@@ -184,7 +184,11 @@ final class RootSidebarModel {
         let generation: UInt64
     }
 
-    private(set) var sessions: [OpenClawChatSessionEntry] = []
+    private(set) var sessions: [OpenClawChatSessionEntry] = [] {
+        didSet { self.updateSnoozeWakeDeadline() }
+    }
+
+    private(set) var now: Date = .now
     private(set) var usage: CostUsageSummaryLite?
     private(set) var cronJobs: [CronJob] = []
     private(set) var isRefreshing = false
@@ -196,6 +200,8 @@ final class RootSidebarModel {
     private var sessionObserverGeneration: UInt64 = 0
     private var sessionObserverDeclaration: SessionObserverDeclaration<GatewayNodeSessionRoute>?
     private var sessionObserverSync: (id: UUID, task: Task<Void, Never>)?
+    @ObservationIgnored private var snoozeWakeUpdatesActive = false
+    @ObservationIgnored private var snoozeWakeTask: Task<Void, Never>?
 
     var failedCronJobCount: Int {
         self.cronJobs.count { Self.isFailedCronJob($0) }
@@ -213,16 +219,73 @@ final class RootSidebarModel {
         currentSessionKey: String,
         mainSessionKey: String,
         activeAgentID: String?,
-        groups: [OpenClawChatSessionGroup]) -> [ChatSessionSidebarModel.Section]
+        groups: [OpenClawChatSessionGroup],
+        sessionRoutingContract: String? = nil) -> [ChatSessionSidebarModel.Section]
     {
-        ChatSessionSidebarModel.sections(
+        Self.sections(
             sessions: self.sessions,
+            query: query,
             currentSessionKey: currentSessionKey,
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             groups: groups,
+            sessionRoutingContract: sessionRoutingContract,
+            now: self.now)
+    }
+
+    static func sections(
+        sessions: [OpenClawChatSessionEntry],
+        query: String,
+        currentSessionKey: String,
+        mainSessionKey: String,
+        activeAgentID: String?,
+        groups: [OpenClawChatSessionGroup],
+        sessionRoutingContract: String? = nil,
+        now: Date = .now) -> [ChatSessionSidebarModel.Section]
+    {
+        let selectedSessionKey = ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions,
+            currentSessionKey: currentSessionKey,
+            mainSessionKey: mainSessionKey,
+            activeAgentID: activeAgentID,
+            sessionRoutingContract: sessionRoutingContract)
+        let selectedIsSnoozed = sessions.contains {
+            $0.key == selectedSessionKey && $0.isSnoozed(at: now)
+        }
+        return ChatSessionSidebarModel.sections(
+            sessions: sessions.filter { !$0.isSnoozed(at: now) },
+            // The shared sidebar otherwise creates a placeholder for a missing selected row.
+            currentSessionKey: selectedIsSnoozed ? "" : currentSessionKey,
+            mainSessionKey: mainSessionKey,
+            activeAgentID: activeAgentID,
+            groups: groups,
             excludesMainSession: true,
-            query: query)
+            query: query,
+            sessionRoutingContract: sessionRoutingContract)
+    }
+
+    func setSnoozeWakeUpdatesActive(_ active: Bool) {
+        self.snoozeWakeUpdatesActive = active
+        self.updateSnoozeWakeDeadline()
+    }
+
+    private func updateSnoozeWakeDeadline() {
+        self.snoozeWakeTask?.cancel()
+        self.snoozeWakeTask = nil
+        self.now = .now
+        guard self.snoozeWakeUpdatesActive,
+              let wakeAt = OpenClawChatSessionSnooze.nextWake(in: self.sessions, now: self.now)
+        else { return }
+
+        self.snoozeWakeTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(max(0, wakeAt.timeIntervalSinceNow) + 0.001))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            self?.updateSnoozeWakeDeadline()
+        }
     }
 
     func refresh(appModel: NodeAppModel) async {
@@ -321,9 +384,7 @@ final class RootSidebarModel {
                 timeoutMs: 12000)
             do {
                 _ = try await appModel.operatorSession.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
+                    request,
                     ifCurrentRoute: route)
                 if let declaration = Self.confirmedSessionObserverDeclaration(
                     route: route,
@@ -366,10 +427,7 @@ final class RootSidebarModel {
             },
             subscribe: {
                 let request = OpenClawChatGatewayRequests.subscribeSessions(timeoutMs: 12000)
-                _ = try await appModel.operatorSession.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs)
+                _ = try await appModel.operatorSession.request(request)
             },
             onEvent: { [weak self] frame in
                 await self?.handleSessionEvent(frame, appModel: appModel) ?? false
@@ -420,25 +478,19 @@ final class RootSidebarModel {
                 invalidateObserverDeclaration()
                 await declareObserverVisibility(observerVisibility())
                 failureCount = 0
+
+                for await frame in stream {
+                    guard !Task.isCancelled else { return }
+                    if await onEvent(frame) {
+                        break
+                    }
+                }
+                guard !Task.isCancelled else { return }
             } catch is CancellationError {
                 return
             } catch {
-                failureCount += 1
-                guard await self.waitForSessionEventRetry(
-                    failureCount: failureCount,
-                    retryDelays: retryDelays,
-                    sleep: sleep)
-                else { return }
-                continue
+                // Failed subscriptions and ended streams use the same retry budget.
             }
-
-            for await frame in stream {
-                guard !Task.isCancelled else { return }
-                if await onEvent(frame) {
-                    break
-                }
-            }
-            guard !Task.isCancelled else { return }
             failureCount += 1
             guard await self.waitForSessionEventRetry(
                 failureCount: failureCount,
@@ -506,8 +558,10 @@ final class RootSidebarModel {
             return
         }
         if let totalCount = roster.totalCount {
+            // Localization: arguments (20, 100) mean 20 displayed out of 100 total, with 80 still to load.
+            // Keep the displayed count first; rephrase the sentence instead of reversing argument roles.
             self.sessionErrorText = String(
-                format: String(localized: "Showing %lld of %lld sessions. Refresh to load the rest."),
+                format: String(localized: "Showing %lld sessions; %lld total. Refresh to load the rest."),
                 roster.sessions.count,
                 totalCount)
         } else {
@@ -546,48 +600,16 @@ final class RootSidebarModel {
     }
 
     private func loadCronJobs(appModel: NodeAppModel) async -> [CronJob]? {
-        let pageLimit = 5
-        let jobLimit = 1000
-        var jobs: [CronJob] = []
-        var seenJobIDs: Set<String> = []
-        var expectedIdentity: CronJobsSnapshotIdentity?
-        var offset = 0
-        for _ in 0..<pageLimit {
+        let snapshot = await CronJobsListLite.collect(maximumPageCount: 5, maximumJobCount: 1000) { offset in
             let paramsJSON = "{\"includeDisabled\":true,\"limit\":200,\"offset\":\(offset)," +
                 "\"sortBy\":\"name\",\"sortDir\":\"asc\"}"
-            let page = await self.request(
+            return await self.request(
                 CronJobsListLite.self,
                 appModel: appModel,
                 method: "cron.list",
                 paramsJSON: paramsJSON)
-            guard let page,
-                  let identity = cronJobsSnapshotIdentity(page: page, maximumCount: jobLimit)
-            else { return nil }
-            if let expectedIdentity, identity != expectedIdentity {
-                return nil
-            }
-            expectedIdentity = identity
-            let pageJobIDs = Set(page.jobs.map(\.id))
-            guard pageJobIDs.count == page.jobs.count,
-                  seenJobIDs.isDisjoint(with: pageJobIDs)
-            else { return nil }
-            seenJobIDs.formUnion(pageJobIDs)
-            jobs.append(contentsOf: page.jobs)
-            guard jobs.count <= jobLimit else { return nil }
-            if let total = identity.total {
-                guard total >= jobs.count else { return nil }
-                if jobs.count == total {
-                    guard !page.hasMore else { return nil }
-                    return jobs
-                }
-            }
-            guard page.hasMore else { return jobs }
-            guard let nextOffset = nextCronJobsListOffset(page: page, currentOffset: offset),
-                  nextOffset <= jobLimit
-            else { return nil }
-            offset = nextOffset
         }
-        return nil
+        return snapshot?.jobs
     }
 
     private func request<T: Decodable>(

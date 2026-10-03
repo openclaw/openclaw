@@ -1,11 +1,10 @@
-// Discord plugin module implements agent components guild auth behavior.
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import type { DiscordComponentEntry } from "../components.js";
 import { resolveDiscordChannelContext } from "./agent-components-context.js";
 import { resolveInteractionContextWithDmAuth } from "./agent-components-dm-auth.js";
+import { resolveAgentComponentPolicyContext } from "./agent-components-live-policy.js";
 import { replySilently } from "./agent-components-reply.js";
 import type {
   AgentComponentContext,
@@ -15,10 +14,10 @@ import type {
   DiscordUser,
 } from "./agent-components.types.js";
 import {
-  isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   resolveDiscordAllowListMatch,
   resolveDiscordChannelConfigWithFallback,
+  resolveDiscordChannelPolicyCommandAuthorizer,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
   resolveDiscordOwnerAccess,
@@ -47,20 +46,9 @@ async function ensureGuildComponentMemberAllowed(params: {
   allowNameMatching: boolean;
   groupPolicy: "open" | "disabled" | "allowlist";
 }) {
-  const {
-    interaction,
-    guildInfo,
-    channelId,
-    rawGuildId,
-    channelCtx,
-    memberRoleIds,
-    user,
-    replyOpts,
-    componentLabel,
-    unauthorizedReply,
-  } = params;
+  const { interaction, guildInfo, user, replyOpts, componentLabel, unauthorizedReply } = params;
 
-  if (!rawGuildId) {
+  if (!params.rawGuildId) {
     return true;
   }
 
@@ -70,34 +58,24 @@ async function ensureGuildComponentMemberAllowed(params: {
 
   const channelConfig = resolveDiscordChannelConfigWithFallback({
     guildInfo,
-    channelId,
-    channelName: channelCtx.channelName,
-    channelSlug: channelCtx.channelSlug,
-    parentId: channelCtx.parentId,
-    parentName: channelCtx.parentName,
-    parentSlug: channelCtx.parentSlug,
-    scope: channelCtx.isThread ? "thread" : "channel",
+    channelId: params.channelId,
+    channelName: params.channelCtx.channelName,
+    channelSlug: params.channelCtx.channelSlug,
+    parentId: params.channelCtx.parentId,
+    parentName: params.channelCtx.parentName,
+    parentSlug: params.channelCtx.parentSlug,
+    scope: params.channelCtx.isThread ? "thread" : "channel",
   });
 
-  if (channelConfig?.enabled === false) {
-    await replyUnauthorized();
-    return false;
-  }
-  const channelAllowlistConfigured =
-    Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
-  const channelAllowed = channelConfig?.allowed !== false;
   if (
-    !isDiscordGroupAllowedByPolicy({
+    channelConfig?.enabled === false ||
+    !resolveDiscordChannelPolicyCommandAuthorizer({
       groupPolicy: params.groupPolicy,
-      guildAllowlisted: Boolean(guildInfo),
-      channelAllowlistConfigured,
-      channelAllowed,
-    })
+      guildInfo,
+      channelConfig,
+    }).allowed ||
+    channelConfig?.allowed === false
   ) {
-    await replyUnauthorized();
-    return false;
-  }
-  if (channelConfig?.allowed === false) {
     await replyUnauthorized();
     return false;
   }
@@ -105,7 +83,7 @@ async function ensureGuildComponentMemberAllowed(params: {
   const { memberAllowed } = resolveDiscordMemberAccessState({
     channelConfig,
     guildInfo,
-    memberRoleIds,
+    memberRoleIds: params.memberRoleIds,
     sender: {
       id: user.id,
       name: user.username,
@@ -122,8 +100,8 @@ async function ensureGuildComponentMemberAllowed(params: {
   return false;
 }
 
-export async function ensureComponentUserAllowed(params: {
-  entry: DiscordComponentEntry;
+async function ensureComponentUserAllowed(params: {
+  allowedUsers: string[];
   interaction: AgentComponentInteraction;
   user: DiscordUser;
   replyOpts: { ephemeral?: boolean };
@@ -131,11 +109,7 @@ export async function ensureComponentUserAllowed(params: {
   unauthorizedReply: string;
   allowNameMatching: boolean;
 }) {
-  const allowList = normalizeDiscordAllowList(params.entry.allowedUsers, [
-    "discord:",
-    "user:",
-    "pk:",
-  ]);
+  const allowList = normalizeDiscordAllowList(params.allowedUsers, ["discord:", "user:", "pk:"]);
   if (!allowList) {
     return true;
   }
@@ -173,27 +147,31 @@ export async function ensureAgentComponentInteractionAllowed(params: {
   componentLabel: string;
   unauthorizedReply: string;
 }) {
+  const ctx = await resolveAgentComponentPolicyContext(params);
+  if (!ctx) {
+    return null;
+  }
   const guildInfo = resolveDiscordGuildEntry({
     guild: params.interaction.guild ?? undefined,
     guildId: params.rawGuildId,
-    guildEntries: params.ctx.guildEntries,
+    guildEntries: ctx.guildEntries,
   });
   const channelCtx = resolveDiscordChannelContext(params.interaction);
   const memberAllowed = await ensureGuildComponentMemberAllowed({
-    interaction: params.interaction,
+    ...params,
     guildInfo,
-    channelId: params.channelId,
-    rawGuildId: params.rawGuildId,
     channelCtx,
-    memberRoleIds: params.memberRoleIds,
-    user: params.user,
-    replyOpts: params.replyOpts,
-    componentLabel: params.componentLabel,
-    unauthorizedReply: params.unauthorizedReply,
-    allowNameMatching: isDangerousNameMatchingEnabled(params.ctx.discordConfig),
-    groupPolicy: resolveComponentRuntimeGroupPolicy(params.ctx),
+    allowNameMatching: isDangerousNameMatchingEnabled(ctx.discordConfig),
+    groupPolicy: resolveComponentRuntimeGroupPolicy(ctx),
   });
   if (!memberAllowed) {
+    return null;
+  }
+  if (ctx.isPolicyCurrent?.() === false) {
+    await replySilently(params.interaction, {
+      content: "Access policy changed. Try this interaction again.",
+      ...params.replyOpts,
+    });
     return null;
   }
   return { parentId: channelCtx.parentId };
@@ -205,10 +183,15 @@ export async function resolveAuthorizedComponentInteraction(params: {
   label: string;
   componentLabel: string;
   unauthorizedReply: string;
+  allowedUsers?: string[];
   defer?: boolean;
 }) {
+  const ctx = await resolveAgentComponentPolicyContext(params);
+  if (!ctx) {
+    return null;
+  }
   const interactionCtx = await resolveInteractionContextWithDmAuth({
-    ctx: params.ctx,
+    ctx,
     interaction: params.interaction,
     label: params.label,
     componentLabel: params.componentLabel,
@@ -218,14 +201,14 @@ export async function resolveAuthorizedComponentInteraction(params: {
     return null;
   }
 
-  const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
+  const { channelId, user, replyOpts, rawGuildId } = interactionCtx;
   const guildInfo = resolveDiscordGuildEntry({
     guild: params.interaction.guild ?? undefined,
     guildId: rawGuildId,
-    guildEntries: params.ctx.guildEntries,
+    guildEntries: ctx.guildEntries,
   });
   const channelCtx = resolveDiscordChannelContext(params.interaction);
-  const allowNameMatching = isDangerousNameMatchingEnabled(params.ctx.discordConfig);
+  const allowNameMatching = isDangerousNameMatchingEnabled(ctx.discordConfig);
   const channelConfig = resolveDiscordChannelConfigWithFallback({
     guildInfo,
     channelId,
@@ -237,32 +220,46 @@ export async function resolveAuthorizedComponentInteraction(params: {
     scope: channelCtx.isThread ? "thread" : "channel",
   });
   const memberAllowed = await ensureGuildComponentMemberAllowed({
-    interaction: params.interaction,
+    ...params,
+    ...interactionCtx,
     guildInfo,
-    channelId,
-    rawGuildId,
     channelCtx,
-    memberRoleIds,
-    user,
-    replyOpts,
-    componentLabel: params.componentLabel,
-    unauthorizedReply: params.unauthorizedReply,
     allowNameMatching,
-    groupPolicy: resolveComponentRuntimeGroupPolicy(params.ctx),
+    groupPolicy: resolveComponentRuntimeGroupPolicy(ctx),
   });
   if (!memberAllowed) {
     return null;
   }
 
   const commandAuthorized = await resolveComponentCommandAuthorized({
-    ctx: params.ctx,
+    ctx,
     interactionCtx,
     channelConfig,
     guildInfo,
     allowNameMatching,
   });
 
+  if (ctx.isPolicyCurrent?.() === false) {
+    await replySilently(params.interaction, {
+      content: "Access policy changed. Try this interaction again.",
+      ...replyOpts,
+    });
+    return null;
+  }
+  if (
+    params.allowedUsers !== undefined &&
+    !(await ensureComponentUserAllowed({
+      ...params,
+      allowedUsers: params.allowedUsers,
+      user,
+      replyOpts,
+      allowNameMatching,
+    }))
+  ) {
+    return null;
+  }
   return {
+    ctx,
     interactionCtx,
     channelCtx,
     guildInfo,
@@ -286,13 +283,14 @@ export async function resolveComponentCommandAuthorized(params: {
     return true;
   }
 
+  const sender = {
+    id: interactionCtx.user.id,
+    name: interactionCtx.user.username,
+    tag: formatDiscordUserTag(interactionCtx.user),
+  };
   const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
     allowFrom: ctx.allowFrom,
-    sender: {
-      id: interactionCtx.user.id,
-      name: interactionCtx.user.username,
-      tag: formatDiscordUserTag(interactionCtx.user),
-    },
+    sender,
     allowNameMatching: params.allowNameMatching,
   });
 
@@ -300,24 +298,15 @@ export async function resolveComponentCommandAuthorized(params: {
     channelConfig,
     guildInfo,
     memberRoleIds: interactionCtx.memberRoleIds,
-    sender: {
-      id: interactionCtx.user.id,
-      name: interactionCtx.user.username,
-      tag: formatDiscordUserTag(interactionCtx.user),
-    },
+    sender,
     allowNameMatching: params.allowNameMatching,
   });
-  const useAccessGroups = true;
-  const authorizers = useAccessGroups
-    ? [
-        { configured: ownerAllowList != null, allowed: ownerOk },
-        { configured: hasAccessRestrictions, allowed: memberAllowed },
-      ]
-    : [{ configured: hasAccessRestrictions, allowed: memberAllowed }];
-
   return resolveCommandAuthorizedFromAuthorizers({
-    useAccessGroups,
-    authorizers,
+    useAccessGroups: true,
+    authorizers: [
+      { configured: ownerAllowList != null, allowed: ownerOk },
+      { configured: hasAccessRestrictions, allowed: memberAllowed },
+    ],
     modeWhenAccessGroupsOff: "configured",
   });
 }

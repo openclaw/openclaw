@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Composer native undo/redo regression: the controlled `.value` binding must
 // not re-apply the textarea value after native input, which clobbers the
 // browser's undo/redo bookkeeping (#131708).
@@ -28,6 +29,7 @@ describeComposerUndoRedo("chat composer native undo/redo", () => {
     browser = await chromium.launch({
       executablePath: chromiumExecutablePath,
       headless: true,
+      ignoreDefaultArgs: ["--hide-scrollbars"],
     });
     server = await startControlUiE2eServer();
     page = await browser.newPage();
@@ -114,5 +116,54 @@ describeComposerUndoRedo("chat composer native undo/redo", () => {
     await page!.waitForTimeout(100);
     expect(await textarea.inputValue()).toBe("");
     expect((await valueWriteCount()) - beforeUndo).toBe(0);
+  });
+
+  it("shrinks a capped draft when removing its scrollbar allows fewer wrapped lines", async () => {
+    const textarea = page!.locator(COMPOSER_TEXTAREA);
+    const style = await page!.addStyleTag({
+      content: `
+        ${COMPOSER_TEXTAREA} {
+          width: 200px;
+          min-height: 20px;
+          max-height: 75px;
+          padding: 0;
+          border: 0;
+          font: 16px/20px monospace;
+          scrollbar-width: auto;
+          scrollbar-color: auto;
+        }
+        ${COMPOSER_TEXTAREA}::-webkit-scrollbar { width: 30px; }
+      `,
+    });
+    try {
+      await textarea.fill("x".repeat(150));
+      await page!.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      expect(
+        await textarea.evaluate((element: HTMLTextAreaElement) => ({
+          width: element.offsetWidth,
+          contentWidth: element.clientWidth,
+          height: element.clientHeight,
+        })),
+      ).toEqual({ width: 200, contentWidth: 170, height: 75 });
+
+      await textarea.fill("x".repeat(60));
+      expect(
+        await textarea.evaluate((element: HTMLTextAreaElement) => ({
+          contentWidth: element.clientWidth,
+          height: element.clientHeight,
+          contentHeight: element.scrollHeight,
+        })),
+      ).toEqual({ contentWidth: 200, height: 60, contentHeight: 60 });
+    } finally {
+      await style.evaluate((element) => {
+        element.parentNode?.removeChild(element);
+      });
+      await textarea.fill("");
+    }
   });
 });

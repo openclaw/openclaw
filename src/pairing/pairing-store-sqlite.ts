@@ -9,7 +9,6 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import {
   dedupePreserveOrder,
@@ -30,10 +29,6 @@ type ChannelPairingState = {
   requests: PairingRequest[];
   allowFrom?: Record<string, string[]>;
 };
-
-function parseTimestamp(value: string | undefined): number | null {
-  return parseDateStringTimestampMs(value) ?? null;
-}
 
 function normalizePersistedPairingMeta(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) {
@@ -62,8 +57,8 @@ function normalizePersistedPairingRequest(value: unknown): PairingRequest | unde
     !code ||
     !createdAt ||
     !lastSeenAt ||
-    parseTimestamp(createdAt) === null ||
-    parseTimestamp(lastSeenAt) === null
+    parseDateStringTimestampMs(createdAt) === undefined ||
+    parseDateStringTimestampMs(lastSeenAt) === undefined
   ) {
     return undefined;
   }
@@ -73,10 +68,6 @@ function normalizePersistedPairingRequest(value: unknown): PairingRequest | unde
 
 export function resolvePairingRequestAccountId(entry: PairingRequest): string {
   return resolveAllowFromAccountId(entry.meta?.accountId) || DEFAULT_ACCOUNT_ID;
-}
-
-export function sqliteOptionsForEnv(env: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
-  return { env };
 }
 
 export function readChannelPairingStateFromDatabase(
@@ -138,10 +129,7 @@ export function readChannelPairingState(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv,
 ): ChannelPairingState {
-  return readChannelPairingStateFromDatabase(
-    openOpenClawStateDatabase(sqliteOptionsForEnv(env)),
-    channel,
-  );
+  return readChannelPairingStateFromDatabase(openOpenClawStateDatabase({ env }), channel);
 }
 
 export function writeChannelPairingStateToDatabase(
@@ -204,10 +192,13 @@ export function updateChannelPairingStateSnapshot<T>(
   env: NodeJS.ProcessEnv,
   update: (state: ChannelPairingState) => T,
 ): T {
-  return runOpenClawStateWriteTransaction((database) => {
-    const state = readChannelPairingStateFromDatabase(database, channel);
-    const result = update(state);
-    writeChannelPairingStateToDatabase(database, channel, state);
-    return result;
-  }, sqliteOptionsForEnv(env));
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const state = readChannelPairingStateFromDatabase(database, channel);
+      const result = update(state);
+      writeChannelPairingStateToDatabase(database, channel, state);
+      return result;
+    },
+    { env },
+  );
 }

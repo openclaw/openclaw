@@ -4,22 +4,6 @@ import {
   type MemoryEmbeddingProbeResult,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
-  resolveMemoryLightDreamingConfig,
-  resolveMemoryRemDreamingConfig,
-} from "openclaw/plugin-sdk/memory-core-host-status";
-import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  formatAuditCounts,
-  formatExtraPaths,
-  formatMemoryIndexOutcome,
-  resolveMemoryPluginConfig,
-  scanMemoryManagerSources,
-  withMemoryCommand,
-  type MemoryManager,
-  type MemorySourceScan,
-} from "./cli-runtime-common.js";
-import {
   defaultRuntime,
   formatErrorMessage,
   setVerbose,
@@ -27,8 +11,36 @@ import {
   theme,
   withProgress,
   withProgressTotals,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import {
+  getRuntimeConfig,
   type OpenClawConfig,
-} from "./cli.host.runtime.js";
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  resolveMemoryLightDreamingConfig,
+  resolveMemoryRemDreamingConfig,
+  resolveMemoryDeepDreamingConfig,
+  resolveMemoryFtsState,
+  resolveMemoryVectorState,
+} from "openclaw/plugin-sdk/memory-core-host-status";
+import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  readSelectedMemoryProviderStatus,
+  resolveForeignMemorySlotOwner,
+  type SelectedMemoryProviderStatus,
+} from "./cli-memory-slot.js";
+import {
+  formatAuditCounts,
+  formatExtraPaths,
+  formatMemoryIndexOutcome,
+  resolveMemoryAgentIds,
+  resolveMemoryPluginConfig,
+  scanMemoryManagerSources,
+  withMemoryCommand,
+  type MemoryManager,
+  type MemorySourceScan,
+} from "./cli-runtime-common.js";
 import type { MemoryCommandOptions } from "./cli.types.js";
 import {
   auditDreamingArtifacts,
@@ -36,7 +48,7 @@ import {
   type DreamingArtifactsAuditSummary,
   type RepairDreamingArtifactsResult,
 } from "./dreaming-repair.js";
-import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import { formatRecallRepairDetails } from "./dreaming-shared.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import {
   auditShortTermPromotionArtifacts,
@@ -45,6 +57,8 @@ import {
   type ShortTermAuditSummary,
 } from "./short-term-promotion.js";
 const { accent, heading, info, muted, success, warn } = theme;
+const formatMemoryByteSize = (value: number) =>
+  formatByteSize(value, { style: "iec", maxUnit: "tera", separator: " ", fractionDigits: 1 });
 type LlamaCppRuntimeStatus = {
   state?: string;
   backend?: string;
@@ -66,6 +80,7 @@ function formatMemoryIndexIdentityWarning(
 ): {
   reason: string;
   fix: string;
+  paused: string;
 } | null {
   const diagnostic = resolveMemoryIndexIdentityDiagnostic(status);
   if (!diagnostic) {
@@ -74,12 +89,13 @@ function formatMemoryIndexIdentityWarning(
   return {
     reason: `${diagnostic.reason} (owner: ${diagnostic.owner}, code: ${diagnostic.code})`,
     fix: `Run: ${formatMemoryIndexRebuildGuidance(status, agentId)}`,
+    paused: diagnostic.owner === "configuration" ? "paused until memory is rebuilt" : "paused",
   };
 }
 function formatDreamingSummary(cfg: OpenClawConfig): string {
   const pluginConfig = resolveMemoryPluginConfig(cfg);
   const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg });
-  const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  const deep = resolveMemoryDeepDreamingConfig({ pluginConfig, cfg });
   const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg });
   const timezone = deep.timezone ?? light.timezone ?? rem.timezone;
   const formatCron = (cron: string) => (timezone ? `${cron} (${timezone})` : cron);
@@ -99,16 +115,7 @@ function formatDreamingSummary(cfg: OpenClawConfig): string {
 function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): string {
   const actions: string[] = [];
   if (repair.rewroteStore) {
-    const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
-    const details = [
-      repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
-      (repair.removedDanglingEntries ?? 0) > 0
-        ? `-${repair.removedDanglingEntries} dangling`
-        : null,
-      removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
-    ]
-      .filter(Boolean)
-      .join(", ");
+    const details = formatRecallRepairDetails(repair);
     actions.push(`rewrote store${details ? ` (${details})` : ""}`);
   }
   if (repair.removedStaleLock) {
@@ -143,11 +150,54 @@ function formatDreamingRepairSummary(repair: RepairDreamingArtifactsResult): str
   }
   return actions.length > 0 ? actions.join(" · ") : "no changes";
 }
+// Another plugin owns the memory slot: report that provider, never the sidecar's own index.
+async function runSelectedMemoryProviderStatus(
+  opts: MemoryCommandOptions,
+  cfg: OpenClawConfig,
+  owner: string,
+) {
+  if (opts.deep || opts.index || opts.fix) {
+    defaultRuntime.error(
+      `memory status --deep, --index, and --fix inspect Memory Core's own index, but plugins.slots.memory selects "${owner}". Run "openclaw memory index" to maintain the Memory Core sidecar index.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  const results: SelectedMemoryProviderStatus[] = [];
+  for (const agentId of resolveMemoryAgentIds(cfg, opts.agent)) {
+    results.push(await readSelectedMemoryProviderStatus({ cfg, agentId, owner }));
+  }
+  if (opts.json) {
+    defaultRuntime.writeJson(results);
+    return;
+  }
+  const label = (text: string) => muted(`${text}:`);
+  for (const { agentId, provider, health } of results) {
+    const healthColor = health.status === "ready" ? success : warn;
+    const lines = [
+      `${heading("Memory")} ${muted(`(${agentId})`)}`,
+      `${label("Provider")} ${info(provider)} ${muted("(selected memory slot)")}`,
+      `${label("Health")} ${healthColor(health.status)}${health.message ? ` ${muted(health.message)}` : ""}`,
+      `${label("Memory Core")} ${muted("consolidation sidecar only; its index is not this agent's memory")}`,
+      `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
+    ];
+    defaultRuntime.log(lines.join("\n"));
+    defaultRuntime.log("");
+  }
+}
+
 export async function runMemoryStatus(
   opts: MemoryCommandOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
   setVerbose(Boolean(opts.verbose));
+  const runtimeConfig = getRuntimeConfig({ skipPluginValidation: true });
+  const slotOwner = resolveForeignMemorySlotOwner(runtimeConfig);
+  if (slotOwner) {
+    await runSelectedMemoryProviderStatus(opts, runtimeConfig, slotOwner);
+    return;
+  }
+  const deep = Boolean(opts.deep || opts.index);
   const allResults: Array<{
     agentId: string;
     status: ReturnType<MemoryManager["status"]>;
@@ -168,7 +218,6 @@ export async function runMemoryStatus(
     inspectSources: true,
     ...hostOptions,
     run: async ({ manager, agentId }) => {
-      const deep = Boolean(opts.deep || opts.index);
       let embeddingProbe: MemoryEmbeddingProbeResult | undefined;
       let indexError: string | undefined;
       const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
@@ -312,6 +361,20 @@ export async function runMemoryStatus(
       `${label("Workspace")} ${info(workspacePath)}`,
       `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
     ].filter(Boolean) as string[];
+    if (status.storage) {
+      const storage = status.storage;
+      lines.push(
+        `${label("Agent database")} ${info(formatMemoryByteSize(storage.databaseBytes))} · WAL ${formatMemoryByteSize(storage.walBytes)} · reusable ${formatMemoryByteSize(storage.reusableBytes)}`,
+      );
+      lines.push(
+        `${label("Stored embedding cache")} ${info(formatMemoryByteSize(storage.embeddingCacheBytes))} · ${storage.embeddingCacheEntries} entries`,
+      );
+      lines.push(
+        muted(
+          "Database includes sessions and other agent data. Reusable pages remain allocated until compaction.",
+        ),
+      );
+    }
     if (embeddingProbe) {
       const state =
         embeddingProbe.ok && embeddingProbe.checked === false
@@ -325,9 +388,8 @@ export async function runMemoryStatus(
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
       }
     }
-    const llamaCppRuntime = opts.deep ? readLlamaCppRuntimeStatus(status) : null;
-    if (llamaCppRuntime) {
-      const runtime = llamaCppRuntime;
+    const runtime = deep ? readLlamaCppRuntimeStatus(status) : null;
+    if (runtime) {
       const backend = runtime.backend ?? "unknown";
       const build = runtime.buildInfo ? ` (${runtime.buildInfo})` : "";
       lines.push(`${label("llama.cpp server")} ${info(backend)}${muted(build)}`);
@@ -362,7 +424,7 @@ export async function runMemoryStatus(
     const identityWarning = formatMemoryIndexIdentityWarning(status, agentId);
     if (identityWarning) {
       lines.push(`${label("Index identity")} ${warn(identityWarning.reason)}`);
-      lines.push(`${label("Vector search")} ${warn("paused until memory is rebuilt")}`);
+      lines.push(`${label("Vector search")} ${warn(identityWarning.paused)}`);
       lines.push(`${label("Fix")} ${muted(identityWarning.fix)}`);
     }
     if (status.sourceCounts?.length) {
@@ -378,12 +440,7 @@ export async function runMemoryStatus(
         const payload =
           entry.chunkBytes === undefined
             ? ""
-            : ` · ${formatByteSize(entry.chunkBytes, {
-                style: "iec",
-                maxUnit: "tera",
-                separator: " ",
-                fractionDigits: 1,
-              })} text + embeddings`;
+            : ` · ${formatMemoryByteSize(entry.chunkBytes)} text + embeddings`;
         lines.push(`  ${accent(entry.source)} ${muted("·")} ${muted(counts + payload)}`);
       }
     }
@@ -391,14 +448,9 @@ export async function runMemoryStatus(
       lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
     }
     if (status.vector) {
+      const vector = status.vector;
       const formatVectorState = (available: boolean | undefined) =>
-        status.vector?.enabled
-          ? available === undefined
-            ? "unknown"
-            : available
-              ? "ready"
-              : "unavailable"
-          : "disabled";
+        resolveMemoryVectorState({ enabled: vector.enabled, available }).state;
       const formatVectorLine = (lineLabel: string, state: string) => {
         const vectorColor = state === "ready" ? success : state === "unavailable" ? warn : muted;
         lines.push(`${label(lineLabel)} ${vectorColor(state)}`);
@@ -435,11 +487,7 @@ export async function runMemoryStatus(
       }
     }
     if (status.fts) {
-      const ftsState = status.fts.enabled
-        ? status.fts.available
-          ? "ready"
-          : "unavailable"
-        : "disabled";
+      const { state: ftsState } = resolveMemoryFtsState(status.fts);
       const ftsColor = ftsState === "ready" ? success : ftsState === "unavailable" ? warn : muted;
       lines.push(`${label("FTS")} ${ftsColor(ftsState)}`);
       if (status.fts.error) {
@@ -509,27 +557,19 @@ export async function runMemoryStatus(
         lines.push(`  ${warn(issue)}`);
       }
     }
-    if (audit?.issues.length) {
-      if (!scan?.issues.length) {
+    let hasIssues = Boolean(scan?.issues.length);
+    for (const report of [audit, dreamingAudit]) {
+      if (!report?.issues.length) {
+        continue;
+      }
+      if (!hasIssues) {
         lines.push(label("Issues"));
       }
-      for (const issue of audit.issues) {
+      hasIssues = true;
+      for (const issue of report.issues) {
         lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
       }
-      if (!opts.fix) {
-        if (audit.issues.some((issue) => issue.fixable)) {
-          lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
-        }
-      }
-    }
-    if (dreamingAudit?.issues.length) {
-      if (!scan?.issues.length && !audit?.issues.length) {
-        lines.push(label("Issues"));
-      }
-      for (const issue of dreamingAudit.issues) {
-        lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
-      }
-      if (!opts.fix && dreamingAudit.issues.some((issue) => issue.fixable)) {
+      if (!opts.fix && report.issues.some((issue) => issue.fixable)) {
         lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
       }
     }

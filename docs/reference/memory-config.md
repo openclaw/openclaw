@@ -8,6 +8,7 @@ read_when:
   - You want to understand hybrid search, MMR, or temporal-decay defaults
   - You want to enable multimodal memory indexing
   - You need to exclude specific session sources from automatic dreaming ingestion
+  - You see a memory file-watching pressure warning
 ---
 
 This page lists every configuration knob for OpenClaw memory search. For conceptual overviews, see:
@@ -117,6 +118,13 @@ automatically re-embedding everything. Rebuild when you are ready with
 `openclaw memory index --force --agent <id>`.
 </Warning>
 
+If an outage activates a fallback that cannot read the existing index, later
+searches retry the configured primary, with a 30-second cooldown between recovery
+attempts. Once the primary responds and matches the stored provider, model, and
+provider settings, search resumes without restarting the Gateway or rebuilding
+the index. An index already built with the fallback stays on that compatible
+provider; recovery never silently replaces its embeddings.
+
 When `provider` is unset, legacy `provider: "auto"` is present, or
 `provider: "none"` intentionally selects FTS-only mode, memory recall can still
 use lexical FTS ranking when embeddings are unavailable.
@@ -156,14 +164,14 @@ provider/auth configuration, switch to a reachable provider, or set
 
 ### API key resolution
 
-Remote embeddings require an API key. Bedrock uses the AWS SDK default credential chain instead (instance roles, SSO, access keys, or a Bedrock API key).
+Remote embedding authentication depends on the provider. Bedrock uses the AWS SDK default credential chain (instance roles, SSO, access keys, or a Bedrock API key).
 
 | Provider       | Env var                                             | Config key                          |
 | -------------- | --------------------------------------------------- | ----------------------------------- |
 | Bedrock        | AWS credential chain, or `AWS_BEARER_TOKEN_BEDROCK` | No API key needed                   |
 | DeepInfra      | `DEEPINFRA_API_KEY`                                 | `models.providers.deepinfra.apiKey` |
 | Gemini         | `GEMINI_API_KEY`                                    | `models.providers.google.apiKey`    |
-| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`  | Auth profile via device login       |
+| GitHub Copilot | `COPILOT_GITHUB_TOKEN`                              | Auth profile via device login       |
 | Mistral        | `MISTRAL_API_KEY`                                   | `models.providers.mistral.apiKey`   |
 | Ollama         | `OLLAMA_API_KEY` (placeholder)                      | --                                  |
 | OpenAI         | `OPENAI_API_KEY`                                    | `models.providers.openai.apiKey`    |
@@ -175,7 +183,9 @@ such as `my-embeddings:default`. Literal keys keep their configured value even
 when other profiles are saved for the provider. Empty keys do not select a saved profile.
 
 <Note>
-Codex OAuth covers chat/completions only and does not satisfy embedding requests.
+OpenAI embeddings can use a stored Codex OAuth profile when the account grants
+embedding access. The separate Sign in with ChatGPT token-sharing grant does not
+authorize embeddings. Run `openclaw memory status --deep` to check your account.
 </Note>
 
 ---
@@ -230,12 +240,13 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
     Upgrading any existing configuration that already uses
     `gemini-embedding-2` can trigger the same pause even when you do not edit the
-    configuration. Before this release, the stable model's dimension was
+    configuration. Before 2026.8.1, the stable model's dimension was
     omitted from index identity whether `outputDimensionality` was absent or
-    explicitly set. After upgrade, an absent setting resolves to 3072, while an
+    explicitly set. From 2026.8.1 ([#128716](https://github.com/openclaw/openclaw/pull/128716)),
+    an absent setting resolves to 3072, while an
     explicit setting between 128 and 3072 becomes part of the identity. The
     default `gemini-embedding-001` keeps its existing identity when this setting
-    is absent; an explicitly configured value that was previously ignored now
+    is absent; an explicitly configured value that 2026.8.1 no longer ignores
     also changes the identity. For either path, check the affected agent with
     `openclaw memory status --deep --agent <id>`, then rebuild when ready with
     `openclaw memory index --force --agent <id>`.
@@ -286,6 +297,8 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
       },
     }
     ```
+
+    Concurrent embedding requests share an in-flight AWS credential refresh so a batch does not resolve instance-role credentials separately for every chunk. Later requests refresh through the SDK again, picking up rotated profile files and role selections without restarting the Gateway.
 
     | Key                    | Type     | Default                        | Description                     |
     | ---------------------- | -------- | ------------------------------- | -------------------------------- |
@@ -342,7 +355,7 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     | ----------------- | -------- | --------------- | ----------------------- |
     | `local.modelPath` | `string` | auto-downloaded | Path to GGUF model file |
 
-    Install the official llama.cpp provider, then choose llama.cpp once in
+    Install the official [llama.cpp provider](/plugins/llama-cpp), then choose llama.cpp once in
     interactive setup. OpenClaw installs a pinned, verified `llama-server` and
     writes its loopback `localService` configuration. Default model:
     `embeddinggemma-300m-qat-Q8_0.gguf` (~0.3 GB, auto-downloaded).
@@ -370,6 +383,29 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 Memory engines own synchronization, batching, watch, and post-compaction
 indexing heuristics. OpenClaw keeps these behaviors enabled with maintained
 defaults rather than exposing per-install timing switches.
+
+### File-watcher pressure
+
+The "Memory file watching is tracking ..." warning reports an advisory count of
+watched paths or directories, not a measured host limit or confirmed exhaustion.
+Remove unnecessary `memory.search.extraPaths` entries or narrow their directory
+roots. Global entries and `agents.entries.<id>.memory.search.extraPaths` entries
+are combined: an empty per-agent list does not remove global roots. Changing only
+an entry's `pattern` filters indexed files, not the directory tree being watched.
+Events outside every applicable pattern are ignored when they cannot affect an
+indexed file or directory. Events with no path or an unknown entry type remain
+conservative when indexed content could have changed.
+
+Removing extra-path entries does not exclude files that still belong to the
+default `MEMORY.md`, `USER.md`, or `memory/` roots. If reducing extra paths is
+insufficient, review file-watch and open-file limits on the Gateway host. There is no supported
+`memory.search.sync.watch` setting.
+
+After changes, restart the Gateway. To refresh the affected index, run
+`openclaw memory index --force --agent <id>` on the Gateway host using its profile
+and environment, including any `OPENCLAW_STATE_DIR` or `OPENCLAW_CONFIG_PATH`
+overrides. Use the affected agent's ID; the command printed in the warning includes
+it and the active profile or container hint. See [memory index](/cli/memory#memory-index).
 
 ## Hybrid search config
 
@@ -432,7 +468,27 @@ auto-injected.
 
 Paths can be absolute or workspace-relative. Directories are scanned recursively for supported
 files. Object entries narrow a directory with a root-relative glob using `/` separators; direct
-file entries are indexed exactly. The builtin engine skips symlinks.
+file entries are indexed exactly. Entries with the same resolved directory share one scan, and
+scans skip subdirectories that their patterns can prove irrelevant. Complex patterns retain
+conservative traversal. The builtin engine skips symlinks. When a configured root is a
+symlink, `openclaw memory status` names the skipped root in text and JSON output and recommends
+configuring its canonical absolute directory instead.
+
+For shared notes, keep each workspace's `memory/` directory local and add the shared directory's
+canonical path to `extraPaths`. This setting indexes notes; it does not authorize legacy host-event
+migration through a symlink.
+
+If `openclaw doctor --fix` reports an unsafe Memory Core host-event source, check the named path and
+permissions. Back up the legacy journal before replacing any symlink. To import it, preserve its
+contents at `memory/.dreams/events.jsonl` as a regular file under regular directories inside the intended
+workspace, then rerun `openclaw doctor --fix`. Doctor leaves rejected sources untouched. A symlink to
+the workspace root itself is supported. Symlinks below that root are refused when a legacy event
+source, import claim, or migrated archive is present; directories without those sources need no repair.
+
+If a checkpointed `events.jsonl.migrated` archive changed other than by append, Doctor warns and
+preserves both the archive and the already imported SQLite events. It defers later event generations
+in that workspace while continuing unrelated repairs. Preserve the archive for inspection; this warning
+does not mean its edited contents were imported. Unsafe source paths and failed imports still stop Doctor.
 
 ---
 
@@ -476,6 +532,8 @@ Batch enablement is the only remote batching setting. Concurrency, polling, and 
 
 ---
 
+<a id="session-memory-search-experimental" />
+
 ## Session memory search
 
 Index session transcripts and surface them via `memory_search`:
@@ -500,7 +558,7 @@ Ordinary user-session transcripts, including retained, reset, and
 deleted-session archives, remain eligible until explicitly targeted.
 
 <Note>
-The [session-memory hook](/automation/hooks#session-memory) saves conversation
+The [session-memory hook](/automation/hooks/bundled-hooks#session-memory) saves conversation
 excerpts to `<workspace>/memory/`, which the `memory` source already indexes.
 If transcript indexing is also enabled, the same conversation can appear from
 both `memory` and `sessions`, resulting in overlapping search results and
@@ -513,13 +571,16 @@ when you intentionally want both representations.
 
 Ordinary model-invoked session transcript search obeys
 [`tools.sessions.visibility`](/gateway/config-tools#tools-sessions). The default
-`agent` visibility exposes same-agent sessions to unsandboxed callers, including
-non-main sessions and conversations with other users sharing the agent. Set
-`tree` explicitly for current plus spawned scope (main still sees all
+`all` visibility permits cross-agent session access for unsandboxed callers,
+including other users' transcripts. `memory_search` remains scoped to the selected
+agent's indexed corpus; use [`sessions_search`](/concepts/session-search) for
+Gateway-wide transcript search. Cross-agent access is on by default and governed
+by `tools.agentToAgent`; set `enabled: false` to block ordinary cross-agent access
+or use `allow` to restrict agent pairs; requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`. Set `agent` for same-agent recall or
+`tree` for current plus spawned scope (main still sees all
 same-agent sessions), or `self` for strict current-session access. A per-peer
-DM scope alone does not restrict session-tool recall. Cross-agent recall
-requires `all` and agent-to-agent policy; sandbox clamps and incognito
-exclusions still apply.
+DM scope alone does not restrict session-tool recall. Sandbox clamps and
+incognito exclusions still apply.
 
 `rememberAcrossConversations` does not widen that setting. It supplies a
 separate runtime-only authorization limited to same-agent private
@@ -533,7 +594,8 @@ The examples below place these settings under top-level `memory.search`. You can
 apply equivalent settings in a per-agent `memory.search` override when only one
 agent should index and search session transcripts.
 
-For same-agent gateway-to-DM recall:
+To keep transcript recall same-agent only, narrow session visibility from the
+default `all`:
 
 ```json5
 {
@@ -558,6 +620,8 @@ For same-agent gateway-to-DM recall:
 | `store.vector.enabled`       | `boolean` | `true`  | Use sqlite-vec for vector queries |
 | `store.vector.extensionPath` | `string`  | bundled | Override sqlite-vec path          |
 
+For Bun on macOS, install Homebrew SQLite to enable extension loading; see [Bun SQLite setup](/install/bun-compatibility#sqlite-library-selection) for automatic discovery and the `OPENCLAW_SQLITE_LIBRARY` library override.
+
 When sqlite-vec is unavailable, OpenClaw falls back to in-process cosine similarity automatically.
 
 ---
@@ -571,11 +635,17 @@ Built-in memory indexes live in each agent's OpenClaw SQLite database at
 | --------------------- | -------- | ----------- | ----------------------------------------- |
 | `store.fts.tokenizer` | `string` | `unicode61` | FTS5 tokenizer (`unicode61` or `trigram`) |
 
+With `trigram`, query terms shorter than three characters use substring matching,
+so short terms such as `AI` and `UK` remain searchable. Longer terms keep
+full-text matching, including in queries that also contain short terms.
+
 ---
 
 ## Citations
 
 `memory.citations` controls citation visibility for built-in memory results:
+
+Cited snippets preserve leading indentation; trailing whitespace is removed before the source footer.
 
 | Value            | Behavior                                               |
 | ---------------- | ------------------------------------------------------ |
@@ -683,7 +753,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 | `frequency`                             | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep                                                                                |
 | `model`                                 | `string`  | default model | Optional Dream Diary subagent model override                                                                                     |
 | `phases.deep.maxPromotedSnippetTokens`  | `number`  | `160`         | Maximum estimated tokens kept from each short-term recall snippet promoted into `MEMORY.md`; provenance metadata remains visible |
-| `phases.deep.maxPriorEntryLossFraction` | `number`  | `0.25`        | Reject a consolidation rewrite that removes more than this fraction of prior entries                                             |
+| `phases.deep.maxPriorEntryLossFraction` | `number`  | `0.25`        | Reject consolidation or append compaction that removes more than this fraction of prior entries                                  |
 
 ### Example
 

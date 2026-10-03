@@ -29,24 +29,7 @@ export type CrossContextDecoration = {
   presentationBuilder?: CrossContextPresentationBuilder;
 };
 
-const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
-  "send",
-  "poll",
-  "poll-vote",
-  "reply",
-  "sendWithEffect",
-  "sendAttachment",
-  "upload-file",
-  "edit",
-  "delete",
-  "pin",
-  "unpin",
-  "thread-create",
-  "thread-reply",
-  "sticker",
-]);
-
-// Mutations are guarded above, but markers only apply to outbound payloads that
+// All mutations are guarded, but markers only apply to outbound payloads that
 // create new visible content. Existing-message edits/pins/deletes should not
 // grow cross-context forwarding text.
 const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
@@ -60,6 +43,18 @@ const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
   "sticker",
 ]);
 
+const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
+  ...CONTEXT_MARKER_ACTIONS,
+  "poll-vote",
+  "edit",
+  "delete",
+  "pin",
+  "unpin",
+  "thread-create",
+  "topic-create",
+  "topic-edit",
+]);
+
 function resolveContextGuardTarget(
   action: ChannelMessageActionName,
   params: Record<string, unknown>,
@@ -68,21 +63,14 @@ function resolveContextGuardTarget(
     return undefined;
   }
 
-  if (action === "thread-reply" || action === "thread-create") {
-    if (typeof params.channelId === "string") {
-      return params.channelId;
+  const keys =
+    action === "thread-reply" || action === "thread-create"
+      ? ["channelId", "to"]
+      : ["to", "channelId"];
+  for (const key of keys) {
+    if (typeof params[key] === "string") {
+      return params[key];
     }
-    if (typeof params.to === "string") {
-      return params.to;
-    }
-    return undefined;
-  }
-
-  if (typeof params.to === "string") {
-    return params.to;
-  }
-  if (typeof params.channelId === "string") {
-    return params.channelId;
   }
   return undefined;
 }
@@ -121,10 +109,12 @@ function isCrossContextTarget(params: {
   );
 }
 
-function resolveAgentMessageToolsConfig(
-  cfg: OpenClawConfig,
-  agentId?: string | null,
-): MessageToolsConfig | undefined {
+/** Resolves message-tool policy after applying agent-specific overrides. */
+export function resolveEffectiveMessageToolsConfig(params: {
+  cfg: OpenClawConfig;
+  agentId?: string | null;
+}): MessageToolsConfig | undefined {
+  const { cfg, agentId } = params;
   const trimmedAgentId = agentId?.trim();
   const globalConfig = cfg.tools?.message;
   if (!trimmedAgentId) {
@@ -170,16 +160,6 @@ function resolveAgentMessageToolsConfig(
 }
 
 /**
- * Resolves the message-tool policy after applying any agent-specific overrides.
- */
-export function resolveEffectiveMessageToolsConfig(params: {
-  cfg: OpenClawConfig;
-  agentId?: string | null;
-}): MessageToolsConfig | undefined {
-  return resolveAgentMessageToolsConfig(params.cfg, params.agentId);
-}
-
-/**
  * Returns the normalized allowed message actions for an agent or the global policy.
  */
 export function resolveAllowedMessageActions(params: {
@@ -214,7 +194,7 @@ export function enforceMessageActionAllowlist(params: {
 }
 
 /**
- * Enforces cross-context message-send policy for a bound channel/thread context.
+ * Enforces source-provider policy independently of channel/thread target availability.
  */
 export function enforceCrossContextPolicy(params: {
   channel: ChannelId;
@@ -224,12 +204,6 @@ export function enforceCrossContextPolicy(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;
 }): void {
-  const currentTarget =
-    params.toolContext?.currentChannelId?.trim() ??
-    params.toolContext?.currentMessagingTarget?.trim();
-  if (!currentTarget) {
-    return;
-  }
   if (!CONTEXT_GUARDED_ACTIONS.has(params.action)) {
     return;
   }
@@ -242,7 +216,7 @@ export function enforceCrossContextPolicy(params: {
   // Runtime must not keep a second legacy interpretation path here.
   const currentProvider = params.toolContext?.currentChannelProvider;
   const allowWithinProvider = messageConfig?.crossContext?.allowWithinProvider !== false;
-  const allowAcrossProviders = messageConfig?.crossContext?.allowAcrossProviders === true;
+  const allowAcrossProviders = messageConfig?.crossContext?.allowAcrossProviders !== false;
 
   // Provider mismatch is stronger than target mismatch; normalize targets only within one provider.
   if (currentProvider && currentProvider !== params.channel) {
@@ -257,6 +231,13 @@ export function enforceCrossContextPolicy(params: {
   }
 
   if (allowWithinProvider) {
+    return;
+  }
+
+  const currentTarget =
+    params.toolContext?.currentChannelId?.trim() ??
+    params.toolContext?.currentMessagingTarget?.trim();
+  if (!currentTarget) {
     return;
   }
 

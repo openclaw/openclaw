@@ -14,40 +14,6 @@ func chatMarkdownDisclosureSummarySource(
     authoredSummary ?? localizedDefault()
 }
 
-/// Shared native Markdown rendering for app-owned chat surfaces outside the
-/// full OpenClaw chat transcript.
-@MainActor
-public struct OpenClawChatMarkdownView: View {
-    private let text: String
-    private let isUserMessage: Bool
-    private let variant: ChatMarkdownVariant
-    private let textColor: Color
-    private let isComplete: Bool
-
-    public init(
-        text: String,
-        isUserMessage: Bool,
-        variant: ChatMarkdownVariant = .standard,
-        textColor: Color,
-        isComplete: Bool = true)
-    {
-        self.text = text
-        self.isUserMessage = isUserMessage
-        self.variant = variant
-        self.textColor = textColor
-        self.isComplete = isComplete
-    }
-
-    public var body: some View {
-        ChatMarkdownRenderer(
-            text: self.text,
-            context: self.isUserMessage ? .user : .assistant,
-            variant: self.variant,
-            textColor: self.textColor,
-            isComplete: self.isComplete)
-    }
-}
-
 @MainActor
 struct ChatMarkdownRenderer: View {
     enum Context {
@@ -99,11 +65,6 @@ struct ChatMarkdownRenderer: View {
     let variant: ChatMarkdownVariant
     let typography: Typography
     let textColor: Color
-
-    static func styledText(_ content: String, font: Font) -> SwiftUI.Text {
-        SwiftUI.Text(content)
-            .font(font)
-    }
 
     var reveal: ChatMarkdownProseReveal?
 
@@ -238,10 +199,24 @@ struct ChatMarkdownRenderSnapshot {
 
     init(text: String, isComplete: Bool, preparesReveal: Bool = false) {
         let processed = ChatMarkdownPreprocessor.preprocess(markdown: text)
-        self.blocks = ChatMarkdownBlockSegmenter.segments(
+        let segments = ChatMarkdownBlockSegmenter.segments(
             markdown: processed.cleaned,
-            isComplete: isComplete).map {
-            Self.renderedBlock($0, isComplete: isComplete, preparesReveal: preparesReveal)
+            isComplete: isComplete)
+        let lastProseIndex: Int? = if preparesReveal, !isComplete {
+            segments.lastIndex {
+                if case .prose = $0 {
+                    return true
+                }
+                return false
+            }
+        } else {
+            nil
+        }
+        self.blocks = segments.enumerated().map { index, block in
+            Self.renderedBlock(
+                block,
+                isComplete: isComplete,
+                preparesReveal: preparesReveal && (isComplete || index == lastProseIndex))
         }
         self.images = processed.images
     }
@@ -334,6 +309,7 @@ private struct ChatMarkdownDisclosureView: View {
     let typography: ChatMarkdownRenderer.Typography
     let textColor: Color
 
+    // periphery:ignore - Read and written through $isExpanded; Xcode 27 omits the projected-binding reference.
     @State private var isExpanded: Bool
 
     init(
@@ -423,16 +399,6 @@ struct ChatMarkdownProse {
             self.prefix = AttributedString()
             self.tail = []
         }
-    }
-
-    // periphery:ignore - package tests inspect parsed math spans without exposing renderer internals.
-    var inlineMathLatex: [String] {
-        self.inlineContent?.compactMap { content in
-            if case let .math(span) = content {
-                return span.latex
-            }
-            return nil
-        } ?? []
     }
 
     var inlineAccessibilityText: String? {
@@ -594,8 +560,19 @@ struct ChatMarkdownProse {
         let options = AttributedString.MarkdownParsingOptions(
             interpretedSyntax: .full,
             failurePolicy: .returnPartiallyParsedIfPossible)
-        return (try? AttributedString(markdown: displayMarkdown, options: options))
+        let parsed = (try? AttributedString(markdown: displayMarkdown, options: options))
             ?? AttributedString(displayMarkdown)
+        // Foundation stores block boundaries as presentation intents, without newline
+        // characters. SwiftUI Text needs explicit separators, including on the reveal path.
+        var rendered = AttributedString()
+        for (_, range) in parsed.runs[\.presentationIntent] {
+            if !rendered.characters.isEmpty {
+                let trailingNewlines = rendered.characters.suffix(2).reversed().prefix { $0 == "\n" }.count
+                rendered.append(AttributedString(String(repeating: "\n", count: 2 - trailingNewlines)))
+            }
+            rendered.append(AttributedString(parsed[range]))
+        }
+        return rendered
     }
 
     private static func tailPieces(

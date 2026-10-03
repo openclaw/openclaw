@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   projectAgentHarnessTranscriptMessageForDisplay,
+  restorePreparedUserTurnOperationalMetaForRuntime,
   runAgentHarnessBeforeMessageWriteHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -17,7 +18,9 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import {
   isCompatibleSingletonRewrite,
   isCompleteToolGroup,
+  isSameUserTurn,
   projectReplayPayload,
+  userText,
   type AttemptTranscriptMessage as TranscriptMessage,
 } from "./attempt-transcript-replay.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
@@ -187,7 +190,7 @@ export function createAttemptTranscriptJournal(params: {
     options: { singleton?: boolean } = {},
   ): TranscriptMessage | undefined => {
     const message = structuredClone(write.message) as TranscriptMessage;
-    const originalReplayPayload = structuredClone(projectReplayPayload(message));
+    const originalReplayPayload = projectReplayPayload(message);
     const hooked = runAgentHarnessBeforeMessageWriteHook({
       message: structuredClone(message) as TranscriptMessage,
       agentId: target.agentId,
@@ -212,7 +215,7 @@ export function createAttemptTranscriptJournal(params: {
       message.role === "toolResult"
         ? { toolCallId: message.toolCallId, toolName: message.toolName }
         : {};
-    const prepared = projectDisplay({
+    const projected = projectDisplay({
       ...hooked,
       ...toolIdentity,
       ...(taintMetadata
@@ -222,6 +225,13 @@ export function createAttemptTranscriptJournal(params: {
       ...(message.role === "user" && message.provenance ? { provenance: message.provenance } : {}),
       ...((message as { display?: boolean }).display === false ? { display: false } : {}),
     }) as TranscriptMessage;
+    const prepared =
+      message.role === "user"
+        ? restorePreparedUserTurnOperationalMetaForRuntime({
+            runtimeMessage: projected,
+            preparedMessage: message,
+          })
+        : projected;
     return options.singleton && !isCompatibleSingletonRewrite(message, prepared)
       ? undefined
       : prepared;
@@ -252,7 +262,9 @@ export function createAttemptTranscriptJournal(params: {
       replayInvalid = true;
     }
     if (outcome.result.message.role === "user") {
-      write.recorder?.markRuntimePersisted(outcome.result.message, outcome.result.anchor);
+      write.recorder?.markRuntimePersisted(outcome.result.message, outcome.result.anchor, {
+        appended: outcome.result.appended,
+      });
     }
     return outcome.result as AppendResult;
   };
@@ -447,7 +459,7 @@ export function createAttemptTranscriptJournal(params: {
         accept(outcome);
         persistedInitialUser = persisted;
         terminalAnchor = outcome.anchor;
-        recorder.markRuntimePersisted(persisted, outcome.anchor);
+        recorder.markRuntimePersisted(persisted, outcome.anchor, { appended: outcome.appended });
         params.attempt.onUserMessagePersisted?.(persisted);
         await publish(outcome.appended);
       })();
@@ -484,10 +496,13 @@ export function createAttemptTranscriptJournal(params: {
       schedule(async () => {
         const recorder = sdkUserRecorders.get(input.eventId);
         sdkUserRecorders.delete(input.eventId);
-        const provenance = (await recorder?.resolveMessage())?.provenance;
+        const preparedMessage = await recorder?.resolveMessage();
         const write: PendingWrite = {
           eventId: input.eventId,
-          message: provenance ? { ...input.message, provenance } : input.message,
+          message: restorePreparedUserTurnOperationalMetaForRuntime({
+            runtimeMessage: input.message,
+            preparedMessage,
+          }),
           recorder,
         };
         if (pendingTools) {
@@ -650,50 +665,4 @@ function isCurrentJournalIdentity(
   return (
     key === `${params.attempt.runId}:user` || key.startsWith(`copilot-sdk:${params.sdkSessionId}:`)
   );
-}
-
-function isSameUserTurn(
-  candidate: AgentMessage | undefined,
-  current: Extract<AgentMessage, { role: "user" }> | undefined,
-  currentRunUserKey: string,
-): boolean {
-  if (candidate?.role !== "user" || !current) {
-    return false;
-  }
-  if (candidate === current) {
-    return true;
-  }
-  const candidateKey = (candidate as { idempotencyKey?: unknown }).idempotencyKey;
-  const currentKey = (current as { idempotencyKey?: unknown }).idempotencyKey;
-  if (typeof candidateKey === "string" || typeof currentKey === "string") {
-    if (typeof candidateKey === "string" && typeof currentKey === "string") {
-      return candidateKey === currentKey;
-    }
-    if (
-      typeof candidateKey !== "string" ||
-      typeof currentKey === "string" ||
-      (!candidateKey.startsWith("copilot:") && candidateKey !== currentRunUserKey)
-    ) {
-      return false;
-    }
-  }
-  // The embedded-runner boundary identifies the active user as the last user
-  // and stamps it with this recorder timestamp; historical turns are ineligible.
-  return (
-    candidate.timestamp === current.timestamp &&
-    userText(candidate.content) === userText(current.content)
-  );
-}
-
-function userText(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content) && content.length === 1) {
-    const part = content[0] as { text?: unknown; type?: unknown };
-    if (part?.type === "text" && typeof part.text === "string") {
-      return part.text;
-    }
-  }
-  return JSON.stringify(content) ?? "";
 }

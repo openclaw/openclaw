@@ -1,6 +1,7 @@
 // Runtime import side-effect contract tests cover cold import behavior for plugin runtime code.
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { assertNoImportTimeSideEffects } from "../../plugin-sdk/test-helpers/import-side-effects.js";
 
 const listChannelPlugins = vi.hoisted(() =>
@@ -21,7 +22,6 @@ const CHANNEL_REGISTRY_WHY =
 const CHANNEL_REGISTRY_FIX =
   "keep the seam behind a lazy getter/runtime boundary so import stays cold and the first real lookup loads once.";
 const HOT_RUNTIME_IMPORT_CASES = [
-  ["src/config/markdown-tables.ts", () => import("../../config/markdown-tables.js")],
   [
     "src/plugin-sdk/approval-handler-adapter-runtime.ts",
     () => import("../../plugin-sdk/approval-handler-adapter-runtime.js"),

@@ -1,13 +1,17 @@
-// `/model` directive parser for auto-reply messages.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelSelectionScope } from "../config/types.agent-defaults.js";
-import { escapeRegExp } from "../utils.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { removeDirectiveSpan } from "./reply/directive-parsing.js";
 
 export type { ModelSelectionScope } from "../config/types.agent-defaults.js";
 
-const MODEL_REF_PATTERN = String.raw`[A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*`;
+const QUOTED_ATOM_PATTERN = String.raw`"(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"`;
+const QUOTED_ATOM_RE = new RegExp(`^${QUOTED_ATOM_PATTERN}$`);
+const QUOTED_MODEL_PREFIX_RE = new RegExp(`^${QUOTED_ATOM_PATTERN}`, "i");
+const UNQUOTED_MODEL_REF_PATTERN = String.raw`[A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*`;
+const MODEL_REF_PATTERN = String.raw`(?:(?:${QUOTED_ATOM_PATTERN}|${UNQUOTED_MODEL_REF_PATTERN})@${QUOTED_ATOM_PATTERN}|${UNQUOTED_MODEL_REF_PATTERN})`;
 const MODEL_RUNTIME_VALUE_PATTERN = String.raw`[A-Za-z0-9_.:-]+`;
 const MODEL_SCOPE_OPTION_PATTERN = String.raw`(?:--session|-s|--agent|-a|--global|-g)(?=$|\s)`;
 const MODEL_OPTION_PATTERN = String.raw`(?:(?:${MODEL_SCOPE_OPTION_PATTERN}|--runtime)(?=$|\s)|runtime=|harness=)`;
@@ -39,14 +43,6 @@ function parseModelScope(raw: string | undefined): ModelSelectionScope | undefin
   }
 }
 
-function parseModelDirectiveMatch(match: RegExpMatchArray | null) {
-  return {
-    rawModel: match?.[1]?.trim(),
-    rawRuntime: (match?.[2] ?? match?.[5])?.trim(),
-    scope: parseModelScope(match?.[3] ?? match?.[4]),
-  };
-}
-
 function hasAdditionalModelScope(body: string, match: RegExpMatchArray | null): boolean {
   if (!match || match.index === undefined) {
     return false;
@@ -73,8 +69,30 @@ export function extractModelDirective(
     return { cleaned: "", scopeConflict: false, hasDirective: false };
   }
 
-  const modelOptionsOnlyMatch = MODEL_OPTIONS_ONLY_DIRECTIVE_PATTERN.exec(body);
-  const modelMatch = modelOptionsOnlyMatch ?? MODEL_DIRECTIVE_PATTERN.exec(body);
+  const modelDirectiveMatch = MODEL_DIRECTIVE_PATTERN.exec(body);
+  const modelReference = modelDirectiveMatch?.[1];
+  const quotedModel = modelReference?.startsWith('"')
+    ? QUOTED_MODEL_PREFIX_RE.exec(modelReference)?.[0]
+    : undefined;
+  const quotedProfileOffset = quotedModel?.length ?? modelReference?.indexOf('@"') ?? -1;
+  const quotedProfile =
+    quotedProfileOffset >= 0 ? modelReference?.slice(quotedProfileOffset + 1) : undefined;
+  // Commands ignore case, but JSON string escapes are case-sensitive.
+  if (
+    (quotedModel !== undefined && !QUOTED_ATOM_RE.test(quotedModel)) ||
+    (quotedProfile !== undefined && !QUOTED_ATOM_RE.test(quotedProfile)) ||
+    (modelDirectiveMatch?.index !== undefined &&
+      (!modelReference || modelReference.endsWith("@")) &&
+      body
+        .slice(modelDirectiveMatch.index + modelDirectiveMatch[0].length)
+        .trimStart()
+        .startsWith('"'))
+  ) {
+    return { cleaned: body, scopeConflict: false, hasDirective: false };
+  }
+  const modelOptionsOnlyMatch =
+    quotedProfile === undefined ? MODEL_OPTIONS_ONLY_DIRECTIVE_PATTERN.exec(body) : null;
+  const modelMatch = modelOptionsOnlyMatch ?? modelDirectiveMatch;
 
   const aliases = normalizeStringEntries(options?.aliases);
   const aliasMatch =
@@ -86,18 +104,27 @@ export function extractModelDirective(
         ).exec(body);
 
   const match = modelMatch ?? aliasMatch;
-  const parsed = modelOptionsOnlyMatch
-    ? {
-        rawModel: undefined,
-        rawRuntime: (modelOptionsOnlyMatch[1] ?? modelOptionsOnlyMatch[4])?.trim(),
-        scope: parseModelScope(modelOptionsOnlyMatch[2] ?? modelOptionsOnlyMatch[3]),
-      }
-    : parseModelDirectiveMatch(match);
-  const { rawModel: raw, rawRuntime, scope } = parsed;
+  const raw = modelOptionsOnlyMatch ? undefined : match?.[1]?.trim();
+  const rawRuntime = (
+    modelOptionsOnlyMatch
+      ? (modelOptionsOnlyMatch[1] ?? modelOptionsOnlyMatch[4])
+      : (match?.[2] ?? match?.[5])
+  )?.trim();
+  const scope = parseModelScope(
+    modelOptionsOnlyMatch
+      ? (modelOptionsOnlyMatch[2] ?? modelOptionsOnlyMatch[3])
+      : (match?.[3] ?? match?.[4]),
+  );
 
   let rawModel = raw;
   let rawProfile: string | undefined;
-  if (raw) {
+  if (raw && quotedProfile !== undefined) {
+    rawModel =
+      quotedModel === undefined
+        ? raw.slice(0, quotedProfileOffset)
+        : normalizeOptionalString(JSON.parse(quotedModel));
+    rawProfile = normalizeOptionalString(JSON.parse(quotedProfile));
+  } else if (raw) {
     const split = splitTrailingAuthProfile(raw);
     rawModel = split.model;
     rawProfile = split.profile;

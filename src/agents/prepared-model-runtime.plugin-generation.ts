@@ -1,19 +1,63 @@
-import {
-  listRuntimePluginIdsFromRegistry,
-  registryContainsRuntimePluginIds,
-} from "../plugins/active-runtime-registry.js";
+import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
-import {
-  resolveAgentRuntimePluginLoadPlan,
-  resolveAgentRuntimePluginSelections,
-} from "./harness/runtime-plugin-load-plan.js";
+import { resolveAgentRuntimePluginSelectionOwners } from "./harness/runtime-plugin-load-plan.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
+import { ownPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
+  PreparedMediaCapabilityProviderAcquisition,
+  PreparedMediaCapabilityProviderSource,
 } from "./prepared-model-runtime.types.js";
+
+/** Retains the original source and checks its captured authority only for new admission. */
+export function acquirePreparedMediaCapabilityProviders(
+  source: PreparedMediaCapabilityProviderSource,
+  providers: PreparedMediaCapabilityProviderAcquisition["providers"],
+  registry: PreparedMediaCapabilityProviderSource["registry"],
+): PreparedMediaCapabilityProviderAcquisition {
+  const isCurrent = capturePluginLifecycleAuthority(source.registry, undefined, {
+    scopedRuntime: true,
+  });
+  let released = false;
+  const assertOpen = () => {
+    if (released || !isCurrent?.()) {
+      throw new Error(
+        "The media provider setup changed before generation started. Retry the request with the current provider setup.",
+      );
+    }
+  };
+  assertOpen();
+  // Execute through the composed view so nested lookups retain adopted donor registrations.
+  const invocations = source.resources.createInvocationScope(registry);
+  const claim = source.resources.retain();
+  return {
+    providers: {
+      mediaUnderstandingProviders: providers.mediaUnderstandingProviders?.map((provider) =>
+        invocations.wrap(provider),
+      ),
+      imageGenerationProviders: providers.imageGenerationProviders?.map((provider) =>
+        invocations.wrap(provider),
+      ),
+      videoGenerationProviders: providers.videoGenerationProviders?.map((provider) =>
+        invocations.wrap(provider),
+      ),
+      musicGenerationProviders: providers.musicGenerationProviders?.map((provider) =>
+        invocations.wrap(provider),
+      ),
+    },
+    assertOpen,
+    release: () => {
+      released = true;
+      invocations.release();
+      return claim.release();
+    },
+  };
+}
 
 // Lineage is cache identity only. Derived generations still require the exact open
 // parent lease at admission; they never become configured publication authority.
@@ -31,18 +75,26 @@ export function preparedPluginGenerationSupportsSelections(
     return true;
   }
   const registry = generation.pluginRegistry;
-  if (!registry) {
-    return false;
-  }
-  const plan = resolveAgentRuntimePluginLoadPlan({
+  const selection = resolveAgentRuntimePluginSelectionOwners({
     config: input.config,
     workspaceDir:
       generation.pluginMetadataSnapshot.workspaceDir ?? input.workspaceDir ?? process.cwd(),
-    basePluginIds: listRuntimePluginIdsFromRegistry(registry),
-    selections: resolveAgentRuntimePluginSelections(input.config, input.runtimePluginSelections),
+    selections: input.runtimePluginSelections,
     metadataSnapshot: generation.pluginMetadataSnapshot,
   });
-  return registryContainsRuntimePluginIds(registry, plan.pluginIds);
+  // Failed and disabled loads are recorded generation outcomes, not missing owners.
+  // Borrowing preserves those outcomes; downstream model resolution owns availability.
+  // Shared capabilities retain their admitted outcome, including context-engine fallback.
+  return (
+    registry !== undefined &&
+    selection.pluginIds.every(
+      (id) =>
+        registry.plugins.some(
+          (plugin) =>
+            plugin.id === id && (plugin.status === "error" || plugin.status === "disabled"),
+        ) || registryContainsRuntimePluginIds(registry, [id]),
+    )
+  );
 }
 
 export function preparedPluginGenerationReusesBase(
@@ -61,6 +113,7 @@ export function createPreparedPluginGeneration(params: {
   inboundPluginRegistry: PreparedModelRuntimePluginGeneration["inboundPluginRegistry"];
   inlineProviderModels: PreparedModelRuntimePluginGeneration["inlineProviderModels"];
   mediaCapabilityProviders: PreparedModelRuntimePluginGeneration["mediaCapabilityProviders"];
+  mediaCapabilityProviderSource?: PreparedModelRuntimePluginGeneration["mediaCapabilityProviderSource"];
   messageToolCatalog: PreparedModelRuntimePluginGeneration["messageToolCatalog"];
   pluginMetadataSnapshot: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"];
   preparedStaticProviderCatalog: PreparedModelRuntimePluginGeneration["preparedStaticProviderCatalog"];
@@ -82,15 +135,18 @@ export function createPreparedPluginGeneration(params: {
       pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       pluginRegistry: params.runtimePluginRegistry,
       mediaCapabilityProviders: params.mediaCapabilityProviders,
+      mediaCapabilityProviderSource: params.mediaCapabilityProviderSource,
       messageToolCatalog: params.messageToolCatalog,
       preparedStaticProviderCatalog: params.preparedStaticProviderCatalog,
     });
     if (params.pluginMetadataSnapshot === reusable.pluginMetadataSnapshot) {
       derivedGenerationBases.set(derived, reusable);
     }
+    ownPreparedPluginGeneration(derived);
     return derived;
   }
-  return Object.freeze({
+  const generation = Object.freeze({
+    remoteCatalog: captureRemoteModelCatalogSnapshot(),
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     inlineProviderModels: Object.freeze([...params.inlineProviderModels]),
     configuredCatalogEntries: Object.freeze([...params.configuredCatalogEntries]),
@@ -103,6 +159,9 @@ export function createPreparedPluginGeneration(params: {
     ...(params.mediaCapabilityProviders
       ? { mediaCapabilityProviders: params.mediaCapabilityProviders }
       : {}),
+    ...(params.mediaCapabilityProviderSource
+      ? { mediaCapabilityProviderSource: params.mediaCapabilityProviderSource }
+      : {}),
     ...(params.preparedStaticProviderCatalog
       ? { preparedStaticProviderCatalog: params.preparedStaticProviderCatalog }
       : {}),
@@ -110,15 +169,20 @@ export function createPreparedPluginGeneration(params: {
       ? { providerStaticModels: Object.freeze([...(params.providerStaticModels ?? [])]) }
       : {}),
   });
+  ownPreparedPluginGeneration(generation);
+  return generation;
 }
 
 export async function buildPreparedPluginModelCatalog(params: {
+  includeNative?: boolean;
+  providerIds?: readonly string[];
   agentFacts: {
     credentials: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["authCredentials"];
     input: PreparedModelRuntimeInput;
   };
   catalogMode: PreparedModelRuntimeCatalogMode;
   modelRegistry: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["modelRegistry"];
+  providerOutcomes?: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["providerOutcomes"];
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }) {
   const { credentials, input } = params.agentFacts;
@@ -130,12 +194,14 @@ export async function buildPreparedPluginModelCatalog(params: {
       config: input.config,
       modelRegistry: params.modelRegistry,
       metadataSnapshot,
+      providerOutcomes: params.providerOutcomes,
       includeProviderPluginAugmentation: params.catalogMode === "live",
+      providerIds: params.providerIds,
       ...(input.env ? { env: input.env } : {}),
       ...(input.readOnly ? { readOnly: true } : {}),
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     });
-    return params.catalogMode === "live"
+    return params.catalogMode === "live" && params.includeNative !== false
       ? await augmentPreparedModelCatalogWithAgentHarness({
           input,
           snapshot,

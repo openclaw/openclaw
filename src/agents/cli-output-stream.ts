@@ -9,7 +9,6 @@ import type {
 import type {
   CliJsonlStreamingParserOptions,
   CliOutput,
-  CliStreamJsonOutputLimits,
   CliUsage,
 } from "./cli-output-contracts.js";
 import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
@@ -21,7 +20,6 @@ import {
   dispatchClaudeCliStreamingToolEvent,
   dispatchClaudeCliThinking,
   dispatchGeminiCliStreamingToolEvent,
-  isClaudeToolUseBlockType,
   partitionLeadingTaggedReasoning,
   projectCliBackendEvent,
   projectCliTaggedReasoning,
@@ -30,73 +28,31 @@ import * as cliOutputLifecycle from "./cli-output-lifecycle.js";
 import {
   decodeCliRecords,
   isClaudeStreamJsonDialect,
-  isClaudeStreamJsonResult,
   isClaudeSyntheticNoResponse,
   isClaudeSubagentRecord,
+  isClaudeToolUseBlockType,
   isGeminiStreamJsonDialect,
-  isStreamJsonDialect,
   missingMessageBoundarySeparator,
   parseClaudeCliJsonlResult,
   parseClaudeCliStreamingDelta,
   pickCliResumeCheckpointId,
   pickCliSessionId,
   preferGeminiCliStreamJsonError,
+  readClaudeAttributedSubagentProgressId,
   preferStreamedClaudeTextOverResult,
   readCliUsage,
   readGeminiCliStreamJsonError,
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
-
-const CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
-const CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES = 20_000;
+import { appendCliResultText } from "./cli-output-results.js";
+import {
+  CLI_STREAM_JSON_OUTPUT_LIMITS,
+  frameBoundedCliJsonlChunk,
+  streamJsonOutputLimitErrorText,
+} from "./cli-output-stream-limits.js";
 export const CLI_STREAM_JSON_MISSING_RESULT_ERROR =
   "CLI stream-json output ended without a result event.";
 const CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR = "Claude CLI returned a synthetic no-response result.";
-
-const CLI_STREAM_JSON_OUTPUT_LIMITS = Object.freeze({
-  maxTurnRawChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
-  maxPendingLineChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
-  maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
-} satisfies CliStreamJsonOutputLimits);
-
-/** Frames arbitrary stdout chunks while bounding each individual raw JSONL line. */
-function frameBoundedCliJsonlChunk(
-  state: { pending: string },
-  chunk: string,
-  maxLineChars: number,
-  onLine: (line: string) => boolean | void,
-): boolean {
-  for (let offset = 0; offset < chunk.length;) {
-    const newlineIndex = chunk.indexOf("\n", offset);
-    const lineEnd = newlineIndex === -1 ? chunk.length : newlineIndex;
-    if (state.pending.length + (lineEnd - offset) > maxLineChars) {
-      state.pending = "";
-      return false;
-    }
-    state.pending += chunk.slice(offset, lineEnd);
-    if (newlineIndex === -1) {
-      return true;
-    }
-    const line = state.pending;
-    // Control-response writes can synchronously reenter stdout framing.
-    state.pending = "";
-    offset = newlineIndex + 1;
-    if (onLine(line) === false) {
-      return true;
-    }
-  }
-  return true;
-}
-
-function streamJsonOutputLimitErrorText(kind: "raw" | "line" | "lines", limit: number): string {
-  if (kind === "line") {
-    return `CLI JSONL line exceeded ${limit} characters; refusing to parse output.`;
-  }
-  if (kind === "lines") {
-    return `CLI JSONL output exceeded ${limit} lines; refusing to parse output.`;
-  }
-  return `CLI JSONL output exceeded ${limit} characters; refusing to parse output.`;
-}
 
 export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOptions) {
   const lineBuffer = { pending: "" };
@@ -138,19 +94,18 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let taggedReasoningRouter = createLeadingTaggedReasoningRouter();
   let currentTaggedReasoningText = "";
 
+  const appendAssistantText = (delta: string) => {
+    assistantText += delta;
+    params.onAssistantDelta({ text: assistantText, delta, sessionId, usage });
+  };
+
   const flushPendingClaudeAssistantText = () => {
     if (!pendingClaudeText) {
       return;
     }
     const delta = pendingClaudeText;
     pendingClaudeText = "";
-    assistantText = `${assistantText}${delta}`;
-    params.onAssistantDelta({
-      text: assistantText,
-      delta,
-      sessionId,
-      usage,
-    });
+    appendAssistantText(delta);
   };
 
   const flushPendingClaudeCommentaryText = () => {
@@ -193,9 +148,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
     pendingMessageSeparator = false;
     sawToolUseSinceText = false;
-    const deltaText = `${separator}${delta}`;
-    assistantText = `${assistantText}${deltaText}`;
-    params.onAssistantDelta({ text: assistantText, delta: deltaText, sessionId, usage });
+    appendAssistantText(`${separator}${delta}`);
   };
 
   const routeTaggedReasoningDeltas = (
@@ -329,16 +282,33 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (parseErrorText) {
       return;
     }
-    if (parsed.type === "result" && isStreamJsonDialect(params)) {
+    const attributedParentToolUseId = readClaudeAttributedSubagentProgressId(parsed);
+    if (attributedParentToolUseId) {
+      params.onAttributedSubagentProgress?.(attributedParentToolUseId);
+    }
+    if (
+      claudeStreamJson &&
+      parsed.type === "system" &&
+      parsed.subtype === "init" &&
+      !isClaudeSubagentRecord(parsed)
+    ) {
+      try {
+        params.onNativeTools?.(parsed.tools);
+      } catch (error) {
+        parseErrorText = truncateUtf16Safe(formatErrorMessage(error), 500);
+        return;
+      }
+    }
+    if (
+      parsed.type === "result" &&
+      parsed.openclaw_interim_result !== true &&
+      supportsCliJsonlToolEvents(params)
+    ) {
       sawTerminalResult = true;
     }
     observeSessionId(parsed);
     const nextUsage = readCliUsage(parsed);
-    const isClaudeTerminalResult =
-      isClaudeStreamJsonDialect({
-        backend: params.backend,
-        providerId: params.providerId,
-      }) && parsed.type === "result";
+    const isClaudeTerminalResult = claudeStreamJson && parsed.type === "result";
     if (isClaudeTerminalResult && nextUsage && usage) {
       diagnosticUsage = nextUsage;
     }
@@ -346,11 +316,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       params.onUsage?.(nextUsage, isClaudeTerminalResult);
     }
     const shouldUseUsage =
-      !isClaudeStreamJsonResult({
-        backend: params.backend,
-        providerId: params.providerId,
-        parsed,
-      }) || !usage;
+      !supportsCliJsonlToolEvents(params) || parsed.type !== "result" || !usage;
     if (shouldUseUsage) {
       usage = nextUsage ?? usage;
     }
@@ -395,11 +361,11 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       return;
     }
 
-    if (classifyClaudeCommentary && parsed.type === "result") {
+    if (parsed.type === "result") {
       finishTaggedReasoningMessage();
-      flushPendingClaudeAssistantText();
-    } else if (parsed.type === "result") {
-      finishTaggedReasoningMessage();
+      if (classifyClaudeCommentary) {
+        flushPendingClaudeAssistantText();
+      }
     }
 
     let result = parseClaudeCliJsonlResult({
@@ -410,7 +376,18 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       usage,
     });
     if (result) {
-      if (result.errorText) {
+      // A stopped turn is only a failure when nothing was delivered; text
+      // streamed before the stop is still the reply, so this one defers until
+      // the resolved text below is known.
+      const stoppedTurn =
+        result.terminalFailure?.reason === "turn_stopped" ? result.terminalFailure : undefined;
+      const stoppedTurnErrorText = stoppedTurn ? (result.errorText ?? "") : "";
+      if (stoppedTurn) {
+        const delivered = { ...result };
+        delete delivered.errorText;
+        delete delivered.terminalFailure;
+        result = delivered;
+      } else if (result.errorText) {
         output = result;
         return;
       }
@@ -443,21 +420,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       const nextText = (
         keepStreamed ? preservedCandidate : result.text || streamedText || texts.join("\n").trim()
       ).trim();
-      const previousText = output?.text?.trim() ?? "";
-      // Claude Code may emit an interim result while background agents run, then
-      // a second result after task-notification. Preserve earlier result text
-      // when the later envelope does not already include it.
-      let text = nextText;
-      if (
-        previousText &&
-        nextText &&
-        previousText !== nextText &&
-        !nextText.startsWith(previousText)
-      ) {
-        text = `${previousText}\n${nextText}`;
-      } else if (!nextText) {
-        text = previousText;
-      }
+      const { text, textParts, completedText } = appendCliResultText(output, nextText);
       const syntheticNoResponse =
         sawClaudeSyntheticNoResponse &&
         parsed.subtype === "success" &&
@@ -468,15 +431,36 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       output = {
         ...result,
         text,
+        ...((textParts.length > 1 ||
+          output?.textParts ||
+          parsed.openclaw_interim_result === true) &&
+        !(stoppedTurn && !nextText)
+          ? { textParts }
+          : {}),
         ...(syntheticNoResponse
           ? {
               errorText: CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR,
               terminalFailure: { reason: "synthetic_no_response" as const },
             }
           : {}),
+        // The CLI's own terminal reason outranks the synthetic marker: it names
+        // why the turn stopped and must not be retried like a format fault.
+        // Delivery is judged on this result's own segment; text an earlier
+        // interim result already committed is not this turn's reply.
+        ...(stoppedTurn && !nextText
+          ? { text: "", errorText: stoppedTurnErrorText, terminalFailure: stoppedTurn }
+          : {}),
         ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
         ...(diagnosticUsage ? { diagnosticUsage } : {}),
       };
+      if (
+        parsed.openclaw_interim_result === true &&
+        completedText &&
+        !output.errorText &&
+        !output.terminalFailure
+      ) {
+        params.onCompletedReply?.(completedText, textParts.length - 1);
+      }
       // An interim result commits its segment. Rebase boundary state so later
       // text is judged on its own, while delta snapshots stay cumulative.
       segmentStart = assistantText.length;
@@ -591,13 +575,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       ) {
         const deltaText = parsed.content;
         if (deltaText) {
-          assistantText = `${assistantText}${deltaText}`;
-          params.onAssistantDelta({
-            text: assistantText,
-            delta: deltaText,
-            sessionId,
-            usage,
-          });
+          appendAssistantText(deltaText);
         }
       } else if (
         isGeminiStreamJsonDialect(params) &&
@@ -714,7 +692,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       if (sawCustomJsonlEvent) {
         return { text: texts.join("\n").trim() || assistantText.trim(), sessionId, usage };
       }
-      if (isStreamJsonDialect(params) && assistantText.trim()) {
+      if (supportsCliJsonlToolEvents(params) && assistantText.trim()) {
         return {
           text: assistantText.trim(),
           sessionId,
@@ -725,7 +703,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       if (isGeminiStreamJsonDialect(params) && sawGeminiStructuredOutput) {
         return { text: "", sessionId, usage };
       }
-      if (isStreamJsonDialect(params)) {
+      if (supportsCliJsonlToolEvents(params)) {
         return {
           text: "",
           sessionId,

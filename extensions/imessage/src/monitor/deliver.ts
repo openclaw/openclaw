@@ -1,26 +1,19 @@
-// Imessage plugin module implements deliver behavior.
 import {
+  createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  createMessageReceiptFromOutboundResults,
-  listMessageReceiptPlatformIds,
-} from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { chunkMarkdownTextWithMode, resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { sendMessageIMessage } from "../send.js";
-import {
-  chunkTextWithMode,
-  convertMarkdownTables,
-  resolveChunkMode,
-  resolveMarkdownTableMode,
-} from "./deliver.runtime.js";
 import type { SentMessageCache } from "./echo-cache.js";
 import { sanitizeOutboundText } from "./sanitize-outbound.js";
 
@@ -69,7 +62,7 @@ export async function deliverIMessageReply(params: {
     delivered = await deliverTextOrMediaReply({
       payload,
       text: reply.text,
-      chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
+      chunkText: (value) => chunkMarkdownTextWithMode(value, textLimit, chunkMode),
       sendText: sendAccepted,
       sendMedia: ({ mediaUrl, caption }) => sendAccepted(caption ?? "", mediaUrl),
     });
@@ -80,23 +73,17 @@ export async function deliverIMessageReply(params: {
     }
     // A native attachment can settle before its caption rejects; preserve every
     // previously accepted receipt plus that nested provider-visible subset.
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: [
-        ...accepted.map((result) => ({ receipt: result.receipt })),
-        ...(partial?.receipt
-          ? [{ receipt: partial.receipt }]
-          : (partial?.messageIds ?? []).map((messageId) => ({ messageId }))),
-      ],
-      kind: reply.mediaUrls.length > 0 ? "media" : "text",
-    });
-    throw createChannelPartialDeliveryError(error, {
-      messageIds: listMessageReceiptPlatformIds(receipt),
-      receipt,
-      visibleReplySent: true,
-      content: [...accepted.map((result) => result.sentText), partial?.content]
-        .filter(Boolean)
-        .join("\n"),
-    });
+    throw createChannelPartialDeliveryError(
+      error,
+      createAcceptedChannelDeliveryResult({
+        results: accepted.map((result) => ({ receipt: result.receipt })),
+        deliveryResults: partial ? [partial] : [],
+        kind: reply.mediaUrls.length > 0 ? "media" : "text",
+        content: [...accepted.map((result) => result.sentText), partial?.content]
+          .filter(Boolean)
+          .join("\n"),
+      }),
+    );
   }
   if (delivered === "empty") {
     return {
@@ -104,20 +91,16 @@ export async function deliverIMessageReply(params: {
       suppression: { reason: "no_visible_result" as const },
     };
   }
-  const receipt = createMessageReceiptFromOutboundResults({
+  const deliveryResult = createAcceptedChannelDeliveryResult({
     results: accepted.map((result) => ({ receipt: result.receipt })),
     kind: delivered,
-  });
-  runtime.log?.(`imessage: delivered reply to ${target}`);
-  return {
-    messageIds: listMessageReceiptPlatformIds(receipt),
-    receipt,
-    visibleReplySent: true as const,
     content: accepted
       .map((result) => result.sentText)
       .filter(Boolean)
       .join("\n"),
-  };
+  });
+  runtime.log?.(`imessage: delivered reply to ${target}`);
+  return deliveryResult;
 }
 
 export function createIMessageEchoCachingSend(params: {

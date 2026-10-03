@@ -3,7 +3,15 @@
  *
  * Ages out stale unended runs while keeping recent/composed child links visible.
  */
+import { hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  getSubagentRunRuntimeKey,
+  isSameSubagentRunOwner,
+  type SubagentRunIdentity,
+} from "./subagent-run-generation.js";
 import { resolveSubagentRunDurationMs } from "./subagent-run-timeout.js";
 import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
 
@@ -13,6 +21,40 @@ type SubagentRunLivenessRecord = Pick<
 > & {
   execution: Pick<SubagentRunRecord["execution"], "startedAt" | "endedAt">;
 };
+
+/** Routing metadata alone does not own an execution. */
+export function isSubagentRunLive(
+  entry:
+    | (SubagentRunIdentity & { execution: Pick<SubagentRunRecord["execution"], "endedAt"> })
+    | null
+    | undefined,
+): boolean {
+  if (!entry || typeof entry.execution.endedAt === "number") {
+    return false;
+  }
+  const current = subagentRuns.get(entry.runId);
+  return Boolean(
+    current &&
+    typeof current.execution.endedAt !== "number" &&
+    isSameSubagentRunOwner(current, entry) &&
+    hasLiveAgentRunContext(entry.runId),
+  );
+}
+
+/** Queued admission belongs to the exact current registration and scheduler reservation. */
+export function isSubagentRunQueued(entry: SubagentRunIdentity | null | undefined): boolean {
+  const current = entry ? subagentRuns.get(entry.runId) : undefined;
+  return Boolean(
+    current &&
+    isSameSubagentRunOwner(current, entry) &&
+    current.collect &&
+    current.execution.status === "queued" &&
+    ownsSwarmRunReservation(
+      current.schedulerSlotId ?? current.runId,
+      getSubagentRunRuntimeKey(current),
+    ),
+  );
+}
 
 const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 export const RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS = 30 * 60 * 1_000;
@@ -54,28 +96,24 @@ export function isStaleUnendedSubagentRun(
   return now - startedAt > resolveStaleCutoffMs(entry);
 }
 
-/** Return whether a subagent run is still live and unended. */
-export function isLiveUnendedSubagentRun(
-  entry: SubagentRunLivenessRecord,
+/** Admission/display retention includes current owners and a bounded registration grace.
+ * This is not an executor-liveness assertion; use isSubagentRunLive for that.
+ */
+export function isRetainedUnendedSubagentRun(
+  entry: SubagentRunLivenessRecord & { runId: string },
   now = Date.now(),
 ): boolean {
-  return !hasSubagentRunEnded(entry) && !isStaleUnendedSubagentRun(entry, now);
-}
-
-function isRecentlyEndedSubagentRun(
-  entry: { execution: Pick<SubagentRunRecord["execution"], "endedAt"> },
-  now = Date.now(),
-  recentMs = RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
-): boolean {
-  if (!hasSubagentRunEnded(entry)) {
-    return false;
-  }
-  return now - entry.execution.endedAt <= recentMs;
+  return (
+    !hasSubagentRunEnded(entry) &&
+    (isSubagentRunLive(entry) ||
+      isSubagentRunQueued(entry) ||
+      !isStaleUnendedSubagentRun(entry, now))
+  );
 }
 
 /** Return whether a child-session link should still appear in subagent listings. */
 export function shouldKeepSubagentRunChildLink(
-  entry: SubagentRunLivenessRecord,
+  entry: SubagentRunLivenessRecord & { runId: string },
   options?: {
     activeDescendants?: number;
     now?: number;
@@ -83,8 +121,9 @@ export function shouldKeepSubagentRunChildLink(
 ): boolean {
   const now = options?.now ?? Date.now();
   return (
-    isLiveUnendedSubagentRun(entry, now) ||
+    isRetainedUnendedSubagentRun(entry, now) ||
     (options?.activeDescendants ?? 0) > 0 ||
-    isRecentlyEndedSubagentRun(entry, now)
+    (hasSubagentRunEnded(entry) &&
+      now - entry.execution.endedAt <= RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS)
   );
 }

@@ -27,8 +27,6 @@ func (fakeDocsTranslator) TranslateRaw(_ context.Context, text, _, _ string) (st
 	return replaced, nil
 }
 
-func (fakeDocsTranslator) Close() {}
-
 type invalidFrontmatterTranslator struct{}
 
 func (invalidFrontmatterTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -38,8 +36,6 @@ func (invalidFrontmatterTranslator) Translate(_ context.Context, text, _, _ stri
 func (invalidFrontmatterTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
 	return text, nil
 }
-
-func (invalidFrontmatterTranslator) Close() {}
 
 type transcriptFrontmatterTranslator struct{}
 
@@ -51,8 +47,6 @@ func (transcriptFrontmatterTranslator) TranslateRaw(_ context.Context, text, _, 
 	return text, nil
 }
 
-func (transcriptFrontmatterTranslator) Close() {}
-
 type errorTranslator struct{}
 
 func (errorTranslator) Translate(context.Context, string, string, string) (string, error) {
@@ -63,7 +57,21 @@ func (errorTranslator) TranslateRaw(context.Context, string, string, string) (st
 	return "", errors.New("codex exec failed: exit status 1")
 }
 
-func (errorTranslator) Close() {}
+func TestProcessFileRejectsFailedHTMLTranslation(t *testing.T) {
+	docsRoot := t.TempDir()
+	sourcePath := filepath.Join(docsRoot, "page.md")
+	if err := os.WriteFile(sourcePath, []byte("<div>Translate this text.</div>\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tm := &TranslationMemory{entries: map[string]TMEntry{}}
+	_, _, err := processFile(context.Background(), errorTranslator{}, tm, docsRoot, sourcePath, "en", "de")
+	if err == nil || err.Error() != "codex exec failed: exit status 1" {
+		t.Fatalf("expected HTML translation failure, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(docsRoot, "de", "page.md")); !os.IsNotExist(err) {
+		t.Fatalf("failed translation wrote an output page: %v", err)
+	}
+}
 
 type partialFailTranslator struct{}
 
@@ -80,8 +88,6 @@ func (partialFailTranslator) TranslateRaw(_ context.Context, text, _, _ string) 
 	}
 	return text, nil
 }
-
-func (partialFailTranslator) Close() {}
 
 type partialFailSlowTranslator struct{}
 
@@ -107,8 +113,6 @@ func (partialFailSlowTranslator) TranslateRaw(ctx context.Context, text, srcLang
 	return partialFailTranslator{}.TranslateRaw(ctx, text, srcLang, tgtLang)
 }
 
-func (partialFailSlowTranslator) Close() {}
-
 type cancelAwareTranslator struct{}
 
 func (cancelAwareTranslator) Translate(ctx context.Context, text, _, _ string) (string, error) {
@@ -125,8 +129,6 @@ func (cancelAwareTranslator) TranslateRaw(ctx context.Context, text, _, _ string
 	return text, nil
 }
 
-func (cancelAwareTranslator) Close() {}
-
 type contextErrorTranslator struct{}
 
 func (contextErrorTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -142,8 +144,6 @@ func (contextErrorTranslator) TranslateRaw(_ context.Context, text, _, _ string)
 	}
 	return text, nil
 }
-
-func (contextErrorTranslator) Close() {}
 
 type cancelAfterFirstDocTranslator struct {
 	cancel context.CancelFunc
@@ -167,8 +167,6 @@ func (t *cancelAfterFirstDocTranslator) TranslateRaw(ctx context.Context, text, 
 	}
 	return text, nil
 }
-
-func (t *cancelAfterFirstDocTranslator) Close() {}
 
 func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 	t.Parallel()
@@ -201,8 +199,8 @@ func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 		thinking:   "high",
 		overwrite:  true,
 		parallel:   1,
-	}, []string{filepath.Join(docsRoot, "gateway", "index.md")}, func(_, _ string, _ []GlossaryEntry, _ string) (docsTranslator, error) {
-		return fakeDocsTranslator{}, nil
+	}, []string{filepath.Join(docsRoot, "gateway", "index.md")}, func(_, _ string, _ []GlossaryEntry, _ string) docsTranslator {
+		return fakeDocsTranslator{}
 	})
 	if err != nil {
 		t.Fatalf("runDocsI18N failed: %v", err)
@@ -354,6 +352,7 @@ func TestClassifyDocOutputRequiresCurrentPromptVersion(t *testing.T) {
 			"x-i18n:",
 			"  source_hash: "+sourceHash,
 			fmt.Sprintf("  prompt_version: %d", version),
+			fmt.Sprintf("  workflow: %d", workflowVersion),
 			"  postprocess_version: "+localizedLinkPostprocessVersion,
 			"---",
 			"",
@@ -380,7 +379,7 @@ func TestClassifyDocOutputRequiresCurrentPromptVersion(t *testing.T) {
 	}
 }
 
-func TestFilterDocQueueSchedulesLegacyOutputsForPostprocessOnly(t *testing.T) {
+func TestFilterDocQueueSchedulesPendingOutputsForPostprocessOnly(t *testing.T) {
 	t.Parallel()
 
 	docsRoot := t.TempDir()
@@ -393,6 +392,7 @@ func TestFilterDocQueueSchedulesLegacyOutputsForPostprocessOnly(t *testing.T) {
 		"x-i18n:",
 		"  source_hash: "+hashBytes([]byte(mustReadFile(t, sourcePath))),
 		fmt.Sprintf("  prompt_version: %d", promptVersion),
+		fmt.Sprintf("  workflow: %d", workflowVersion),
 		"---",
 		"",
 		"See [Troubleshooting](/gateway/troubleshooting).",
@@ -403,7 +403,7 @@ func TestFilterDocQueueSchedulesLegacyOutputsForPostprocessOnly(t *testing.T) {
 		t.Fatalf("filterDocQueue failed: %v", err)
 	}
 	if len(pending) != 0 {
-		t.Fatalf("expected legacy matching output to skip translation, got pending=%v", pending)
+		t.Fatalf("expected current matching output to skip translation, got pending=%v", pending)
 	}
 	if skipped != 1 {
 		t.Fatalf("expected one skipped translation, got %d", skipped)
@@ -429,6 +429,7 @@ func TestFilterDocQueueHonorsMaxAcrossPostprocessOutputs(t *testing.T) {
 		"x-i18n:",
 		"  source_hash: "+hashBytes([]byte(mustReadFile(t, firstSource))),
 		fmt.Sprintf("  prompt_version: %d", promptVersion),
+		fmt.Sprintf("  workflow: %d", workflowVersion),
 		"---",
 		"",
 		"# 网关",
@@ -439,6 +440,7 @@ func TestFilterDocQueueHonorsMaxAcrossPostprocessOutputs(t *testing.T) {
 		"x-i18n:",
 		"  source_hash: "+hashBytes([]byte(mustReadFile(t, secondSource))),
 		fmt.Sprintf("  prompt_version: %d", promptVersion),
+		fmt.Sprintf("  workflow: %d", workflowVersion),
 		"---",
 		"",
 		"# 示例 provider",
@@ -479,8 +481,8 @@ func TestRunDocsI18NAllowPartialKeepsEarlierSuccessfulDocOutputs(t *testing.T) {
 		overwrite:    true,
 		allowPartial: true,
 		parallel:     1,
-	}, []string{okPath, failPath}, func(_, _ string, _ []GlossaryEntry, _ string) (docsTranslator, error) {
-		return partialFailTranslator{}, nil
+	}, []string{okPath, failPath}, func(_, _ string, _ []GlossaryEntry, _ string) docsTranslator {
+		return partialFailTranslator{}
 	})
 	if err != nil {
 		t.Fatalf("runDocsI18N failed despite partial output: %v", err)
@@ -513,8 +515,8 @@ func TestRunDocsI18NAllowPartialContinuesAfterFailedDoc(t *testing.T) {
 		overwrite:    true,
 		allowPartial: true,
 		parallel:     1,
-	}, []string{failPath, okPath}, func(_, _ string, _ []GlossaryEntry, _ string) (docsTranslator, error) {
-		return partialFailTranslator{}, nil
+	}, []string{failPath, okPath}, func(_, _ string, _ []GlossaryEntry, _ string) docsTranslator {
+		return partialFailTranslator{}
 	})
 	if err != nil {
 		t.Fatalf("runDocsI18N failed despite later partial output: %v", err)
@@ -549,8 +551,8 @@ func TestRunDocsI18NAllowPartialParallelKeepsQueuedDocsAfterFailure(t *testing.T
 		overwrite:    true,
 		allowPartial: true,
 		parallel:     2,
-	}, []string{failPath, slowPath, okPath}, func(_, _ string, _ []GlossaryEntry, _ string) (docsTranslator, error) {
-		return partialFailSlowTranslator{}, nil
+	}, []string{failPath, slowPath, okPath}, func(_, _ string, _ []GlossaryEntry, _ string) docsTranslator {
+		return partialFailSlowTranslator{}
 	})
 	if err != nil {
 		t.Fatalf("runDocsI18N failed despite later parallel output: %v", err)
@@ -588,8 +590,8 @@ func TestRunDocsI18NAllowPartialStopsAfterRunCancellation(t *testing.T) {
 		overwrite:    true,
 		allowPartial: true,
 		parallel:     1,
-	}, []string{firstPath, secondPath}, func(_, _ string, _ []GlossaryEntry, _ string) (docsTranslator, error) {
-		return cancelAwareTranslator{}, nil
+	}, []string{firstPath, secondPath}, func(_, _ string, _ []GlossaryEntry, _ string) docsTranslator {
+		return cancelAwareTranslator{}
 	})
 	if err == nil {
 		t.Fatal("expected canceled run to fail even with allowPartial=true")
@@ -620,8 +622,8 @@ func TestRunDocsI18NAllowPartialReturnsCancellationAfterPartialSuccess(t *testin
 		overwrite:    true,
 		allowPartial: true,
 		parallel:     1,
-	}, []string{firstPath, secondPath}, func(_, _ string, _ []GlossaryEntry, _ string) (docsTranslator, error) {
-		return &cancelAfterFirstDocTranslator{cancel: cancel}, nil
+	}, []string{firstPath, secondPath}, func(_, _ string, _ []GlossaryEntry, _ string) docsTranslator {
+		return &cancelAfterFirstDocTranslator{cancel: cancel}
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled run after partial success, got %v", err)
@@ -656,8 +658,8 @@ func TestRunDocsI18NAllowPartialStopsAfterContextError(t *testing.T) {
 		overwrite:    true,
 		allowPartial: true,
 		parallel:     1,
-	}, []string{firstPath, cancelPath, laterPath}, func(_, _ string, _ []GlossaryEntry, _ string) (docsTranslator, error) {
-		return contextErrorTranslator{}, nil
+	}, []string{firstPath, cancelPath, laterPath}, func(_, _ string, _ []GlossaryEntry, _ string) docsTranslator {
+		return contextErrorTranslator{}
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected cancellation error to remain terminal, got %v", err)
@@ -701,16 +703,13 @@ func TestRunDocsI18NRewritesLineTitleFromExactGlossaryWithoutModel(t *testing.T)
 			thinking:   "low",
 			overwrite:  true,
 			parallel:   1,
-		}, []string{linePath}, func(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (docsTranslator, error) {
-			translator, err := NewCodexTranslator(srcLang, tgtLang, glossary, thinking)
-			if err != nil {
-				return nil, err
-			}
+		}, []string{linePath}, func(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) docsTranslator {
+			translator := NewCodexTranslator(srcLang, tgtLang, glossary, thinking)
 			translator.runPrompt = func(context.Context, codexPromptRequest) (string, error) {
 				t.Fatalf("exact LINE title for %s should not call Codex", tgtLang)
 				return "", nil
 			}
-			return translator, nil
+			return translator
 		})
 		if err != nil {
 			t.Fatalf("runDocsI18N(%s) failed: %v", locale, err)
@@ -729,10 +728,7 @@ func TestTranslateSnippetDoesNotCacheFallbackToSource(t *testing.T) {
 	tm := &TranslationMemory{entries: map[string]TMEntry{}}
 	source := "Gateway"
 
-	translated, err := translateSnippet(context.Background(), invalidFrontmatterTranslator{}, tm, "gateway/index.md:frontmatter:title", source, "en", "zh-CN")
-	if err != nil {
-		t.Fatalf("translateSnippet returned error: %v", err)
-	}
+	translated := translateSnippet(context.Background(), invalidFrontmatterTranslator{}, tm, "gateway/index.md:frontmatter:title", source, "en", "zh-CN")
 	if translated != source {
 		t.Fatalf("expected fallback to source text, got %q", translated)
 	}
@@ -749,10 +745,7 @@ func TestTranslateSnippetRejectsTranscriptArtifact(t *testing.T) {
 	tm := &TranslationMemory{entries: map[string]TMEntry{}}
 	source := "Working with reactions across channels"
 
-	translated, err := translateSnippet(context.Background(), transcriptFrontmatterTranslator{}, tm, "tools/reactions.md:frontmatter:read_when:0", source, "en", "th")
-	if err != nil {
-		t.Fatalf("translateSnippet returned error: %v", err)
-	}
+	translated := translateSnippet(context.Background(), transcriptFrontmatterTranslator{}, tm, "tools/reactions.md:frontmatter:read_when:0", source, "en", "th")
 	if translated != source {
 		t.Fatalf("expected fallback to source text, got %q", translated)
 	}
@@ -769,10 +762,7 @@ func TestTranslateSnippetFallsBackWhenFrontmatterTranslatorFails(t *testing.T) {
 	tm := &TranslationMemory{entries: map[string]TMEntry{}}
 	source := "LINE Messaging API plugin setup, config, and usage"
 
-	translated, err := translateSnippet(context.Background(), errorTranslator{}, tm, "channels/line.md:frontmatter:summary", source, "en", "zh-CN")
-	if err != nil {
-		t.Fatalf("translateSnippet returned error: %v", err)
-	}
+	translated := translateSnippet(context.Background(), errorTranslator{}, tm, "channels/line.md:frontmatter:summary", source, "en", "zh-CN")
 	if translated != source {
 		t.Fatalf("expected fallback to source text, got %q", translated)
 	}
@@ -790,10 +780,7 @@ func TestTranslateSnippetCachesDocumentSourcePath(t *testing.T) {
 	source := "Gateway"
 	segmentID := "gateway/index.md:frontmatter:title"
 
-	translated, err := translateSnippet(context.Background(), fakeDocsTranslator{}, tm, segmentID, source, "en", "zh-CN")
-	if err != nil {
-		t.Fatalf("translateSnippet returned error: %v", err)
-	}
+	translated := translateSnippet(context.Background(), fakeDocsTranslator{}, tm, segmentID, source, "en", "zh-CN")
 	if translated != source {
 		t.Fatalf("unexpected translation %q", translated)
 	}
@@ -828,5 +815,49 @@ func TestValidateNoTranslationTranscriptArtifacts(t *testing.T) {
 	source := "Document `functions.read` examples exactly."
 	if err := validateNoTranslationTranscriptArtifacts(source, "Document `functions.read` examples exactly."); err != nil {
 		t.Fatalf("expected source-owned token to be allowed: %v", err)
+	}
+}
+
+func TestRunDocsI18NKeepsModelSelectionPrivate(t *testing.T) {
+	t.Setenv(envDocsI18nModel, "private-primary")
+	t.Setenv("OPENCLAW_DOCS_I18N_FALLBACK_MODEL", "private-fallback")
+	for _, mode := range []string{"doc", "segment"} {
+		t.Run(mode, func(t *testing.T) {
+			docsRoot := t.TempDir()
+			writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
+			writeFile(t, filepath.Join(docsRoot, ".i18n", "zh-CN.tm.jsonl"), `{"cache_key":"old-cache","translated":"old translation","model":"private-primary","provider":"old-provider"}`)
+			source := filepath.Join(docsRoot, "test.md")
+			writeFile(t, source, "---\ntitle: Gateway\n---\n\n# Gateway\n\nHello world.\n")
+			writeFile(t, filepath.Join(docsRoot, "zh-CN", "test.md"), stringsJoin(
+				"---",
+				"title: Gateway",
+				"x-i18n:",
+				"  source_hash: "+hashBytes([]byte(mustReadFile(t, source))),
+				fmt.Sprintf("  prompt_version: %d", promptVersion),
+				fmt.Sprintf("  workflow: %d", workflowVersion-1),
+				"  postprocess_version: "+localizedLinkPostprocessVersion,
+				"  model: private-primary",
+				"  provider: old-provider",
+				"---",
+				"",
+				"# Previous translation",
+			))
+			if err := runDocsI18N(context.Background(), runConfig{docsRoot: docsRoot, sourceLang: "en", targetLang: "zh-CN", mode: mode, parallel: 1}, []string{source}, func(string, string, []GlossaryEntry, string) docsTranslator {
+				return fakeDocsTranslator{}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{filepath.Join(docsRoot, "zh-CN", "test.md"), filepath.Join(docsRoot, ".i18n", "zh-CN.tm.jsonl")} {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, private := range []string{"private-primary", "private-fallback", "model:", `"model":`, "provider:", `"provider":`} {
+					if strings.Contains(string(data), private) {
+						t.Fatalf("private metadata %q leaked in %s", private, path)
+					}
+				}
+			}
+		})
 	}
 }

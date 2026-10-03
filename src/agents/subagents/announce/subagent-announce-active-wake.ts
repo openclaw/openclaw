@@ -1,59 +1,23 @@
-/**
- * Active-requester wake and steering for subagent announcements.
- */
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
-import { sessionDeliveryChannel } from "../../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../../utils/delivery-context.read.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
-import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
+import {
+  queueEmbeddedAgentMessageWithOutcomeAsync,
+  queueGuardedEmbeddedAgentMessageWithOutcomeAsync,
+  resolveEmbeddedRunAbandonment,
+  type EmbeddedAgentQueueMessageOutcome,
+} from "../../embedded-agent-runner/runs.js";
 import { waitForAnnounceRetryDelay } from "./subagent-announce-delivery-retry.js";
 import {
-  formatEmbeddedAgentQueueFailureSummary,
-  getSubagentAnnounceRuntimeConfig,
-  getSubagentRequesterSessionActivity,
-  isEmbeddedAgentRunActive,
-  isSubagentRequesterSessionAbandoned,
+  getSubagentRequesterSessionActivity as resolveRequesterSessionActivity,
   loadRequesterSessionEntry,
-  queueSubagentAnnounceMessage,
   resolveQueueSettings,
-  tryResolveSubagentRequesterAgentId,
 } from "./subagent-announce-delivery.runtime.js";
-import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
-const SOURCE_OWNER_CHANGED = Symbol("source_owner_changed");
+export const SOURCE_OWNER_CHANGED = Symbol("source_owner_changed");
 
-function formatQueueWakeFailureError(
-  fallback: string,
-  outcome: EmbeddedAgentQueueMessageOutcome,
-): string {
-  const summary = formatEmbeddedAgentQueueFailureSummary(outcome);
-  return summary ? `${fallback}: ${summary}` : fallback;
-}
-
-export function resolveRequesterSessionActivity(
-  requesterSessionKey: string,
-  requesterAgentId?: string,
-) {
-  const cfg = getSubagentAnnounceRuntimeConfig();
-  const resolvedAgentId = tryResolveSubagentRequesterAgentId(
-    cfg,
-    requesterSessionKey,
-    requesterAgentId,
-  );
-  if (!resolvedAgentId) {
-    return { isActive: false };
-  }
-  const activity = getSubagentRequesterSessionActivity(requesterSessionKey, resolvedAgentId);
-  if (activity.sessionId || activity.isActive) {
-    return activity;
-  }
-  const { entry } = loadRequesterSessionEntry(requesterSessionKey, resolvedAgentId);
-  const sessionId = entry?.sessionId;
-  return {
-    sessionId,
-    isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
-  };
-}
+export { resolveRequesterSessionActivity };
 
 // Backoff schedule for re-attempting an active-requester steer while the run is
 // compacting. Compaction is transient and usually finishes quickly, so a denser
@@ -65,15 +29,17 @@ function resolveCompactionSteerRetryDelaysMs() {
     : ([1_000, 2_000, 4_000, 8_000] as const);
 }
 
-// Wake an active requester run through transient compacting and transcript-wait
-// outcomes. Both active-wake call sites use one loop so delivery deadlines and
-// best-effort transcript retry stay consistent.
+// Wake an active requester run through transient compacting and delivery-mode
+// outcomes. Unsupported transcript-commit waits are terminal refusals: the loop
+// keeps the requested gate intact and lets the caller fall through to the
+// canonical requester-agent handoff instead of re-steering on stale context.
 export async function resolveActiveWakeWithRetries(
   sessionId: string,
   message: string,
   wakeOptions: EmbeddedAgentQueueMessageOptions,
   signal?: AbortSignal,
   isAttemptAllowed?: () => boolean,
+  isSourceSessionAdmissionAllowed?: () => boolean,
 ): Promise<EmbeddedAgentQueueMessageOutcome | typeof SOURCE_OWNER_CHANGED> {
   // Bound the whole active wake by the caller's delivery window. Each retry
   // passes only the remaining window into transcript-commit waiting so a
@@ -96,11 +62,21 @@ export async function resolveActiveWakeWithRetries(
       deliveryTimeoutMs: remainingDeliveryTimeoutMs,
     };
   };
+  const canInject = isSourceSessionAdmissionAllowed
+    ? () => isAttemptAllowed?.() !== false && isSourceSessionAdmissionAllowed()
+    : undefined;
   const attemptWake = async (options: EmbeddedAgentQueueMessageOptions) => {
-    if (isAttemptAllowed?.() === false) {
+    if (isAttemptAllowed?.() === false || isSourceSessionAdmissionAllowed?.() === false) {
       return SOURCE_OWNER_CHANGED;
     }
-    const result = await queueSubagentAnnounceMessage(sessionId, message, options);
+    const result = canInject
+      ? await queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
+          sessionId,
+          message,
+          options,
+          canInject,
+        )
+      : await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, message, options);
     return isAttemptAllowed?.() === false ? SOURCE_OWNER_CHANGED : result;
   };
   let outcome = await attemptWake(currentOptions);
@@ -113,30 +89,24 @@ export async function resolveActiveWakeWithRetries(
     if (outcome.queued || signal?.aborted) {
       break;
     }
-    if (isAttemptAllowed?.() === false) {
+    if (isAttemptAllowed?.() === false || isSourceSessionAdmissionAllowed?.() === false) {
       outcome = SOURCE_OWNER_CHANGED;
       break;
-    }
-    if (
-      outcome.reason === "transcript_commit_wait_unsupported" &&
-      currentOptions.waitForTranscriptCommit === true
-    ) {
-      const bestEffortOptions = { ...currentOptions };
-      delete bestEffortOptions.waitForTranscriptCommit;
-      currentOptions = bestEffortOptions;
-      outcome = await attemptWake(currentOptions);
-      continue;
     }
     if (
       outcome.reason === "source_reply_delivery_mode_mismatch" &&
       currentOptions.sourceReplyDeliveryMode !== undefined
     ) {
-      // Active requester runs own their final delivery mode. Direct-completion
+      // Active requester runs own the final delivery mode. Direct-completion
       // policy must not make an already-running automatic parent unreachable.
       const activeRunOptions = { ...currentOptions };
       delete activeRunOptions.sourceReplyDeliveryMode;
       currentOptions = activeRunOptions;
-      outcome = await attemptWake(currentOptions);
+      const retryOptions = resolveRetryOptions();
+      if (!retryOptions) {
+        break;
+      }
+      outcome = await attemptWake(retryOptions);
       continue;
     }
     if (outcome.reason === "compacting") {
@@ -149,15 +119,10 @@ export async function resolveActiveWakeWithRetries(
       if (!canRetry) {
         break;
       }
-      // Use the next scheduled backoff delay; once the schedule is exhausted,
-      // keep using its last entry until the deadline is reached.
       const scheduledDelayMs =
         compactionRetryDelaysMs[
           Math.min(compactionRetryIndex, compactionRetryDelaysMs.length - 1)
         ] ?? 0;
-      // Clamp the wait to the remaining delivery window so the final retry does
-      // not sleep past the deadline (which would overrun the delivery timeout).
-      // If no time remains, stop retrying and let the fallback handle it.
       const delayMs =
         remainingDeliveryTimeoutMs === undefined
           ? scheduledDelayMs
@@ -190,6 +155,7 @@ export async function maybeSteerSubagentAnnounce(params: {
   createUserTurnTranscriptRecorder?: (sessionId: string) => UserTurnTranscriptRecorder;
   signal?: AbortSignal;
   isSourceSessionEffectsAllowed?: () => boolean;
+  isSourceSessionAdmissionAllowed?: () => boolean;
 }): Promise<
   | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
   | { status: "none" | "dropped" | "source_owner_changed" }
@@ -197,22 +163,13 @@ export async function maybeSteerSubagentAnnounce(params: {
   if (params.signal?.aborted) {
     return { status: "none" };
   }
-  const cfg = getSubagentAnnounceRuntimeConfig();
-  const requesterAgentId = tryResolveSubagentRequesterAgentId(
-    cfg,
-    params.requesterSessionKey,
-    params.requesterAgentId,
-  );
-  if (!requesterAgentId) {
-    return { status: "none" };
-  }
-  const { entry } = loadRequesterSessionEntry(params.requesterSessionKey, requesterAgentId);
-  const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey, requesterAgentId);
+  const requester = loadRequesterSessionEntry(params.requesterSessionKey, params.requesterAgentId);
+  const { cfg, entry, canonicalKey } = requester;
   const { sessionId, isActive } = resolveRequesterSessionActivity(
     params.requesterSessionKey,
-    requesterAgentId,
+    requester,
   );
-  if (isSubagentRequesterSessionAbandoned(canonicalKey, sessionId)) {
+  if (resolveEmbeddedRunAbandonment({ sessionKey: canonicalKey, sessionId })) {
     return { status: "none" };
   }
   if (!sessionId || !isActive) {
@@ -242,6 +199,7 @@ export async function maybeSteerSubagentAnnounce(params: {
     queueOptions,
     params.signal,
     params.isSourceSessionEffectsAllowed,
+    params.isSourceSessionAdmissionAllowed,
   );
   if (queueOutcome === SOURCE_OWNER_CHANGED) {
     return { status: "source_owner_changed" };
@@ -257,25 +215,18 @@ export async function maybeSteerSubagentAnnounce(params: {
   // A stale_run refusal means the requester run is evidence-dead: it will not
   // drain its steer queue, so "dropped" would discard the handoff. Report
   // not-active so dispatch takes the direct fallback instead.
-  if (queueOutcome.reason === "stale_run") {
+  // Unguarded sinks likewise leave source-bound input to the direct Gateway path.
+  if (
+    queueOutcome.reason === "stale_run" ||
+    queueOutcome.reason === "transcript_commit_wait_unsupported" ||
+    (params.isSourceSessionAdmissionAllowed !== undefined &&
+      queueOutcome.reason === "guarded_injection_unsupported")
+  ) {
     return { status: "none" };
   }
   const currentActivity = resolveRequesterSessionActivity(
     params.requesterSessionKey,
-    requesterAgentId,
+    loadRequesterSessionEntry(params.requesterSessionKey, params.requesterAgentId),
   );
   return { status: currentActivity.isActive ? "dropped" : "none" };
-}
-
-export function formatActiveWakeFailure(
-  fallback: string,
-  outcome: EmbeddedAgentQueueMessageOutcome,
-): string {
-  return formatQueueWakeFailureError(fallback, outcome);
-}
-
-export function isSourceOwnerChangedWake(
-  outcome: EmbeddedAgentQueueMessageOutcome | typeof SOURCE_OWNER_CHANGED,
-): outcome is typeof SOURCE_OWNER_CHANGED {
-  return outcome === SOURCE_OWNER_CHANGED;
 }

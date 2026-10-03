@@ -1,21 +1,15 @@
-import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord as readObjectRecord,
+  asOptionalRecord as readRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
+import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
+import {
+  MAX_TOOL_APPROVAL_REVIEWS,
+  normalizeToolApprovalReview,
+} from "../shared/tool-approval-reviews.js";
 import { truncateChatHistoryText } from "./chat-display-projection.helpers.js";
-
-const MAX_TOOL_APPROVAL_REVIEWS = 16;
-const TOOL_APPROVAL_REVIEW_STATUSES = new Set([
-  "in_progress",
-  "approved",
-  "denied",
-  "timed_out",
-  "aborted",
-]);
-
-function boundedReviewText(value: unknown, maxChars: number): string | undefined {
-  const text = typeof value === "string" ? value.trim() : "";
-  return text ? truncateUtf16Safe(text, maxChars) : undefined;
-}
 
 function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is string {
   return (
@@ -26,49 +20,17 @@ function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is st
   );
 }
 
-function projectToolApprovalReview(value: unknown): Record<string, unknown> | undefined {
-  const review = readRecord(value);
-  const id = boundedReviewText(review?.id, 256);
-  const label = boundedReviewText(review?.label, 80);
-  const status = boundedReviewText(review?.status, 32);
-  if (!id || !label || !status || !TOOL_APPROVAL_REVIEW_STATUSES.has(status)) {
-    return undefined;
-  }
-  const riskLevel = boundedReviewText(review?.riskLevel, 40);
-  const userAuthorization = boundedReviewText(review?.userAuthorization, 40);
-  const rationale = boundedReviewText(review?.rationale, 2_000);
-  return {
-    id,
-    label,
-    status,
-    ...(riskLevel ? { riskLevel } : {}),
-    ...(userAuthorization ? { userAuthorization } : {}),
-    ...(rationale ? { rationale } : {}),
-  };
-}
-
 /** Return true for known tool-call/tool-result block type spellings in transcripts. */
 export function isToolHistoryBlockType(type: unknown): boolean {
   if (typeof type !== "string") {
     return false;
   }
-  const normalized = type.trim().toLowerCase();
-  return (
-    normalized === "toolcall" ||
-    normalized === "tool_call" ||
-    normalized === "tooluse" ||
-    normalized === "tool_use" ||
-    normalized === "toolresult" ||
-    normalized === "tool_result"
-  );
+  const normalized = type.trim();
+  return isToolCallContentType(normalized) || isToolResultContentType(normalized);
 }
 
 export function isToolResultHistoryBlockType(type: unknown): boolean {
-  if (typeof type !== "string") {
-    return false;
-  }
-  const normalized = type.trim().toLowerCase();
-  return normalized === "toolresult" || normalized === "tool_result";
+  return typeof type === "string" && isToolResultContentType(type.trim());
 }
 
 export function projectToolResultDetails(
@@ -118,7 +80,7 @@ export function projectToolResultDetails(
   if (Array.isArray(record.approvalReviews)) {
     const reviews = record.approvalReviews
       .slice(-MAX_TOOL_APPROVAL_REVIEWS)
-      .flatMap((review) => projectToolApprovalReview(review) ?? []);
+      .flatMap((review) => normalizeToolApprovalReview(review) ?? []);
     if (reviews.length > 0) {
       projected.approvalReviews = reviews;
     }
@@ -154,23 +116,13 @@ export function messageHasToolResultShape(message: Record<string, unknown>): boo
     return true;
   }
   const content = Array.isArray(message.content) ? message.content : [];
-  if (
-    content.some(
-      (block) =>
-        block &&
-        typeof block === "object" &&
-        isToolResultHistoryBlockType((block as { type?: unknown }).type),
-    )
-  ) {
+  if (content.some((block) => isToolResultHistoryBlockType(readObjectRecord(block)?.type))) {
     return true;
   }
-  const hasToolCallBlock = content.some(
-    (block) =>
-      block &&
-      typeof block === "object" &&
-      isToolHistoryBlockType((block as { type?: unknown }).type) &&
-      !isToolResultHistoryBlockType((block as { type?: unknown }).type),
-  );
+  const hasToolCallBlock = content.some((block) => {
+    const type = readObjectRecord(block)?.type;
+    return isToolHistoryBlockType(type) && !isToolResultHistoryBlockType(type);
+  });
   const hasToolId =
     typeof message.toolCallId === "string" ||
     typeof message.tool_call_id === "string" ||
@@ -181,10 +133,10 @@ export function messageHasToolResultShape(message: Record<string, unknown>): boo
 }
 
 export function extractChatHistoryBlockText(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
+  const entry = readObjectRecord(message);
+  if (!entry) {
     return undefined;
   }
-  const entry = message as Record<string, unknown>;
   if (typeof entry.content === "string") {
     return entry.content;
   }
@@ -195,13 +147,7 @@ export function extractChatHistoryBlockText(message: unknown): string | undefine
     return undefined;
   }
   const textParts = entry.content
-    .map((block) => {
-      if (!block || typeof block !== "object") {
-        return undefined;
-      }
-      const typed = block as { text?: unknown };
-      return typeof typed.text === "string" ? typed.text : undefined;
-    })
+    .map((block) => readObjectRecord(block)?.text)
     .filter((value): value is string => typeof value === "string");
   return textParts.length > 0 ? textParts.join("\n") : undefined;
 }
@@ -223,56 +169,68 @@ function extractChatHistoryCanvasPreview(message: Record<string, unknown>) {
   return undefined;
 }
 
-function appendCanvasBlockToAssistantHistoryMessage(params: {
-  message: unknown;
-  preview: ReturnType<typeof extractCanvasFromText>;
+type ChatCanvasPreview = {
+  preview: NonNullable<ReturnType<typeof extractCanvasFromText>>;
   rawText: string | null;
-}): unknown {
-  const preview = params.preview;
-  if (!preview || !params.message || typeof params.message !== "object") {
-    return params.message;
+};
+
+export type ChatCanvasBlock = ChatCanvasPreview & { type: "canvas" };
+
+export function extractChatToolResultCanvasPreview(
+  message: unknown,
+): ChatCanvasPreview | undefined {
+  const entry = readRecord(message);
+  if (!entry) {
+    return undefined;
   }
-  const entry = params.message as Record<string, unknown>;
-  const baseContent = Array.isArray(entry.content)
-    ? [...entry.content]
-    : typeof entry.content === "string"
-      ? [{ type: "text", text: entry.content }]
-      : typeof entry.text === "string"
-        ? [{ type: "text", text: entry.text }]
-        : [];
-  const alreadyPresent = baseContent.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const typed = block as { type?: unknown; preview?: unknown };
-    return (
-      typed.type === "canvas" &&
-      typed.preview &&
-      typeof typed.preview === "object" &&
-      (((typed.preview as { viewId?: unknown }).viewId &&
-        (typed.preview as { viewId?: unknown }).viewId === preview.viewId) ||
-        ((typed.preview as { url?: unknown }).url &&
-          (typed.preview as { url?: unknown }).url === preview.url))
-    );
-  });
-  if (!alreadyPresent) {
-    baseContent.push({
-      type: "canvas",
-      preview,
-      rawText: params.rawText,
-    });
-  }
-  return {
-    ...entry,
-    content: baseContent,
-  };
+  const detailsPreview = extractChatHistoryCanvasPreview(entry);
+  const text = detailsPreview ? undefined : extractChatHistoryBlockText(entry);
+  const preview = detailsPreview ?? extractCanvasFromText(text);
+  return preview ? { preview, rawText: detailsPreview ? null : (text ?? null) } : undefined;
 }
 
-function messageContainsToolHistoryContent(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
+export function appendChatCanvasBlocks<T>(
+  content: readonly T[],
+  previews: readonly ChatCanvasPreview[],
+): Array<T | ChatCanvasBlock> {
+  const baseContent: Array<T | ChatCanvasBlock> = [...content];
+  for (const { preview, rawText } of previews) {
+    // Only retained blocks participate: rejecting an id collision must not
+    // reserve that preview's different URL for subsequent previews.
+    const alreadyPresent = baseContent.some((block) => {
+      const typed = readObjectRecord(block);
+      const existing = typed?.type === "canvas" ? readObjectRecord(typed.preview) : undefined;
+      return Boolean(
+        existing &&
+        ((existing.viewId && existing.viewId === preview.viewId) ||
+          (existing.url && existing.url === preview.url)),
+      );
+    });
+    if (!alreadyPresent) {
+      baseContent.push({ type: "canvas", preview, rawText });
+    }
   }
-  const entry = message as Record<string, unknown>;
+  return baseContent;
+}
+
+export function appendChatCanvasBlocksToMessage(
+  message: Record<string, unknown> | undefined,
+  previews: readonly ChatCanvasPreview[],
+): Record<string, unknown> | undefined {
+  if (!message || previews.length === 0) {
+    return message;
+  }
+  const content = Array.isArray(message.content)
+    ? message.content
+    : typeof message.content === "string"
+      ? [{ type: "text", text: message.content }]
+      : typeof message.text === "string"
+        ? [{ type: "text", text: message.text }]
+        : [];
+  return { ...message, content: appendChatCanvasBlocks(content, previews) };
+}
+
+function messageContainsToolHistoryContent(entry: Record<string, unknown>): boolean {
   if (
     typeof entry.toolCallId === "string" ||
     typeof entry.tool_call_id === "string" ||
@@ -284,12 +242,7 @@ function messageContainsToolHistoryContent(message: unknown): boolean {
   if (!Array.isArray(entry.content)) {
     return false;
   }
-  return entry.content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    return isToolHistoryBlockType((block as { type?: unknown }).type);
-  });
+  return entry.content.some((block) => isToolHistoryBlockType(readObjectRecord(block)?.type));
 }
 
 export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown[] {
@@ -300,31 +253,19 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
   let changed = false;
   let lastAssistantIndex = -1;
   let lastRenderableAssistantIndex = -1;
-  const pending: Array<{
-    preview: NonNullable<ReturnType<typeof extractCanvasFromText>>;
-    rawText: string | null;
-  }> = [];
+  const pending: ChatCanvasPreview[] = [];
   for (let index = 0; index < next.length; index++) {
-    const message = next[index];
-    if (!message || typeof message !== "object") {
+    const entry = readObjectRecord(next[index]);
+    if (!entry) {
       continue;
     }
-    const entry = message as Record<string, unknown>;
     const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
     if (role === "assistant") {
       lastAssistantIndex = index;
       if (!messageContainsToolHistoryContent(entry)) {
         lastRenderableAssistantIndex = index;
         if (pending.length > 0) {
-          let target = next[index];
-          for (const item of pending) {
-            target = appendCanvasBlockToAssistantHistoryMessage({
-              message: target,
-              preview: item.preview,
-              rawText: item.rawText,
-            });
-          }
-          next[index] = target;
+          next[index] = appendChatCanvasBlocksToMessage(entry, pending);
           pending.length = 0;
           changed = true;
         }
@@ -334,36 +275,17 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
     if (!messageContainsToolHistoryContent(entry)) {
       continue;
     }
-    const toolName =
-      typeof entry.toolName === "string"
-        ? entry.toolName
-        : typeof entry.tool_name === "string"
-          ? entry.tool_name
-          : undefined;
-    const text = extractChatHistoryBlockText(entry);
-    const detailsPreview = extractChatHistoryCanvasPreview(entry);
-    const preview = detailsPreview ?? extractCanvasFromText(text, toolName);
+    const preview = extractChatToolResultCanvasPreview(entry);
     if (!preview) {
       continue;
     }
-    pending.push({
-      preview,
-      rawText: detailsPreview ? null : (text ?? null),
-    });
+    pending.push(preview);
   }
   if (pending.length > 0) {
     const targetIndex =
       lastRenderableAssistantIndex >= 0 ? lastRenderableAssistantIndex : lastAssistantIndex;
     if (targetIndex >= 0) {
-      let target = next[targetIndex];
-      for (const item of pending) {
-        target = appendCanvasBlockToAssistantHistoryMessage({
-          message: target,
-          preview: item.preview,
-          rawText: item.rawText,
-        });
-      }
-      next[targetIndex] = target;
+      next[targetIndex] = appendChatCanvasBlocksToMessage(readRecord(next[targetIndex]), pending);
       changed = true;
     }
   }

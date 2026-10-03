@@ -1,55 +1,110 @@
-// Subagent session reactivation helper.
-// Replaces completed subagent run records when a user steers the child session.
-import { getLatestSubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import {
+  assertSubagentRegistryWriteSourceCurrent,
+  restoreSubagentRunsFromDisk,
+} from "../agents/subagents/registry/subagent-registry-persistence.js";
+import {
+  getLatestLiveSubagentRunByChildSessionKey,
+  getLatestSubagentRunByChildSessionKey,
+} from "../agents/subagents/registry/subagent-registry-read.js";
+import {
+  isSameSubagentRun,
+  isSameSubagentRunOwner,
+} from "../agents/subagents/registry/subagent-run-generation.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
-// Completed subagent sessions can be reactivated after a user steer by replacing
-// the previous completed run id with the next run id through a lazy runtime
-// import. Active subagent runs are never replaced here.
-async function loadSessionSubagentReactivationRuntime() {
-  return import("../agents/subagents/registry/subagent-registry-runtime.js");
-}
-
-/**
- * Reactivates a completed subagent session by swapping in the new run id.
- *
- * `task` is the canonical user-supplied prompt text that just dispatched the
- * follow-up. When provided, it is persisted on the new run record so a later
- * orphan recovery / gateway restart rewraps the follow-up prompt rather than
- * the stale original task. Without this, sessions.send and agent.run callers
- * could reactivate a completed run with the new run id but lose the new
- * prompt text from restart redispatch.
- */
+/** Persist the dispatched follow-up prompt so restart recovery cannot reuse the original task. */
 export async function reactivateCompletedSubagentSession(params: {
   sessionKey: string;
   runId?: string;
   task?: string;
   gatewayContextResolver?: GatewayContextResolver;
+  assertCurrent?: () => void;
 }): Promise<boolean> {
   const runId = params.runId?.trim();
   if (!runId) {
     return false;
   }
-  const existing = getLatestSubagentRunByChildSessionKey(params.sessionKey);
+  const paused = getLatestLiveSubagentRunByChildSessionKey(
+    params.sessionKey,
+    (entry) => entry.pauseReason === "sessions_yield",
+  );
+  const existing = paused ?? getLatestSubagentRunByChildSessionKey(params.sessionKey);
   if (!existing || typeof existing.execution.endedAt !== "number") {
     return false;
   }
-  const { replaceSubagentRunAfterSteer } = await loadSessionSubagentReactivationRuntime();
-  // The lazy import can outlive its Gateway. Check the exact owner immediately
-  // before the synchronous replacement write.
   if (params.gatewayContextResolver && !params.gatewayContextResolver()) {
     return false;
   }
+  const stateContext = captureOpenClawStateWorkerContext();
+  const liveSource = () =>
+    getLatestLiveSubagentRunByChildSessionKey(
+      params.sessionKey,
+      (entry) => entry.runId === existing.runId,
+    );
+  if (!liveSource()) {
+    await restoreSubagentRunsFromDisk({
+      runs: subagentRuns,
+      mergeOnly: true,
+      context: stateContext,
+      assertCurrent: params.assertCurrent,
+    });
+  }
+  const source = liveSource();
+  if (!source || !isSameSubagentRun(source, existing)) {
+    return false;
+  }
+  const latest = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
+  const assertOriginalOwnerCurrent = () => {
+    assertSubagentRegistryWriteSourceCurrent(stateContext);
+    const current = liveSource();
+    const currentLatest = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
+    if (
+      !isSameSubagentRunOwner(current, source) ||
+      (latest ? !isSameSubagentRunOwner(currentLatest, latest) : currentLatest !== undefined) ||
+      (current && typeof current.execution.endedAt !== "number")
+    ) {
+      throw new Error("subagent follow-up source changed while its writes settled");
+    }
+    params.assertCurrent?.();
+    if (params.gatewayContextResolver && !params.gatewayContextResolver()) {
+      throw new Error("subagent follow-up Gateway owner retired");
+    }
+  };
+  const runtime = await import("../agents/subagents/registry/subagent-registry.js");
+  assertOriginalOwnerCurrent();
   const task = params.task;
   const hasTask = typeof task === "string" && task.trim().length > 0;
-  return replaceSubagentRunAfterSteer({
-    previousRunId: existing.runId,
-    nextRunId: runId,
-    fallback: existing,
-    runTimeoutSeconds: existing.runTimeoutSeconds ?? 0,
-    ...(hasTask ? { task } : {}),
-    ...(params.gatewayContextResolver
-      ? { gatewayContextResolver: params.gatewayContextResolver }
-      : {}),
-  });
+  // A yielded child still owes its parent completion; operator follow-ups must
+  // preserve that wake rather than treating the task as already completed.
+  const gatewayBinding = params.gatewayContextResolver
+    ? { gatewayContextResolver: params.gatewayContextResolver }
+    : {};
+  const replaced =
+    source.pauseReason === "sessions_yield"
+      ? await runtime.adoptPausedSubagentRunForFollowUp({
+          childSessionKey: params.sessionKey,
+          runId,
+          task: hasTask ? task : source.task,
+          assertCurrent: assertOriginalOwnerCurrent,
+          ...gatewayBinding,
+        })
+      : await runtime.replaceSubagentRunAfterSteerCore({
+          previousRunId: source.runId,
+          nextRunId: runId,
+          preserveCompletedRun: true,
+          runTimeoutSeconds: source.runTimeoutSeconds ?? 0,
+          ...(hasTask ? { task } : {}),
+          assertCurrent: assertOriginalOwnerCurrent,
+          ...gatewayBinding,
+        });
+  if (replaced) {
+    return true;
+  }
+  const currentOwner = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
+  if (currentOwner?.runId === runId) {
+    return true;
+  }
+  throw new Error("subagent follow-up owner replacement was rejected");
 }

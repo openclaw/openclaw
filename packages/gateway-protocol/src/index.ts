@@ -1,6 +1,11 @@
 export * from "./error-details.js";
 export * from "./github-publication-api.js";
 export * from "./session-agent-status.js";
+export type {
+  ModelCatalogScope,
+  ModelCatalogTarget,
+  ModelsSnapshotEvent,
+} from "./model-catalog-publication.js";
 export * from "./terminal-validators.js";
 export {
   validateApprovalGetResult,
@@ -10,19 +15,31 @@ export {
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
 export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
+export * from "./schema/worker-gateway-tool.js";
 export * from "./schema/worker-computer.js";
+export * from "./schema/computer.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/skill-library.js";
+export * from "./schema/plugin-credentials.js";
+export * from "./schema/web-search.js";
+export * from "./schema/plugin-skills.js";
 export * from "./schema/ui-command.js";
+export * from "./schema/themes.js";
+export * from "./theme.js";
+export { TALK_VOICE_CHANGE_TIMEOUT_MS } from "./schema/talk-voice.js";
 export * from "./schema/board.js";
+export * from "./schema/canvas.js";
 export * from "./schema/progress-card.js";
+export * from "./schema/transcripts.js";
 export {
+  SessionConversationLinkSchema,
   SessionCreatedActorSchema,
   SessionEntryArchiveReasonSchema,
   SessionPermissionModeSchema,
   SessionOwnerSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
+  type SessionConversationLink,
   type SessionEntryArchiveReason,
   type SessionOwner,
   type SessionPermissionMode,
@@ -32,15 +49,29 @@ export {
 } from "./schema/sessions-row.js";
 export * from "./schema/session-classification.js";
 export * from "./schema/session-participant.js";
+export {
+  SessionOwnerSessionCountSchema,
+  type SessionOwnerSessionCount,
+} from "./schema/sessions-list.js";
 export * from "./schema/sessions-suggestions.js";
+export * from "./schema/sessions-reactions.js";
+export * from "./schema/sessions-activity-summary.js";
 export * from "./schema/sessions-delete.js";
 export * from "./schema/sessions-goal.js";
+export {
+  SESSIONS_FILES_ASSETS_MAX_REFS,
+  SESSIONS_FILES_ASSET_MAX_BYTES,
+  SESSIONS_FILES_ASSETS_MAX_TOTAL_BYTES,
+} from "./schema/sessions.js";
+export * from "./schema/sessions-provider-review.js";
 export {
   SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
   SESSION_CREATE_RETRY_WINDOW_MS,
 } from "./schema/sessions-create.js";
 export * from "./schema/projects.js";
 export * from "./migration-api.js";
+export * from "./schema/storage.js";
+export * from "./schema/backup.js";
 export * from "./restart-unavailable.js";
 export type * from "./public-session-catalog.js";
 export * from "./validator-registry.js";

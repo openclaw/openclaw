@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { openAIRealtimeHost } from "./realtime-host.js";
 import {
   type OpenAIQuicksilverPendingAudio,
   OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
@@ -7,7 +8,7 @@ import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-b
 import {
   OpenAIQuicksilverAudioPeer,
   type OpenAIQuicksilverAudioPeerContract,
-} from "./realtime-quicksilver-peer.runtime.js";
+} from "./realtime-quicksilver-media.runtime.js";
 import { createCallResponse, FakeSocket } from "./realtime-quicksilver.test-helpers.js";
 
 const MAX_PENDING_RELAY_FRAMES = 250;
@@ -47,28 +48,31 @@ describe("GPT-Live gateway microphone audio pipeline", () => {
       resolvePeer = resolve;
     });
     const onError = vi.fn();
-    const bridge = new OpenAIQuicksilverGatewayBridge({
-      providerConfig: {},
-      model: "gpt-live-1-codex",
-      voice: "marin",
-      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onError,
-      runAgentConsult: vi.fn(async () => ({ text: "done" })),
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      resolveAuth: vi.fn(async () => ({
-        type: "oauth" as const,
-        token: "oauth-token",
-        accountId: "account-1",
-      })),
-      createPeer: vi.fn((callbacks) => {
-        peerCallbacks = callbacks;
-        return peerPromise;
-      }),
-      fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_pending_audio")),
-      webSocketFactory: () => new FakeSocket(),
-    });
+    const bridge = new OpenAIQuicksilverGatewayBridge(
+      {
+        providerConfig: {},
+        model: "gpt-live-test-canary",
+        voice: "marin",
+        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onError,
+        runAgentConsult: vi.fn(async () => ({ text: "done" })),
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        resolveAuth: vi.fn(async () => ({
+          type: "oauth" as const,
+          token: "oauth-token",
+          accountId: "account-1",
+        })),
+        createPeer: vi.fn((callbacks) => {
+          peerCallbacks = callbacks;
+          return peerPromise;
+        }),
+        fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_pending_audio")),
+        webSocketFactory: () => new FakeSocket(),
+      },
+      openAIRealtimeHost,
+    );
     const connection = bridge.connect();
     const source = Buffer.alloc(256 * OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
     for (let frame = 0; frame < 256; frame += 1) {
@@ -152,7 +156,7 @@ describe("GPT-Live gateway microphone audio pipeline", () => {
       );
       expect(onError).not.toHaveBeenCalled();
     } finally {
-      bridge.close();
+      await bridge.close();
       vi.useRealTimers();
     }
   });

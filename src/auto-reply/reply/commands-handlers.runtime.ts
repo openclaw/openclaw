@@ -7,12 +7,13 @@ import { handleBtwCommand } from "./commands-btw.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import { handleContextCommand } from "./commands-context-command.js";
+import { handleDashboardCommand } from "./commands-dashboard.js";
 import { handleDiagnosticsCommand } from "./commands-diagnostics.js";
 import { handleGoalCommand } from "./commands-goal.js";
 import {
   handleCommandsListCommand,
-  handleExportTrajectoryCommand,
   handleExportSessionCommand,
+  handleExportTrajectoryCommand,
   handleHelpCommand,
   handleSkillCommandUsage,
   handleStatusCommand,
@@ -39,9 +40,9 @@ import {
 import { handleSteerCommand } from "./commands-steer.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
 import { handleSystemAgentCommand } from "./commands-system-agent.js";
-import { handleTasksCommand } from "./commands-tasks.js";
 import { handleTtsCommands } from "./commands-tts.js";
 import type { CommandHandler } from "./commands-types.js";
+import { handleUpdateCommand } from "./commands-update.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
 
 export function loadCommandHandlers(): CommandHandler[] {
@@ -57,6 +58,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleUsageCommand,
     handleSessionCommand,
     handleRestartCommand,
+    handleUpdateCommand,
     handleTtsCommands,
     handleHelpCommand,
     handleCommandsListCommand,
@@ -65,11 +67,11 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleToolsCommand,
     handleStatusCommand,
     handleGoalCommand,
+    handleDashboardCommand,
     handleLearnCommand,
     handleLoopCommand,
     handleNameCommand,
     handleDiagnosticsCommand,
-    handleTasksCommand,
     handleSteerCommand,
     handleAllowlistCommand,
     handleApproveCommand,

@@ -1,12 +1,64 @@
 import { describe, expect, it } from "vitest";
 import { materializeClawToolProfile } from "./tool-profile-consent.js";
 import {
-  cronCapabilityChange,
-  mcpCapabilityChange,
   pushResolvedAgentCapabilityChanges,
+  resourceCapabilityChange,
 } from "./update-capability-changes.js";
 
 type Changes = Parameters<typeof pushResolvedAgentCapabilityChanges>[0]["changes"];
+
+describe.each(["mcpServer", "cronJob"] as const)("resourceCapabilityChange (%s)", (kind) => {
+  it("treats a blocked removal without a desired value as a reduction", () => {
+    const action = "manual";
+    const change = resourceCapabilityChange({ kind, id: "resource", action, current: null });
+    expect(change).toMatchObject({
+      kind,
+      id: "resource",
+      path: `${kind === "mcpServer" ? "mcpServers" : "cronJobs"}.resource`,
+      action,
+      classification: "reduction",
+      requiresDistinctConsent: false,
+      effect: { removed: true },
+      current: { summary: "not configured" },
+    });
+    expect(change).not.toHaveProperty("desired");
+  });
+
+  it("keeps absent values omitted and treats explicit null as present", () => {
+    const params = { kind, id: "resource", action: "change" as const };
+    const missing = resourceCapabilityChange(params);
+    expect(missing).not.toHaveProperty("current");
+    expect(missing).not.toHaveProperty("desired");
+    expect(resourceCapabilityChange({ ...params, current: undefined, desired: undefined })).toEqual(
+      missing,
+    );
+
+    const present = resourceCapabilityChange({ ...params, desired: null });
+    expect(present).toMatchObject({
+      classification: "escalation",
+      requiresDistinctConsent: true,
+      effect: { configured: false },
+      desired: { summary: "not configured" },
+    });
+    expect(present).not.toHaveProperty("current");
+  });
+
+  it("ignores unchanged resources before reading their values", () => {
+    expect(
+      resourceCapabilityChange({
+        kind,
+        id: "resource",
+        action: "unchanged",
+        get current() {
+          throw new Error("unchanged current value must not be read");
+        },
+        get desired() {
+          throw new Error("unchanged desired value must not be read");
+        },
+      }),
+    ).toBeUndefined();
+  });
+});
 
 function collectChanges(params: {
   currentAgent: Parameters<typeof pushResolvedAgentCapabilityChanges>[0]["desiredAgent"];
@@ -35,365 +87,257 @@ function collectChanges(params: {
 }
 
 describe("pushResolvedAgentCapabilityChanges", () => {
-  it("classifies effective sandbox and heartbeat changes", () => {
-    const changes = collectChanges({
-      currentAgent: { id: "worker", sandbox: { mode: "all" }, heartbeat: { every: "1h" } },
-      desiredAgent: { id: "worker", sandbox: { mode: "off" }, heartbeat: { every: "5m" } },
-    });
-    expect(changes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: "agent.sandbox.mode",
-          classification: "escalation",
-          requiresDistinctConsent: true,
-        }),
-        expect.objectContaining({
-          path: "agent.heartbeat.every",
-          classification: "escalation",
-          requiresDistinctConsent: true,
-        }),
-      ]),
-    );
-
-    const inherited = collectChanges({
-      currentAgent: { id: "worker", sandbox: { mode: "all" }, heartbeat: { every: "1h" } },
-      desiredAgent: { id: "worker" },
+  type Agent = Parameters<typeof collectChanges>[0]["currentAgent"];
+  type Classification = Changes[number]["classification"];
+  type Expected = [path: string, classification: Classification, details?: Record<string, unknown>];
+  type Case = Parameters<typeof collectChanges>[0] & {
+    name: string;
+    expected: Expected[];
+    absent?: string[];
+  };
+  const agent = (settings: Omit<Agent, "id"> = {}): Agent => ({ id: "worker", ...settings });
+  const cases: Case[] = [
+    {
+      name: "effective sandbox and heartbeat changes",
+      currentAgent: agent({ sandbox: { mode: "all" }, heartbeat: { every: "1h" } }),
+      desiredAgent: agent({ sandbox: { mode: "off" }, heartbeat: { every: "5m" } }),
+      expected: [
+        ["sandbox.mode", "escalation"],
+        ["heartbeat.every", "escalation"],
+      ],
+    },
+    {
+      name: "inherited sandbox and heartbeat changes",
+      currentAgent: agent({ sandbox: { mode: "all" }, heartbeat: { every: "1h" } }),
+      desiredAgent: agent(),
       defaults: { sandbox: { mode: "off" }, heartbeat: { every: "5m" } },
-    });
-    expect(inherited).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: "agent.sandbox.mode",
-          classification: "escalation",
-          requiresDistinctConsent: true,
-          desired: expect.objectContaining({ summary: "off" }),
-        }),
-        expect.objectContaining({
-          path: "agent.heartbeat.every",
-          classification: "escalation",
-          requiresDistinctConsent: true,
-          current: expect.objectContaining({ summary: "1h" }),
-          desired: expect.objectContaining({ summary: "5m" }),
-        }),
-      ]),
-    );
-  });
-
-  it("resolves the implicit heartbeat interval", () => {
-    const changes: Changes = [];
-    pushResolvedAgentCapabilityChanges({
-      changes,
-      agentId: "main",
-      config: {
-        agents: { list: [{ id: "main", heartbeat: { every: "1h" } }] },
-      },
+      expected: [
+        ["sandbox.mode", "escalation", { desired: expect.objectContaining({ summary: "off" }) }],
+        [
+          "heartbeat.every",
+          "escalation",
+          {
+            current: expect.objectContaining({ summary: "1h" }),
+            desired: expect.objectContaining({ summary: "5m" }),
+          },
+        ],
+      ],
+    },
+    {
+      name: "implicit heartbeat interval",
+      currentAgent: { id: "main", heartbeat: { every: "1h" } },
       desiredAgent: { id: "main" },
-    });
-    expect(changes).toContainEqual(
-      expect.objectContaining({
-        path: "agent.heartbeat.every",
-        classification: "escalation",
-        requiresDistinctConsent: true,
-        current: expect.objectContaining({ summary: "1h" }),
-        desired: expect.objectContaining({ summary: "30m" }),
-      }),
-    );
-  });
-
-  it("preserves implicit default-agent heartbeat resolution", () => {
-    const changes: Changes = [];
-    pushResolvedAgentCapabilityChanges({
-      changes,
-      agentId: "worker",
-      config: { agents: { list: [{ id: "worker" }, { id: "other" }] } },
-      desiredAgent: { id: "worker" },
-    });
-    expect(changes.filter((change) => change.path.startsWith("agent.heartbeat."))).toEqual([]);
-  });
-
-  it("classifies heartbeat activity increases and reductions directionally", () => {
-    const moreFrequent = collectChanges({
-      currentAgent: { id: "worker", heartbeat: { every: "1h" } },
-      desiredAgent: { id: "worker", heartbeat: { every: "5m" } },
-    });
-    expect(moreFrequent).toContainEqual(
-      expect.objectContaining({
-        path: "agent.heartbeat.every",
-        classification: "escalation",
-        requiresDistinctConsent: true,
-      }),
-    );
-
-    const lessFrequent = collectChanges({
-      currentAgent: {
-        id: "worker",
+      expected: [
+        [
+          "heartbeat.every",
+          "escalation",
+          {
+            current: expect.objectContaining({ summary: "1h" }),
+            desired: expect.objectContaining({ summary: "30m" }),
+          },
+        ],
+      ],
+    },
+    {
+      name: "heartbeat activity reductions",
+      currentAgent: agent({
         heartbeat: { every: "5m", isolatedSession: false, timeoutSeconds: 60 },
-      },
-      desiredAgent: {
-        id: "worker",
+      }),
+      desiredAgent: agent({
         heartbeat: { every: "1h", isolatedSession: true, timeoutSeconds: 30 },
+      }),
+      expected: [
+        ["heartbeat.every", "reduction"],
+        ["heartbeat.isolatedSession", "reduction"],
+        ["heartbeat.timeoutSeconds", "reduction"],
+      ],
+    },
+    {
+      name: "disabled heartbeat",
+      currentAgent: agent({ heartbeat: { every: "5m" } }),
+      desiredAgent: agent({ heartbeat: { every: "0m" } }),
+      expected: [["heartbeat.every", "reduction"]],
+    },
+    {
+      name: "narrower sandbox mode and sharing scope",
+      currentAgent: agent({ sandbox: { mode: "off", scope: "shared" } }),
+      desiredAgent: agent({ sandbox: { mode: "all", scope: "session" } }),
+      expected: [
+        ["sandbox.mode", "reduction"],
+        ["sandbox.scope", "reduction"],
+      ],
+    },
+    {
+      name: "wider sandbox sharing scope",
+      currentAgent: agent({ sandbox: { scope: "session" } }),
+      desiredAgent: agent({ sandbox: { scope: "shared" } }),
+      expected: [["sandbox.scope", "escalation"]],
+    },
+    {
+      name: "substituted tool restrictions",
+      currentAgent: agent({ tools: { deny: ["exec"] } }),
+      desiredAgent: agent({ tools: { deny: ["read", "write"] } }),
+      expected: [["tools.deny", "escalation"]],
+    },
+    ...(["allow", "deny"] as const).flatMap((field): Case[] => [
+      {
+        name: `added tools.${field} restriction`,
+        currentAgent: agent(),
+        desiredAgent: agent({ tools: { [field]: ["exec"] } }),
+        expected: [[`tools.${field}`, "reduction"]],
       },
-    });
-    expect(lessFrequent).toEqual(
+      {
+        name: `removed tools.${field} restriction`,
+        currentAgent: agent({ tools: { [field]: ["exec"] } }),
+        desiredAgent: agent(),
+        expected: [[`tools.${field}`, "escalation"]],
+      },
+    ]),
+    ...([true, false] as const).map((added): Case => ({
+      name: `${added ? "added" : "removed"} additive tool grant`,
+      currentAgent: agent({
+        tools: { profile: "coding", ...(added ? {} : { alsoAllow: ["browser"] }) },
+      }),
+      desiredAgent: agent({
+        tools: { profile: "coding", ...(added ? { alsoAllow: ["browser"] } : {}) },
+      }),
+      expected: [["tools.alsoAllow", added ? "escalation" : "reduction"]],
+      absent: ["agent.tools.profile"],
+    })),
+    {
+      name: "growth in a frozen allowlist",
+      currentAgent: agent({ tools: { allow: ["read", "write"] } }),
+      desiredAgent: agent({ tools: { allow: ["read", "write", "apply_patch"] } }),
+      expected: [["tools.allow", "escalation"]],
+    },
+    {
+      name: "freezing an inherited additive tool grant",
+      currentAgent: agent({ tools: { profile: "minimal" } }),
+      desiredAgent: agent({
+        tools: materializeClawToolProfile({ tools: { profile: "minimal" } }).tools,
+      }),
+      tools: { alsoAllow: ["browser"] },
+      expected: [["tools.allow", "reduction"]],
+    },
+    {
+      name: "inherited profile expansion",
+      currentAgent: agent(),
+      desiredAgent: agent({ tools: { profile: "coding" } }),
+      tools: { profile: "minimal" },
+      expected: [["tools.profile", "escalation"]],
+    },
+    {
+      name: "wildcard profile reduction",
+      currentAgent: agent({ tools: { profile: "full" } }),
+      desiredAgent: agent({ tools: { profile: "coding" } }),
+      expected: [["tools.profile", "reduction"]],
+    },
+    {
+      name: "removal of workspace-only confinement",
+      currentAgent: agent({ tools: { fs: { workspaceOnly: true } } }),
+      desiredAgent: agent(),
+      tools: { fs: { workspaceOnly: false } },
+      expected: [["tools.fs.workspaceOnly", "escalation"]],
+    },
+    {
+      name: "built-in profile and portable policy changes",
+      currentAgent: agent({
+        tools: { profile: "coding", fs: { workspaceOnly: false } },
+        memory: {
+          search: { enabled: false, rememberAcrossConversations: false, sources: ["memory"] },
+        },
+      }),
+      desiredAgent: agent({
+        tools: { profile: "full", alsoAllow: ["cron"], fs: { workspaceOnly: true } },
+        memory: {
+          search: {
+            enabled: true,
+            rememberAcrossConversations: true,
+            sources: ["memory", "sessions"],
+          },
+        },
+      }),
+      expected: [
+        [
+          "tools.profile",
+          "escalation",
+          {
+            effect: expect.objectContaining({
+              current: "coding",
+              desired: "full",
+              currentCapabilities: expect.arrayContaining(["read", "write"]),
+              desiredCapabilities: expect.arrayContaining(["*"]),
+            }),
+          },
+        ],
+        ["tools.fs.workspaceOnly", "reduction"],
+        ["memory.search.enabled", "escalation"],
+        ["memory.search.rememberAcrossConversations", "escalation"],
+        ["memory.search.sources", "escalation"],
+      ],
+    },
+    {
+      name: "inherited memory defaults",
+      currentAgent: agent({ memory: { search: { enabled: false } } }),
+      desiredAgent: agent(),
+      expected: [
+        [
+          "memory.search.enabled",
+          "escalation",
+          {
+            current: expect.objectContaining({ summary: "false" }),
+            desired: expect.objectContaining({ summary: "true" }),
+          },
+        ],
+      ],
+    },
+    {
+      name: "contextual cross-conversation recall defaults",
+      currentAgent: agent({ memory: { search: { rememberAcrossConversations: false } } }),
+      desiredAgent: agent(),
+      expected: [
+        ["memory.search.rememberAcrossConversations", "escalation"],
+        ["memory.search.sources", "escalation"],
+      ],
+    },
+  ];
+
+  it.each(cases)("classifies $name", ({ expected, absent = [], ...input }) => {
+    const changes = collectChanges(input);
+    expect(changes).toEqual(
       expect.arrayContaining(
-        ["every", "isolatedSession", "timeoutSeconds"].map((field) =>
+        expected.map(([path, classification, details]) =>
           expect.objectContaining({
-            path: `agent.heartbeat.${field}`,
-            classification: "reduction",
-            requiresDistinctConsent: false,
+            path: `agent.${path}`,
+            classification,
+            requiresDistinctConsent: classification === "escalation",
+            ...details,
           }),
         ),
       ),
     );
-
-    const disabled = collectChanges({
-      currentAgent: { id: "worker", heartbeat: { every: "5m" } },
-      desiredAgent: { id: "worker", heartbeat: { every: "0m" } },
-    });
-    expect(disabled).toContainEqual(
-      expect.objectContaining({
-        path: "agent.heartbeat.every",
-        classification: "reduction",
-        requiresDistinctConsent: false,
-      }),
-    );
-  });
-
-  it("ranks sandbox mode and sharing scope", () => {
-    const changes = collectChanges({
-      currentAgent: { id: "worker", sandbox: { mode: "off", scope: "shared" } },
-      desiredAgent: { id: "worker", sandbox: { mode: "all", scope: "session" } },
-    });
-    expect(changes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: "agent.sandbox.mode",
-          classification: "reduction",
-          requiresDistinctConsent: false,
-        }),
-        expect.objectContaining({
-          path: "agent.sandbox.scope",
-          classification: "reduction",
-          requiresDistinctConsent: false,
-        }),
-      ]),
-    );
-
-    const widened = collectChanges({
-      currentAgent: { id: "worker", sandbox: { scope: "session" } },
-      desiredAgent: { id: "worker", sandbox: { scope: "shared" } },
-    });
-    expect(widened).toContainEqual(
-      expect.objectContaining({
-        path: "agent.sandbox.scope",
-        classification: "escalation",
-        requiresDistinctConsent: true,
-      }),
-    );
-  });
-
-  it("classifies tool restrictions by effective set membership", () => {
-    const substituted = collectChanges({
-      currentAgent: { id: "worker", tools: { deny: ["exec"] } },
-      desiredAgent: { id: "worker", tools: { deny: ["read", "write"] } },
-    });
-    expect(substituted).toContainEqual(
-      expect.objectContaining({
-        path: "agent.tools.deny",
-        classification: "escalation",
-        requiresDistinctConsent: true,
-      }),
-    );
-
-    for (const field of ["allow", "deny"] as const) {
-      const added = collectChanges({
-        currentAgent: { id: "worker" },
-        desiredAgent: { id: "worker", tools: { [field]: ["exec"] } },
-      });
-      expect(added).toContainEqual(
-        expect.objectContaining({
-          path: `agent.tools.${field}`,
-          classification: "reduction",
-          requiresDistinctConsent: false,
-        }),
-      );
-
-      const removed = collectChanges({
-        currentAgent: { id: "worker", tools: { [field]: ["exec"] } },
-        desiredAgent: { id: "worker" },
-      });
-      expect(removed).toContainEqual(
-        expect.objectContaining({
-          path: `agent.tools.${field}`,
-          classification: "escalation",
-          requiresDistinctConsent: true,
-        }),
-      );
+    for (const path of absent) {
+      expect(changes).not.toContainEqual(expect.objectContaining({ path }));
     }
   });
 
-  it("classifies additive tool grants as escalations and removals as reductions", () => {
-    const added = collectChanges({
-      currentAgent: { id: "worker", tools: { profile: "coding" } },
-      desiredAgent: {
-        id: "worker",
-        tools: { profile: "coding", alsoAllow: ["browser"] },
-      },
-    });
-
-    expect(added).toContainEqual(
-      expect.objectContaining({
-        path: "agent.tools.alsoAllow",
-        classification: "escalation",
-        requiresDistinctConsent: true,
-      }),
-    );
-    expect(added).not.toContainEqual(expect.objectContaining({ path: "agent.tools.profile" }));
-
-    const removed = collectChanges({
-      currentAgent: {
-        id: "worker",
-        tools: { profile: "coding", alsoAllow: ["browser"] },
-      },
-      desiredAgent: { id: "worker", tools: { profile: "coding" } },
-    });
-    expect(removed).toContainEqual(
-      expect.objectContaining({
-        path: "agent.tools.alsoAllow",
-        classification: "reduction",
-        requiresDistinctConsent: false,
-      }),
-    );
-    expect(removed).not.toContainEqual(expect.objectContaining({ path: "agent.tools.profile" }));
-  });
-
-  it("classifies growth in a frozen profile allowlist as an escalation", () => {
-    const changes = collectChanges({
-      currentAgent: {
-        id: "worker",
-        tools: { allow: ["read", "write"] },
-      },
-      desiredAgent: {
-        id: "worker",
-        tools: { allow: ["read", "write", "apply_patch"] },
-      },
-    });
-
-    expect(changes).toContainEqual(
-      expect.objectContaining({
-        path: "agent.tools.allow",
-        classification: "escalation",
-        requiresDistinctConsent: true,
-      }),
-    );
-  });
-
-  it("does not escalate the one-time migration from a profile to its frozen allowlist", () => {
-    const desiredTools = materializeClawToolProfile({
-      tools: { profile: "minimal", alsoAllow: ["cron"], deny: ["exec"] },
-    }).tools;
-    const changes = collectChanges({
-      currentAgent: {
-        id: "worker",
-        tools: { profile: "minimal", alsoAllow: ["cron"], deny: ["exec"] },
-      },
-      desiredAgent: {
-        id: "worker",
-        tools: desiredTools,
-      },
-    });
-
-    expect(changes.filter((change) => change.path.startsWith("agent.tools."))).toEqual([]);
-  });
-
-  it("reports authority removed by freezing an inherited global alsoAllow grant", () => {
-    const desiredTools = materializeClawToolProfile({
-      tools: { profile: "minimal" },
-    }).tools;
-    const changes = collectChanges({
-      currentAgent: {
-        id: "worker",
-        tools: { profile: "minimal" },
-      },
-      desiredAgent: {
-        id: "worker",
-        tools: desiredTools,
-      },
-      tools: { alsoAllow: ["browser"] },
-    });
-
-    expect(changes).toContainEqual(
-      expect.objectContaining({
-        path: "agent.tools.allow",
-        classification: "reduction",
-        requiresDistinctConsent: false,
-      }),
-    );
-  });
-
-  it("classifies inherited profiles and wildcard reductions by effective capabilities", () => {
-    const inheritedExpansion = collectChanges({
-      currentAgent: { id: "worker" },
-      desiredAgent: { id: "worker", tools: { profile: "coding" } },
-      tools: { profile: "minimal" },
-    });
-    expect(inheritedExpansion).toContainEqual(
-      expect.objectContaining({
-        path: "agent.tools.profile",
-        classification: "escalation",
-        requiresDistinctConsent: true,
-      }),
-    );
-
-    const wildcardReduction = collectChanges({
-      currentAgent: { id: "worker", tools: { profile: "full" } },
-      desiredAgent: { id: "worker", tools: { profile: "coding" } },
-    });
-    expect(wildcardReduction).toContainEqual(
-      expect.objectContaining({
-        path: "agent.tools.profile",
-        classification: "reduction",
-        requiresDistinctConsent: false,
-      }),
-    );
-  });
-
-  it("classifies removal of workspace-only confinement against host defaults", () => {
-    const changes = collectChanges({
-      currentAgent: { id: "worker", tools: { fs: { workspaceOnly: true } } },
-      desiredAgent: { id: "worker" },
-      tools: { fs: { workspaceOnly: false } },
-    });
-
-    expect(changes).toContainEqual(
-      expect.objectContaining({
-        path: "agent.tools.fs.workspaceOnly",
-        classification: "escalation",
-        requiresDistinctConsent: true,
-      }),
-    );
-  });
-
-  it("resolves built-in profile capabilities and portable policy changes", () => {
-    const changes = collectChanges({
-      currentAgent: {
-        id: "worker",
-        tools: { profile: "coding", fs: { workspaceOnly: false } },
-        memory: {
-          search: {
-            enabled: false,
-            rememberAcrossConversations: false,
-            sources: ["memory"],
-          },
-        },
-      },
-      desiredAgent: {
-        id: "worker",
-        tools: {
-          profile: "full",
-          alsoAllow: ["cron"],
-          fs: { workspaceOnly: true },
-        },
+  const unchangedCases: Array<{
+    name: string;
+    prefix: string;
+    config: Parameters<typeof pushResolvedAgentCapabilityChanges>[0]["config"];
+    desiredAgent: Agent;
+  }> = [
+    {
+      name: "implicit default-agent heartbeat",
+      prefix: "agent.heartbeat.",
+      config: { agents: { list: [{ id: "worker" }, { id: "other" }] } },
+      desiredAgent: agent(),
+    },
+    {
+      name: "inherited memory search",
+      prefix: "agent.memory.search.",
+      config: {
+        agents: { list: [agent()] },
         memory: {
           search: {
             enabled: true,
@@ -402,175 +346,84 @@ describe("pushResolvedAgentCapabilityChanges", () => {
           },
         },
       },
-    });
-
-    expect(changes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: "agent.tools.profile",
-          classification: "escalation",
-          requiresDistinctConsent: true,
-          effect: expect.objectContaining({
-            current: "coding",
-            desired: "full",
-            currentCapabilities: expect.arrayContaining(["read", "write"]),
-            desiredCapabilities: expect.arrayContaining(["*"]),
-          }),
-        }),
-        expect.objectContaining({
-          path: "agent.tools.fs.workspaceOnly",
-          classification: "reduction",
-          requiresDistinctConsent: false,
-        }),
-        expect.objectContaining({
-          path: "agent.memory.search.enabled",
-          classification: "escalation",
-          requiresDistinctConsent: true,
-        }),
-        expect.objectContaining({
-          path: "agent.memory.search.rememberAcrossConversations",
-          classification: "escalation",
-          requiresDistinctConsent: true,
-        }),
-        expect.objectContaining({
-          path: "agent.memory.search.sources",
-          classification: "escalation",
-          requiresDistinctConsent: true,
-        }),
-      ]),
-    );
-  });
-
-  it("resolves inherited memory defaults before classifying updates", () => {
-    const changes = collectChanges({
-      currentAgent: { id: "worker", memory: { search: { enabled: false } } },
-      desiredAgent: { id: "worker" },
-    });
-
-    expect(changes).toContainEqual(
-      expect.objectContaining({
-        path: "agent.memory.search.enabled",
-        classification: "escalation",
-        current: expect.objectContaining({ summary: "false" }),
-        desired: expect.objectContaining({ summary: "true" }),
-      }),
-    );
-  });
-
-  it("reads canonical top-level and per-agent memory search settings", () => {
-    const inherited = collectChanges({
-      currentAgent: { id: "worker" },
-      desiredAgent: { id: "worker" },
-      memory: {
-        search: {
-          enabled: true,
-          rememberAcrossConversations: true,
-          sources: ["memory", "sessions"],
+      desiredAgent: agent(),
+    },
+    {
+      name: "one-time profile freeze",
+      prefix: "agent.tools.",
+      config: {
+        agents: {
+          list: [agent({ tools: { profile: "minimal", alsoAllow: ["cron"], deny: ["exec"] } })],
         },
       },
-    });
-    expect(inherited.filter((change) => change.path.startsWith("agent.memory.search."))).toEqual(
-      [],
-    );
-
-    const overridden = collectChanges({
-      currentAgent: {
-        id: "worker",
-        memory: { search: { enabled: false } },
-      },
-      desiredAgent: {
-        id: "worker",
-        memory: { search: { enabled: true } },
-      },
-    });
-    expect(overridden).toContainEqual(
-      expect.objectContaining({
-        path: "agent.memory.search.enabled",
-        classification: "escalation",
+      desiredAgent: agent({
+        tools: materializeClawToolProfile({
+          tools: { profile: "minimal", alsoAllow: ["cron"], deny: ["exec"] },
+        }).tools,
       }),
-    );
-  });
+    },
+  ];
+  it.each(unchangedCases)(
+    "preserves $name without capability changes",
+    ({ config, desiredAgent, prefix }) => {
+      const changes: Changes = [];
+      pushResolvedAgentCapabilityChanges({ changes, agentId: "worker", config, desiredAgent });
+      expect(changes.filter((change) => change.path.startsWith(prefix))).toEqual([]);
+    },
+  );
 
-  it("uses contextual memory defaults when classifying cross-conversation recall", () => {
-    const changes = collectChanges({
-      currentAgent: {
-        id: "worker",
-        memory: { search: { rememberAcrossConversations: false } },
-      },
-      desiredAgent: { id: "worker" },
-    });
-
-    expect(changes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: "agent.memory.search.rememberAcrossConversations",
-          classification: "escalation",
-          requiresDistinctConsent: true,
-        }),
-        expect.objectContaining({
-          path: "agent.memory.search.sources",
-          classification: "escalation",
-          requiresDistinctConsent: true,
-        }),
-      ]),
-    );
-  });
-
-  it("treats tool policies on a restored missing agent as escalations", () => {
-    for (const field of ["allow", "deny"] as const) {
+  it.each([
+    {
+      name: "allow policy",
+      desiredAgent: agent({ tools: { allow: ["exec"] } }),
+      defaults: {},
+      paths: ["tools.allow"],
+    },
+    {
+      name: "deny policy",
+      desiredAgent: agent({ tools: { deny: ["exec"] } }),
+      defaults: {},
+      paths: ["tools.deny"],
+    },
+    {
+      name: "inherited capabilities",
+      desiredAgent: agent(),
+      defaults: { sandbox: { mode: "all" as const }, heartbeat: { every: "1h" } },
+      paths: ["sandbox.mode", "heartbeat.every"],
+    },
+  ])(
+    "treats $name on a restored missing agent as escalations",
+    ({ desiredAgent, defaults, paths }) => {
       const changes: Changes = [];
       pushResolvedAgentCapabilityChanges({
         changes,
         agentId: "worker",
-        config: { agents: { list: [] } },
-        desiredAgent: { id: "worker", tools: { [field]: ["exec"] } },
+        config: { agents: { defaults, list: [] } },
+        desiredAgent,
       });
-      expect(changes).toContainEqual(
-        expect.objectContaining({
-          path: `agent.tools.${field}`,
-          classification: "escalation",
-          requiresDistinctConsent: true,
-        }),
+      expect(changes).toEqual(
+        expect.arrayContaining(
+          paths.map((path) =>
+            expect.objectContaining({
+              path: `agent.${path}`,
+              classification: "escalation",
+              requiresDistinctConsent: true,
+            }),
+          ),
+        ),
       );
-    }
-  });
-
-  it("treats inherited capabilities on a restored missing agent as escalations", () => {
-    const changes: Changes = [];
-    pushResolvedAgentCapabilityChanges({
-      changes,
-      agentId: "worker",
-      config: {
-        agents: {
-          defaults: { sandbox: { mode: "all" }, heartbeat: { every: "1h" } },
-          list: [],
-        },
-      },
-      desiredAgent: { id: "worker" },
-    });
-    expect(changes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: "agent.sandbox.mode",
-          classification: "escalation",
-          requiresDistinctConsent: true,
-        }),
-        expect.objectContaining({
-          path: "agent.heartbeat.every",
-          classification: "escalation",
-          requiresDistinctConsent: true,
-        }),
-      ]),
-    );
-  });
+    },
+  );
 
   it("does not derive redacted capability digests from private details or payloads", () => {
-    const firstMcp = mcpCapabilityChange({
+    const firstMcp = resourceCapabilityChange({
+      kind: "mcpServer",
       id: "search",
       action: "change",
       desired: { url: "https://first.example", auth: { scheme: "first" } },
     });
-    const secondMcp = mcpCapabilityChange({
+    const secondMcp = resourceCapabilityChange({
+      kind: "mcpServer",
       id: "search",
       action: "change",
       desired: { url: "https://second.example", auth: { scheme: "second" } },
@@ -581,12 +434,14 @@ describe("pushResolvedAgentCapabilityChanges", () => {
     expect(JSON.stringify(firstMcp)).not.toContain("first.example");
     expect(JSON.stringify(firstMcp)).not.toContain('"scheme":"first"');
 
-    const firstCron = cronCapabilityChange({
+    const firstCron = resourceCapabilityChange({
+      kind: "cronJob",
       id: "report",
       action: "change",
       desired: { schedule: { cron: "0 9 * * *" }, session: "isolated", message: "first" },
     });
-    const secondCron = cronCapabilityChange({
+    const secondCron = resourceCapabilityChange({
+      kind: "cronJob",
       id: "report",
       action: "change",
       desired: { schedule: { cron: "0 9 * * *" }, session: "isolated", message: "second" },
@@ -604,7 +459,8 @@ describe("pushResolvedAgentCapabilityChanges", () => {
   });
 
   it("describes MCP execution shape without exposing private configuration", () => {
-    const change = mcpCapabilityChange({
+    const change = resourceCapabilityChange({
+      kind: "mcpServer",
       id: "private",
       action: "add",
       desired: {

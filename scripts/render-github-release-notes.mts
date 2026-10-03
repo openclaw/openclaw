@@ -2,12 +2,16 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { validateReleaseManifestAdvisoryJobs } from "./full-release-validation-policy.mjs";
+import { changelogFormat, findReleaseChangelog } from "./lib/release-changelog.mjs";
 import {
   compactReleaseNotes,
   OPENCLAW_RELEASE_TAG_PATTERN,
   validateReleaseNotesRepository as validateRepository,
   validateReleaseNotesTag as validateTag,
 } from "./lib/release-notes-compaction.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import { validateActiveExtendedStableLine } from "./openclaw-npm-extended-stable-release.mjs";
 
 type ShippedBaselineExclusion = {
   ref: string;
@@ -31,10 +35,28 @@ type ReleaseNotesTarget = {
   version: unknown;
   tag: unknown;
   repository: unknown;
+  regularStableVersion?: unknown;
+  contributionRecordPath?: string;
+  validationManifest?: unknown;
 };
 
 const RELEASE_VERIFICATION_HEADING = "### Release verification";
+const ADVISORY_LINE_PREFIX = "- Advisory job (";
 const SHIPPED_BASELINE_EXCLUSIONS_PREFIX = "Shipped baseline exclusions:";
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+] as const;
 const RELEASE_HEADING_PATTERN =
   /^## (?<version>Unreleased|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-(?:(?:alpha|beta)\.[1-9][0-9]*|[1-9][0-9]*))?)\r?$/u;
 
@@ -55,7 +77,47 @@ function normalizeTail(value: string | undefined) {
 function joinBody(notes: string, tail: string | undefined) {
   const normalizedNotes = notes.trimEnd();
   const normalizedTail = normalizeTail(tail);
+  if (!normalizedNotes) {
+    return normalizedTail;
+  }
   return normalizedTail ? `${normalizedNotes}\n\n${normalizedTail}` : normalizedNotes;
+}
+
+function normalizeVerification(verification: string, manifest: unknown) {
+  if (manifest === undefined) {
+    return normalizeTail(verification);
+  }
+  validateReleaseManifestAdvisoryJobs(manifest);
+  return normalizeTail(verification)
+    .split("\n")
+    .filter((line) => !line.startsWith(ADVISORY_LINE_PREFIX))
+    .join("\n")
+    .trimEnd();
+}
+
+function extendedStableReleaseNotice({
+  version,
+  repository,
+  regularStableVersion,
+}: {
+  version: string;
+  repository: string;
+  regularStableVersion: unknown;
+}) {
+  const release = parseReleaseVersion(version);
+  if (!release || classifyReleaseTrain(release) !== "extended-stable") {
+    if (regularStableVersion !== undefined) {
+      fail("regular stable version is only valid for extended-stable release notes");
+    }
+    return "";
+  }
+  assertString(regularStableVersion, "regular stable version");
+  validateActiveExtendedStableLine(version, regularStableVersion);
+  const month = MONTH_NAMES[release.month - 1];
+  if (!month) {
+    fail(`unsupported extended-stable release month: ${release.month}`);
+  }
+  return `This is a gateway-only \`extended-stable\` release, which is our current equivalent to LTS. This release is OpenClaw from the end of ${month} ${release.year}, plus critical security updates, reliability and performance fixes, and features like new model support. The latest version of OpenClaw at the time of this release is [${regularStableVersion}](https://github.com/${repository}/releases#release-v${regularStableVersion})`;
 }
 
 export function formatContributionRecordProvenance(provenance: ContributionRecordProvenance) {
@@ -276,7 +338,7 @@ export function dedicatedSectionVersionForTag(tag: unknown) {
   return /-(?:alpha\.)?[1-9][0-9]*$/u.test(taggedVersion) ? taggedVersion : undefined;
 }
 
-export function releaseNotesSectionForTag(changelog: unknown, version: unknown, tag: unknown) {
+function releaseNotesSectionForTag(changelog: unknown, version: unknown, tag: unknown) {
   // Alpha and correction tags prefer their own exact heading when the
   // changelog carries one; otherwise they fall back to the base version.
   assertString(tag, "tag");
@@ -302,11 +364,44 @@ export function releaseNotesSectionForTag(changelog: unknown, version: unknown, 
   }
 }
 
+export function loadReleaseNotesForTag({
+  rootDir,
+  ref,
+  tag,
+  version = releaseNotesVersionForTag(tag),
+}: {
+  rootDir: string;
+  ref?: string;
+  tag: string;
+  version?: string;
+}) {
+  validateTag(tag);
+  const dedicatedVersion = dedicatedSectionVersionForTag(tag);
+  const versions = [
+    ...(dedicatedVersion ? [dedicatedVersion] : []),
+    version,
+    ...(/-alpha\.[1-9][0-9]*$/u.test(tag) ? ["Unreleased"] : []),
+  ];
+  for (const selectedVersion of new Set(versions)) {
+    const source = findReleaseChangelog({ rootDir, ref, version: selectedVersion });
+    if (source) {
+      if (source.format !== "initial") {
+        fail("docs-mirrored release notes require the docs-publication renderer");
+      }
+      return source;
+    }
+  }
+  throw new Error(`changelog does not contain release notes for ${tag}`);
+}
+
 export function renderGithubReleaseNotes({
   changelog,
   version,
   tag,
   repository,
+  regularStableVersion,
+  contributionRecordPath,
+  validationManifest,
   verification = "",
 }: ReleaseNotesTarget & { verification?: string }) {
   assertString(repository, "repository");
@@ -318,9 +413,19 @@ export function renderGithubReleaseNotes({
   if (tagVersion !== version) {
     fail(`release tag ${tag} requires CHANGELOG.md version ${tagVersion}, got ${version}`);
   }
+  assertString(changelog, "changelog");
+  if (changelogFormat(changelog) !== "initial") {
+    fail("docs-mirrored release notes require the docs-publication renderer");
+  }
   const section = releaseNotesSectionForTag(changelog, version, tag);
-  const mode = fitsGithubReleaseBody(section) ? "full" : "compact";
-  const baseBody = mode === "full" ? section : compactReleaseNotes(section, repository, tag)?.body;
+  const notice = extendedStableReleaseNotice({ version, repository, regularStableVersion });
+  const fullBody = joinBody(notice, section);
+  const mode = fitsGithubReleaseBody(fullBody) ? "full" : "compact";
+  const compactBody =
+    mode === "full"
+      ? undefined
+      : compactReleaseNotes(section, repository, tag, contributionRecordPath)?.body;
+  const baseBody = mode === "full" ? fullBody : compactBody && joinBody(notice, compactBody);
   if (baseBody === undefined) {
     fail(
       "release notes exceed GitHub's body limit and cannot be compacted without a complete contribution record",
@@ -332,7 +437,7 @@ export function renderGithubReleaseNotes({
       `compacted release notes are still too large for GitHub: ${size.characters} characters, ${size.bytes} bytes`,
     );
   }
-  const normalizedVerification = normalizeTail(verification);
+  const normalizedVerification = normalizeVerification(verification, validationManifest);
   const bodyWithVerification = joinBody(baseBody, normalizedVerification);
   const verificationIncluded =
     normalizedVerification !== "" && fitsGithubReleaseBody(bodyWithVerification);
@@ -348,39 +453,16 @@ export function renderGithubReleaseNotes({
 
 export function verifyGithubReleaseNotes({
   body,
-  changelog,
-  version,
-  tag,
-  repository,
+  ...target
 }: ReleaseNotesTarget & { body: unknown }) {
   assertString(body, "release body");
   const normalizedBody = body.trimEnd();
-  const base = renderGithubReleaseNotes({
-    changelog,
-    version,
-    tag,
-    repository,
-  });
-  if (normalizedBody === base.body) {
-    return {
-      ...base,
-      matches: true,
-      actualSize: githubReleaseBodySize(normalizedBody),
-    };
-  }
+  const base = renderGithubReleaseNotes({ ...target, validationManifest: undefined });
   const verificationPrefix = `${base.body}\n\n${RELEASE_VERIFICATION_HEADING}`;
   const verification = normalizedBody.startsWith(verificationPrefix)
     ? normalizedBody.slice(base.body.length + 2)
     : "";
-  const expected = verification
-    ? renderGithubReleaseNotes({
-        changelog,
-        version,
-        tag,
-        repository,
-        verification,
-      })
-    : base;
+  const expected = renderGithubReleaseNotes({ ...target, verification });
   return {
     ...expected,
     matches: normalizedBody === expected.body,
@@ -391,21 +473,29 @@ export function verifyGithubReleaseNotes({
 function usage() {
   return `Usage:
   node --import tsx scripts/render-github-release-notes.mts \\
-    --changelog <path> --tag <tag> --repository <owner/repo> \\
-    [--version <version>] [--verification-file <path>] [--output <path>] \\
+    (--root <repository-path> [--ref <ref>] | --changelog <legacy-file>) \\
+    --tag <tag> --repository <owner/repo> \\
+    [--version <version>] [--regular-stable-version <version>] \\
+    [--verification-file <path>] [--validation-manifest <path>] [--output <path>] \\
     [--metadata-output <path>]
+  Verification uses the same target arguments with --verify-body <path>.
 `;
 }
 
 function parseArgs(argv: string[]) {
   const valueOptions = [
     ["--changelog", "changelog"],
+    ["--root", "rootDir"],
+    ["--ref", "ref"],
     ["--version", "version"],
     ["--tag", "tag"],
     ["--repository", "repository"],
+    ["--regular-stable-version", "regularStableVersion"],
     ["--verification-file", "verificationFile"],
+    ["--validation-manifest", "validationManifest"],
     ["--output", "output"],
     ["--metadata-output", "metadataOutput"],
+    ["--verify-body", "verifyBody"],
   ] as const satisfies ReadonlyArray<readonly [string, string]>;
   type ValueOption = (typeof valueOptions)[number][1];
   const options: Partial<Record<ValueOption, string>> & { help?: true } = {};
@@ -428,13 +518,25 @@ function parseArgs(argv: string[]) {
     fail(`unknown argument: ${arg}`);
   }
   if (!options.help) {
-    for (const name of ["changelog", "tag", "repository"] as const) {
+    for (const name of ["tag", "repository"] as const) {
       if (!options[name]) {
         fail(`--${name} is required`);
       }
     }
+    if (Boolean(options.changelog) === Boolean(options.rootDir)) {
+      fail("exactly one of --root or --changelog is required");
+    }
+    if (options.ref && !options.rootDir) {
+      fail("--ref requires --root");
+    }
     if (options.metadataOutput && !options.output) {
       fail("--metadata-output requires --output");
+    }
+    if (
+      options.verifyBody &&
+      (options.output || options.metadataOutput || options.verificationFile)
+    ) {
+      fail("--verify-body cannot be combined with rendering output or verification-file options");
     }
   }
   return options;
@@ -447,20 +549,43 @@ function main() {
     return;
   }
   const { changelog: changelogPath, repository, tag } = options;
-  if (!changelogPath || !repository || !tag) {
+  if (!repository || !tag) {
     fail("release notes arguments were not validated");
   }
-  const changelog = readFileSync(changelogPath, "utf8");
+  const version = options.version ?? releaseNotesVersionForTag(tag);
+  const source = options.rootDir
+    ? loadReleaseNotesForTag({ rootDir: options.rootDir, ref: options.ref, tag, version })
+    : undefined;
+  const changelog = source
+    ? source.section
+    : changelogPath
+      ? readFileSync(changelogPath, "utf8")
+      : fail("release notes source was not validated");
+  const target = {
+    changelog,
+    version,
+    tag,
+    repository,
+    regularStableVersion: options.regularStableVersion,
+    contributionRecordPath: source?.recordPath ?? undefined,
+    validationManifest: options.validationManifest
+      ? JSON.parse(readFileSync(options.validationManifest, "utf8"))
+      : undefined,
+  };
+  if (options.verifyBody) {
+    const result = verifyGithubReleaseNotes({
+      ...target,
+      body: readFileSync(options.verifyBody, "utf8"),
+    });
+    if (!result.matches) {
+      fail("Release body does not match canonical release notes.");
+    }
+    return;
+  }
   const verification = options.verificationFile
     ? readFileSync(options.verificationFile, "utf8")
     : "";
-  const rendered = renderGithubReleaseNotes({
-    changelog,
-    version: options.version ?? releaseNotesVersionForTag(tag),
-    tag,
-    repository,
-    verification,
-  });
+  const rendered = renderGithubReleaseNotes({ ...target, verification });
   if (options.output) {
     writeFileSync(options.output, rendered.body);
     if (options.metadataOutput) {

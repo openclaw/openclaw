@@ -15,8 +15,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
-  completeDeferredSessionMcpRuntimeRetirement: mocks.completeRetirement,
   peekSessionMcpRuntime: mocks.peekSessionMcpRuntime,
+}));
+vi.mock("../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
+  completeDeferredSessionMcpRuntimeRetirement: mocks.completeRetirement,
 }));
 vi.mock("../agents/mcp-ui-resource.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/mcp-ui-resource.js")>()),
@@ -33,8 +35,15 @@ const {
   verifyMcpAppStandaloneTicket,
 } = await import("./mcp-app-standalone.js");
 
-function issueTicket(params: Parameters<typeof createMcpAppStandaloneTicket>[0]) {
-  const issued = createMcpAppStandaloneTicket(params);
+function issueTicket(
+  params: Omit<Parameters<typeof createMcpAppStandaloneTicket>[0], "toolOperationsAuthorized"> & {
+    toolOperationsAuthorized?: boolean;
+  },
+) {
+  const issued = createMcpAppStandaloneTicket({
+    ...params,
+    toolOperationsAuthorized: params.toolOperationsAuthorized ?? true,
+  });
   if (!issued) {
     throw new Error("ticket capacity unexpectedly exhausted");
   }

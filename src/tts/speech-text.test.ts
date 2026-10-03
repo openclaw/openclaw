@@ -71,18 +71,30 @@ const ready = true;
   });
 
   it.each([
-    ["a longer closing fence", "```\nconst answer = 42;\n````"],
-    ["an unclosed fence", "```\nconst answer = 42;"],
-    ["tilde fences", "~~~ts\nconst answer = 42;\n~~~"],
-    ["a mismatched marker inside a fence", "```\n~~~\nconst answer = 42;\n```"],
-    ["an indented closing fence", "```\nconst answer = 42;\n   ```"],
-    ["a blockquoted fence", "> ```\n> const answer = 42;\n> ```"],
     [
-      "a two-level list-nested fence",
-      '- Outer\n  - Inner\n    ```\n    const detailedAnswer = "this body dominates the reply";\n    ```',
+      "inline code",
+      "```printf```\n\nThis explanation is ordinary prose and should be spoken in full.",
     ],
-  ])("detects code-heavy text with %s", (_description, input) => {
-    expect(isCodeHeavySpeechText(input)).toBe(true);
+    [
+      "prose after a quoted fence",
+      "> ```\n> x\n\nThis explanation is ordinary prose and should be spoken in full.",
+    ],
+  ])("does not classify %s as fenced code", (_name, text) => {
+    expect(isCodeHeavySpeechText(text)).toBe(false);
+  });
+
+  it("recognizes a fence opened on the list marker line", () => {
+    const text = '- ```js\n  const detailedAnswer = "this body dominates the reply";\n  ```';
+    expect(isCodeHeavySpeechText(text)).toBe(true);
+  });
+
+  it.each([
+    ["1234567", false],
+    ["12345678", true],
+    ["12345  ", false],
+    ["123456  ", true],
+  ])("keeps the inclusive half-code boundary for %j", (code, expected) => {
+    expect(isCodeHeavySpeechText(`\`\`\`\n${code}\n\`\`\``)).toBe(expected);
   });
 
   it("keeps blockquoted code and surrounding prose aligned with Markdown stripping", () => {
@@ -95,11 +107,5 @@ const ready = true;
     expect(isCodeHeavySpeechText(input)).toBe(false);
     expect(normalizeSpeechText(input)).toContain("This explanation is deliberately much longer");
     expect(normalizeSpeechText(input)).toContain("const ready = true;");
-  });
-
-  it("does not count prose after a tab-terminated closing fence as code", () => {
-    const input = "```\nx\n```\t\nThis prose follows the code fence and is much longer than it.";
-
-    expect(isCodeHeavySpeechText(input)).toBe(false);
   });
 });

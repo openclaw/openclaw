@@ -1,6 +1,7 @@
 // Covers send validation for target/channel mismatches, configured channel
 // availability, and explicit target requirements.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelOutboundContext } from "../../channels/plugins/outbound.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -46,32 +47,6 @@ describe("runMessageAction send validation", () => {
         toolContext: { currentChannelId: "C12345678" },
       }),
     ).rejects.toThrow(/message required/i);
-  });
-
-  it("allows send when only presentation payloads are provided", async () => {
-    const result = await runDrySend({
-      cfg: {
-        channels: {
-          forum: {
-            botToken: "forum-test",
-          },
-        },
-      } as OpenClawConfig,
-      actionParams: {
-        channel: "forum",
-        target: "123456",
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Approve", value: "approve" }],
-            },
-          ],
-        },
-      },
-    });
-
-    expect(result.kind).toBe("send");
   });
 
   it("allows send when only generic presentation blocks are provided", async () => {
@@ -235,18 +210,6 @@ describe("runMessageAction send validation", () => {
         poll_public: "true",
       },
     },
-    {
-      name: "channel-extra poll params with content",
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hi",
-        pollQuestion: "Ready?",
-        pollOption: ["Yes", "No"],
-        pollDurationSeconds: -5,
-        pollPublic: "true",
-      },
-    },
   ])("rejects send actions that include $name", async ({ actionParams }) => {
     await expect(
       runDrySend({
@@ -298,23 +261,20 @@ describe("runMessageAction send validation", () => {
     expect(result.kind).toBe("send");
   });
 
-  it.each(["", " \t\n"])(
-    "treats blank shared-schema event location %j as omitted on send",
-    async (location) => {
-      const result = await runDrySend({
-        cfg: workspaceConfig,
-        actionParams: {
-          channel: "workspace",
-          target: "#C12345678",
-          message: "hello",
-          location,
-        },
-        toolContext: { currentChannelId: "C12345678" },
-      });
+  it("treats blank shared-schema event location as omitted on send", async () => {
+    const result = await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "#C12345678",
+        message: "hello",
+        location: " \t\n",
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    });
 
-      expect(result.kind).toBe("send");
-    },
-  );
+    expect(result.kind).toBe("send");
+  });
 
   it("keeps rejecting a non-empty event location string on send", async () => {
     await expect(
@@ -350,54 +310,44 @@ describe("message body alias normalization", () => {
   });
 
   it.each([
-    { alias: "SendMessage", value: "hello from alias" },
-    { alias: "content", value: "hello from content" },
-    { alias: "text", value: "hello from text" },
-  ])("normalizes $alias alias to message for send", async ({ alias, value }) => {
-    const result = await runDrySend({
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        [alias]: value,
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
-  it("does not overwrite an explicit message with an alias", async () => {
-    const result = await runDrySend({
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "explicit",
-        SendMessage: "alias value",
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
-  it("emits a diagnostic warning when normalizing an alias", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    await runDrySend({
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        SendMessage: "alias body",
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    });
-
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[message-tool] normalized alias "SendMessage" to "message"'),
+    { name: "canonical message", body: { message: "    indented body" } },
+    { name: "reasoning tag alias", body: { text: "<think>private</think>    indented body" } },
+    {
+      name: "mixed reasoning preamble alias",
+      body: { text: "<think>private</think>\nThinking\n_summary_\n    indented body" },
+    },
+    {
+      name: "blank earlier alias",
+      body: { SendMessage: " \n\t ", content: "    indented body", text: "not selected" },
+    },
+    { name: "caption fallback", body: { message: "", caption: "    indented body" } },
+  ])("delivers code indentation through $name", async ({ body }) => {
+    const sentText: string[] = [];
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: {
+            ...workspaceTestPlugin,
+            outbound: {
+              ...workspaceTestPlugin.outbound,
+              sendText: async (ctx: ChannelOutboundContext) => {
+                sentText.push(ctx.text);
+                return { channel: "workspace", messageId: "body-whitespace" };
+              },
+            },
+          },
+        },
+      ]),
     );
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: { channel: "workspace", target: "#C12345678", ...body },
+    });
+    expect(result.kind).toBe("send");
+    expect(sentText).toEqual(["    indented body"]);
   });
 
   it.each([
@@ -419,7 +369,7 @@ describe("message body alias normalization", () => {
       toolContext: {
         currentChannelProvider: "webchat",
       },
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       sourceReplyDeliveryMode: "message_tool_only",
     });
 

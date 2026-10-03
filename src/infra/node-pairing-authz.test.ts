@@ -17,13 +17,6 @@ const ADMIN_ONLY_INVOKE_COMMANDS = [
 ] as const;
 
 describe("resolveNodePairApprovalScopes", () => {
-  it("requires operator.admin for system.run commands", () => {
-    expect(resolveNodePairApprovalScopes(["system.run"])).toEqual([
-      "operator.pairing",
-      "operator.admin",
-    ]);
-  });
-
   it.each([...NODE_SYSTEM_RUN_COMMANDS, ...ADMIN_ONLY_INVOKE_COMMANDS])(
     "requires operator.admin for %s commands",
     (command) => {

@@ -82,12 +82,12 @@ from model names. Unknown IDs can still be configured explicitly; listing alone
 does not prove chat compatibility. This is not a complete automatic catalog of
 every NVIDIA model.
 
-Both public fetches use fixed HTTPS hosts and send no credentials. If the
-featured feed fails, available bundled chat models still appear. If the
-inventory is unavailable or malformed, browse and setup retain the bundled
-fallback, while the fresh-live catalog stays empty. A successful empty inventory
-does not restore stale bundled entries. Without NVIDIA auth, browsing uses the
-bundled catalog without fetching.
+Both public fetches use fixed HTTPS hosts and send no credentials. A failed
+inventory or featured request marks discovery unavailable and retains the last
+successful catalog for the same provider configuration and credentials. Failed
+featured metadata cannot silently remove previously discovered models. A
+successful empty inventory clears discovered models, even if the featured feed
+fails. Without NVIDIA auth, browsing uses the bundled catalog without fetching.
 
 ## Nemotron 3.5 Lightning
 
@@ -114,8 +114,9 @@ The bundled Ultra row sends
 by default so normal chat output stays in the visible answer instead of
 exposing reasoning text.
 
-Use Ultra for the highest-capability NVIDIA default. Keep Super selected when
-you want the smaller Nemotron 3 option, or choose one of the third-party models
+Use Ultra for the highest-capability NVIDIA default. Select Nemotron 3.5
+Lightning or Nemotron 3 Super when you want a smaller Nemotron option, or
+choose one of the third-party models
 hosted in NVIDIA's catalog when their context, latency, or behavior fits better.
 
 ## Bundled fallback catalog
@@ -204,7 +205,9 @@ longer work. Migrate existing Qwen configurations to an active model.
     model idle watchdog before they emit a first response chunk. For custom
     NVIDIA provider entries, raise the provider timeout instead of the whole
     agent runtime timeout; `timeoutSeconds` covers provider HTTP requests and
-    raises the idle/stream watchdog ceiling for that provider:
+    raises the idle/stream watchdog ceiling for that provider. The provider id
+    below (`custom-integrate-api-nvidia-com`) is a name you choose, not a
+    reserved value; any id works as long as your model refs use the same prefix:
 
     ```json5
     {

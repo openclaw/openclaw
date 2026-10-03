@@ -1,7 +1,4 @@
-import type {
-  ChannelPreviewStreamingConfig,
-  ChannelStreamingProgressConfig,
-} from "./types.base.js";
+import type { ChannelPreviewStreamingConfig, SessionThreadBindingsConfig } from "./types.base.js";
 import type {
   ChannelBotInteractionConfig,
   ChannelExecApprovalConfig,
@@ -14,10 +11,7 @@ import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
-export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
-export type DiscordChannelStreamingConfig = Omit<ChannelPreviewStreamingConfig, "progress"> & {
-  progress?: ChannelStreamingProgressConfig;
-};
+export type DiscordChannelStreamingConfig = ChannelPreviewStreamingConfig;
 
 export type DiscordPluralKitConfig = {
   enabled?: boolean;
@@ -37,6 +31,8 @@ export type DiscordDmConfig = {
 
 export type DiscordGuildChannelConfig = {
   requireMention?: boolean;
+  /** Override mention gating in threads created by this bot; omitted preserves autoThread behavior. */
+  requireMentionInBotThreads?: boolean;
   /**
    * If true, drop messages addressed to another identity by mention or bot reply, but not this
    * bot (not @everyone/@here).
@@ -71,6 +67,8 @@ export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist
 export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
+  /** Default for bot-created threads unless the channel overrides it. */
+  requireMentionInBotThreads?: boolean;
   /**
    * If true, drop messages addressed to another identity by mention or bot reply, but not this
    * bot (not @everyone/@here).
@@ -225,9 +223,6 @@ export type DiscordVoiceConfig = {
 export type DiscordExecApprovalConfig = ChannelExecApprovalConfig<string> & {
   /** Delete approval DMs after approval, denial, or timeout. Default: false. */
   cleanupAfterResolve?: boolean;
-  /** Where to send approval prompts. "dm" sends to approver DMs (default), "channel" sends to the
-   *  originating Discord channel, "both" sends to both. When target is "channel" or "both", buttons
-   *  are only usable by resolved approvers; other users receive an ephemeral denial. */
 };
 
 export type DiscordAgentComponentsConfig = {
@@ -237,18 +232,7 @@ export type DiscordAgentComponentsConfig = {
   ttlMs?: number;
 };
 
-export type DiscordThreadBindingsConfig = {
-  /** Enable Discord thread binding features. Overrides session.threadBindings.enabled. */
-  enabled?: boolean;
-  /** Inactivity window in hours. Set 0 to disable. Default: 24. */
-  idleHours?: number;
-  /** Hard max age in hours. Set 0 to disable. Default: 0. */
-  maxAgeHours?: number;
-  /** Allow session spawns to create and bind Discord threads. Default: true. */
-  spawnSessions?: boolean;
-  /** Default context mode for native subagents. Default: fork. */
-  defaultSpawnContext?: "isolated" | "fork";
-};
+export type DiscordThreadBindingsConfig = SessionThreadBindingsConfig;
 
 export type DiscordSlashCommandConfig = {
   /** Reply ephemerally (default: true). */
@@ -267,9 +251,6 @@ export type DiscordAutoPresenceConfig = {
   intervalMs?: number;
   /** Minimum spacing between actual gateway presence updates (ms). Default: 15000. */
   minUpdateIntervalMs?: number;
-  /** Optional custom status text while runtime is healthy; supports plain text. */
-  /** Optional custom status text while runtime/quota state is degraded or unknown. */
-  /** Optional custom status text while runtime detects quota/token exhaustion. */
   /** @deprecated Doctor-only legacy input. */
   exhaustedText?: string;
 };
@@ -317,7 +298,6 @@ export type DiscordAccountConfig = Omit<
     execApprovals?: DiscordExecApprovalConfig;
     /** Agent-controlled interactive components (buttons, select menus). */
     agentComponents?: DiscordAgentComponentsConfig;
-    /** Discord UI customization (components, modals, etc.). */
     /** Slash command configuration. */
     slashCommand?: DiscordSlashCommandConfig;
     /** Thread binding lifecycle settings. */

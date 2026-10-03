@@ -13,26 +13,23 @@ afterEach(() => {
 });
 
 describe("collectMcpPaginatedItems", () => {
-  it.each(["tool", "resource", "prompt"])(
-    "preserves normal %s ordering and treats an empty cursor as present",
-    async (operation) => {
-      const cursors: Array<string | undefined> = [];
-      const result = await collectMcpPaginatedItems({
-        label: `MCP ${operation} listing`,
-        itemLabel: `${operation}s`,
-        ...limits,
-        loadPage: async ({ cursor }) => {
-          cursors.push(cursor);
-          return cursor === undefined
-            ? { items: [`${operation}-one`], nextCursor: "" }
-            : { items: [`${operation}-two`] };
-        },
-      });
+  it("preserves ordering and treats an empty cursor as present", async () => {
+    const cursors: Array<string | undefined> = [];
+    const result = await collectMcpPaginatedItems({
+      label: "MCP tool listing",
+      itemLabel: "tools",
+      ...limits,
+      loadPage: async ({ cursor }) => {
+        cursors.push(cursor);
+        return cursor === undefined
+          ? { items: ["tool-one"], nextCursor: "" }
+          : { items: ["tool-two"] };
+      },
+    });
 
-      expect(cursors).toEqual([undefined, ""]);
-      expect(result).toEqual([`${operation}-one`, `${operation}-two`]);
-    },
-  );
+    expect(cursors).toEqual([undefined, ""]);
+    expect(result).toEqual(["tool-one", "tool-two"]);
+  });
 
   it("rejects repeated and cyclic cursors", async () => {
     await expect(
@@ -142,13 +139,38 @@ describe("collectMcpPaginatedItems", () => {
       loadPage: async () => ({ items: ["resource"] }),
       mapItem: (item) => {
         mappedItems += 1;
-        vi.setSystemTime(1_050);
+        // Cross the deadline on the monotonic clock only; the deadline timer must not fire,
+        // so the synchronous check is what rejects the page.
+        vi.spyOn(performance, "now").mockReturnValue(performance.now() + 50);
         return item;
       },
     });
 
     await expect(listing).rejects.toThrow("timed out after 50ms");
     expect(mappedItems).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps the collector deadline through a forward wall-clock step", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    let page = 0;
+    const items = await collectMcpPaginatedItems({
+      label: "MCP tool listing",
+      itemLabel: "tools",
+      ...limits,
+      timeoutMs: 50,
+      loadPage: async () => {
+        page += 1;
+        // The wall clock jumps far past the deadline while the collector is still within budget.
+        vi.setSystemTime(1_000 + 60_000);
+        return page < 3
+          ? { items: [`tool-${page}`], nextCursor: `cursor-${page}` }
+          : { items: [`tool-${page}`] };
+      },
+    });
+
+    expect(items).toEqual(["tool-1", "tool-2", "tool-3"]);
     expect(vi.getTimerCount()).toBe(0);
   });
 

@@ -1,4 +1,3 @@
-// Telegram plugin module implements shared runtime behavior.
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import type { ResolvedTelegramAccount } from "./accounts.js";
 import {
@@ -6,7 +5,6 @@ import {
   buildTelegramModelBrowseChannelData,
   buildTelegramModelsAddProviderChannelData,
   buildTelegramModelsListChannelData,
-  buildTelegramModelsMenuChannelData,
   buildTelegramModelsProviderChannelData,
 } from "./command-ui.js";
 import { telegramDoctor } from "./doctor.js";
@@ -37,7 +35,7 @@ export function createTelegramPluginBase(params: {
       nativeCommandsAutoEnabled: true,
       nativeSkillsAutoEnabled: true,
       buildCommandsListChannelData: buildTelegramCommandsListChannelData,
-      buildModelsMenuChannelData: buildTelegramModelsMenuChannelData,
+      buildModelsMenuChannelData: buildTelegramModelsProviderChannelData,
       buildModelsProviderChannelData: buildTelegramModelsProviderChannelData,
       buildModelsAddProviderChannelData: buildTelegramModelsAddProviderChannelData,
       buildModelsListChannelData: buildTelegramModelsListChannelData,

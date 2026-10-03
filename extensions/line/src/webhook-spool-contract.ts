@@ -85,7 +85,3 @@ export function laneKeyFor(event: unknown, eventId: string): string {
   }
   return eventId;
 }
-
-export function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}

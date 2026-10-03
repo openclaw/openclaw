@@ -5,10 +5,250 @@ import Testing
 
 @MainActor
 struct ChatSessionSidebarModelTests {
+    private func mixedRoster() throws -> [OpenClawChatSessionEntry] {
+        try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
+        {"sessions":[
+          {"key":"agent:main:main","createdAt":900,"updatedAt":900,"childSessions":["child"]},
+          {"key":"older","createdAt":100,"updatedAt":800},
+          {"key":"newer","createdAt":200,"updatedAt":100},
+          {"key":"agent:main:cron:daily","createdAt":800,"createdActor":{"type":"system"}},
+          {"key":"probe","createdAt":700,"createdActor":{"type":"system"},"label":"Named probe"},
+          {"key":"internal","createdAt":600,"createdVia":"internal"},
+          {"key":"named-internal","createdAt":300,"createdVia":"internal","label":"Release planning"},
+          {"key":"human","createdAt":250,"createdVia":"run","createdActor":{"type":"human"}},
+          {"key":"agent:main:slack:channel:demo","createdAt":50,"surface":"slack","kind":"group"},
+          {"key":"child","createdAt":150,"parentSessionKey":"agent:main:main","childSessions":["grandchild"]},
+          {"key":"grandchild","createdAt":160,"parentSessionKey":"child"},
+          {"key":"z-tie","createdAt":75},
+          {"key":"a-tie","createdAt":75},
+          {"key":"missing","updatedAt":1000},
+          {"key":"pinned-old","pinned":true,"pinnedAt":100,"createdAt":500},
+          {"key":"pinned-new","pinned":true,"pinnedAt":200,"createdAt":1}
+        ]}
+        """#.utf8)).sessions
+    }
+
+    @Test func `sidebar view defaults hide background rows and promote main children`() throws {
+        let sessions = try self.mixedRoster()
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: sessions, currentSessionKey: "older", mainSessionKey: "agent:main:main",
+            activeAgentID: "main", excludesMainSession: true, query: "", viewOptions: .init())
+        #expect(sections.first?.nodes.map(\.id) == ["pinned-new", "pinned-old"])
+        let recent = sections.first(where: { $0.id == "recent" })
+        #expect(recent?.nodes.map(\.id) == [
+            "named-internal", "human", "newer", "child", "older", "z-tie", "a-tie", "missing",
+        ])
+        #expect(recent?.nodes.first(where: { $0.id == "child" })?.children.map(\.id) == ["grandchild"])
+        #expect(sections.first(where: { $0.id == "groups" })?.nodes.map(\.id) == ["agent:main:slack:channel:demo"])
+    }
+
+    @Test func `sidebar visibility toggles are independent and selected hidden rows survive`() throws {
+        let sessions = try self.mixedRoster()
+        for (automation, system) in [(false, false), (true, false), (false, true), (true, true)] {
+            let options = ChatSessionSidebarModel.ViewOptions(showAutomation: automation, showSystem: system)
+            let sections = ChatSessionSidebarModel.sections(
+                sessions: sessions, currentSessionKey: "older", mainSessionKey: "agent:main:main",
+                excludesMainSession: true, query: "", viewOptions: options)
+            let keys = Set(sections.flatMap(\.nodes).map(\.id))
+            #expect(keys.contains("agent:main:cron:daily") == automation)
+            #expect(keys.contains("probe") == system)
+            #expect(keys.contains("internal") == system)
+            #expect(keys.contains("named-internal"))
+            #expect(keys.contains("human"))
+        }
+        for selected in ["agent:main:cron:daily", "probe", "internal"] {
+            let sections = ChatSessionSidebarModel.sections(
+                sessions: sessions, currentSessionKey: selected, mainSessionKey: "agent:main:main",
+                excludesMainSession: true, query: "", viewOptions: .init())
+            #expect(sections.flatMap(\.nodes).contains { $0.id == selected })
+        }
+        // Catalog recovery keeps main; ordinary shared callers retain the original roster.
+        let recovery = ChatSessionSidebarModel.sections(
+            sessions: sessions, currentSessionKey: "main", mainSessionKey: "agent:main:main",
+            query: "", viewOptions: .init())
+        #expect(recovery.flatMap(\.nodes).contains { $0.id == "agent:main:main" })
+        let legacy = ChatSessionSidebarModel.sections(
+            sessions: sessions, currentSessionKey: "older", query: "")
+        #expect(legacy.flatMap(\.nodes).contains { $0.id == "probe" })
+        #expect(legacy.flatMap(\.nodes).contains { $0.id == "agent:main:cron:daily" })
+        #expect(legacy.last?.nodes.first?.id == "missing")
+    }
+
+    @Test func `sidebar sort changes groups without moving pins and creation ties survive refresh`() throws {
+        var sessions = try self.mixedRoster()
+        for index in sessions.indices
+            where ["older", "newer", "z-tie", "a-tie", "missing"].contains(sessions[index].key)
+        {
+            sessions[index].category = "Work"
+        }
+        var order = ChatSessionSidebarModel.ObservedOrder()
+        order.observe(sessions.map(OpenClawChatSessionSidebarData.identity))
+        // A transient paging gap and a reordered refresh must not reverse tied rows.
+        order.observe([OpenClawChatSessionSidebarData.identity(self.entry(key: "older"))])
+        sessions.reverse()
+        order.observe(sessions.map(OpenClawChatSessionSidebarData.identity))
+        for (sort, expected) in [
+            (ChatSessionSidebarModel.Sort.created, ["newer", "older", "z-tie", "a-tie", "missing"]),
+            (.updated, ["missing", "older", "newer", "a-tie", "z-tie"]),
+        ] {
+            let sections = ChatSessionSidebarModel.sections(
+                sessions: sessions, currentSessionKey: "older", mainSessionKey: "agent:main:main",
+                groups: [.init(name: "Work", position: 0)], excludesMainSession: true, query: "",
+                viewOptions: .init(sort: sort), observedOrder: order)
+            #expect(sections.first?.nodes.map(\.id) == ["pinned-new", "pinned-old"])
+            #expect(sections.first(where: { $0.id == "group:Work" })?.nodes.map(\.id) == expected)
+        }
+    }
+
+    @Test func `sidebar creation dates put zero before missing or invalid and fall back to key`() {
+        var rows = ["z", "a", "zero", "invalid", "negative"].map { self.entry(key: $0) }
+        rows[2].createdAt = 0
+        rows[3].createdAt = .infinity
+        rows[4].createdAt = -1
+        let order = ChatSessionSidebarModel.ObservedOrder()
+        #expect(order.sortedByCreation(rows).map(\.key) == ["zero", "a", "invalid", "negative", "z"])
+    }
+
+    @Test(arguments: [
+        ("cron:", true), (" CRON:nightly ", true), ("cron", false),
+        ("agent::main::cron::nightly", true), ("agent: :cron:nightly", true),
+        ("agent:\n:cron:nightly", true), ("agent:main:cron: :child", true),
+        ("agent:main:cron:   ", false), ("agent:main::cron::", false),
+        ("agent::cron:nightly", false), ("agent:main:other:cron:nightly", false),
+        ("agent:main:cronicle:nightly", false), (":agent:main:cron:nightly", false),
+    ])
+    func `sidebar automation classification mirrors web display keys`(key: String, automation: Bool) {
+        #expect(ChatSessionSidebarModel.ViewOptions().includes(self.entry(key: key)) == !automation)
+    }
+
+    @Test func `sidebar system classification uses exact provenance and explicit names only`() throws {
+        let rows = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data(#"""
+        [
+          {"key":"display","createdVia":"run","displayName":"Named"},
+          {"key":"subject","createdVia":"internal","subject":"Named"},
+          {"key":"blank","createdVia":"run","label":"  "},
+          {"key":"auto","createdVia":"internal","autoLabel":"Generated"},
+          {"key":"legacy","isBackground":true},
+          {"key":"case","createdVia":"INTERNAL","createdActor":{"type":"SYSTEM"}}
+        ]
+        """#.utf8))
+        #expect(rows.filter { ChatSessionSidebarModel.ViewOptions().includes($0) }.map(\.key) == [
+            "display", "subject", "legacy", "case",
+        ])
+        let original = try self.mixedRoster()
+        let cached = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: JSONEncoder().encode(original))
+        #expect(cached == original)
+        #expect(cached.first?.createdAt == 900)
+        #expect(cached.first(where: { $0.key == "probe" })?.createdActor?.type == "system")
+        #expect(cached.first(where: { $0.key == "internal" })?.createdVia == "internal")
+    }
+
+    #if os(macOS)
+    @Test func `sidebar preview off keeps attention failures and queued status without ambient text`() {
+        let now = Date(timeIntervalSince1970: 1)
+        var row = self.entry(key: "preview", status: "running", hasActiveRun: true, activeRunIds: ["run"])
+        func subtitle(show: Bool = false) -> String? {
+            ChatSessionRowPresentation(
+                session: row, isConnected: true, preview: "Recent answer", showPreview: show, now: now).subtitle
+        }
+        #expect(subtitle() == nil)
+        #expect(subtitle(show: true) == "Working")
+        row.status = "queued"
+        #expect(subtitle() == "Queued")
+        row.status = "running"
+        row.observerDigest = .init(runId: "run", revision: 1, updatedAt: 1000, headline: "Need input", health: "stuck")
+        #expect(subtitle() == "Need input")
+        row.observerDigest = nil
+        row.agentStatus = .init(note: "Approve the command", expiresAt: 2000, attention: "hand")
+        #expect(subtitle() == "Approve the command")
+        row.agentStatus = nil
+        row.hasActiveRun = false
+        row.status = "failed"
+        row.lastRunError = "Permission denied"
+        row.endedAt = 1000
+        #expect(subtitle() == "Permission denied")
+        row.lastReadAt = 1000
+        #expect(subtitle() == nil)
+        #expect(subtitle(show: true) == "Recent answer")
+        row.worktree = .init(id: nil, branch: "topic", repoRoot: "/repo")
+        #expect(ChatSessionRowPresentation(
+            session: row, isConnected: false, preview: nil, showPreview: false, now: now).subtitle == nil)
+    }
+    #endif
+
+    @Test func `activity expires attention without mistaking child work for its finished parent`() {
+        let status = OpenClawChatSessionAgentStatus(note: "Choose a destination", expiresAt: 2000, attention: "hand")
+        let parent = self.entry(
+            key: "agent:research:parent", status: "done",
+            agentStatus: status,
+            observerDigest: .init(revision: 1, updatedAt: 1000, headline: "Parent finished", health: "done"),
+            hasActiveSubagentRun: true)
+        #expect(ChatSessionSidebarModel.activity(for: parent, now: 1000)?.kind == .attention)
+        let expired = ChatSessionSidebarModel.activity(for: parent, now: 3000)
+        #expect(expired?.kind == .running)
+        #expect(expired?.text == "Working")
+        #expect(ChatSessionSidebarModel.activity(for: self.entry(key: "unknown"), now: 3000) == nil)
+    }
+
+    @Test func `agent summaries count owned rows once and do not revive read failures`() {
+        var global = self.entry(key: "global", unread: true, status: "running", hasActiveRun: true)
+        global.agentId = "research"
+        var foreign = global
+        foreign.agentId = "main"
+        let attention = self.entry(
+            key: "agent:research:review", unread: true,
+            agentStatus: .init(note: "Review the result", expiresAt: 5000, attention: "hand"))
+        let queued = self.entry(key: "agent:research:queued", status: "queued", hasActiveRun: true)
+        let readFailure = self.entry(
+            key: "agent:research:old", updatedAt: 1000, lastReadAt: 2000,
+            status: "failed", lastRunError: "Old failure", endedAt: 1000)
+        let summary = ChatSessionSidebarModel.agentSummary(for: "research", sessions: [
+            global, foreign, attention, queued, queued, readFailure,
+            self.entry(key: "unknown", unread: true, status: "running"),
+            self.entry(key: "agent:research:onboarding", unread: true, status: "running"),
+            self.entry(key: "agent:research:archived", archived: true, unread: true, status: "failed"),
+        ], now: 3000)
+        #expect(summary?.runningCount == 1)
+        #expect(summary?.queuedCount == 1)
+        #expect(summary?.attentionCount == 1)
+        #expect(summary?.unreadCount == 2)
+        #expect(summary?.activity?.text == "Review the result")
+        #expect(ChatSessionSidebarModel.agentSummary(for: "research", sessions: [readFailure], now: 3000)?
+            .activity == nil)
+        #expect(ChatSessionSidebarModel.agentSummary(for: "unloaded", sessions: [global], now: 3000) == nil)
+    }
+
+    @Test func `message previews use recent visible prose and omit hidden reasoning and tool rows`() {
+        let answer = OpenClawChatMessage(role: "assistant", content: [
+            .init(
+                type: "text",
+                text: "<think>Private reasoning</think>**Ready** to review.\nNext step.",
+                mimeType: nil,
+                fileName: nil,
+                content: nil),
+        ], timestamp: 1)
+        let tool = OpenClawChatMessage(role: "tool", content: [
+            .init(type: "text", text: "Internal tool output", mimeType: nil, fileName: nil, content: nil),
+        ], timestamp: 2)
+        #expect(ChatSessionSidebarModel.messagePreview(from: [answer, tool]) == "Ready to review. Next step.")
+        let long = OpenClawChatMessage(role: "user", content: [
+            .init(
+                type: "text",
+                text: String(repeating: "word ", count: 10000),
+                mimeType: nil,
+                fileName: nil,
+                content: nil),
+        ], timestamp: 3)
+        let preview = ChatSessionSidebarModel.messagePreview(from: [answer, long])
+        #expect(preview?.hasPrefix("You: word") == true)
+        #expect((preview?.count ?? 0) <= 245)
+    }
+
     private func entry(
         key: String,
         displayName: String? = nil,
         label: String? = nil,
+        autoLabel: String? = nil,
         subject: String? = nil,
         sessionId: String? = nil,
         updatedAt: Double? = nil,
@@ -51,6 +291,7 @@ struct ChatSessionSidebarModelTests {
             model: nil,
             contextTokens: nil,
             label: label,
+            autoLabel: autoLabel,
             category: category,
             pinned: pinned,
             pinnedAt: pinnedAt,
@@ -196,9 +437,22 @@ struct ChatSessionSidebarModelTests {
             currentSessionKey: "main",
             query: "")
 
-        // Default (macOS) sections keep the main row; only Home-row sidebars
-        // opt into excludesMainSession.
+        // Other consumers keep the main row unless navigation owns it.
         #expect(sections.flatMap(\.nodes).map(\.session.key) == ["main"])
+    }
+
+    @Test func `archive query presentation opts in without changing default visibility`() throws {
+        let rows = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
+        {"sessions":[{"key":"active","archived":false},{"key":"archived","archived":true}]}
+        """#.utf8)).sessions
+        func keys(_ options: ChatSessionSidebarModel.ViewOptions?) -> Set<String> {
+            Set(ChatSessionSidebarModel.sections(
+                sessions: rows, currentSessionKey: "active", query: "", viewOptions: options)
+                .flatMap(\.nodes).map(\.session.key))
+        }
+        #expect(keys(nil) == ["active"])
+        #expect(keys(.init()) == ["active"])
+        #expect(keys(.init(status: .all)) == ["active", "archived"])
     }
 
     @Test func `active session gets a placeholder row before lists load`() {
@@ -229,11 +483,14 @@ struct ChatSessionSidebarModelTests {
     }
 
     @Test func `agent scope keeps active agent and unprefixed sessions`() {
+        var foreignGlobal = self.entry(key: "global", updatedAt: 250)
+        foreignGlobal.agentId = "other"
         let sections = ChatSessionSidebarModel.sections(
             sessions: [
                 self.entry(key: "agent:ops:main", updatedAt: 400),
                 self.entry(key: "agent:ops:deploy", updatedAt: 300),
                 self.entry(key: "agent:other:private", updatedAt: 200),
+                foreignGlobal,
                 self.entry(key: "global-tool", updatedAt: 100),
             ],
             currentSessionKey: "main",
@@ -275,7 +532,7 @@ struct ChatSessionSidebarModelTests {
         #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:ops:child"])
     }
 
-    @Test func `global aliases select their agent wrapped row`() {
+    @Test func `bare global stays distinct from an ordinary qualified global row`() {
         let sessions = [
             self.entry(key: "global", updatedAt: 200),
             self.entry(key: "agent:ops:global", updatedAt: 100, archived: true),
@@ -291,8 +548,8 @@ struct ChatSessionSidebarModelTests {
             sessions: sessions,
             currentSessionKey: "global",
             mainSessionKey: "agent:main:main",
-            activeAgentID: "ops") == "agent:ops:global")
-        #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:ops:global"])
+            activeAgentID: "ops") == "global")
+        #expect(sections.flatMap(\.nodes).map(\.session.key) == ["global"])
     }
 
     @Test func `query filters on display name and key`() {
@@ -354,6 +611,70 @@ struct ChatSessionSidebarModelTests {
         #expect(sections.isEmpty)
     }
 
+    #if os(macOS)
+    @Test(arguments: [
+        (
+            #"{"key":"agent:ops:thread","label":" Release room ","displayName":"Generated","derivedTitle":"Derived"}"#,
+            "Release room"),
+        (
+            #"{"key":"agent:ops:thread","label":" ","displayName":" Generated ","derivedTitle":"Derived"}"#,
+            "Generated"),
+        (
+            #"{"key":"agent:ops:thread","label":"agent:ops:thread","displayName":"agent:ops:thread","derivedTitle":"Derived"}"#,
+            "Derived"),
+        (
+            #"{"key":"agent:ops:thread","worktree":{"branch":"openclaw/topic","repoRoot":"/repo/project/"},"derivedTitle":"Derived"}"#,
+            "project ⎇ topic"),
+        (
+            #"{"key":"agent:ops:thread","repository":{"url":"https://example.test/project.git","branch":"main"},"derivedTitle":"Derived"}"#,
+            "Derived"),
+        (#"{"key":"agent:ops:standup","autoLabel":"Device title"}"#, "standup"),
+        (#"{"key":"agent:ops:main"}"#, "Main Session"),
+        (#"{"key":"agent:subagent:main","label":"Subagent: named main"}"#, "Subagent: named main"),
+        (#"{"key":"agent:ops:dashboard:00f9d5c1-e6d0-4c9a-9d84-1c2f3a4b5c6d"}"#, "New session"),
+        (#"{"key":"agent:ops:explicit:task-0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d"}"#, "task-…5c6d"),
+        (#"{"key":"agent:ops:node-4de003fbff138fcb9239c9378b2e"}"#, "node-…8b2e"),
+        (#"{"key":"agent:ops:task-123456789"}"#, "task-123456789"),
+        (#"{"key":"agent:ops:subagent:worker","label":"Subagent: Research sources"}"#, "Research sources"),
+        (#"{"key":"agent:ops:subagent:worker"}"#, "Subagent:"),
+        (#"{"key":"agent:ops:cron:daily","label":"Cron Job: nightly"}"#, "Automation: nightly"),
+        (#"{"key":"agent:ops:cron:daily","label":"automation: Existing prefix"}"#, "automation: Existing prefix"),
+        (#"{"key":"agent:ops:telegram:cards:dm:491234567890"}"#, "Telegram · …567890 · cards"),
+        (#"{"key":"agent:ops:telegram:cards:direct:42","displayName":"Alice","accountId":"ops"}"#, "Alice · ops"),
+        (#"{"key":"agent:ops:telegram:direct:42","label":"Alice · cards","accountId":"cards"}"#, "Alice · cards"),
+        (#"{"key":"agent:ops:telegram:default:direct:42","displayName":"Alice"}"#, "Alice"),
+        (#"{"key":"agent:ops:telegram:direct:dm:42"}"#, "Telegram · 42 · direct"),
+        (#"{"key":"agent:ops:telegram:direct:12345😀67890"}"#, "Telegram · …67890"),
+        (#"{"key":"agent:ops:telegram:group:room"}"#, "Telegram Group"),
+        (#"{"key":"agent:ops:telegram:work:group:room"}"#, "telegram:work:group:room"),
+        (#"{"key":"imessage:room"}"#, "iMessage Session"),
+    ])
+    func `mac sidebar titles mirror web wire names without changing shared display`(
+        wire: String,
+        expected: String) throws
+    {
+        let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(wire.utf8))
+        #expect(ChatSessionSidebarModel.sidebarDisplayName(for: session) == expected)
+    }
+
+    @Test(arguments: [
+        (
+            #"{"key":"work","worktree":{"branch":"openclaw/topic","repoRoot":"C:\\repo\\project\\"},"execNode":"node-1234567890ab"}"#,
+            "project ⎇ topic · node-…90ab"),
+        (
+            #"{"key":"work","repository":{"url":"https://example.test/project.git","branch":"openclaw/cloud-task"}}"#,
+            "project ⎇ openclaw/cloud-task"),
+        (#"{"key":"work","execNode":"11c38726acc6fac280357576c87acc6fac280357"}"#, "…0357"),
+    ])
+    func `mac sidebar work subtitles retain repository branches and shorten node ids`(
+        wire: String,
+        expected: String) throws
+    {
+        let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(wire.utf8))
+        #expect(ChatSessionSidebarModel.sidebarWorkSubtitle(for: session) == expected)
+    }
+    #endif
+
     @Test func `session keys render as human names`() {
         #expect(ChatSessionSidebarModel.displayName(forKey: "agent:main:main") == "main")
         #expect(ChatSessionSidebarModel.displayName(forKey: "agent:ops:standup") == "standup (ops)")
@@ -366,6 +687,40 @@ struct ChatSessionSidebarModelTests {
 
         let unnamed = self.entry(key: "agent:main:x")
         #expect(ChatSessionSidebarModel.displayName(for: unnamed) == "x")
+
+        let androidStamp = self.entry(
+            key: "agent:main:node-1234567890ab",
+            displayName: "Generated title",
+            autoLabel: "OpenClaw App · Pixel · 1234567890ab")
+        #expect(ChatSessionSidebarModel.displayName(for: androidStamp) == "Generated title")
+        let unnamedAndroidSession = self.entry(
+            key: "agent:main:node-1234567890ab",
+            autoLabel: "OpenClaw App · Pixel · 1234567890ab")
+        #expect(
+            ChatSessionSidebarModel.displayName(for: unnamedAndroidSession)
+                == "OpenClaw App · Pixel · 1234567890ab")
+
+        for label in [
+            "OpenClaw App",
+            "OpenClaw App · 1234567890ab",
+            "OpenClaw App · Pixel · 1234567890ab",
+            "OpenClaw App · Release planning · 1234567890ab",
+        ] {
+            let manuallyNamed = self.entry(
+                key: "agent:main:node-1234567890ab",
+                displayName: "Generated title",
+                label: label,
+                autoLabel: "OpenClaw App · Pixel · 1234567890ab")
+            #expect(ChatSessionSidebarModel.displayName(for: manuallyNamed) == label)
+        }
+
+        let manualPrefix = self.entry(
+            key: "agent:main:dashboard:fresh",
+            displayName: "Generated title",
+            label: "OpenClaw App · Release planning")
+        #expect(
+            ChatSessionSidebarModel.displayName(for: manualPrefix)
+                == "OpenClaw App · Release planning")
     }
 
     @Test func `delete excludes main aliases and allows ordinary or selected global sessions`() {
@@ -845,7 +1200,9 @@ struct ChatSessionSidebarModelTests {
 
         let omitted = try decoder.decode(
             OpenClawChatSessionsChangedEvent.self,
-            from: Data(#"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":200,"hasActiveRun":true}}"#.utf8))
+            from: Data(
+                #"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":200,"hasActiveRun":true}}"#
+                    .utf8))
         let retained = try #require(ChatSessionSidebarModel.applying(
             sessionChange: omitted,
             to: [existing]))
@@ -853,7 +1210,9 @@ struct ChatSessionSidebarModelTests {
 
         let tombstoned = try decoder.decode(
             OpenClawChatSessionsChangedEvent.self,
-            from: Data(#"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":300,"hasActiveRun":true,"activeRunIds":null}}"#.utf8))
+            from: Data(
+                #"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":300,"hasActiveRun":true,"activeRunIds":null}}"#
+                    .utf8))
         let cleared = try #require(ChatSessionSidebarModel.applying(
             sessionChange: tombstoned,
             to: retained))

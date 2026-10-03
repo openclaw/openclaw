@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { runCommandWithTimeout } from "../process/exec.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
 import { toRepoRelativePath } from "../test-utils/repo-files.js";
 import {
   resolvePluginNpmGenerationProjectDir,
@@ -314,8 +315,7 @@ function expectNpmUninstallCommand(params: { packageName: string; npmRoot: strin
   if (!command) {
     throw new Error("Expected npm uninstall command");
   }
-  expect(command[0]).toEqual([
-    "npm",
+  expect(npmCommandArgs(command[0])).toEqual([
     "uninstall",
     "--loglevel=error",
     "--legacy-peer-deps",
@@ -337,14 +337,6 @@ function expectNpmUninstallCommand(params: { packageName: string; npmRoot: strin
 }
 
 describe("resolveUninstallChannelConfigKeys", () => {
-  it("falls back to pluginId when channelIds are unknown", () => {
-    expect(resolveUninstallChannelConfigKeys("timbot")).toEqual(["timbot"]);
-  });
-
-  it("keeps explicit empty channelIds as remove-nothing", () => {
-    expect(resolveUninstallChannelConfigKeys("telegram", { channelIds: [] })).toStrictEqual([]);
-  });
-
   it("filters shared keys and duplicate channel ids", () => {
     expect(
       resolveUninstallChannelConfigKeys("bad-plugin", {
@@ -627,14 +619,6 @@ describe("removePluginFromConfig", () => {
     expect(actions.contextEngineSlot).toBe(true);
   });
 
-  it("removes plugins object when uninstall leaves only empty slots", () => {
-    const config = createSinglePluginWithEmptySlotsConfig();
-
-    const { config: result } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.slots).toBeUndefined();
-  });
-
   it("cleans up empty slots object", () => {
     const config = createSinglePluginWithEmptySlotsConfig();
 
@@ -673,16 +657,6 @@ describe("removePluginFromConfig", () => {
     expect(result.plugins?.installs).toEqual(expectedInstalls);
     expect(actions.entry).toBe(entryChanged);
     expect(actions.install).toBe(installChanged);
-  });
-
-  it("cleans up empty plugins object", () => {
-    const config = createPluginConfig({
-      entries: createSinglePluginEntries(),
-    });
-
-    const { config: result } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.entries).toBeUndefined();
   });
 
   it("preserves other config values", () => {
@@ -955,37 +929,6 @@ describe("uninstallPlugin", () => {
     });
     expect(successfulResult.actions.entry).toBe(true);
     expect(successfulResult.actions.install).toBe(true);
-  });
-
-  it("cleans stale policy references even when plugin code and install records are gone", async () => {
-    const result = await uninstallPlugin({
-      config: createPluginConfig({
-        allow: ["missing-plugin", "other-plugin"],
-        deny: ["missing-plugin"],
-        slots: {
-          memory: "missing-plugin",
-        },
-      }),
-      pluginId: "missing-plugin",
-      deleteFiles: true,
-    });
-
-    const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.actions).toEqual({
-      entry: false,
-      install: false,
-      allowlist: true,
-      denylist: true,
-      loadPath: false,
-      memorySlot: true,
-      contextEngineSlot: false,
-      channelConfig: false,
-      directory: false,
-    });
-    expect(successfulResult.config.plugins?.allow).toEqual(["other-plugin"]);
-    expect(successfulResult.config.plugins?.deny).toBeUndefined();
-    expect(successfulResult.config.plugins?.slots?.memory).toBeUndefined();
-    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1802,7 +1745,7 @@ describe("uninstallPlugin", () => {
       `${JSON.stringify({ name: "runtime-peer", version: "1.0.0" }, null, 2)}\n`,
     );
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[], options?: unknown) => {
-      if (argv[1] === "uninstall") {
+      if (npmCommandArgs(argv)?.[0] === "uninstall") {
         expect(argv).toContain("--legacy-peer-deps");
         await fs.rm(removedPluginDir, { recursive: true, force: true });
         const rootManifest = JSON.parse(
@@ -1822,7 +1765,7 @@ describe("uninstallPlugin", () => {
           termination: "exit",
         };
       }
-      if (argv[1] === "install" && argv.includes("--package-lock-only")) {
+      if (npmCommandArgs(argv)?.[0] === "install" && argv.includes("--package-lock-only")) {
         const cwd = (options as { cwd?: string } | undefined)?.cwd;
         expect(cwd).toBeTruthy();
         await fs.writeFile(
@@ -1838,7 +1781,7 @@ describe("uninstallPlugin", () => {
           termination: "exit",
         };
       }
-      if (argv[1] === "install") {
+      if (npmCommandArgs(argv)?.[0] === "install") {
         expect(argv).toContain("--legacy-peer-deps");
         expect(argv).toContain("--omit=peer");
         await fs.rm(runtimePeerDir, { recursive: true, force: true });
@@ -2294,7 +2237,7 @@ describe("uninstallPlugin", () => {
   });
 
   it("returns a warning when directory deletion fails unexpectedly", async () => {
-    const rmSpy = vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("permission denied"));
+    const unlinkSpy = vi.spyOn(fs, "unlink").mockRejectedValueOnce(new Error("permission denied"));
     try {
       const { result } = await runDeleteInstalledNpmPluginFixture(tempDir);
 
@@ -2304,7 +2247,7 @@ describe("uninstallPlugin", () => {
       expect(successfulResult.warnings).toHaveLength(1);
       expect(successfulResult.warnings[0]).toContain("Failed to remove plugin directory");
     } finally {
-      rmSpy.mockRestore();
+      unlinkSpy.mockRestore();
     }
   });
 

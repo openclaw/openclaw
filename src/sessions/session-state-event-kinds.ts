@@ -1,9 +1,12 @@
 export type SessionStateActorType = "human" | "agent" | "system";
 
+export const SESSION_CREATED_NOTICE_CONTEXT_PREFIX = "session-created:";
+
 export type SessionStateEventKind =
   | "created"
   | "human_direct_message"
   | "adopted"
+  | "imported"
   | "run_completed"
   | "run_failed"
   | "child_spawned"
@@ -17,6 +20,7 @@ export const NOTIFY_BY_SESSION_STATE_EVENT_KIND: Record<SessionStateEventKind, b
   human_direct_message: true,
   upstream_missing: true,
   adopted: false,
+  imported: false,
   goal_changed: true,
   run_completed: false,
   run_failed: false,

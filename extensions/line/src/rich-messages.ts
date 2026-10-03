@@ -1,23 +1,26 @@
-// Line plugin module owns typed rich-message schemas and native rendering.
 import type { messagingApi } from "@line/bot-sdk";
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
-  adaptMessagePresentationForChannel,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
+  renderPresentationForDelivery,
   resolveMessagePresentationButtonAction,
   resolveMessagePresentationOptionAction,
   type MessagePresentation,
+  type MessagePresentationAction,
   type MessagePresentationBlock,
-  type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  resolveAskUserQuestionOptionIndex,
+  resolveAskUserQuestionOptionIndices,
+  type AskUserQuestionOptionIndices,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Type } from "typebox";
 import { hasLineCredentials } from "./account-helpers.js";
 import { resolveLineAccount } from "./accounts.js";
 import { messageAction, postbackAction, type Action } from "./actions.js";
@@ -29,78 +32,10 @@ import {
 } from "./flex-templates/media-control-cards.js";
 import { fitsLineFlexBubble } from "./flex-templates/message.js";
 import { createAgendaCard, createEventCard } from "./flex-templates/schedule-cards.js";
-import type { LineQuickReplyItem, LineRichCard } from "./types.js";
-
-const nonempty = () => Type.String({ minLength: 1 });
-const closed = <T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
-  Type.Object(properties, { additionalProperties: false });
-
-const lineCardSchema = Type.Union([
-  closed({
-    type: Type.Literal("media_player"),
-    title: nonempty(),
-    artist: Type.Optional(nonempty()),
-    source: Type.Optional(nonempty()),
-    imageUrl: Type.Optional(Type.String({ pattern: "^https://" })),
-    status: Type.Optional(Type.Union([Type.Literal("playing"), Type.Literal("paused")])),
-  }),
-  closed({
-    type: Type.Literal("event"),
-    title: nonempty(),
-    date: nonempty(),
-    time: Type.Optional(nonempty()),
-    location: Type.Optional(nonempty()),
-    description: Type.Optional(nonempty()),
-  }),
-  closed({
-    type: Type.Literal("agenda"),
-    title: nonempty(),
-    events: Type.Array(
-      closed({
-        title: nonempty(),
-        time: Type.Optional(nonempty()),
-        location: Type.Optional(nonempty()),
-      }),
-      { minItems: 1, maxItems: 6 },
-    ),
-  }),
-  closed({
-    type: Type.Literal("device"),
-    name: nonempty(),
-    deviceType: Type.Optional(nonempty()),
-    status: Type.Optional(nonempty()),
-    controls: Type.Optional(
-      Type.Array(closed({ label: nonempty(), action: nonempty() }), { maxItems: 6 }),
-    ),
-  }),
-  closed({
-    type: Type.Literal("appletv_remote"),
-    name: Type.Optional(nonempty()),
-    status: Type.Optional(nonempty()),
-  }),
-]);
-
-const lineChannelDataSchema = Type.Optional(
-  closed({
-    line: closed({
-      location: Type.Optional(
-        closed({
-          title: nonempty(),
-          address: nonempty(),
-          latitude: Type.Number({ minimum: -90, maximum: 90 }),
-          longitude: Type.Number({ minimum: -180, maximum: 180 }),
-        }),
-      ),
-      card: Type.Optional(lineCardSchema),
-      mediaKind: Type.Optional(
-        Type.Union([Type.Literal("image"), Type.Literal("video"), Type.Literal("audio")]),
-      ),
-      previewImageUrl: Type.Optional(Type.String({ pattern: "^https://" })),
-      durationMs: Type.Optional(Type.Integer({ minimum: 1 })),
-      trackingId: Type.Optional(nonempty()),
-    }),
-  }),
-);
+import { inferLineTargetChatType } from "./messaging-target.js";
+import { buildLineQuestionPostbackData } from "./question-postback.js";
+import { lineChannelDataSchema, type LineRichCard } from "./rich-message-schema.js";
+import type { LineQuickReplyItem } from "./types.js";
 
 export const lineMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: ({ cfg, accountId }) => {
@@ -136,9 +71,30 @@ export const LINE_PRESENTATION_CAPABILITIES = {
   },
 } satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
 
-function toLineAction(button: MessagePresentationButton): Action | undefined {
-  const normalized = resolveMessagePresentationButtonAction(button);
-  const { label } = button;
+function toLineAction(
+  label: string,
+  normalized: MessagePresentationAction | undefined,
+  questionOptionIndices?: AskUserQuestionOptionIndices,
+): Action | undefined {
+  if (normalized?.type === "question") {
+    if ("intent" in normalized) {
+      return undefined;
+    }
+    // Send the Gateway's canonical index, never an option inferred from its label.
+    const optionIndex = resolveAskUserQuestionOptionIndex({
+      questionOptionIndices,
+      questionId: normalized.questionId,
+      optionValue: normalized.optionValue,
+    });
+    const data =
+      optionIndex === undefined
+        ? undefined
+        : buildLineQuestionPostbackData({ questionId: normalized.questionId, optionIndex });
+    if (!data) {
+      return undefined;
+    }
+    return { type: "postback", label, data, displayText: label };
+  }
   if (normalized?.type === "command") {
     return { type: "message", label, text: normalized.command };
   }
@@ -157,7 +113,31 @@ function toLineAction(button: MessagePresentationButton): Action | undefined {
 export function renderLinePresentation(
   payload: ReplyPayload,
   presentation: MessagePresentation,
-): ReplyPayload | null {
+  to?: string,
+  sourcePresentation: MessagePresentation = presentation,
+) {
+  const hasQuestion = sourcePresentation.blocks.some(
+    (block) =>
+      block.type === "buttons" &&
+      block.buttons.some(
+        (button) => resolveMessagePresentationButtonAction(button)?.type === "question",
+      ),
+  );
+  const hasAuthoredPrompt =
+    Boolean(sourcePresentation.title?.trim()) ||
+    sourcePresentation.blocks.some(
+      (block) => (block.type === "text" || block.type === "context") && block.text.trim(),
+    );
+  // Adaptation may add Actions/Other guidance, which cannot replace the prompt.
+  // Declining native rendering preserves the producer's complete text fallback.
+  if (hasQuestion && !hasAuthoredPrompt) {
+    return null;
+  }
+  // Group and room postbacks do not carry the sender identity required by
+  // question admission. Keep their choices readable through the shared fallback.
+  if (inferLineTargetChatType(to ?? "") !== "direct" && hasQuestion) {
+    return null;
+  }
   const hasCard = presentation.blocks.some(
     (block) => block.type === "buttons" && block.buttons.length > 0,
   );
@@ -165,12 +145,33 @@ export function renderLinePresentation(
   const quickReplyItems: LineQuickReplyItem[] = [];
   const carriedBlocks: MessagePresentationBlock[] = [];
   const cardBody: string[] = [];
+  // Keep omitted controls visible using the shared adapter's `Actions:` wording.
+  const omittedControlLabels: string[] = [];
+  const questionLabels = new Set<string>();
+  const questionOptionIndices = resolveAskUserQuestionOptionIndices(payload);
   for (const block of presentation.blocks) {
     if (block.type === "buttons") {
       for (const button of block.buttons) {
-        const action = toLineAction(button);
+        const normalized = resolveMessagePresentationButtonAction(button);
+        // Only plain-text inbound can claim a free-text answer; a postback adds no action.
+        if (
+          normalized?.type === "question" &&
+          "intent" in normalized &&
+          normalized.intent === "custom-input"
+        ) {
+          omittedControlLabels.push(button.label);
+          continue;
+        }
+        const action = toLineAction(button.label, normalized, questionOptionIndices);
         if (!action) {
           return null;
+        }
+        // Truncation can make distinct options look identical; retain the text fallback.
+        if (normalized?.type === "question") {
+          if (questionLabels.has(button.label)) {
+            return null;
+          }
+          questionLabels.add(button.label);
         }
         buttons.push({ label: button.label, action });
       }
@@ -203,12 +204,18 @@ export function renderLinePresentation(
   if (buttons.length === 0 && quickReplyItems.length === 0) {
     return null;
   }
+  if (hasCard && omittedControlLabels.length > 0) {
+    cardBody.push(`Actions:\n${omittedControlLabels.map((label) => `- ${label}`).join("\n")}`);
+  }
 
   const lineData = isRecord(payload.channelData?.line) ? payload.channelData.line : {};
   const title = presentation.title || "Choose an option";
+  // The card's own heading can be generic, but altText is the whole message in
+  // the notification and the chat list, so it carries the words being asked.
+  const altText = presentation.title || cardBody[0] || title;
   const flexMessage = hasCard
     ? {
-        altText: title,
+        altText,
         contents: createActionCard(title, cardBody.join("\n") || "Choose an option.", buttons),
       }
     : undefined;
@@ -240,37 +247,33 @@ export function renderLinePresentation(
  * replies the plugin delivers itself reach delivery with the controls still
  * portable. Preparing them here keeps both LINE delivery paths on one rendering.
  */
-export function prepareLineReplyPayload(payload: ReplyPayload): ReplyPayload {
-  const presentation = normalizeMessagePresentation(payload.presentation);
-  if (!presentation) {
+export async function prepareLineReplyPayload(
+  payload: ReplyPayload,
+  to?: string,
+): Promise<ReplyPayload> {
+  if (!normalizeMessagePresentation(payload.presentation)) {
     return payload;
   }
-  const { presentation: _presentation, presentationTextMode, ...rest } = payload;
-  // "fallback" text already renders these controls as prose; native ones replace it.
-  const usesFallbackText = presentationTextMode === "fallback" && Boolean(rest.text?.trim());
-  const rendered = renderLinePresentation(
-    usesFallbackText ? { ...rest, text: undefined } : rest,
-    adaptMessagePresentationForChannel({
-      presentation,
-      capabilities: LINE_PRESENTATION_CAPABILITIES,
-    }),
+  const usesFallbackText =
+    payload.presentationTextMode === "fallback" && Boolean(payload.text?.trim());
+  return renderPresentationForDelivery(
+    {
+      presentationCapabilities: LINE_PRESENTATION_CAPABILITIES,
+      renderPresentation: (adapted, sourcePresentation) => {
+        const rendered = renderLinePresentation(
+          adapted,
+          adapted.presentation,
+          to,
+          sourcePresentation,
+        );
+        // Quick replies have no Flex body to replace the author's fallback prose.
+        return rendered && usesFallbackText && rendered.channelData.line.flexMessage === undefined
+          ? { ...rendered, text: payload.text }
+          : rendered;
+      },
+    },
+    { ...payload, presentationTextMode: usesFallbackText ? "fallback" : undefined },
   );
-  if (rendered) {
-    // Only a Flex body replaces the fallback prose. Without a card the renderer
-    // rebuilds the words it could not draw, and the author's own fallback text
-    // is the better rendering of the same facts, so it wins.
-    const renderedLine = isRecord(rendered.channelData?.line) ? rendered.channelData.line : {};
-    return usesFallbackText && renderedLine.flexMessage === undefined
-      ? { ...rendered, text: rest.text }
-      : rendered;
-  }
-  // LINE renders these controls natively or not at all; keep their labels visible.
-  return {
-    ...rest,
-    text: usesFallbackText
-      ? (rest.text ?? renderMessagePresentationFallbackText({ presentation }))
-      : renderMessagePresentationFallbackText({ text: rest.text, presentation }),
-  };
 }
 
 const toSlug = (value: string): string =>

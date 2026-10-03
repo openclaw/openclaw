@@ -1,11 +1,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readOfflineStorageScope, type OfflineStorageClient } from "../../app/boot-record.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
+import { generateUUID } from "../uuid.ts";
 import type { ChatQueueItem, DurableComposerDraftAttachment } from "./chat-types.ts";
 import {
   openControlUiDatabase,
   requestResult,
   transactionComplete,
 } from "./control-ui-database.runtime.ts";
+import { readChatSelectionAnnotation } from "./selection-annotation.ts";
 
 const STORE_NAME = "outboxPayloads";
 const MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
@@ -78,7 +81,7 @@ export async function writeOutboxPayload(
       owner.gatewayOwner,
       owner.recoveryScope,
       owner.queueId,
-      crypto.randomUUID(),
+      generateUUID(),
     ]);
     store.add({ key, owner, bytes, attachments } satisfies StoredPayload);
     await completed;
@@ -129,14 +132,18 @@ export async function readOutboxPayload(
         !isRecord(entry) ||
         !(entry.blob instanceof Blob) ||
         typeof entry.mimeType !== "string" ||
+        (entry.origin !== undefined && entry.origin !== "paste" && entry.origin !== "file") ||
         (entry.fileName !== undefined && typeof entry.fileName !== "string") ||
         (entry.sizeBytes !== undefined && entry.sizeBytes !== entry.blob.size)
       ) {
         return { status: "failed", reason: "missing" };
       }
+      const selectionAnnotation = readChatSelectionAnnotation(entry.selectionAnnotation);
       attachments.push({
         blob: entry.blob,
         mimeType: entry.mimeType,
+        ...(entry.origin ? { origin: entry.origin } : {}),
+        ...(selectionAnnotation ? { selectionAnnotation } : {}),
         ...(typeof entry.fileName === "string" ? { fileName: entry.fileName } : {}),
         ...(typeof entry.sizeBytes === "number" ? { sizeBytes: entry.sizeBytes } : {}),
       });
@@ -155,7 +162,8 @@ export async function readOutboxPayload(
 export async function removeOutboxPayloads(references: readonly PayloadReference[]): Promise<void> {
   try {
     // Duplicated storage carries the source marker until adoption finishes. Only
-    // the document's held lock can authorize deletion, including cleanup callers.
+    // the current document identity can authorize deletion. Lockless documents
+    // rotate that identity before touching copied metadata.
     const tabId = await outboxPayloadTab();
     const owned = references.filter((reference) => reference.tabId === tabId);
     if (!owned.length) {
@@ -179,12 +187,21 @@ let tabPromise: Promise<string> | null = null;
 export function outboxPayloadTab(): Promise<string> {
   return (tabPromise ??= (async () => {
     const storage = getSafeSessionStorage();
-    if (!storage || !globalThis.navigator?.locks) {
+    if (!storage) {
       throw new Error("Outbox ownership unavailable");
+    }
+    const locks = globalThis.navigator?.locks;
+    if (!locks) {
+      // Plain HTTP has IndexedDB and sessionStorage but no Web Locks. A fresh
+      // document identity makes reloads and duplicated tabs adopt copied bytes
+      // without ever gaining deletion authority over the source payload.
+      const id = generateUUID();
+      storage.setItem(TAB_STORAGE_KEY, id);
+      return id;
     }
     const claim = (id: string) =>
       new Promise<boolean>((resolve, reject) => {
-        void navigator.locks
+        void locks
           .request(`openclaw-outbox:${id}`, { ifAvailable: true }, (lock) => {
             resolve(Boolean(lock));
             // A document holds its tab identity until the browser destroys it. A
@@ -194,7 +211,7 @@ export function outboxPayloadTab(): Promise<string> {
           .catch(reject);
       });
     const previous = storage.getItem(TAB_STORAGE_KEY);
-    const id = previous && (await claim(previous)) ? previous : crypto.randomUUID();
+    const id = previous && (await claim(previous)) ? previous : generateUUID();
     if (id !== previous && !(await claim(id))) {
       throw new Error("Outbox ownership unavailable");
     }
@@ -206,28 +223,31 @@ export function outboxPayloadTab(): Promise<string> {
   }));
 }
 
-// A connected client must finish recovery resolution; an offline client may
-// retain the exact owner it previously authenticated, but never infer a new one.
-const knownOwners = new WeakMap<object, string>();
 type RecoveryHost = {
-  client?: { recoveryScope?: string; recoveryScopeReady?: boolean } | null;
+  client?: OfflineStorageClient | null;
   connected?: boolean;
+  settings?: { gatewayUrl?: string | null };
 };
+export function outboxStorageScope(host: RecoveryHost): string | undefined {
+  const owner = readOfflineStorageScope(host);
+  return owner
+    ? JSON.stringify([host.settings?.gatewayUrl?.trim() || "default", owner])
+    : undefined;
+}
 export function observeOutboxRecoveryOwner(host: RecoveryHost): string | undefined {
-  const client = host.client;
-  if (!client || (host.connected && !client.recoveryScopeReady)) {
-    return undefined;
-  }
-  if (client.recoveryScopeReady && client.recoveryScope) {
-    knownOwners.set(client, client.recoveryScope);
-  }
-  const remembered = knownOwners.get(client);
-  return remembered === client.recoveryScope ? remembered : undefined;
+  return readOfflineStorageScope(host);
 }
 
-export function outboxPayloadMatchesOwner(host: RecoveryHost, item: ChatQueueItem): boolean {
+/** Explicit legacy review may assign unowned input, but never another account's input. */
+export function outboxPayloadCanRecover(host: RecoveryHost, item: ChatQueueItem): boolean {
   return (
-    !item.attachmentPayload ||
-    item.attachmentPayload.recoveryScope === observeOutboxRecoveryOwner(host)
+    (!item.storageScope || item.storageScope === outboxStorageScope(host)) &&
+    (!item.attachmentPayload ||
+      item.attachmentPayload.recoveryScope === observeOutboxRecoveryOwner(host))
   );
+}
+
+/** Normal projection and delivery require provenance captured by an admission owner. */
+export function outboxPayloadMatchesOwner(host: RecoveryHost, item: ChatQueueItem): boolean {
+  return Boolean(item.storageScope && outboxPayloadCanRecover(host, item));
 }

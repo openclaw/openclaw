@@ -1,3 +1,4 @@
+import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import {
   accumulatedStreamText,
   trimAccumulatedStreamPrefix,
@@ -9,25 +10,27 @@ import { isStandaloneToolMessageForDisplay } from "../../lib/chat/message-normal
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import {
+  messageRecoveryKey,
+  type AssistantMessageExpansionState,
+} from "./chat-message-recovery.ts";
 import { resetWorkingProgress } from "./chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
-import { sanitizeStreamText } from "./chat-thread-items.ts";
+import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
+import { readChatThreadMessageIdentity, sanitizeStreamText } from "./chat-thread-items.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
-export {
-  isPendingSendMessage,
-  persistedMessageEntryId,
-  readPendingSendFailure,
-} from "./chat-thread-items.ts";
+export { persistedMessageEntryId, readPendingSendStatus } from "./chat-thread-items.ts";
 export {
   assistantGroupCanOwnActiveRunStatus,
   coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
 } from "./chat-thread-grouping.ts";
-export { agentRunFrameGroups, coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+export { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 
 type CachedChatItems = {
+  generation: number;
   input: BuildChatItemsProps | null;
   items: ReturnType<typeof buildChatItems>;
   liveStream: {
@@ -51,7 +54,15 @@ type ToolCardExpansionState = {
   };
 };
 
-const chatItemsByPane = new Map<string, Map<string, CachedChatItems>>();
+type ChatItemsProjection = "visible" | "unfiltered";
+type CachedChatProjections = Partial<Record<ChatItemsProjection, CachedChatItems>> & {
+  inputOrder: ChatInputOrderState;
+  initialTurnId: BuildChatItemsProps["initialTurnId"];
+};
+// Search and gallery inputs must not evict each other. Both projections share
+// the pane/session's input order, bounded lifetime, and canonical builder.
+const chatItemsByPane = new Map<string, Map<string, CachedChatProjections>>();
+const chatItemsGenerations = new WeakMap<readonly RenderChatItem[], number>();
 const toolCardStateBySession = new Map<string, ToolCardExpansionState>();
 const expandedUserMessagesBySession = new Map<string, Map<string, boolean>>();
 const expansionMapVersions = new WeakMap<ReadonlyMap<string, unknown>, number>();
@@ -67,6 +78,12 @@ export function resetChatThreadState(paneId?: string): void {
   expandedUserMessagesBySession.clear();
 }
 
+type ReplySource = MessageGroup["replyToMessage"];
+
+function sameReplySource(previous: ReplySource, next: ReplySource): boolean {
+  return previous?.key === next?.key && previous?.message === next?.message;
+}
+
 function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
   // Source message identity owns the row timestamp too: normalization supplies
   // Date.now() for missing timestamps, which must not churn stable rows.
@@ -75,8 +92,15 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     previous.senderLabel === next.senderLabel &&
     previous.senderSession?.sessionKey === next.senderSession?.sessionKey &&
     previous.senderSession?.agentId === next.senderSession?.agentId &&
+    previous.senderSession?.label === next.senderSession?.label &&
+    messageClientSourcesKey(previous.sourceClients ?? []) ===
+      messageClientSourcesKey(next.sourceClients ?? []) &&
     JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
     JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
+    sameReplySource(previous.replyToMessage, next.replyToMessage) &&
+    previous.replyShared === next.replyShared &&
+    sameReplySource(previous.replyTurnSource, next.replyTurnSource) &&
+    sameReplySource(previous.replyCurrentSource, next.replyCurrentSource) &&
     previous.isStreaming === next.isStreaming &&
     previous.visibleContent === next.visibleContent &&
     previous.runId === next.runId &&
@@ -87,7 +111,9 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
         candidate !== undefined &&
         entry.key === candidate.key &&
         entry.message === candidate.message &&
-        entry.duplicateCount === candidate.duplicateCount
+        entry.duplicateCount === candidate.duplicateCount &&
+        JSON.stringify(entry.replyTarget) === JSON.stringify(candidate.replyTarget) &&
+        entry.hasVisibleContent === candidate.hasVisibleContent
       );
     })
   );
@@ -111,7 +137,9 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.kind === "notice" &&
         previous.text === next.text &&
         previous.label === next.label &&
+        previous.sessionsYield === next.sessionsYield &&
         previous.startsTurn === next.startsTurn &&
+        previous.boundaryId === next.boundaryId &&
         previous.timestamp === next.timestamp
       );
     case "divider":
@@ -122,9 +150,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.label === next.label &&
         previous.metric === next.metric &&
         previous.description === next.description &&
-        previous.timestamp === next.timestamp &&
-        previous.action?.kind === next.action?.kind &&
-        previous.action?.label === next.action?.label
+        previous.timestamp === next.timestamp
       );
     case "stream":
       return (
@@ -132,6 +158,8 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.text === next.text &&
         previous.startedAt === next.startedAt &&
         previous.isStreaming === next.isStreaming &&
+        JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
+        sameReplySource(previous.replyToMessage, next.replyToMessage) &&
         previous.runId === next.runId &&
         previous.boundaryId === next.boundaryId
       );
@@ -206,6 +234,9 @@ function stabilizeChatItems(
         prior.senderLabel !== item.senderLabel ||
         prior.senderSession?.sessionKey !== item.senderSession?.sessionKey ||
         prior.senderSession?.agentId !== item.senderSession?.agentId ||
+        prior.senderSession?.label !== item.senderSession?.label ||
+        messageClientSourcesKey(prior.sourceClients ?? []) !==
+          messageClientSourcesKey(item.sourceClients ?? []) ||
         senderIdentityKey(prior.sender) !== senderIdentityKey(item.sender)
       ) {
         continue;
@@ -240,10 +271,17 @@ function stabilizeChatItems(
     const prior = previousByKey.get(`${item.kind}\u0000${item.key}`);
     return prior && sameChatItem(prior, item) ? prior : item;
   });
-  return stabilized.length === previous.length &&
-    stabilized.every((item, index) => item === previous[index])
-    ? previous
-    : stabilized;
+  return sameEntries(stabilized, previous) ? previous : stabilized;
+}
+
+function sameEntries<T>(previous?: readonly T[], next?: readonly T[]): boolean {
+  return (
+    previous === next ||
+    (previous !== undefined &&
+      next !== undefined &&
+      previous.length === next.length &&
+      previous.every((entry, index) => entry === next[index]))
+  );
 }
 
 function sameChatItemsStructuralInput(
@@ -263,15 +301,25 @@ function sameChatItemsStructuralInput(
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
-    previous.pendingInputs === next.pendingInputs &&
+    previous.initialTurnId === next.initialTurnId &&
+    // renderChat derives this list of immutable Gateway records on every render,
+    // including scroll-driven ones; identity would rebuild all loaded history.
+    sameEntries(previous.pendingInputs, next.pendingInputs) &&
+    previous.workspaceSyncPendingRunIds === next.workspaceSyncPendingRunIds &&
+    previous.workerSetupPending === next.workerSetupPending &&
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&
     previous.runActive === next.runActive &&
     previous.questionPrompts === next.questionPrompts &&
     previous.loading === next.loading &&
+    sameEntries(previous.replyPeople, next.replyPeople) &&
+    previous.replyLocalPerson === next.replyLocalPerson &&
     previous.searchOpen === next.searchOpen &&
-    previous.searchQuery === next.searchQuery
+    previous.searchQuery === next.searchQuery &&
+    previous.messageRecovery?.messages === next.messageRecovery?.messages &&
+    previous.messageRecovery?.revision === next.messageRecovery?.revision &&
+    previous.messageRecovery?.agentId === next.messageRecovery?.agentId
   );
 }
 
@@ -299,19 +347,47 @@ function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsPr
   return true;
 }
 
+export function findLiveStreamIndex(items: readonly RenderChatItem[]): number {
+  return items.findIndex((item) => item.kind === "stream" && item.isStreaming);
+}
+
+export function getChatItemsGeneration(items: readonly RenderChatItem[]): number {
+  return chatItemsGenerations.get(items) ?? 0;
+}
+
 export function buildCachedChatItems(
   input: BuildChatItemsProps,
+  projection: ChatItemsProjection = "visible",
 ): ReturnType<typeof buildChatItems> {
   let paneCache = chatItemsByPane.get(input.paneId);
   if (!paneCache) {
     paneCache = new Map();
     chatItemsByPane.set(input.paneId, paneCache);
   }
-  const cached = getOrCreateSessionCacheValue(paneCache, input.sessionKey, () => ({
+  const projections = getOrCreateSessionCacheValue(
+    paneCache,
+    input.sessionKey,
+    (): CachedChatProjections => ({
+      inputOrder: { keys: [] },
+      initialTurnId: input.initialTurnId,
+    }),
+  );
+  if (projections.initialTurnId !== input.initialTurnId) {
+    projections.initialTurnId = input.initialTurnId;
+    projections.inputOrder.keys = [];
+    // Retiring the initial input resets both views of that ordering ledger.
+    for (const cached of [projections.visible, projections.unfiltered]) {
+      if (cached) {
+        cached.input = null;
+      }
+    }
+  }
+  const cached = (projections[projection] ??= {
+    generation: 0,
     input: null,
     items: [],
     liveStream: null,
-  }));
+  });
   // Keep stream-only updates off the loaded-history path; structural changes
   // still use the full builder.
   if (cached.input && sameChatItemsStructuralInput(cached.input, input)) {
@@ -323,10 +399,13 @@ export function buildCachedChatItems(
       return cached.items;
     }
   }
-  const items = stabilizeChatItems(cached.items, buildChatItems(input));
+  const items = stabilizeChatItems(cached.items, buildChatItems(input, projections.inputOrder));
+  // A rebuild can retain every row and the array. Consumers still need to
+  // observe the structural pass; text-only slot replacements do not advance it.
+  chatItemsGenerations.set(items, ++cached.generation);
   cached.input = input;
   cached.items = items;
-  const liveStreamIndex = items.findIndex((item) => item.kind === "stream" && item.isStreaming);
+  const liveStreamIndex = findLiveStreamIndex(items);
   cached.liveStream =
     liveStreamIndex < 0
       ? null
@@ -350,9 +429,29 @@ export function setExpansionState<T>(values: Map<string, T>, key: string, value:
   expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
 }
 
-export function deleteExpansionState<T>(values: Map<string, T>, key: string): void {
+function deleteExpansionState<T>(values: Map<string, T>, key: string): void {
   if (values.delete(key)) {
     expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
+  }
+}
+
+export function pruneAssistantMessageExpansions(
+  expanded: Map<string, AssistantMessageExpansionState>,
+  agentId: string | undefined,
+  sourceMessages: readonly unknown[],
+): void {
+  // Search and virtualization only hide rows. Prune against source history so
+  // a removed message retires its body/load without refetching hidden rows.
+  const retainedKeys = new Set(
+    sourceMessages
+      .map((message) => readChatThreadMessageIdentity(message)?.id)
+      .filter((id): id is string => typeof id === "string")
+      .map((id) => messageRecoveryKey(agentId, id)),
+  );
+  for (const key of expanded.keys()) {
+    if (!retainedKeys.has(key)) {
+      deleteExpansionState(expanded, key);
+    }
   }
 }
 
@@ -381,21 +480,6 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
   return getOrCreateSessionCacheValue(expandedUserMessagesBySession, sessionKey, () => new Map());
 }
 
-export function* collectToolTitleCandidates(items: readonly (ChatItem | MessageGroup)[]) {
-  for (const item of items) {
-    if (item.kind === "group") {
-      for (const entry of item.messages) {
-        yield* extractToolCardsCached(entry.message);
-      }
-    }
-  }
-}
-
-export type AssistantMessageExpansionState =
-  | { status: "loading"; revision: number }
-  | { status: "error"; revision: number }
-  | { status: "loaded"; markdown: string; revision: number };
-
 export function syncToolCardExpansionState(
   sessionKey: string,
   items: readonly (ChatItem | MessageGroup)[],
@@ -412,6 +496,13 @@ export function syncToolCardExpansionState(
     return;
   }
   const currentToolCardIds = new Set<string>();
+  const retainDisclosure = (id: string) => {
+    currentToolCardIds.add(id);
+    if (!initialized.has(id)) {
+      setExpansionState(expanded, id, autoExpandToolCalls);
+      initialized.add(id);
+    }
+  };
   for (const item of items) {
     if (item.kind !== "group") {
       continue;
@@ -419,24 +510,12 @@ export function syncToolCardExpansionState(
     for (const entry of item.messages) {
       const cards = extractToolCardsCached(entry.message);
       for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
-        const disclosureId = `${entry.key}:toolcard:${cardIndex}`;
-        currentToolCardIds.add(disclosureId);
-        if (initialized.has(disclosureId)) {
-          continue;
-        }
-        setExpansionState(expanded, disclosureId, autoExpandToolCalls);
-        initialized.add(disclosureId);
+        retainDisclosure(`${entry.key}:toolcard:${cardIndex}`);
       }
       if (!isStandaloneToolMessageForDisplay(entry.message)) {
         continue;
       }
-      const disclosureId = `toolmsg:${entry.key}`;
-      currentToolCardIds.add(disclosureId);
-      if (initialized.has(disclosureId)) {
-        continue;
-      }
-      setExpansionState(expanded, disclosureId, autoExpandToolCalls);
-      initialized.add(disclosureId);
+      retainDisclosure(`toolmsg:${entry.key}`);
     }
   }
   if (autoExpandToolCalls && !lastSync?.autoExpandToolCalls) {

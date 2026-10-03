@@ -1,14 +1,21 @@
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { normalizeMessageClientSources } from "../../chat/message-client-source.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import { loadSessionEntry } from "../session-utils.js";
+import type { UserTurnOriginalInputCommit } from "../../sessions/user-turn-transcript.types.js";
+import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import type { MentionInbox } from "../mention-inbox.types.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { formatForLog } from "../ws-log.js";
-import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { buildRestartSafeChatTranscriptState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import {
@@ -17,13 +24,18 @@ import {
 } from "./chat-send-reply-context.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
+import type { createChatSendGoalCommitGuard } from "./chat-send-work-admission.js";
 import { gatewayClientSenderFields } from "./gateway-client-identity.js";
 import type { GatewayClient } from "./shared-types.js";
 
+export type GatewayChatUserTurnPersist = (options?: {
+  contextFreeCommand?: true;
+}) => ReturnType<UserTurnTranscriptRecorder["persistFallback"]>;
+
 type GatewayChatUserTurnController = {
   baseInput: UserTurnInput;
-  persist: ReturnType<typeof createUserTurnTranscriptRecorder>["persistFallback"];
-  persistBestEffort: () => Promise<void>;
+  persist: GatewayChatUserTurnPersist;
+  persistBestEffort: GatewayChatUserTurnPersist;
   recorder: UserTurnTranscriptRecorder;
   replyContextFieldsPromise?: Promise<ChatSendReplyContextFields>;
   setInputPromise: (input: Promise<UserTurnInput>) => void;
@@ -37,21 +49,35 @@ export function createGatewayChatUserTurnController(params: {
   transcript?: Pick<UserTurnInput, "display" | "excludeFromContext">;
   startedAt: number;
   warn: (message: string) => void;
-  assertGoalCurrent?: () => void;
+  mentionInbox?: MentionInbox;
+  goalCommitGuard?: ReturnType<typeof createChatSendGoalCommitGuard>;
+  assertOriginalInputCommit?: () => void;
 }): GatewayChatUserTurnController {
   const { admission, request, session } = params;
   const sender =
     request.goalOperation?.action === "resume"
       ? undefined
       : gatewayClientSenderFields(params.client).sender;
+  const senderProfileId = params.client?.authenticatedUserProfile?.profileId;
+  const selectedMentions = request.mentions;
+  const mentionInbox = params.mentionInbox;
+  const sourceId = buildRunUserTurnIdempotencyKey(session.clientRunId);
+  const sourceClients =
+    !params.client?.internal?.syntheticClient &&
+    (!request.systemInputProvenance || request.systemInputProvenance.kind === "external_user")
+      ? normalizeMessageClientSources([request.clientInfo])
+      : [];
   const baseInput: UserTurnInput = {
     ...params.transcript,
     ...(request.goalOperation?.action === "resume" ? { display: false } : {}),
     text: request.rawMessage,
+    ...(request.workContext ? { workContext: request.workContext } : {}),
+    ...(request.mentions ? { mentions: request.mentions } : {}),
     timestamp: session.now,
-    idempotencyKey: buildRunUserTurnIdempotencyKey(session.clientRunId),
+    idempotencyKey: sourceId,
     ...(request.p.replyToId ? { replyToId: request.p.replyToId } : {}),
     ...(sender ? { sender } : {}),
+    ...(sourceClients.length ? { transport: { clients: sourceClients } } : {}),
     ...(hasGatewayAdminScope(params.client) ? { senderIsOwner: true } : {}),
     ...(request.systemInputProvenance ? { provenance: request.systemInputProvenance } : {}),
   };
@@ -68,28 +94,44 @@ export function createGatewayChatUserTurnController(params: {
       })
     : undefined;
   let inputPromise = replyContextFieldsPromise
-    ? replyContextFieldsPromise.then(
-        (fields): UserTurnInput => ({
-          ...baseInput,
-          ...(fields.ReplyToBody
-            ? {
-                replyToPreview: {
-                  text: fields.ReplyToBody,
-                  ...(fields.ReplyToSender ? { senderLabel: fields.ReplyToSender } : {}),
-                },
-              }
-            : {}),
-        }),
-      )
+    ? replyContextFieldsPromise.then((fields): UserTurnInput => ({
+        ...baseInput,
+        ...(fields.ReplyToBody
+          ? {
+              replyToPreview: {
+                text: fields.ReplyToBody,
+                ...(fields.ReplyToSender ? { senderLabel: fields.ReplyToSender } : {}),
+              },
+            }
+          : {}),
+      }))
     : Promise.resolve(baseInput);
-  const recorder = createUserTurnTranscriptRecorder({
+  let contextFreeCommand = false;
+  const recorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+    ...(sender?.id && !request.goalOperation
+      ? {
+          // Attribution and submitted bytes survive reconnect; display names, leaf
+          // cursors and generated media paths are not immutable request identity.
+          pendingInputRequestFingerprint: sha256Hex(
+            stableStringify([
+              {
+                ...request.p,
+                sessionId: admission.sessionBinding.sessionId,
+                expectedLeafEntryId: undefined,
+              },
+              sender.identity ?? sender.id,
+              hasGatewayAdminScope(params.client),
+            ]),
+          ),
+        }
+      : {}),
     ...(request.goalOperation
       ? {
           sessionTurnMutation: {
             kind: "goal",
             operation: request.goalOperation,
             runId: session.clientRunId,
-            assertCurrent: params.assertGoalCurrent,
+            ...params.goalCommitGuard,
           },
         }
       : {}),
@@ -97,21 +139,15 @@ export function createGatewayChatUserTurnController(params: {
     resolveInput: () => inputPromise,
     target: () => {
       // Retain only the current binding; transcript writers recheck it at commit.
-      const { storePath, entry } = loadSessionEntry(session.sessionKey, {
-        ...session.sessionLoadOptions,
-        clone: false,
-      });
-      const sessionId = (entry ?? admission.initialSessionEntry)?.sessionId;
-      if (!sessionId || sessionId !== admission.sessionBinding.sessionId) {
-        return undefined;
-      }
+      const target = session.sessionTarget;
+      const sessionId = admission.sessionBinding.sessionId;
       return {
         sessionId,
         expectedSessionId: sessionId,
         initialSessionEntry: admission.initialSessionEntry,
-        sessionKey: session.sessionKey,
+        sessionKey: target.storeKey,
         sessionEntry: undefined,
-        storePath,
+        storePath: target.storePath,
         agentId: session.agentId,
         config: session.cfg,
       };
@@ -124,12 +160,82 @@ export function createGatewayChatUserTurnController(params: {
         })
       : {}),
     errorContext: "gateway chat user turn transcript",
-    beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+    assertOriginalInputCommit: params.assertOriginalInputCommit,
+    beforeMessageWrite: (event) => {
+      const originalInput = event.message.idempotencyKey === sourceId;
+      const next = runAgentHarnessBeforeMessageWriteHook(event);
+      // This hook runs inside the synchronous writer after durable replay lookup.
+      // Fence only fresh original input, never accepted custody or terminal notices.
+      if (originalInput && next?.role === "user") {
+        recorder.assertOriginalInputCommit?.();
+        if (contextFreeCommand) {
+          return {
+            ...next,
+            excludeFromContext: true,
+            __openclaw: {
+              ...asOptionalRecord(Reflect.get(next, "__openclaw")),
+              contextFreeCommand: true,
+            },
+          };
+        }
+      }
+      return next;
+    },
     onPersistenceError: (error) =>
       params.warn(`gateway user transcript persistence failed: ${formatForLog(error)}`),
+    ...(selectedMentions && senderProfileId && mentionInbox
+      ? {
+          onOriginalInputCommitted: ({ message, anchor }: UserTurnOriginalInputCommit) => {
+            const stored = message["__openclaw"]?.humanMentions;
+            const text =
+              extractTextFromChatContent(message.content, {
+                joinWith: "\n",
+                normalizeText: (value) => value,
+              }) ?? "";
+            const retained = selectedMentions.filter(
+              (mention) =>
+                Array.isArray(stored) &&
+                stored.some((value) => {
+                  const span = asOptionalRecord(value);
+                  return (
+                    span?.profileId === mention.profileId &&
+                    span.start === mention.start &&
+                    span.end === mention.end &&
+                    text.slice(mention.start, mention.end) ===
+                      request.rawMessage.slice(mention.start, mention.end)
+                  );
+                }),
+            );
+            if (!retained.length) {
+              params.warn(
+                "Human mentions skipped because the committed text no longer contains the selected tokens.",
+              );
+              return;
+            }
+            mentionInbox.recordCommittedInput({
+              sourceId,
+              committedSource: {
+                generation: anchor.generation,
+                sequence: anchor.rawSeq,
+                timestamp: message.timestamp,
+              },
+              agentId: anchor.agentId,
+              sessionKey: session.sessionKey,
+              sessionId: anchor.sessionId,
+              messageId: anchor.entryId,
+              senderProfileId,
+              recipientProfileIds: retained.map((mention) => mention.profileId),
+              excerpt: redactSensitiveText(text),
+            });
+          },
+        }
+      : {}),
   });
-  const persist = async () =>
-    await measureDiagnosticsTimelineSpan(
+  const persist: GatewayChatUserTurnController["persist"] = async (options) => {
+    if (options?.contextFreeCommand === true && !recorder.hasPersisted()) {
+      contextFreeCommand = true;
+    }
+    return await measureDiagnosticsTimelineSpan(
       "gateway.chat_send.persist_user_transcript",
       () => recorder.persistFallback(),
       {
@@ -138,11 +244,12 @@ export function createGatewayChatUserTurnController(params: {
         attributes: admission.chatSendTraceAttributes,
       },
     );
+  };
   return {
     baseInput,
     persist,
-    persistBestEffort: async () => {
-      await persist().catch(() => undefined);
+    persistBestEffort: async (options) => {
+      return await persist(options).catch(() => undefined);
     },
     recorder,
     replyContextFieldsPromise,

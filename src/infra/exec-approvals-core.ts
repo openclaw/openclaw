@@ -1,6 +1,6 @@
 // Shared exec approval types and mode normalization.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type { ApprovalScope } from "./approval-scope.js";
+import type { ApprovalScope } from "../../packages/gateway-protocol/src/schema/approvals.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import type { ExecAllowlistEntry, McpToolGrant } from "./exec-approvals.types.js";
@@ -13,22 +13,19 @@ export type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 export type ExecApprovalUnavailableDecision = "allow-always";
 
-export const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
-
-export function normalizeExecHost(value?: string | null): ExecHost | null {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
-    return normalized;
-  }
-  return null;
-}
+const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
 
 export function normalizeExecTarget(value?: string | null): ExecTarget | null {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "auto") {
+  if (
+    normalized === "auto" ||
+    normalized === "sandbox" ||
+    normalized === "gateway" ||
+    normalized === "node"
+  ) {
     return normalized;
   }
-  return normalizeExecHost(normalized);
+  return null;
 }
 
 export function requireValidExecTarget(value?: unknown): ExecTarget | null {
@@ -99,6 +96,18 @@ export function resolveExecModeFromPolicy(params: {
     return "full";
   }
   return "ask";
+}
+
+// Migration, policy writes, and repair hints must preserve policies that the
+// display-mode projection cannot express: always-ask and full/on-miss.
+export function resolveExactExecModeFromPolicy(params: {
+  security: ExecSecurity;
+  ask: ExecAsk;
+}): ExecMode | null {
+  if (params.ask === "always" || (params.security === "full" && params.ask === "on-miss")) {
+    return null;
+  }
+  return resolveExecModeFromPolicy(params);
 }
 
 export function resolveExecPolicyForMode(mode: ExecMode): {

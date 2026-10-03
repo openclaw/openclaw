@@ -3,6 +3,11 @@
  */
 export type { ApiProvider } from "@openclaw/ai";
 export { resolveProviderContext } from "../../packages/ai/src/provider-types.js";
+export {
+  resolveOpenAIModelReasoningEfforts,
+  resolveOpenAIReasoningEffortMapping,
+} from "../../packages/ai/src/providers/openai-reasoning-effort.js";
+export { resolveOpenAIReasoningEffortMap } from "../../packages/ai/src/transports/openai-reasoning-compat.js";
 export type {
   ProviderContext,
   ProviderModel,
@@ -13,6 +18,7 @@ export type {
 export {
   calculateCost,
   clampThinkingLevel,
+  createToolArgumentPreviewSchedule,
   getApiProvider,
   getApiProviders,
   getEnvApiKey,

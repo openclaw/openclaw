@@ -21,7 +21,7 @@ import {
 import { listDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { NodeRegistry } from "./node-registry.js";
-import * as gatewayWsRuntime from "./server-ws-runtime.js";
+import * as gatewayWsConnection from "./server/ws-connection.js";
 import {
   connectReq,
   installGatewayTestHooks,
@@ -108,13 +108,13 @@ describe("node pairing rate limit", () => {
     testState.gatewayAuth = { mode: "token", token: "secret" };
     const identityDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-node-startup-"));
     const identityPath = path.join(identityDir, "identity.sqlite");
-    const attachGatewayWsHandlers = gatewayWsRuntime.attachGatewayWsHandlers;
+    const attachGatewayWsConnectionHandler = gatewayWsConnection.attachGatewayWsConnectionHandler;
     let nodeRegistry: NodeRegistry | undefined;
     const startupAdmission = vi
-      .spyOn(gatewayWsRuntime, "attachGatewayWsHandlers")
+      .spyOn(gatewayWsConnection, "attachGatewayWsConnectionHandler")
       .mockImplementation((params) => {
-        nodeRegistry = params.context.nodeRegistry;
-        return attachGatewayWsHandlers({ ...params, isStartupPending: () => true });
+        nodeRegistry = params.buildRequestContext().nodeRegistry;
+        return attachGatewayWsConnectionHandler({ ...params, isStartupPending: () => true });
       });
 
     try {
@@ -164,11 +164,11 @@ describe("node pairing rate limit", () => {
     async (_pairingState, approveDevice, omitDevice) => {
       testState.gatewayAuth = { mode: "token", token: "secret" };
       const identityDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-node-startup-unpaired-"));
-      const attachGatewayWsHandlers = gatewayWsRuntime.attachGatewayWsHandlers;
+      const attachGatewayWsConnectionHandler = gatewayWsConnection.attachGatewayWsConnectionHandler;
       const startupAdmission = vi
-        .spyOn(gatewayWsRuntime, "attachGatewayWsHandlers")
+        .spyOn(gatewayWsConnection, "attachGatewayWsConnectionHandler")
         .mockImplementation((params) =>
-          attachGatewayWsHandlers({ ...params, isStartupPending: () => true }),
+          attachGatewayWsConnectionHandler({ ...params, isStartupPending: () => true }),
         );
 
       try {
@@ -239,7 +239,9 @@ describe("node pairing rate limit", () => {
 
       expect(connected).toHaveLength(3);
       expect(rateLimited).toHaveLength(5);
-      expect((await listNodePairing()).pending).toHaveLength(3);
+      const pairing = await listNodePairing();
+      expect(pairing.pending).toHaveLength(0);
+      expect(pairing.paired).toHaveLength(3);
     });
   });
 
@@ -296,7 +298,7 @@ describe("node pairing rate limit", () => {
       }
 
       const pending = (await listNodePairing()).pending;
-      expect(pending).toHaveLength(4);
+      expect(pending).toHaveLength(1);
       expect(pending.find((entry) => entry.nodeId === pairedIdentity.deviceId)?.caps).toEqual([
         "camera",
         "screen",

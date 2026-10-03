@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
+import { buildBoardWidgetContentSecurityPolicy } from "../gateway/board-sandbox.js";
 import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
 import {
   resolveCanvasDocumentsDir,
@@ -11,12 +12,7 @@ import {
 
 async function readRootFile(root: Awaited<ReturnType<typeof fsRoot>>, relativePath: string) {
   try {
-    const opened = await root.open(relativePath);
-    try {
-      return { data: await opened.handle.readFile(), realPath: opened.realPath };
-    } finally {
-      await opened.handle.close().catch(() => {});
-    }
+    return await root.read(relativePath, { maxBytes: Infinity });
   } catch (error) {
     if (error instanceof FsSafeError) {
       return null;
@@ -38,7 +34,7 @@ async function resolveDocumentSandbox(
     return undefined;
   }
   try {
-    const manifest = JSON.parse(opened.data.toString("utf8")) as CanvasDocumentManifest;
+    const manifest = JSON.parse(opened.buffer.toString("utf8")) as CanvasDocumentManifest;
     return manifest.cspSandbox === "scripts" ? "scripts" : undefined;
   } catch {
     return undefined;
@@ -65,43 +61,38 @@ export async function handleCanvasDocumentHttpRequest(
     const documentsDir = resolveCanvasDocumentsDir();
     const relativePath = path.relative(documentsDir, localPath);
     const root = await fsRoot(documentsDir);
-    const opened = await readRootFile(root, relativePath);
-    if (!opened) {
-      res.statusCode = 404;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("not found");
-      return true;
-    }
+    const opened = await root.read(relativePath, { maxBytes: Infinity });
 
     const lowerPath = opened.realPath.toLowerCase();
     const mime =
       lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
         ? "text/html"
         : ((await detectMime({ filePath: opened.realPath })) ?? "application/octet-stream");
+    // Measure the decoded representation: UTF-8 replacement characters can
+    // make an HTML response longer than the bytes stored on disk.
+    const body = mime === "text/html" ? opened.buffer.toString("utf8") : opened.buffer;
     res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Type", mime === "text/html" ? "text/html; charset=utf-8" : mime);
+    res.setHeader("Content-Length", String(Buffer.byteLength(body)));
     if (mime === "text/html") {
-      // Measure the decoded representation: toString("utf8") expands invalid
-      // bytes to U+FFFD, so the raw file length can differ from the body sent.
-      const body = opened.data.toString("utf8");
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.setHeader("Content-Length", String(Buffer.byteLength(body)));
       if ((await resolveDocumentSandbox(root, relativePath)) === "scripts") {
-        res.setHeader("Content-Security-Policy", "sandbox allow-scripts");
+        // Registered documents allow local renderer scripts in their own CSP;
+        // the response policy must preserve that permission because policies intersect.
+        res.setHeader(
+          "Content-Security-Policy",
+          buildBoardWidgetContentSecurityPolicy({
+            grantState: "none",
+            resourceOrigins: ["'self'"],
+          }),
+        );
+        res.setHeader("Referrer-Policy", "no-referrer");
       }
-      if (req.method === "HEAD") {
-        res.end();
-        return true;
-      }
-      res.end(body);
-      return true;
     }
-    res.setHeader("Content-Type", mime);
-    res.setHeader("Content-Length", String(opened.data.byteLength));
     if (req.method === "HEAD") {
       res.end();
       return true;
     }
-    res.end(opened.data);
+    res.end(body);
     return true;
   } catch (error) {
     res.statusCode = error instanceof FsSafeError ? 404 : 500;

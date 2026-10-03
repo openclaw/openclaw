@@ -1,12 +1,13 @@
-// QA Lab mock provider prompt directives and tool declarations.
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   type ResponsesInputItem,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
-  QA_TOOL_SEARCH_PROMPT_RE,
-  QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
 } from "./mock-openai-contracts.js";
-import { extractInstructionsText } from "./mock-openai-input.js";
+import { extractCurrentRuntimeContextTexts, extractInstructionsText } from "./mock-openai-input.js";
 function extractLastCapture(text: string, pattern: RegExp) {
   let lastMatch: RegExpExecArray | null = null;
   const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
@@ -24,32 +25,24 @@ function extractCaptures(text: string, pattern: RegExp) {
 }
 
 export function extractExactReplyDirective(text: string) {
-  const backtickedMatch = extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
-  if (backtickedMatch) {
-    return backtickedMatch;
-  }
   return (
+    extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i) ??
     extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i) ??
     extractLastCapture(text, /reply(?: with)? exactly\s+(?!with\b)([^\s`.,;:!?]+)/i)
   );
 }
 
 export function extractFinishExactlyDirective(text: string) {
-  const backtickedMatch = extractLastCapture(text, /finish with exactly\s+`([^`]+)`/i);
-  if (backtickedMatch) {
-    return backtickedMatch;
-  }
-  return extractLastCapture(text, /finish with exactly\s+([^\s`.,;:!?]+)/i);
+  return (
+    extractLastCapture(text, /finish with exactly\s+`([^`]+)`/i) ??
+    extractLastCapture(text, /finish with exactly\s+([^\s`.,;:!?]+)/i)
+  );
 }
 
 export function extractExactMarkerDirective(text: string) {
-  const backtickedMatch = extractLastCapture(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i);
-  if (backtickedMatch) {
-    return backtickedMatch;
-  }
-  return extractLastCapture(
-    text,
-    /exact marker\b[^:\n]{0,120}:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i,
+  return (
+    extractLastCapture(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i) ??
+    extractLastCapture(text, /exact marker\b[^:\n]{0,120}:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i)
   );
 }
 
@@ -82,19 +75,11 @@ export function extractSlackProgressCommentaryDirectives(text: string) {
   return { commentaryMarker, execCommand, finalMarker, toolMarker };
 }
 
-export function extractWhatsAppLocationMarkerDirective(text: string) {
+function extractWhatsAppMarkerDirective(text: string, kind: "location" | "contact" | "sticker") {
   return extractLastCapture(
     text,
-    /WhatsApp location marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i,
+    new RegExp(`WhatsApp ${kind} marker:\\s*([^\\s\`.,;:!?]+(?:-[^\\s\`.,;:!?]+)*)`, "i"),
   );
-}
-
-export function extractWhatsAppContactMarkerDirective(text: string) {
-  return extractLastCapture(text, /WhatsApp contact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
-}
-
-export function extractWhatsAppStickerMarkerDirective(text: string) {
-  return extractLastCapture(text, /WhatsApp sticker marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
 }
 
 const QA_TIMESTAMPED_MESSAGE_PREFIX_RE =
@@ -123,15 +108,8 @@ function hasWhatsAppStructuredMessageBody(prompt: string, bodyPattern: RegExp) {
   });
 }
 
-export function shouldUseWhatsAppLocationMarker(prompt: string) {
-  return hasWhatsAppStructuredMessageBody(prompt, /^📍\s*37\.774900,\s*-122\.419400\b/u);
-}
-
-export function shouldUseWhatsAppContactMarker(prompt: string) {
-  return hasWhatsAppStructuredMessageBody(prompt, /^<contacts?(?::|>)/iu);
-}
-
-export function shouldUseWhatsAppStickerMarker(prompt: string) {
+function shouldUseWhatsAppStickerMarker(input: ResponsesInputItem[]) {
+  const prompt = extractCurrentRuntimeContextTexts(input).join("\n\n");
   const label = "WhatsApp media:";
   let searchFrom = 0;
   for (;;) {
@@ -157,6 +135,21 @@ export function shouldUseWhatsAppStickerMarker(prompt: string) {
     }
     searchFrom = labelIndex + label.length;
   }
+}
+
+export function resolveWhatsAppStructuredReply(
+  prompt: string,
+  input: ResponsesInputItem[],
+  allInputText: string,
+) {
+  return (
+    (hasWhatsAppStructuredMessageBody(prompt, /^📍\s*37\.774900,\s*-122\.419400\b/u) &&
+      extractWhatsAppMarkerDirective(allInputText, "location")) ||
+    (hasWhatsAppStructuredMessageBody(prompt, /^<contacts?(?::|>)/iu) &&
+      extractWhatsAppMarkerDirective(allInputText, "contact")) ||
+    (shouldUseWhatsAppStickerMarker(input) &&
+      extractWhatsAppMarkerDirective(allInputText, "sticker"))
+  );
 }
 
 function extractLabeledMarkerDirective(text: string, label: string) {
@@ -210,42 +203,51 @@ function extractBareToolArg(text: string, name: string) {
 export function hasDeclaredTool(body: Record<string, unknown>, name: string) {
   return (
     hasToolDefinition(body, name) ||
-    instructionTextMentionsToolName(extractInstructionsText(body), name)
+    instructionTextDeclaresTool(extractInstructionsText(body), name)
   );
 }
 
 export function hasToolDefinition(body: Record<string, unknown>, name: string) {
   const tools = Array.isArray(body.tools) ? body.tools : [];
   const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
-  return [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name));
+  return [...tools, ...dynamicTools].some((tool) => findNamedToolDefinition(tool, name) !== null);
 }
 
-function toolDefinitionMentionsName(value: unknown, name: string, depth = 0): boolean {
+export function findNamedToolDefinition(
+  value: unknown,
+  name: string,
+  depth = 0,
+): Record<string, unknown> | null {
   if (depth > 6 || !value || typeof value !== "object") {
-    return false;
+    return null;
   }
-  if (Array.isArray(value)) {
-    return value.some((item) => toolDefinitionMentionsName(item, name, depth + 1));
-  }
-  const record = value as Record<string, unknown>;
-  for (const key of ["name", "tool", "functionName"]) {
-    if (record[key] === name) {
-      return true;
+  if (!Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (record.name === name || record.tool === name || record.functionName === name) {
+      return record;
     }
   }
-  return Object.values(record).some((item) => toolDefinitionMentionsName(item, name, depth + 1));
-}
-
-function instructionTextMentionsToolName(text: string, name: string) {
-  if (!text) {
-    return false;
+  for (const item of Array.isArray(value) ? value : Object.values(value)) {
+    const match = findNamedToolDefinition(item, name, depth + 1);
+    if (match) {
+      return match;
+    }
   }
-  const escapedName = escapeRegExp(name);
-  return new RegExp(`(^|[^A-Za-z0-9_])${escapedName}([^A-Za-z0-9_]|$)`).test(text);
+  return null;
 }
 
-export function isQaToolSearchFixture(text: string) {
-  return QA_TOOL_SEARCH_PROMPT_RE.test(text) || QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(text);
+function instructionTextDeclaresTool(text: string, name: string) {
+  // Mirror the policy-filtered list and availability-gated messaging heading
+  // from system-prompt-tool-list.ts / system-prompt-messaging.ts. Ordinary
+  // instructions (including AGENTS.md's Tools notes) do not declare tools.
+  const sections = text.replaceAll("\r\n", "\n").split(/^## /m);
+  const tooling = sections.find((section) => section.startsWith("Tooling\n")) ?? "";
+  const messaging = sections.find((section) => section.startsWith("Messaging\n")) ?? "";
+  const escapedName = escapeRegExp(name);
+  return (
+    new RegExp(`^- ${escapedName}(?:: |$)`, "m").test(tooling) ||
+    new RegExp(`^### ${escapedName} tool$`, "m").test(messaging)
+  );
 }
 
 export function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> | null {
@@ -288,24 +290,6 @@ export function buildQaA2aMessageToolMirrorSessionsSendArgs(
     message: `qa group visible reply tool check. Use the visible room reply path. exact marker: \`${marker}\``,
     timeoutSeconds: 0,
   };
-}
-
-export function extractToolErrorForNamedCall(params: {
-  input: ResponsesInputItem[];
-  name: string;
-  toolJson: Record<string, unknown> | null;
-}) {
-  const error = typeof params.toolJson?.error === "string" ? params.toolJson.error.trim() : "";
-  if (!error) {
-    return undefined;
-  }
-  const namedFunctionCall = params.input.some(
-    (item) => item.type === "function_call" && item.name === params.name,
-  );
-  if (namedFunctionCall) {
-    return error;
-  }
-  return undefined;
 }
 
 export function hasToolErrorOutput(toolJson: Record<string, unknown> | null, toolOutput: string) {
@@ -357,27 +341,19 @@ export function resolveHeartbeatPromptReply(text: string): "HEARTBEAT_OK" | "NO_
 }
 
 export function readFirstMediaPath(value: unknown): string {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const media = asOptionalRecord(value);
+  if (!media) {
     return "";
   }
-  const media = value as {
-    mediaUrl?: unknown;
-    mediaUrls?: unknown;
-    path?: unknown;
-    filePath?: unknown;
-    attachments?: unknown;
-  };
-  for (const candidate of [media.mediaUrl, media.path, media.filePath]) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  if (Array.isArray(media.mediaUrls)) {
-    const mediaUrl = media.mediaUrls.find(
-      (candidate) => typeof candidate === "string" && candidate.trim(),
-    );
-    if (typeof mediaUrl === "string" && mediaUrl.trim()) {
-      return mediaUrl.trim();
+  for (const candidate of [
+    media.mediaUrl,
+    media.path,
+    media.filePath,
+    ...(Array.isArray(media.mediaUrls) ? media.mediaUrls : []),
+  ]) {
+    const mediaPath = normalizeOptionalString(candidate);
+    if (mediaPath) {
+      return mediaPath;
     }
   }
   if (Array.isArray(media.attachments)) {

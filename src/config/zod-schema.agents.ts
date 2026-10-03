@@ -1,10 +1,11 @@
-// Defines agent-related Zod schema fragments for config parsing.
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
+
+export { BroadcastSchema } from "./zod-schema.messages.js";
 
 const AgentEntryConfigSchema = z.preprocess(
   (value, ctx) => {
@@ -27,7 +28,7 @@ const AgentEntryConfigSchema = z.preprocess(
 );
 
 export const AgentsSchema = z
-  .object({
+  .strictObject({
     ownership: z.literal("explicit").optional(),
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
     entries: z
@@ -37,7 +38,6 @@ export const AgentsSchema = z
       )
       .optional(),
   })
-  .strict()
   .superRefine((value, ctx) => {
     const entries = Object.entries(value.entries ?? {});
     if (entries.length === 0) {
@@ -87,59 +87,57 @@ export const AgentsSchema = z
   })
   .optional();
 
-const BindingMatchSchema = z
-  .object({
-    channel: z.string(),
-    accountId: z.string().optional(),
-    peer: z
-      .object({
-        kind: z.union([z.literal("direct"), z.literal("group"), z.literal("channel")]),
-        id: z.string(),
-      })
-      .strict()
-      .optional(),
-    guildId: z.string().optional(),
-    teamId: z.string().optional(),
-    roles: z.array(z.string()).optional(),
-  })
-  .strict();
+const BindingMatchSchema = z.strictObject({
+  channel: z.string(),
+  /**
+   * Channel account to match.
+   * - Omitted/empty: matches only the channel default account.
+   * - "*": matches every account on the channel.
+   * - Any other string: matches that specific account id.
+   */
+  accountId: z.string().optional(),
+  peer: z
+    .strictObject({
+      kind: z.union([z.literal("direct"), z.literal("group"), z.literal("channel")]),
+      id: z.string(),
+    })
+    .optional(),
+  guildId: z.string().optional(),
+  teamId: z.string().optional(),
+  /** Discord role IDs used for role-based routing. */
+  roles: z.array(z.string()).optional(),
+});
 
-const BindingSessionSchema = z
-  .object({
-    dmScope: z
-      .enum(["main", "per-peer", "per-channel-peer", "per-account-channel-peer"])
-      .optional(),
-    groupScope: z.enum(["main", "per-group"]).optional(),
-  })
-  .strict();
+const BindingSessionSchema = z.strictObject({
+  /** Optional session scoping override for conversations matched by this binding. */
+  dmScope: z.enum(["main", "per-peer", "per-channel-peer", "per-account-channel-peer"]).optional(),
+  groupScope: z.enum(["main", "per-group"]).optional(),
+});
 
-const RouteBindingSchema = z
-  .object({
-    type: z.literal("route").optional(),
-    agentId: z.string(),
-    comment: z.string().optional(),
-    match: BindingMatchSchema,
-    session: BindingSessionSchema.optional(),
-  })
-  .strict();
+const RouteBindingSchema = z.strictObject({
+  /** Missing type is interpreted as route for backward compatibility. */
+  type: z.literal("route").optional(),
+  agentId: z.string(),
+  comment: z.string().optional(),
+  match: BindingMatchSchema,
+  session: BindingSessionSchema.optional(),
+});
 
 const AcpBindingSchema = z
-  .object({
+  .strictObject({
     type: z.literal("acp"),
     agentId: z.string(),
     comment: z.string().optional(),
     match: BindingMatchSchema,
     acp: z
-      .object({
+      .strictObject({
         mode: z.enum(["persistent", "oneshot"]).optional(),
         label: z.string().optional(),
         cwd: z.string().optional(),
         backend: z.string().optional(),
       })
-      .strict()
       .optional(),
   })
-  .strict()
   .superRefine((value, ctx) => {
     const peerId = normalizeOptionalString(value.match.peer?.id) ?? "";
     if (!peerId) {
@@ -152,12 +150,3 @@ const AcpBindingSchema = z
   });
 
 export const BindingsSchema = z.array(z.union([RouteBindingSchema, AcpBindingSchema])).optional();
-
-const BroadcastStrategySchema = z.enum(["parallel", "sequential"]);
-
-export const BroadcastSchema = z
-  .object({
-    strategy: BroadcastStrategySchema.optional(),
-  })
-  .catchall(z.array(z.string()))
-  .optional();

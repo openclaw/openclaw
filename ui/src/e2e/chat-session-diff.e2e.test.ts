@@ -214,10 +214,10 @@ suite.define(() => {
     await waitForSessionDiff(page);
     await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(1);
 
-    await openChatSidePanelType(page, "Tasks");
+    await openChatSidePanelType(page, "Side chat");
     await expect
       .poll(() => page.locator(".tabstrip-tab__label").allTextContents())
-      .toContain("Tasks");
+      .toContain("Side chat");
     await page.evaluate(
       () =>
         new Promise<void>((resolve) => {
@@ -253,7 +253,7 @@ suite.define(() => {
     await waitForSessionDiff(page);
   });
 
-  it("replaces an automatically seeded diff when the pane session changes", async () => {
+  it("shows each session's diff and retains its local view state when navigating away", async () => {
     const firstSessionKey = "agent:main:first-review";
     const secondSessionKey = "agent:main:second-review";
     const context = await newBrowserContext();
@@ -316,15 +316,38 @@ suite.define(() => {
     });
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstSessionKey));
     await waitForSessionDiff(page);
+    const firstFileToggle = page.locator(".session-diff__file-toggle").first();
+    await firstFileToggle.click();
+    await expect.poll(() => firstFileToggle.getAttribute("aria-expanded")).toBe("false");
 
     await navigateToControlUiSession(page, secondSessionKey);
 
     await expect
-      .poll(() => page.locator(".session-diff__filename").allTextContents())
+      .poll(() =>
+        page
+          .locator('openclaw-chat-pane[aria-hidden="false"] .session-diff__filename')
+          .allTextContents(),
+      )
       .toEqual(["second.md"]);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.diff")).at(-1)?.params)
       .toMatchObject({ sessionKey: secondSessionKey });
+    expect(
+      await firstFileToggle.evaluate((element) =>
+        element.closest("openclaw-chat-pane")?.getAttribute("aria-hidden"),
+      ),
+    ).toBe("true");
+
+    await navigateToControlUiSession(page, firstSessionKey);
+    await expect
+      .poll(() =>
+        page
+          .locator('openclaw-chat-pane[aria-hidden="false"] .session-diff__filename')
+          .allTextContents(),
+      )
+      .toEqual(["app.ts", "notes.md"]);
+    expect(await firstFileToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(2);
   });
 
   it("opens the session diff from the branch change stats", async () => {
@@ -535,7 +558,7 @@ suite.define(() => {
 
     const panel = page.locator(".session-diff");
     await expect.poll(() => panel.count()).toBe(1);
-    const panelSurface = page.locator(".side-panel").filter({ has: panel });
+    const panelSurface = page.locator('[data-panel-slot="detail"]').filter({ has: panel });
     await expect
       .poll(() => panelSurface.evaluate((element) => element.getBoundingClientRect().width))
       .toBe(480);
@@ -640,10 +663,14 @@ suite.define(() => {
     await expect.poll(() => modified.locator(".chat-diff").count()).toBe(1);
 
     // The section-title button opens the same scope menu as the footer.
+    await gateway.deferNext("sessions.diff");
     await panel.locator(".session-diff__section-title").click();
     await page
       .locator('openclaw-session-diff-menu wa-dropdown-item[value="scope:uncommitted"]')
       .click();
+    await expect.poll(() => panel.locator("openclaw-panel-loading-skeleton").count()).toBe(1);
+    expect(await panel.locator(".session-diff__file").count()).toBe(0);
+    await gateway.resolveDeferred("sessions.diff");
     await expect
       .poll(() => panel.locator(".session-diff__section-title span").textContent())
       .toBe("Uncommitted");
@@ -652,10 +679,14 @@ suite.define(() => {
       .poll(async () => (await gateway.getRequests("sessions.diff")).at(-1)?.params)
       .toMatchObject({ scope: "uncommitted" });
 
+    await gateway.deferNext("sessions.diff");
     await panel.locator(".session-diff__footer").click();
     await page
       .locator('openclaw-session-diff-menu wa-dropdown-item[value="scope:commit:abc1234"]')
       .click();
+    await expect.poll(() => panel.locator("openclaw-panel-loading-skeleton").count()).toBe(1);
+    expect(await panel.locator(".session-diff__file").count()).toBe(0);
+    await gateway.resolveDeferred("sessions.diff");
     await expect
       .poll(() => panel.locator(".session-diff__section-title span").textContent())
       .toBe("abc1234 First feature change");
@@ -663,6 +694,82 @@ suite.define(() => {
       .poll(async () => (await gateway.getRequests("sessions.diff")).at(-1)?.params)
       .toMatchObject({ scope: "commit", commit: "abc1234" });
     await expect.poll(() => panel.locator(".session-diff__gap-controls").count()).toBe(0);
+  });
+
+  it("follows checkout binding in Review and Files and keeps diffs visible while refreshing", async () => {
+    const sessionKey = "agent:main:pending-checkout";
+    const context = await newBrowserContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
+      methodResponses: {
+        "sessions.diff": { ...SESSION_DIFF_RESPONSE, sessionKey },
+        "sessions.files.list": { sessionKey, files: [] },
+      },
+    });
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    await openChatSidePanelType(page, "Review");
+    await waitForSessionDiff(page);
+    const panel = page.locator(".session-diff");
+    const filenames = panel.locator(".session-diff__filename");
+    const boundDiff = {
+      ...SESSION_DIFF_RESPONSE,
+      sessionKey,
+      root: "/tmp/prepared-worktree",
+      files: [SESSION_DIFF_RESPONSE.files[1]],
+      additions: 2,
+      deletions: 0,
+    };
+    await gateway.setMethodResponse("sessions.diff", boundDiff);
+    await gateway.deferNext("sessions.diff");
+    const projectEvent = { sessionKey, agentId: "main", reason: "project" };
+    await gateway.emitGatewayEvent("sessions.changed", projectEvent);
+    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(2);
+    await expect.poll(() => panel.locator("openclaw-panel-loading-skeleton").count()).toBe(1);
+    expect(await filenames.allTextContents()).toEqual([]);
+    await gateway.resolveDeferred("sessions.diff");
+    await expect.poll(() => filenames.allTextContents()).toEqual(["notes.md"]);
+    expect(await panel.isVisible()).toBe(true);
+    expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+
+    await gateway.deferNext("sessions.diff");
+    await gateway.setMethodResponse("sessions.diff", { ...SESSION_DIFF_RESPONSE, sessionKey });
+    await gateway.emitChatFinal({ sessionKey, runId: "refresh-run", text: "Updated files." });
+    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(3);
+    await expect.poll(() => panel.getAttribute("aria-busy")).toBe("true");
+    if (captureProof) {
+      await page.locator('[data-panel-slot="detail"]').screenshot({
+        path: path.join(artifactDir, "refresh-pending.png"),
+      });
+    }
+    expect(await filenames.allTextContents()).toEqual(["notes.md"]);
+    expect(await panel.locator("openclaw-panel-loading-skeleton").count()).toBe(0);
+    expect(await panel.getByRole("button", { name: "Refresh changes" }).isDisabled()).toBe(true);
+    expect(
+      await panel
+        .locator(".session-diff__refresh svg")
+        .evaluate((icon) => getComputedStyle(icon).animationName),
+    ).toBe("btn-spinner-spin");
+    await gateway.resolveDeferred("sessions.diff");
+    await expect.poll(() => panel.getAttribute("aria-busy")).toBe("false");
+    await expect.poll(() => filenames.allTextContents()).toEqual(["app.ts", "notes.md"]);
+
+    await openChatSidePanelType(page, "Files");
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
+      .toBe(1);
+    await gateway.setMethodResponse("sessions.files.list", {
+      sessionKey,
+      root: boundDiff.root,
+      files: [],
+      browser: { path: "", entries: [{ kind: "file", name: "notes.md", path: "notes.md" }] },
+    });
+    await gateway.emitGatewayEvent("sessions.changed", projectEvent);
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
+      .toBe(2);
+    await page.locator(".chat-workspace-rail__file-name", { hasText: "notes.md" }).waitFor();
   });
 
   it("refreshes an open Review after checkout creation without listing workspace files", async () => {

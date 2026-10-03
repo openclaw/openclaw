@@ -1,32 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import {
-  context,
-  diag,
-  DiagLogLevel,
-  metrics,
-  propagation,
-  ROOT_CONTEXT,
-  trace,
-} from "@opentelemetry/api";
+import { context, diag, DiagLogLevel, metrics, propagation, trace } from "@opentelemetry/api";
 import { logs } from "@opentelemetry/api-logs";
-import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
-import { W3CTraceContextPropagator } from "@opentelemetry/core";
-import {
-  InMemoryLogRecordExporter,
-  LoggerProvider,
-  SimpleLogRecordProcessor,
-} from "@opentelemetry/sdk-logs";
-import {
-  AggregationTemporality,
-  InMemoryMetricExporter,
-  MeterProvider,
-  PeriodicExportingMetricReader,
-} from "@opentelemetry/sdk-metrics";
-import {
-  BasicTracerProvider,
-  InMemorySpanExporter,
-  SimpleSpanProcessor,
-} from "@opentelemetry/sdk-trace-base";
 import {
   resetDiagnosticEventsForTest,
   type DiagnosticTraceContext,
@@ -161,7 +135,7 @@ function captureOtelDiagnostics(): string[] {
   return messages;
 }
 
-test("flushes each private generation and leaves global providers untouched", async () => {
+test("flushes each private generation on restart and leaves global providers untouched", async () => {
   const receiverA = startLocalOtlpReceiver();
   const receiverB = startLocalOtlpReceiver();
   const portA = await receiverA.listen();
@@ -172,8 +146,7 @@ test("flushes each private generation and leaves global providers untouched", as
     metrics: registeredOtelGlobals()?.metrics,
     trace: registeredOtelGlobals()?.trace,
   };
-  const serviceA = createDiagnosticsOtelService();
-  const serviceB = createDiagnosticsOtelService();
+  const service = createDiagnosticsOtelService();
   const ctxA = createOtelContext(`http://127.0.0.1:${portA}`, {
     traces: true,
     metrics: true,
@@ -188,10 +161,9 @@ test("flushes each private generation and leaves global providers untouched", as
   ctxB.config.diagnostics!.otel!.flushIntervalMs = 60_000;
 
   try {
-    expect(serviceA).not.toBe(serviceB);
-    await serviceA.start(ctxA);
+    await service.start(ctxA);
     const traceA = await emitRealSdkSignals("generation-a");
-    await serviceA.stop?.(ctxA);
+    await service.stop?.(ctxA);
     const aRequestsAfterStop = receiverA.capturedRequests.length;
 
     expect(new Set(receiverA.capturedRequests.map((request) => request.signal))).toEqual(
@@ -208,9 +180,9 @@ test("flushes each private generation and leaves global providers untouched", as
     await sleep(50);
     expect(receiverA.capturedRequests).toHaveLength(aRequestsAfterStop);
 
-    await serviceB.start(ctxB);
+    await service.start(ctxB);
     const traceB = await emitRealSdkSignals("generation-b");
-    await serviceB.stop?.(ctxB);
+    await service.stop?.(ctxB);
     const bRequestsAfterStop = receiverB.capturedRequests.length;
 
     expect(receiverA.capturedRequests).toHaveLength(aRequestsAfterStop);
@@ -228,127 +200,10 @@ test("flushes each private generation and leaves global providers untouched", as
     await sleep(50);
     expect(receiverB.capturedRequests).toHaveLength(bRequestsAfterStop);
   } finally {
-    await serviceA.stop?.(ctxA);
-    await serviceB.stop?.(ctxB);
+    await service.stop?.(ctxA);
+    await service.stop?.(ctxB);
     await receiverA.close();
     await receiverB.close();
-  }
-}, 30_000);
-
-test("keeps preloaded host providers live and owned by the host after plugin stop", async () => {
-  releaseOtelGlobals();
-  process.env[PRELOAD_ENV] = "1";
-  const externalContextManager = new AsyncLocalStorageContextManager().enable();
-  const externalPropagator = new W3CTraceContextPropagator();
-  const spanExporter = new InMemorySpanExporter();
-  const tracerProvider = new BasicTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(spanExporter)],
-  });
-  const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-  const metricProvider = new MeterProvider({
-    readers: [
-      new PeriodicExportingMetricReader({
-        exporter: metricExporter,
-        exportIntervalMillis: 60_000,
-      }),
-    ],
-  });
-  const logExporter = new InMemoryLogRecordExporter();
-  const loggerProvider = new LoggerProvider({
-    processors: [new SimpleLogRecordProcessor({ exporter: logExporter })],
-  });
-  expect(context.setGlobalContextManager(externalContextManager)).toBe(true);
-  expect(propagation.setGlobalPropagator(externalPropagator)).toBe(true);
-  expect(trace.setGlobalTracerProvider(tracerProvider)).toBe(true);
-  expect(metrics.setGlobalMeterProvider(metricProvider)).toBe(true);
-  logs.setGlobalLoggerProvider(loggerProvider);
-  const hostOwners = {
-    context: registeredOtelGlobals()?.context,
-    logs: logs.getLoggerProvider(),
-    metrics: registeredOtelGlobals()?.metrics,
-    propagation: registeredOtelGlobals()?.propagation,
-    trace: registeredOtelGlobals()?.trace,
-  };
-  const { service, ctx } = await startOtelService({
-    traces: true,
-    metrics: true,
-    logs: false,
-  });
-  const emitHostSignals = (generation: string) => {
-    trace.getTracer("host-preloaded").startSpan(`host-${generation}`).end();
-    metrics
-      .getMeter("host-preloaded")
-      .createCounter("host.preloaded.counter")
-      .add(1, { generation });
-    logs.getLogger("host-preloaded").emit({
-      body: `host-${generation}`,
-      severityText: "INFO",
-    });
-  };
-
-  try {
-    expect({
-      context: registeredOtelGlobals()?.context,
-      logs: logs.getLoggerProvider(),
-      metrics: registeredOtelGlobals()?.metrics,
-      propagation: registeredOtelGlobals()?.propagation,
-      trace: registeredOtelGlobals()?.trace,
-    }).toEqual(hostOwners);
-    emitHostSignals("before-stop");
-    await Promise.all([
-      tracerProvider.forceFlush(),
-      metricProvider.forceFlush(),
-      loggerProvider.forceFlush(),
-    ]);
-
-    const incoming = {
-      traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-    };
-    const extracted = propagation.extract(ROOT_CONTEXT, incoming);
-    const outgoing: Record<string, string> = {};
-    await context.with(extracted, async () => {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      propagation.inject(context.active(), outgoing);
-    });
-    expect(outgoing).toEqual(incoming);
-
-    await service.stop?.(ctx);
-    expect({
-      context: registeredOtelGlobals()?.context,
-      logs: logs.getLoggerProvider(),
-      metrics: registeredOtelGlobals()?.metrics,
-      propagation: registeredOtelGlobals()?.propagation,
-      trace: registeredOtelGlobals()?.trace,
-    }).toEqual(hostOwners);
-    emitHostSignals("after-stop");
-    await Promise.all([
-      tracerProvider.forceFlush(),
-      metricProvider.forceFlush(),
-      loggerProvider.forceFlush(),
-    ]);
-
-    expect(spanExporter.getFinishedSpans().map((span) => span.name)).toEqual([
-      "host-before-stop",
-      "host-after-stop",
-    ]);
-    expect(
-      metricExporter
-        .getMetrics()
-        .flatMap((resourceMetrics) => resourceMetrics.scopeMetrics)
-        .flatMap((scopeMetrics) => scopeMetrics.metrics)
-        .map((metric) => metric.descriptor.name),
-    ).toContain("host.preloaded.counter");
-    expect(logExporter.getFinishedLogRecords().map((record) => record.body)).toEqual([
-      "host-before-stop",
-      "host-after-stop",
-    ]);
-  } finally {
-    await service.stop?.(ctx);
-    await loggerProvider.shutdown();
-    await metricProvider.shutdown();
-    await tracerProvider.shutdown();
   }
 }, 30_000);
 

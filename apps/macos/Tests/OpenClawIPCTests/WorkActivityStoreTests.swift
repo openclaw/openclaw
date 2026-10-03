@@ -2,9 +2,60 @@ import Foundation
 import OpenClawProtocol
 import Testing
 @testable import OpenClaw
+@testable import OpenClawKit
 
+@Suite(.testWaitLimit)
 @MainActor
 struct WorkActivityStoreTests {
+    @Test func `replacement primary clears old work without retiring the new same-key tool`() async throws {
+        try await TestIsolation.withIsolatedState {
+            let connection = makeActivityGatewayConnection(mainSessionKey: "main")
+            let control = ControlChannel(gateway: connection, endpointRevision: { 1 })
+            let store = WorkActivityStore.shared
+            let previousMainKey = store.mainSessionKey
+            defer {
+                store.handleJob(sessionKey: "main", state: "done")
+                store.setMainSessionKey(previousMainKey)
+            }
+            store.setMainSessionKey("before-primary")
+            _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
+            try await TestWait.observed("main activity session") { store.mainSessionKey == "main" }
+            #expect(store.mainSessionKey == "main")
+
+            store.handleJob(sessionKey: "main", state: "started")
+            store.handleTool(sessionKey: "main", phase: "start", name: "read", meta: "old-tool", args: nil)
+            store.handleTool(sessionKey: "main", phase: "result", name: "read", meta: "old-tool", args: nil)
+
+            // The heartbeat acknowledges that the primary consumer processed the preceding hello.
+            await connection.shutdown()
+            _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
+            let snapshot = try #require(await connection.lastSnapshot)
+            await connection._test_handlePush(.snapshot(snapshot), socketGeneration: 1)
+            await connection._test_handlePush(
+                .event(EventFrame(
+                    type: "event",
+                    event: "heartbeat",
+                    payload: AnyCodable(["ts": 1, "status": "work-lifetime-proof"]))),
+                socketGeneration: 1)
+            try await TestWait.state("work lifetime heartbeat") {
+                control.lastHeartbeatEvent?.status == "work-lifetime-proof"
+            }
+            #expect(control.lastHeartbeatEvent?.status == "work-lifetime-proof")
+            #expect(store.current == nil)
+            #expect(store.iconState == .idle)
+            #expect(store.lastToolUpdatedAt == nil)
+
+            store.handleTool(sessionKey: "main", phase: "start", name: "read", meta: "new-tool", args: nil)
+            let newTool = store.current
+            let newToolUpdatedAt = store.lastToolUpdatedAt
+            try? await Task.sleep(for: .seconds(3))
+            #expect(store.current == newTool)
+            #expect(store.iconState == .workingMain(.tool(.read)))
+            #expect(store.lastToolUpdatedAt == newToolUpdatedAt)
+            await control.disconnect()
+        }
+    }
+
     @Test func `main session job preempts other`() {
         let store = WorkActivityStore()
 
@@ -25,7 +76,7 @@ struct WorkActivityStoreTests {
         #expect(store.current == nil)
     }
 
-    @Test func `job stays working after tool result grace`() async {
+    @Test func `job stays working after tool result grace`() async throws {
         let store = WorkActivityStore()
 
         store.handleJob(sessionKey: "main", state: "started")
@@ -46,9 +97,8 @@ struct WorkActivityStoreTests {
             meta: nil,
             args: ["path": AnyCodable("/tmp/file.txt")])
 
-        for _ in 0..<50 {
-            if store.iconState == .workingMain(.job) { break }
-            try? await Task.sleep(nanoseconds: 100_000_000)
+        try await TestWait.observed("working job after tool result") {
+            store.iconState == .workingMain(.job)
         }
         #expect(store.iconState == .workingMain(.job))
 
@@ -86,13 +136,55 @@ struct WorkActivityStoreTests {
 
     @Test func `resolve icon state honors override selection`() {
         let store = WorkActivityStore()
+        store.handleJob(sessionKey: "discord:group:1", state: "started")
         store.handleJob(sessionKey: "main", state: "started")
         #expect(store.iconState == .workingMain(.job))
 
+        let overrides: [(IconOverrideSelection, IconState)] = [
+            (.idle, .idle),
+            (.mainBash, .overridden(.tool(.bash))),
+            (.mainRead, .overridden(.tool(.read))),
+            (.mainWrite, .overridden(.tool(.write))),
+            (.mainEdit, .overridden(.tool(.edit))),
+            (.mainOther, .overridden(.tool(.other))),
+            (.otherBash, .overridden(.tool(.bash))),
+            (.otherRead, .overridden(.tool(.read))),
+            (.otherWrite, .overridden(.tool(.write))),
+            (.otherEdit, .overridden(.tool(.edit))),
+            (.otherOther, .overridden(.tool(.other))),
+        ]
+        for (selection, expected) in overrides {
+            store.resolveIconState(override: selection)
+            #expect(store.iconState == expected)
+        }
+
+        store.resolveIconState(override: .system)
+        #expect(store.iconState == .workingMain(.job))
+
+        store.handleJob(sessionKey: "main", state: "finished")
         store.resolveIconState(override: .idle)
         #expect(store.iconState == .idle)
-
-        store.resolveIconState(override: .otherEdit)
-        #expect(store.iconState == .overridden(.tool(.edit)))
+        store.resolveIconState(override: .system)
+        #expect(store.iconState == .workingOther(.job))
     }
+}
+
+func makeActivityGatewayConnection(mainSessionKey: String) -> GatewayConnection {
+    let session = GatewayTestWebSocketSession(taskFactory: {
+        GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+            guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+        }, receiveHook: { socket, receiveIndex in
+            if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+            return .data(GatewayWebSocketTestSupport.connectOkData(
+                id: socket.snapshotConnectRequestID() ?? "connect", mainSessionKey: mainSessionKey))
+        })
+    })
+    return GatewayConnection(
+        testEndpointProvider: {
+            GatewayConnection.EndpointSnapshot(
+                config: (URL(string: "ws://127.0.0.1:49229")!, nil, nil), routeAuthority: nil, revision: 1)
+        },
+        currentEndpointRevision: { 1 },
+        sessionBox: WebSocketSessionBox(session: session))
 }

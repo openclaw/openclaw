@@ -1,5 +1,4 @@
 import { getRuntimeConfig } from "../config/config.js";
-import { DEFAULT_ASK, DEFAULT_SECURITY } from "../infra/exec-approvals-config.js";
 import {
   createExecApprovalPolicySnapshot,
   loadExecApprovals,
@@ -24,8 +23,6 @@ export function preparePluginExecAuthorization(params: {
     resolveNodeExecConfigPolicy({
       cfg: getRuntimeConfig(),
       agentId,
-      defaultSecurity: DEFAULT_SECURITY,
-      defaultAsk: DEFAULT_ASK,
     });
   const policy = resolvePolicy();
   const approvals = loadExecApprovals();

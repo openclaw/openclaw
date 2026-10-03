@@ -1,0 +1,313 @@
+import fs from "node:fs";
+import nodePath from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { runGit } from "../agents/worktrees/git.js";
+import type { GitReadOperations } from "../infra/git-read-operations.js";
+import { readGitHead, readGitMetadataPrefix, readGitRefs } from "../infra/git-root.js";
+import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
+import {
+  gitOutput,
+  readCheckoutHead,
+  readRemoteRevisions,
+  resolveBranchLanding,
+} from "./control-ui-session-prs-landing.js";
+import { parseGitHubRemoteUrl } from "./github-remote.js";
+
+/** Observe only this checkout's refs; snapshot publication does not change PR facts. */
+export async function readCheckoutGitRevision({
+  root,
+  includeIndex,
+  branch,
+  defaultBranch,
+}: GitReadOperations["checkout.revision"]["input"]): Promise<string | null> {
+  if (!canReadGitFilesystemRefs()) {
+    return null;
+  }
+  try {
+    const head = readGitHead(root, { maxDepth: 1 });
+    const checkout = readCheckoutHead(root);
+    const defaultRef = readDefaultRef(checkout);
+    if (
+      !head ||
+      !checkout ||
+      checkout.branch === undefined ||
+      (!includeIndex && defaultRef === undefined)
+    ) {
+      return null;
+    }
+    const gitDir = nodePath.dirname(head.headPath);
+    const paths = [
+      nodePath.join(root, ".git"),
+      nodePath.join(checkout.refsBase, "config"),
+      nodePath.join(gitDir, "config.worktree"),
+    ];
+    const replacements = nodePath.join(checkout.refsBase, "refs/replace");
+    let packedReplacements: string[] = [];
+    if (includeIndex) {
+      paths.push(
+        nodePath.join(gitDir, "index"),
+        nodePath.join(checkout.refsBase, "shallow"),
+        nodePath.join(checkout.refsBase, "info/grafts"),
+      );
+      if (fs.existsSync(replacements)) {
+        paths.push(
+          ...fs
+            .readdirSync(replacements, { recursive: true, encoding: "utf8" })
+            .map((name) => nodePath.join(replacements, name)),
+        );
+      }
+      const packed = nodePath.join(checkout.refsBase, "packed-refs");
+      if (fs.existsSync(packed)) {
+        packedReplacements = fs
+          .readFileSync(packed, "utf8")
+          .split("\n")
+          .filter((line) => /\srefs\/replace\//u.test(line))
+          .toSorted();
+      }
+    }
+    const selectedBranch = branch ?? checkout.branch;
+    const selectedDefault = defaultBranch ? `origin/${defaultBranch}` : defaultRef;
+    const tips = await readRemoteRevisions(
+      root,
+      [
+        ...(selectedBranch ? [`refs/remotes/origin/${selectedBranch}`] : []),
+        ...(selectedDefault ? [`refs/remotes/${selectedDefault}`] : []),
+      ],
+      checkout,
+    );
+    return JSON.stringify([
+      checkout,
+      defaultRef,
+      [...tips],
+      packedReplacements,
+      paths.toSorted().map((file) => {
+        const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+        if (
+          stat?.isSymbolicLink() ||
+          (stat?.isFile() &&
+            file.startsWith(`${replacements}${nodePath.sep}`) &&
+            readGitMetadataPrefix(file).startsWith("ref:"))
+        ) {
+          throw new Error("Symbolic Git metadata requires Git discovery");
+        }
+        return stat?.isDirectory()
+          ? [file, stat.dev, stat.ino]
+          : [file, stat?.ino, stat?.size, stat?.mtimeMs, stat?.ctimeMs];
+      }),
+    ]);
+  } catch {
+    return null;
+  }
+}
+
+function readDefaultRef(head: ReturnType<typeof readCheckoutHead>): string | null | undefined {
+  if (!head) {
+    return undefined;
+  }
+  try {
+    const ref = "refs/remotes/origin/HEAD";
+    if (
+      fs.lstatSync(nodePath.join(head.refsBase, ref), { throwIfNoEntry: false })?.isSymbolicLink()
+    ) {
+      return undefined;
+    }
+    const raw = readGitRefs(head.refsBase, [ref]).get(ref);
+    if (raw === null) {
+      return null;
+    }
+    const match = /^ref:\s+(refs\/remotes\/(origin\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*))$/u.exec(
+      raw ?? "",
+    );
+    if (!match) {
+      return undefined;
+    }
+    const target = match[1]!;
+    const short = match[2]!;
+    const aliases = [
+      `refs/${short}`,
+      `refs/tags/${short}`,
+      `refs/heads/${short}`,
+      `refs/remotes/${short}/HEAD`,
+    ];
+    const values = readGitRefs(head.refsBase, [target, ...aliases]);
+    const value = values.get(target);
+    // Symbolic chains and ambiguous names retain Git's resolution/shortening semantics.
+    return (value === null || /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/iu.test(value ?? "")) &&
+      !fs
+        .lstatSync(nodePath.join(head.refsBase, target), { throwIfNoEntry: false })
+        ?.isSymbolicLink() &&
+      !fs.existsSync(nodePath.join(head.refsBase, short)) &&
+      aliases.every((alias) => values.get(alias) === null)
+      ? short
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function readCheckoutGitContext(
+  root: string,
+  githubHost = "github.com",
+): Promise<GitReadOperations["checkout.context"]["output"]> {
+  const head = readCheckoutHead(root);
+  const branch =
+    head?.branch === null
+      ? "HEAD"
+      : (head?.branch ?? (await gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"])));
+  if (!branch) {
+    return null;
+  }
+  const remoteUrl = await gitOutput(root, ["remote", "get-url", "origin"]);
+  const publicRemote = remoteUrl ? parseGitHubRemoteUrl(remoteUrl) : null;
+  const remote = publicRemote ?? (remoteUrl ? parseGitHubRemoteUrl(remoteUrl, githubHost) : null);
+  if (!remote) {
+    return null;
+  }
+  const preparedDefaultRef = readDefaultRef(head);
+  const defaultRef =
+    preparedDefaultRef === undefined
+      ? await gitOutput(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+      : preparedDefaultRef;
+  const defaultBranch = defaultRef?.replace(/^origin\//, "");
+  return {
+    ...remote,
+    ...(!publicRemote ? { host: githubHost } : {}),
+    branch: branch === "HEAD" ? null : branch,
+    root,
+    ...(defaultBranch ? { defaultBranch } : {}),
+  };
+}
+
+const SHORTSTAT_FILES = /(\d+) files? changed/;
+const SHORTSTAT_INSERTIONS = /(\d+) insertion/;
+const SHORTSTAT_DELETIONS = /(\d+) deletion/;
+// Matches sessions-diff's untracked scan bound; stats degrade to an
+// undercount past it instead of stalling the request.
+const MAX_UNTRACKED_STAT_FILES = 100;
+// Oversized untracked files count 0 lines instead of being read; the row's
+// stats are an approximation, not a patch surface.
+const MAX_UNTRACKED_STAT_BYTES = 512 * 1024;
+
+/** Count lines without a subprocess per file; hardlinked content only exposes a count. */
+async function untrackedFileAdditions(root: string, filePath: string): Promise<number> {
+  try {
+    const { buffer: body } = await readRegularFile({
+      filePath: nodePath.resolve(root, filePath),
+      maxBytes: MAX_UNTRACKED_STAT_BYTES,
+    });
+    // Binary files count 0 lines, mirroring git's shortstat behavior.
+    if (body.length === 0 || body.subarray(0, 8192).includes(0)) {
+      return 0;
+    }
+    let lines = 0;
+    for (const byte of body) {
+      if (byte === 10) {
+        lines += 1;
+      }
+    }
+    // A trailing fragment without a newline is still a line git would add.
+    return body[body.length - 1] === 10 ? lines : lines + 1;
+  } catch {
+    // Unreadable paths just do not count toward the size.
+    return 0;
+  }
+}
+
+async function untrackedStats(root: string): Promise<{ additions: number; files: number }> {
+  const listing = await runGit(root, ["ls-files", "--others", "--exclude-standard", "-z"]).catch(
+    () => null,
+  );
+  // NUL-delimited filenames retain leading whitespace, unlike scalar Git output.
+  const paths = listing?.code === 0 ? listing.stdout.split("\0").filter(Boolean) : [];
+  let additions = 0;
+  for (const filePath of paths.slice(0, MAX_UNTRACKED_STAT_FILES)) {
+    additions += await untrackedFileAdditions(root, filePath);
+  }
+  return { additions, files: paths.length };
+}
+
+/**
+ * Working-tree diff counts vs an explicit base, untracked files included:
+ * the size the PR would have if the current work were committed and pushed;
+ * changedFiles decides row visibility for unpushed branches. Unlike bare
+ * `git diff`, this also counts unmerged (conflict) paths.
+ */
+async function diffStatsAgainst(
+  root: string,
+  base: string,
+): Promise<{ additions: number; deletions: number; changedFiles: number } | null> {
+  try {
+    // Checkout-configurable diff drivers must never execute in the Gateway
+    // process (same guard as sessions-diff).
+    // A read must not refresh index stat data and invalidate its own revision.
+    const result = await runGit(root, [
+      "-c",
+      "diff.autoRefreshIndex=false",
+      "diff",
+      "--shortstat",
+      "--no-ext-diff",
+      "--no-textconv",
+      base,
+    ]);
+    if (result.code !== 0) {
+      return null;
+    }
+    // Empty output means an empty diff, not a failure.
+    const summary = result.stdout.trim();
+    const untracked = await untrackedStats(root);
+    return {
+      additions: Number(SHORTSTAT_INSERTIONS.exec(summary)?.[1] ?? 0) + untracked.additions,
+      deletions: Number(SHORTSTAT_DELETIONS.exec(summary)?.[1] ?? 0),
+      changedFiles: Number(SHORTSTAT_FILES.exec(summary)?.[1] ?? 0) + untracked.files,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * GitHub's pull/new page only has something to offer once the pushed branch
+ * carries commits the default branch lacks. Rename-only commits still count:
+ * this gate keys on commits, not line counts.
+ */
+async function branchHasCreatablePullRequest(
+  root: string,
+  defaultSha: string | null,
+  pushedSha: string | null,
+  defaultBranch: string | undefined,
+): Promise<boolean> {
+  // Fail closed when origin/HEAD is missing or the branch is not pushed.
+  if (!defaultBranch || !pushedSha) {
+    return false;
+  }
+  if (!defaultSha) {
+    return true;
+  }
+  const ahead = await gitOutput(root, ["rev-list", "--count", `${defaultSha}..${pushedSha}`]);
+  // A failed count keeps the row: rev-list errors must not hide a valid branch.
+  return ahead === null || Number(ahead) > 0;
+}
+
+export async function readPullRequestBranchFacts(
+  input: GitReadOperations["pull-request.branch-facts"]["input"],
+): Promise<GitReadOperations["pull-request.branch-facts"]["output"]> {
+  const landing = await resolveBranchLanding(input.root, input);
+  const stats = landing.statsBase ? await diffStatsAgainst(input.root, landing.statsBase) : null;
+  // The diff validates equal recorded tips without a separate ancestry probe.
+  // Missing objects must still retain the unknown-comparison fallback.
+  const noPushedChanges =
+    stats !== null &&
+    landing.defaultSha !== null &&
+    landing.defaultSha === landing.pushedSha &&
+    landing.statsBase === landing.defaultSha;
+  const creatable =
+    (!landing.hasLandedPullRequest || landing.provenNewPushedWork) &&
+    !noPushedChanges &&
+    (await branchHasCreatablePullRequest(
+      input.root,
+      landing.defaultSha,
+      landing.pushedSha,
+      input.defaultBranch,
+    ));
+  return !creatable && !(stats && stats.changedFiles > 0) ? undefined : { creatable, stats };
+}

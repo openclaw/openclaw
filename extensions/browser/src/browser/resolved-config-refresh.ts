@@ -1,7 +1,4 @@
-/**
- * Runtime config refresh helpers for Browser profiles that can be hot-reloaded
- * without restarting the whole Browser plugin server.
- */
+import { isDeepStrictEqual } from "node:util";
 import { loadBrowserConfigForRuntimeRefresh } from "./config-refresh-source.js";
 import { resolveBrowserConfig, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import { beginProfileTransition, getProfileLifecycle } from "./server-context.lifecycle.js";
@@ -10,51 +7,37 @@ import type { BrowserServerState, ProfileRuntimeState } from "./server-context.t
 function changedProfileInvariants(
   current: ResolvedBrowserProfile,
   next: ResolvedBrowserProfile,
+  previousConfig: BrowserServerState["resolved"],
+  nextConfig: BrowserServerState["resolved"],
 ): string[] {
-  const changed: string[] = [];
+  const changed: string[] = (["cdpUrl", "cdpPort", "driver"] as const).filter(
+    (key) => current[key] !== next[key],
+  );
   const currentUsesLocalManagedLaunch =
     current.driver === "openclaw" && !current.attachOnly && current.cdpIsLoopback;
   const nextUsesLocalManagedLaunch =
     next.driver === "openclaw" && !next.attachOnly && next.cdpIsLoopback;
-  if (current.cdpUrl !== next.cdpUrl) {
-    changed.push("cdpUrl");
+  if ((current.engine ?? "chromium") !== (next.engine ?? "chromium")) {
+    changed.push("engine");
   }
-  if (current.cdpPort !== next.cdpPort) {
-    changed.push("cdpPort");
+  if (currentUsesLocalManagedLaunch && nextUsesLocalManagedLaunch) {
+    changed.push(
+      ...(["headless", "executablePath"] as const).filter((key) => current[key] !== next[key]),
+    );
+    if (previousConfig.noSandbox !== nextConfig.noSandbox) {
+      changed.push("noSandbox");
+    }
+    if (!isDeepStrictEqual(previousConfig.extraArgs, nextConfig.extraArgs)) {
+      changed.push("extraArgs");
+    }
   }
-  if (current.driver !== next.driver) {
-    changed.push("driver");
-  }
-  if (
-    currentUsesLocalManagedLaunch &&
-    nextUsesLocalManagedLaunch &&
-    current.headless !== next.headless
-  ) {
-    changed.push("headless");
-  }
-  if (
-    currentUsesLocalManagedLaunch &&
-    nextUsesLocalManagedLaunch &&
-    current.executablePath !== next.executablePath
-  ) {
-    changed.push("executablePath");
-  }
-  if (current.attachOnly !== next.attachOnly) {
-    changed.push("attachOnly");
-  }
-  if (current.cdpIsLoopback !== next.cdpIsLoopback) {
-    changed.push("cdpIsLoopback");
-  }
-  if ((current.userDataDir ?? "") !== (next.userDataDir ?? "")) {
-    changed.push("userDataDir");
-  }
-  if ((current.mcpCommand ?? "") !== (next.mcpCommand ?? "")) {
-    changed.push("mcpCommand");
-  }
-  if (
-    current.mcpArgs?.length !== next.mcpArgs?.length ||
-    current.mcpArgs?.some((arg, index) => arg !== next.mcpArgs?.[index])
-  ) {
+  changed.push(
+    ...(["attachOnly", "cdpIsLoopback"] as const).filter((key) => current[key] !== next[key]),
+    ...(["userDataDir", "mcpCommand"] as const).filter(
+      (key) => (current[key] ?? "") !== (next[key] ?? ""),
+    ),
+  );
+  if (!isDeepStrictEqual(current.mcpArgs, next.mcpArgs)) {
     changed.push("mcpArgs");
   }
   return changed;
@@ -92,6 +75,7 @@ function applyResolvedConfig(
   current: BrowserServerState,
   freshResolved: BrowserServerState["resolved"],
 ) {
+  const previousResolved = current.resolved;
   const extensionRelayInternalTokens: Record<string, string> = {};
   for (const [name, relay] of current.extensionRelays ?? []) {
     const runtime = current.profiles.get(name);
@@ -111,15 +95,17 @@ function applyResolvedConfig(
   }
   current.resolved = {
     ...freshResolved,
-    // Keep the runtime evaluate gate stable across request-time profile refreshes.
-    // Security-sensitive behavior should only change via full runtime config reload,
-    // not as a side effect of resolving profiles/tabs during a request.
-    evaluateEnabled: current.resolved.evaluateEnabled,
+    // Admission, security and relay authentication belong to the running
+    // service; a request must not adopt changes that are waiting for its restart.
+    enabled: previousResolved.enabled,
+    evaluateEnabled: previousResolved.evaluateEnabled,
+    ssrfPolicy: previousResolved.ssrfPolicy,
+    extensionRelay: previousResolved.extensionRelay,
     // Only an exact live relay owns its process-local CDP credential; stale
     // config snapshots must never resurrect closed or replaced credentials.
     extensionRelayInternalTokens,
     // Config refresh must not erase the lifecycle's key while a relay is starting.
-    extensionRelayToken: current.resolved.extensionRelayToken,
+    extensionRelayToken: previousResolved.extensionRelayToken,
   };
   for (const [name, runtime] of current.profiles) {
     const actor = getProfileLifecycle(runtime);
@@ -142,7 +128,12 @@ function applyResolvedConfig(
         }).catch(() => {});
         continue;
       }
-      const changed = changedProfileInvariants(runtime.profile, nextProfile);
+      const changed = changedProfileInvariants(
+        runtime.profile,
+        nextProfile,
+        previousResolved,
+        freshResolved,
+      );
       if (changed.length > 0) {
         const previousProfile = runtime.profile;
         const reason = `profile invariants changed: ${changed.join(", ")}`;
@@ -163,7 +154,6 @@ function applyResolvedConfig(
   }
 }
 
-/** Refreshes the Browser runtime's resolved config from disk when hot reload is enabled. */
 export function refreshResolvedBrowserConfigFromDisk(params: {
   current: BrowserServerState;
   refreshConfigFromDisk: boolean;
@@ -177,17 +167,4 @@ export function refreshResolvedBrowserConfigFromDisk(params: {
   const cfg = loadBrowserConfigForRuntimeRefresh();
   const freshResolved = resolveBrowserConfig(cfg.browser, cfg);
   applyResolvedConfig(params.current, freshResolved);
-}
-
-/** Resolves a profile after an optional config reload. */
-export function resolveBrowserProfileWithHotReload(params: {
-  current: BrowserServerState;
-  refreshConfigFromDisk: boolean;
-  name: string;
-}): ResolvedBrowserProfile | null {
-  refreshResolvedBrowserConfigFromDisk({
-    current: params.current,
-    refreshConfigFromDisk: params.refreshConfigFromDisk,
-  });
-  return resolveProfile(params.current.resolved, params.name);
 }

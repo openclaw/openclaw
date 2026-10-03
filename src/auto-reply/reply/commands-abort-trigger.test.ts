@@ -2,7 +2,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handleAbortTrigger } from "./commands-session-abort.js";
-import "./commands-session-abort.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const abortEmbeddedAgentRunMock = vi.hoisted(() => vi.fn());
@@ -34,12 +33,21 @@ vi.mock("./abort-cutoff.js", () => ({
   shouldPersistAbortCutoff: vi.fn(() => false),
 }));
 
-vi.mock("./abort.js", () => ({
+vi.mock("./abort-operation.js", () => ({
   abortSessionRunTargetWithOutcome: abortSessionRunTargetWithOutcomeMock,
-  formatAbortReplyText: formatAbortReplyTextMock,
-  isAbortTrigger: vi.fn((raw: string) => raw === "stop"),
-  setAbortMemory: setAbortMemoryMock,
   stopSubagentsForRequester: vi.fn(async () => ({ stopped: 0, failed: 0 })),
+}));
+
+vi.mock("./abort-trigger-text.js", () => ({
+  isAbortTrigger: vi.fn((raw: string) => raw === "stop"),
+}));
+
+vi.mock("./abort-primitives.js", () => ({
+  setAbortMemory: setAbortMemoryMock,
+}));
+
+vi.mock("./abort.js", () => ({
+  formatAbortReplyText: formatAbortReplyTextMock,
 }));
 
 vi.mock("./commands-session-store.js", () => ({
@@ -48,10 +56,7 @@ vi.mock("./commands-session-store.js", () => ({
 }));
 
 vi.mock("./reply-run-registry.js", () => ({
-  replyRunRegistry: {
-    abort: vi.fn(),
-    resolveSessionId: vi.fn(() => undefined),
-  },
+  resolveReplyOperationsForSession: vi.fn(() => []),
 }));
 
 function buildAbortParams(): HandleCommandsParams {

@@ -1,4 +1,3 @@
-// Launches and manages the local shell process used by TUI local mode.
 import { randomUUID } from "node:crypto";
 import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -35,11 +34,8 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
   let shutdownPromise: Promise<void> | undefined;
   let cancelPendingApproval: (() => void) | undefined;
   const supervisor = getProcessSupervisor();
-  const waitForScope = supervisor.waitForScope;
-  if (!waitForScope) {
-    throw new Error("process supervisor must support scope extinction before running local shells");
-  }
   const scopeKey = `tui-local:${randomUUID()}`;
+  const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
   const createSelector = deps.createSelector ?? createSearchableSelectList;
   const getCwd = deps.getCwd ?? tryProcessCwd;
   const env = deps.env ?? process.env;
@@ -134,8 +130,6 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       run = await supervisor.spawn({
         mode: "anchored-shell",
         command: cmd,
-        sessionId: scopeKey,
-        backendId: "tui-local-shell",
         scopeKey,
         cwd,
         env: { ...env, OPENCLAW_SHELL: "tui-local" },
@@ -180,8 +174,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     (shutdownPromise ??= (async () => {
       closing = true;
       cancelPendingApproval?.();
-      supervisor.cancelScope(scopeKey);
-      await waitForScope(scopeKey);
+      await cleanupScope();
     })());
 
   return { runLocalShellLine, shutdown };

@@ -1,12 +1,9 @@
-// Diffs plugin module implements plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import {
-  resolvePreferredOpenClawTmpDir,
-  type OpenClawConfig,
-  type OpenClawPluginApi,
-} from "../api.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   resolveDiffsPluginDefaults,
   resolveDiffsPluginSecurity,
@@ -41,6 +38,11 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
     }),
     logger: api.logger,
   });
+  api.registerService({
+    id: "diffs-artifact-cleanup",
+    start: () => store.startCleanup(),
+    stop: () => store.stopCleanup(),
+  });
   const resolveCurrentPluginConfig = () =>
     resolveLivePluginConfigObject(
       api.runtime.config?.current
@@ -64,7 +66,11 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
     (ctx) => {
       const pluginConfig = resolveCurrentPluginConfig();
       return createDiffsTool({
-        api,
+        getConfig: () =>
+          (ctx.getRuntimeConfig?.() ??
+            ctx.runtimeConfig ??
+            ctx.config ??
+            api.runtime.config.current()) as OpenClawConfig, // SAFETY: The tool only reads this immutable runtime snapshot.
         store,
         defaults: resolveDiffsPluginDefaults(pluginConfig),
         viewerBaseUrl: resolveDiffsPluginViewerBaseUrl(pluginConfig),

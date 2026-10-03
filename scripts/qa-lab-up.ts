@@ -42,9 +42,7 @@ function parseQaLabUpArgs(argv: readonly string[]) {
 }
 
 export const qaLabUpTesting = {
-  parseQaLabUpArgs,
   runQaLabUp,
-  usage,
 };
 
 type QaLabRuntime = typeof import("../extensions/qa-lab/src/cli.runtime.ts");
@@ -98,12 +96,8 @@ async function runQaLabUp(argv: readonly string[], deps: QaLabUpDeps = {}): Prom
   return 0;
 }
 
-async function main(argv: readonly string[]): Promise<number> {
-  return await runQaLabUp(argv);
-}
-
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
-  main(process.argv.slice(2)).then(
+  runQaLabUp(process.argv.slice(2)).then(
     (code) => {
       process.exitCode = code;
     },

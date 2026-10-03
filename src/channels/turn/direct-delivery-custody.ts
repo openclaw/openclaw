@@ -28,10 +28,8 @@ export function createDirectPendingFinalCustody(
   fallbackStorePath?: string,
 ): DirectPendingFinalCustody | undefined {
   const completion = resolvePendingFinalCompletion(payload);
-  const hasWriterAuthority = Boolean(
-    getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority,
-  );
-  if (!completion && !hasWriterAuthority) {
+  const authority = getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority;
+  if (!completion && !authority) {
     return undefined;
   }
   const identity = completion ? (({ kind: _kind, ...value }) => value)(completion) : undefined;
@@ -39,11 +37,10 @@ export function createDirectPendingFinalCustody(
   let admissionTail = Promise.resolve();
   return {
     bindPendingFinalDelivery: (nextPayload) =>
-      identity
-        ? setReplyPayloadMetadata(nextPayload, {
-            pendingFinalDeliveryCompletion: identity,
-          })
-        : nextPayload,
+      setReplyPayloadMetadata(nextPayload, {
+        ...(identity ? { pendingFinalDeliveryCompletion: identity } : {}),
+        ...(authority ? { sessionWriterDeliveryAuthority: authority } : {}),
+      }),
     assertPlatformSendAuthorized: () =>
       assertReplyPayloadSessionWriterDeliveryAuthorized(payload, fallbackStorePath),
     onPlatformSendDispatch: () => {
@@ -74,6 +71,7 @@ export function createDirectPendingFinalCustody(
 export function toCoreManagedDeliveryInfo(info: ChannelDeliveryInfo) {
   return {
     kind: info.kind,
+    ...(info.participant ? { participant: info.participant } : {}),
     ...(info.assistantMessageIndex === undefined
       ? {}
       : { assistantMessageIndex: info.assistantMessageIndex }),

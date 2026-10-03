@@ -16,7 +16,8 @@
   flex-wrap: wrap;
 }
 
-.logbook__daynav {
+.logbook__daynav,
+.logbook__actions {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -78,12 +79,6 @@
   color: var(--danger);
 }
 
-.logbook__actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .logbook__layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
@@ -96,8 +91,6 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
-
-/* ---- Timeline ---- */
 
 .logbook__timeline {
   display: flex;
@@ -132,7 +125,7 @@
 
 .logbook-card__header {
   display: grid;
-  grid-template-columns: 92px 4px minmax(0, 1fr) auto;
+  grid-template-columns: max-content 4px minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   width: 100%;
@@ -208,7 +201,7 @@
   text-transform: uppercase;
   padding: 2px 7px;
   border-radius: 999px;
-  color: hsl(var(--logbook-hue, 200) 70% 70%);
+  color: var(--text);
   background: hsl(var(--logbook-hue, 200) 60% 50% / 0.15);
 }
 
@@ -289,8 +282,6 @@
     padding-left: 12px;
   }
 }
-
-/* ---- Side panel ---- */
 
 .logbook__side {
   display: flex;

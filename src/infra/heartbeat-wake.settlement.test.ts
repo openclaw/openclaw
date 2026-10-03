@@ -1,10 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+  requestHeartbeat,
   requestHeartbeatAndWait,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
+import {
+  requestSessionEventWakeAndWait,
+  setSessionEventWakeHandler,
+} from "./session-event-wake.js";
 
 describe("heartbeat wake settlement", () => {
   let disposeHandler: (() => void) | undefined;
@@ -27,6 +33,137 @@ describe("heartbeat wake settlement", () => {
   function setHandler(handler: Parameters<typeof setHeartbeatWakeHandler>[0]) {
     disposeHandler = setHeartbeatWakeHandler(handler);
   }
+
+  it("records handler-unavailable instead of waiting for installation", async () => {
+    vi.useFakeTimers();
+    setHandler(null);
+    const controller = new AbortController();
+    const result = requestHeartbeatAndWait(
+      { source: "interval", intent: "scheduled", coalesceMs: 0 },
+      { abortSignal: controller.signal },
+    );
+    try {
+      expect(await Promise.race([result, Promise.resolve("pending")])).toEqual({
+        status: "skipped",
+        reason: "handler-unavailable",
+      });
+      const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+      setHandler(handler);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handler).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      await result;
+    }
+  });
+
+  it.each(["queued", "running"])(
+    "settles a %s waiter when its handler is removed",
+    async (phase) => {
+      vi.useFakeTimers();
+      const release = createDeferred();
+      setHandler(async () => {
+        await release.promise;
+        return { status: "ran", durationMs: 1 };
+      });
+      const controller = new AbortController();
+      const result = requestHeartbeatAndWait(
+        { source: "interval", intent: "scheduled", coalesceMs: 0 },
+        { abortSignal: controller.signal },
+      );
+      try {
+        if (phase === "running") {
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        disposeHandler?.();
+        expect(await Promise.race([result, Promise.resolve("pending")])).toEqual({
+          status: "skipped",
+          reason: "handler-unavailable",
+        });
+      } finally {
+        controller.abort();
+        release.resolve();
+        await result;
+      }
+    },
+  );
+
+  it("dispatches queued notifications after installation before a later target", async () => {
+    vi.useFakeTimers();
+    setHandler(null);
+    const wake = { source: "session-state" as const, intent: "immediate" as const };
+    requestHeartbeat({
+      ...wake,
+      sessionKey: "agent:main:ready",
+      coalesceMs: 0,
+    });
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 7 });
+    setHandler(handler);
+    const later = requestHeartbeatAndWait({
+      ...wake,
+      sessionKey: "agent:main:later",
+      coalesceMs: 5_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handler.mock.calls.map(([request]) => request.sessionKey)).toEqual(["agent:main:ready"]);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(later).resolves.toEqual({ status: "ran", durationMs: 7 });
+    expect(handler.mock.calls.map(([request]) => request.sessionKey)).toEqual([
+      "agent:main:ready",
+      "agent:main:later",
+    ]);
+  });
+
+  it("retains an awaited result across direct handler replacement", async () => {
+    vi.useFakeTimers();
+    const release = createDeferred();
+    setHandler(async () => {
+      await release.promise;
+      return { status: "ran", durationMs: 1 };
+    });
+    const result = requestHeartbeatAndWait({
+      source: "interval",
+      intent: "scheduled",
+      coalesceMs: 0,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const successor = vi.fn().mockResolvedValue({ status: "ran", durationMs: 7 });
+      setHandler(successor);
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(result).resolves.toEqual({ status: "ran", durationMs: 7 });
+      expect(successor).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+    }
+  });
+
+  it("shares one turn between the public heartbeat and session wake entry points", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 7 });
+    const dispose = setSessionEventWakeHandler(handler);
+    const wake = {
+      source: "cron" as const,
+      intent: "event" as const,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      coalesceMs: 100,
+    };
+    const settled = vi.fn();
+    try {
+      void requestHeartbeatAndWait(wake).then(settled);
+      void requestSessionEventWakeAndWait(wake).then(settled);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(settled).toHaveBeenCalledTimes(2);
+      expect(settled).toHaveBeenNthCalledWith(1, { status: "ran", durationMs: 7 });
+      expect(settled).toHaveBeenNthCalledWith(2, { status: "ran", durationMs: 7 });
+    } finally {
+      dispose();
+    }
+  });
 
   it("settles every caller represented by one coalesced wake", async () => {
     vi.useFakeTimers();
@@ -73,10 +210,7 @@ describe("heartbeat wake settlement", () => {
 
   it("detaches an aborted waiter without cancelling its shared wake", async () => {
     vi.useFakeTimers();
-    let finishChild: (() => void) | undefined;
-    const child = new Promise<void>((resolve) => {
-      finishChild = resolve;
-    });
+    const { promise: child, resolve: finishChild } = createDeferred();
     const handler = vi.fn(async () => {
       await child;
       return { status: "ran" as const, durationMs: 1 };

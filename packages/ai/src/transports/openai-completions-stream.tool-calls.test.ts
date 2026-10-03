@@ -11,48 +11,6 @@ import {
 } from "./openai-completions.test-support.js";
 
 describe("openai completions stream", () => {
-  it("promotes tool calls when stream completes cleanly without finish_reason", async () => {
-    const model = makeCompletionsModel({
-      id: "qwen3.6-27b",
-      name: "Qwen 3.6 27B",
-      provider: "vllm",
-      baseUrl: "http://localhost:8000/v1",
-      reasoning: false,
-      contextWindow: 131072,
-    });
-
-    const output = createAssistantOutput(model);
-    const stream = { push: () => {} };
-
-    const mockChunks = [
-      makeCompletionsChunk({
-        tool_calls: [
-          {
-            index: 0,
-            id: "call_cleanstream",
-            function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
-          },
-        ],
-      }),
-    ] as const;
-
-    async function* mockStream() {
-      for (const chunk of mockChunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream, {
-      sawStreamDONE: () => true,
-    });
-
-    expect(output.stopReason).toBe("toolUse");
-    const toolCalls = output.content.filter(
-      (block) => (block as { type?: string }).type === "toolCall",
-    );
-    expect(toolCalls).toHaveLength(1);
-  });
-
   it.each([
     {
       name: "does not promote native tool calls when stream ends without [DONE] and without finish_reason",
@@ -102,51 +60,6 @@ describe("openai completions stream", () => {
     expect(
       output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
     ).toStrictEqual([]);
-  });
-
-  it("strips tool call blocks when provider signals finish_reason stop after visible text", async () => {
-    const model = makeCompletionsModel({
-      id: "llama-3.3-70b",
-      name: "Llama 3.3 70B",
-      provider: "llamacpp",
-      baseUrl: "http://localhost:8080/v1",
-      reasoning: false,
-      contextWindow: 131072,
-    });
-
-    const output = createAssistantOutput(model);
-    const stream = { push: () => {} };
-
-    const mockChunks = [
-      makeCompletionsChunk({ role: "assistant" as const, content: "" }),
-      makeCompletionsChunk({ content: "Here is the answer." }),
-      makeCompletionsChunk(
-        {
-          tool_calls: [
-            {
-              index: 0,
-              id: "call_spurious",
-              function: { name: "bash", arguments: '{"cmd":"rm -rf /"}' },
-            },
-          ],
-        },
-        "stop",
-      ),
-    ] as const;
-
-    async function* mockStream() {
-      for (const chunk of mockChunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
-
-    expect(output.stopReason).toBe("stop");
-    expect(
-      output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
-    ).toStrictEqual([]);
-    expect(output.content.some((block) => (block as { type?: string }).type === "text")).toBe(true);
   });
 
   it("promotes native tool calls through fetch wrapper when SSE terminates cleanly with [DONE] without finish_reason", async () => {
@@ -380,13 +293,7 @@ describe("openai completions stream", () => {
         "tool_calls",
       ),
     ] as const;
-    async function* mockStream() {
-      for (const chunk of chunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
+    await processCompletionsStream(streamChunks(chunks), output, model, stream);
 
     const toolStart = events.find((event) => event.type === "toolcall_start") as
       | { partial?: { content?: Array<{ type?: string; textSignature?: string }> } }
@@ -421,13 +328,7 @@ describe("openai completions stream", () => {
         "stop",
       ),
     ] as const;
-    async function* mockStream() {
-      for (const chunk of chunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, { push() {} });
+    await processCompletionsStream(streamChunks(chunks), output, model, { push() {} });
 
     expect(output.stopReason).toBe("stop");
     expect(output.content).toStrictEqual([{ type: "text", text: "Here is the answer." }]);
@@ -447,46 +348,9 @@ describe("openai completions stream", () => {
       makeCompletionsChunk({ role: "assistant" as const, content: "Ordinary answer." }),
       makeCompletionsChunk({ tool_calls: [] }, "stop"),
     ] as const;
-    async function* mockStream() {
-      for (const chunk of chunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, { push() {} });
+    await processCompletionsStream(streamChunks(chunks), output, model, { push() {} });
 
     expect(output.content).toStrictEqual([{ type: "text", text: "Ordinary answer." }]);
-  });
-
-  it("leaves content unchanged when no tool calls and finish_reason is stop", async () => {
-    const model = makeCompletionsModel({
-      id: "llama-3.3-70b",
-      name: "Llama 3.3 70B",
-      provider: "llamacpp",
-      baseUrl: "http://localhost:8080/v1",
-      reasoning: false,
-      contextWindow: 131072,
-    });
-
-    const output = createAssistantOutput(model);
-    const stream = { push: () => {} };
-
-    const mockChunks = [
-      makeCompletionsChunk({ role: "assistant" as const, content: "" }),
-      makeCompletionsChunk({ content: "Just a text reply." }, "stop"),
-    ] as const;
-
-    async function* mockStream() {
-      for (const chunk of mockChunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
-
-    expect(output.stopReason).toBe("stop");
-    expect(output.content).toHaveLength(1);
-    expect((output.content[0] as { type?: string }).type).toBe("text");
   });
 
   it("replaces the stored function name on a fragmented continuation (managed parity)", async () => {

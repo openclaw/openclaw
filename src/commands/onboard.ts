@@ -4,8 +4,8 @@
  * It validates global setup flags, performs optional reset handling, and then
  * routes to interactive or non-interactive onboarding.
  */
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import { formatInvalidPortOption } from "../cli/error-format.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,50 +13,32 @@ import { isValidEnvSecretRefId } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { resolveProviderMatch } from "../plugins/provider-auth-choice-helpers.js";
-import { resolvePluginProviders } from "../plugins/provider-auth-choice.runtime.js";
 import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
 import { normalizeTokenProviderInput } from "../plugins/provider-auth-input.js";
 import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import { withSetupMigrationTargetLock } from "../wizard/setup.migration-snapshot.js";
-import {
-  formatDeprecatedNonInteractiveAuthChoiceError,
-  isDeprecatedAuthChoice,
-  normalizeLegacyOnboardAuthChoice,
-  resolveDeprecatedAuthChoiceReplacement,
-} from "./auth-choice-legacy.js";
+import { resolveLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { formatAuthChoiceChoicesForCli } from "./auth-choice-options.js";
 import { GENERIC_PROVIDER_AUTH_CHOICES } from "./auth-choice-options.static.js";
-import { isGatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveOnboardingSetupTarget } from "./onboard-agent-target.js";
-import {
-  applyCustomApiConfig,
-  CustomApiError,
-  parseNonInteractiveCustomApiFlags,
-  resolveCustomProviderId,
-} from "./onboard-custom-config.js";
-import { runGuidedOnboarding } from "./onboard-guided.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
 import { hasInteractiveOnboardingTty } from "./onboard-interactive-runner.js";
-import { runInteractiveSetup } from "./onboard-interactive.js";
-import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
-import { resolveNonInteractiveApiKey as resolveNonInteractiveCredential } from "./onboard-non-interactive/api-keys.js";
 import { inferAuthChoiceFromFlags } from "./onboard-non-interactive/local/auth-choice-inference.js";
 import { applyNonInteractiveGatewayConfig } from "./onboard-non-interactive/local/gateway-config.js";
-import { rejectOnboardingOption as rejectOption } from "./onboard-options.js";
-import { validateGatewayWebSocketUrl } from "./onboard-remote.js";
 import {
-  isNodeManagerChoice,
-  isOnboardFlow,
-  type OnboardOptions,
-  type ResetScope,
-} from "./onboard-types.js";
+  rejectOnboardingOption as rejectOption,
+  validateOnboardingChoiceOptions,
+} from "./onboard-options.js";
+import { validateGatewayWebSocketUrl } from "./onboard-remote.js";
+import type { OnboardOptions, ResetScope } from "./onboard-types.js";
 
 const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions", "full"]);
 
@@ -138,43 +120,8 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
       }
     }
   }
-  const choiceValidations: Array<readonly [string, string | undefined, readonly string[]]> = [
-    ["--gateway-bind", opts.gatewayBind, ["loopback", "tailnet", "lan", "auto", "custom"]],
-    ["--gateway-auth", opts.gatewayAuth, ["token", "password"]],
-    ["--tailscale", opts.tailscale, ["off", "serve", "funnel"]],
-    [
-      "--custom-compatibility",
-      opts.customCompatibility,
-      ["openai", "openai-responses", "anthropic"],
-    ],
-  ];
-  for (const [flag, value, allowed] of choiceValidations) {
-    if (value !== undefined && !allowed.includes(value)) {
-      return rejectOption(
-        opts,
-        runtime,
-        `Invalid ${flag} ${JSON.stringify(value)}. Use ${allowed.map((choice) => JSON.stringify(choice)).join(", ")}.`,
-      );
-    }
-  }
-  if (opts.flow !== undefined && !isOnboardFlow(opts.flow)) {
-    return rejectOption(
-      opts,
-      runtime,
-      'Invalid --flow. Use "quickstart", "advanced", "manual", or "import".',
-    );
-  }
-  if (opts.daemonRuntime !== undefined && !isGatewayDaemonRuntime(opts.daemonRuntime)) {
-    return rejectOption(opts, runtime, 'Invalid --daemon-runtime. Use "node" or "bun".');
-  }
-  if (opts.nodeManager !== undefined && !isNodeManagerChoice(opts.nodeManager)) {
-    return rejectOption(opts, runtime, 'Invalid --node-manager. Use "npm", "pnpm", or "bun".');
-  }
-  if (
-    opts.gatewayPort !== undefined &&
-    (!Number.isFinite(opts.gatewayPort) || opts.gatewayPort <= 0 || opts.gatewayPort > 65_535)
-  ) {
-    return rejectOption(opts, runtime, formatInvalidPortOption("--gateway-port"));
+  if (!validateOnboardingChoiceOptions(opts, runtime)) {
+    return false;
   }
   if (opts.gatewayTokenRefEnv !== undefined) {
     const gatewayTokenRefEnv = opts.gatewayTokenRefEnv.trim();
@@ -264,7 +211,6 @@ async function validateResetAuthChoice(params: {
   }
   const availableChoices = new Set(
     formatAuthChoiceChoicesForCli({
-      includeSkip: true,
       config: params.baseConfig,
       workspaceDir: params.workspaceDir,
       env: process.env,
@@ -345,13 +291,29 @@ async function validateResetAuthChoice(params: {
   if (!params.opts.nonInteractive || authChoice === "skip") {
     return true;
   }
+  const { resolveNonInteractiveApiKey: resolveNonInteractiveCredential } =
+    await import("./onboard-non-interactive/api-keys.js");
   const target = resolveOnboardingSetupTarget(
     params.baseConfig,
-    params.opts.agentName
-      ? { name: params.opts.agentName, workspaceDir: params.workspaceDir }
+    params.opts.agentName || params.opts.team
+      ? {
+          name: params.opts.agentName ?? "coordinator",
+          workspaceDir: params.opts.team
+            ? path.join(
+                params.workspaceDir,
+                normalizeAgentId(params.opts.agentName ?? "coordinator"),
+              )
+            : params.workspaceDir,
+        }
       : undefined,
   );
   if (authChoice === "custom-api-key") {
+    const {
+      applyCustomApiConfig,
+      CustomApiError,
+      parseNonInteractiveCustomApiFlags,
+      resolveCustomProviderId,
+    } = await import("./onboard-custom-config.js");
     try {
       const custom = parseNonInteractiveCustomApiFlags({
         baseUrl: params.opts.customBaseUrl,
@@ -384,13 +346,9 @@ async function validateResetAuthChoice(params: {
         return false;
       }
       applyCustomApiConfig({
+        ...custom,
         config: params.baseConfig,
-        baseUrl: custom.baseUrl,
-        modelId: custom.modelId,
-        compatibility: custom.compatibility,
         apiKey: undefined,
-        providerId: custom.providerId,
-        supportsImageInput: custom.supportsImageInput,
       });
     } catch (error) {
       const message =
@@ -400,11 +358,10 @@ async function validateResetAuthChoice(params: {
           : `Invalid custom provider config: ${formatErrorMessage(error)}`;
       return rejectOption(params.opts, params.runtime, message);
     }
-  }
-  if (authChoice !== "custom-api-key") {
+  } else {
     const runtimeProvider = providerAuthChoice
       ? resolveProviderMatch(
-          resolvePluginProviders({
+          (await import("../plugins/provider-auth-choice.runtime.js")).resolvePluginProviders({
             config: params.baseConfig,
             workspaceDir: params.workspaceDir,
             mode: "setup",
@@ -459,43 +416,6 @@ async function validateResetAuthChoice(params: {
   return true;
 }
 
-function validateResetMigrationImport(params: {
-  opts: OnboardOptions;
-  runtime: RuntimeEnv;
-}): boolean {
-  if (
-    !params.opts.importFrom &&
-    !params.opts.importSource &&
-    !params.opts.importSecrets &&
-    params.opts.flow !== "import"
-  ) {
-    return true;
-  }
-  return rejectOption(
-    params.opts,
-    params.runtime,
-    "Migration import cannot be combined with --reset because provider input must be planned before any state is removed. Run the import without --reset.",
-  );
-}
-
-function validateResetNonInteractiveGateway(params: {
-  opts: OnboardOptions;
-  runtime: RuntimeEnv;
-  baseConfig: OpenClawConfig;
-}): boolean {
-  if (!params.opts.nonInteractive || (params.opts.mode ?? "local") === "remote") {
-    return true;
-  }
-  return Boolean(
-    applyNonInteractiveGatewayConfig({
-      nextConfig: params.baseConfig,
-      opts: params.opts,
-      runtime: params.runtime,
-      defaultPort: resolveGatewayPort(params.baseConfig),
-    }),
-  );
-}
-
 /**
  * Interactive onboarding defaults to guided setup. Any explicit
  * setup flag beyond this allowlist keeps the classic wizard — those flags are
@@ -513,6 +433,7 @@ const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "resetScope",
   "nonInteractive",
   "agentName",
+  "team",
   "tui",
   "skipUi",
   "suppressGatewayTokenOutput",
@@ -525,16 +446,9 @@ function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
   if (opts.installDaemon !== undefined || opts.customImageInput !== undefined) {
     return true;
   }
-  for (const [key, value] of Object.entries(opts)) {
-    if (GUIDED_SAFE_ONBOARD_KEYS.has(key) || key === "installDaemon") {
-      continue;
-    }
-    if (value === undefined || value === false) {
-      continue;
-    }
-    return true;
-  }
-  return false;
+  return Object.entries(opts).some(
+    ([key, value]) => !GUIDED_SAFE_ONBOARD_KEYS.has(key) && value !== undefined && value !== false,
+  );
 }
 
 /** Runs the onboard command after normalizing legacy flags and setup mode. */
@@ -542,27 +456,19 @@ export async function setupWizardCommand(
   opts: OnboardOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  assertSupportedRuntime(runtime);
-  const originalAuthChoice = opts.authChoice;
-  const normalizedAuthChoice = normalizeLegacyOnboardAuthChoice(originalAuthChoice, {
-    env: process.env,
-  });
-  if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
+  await assertSupportedRuntime(runtime);
+  const { authChoice: normalizedAuthChoice, deprecated } = resolveLegacyOnboardAuthChoice(
+    opts.authChoice,
+    { env: process.env },
+  );
+  if (opts.nonInteractive && deprecated) {
     // Non-interactive output must be deterministic; reject deprecated aliases
     // instead of printing prompts or compatibility guidance mid-flow.
-    rejectOption(
-      opts,
-      runtime,
-      formatDeprecatedNonInteractiveAuthChoiceError(originalAuthChoice, {
-        env: process.env,
-      })!,
-    );
+    rejectOption(opts, runtime, deprecated.nonInteractiveError);
     return;
   }
-  if (isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
-    runtime.log(
-      resolveDeprecatedAuthChoiceReplacement(originalAuthChoice, { env: process.env })!.message,
-    );
+  if (deprecated) {
+    runtime.log(deprecated.message);
   }
   const flow = opts.flow === "manual" ? ("advanced" as const) : opts.flow;
   const normalizedOpts =
@@ -578,6 +484,29 @@ export async function setupWizardCommand(
     }
   }
   if (!validatePreflightOptions(normalizedOpts, runtime)) {
+    return;
+  }
+  if (normalizedOpts.workspace?.trim()) {
+    const { validateSetupWorkspacePath } = await import("../wizard/setup.workspace.js");
+    const error = validateSetupWorkspacePath(normalizedOpts.workspace.trim());
+    if (error) {
+      rejectOption(normalizedOpts, runtime, `Invalid --workspace: ${error}`);
+      return;
+    }
+  }
+  if (
+    normalizedOpts.team &&
+    (normalizedOpts.mode === "remote" ||
+      normalizedOpts.importFrom ||
+      normalizedOpts.importSource ||
+      normalizedOpts.flow === "import" ||
+      (!normalizedOpts.nonInteractive && wantsClassicInteractiveSetup(normalizedOpts)))
+  ) {
+    rejectOption(
+      normalizedOpts,
+      runtime,
+      "--team supports local guided or non-interactive onboarding. Remove classic, remote, or import options.",
+    );
     return;
   }
   if (normalizedOpts.classic && normalizedOpts.nonInteractive) {
@@ -660,10 +589,10 @@ export async function setupWizardCommand(
   }
 
   const runSetup = normalizedOpts.nonInteractive
-    ? runNonInteractiveSetup
+    ? (await import("./onboard-non-interactive.js")).runNonInteractiveSetup
     : wantsClassicInteractiveSetup(normalizedOpts)
-      ? runInteractiveSetup
-      : runGuidedOnboarding;
+      ? (await import("./onboard-interactive.js")).runInteractiveSetup
+      : (await import("./onboard-guided.js")).runGuidedOnboarding;
 
   const runSetupAfterOptionalReset = async () => {
     if (normalizedOpts.reset) {
@@ -724,15 +653,28 @@ export async function setupWizardCommand(
         return;
       }
       if (
-        !validateResetNonInteractiveGateway({
+        normalizedOpts.nonInteractive &&
+        (normalizedOpts.mode ?? "local") !== "remote" &&
+        !(await applyNonInteractiveGatewayConfig({
+          nextConfig: setupBaseConfig,
           opts: normalizedOpts,
           runtime,
-          baseConfig: setupBaseConfig,
-        })
+          defaultPort: resolveGatewayPort(setupBaseConfig),
+        }))
       ) {
         return;
       }
-      if (!validateResetMigrationImport({ opts: normalizedOpts, runtime })) {
+      if (
+        normalizedOpts.importFrom ||
+        normalizedOpts.importSource ||
+        normalizedOpts.importSecrets ||
+        normalizedOpts.flow === "import"
+      ) {
+        rejectOption(
+          normalizedOpts,
+          runtime,
+          "Migration import cannot be combined with --reset because provider input must be planned before any state is removed. Run the import without --reset.",
+        );
         return;
       }
       // Reset is deliberately the final pre-dispatch step: no rejectable option

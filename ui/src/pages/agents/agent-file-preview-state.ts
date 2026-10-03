@@ -1,5 +1,21 @@
 import { t } from "../../i18n/index.ts";
 
+export function countWords(text: string) {
+  const normalized = text.trim();
+  return normalized ? normalized.split(/\s+/).length : 0;
+}
+
+export function countLines(text: string) {
+  return text.length === 0 ? 0 : text.split(/\r?\n/).length;
+}
+
+export function estimateReadingTimeLabel(wordCount: number) {
+  if (wordCount <= 0) {
+    return t("agents.files.emptyDraft");
+  }
+  return t("agents.files.minRead", { count: String(Math.max(1, Math.round(wordCount / 220))) });
+}
+
 export function setPreviewExpandButtonState(
   button: Element | null | undefined,
   isFullscreen: boolean,
@@ -11,7 +27,7 @@ export function setPreviewExpandButtonState(
   button.classList.toggle("is-fullscreen", isFullscreen);
   button.setAttribute("aria-pressed", String(isFullscreen));
   button.setAttribute("aria-label", label);
-  button.setAttribute("title", label);
+  button.closest("openclaw-tooltip")?.setAttribute("content", label);
 }
 
 export function resetAgentFilePreview(modal: HTMLElement) {

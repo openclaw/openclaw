@@ -21,8 +21,8 @@ describe("resolveSlackListenerEventScope", () => {
         client: listenerClient,
       });
       expect(result?.client).toBe(listenerClient);
-      expect(result?.uploadCompletionClient).toBeInstanceOf(WebClient);
-      expect(result?.uploadCompletionClient).not.toBe(listenerClient);
+      expect(result?.writeClient).toBeInstanceOf(WebClient);
+      expect(result?.writeClient).not.toBe(listenerClient);
     },
   );
 
@@ -46,12 +46,7 @@ describe("resolveSlackListenerEventScope", () => {
       retryConfig: { retries: 0 },
       fetch: (_input, init) => {
         encodedRequestBody = typeof init?.body === "string" ? init.body : "";
-        return Promise.resolve(
-          new Response(JSON.stringify({ ok: true, ts: "123.456", channel: "C123" }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-        );
+        return Promise.resolve(Response.json({ ok: true, ts: "123.456", channel: "C123" }));
       },
     });
     const methodPayload = { channel: "C123", text: "hello" };

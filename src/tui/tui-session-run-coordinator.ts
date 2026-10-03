@@ -1,4 +1,3 @@
-// Owns bounded TUI run state, transcript persistence, and serialized history reloads.
 import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import { getPendingSubmitAcceptedRunId, hasPendingSubmit } from "./tui-submit-state.js";
@@ -45,8 +44,7 @@ type SessionRunObservation = { seenAt: number };
 
 type TuiSessionRunCoordinatorContext = {
   state: TuiStateAccess;
-  loadHistory?: () => Promise<TuiHistoryLoadResult>;
-  refreshSessionInfo?: () => Promise<void>;
+  loadHistory: () => Promise<TuiHistoryLoadResult>;
   restoreTerminalError: (message: string) => void;
   requestRender: (force?: boolean) => void;
   finalizeHistoryOwnedRun: (run: HistoryOwnedRun) => void;
@@ -69,7 +67,6 @@ export class TuiSessionRunCoordinator {
 
   private readonly historyReloadRuns = new Map<string, TuiHistoryReloadRun>();
   private readonly confirmedStreamRunIds = new Set<string>();
-  private readonly retiredOrphanRunIds = new Map<string, number>();
   private rejectUnconfirmedRuns = false;
   private readonly historyReloadRunner = createTuiRefreshCoalescer(() =>
     this.drainHistoryReloadQueue(),
@@ -133,7 +130,6 @@ export class TuiSessionRunCoordinator {
       return;
     }
     if (confirmedRun) {
-      this.retiredOrphanRunIds.delete(runId);
       this.confirmedStreamRunIds.add(runId);
       if (this.confirmedStreamRunIds.size > MAX_TRACKED_RUNS) {
         for (const protectedRunId of this.confirmedStreamRunIds) {
@@ -152,10 +148,7 @@ export class TuiSessionRunCoordinator {
   }
 
   isRetiredOrphanRun(runId: string): boolean {
-    return (
-      this.retiredOrphanRunIds.has(runId) ||
-      (this.rejectUnconfirmedRuns && !this.sessionRuns.has(runId))
-    );
+    return this.rejectUnconfirmedRuns && !this.sessionRuns.has(runId);
   }
 
   isHistoryTerminalDiagnosticRun(runId: string): boolean {
@@ -238,9 +231,7 @@ export class TuiSessionRunCoordinator {
           continue;
         }
         this.forgetSessionRun(candidateRunId);
-        this.retiredOrphanRunIds.set(candidateRunId, Date.now());
       }
-      this.pruneRunMap(this.retiredOrphanRunIds);
     }
   }
 
@@ -323,11 +314,8 @@ export class TuiSessionRunCoordinator {
   }
 
   private async loadHistoryPreservingTerminalErrors(): Promise<TuiHistoryLoadResult> {
-    if (!this.context.loadHistory) {
-      return { loaded: false };
-    }
     const generation = this.historyReloadGeneration;
-    const result = (await this.context.loadHistory()) ?? { loaded: false };
+    const result = await this.context.loadHistory();
     if (!result.loaded || generation !== this.historyReloadGeneration) {
       return result;
     }
@@ -346,7 +334,7 @@ export class TuiSessionRunCoordinator {
   }
 
   private async drainHistoryReloadQueue(): Promise<void> {
-    if (!this.historyReloadQueued || !this.context.loadHistory) {
+    if (!this.historyReloadQueued) {
       return;
     }
 
@@ -431,15 +419,6 @@ export class TuiSessionRunCoordinator {
     const displayed = new Set(displayedRunIds);
     const queuedRunIds = runIds ?? [];
 
-    if (!this.context.loadHistory) {
-      for (const runId of queuedRunIds) {
-        if (historyOwned.has(runId)) {
-          this.noteFinalizedRun(runId, { displayedFinal: true });
-        }
-      }
-      return (this.context.refreshSessionInfo?.() ?? Promise.resolve()).then(isCurrent, isCurrent);
-    }
-
     if (runIds === undefined) {
       this.historyReloadQueued = true;
     }
@@ -463,10 +442,6 @@ export class TuiSessionRunCoordinator {
   }
 
   queueGapHistoryReload(runIds: Iterable<string>, displayedRunIds: Iterable<string> = []): void {
-    if (!this.context.loadHistory) {
-      void this.context.refreshSessionInfo?.();
-      return;
-    }
     const trackedRunIds = Array.from(runIds);
     if (trackedRunIds.length === 0) {
       void this.queueHistoryReload();
@@ -492,7 +467,6 @@ export class TuiSessionRunCoordinator {
     this.postFinalizingRuns.clear();
     this.historyReloadRuns.clear();
     this.confirmedStreamRunIds.clear();
-    this.retiredOrphanRunIds.clear();
     this.rejectUnconfirmedRuns = false;
     this.historyReloadQueued = false;
     this.pendingHistoryRefresh = false;

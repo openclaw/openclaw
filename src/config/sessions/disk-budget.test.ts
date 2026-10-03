@@ -23,7 +23,7 @@ import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 async function expectPathExists(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).resolves.toBeUndefined();
+  await fs.access(targetPath);
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -619,7 +619,8 @@ describe("enforceSessionDiskBudget", () => {
         "keep.checkpoint.22222222-2222-4222-8222-222222222222.jsonl",
       );
       const referencedPostCompactionPath = path.join(dir, "keep-compacted.jsonl");
-      const store: Record<string, SessionEntry> = {
+      // Historical metadata is deliberately outside the current session model.
+      const store = {
         "agent:main:main": {
           sessionId,
           updatedAt: Date.now(),

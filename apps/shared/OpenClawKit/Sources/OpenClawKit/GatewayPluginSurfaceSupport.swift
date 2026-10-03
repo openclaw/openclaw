@@ -1,13 +1,64 @@
 import Foundation
 
 public enum GatewayPluginSurfaceURL {
-    static func resolveHTTPURL(raw: String, against activeGatewayURL: URL?) -> URL? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+    /// Callers validate their relative target namespace before attaching its encoded path.
+    public static func appendingTarget(_ target: URLComponents, toCapabilitySurface rawSurfaceURL: String?) -> URL? {
+        guard let raw = rawSurfaceURL?.trimmedNonEmpty,
+              var surface = URLComponents(string: raw),
+              let scheme = surface.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              surface.host?.isEmpty == false,
+              surface.user == nil,
+              surface.password == nil,
+              surface.percentEncodedQuery == nil,
+              surface.fragment == nil
+        else { return nil }
+
+        let segments = surface.percentEncodedPath.split(separator: "/", omittingEmptySubsequences: true)
+        guard segments.count >= 3,
+              segments[segments.count - 3] == "__openclaw__",
+              segments[segments.count - 2] == "cap",
+              let capability = String(segments[segments.count - 1]).removingPercentEncoding,
+              !capability.isEmpty
+        else { return nil }
+
+        var surfacePath = surface.percentEncodedPath
+        while surfacePath.hasSuffix("/") {
+            surfacePath.removeLast()
+        }
+        surface.percentEncodedPath = surfacePath + target.percentEncodedPath
+        surface.percentEncodedQuery = target.percentEncodedQuery
+        surface.fragment = target.fragment
+        return surface.url
+    }
+
+    static func resolveHTTPURL(
+        raw: String,
+        against activeGatewayURL: URL?,
+        relativeToGatewayContext: Bool = false) -> URL?
+    {
+        guard let trimmed = raw.trimmedNonEmpty else { return nil }
         if let absolute = URL(string: trimmed),
            let scheme = absolute.scheme?.lowercased()
         {
             return scheme == "http" || scheme == "https" ? absolute : nil
+        }
+        if relativeToGatewayContext {
+            guard let activeGatewayURL,
+                  var gateway = URLComponents(url: activeGatewayURL, resolvingAgainstBaseURL: false),
+                  let scheme = gateway.scheme?.lowercased(), scheme == "ws" || scheme == "wss",
+                  gateway.host != nil, gateway.user == nil, gateway.password == nil,
+                  let reference = URLComponents(string: trimmed), reference.host == nil,
+                  !reference.path.isEmpty,
+                  !reference.path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." })
+            else { return nil }
+            // Setup endpoints name a Gateway mount; arbitrary WebSocket paths do not.
+            // Explicit callers keep encoded namespace bytes and never deduplicate prefixes.
+            gateway.scheme = scheme == "wss" ? "https" : "http"
+            gateway.percentEncodedPath += (gateway.percentEncodedPath.hasSuffix("/") ? "" : "/") +
+                reference.percentEncodedPath.drop(while: { $0 == "/" })
+            gateway.percentEncodedQuery = reference.percentEncodedQuery
+            gateway.percentEncodedFragment = reference.percentEncodedFragment
+            return gateway.url
         }
         guard let canonical = canonicalize(raw: trimmed, against: activeGatewayURL),
               let url = URL(string: canonical),
@@ -18,8 +69,7 @@ public enum GatewayPluginSurfaceURL {
     }
 
     public static func canonicalize(raw: String?, against activeGatewayURL: URL?) -> String? {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return nil }
+        guard let trimmed = raw?.trimmedNonEmpty else { return nil }
         guard var parsed = URLComponents(string: trimmed) else { return trimmed }
 
         let parsedHost = parsed.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

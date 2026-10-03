@@ -1,7 +1,11 @@
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  resolveChannelDraftStreamingChunking,
+  resolveChannelStreamingBlockEnabled,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { BlockReplyContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { TelegramBotDeps } from "./bot-deps.js";
 import type {
   TelegramDispatchTurn as Turn,
   TelegramDispatchTurnConfig as TurnConfig,
@@ -9,21 +13,25 @@ import type {
   TelegramDraftStateSlice,
   TelegramQueuedAnswerBlockRotation,
   TelegramSplitLaneSegmentsResult,
-  TelegramAnswerBlockDelivery,
 } from "./bot-message-dispatch.types.js";
-import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
-import { createTelegramDraftStream, type TelegramDraftPreview } from "./draft-stream.js";
-import { renderTelegramHtmlText } from "./format.js";
-import type { DraftLaneState, LaneName } from "./lane-delivery.js";
-import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
+import type { TelegramDraftPreview } from "./draft-stream-message.js";
+import { createTelegramDraftStream } from "./draft-stream.js";
+import type { DraftLaneState, LaneName } from "./lane-delivery-text-deliverer.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
-import { buildTelegramRichMarkdown, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
+import { buildTelegramRichMarkdownPlan, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { reportTelegramProviderDelivery } from "./send-outbound.js";
 import { recordSentMessage } from "./sent-message-cache.js";
+import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./text-chunk-limit.js";
 
 const draftLogger = createSubsystemLogger("telegram/draft-stream");
 const DRAFT_MIN_INITIAL_CHARS = 30;
+
+type Cancel = NonNullable<
+  Parameters<
+    TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
+  >[0]["dispatcherOptions"]["onBeforeDeliverCancelled"]
+>;
 
 function resolveDraftPartialText(
   previous: string,
@@ -37,20 +45,19 @@ function resolveDraftPartialText(
 }
 
 function renderStreamText(
-  turn: Pick<Turn, "tableMode" | "telegramCfg">,
+  turn: Pick<Turn, "richMessages" | "tableMode" | "telegramCfg">,
   text: string,
 ): TelegramDraftPreview {
-  return turn.telegramCfg.richMessages === true
+  return turn.richMessages
     ? {
         text,
-        richMessage: buildTelegramRichMarkdown(text, {
+        richMessage: buildTelegramRichMarkdownPlan(text, {
           tableMode: turn.tableMode,
           skipEntityDetection: turn.telegramCfg.linkPreview === false,
-        }),
+        }).richMessage,
       }
     : {
-        text: renderTelegramHtmlText(text, { tableMode: turn.tableMode }),
-        parseMode: "HTML",
+        text,
         markdownSource: { text, tableMode: turn.tableMode },
       };
 }
@@ -81,15 +88,17 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
   const draftMaxChars =
     params.streamMode === "block"
       ? Math.min(
-          resolveTelegramDraftStreamingChunking(params.cfg, params.context.route.accountId)
-            .maxChars,
+          resolveChannelDraftStreamingChunking(
+            params.cfg,
+            "telegram",
+            params.context.route.accountId,
+            { fallbackLimit: TELEGRAM_TEXT_CHUNK_LIMIT },
+          ).maxChars,
           params.textLimit,
         )
       : Math.min(
           params.textLimit,
-          params.telegramCfg.richMessages === true
-            ? TELEGRAM_RICH_TEXT_LIMIT
-            : TELEGRAM_TEXT_CHUNK_LIMIT,
+          params.richMessages ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_TEXT_CHUNK_LIMIT,
         );
   const renderDraftText = (text: string): TelegramDraftPreview => renderStreamText(params, text);
 
@@ -102,9 +111,13 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
           thread: params.context.threadSpec,
           replyToMessageId: params.draftReplyToMessageId,
           replyToMode: params.replyToMode,
-          richMessages: params.telegramCfg.richMessages,
+          replyQuote:
+            params.draftReplyToMessageId != null
+              ? params.replyQuoteByMessageId[String(params.draftReplyToMessageId)]
+              : undefined,
+          richMessages: params.richMessages,
           linkPreview: params.telegramCfg.linkPreview,
-          minInitialChars: params.streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS,
+          minInitialChars: DRAFT_MIN_INITIAL_CHARS,
           renderText: renderDraftText,
           onRetainedPage: (page) => {
             lanes[laneName].retainedPromptContextPages.push({
@@ -125,7 +138,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
               }
             : {}),
           onProviderMessage: async (message) => {
-            recordSentMessage(params.context.chatId, message.message_id, params.cfg, {
+            await recordSentMessage(params.context.chatId, message.message_id, params.cfg, {
               accountId: params.context.route.accountId,
               agentId: params.opts.ownerAgentId,
             });
@@ -179,9 +192,12 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
       ? false
       : typeof resolvedBlockStreamingEnabled === "boolean"
         ? !resolvedBlockStreamingEnabled
-        : canStreamAnswerDraft
-          ? true
-          : undefined;
+        : !params.allowProviderPreview && !params.context.ctxPayload.GroupThread
+          ? // Hooked blocks replace gated drafts, but preserve an explicit global opt-out.
+            params.cfg.agents?.defaults?.blockStreamingDefault === "off"
+          : canStreamAnswerDraft
+            ? true
+            : undefined;
 
   return {
     answerLane: lanes.answer,
@@ -194,11 +210,11 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
       params.resolvedReasoningLevel === "on" || Boolean(lanes.reasoning.stream),
     lastAnswerPartialText: "",
     activeAnswerDraftIsToolProgressOnly: false,
-    activeAnswerBlockAssistantMessageIndex: undefined as number | undefined,
-    activeAnswerBlockDelivery: undefined as TelegramAnswerBlockDelivery | undefined,
-    queuedAnswerBlockRotations: [] as TelegramQueuedAnswerBlockRotation[],
-    queuedAnswerBlockAssistantMessageIndex: undefined as number | undefined,
-    pendingAnswerBlockAssistantMessageIndex: undefined as number | undefined,
+    activeAnswerBlockAssistantMessageIndex: undefined,
+    activeAnswerBlockDelivery: undefined,
+    queuedAnswerBlockRotations: [],
+    queuedAnswerBlockAssistantMessageIndex: undefined,
+    pendingAnswerBlockAssistantMessageIndex: undefined,
     rotateAnswerLaneWhenQueuedBlocksSettle: false,
     draftEventQueue: Promise.resolve(),
   };
@@ -206,13 +222,11 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
 
 export function resetLaneState(turn: Turn, lane: DraftLaneState): void {
   lane.lastPartialText = "";
-  if (lane === turn.answerLane) {
-    turn.lastAnswerPartialText = "";
-  }
   lane.hasStreamedMessage = false;
   lane.finalized = false;
   lane.retainedPromptContextPages = [];
   if (lane === turn.answerLane) {
+    turn.lastAnswerPartialText = "";
     turn.activeAnswerDraftIsToolProgressOnly = false;
     turn.pendingAnswerBlockAssistantMessageIndex = undefined;
     turn.activeAnswerBlockDelivery = undefined;
@@ -227,30 +241,46 @@ export function repositionLaneForNewMessage(turn: Turn, lane: DraftLaneState): v
 }
 
 export async function rotateLaneForNewMessage(turn: Turn, lane: DraftLaneState): Promise<void> {
-  if (!lane.hasStreamedMessage && typeof lane.stream?.messageId() !== "number") {
-    resetLaneState(turn, lane);
-    return;
+  if (lane.hasStreamedMessage || typeof lane.stream?.messageId() === "number") {
+    // Settle pending edits before changing stream identity; reset only after the
+    // new Telegram message is selected or delivery state can describe the old one.
+    await lane.stream?.stop();
+    lane.stream?.forceNewMessage();
   }
-  // Settle pending edits before changing stream identity; reset only after the
-  // new Telegram message is selected or delivery state can describe the old one.
-  await lane.stream?.stop();
-  lane.stream?.forceNewMessage();
   resetLaneState(turn, lane);
+}
+
+export async function retireAnswerLane(
+  turn: Turn,
+  previewCleanup: "defer" | "clear" = "defer",
+): Promise<void> {
+  const lane = turn.answerLane;
+  if (lane.finalized) {
+    // Accepted messages outlive the progress window that originally carried them.
+    await rotateLaneForNewMessage(turn, lane);
+  } else if (previewCleanup === "defer") {
+    repositionLaneForNewMessage(turn, lane);
+  } else {
+    // Clear settles in-flight sends and stops the stream before it can reopen.
+    await lane.stream?.clear();
+    lane.stream?.forceNewMessage();
+    resetLaneState(turn, lane);
+  }
 }
 
 export async function rotateAnswerLaneForNewMessage(turn: Turn) {
   // An accepted block must become durable before rotation; otherwise cleanup
   // can discard its only visible preview.
   await turn.materializeAnswerLaneBeforeRotation();
-  await rotateLaneForNewMessage(turn, turn.answerLane);
+  await retireAnswerLane(turn);
 }
 
-export async function rotateAnswerLaneAfterToolProgress(turn: Turn): Promise<boolean> {
+async function rotateAnswerLaneAfterToolProgress(turn: Turn): Promise<boolean> {
   if (!turn.activeAnswerDraftIsToolProgressOnly) {
     return false;
   }
-  repositionLaneForNewMessage(turn, turn.answerLane);
-  turn.progressCompositor.suppress();
+  await retireAnswerLane(turn);
+  turn.progressCompositor.resetActivity({ suppressed: true });
   turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
   return true;
 }
@@ -271,10 +301,10 @@ export async function prepareAnswerLaneForText(turn: Turn): Promise<boolean> {
   if (turn.streamMode === "progress") {
     return false;
   }
-  if (await rotateAnswerLaneAfterToolProgress(turn)) {
-    return true;
-  }
-  if (await rotateAnswerLaneAfterQueuedBlocksSettle(turn)) {
+  if (
+    (await rotateAnswerLaneAfterToolProgress(turn)) ||
+    (await rotateAnswerLaneAfterQueuedBlocksSettle(turn))
+  ) {
     return true;
   }
   if (!turn.answerLane.finalized) {
@@ -347,7 +377,7 @@ function updateTelegramDraftFromPartial(
   }
   if (lane === turn.answerLane) {
     turn.activeAnswerDraftIsToolProgressOnly = false;
-    turn.progressCompositor.suppress();
+    turn.progressCompositor.resetActivity({ suppressed: true });
     turn.lastAnswerPartialText = nextText;
   }
   lane.hasStreamedMessage = true;
@@ -465,7 +495,9 @@ export async function prepareQueuedAnswerBlock(
   ) {
     return;
   }
-  turn.progressCompositor.reset();
+  if (turn.streamMode !== "progress") {
+    turn.progressCompositor.resetActivity();
+  }
   const assistantMessageIndex = blockContext?.assistantMessageIndex;
   if (assistantMessageIndex === undefined) {
     turn.queuedAnswerBlockRotations.push({
@@ -535,6 +567,18 @@ export function dropQueuedAnswerBlockRotation(
   recomputeTelegramQueuedAnswerBlockRotations(turn);
 }
 
+export function handleBeforeDeliverCancelled(
+  turn: Turn,
+  payload: Parameters<Cancel>[0],
+  info: Parameters<Cancel>[1],
+): ReturnType<Cancel> {
+  return info.kind === "block"
+    ? enqueueDraftEvent(turn, async () => {
+        dropQueuedAnswerBlockRotation(turn, payload, info.assistantMessageIndex);
+      })
+    : undefined;
+}
+
 export function isQueuedAnswerBlock(
   turn: Turn,
   payload: ReplyPayload,
@@ -546,6 +590,7 @@ export function isQueuedAnswerBlock(
 }
 
 export function beginDraftQueuedFollowup(turn: Turn): void {
+  turn.progressContinuationAdopted = false;
   for (const lane of [turn.answerLane, turn.reasoningLane]) {
     if (!lane.stream) {
       continue;
@@ -556,21 +601,7 @@ export function beginDraftQueuedFollowup(turn: Turn): void {
 }
 
 export async function cleanupDrafts(turn: Turn, superseded: boolean): Promise<void> {
-  for (const lane of [turn.answerLane, turn.reasoningLane]) {
-    const stream = lane.stream;
-    if (!stream) {
-      continue;
-    }
-    if (superseded) {
-      await (typeof stream.discard === "function" ? stream.discard() : stream.stop());
-    } else if (lane.finalized) {
-      await stream.stop();
-    } else {
-      await stream.clear();
-    }
-  }
+  await turn.previewLifecycle.cleanup({
+    failed: superseded || turn.dispatchError != null || turn.agentRunFailed,
+  });
 }
-
-export const waitForDraftEvents = (turn: Turn) => turn.draftEventQueue;
-
-export const flushDraftLane = (_turn: Turn, lane: DraftLaneState) => lane.stream?.flush();

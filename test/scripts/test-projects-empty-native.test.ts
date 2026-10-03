@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { JsonTestResults } from "vitest/node";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { createPreparedVitestCliFixture } from "./run-vitest-bounded-fixture.test-support.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const target = "test/scripts/empty-policy.synthetic.test.ts";
@@ -13,11 +14,40 @@ const sibling = "test/scripts/empty-policy-sibling.synthetic.test.ts";
 const source = "test/scripts/empty-policy.synthetic.ts";
 const isolated = "test/scripts/control-ui-i18n.test.ts";
 const config = "test/vitest/vitest.tooling.config.ts";
+const preparedCli = createPreparedVitestCliFixture(
+  repoRoot,
+  ["run-vitest.mts", "test-projects.mts"],
+  { prepareWorkerArtifacts: true },
+);
+beforeAll(() => preparedCli.prepare());
+afterAll(() => preparedCli.cleanup());
 
 describe("project runner native empty-file policy", () => {
   it.for([
     { name: "delegated default", code: 1 },
     { name: "package test entry default", code: 1, entry: "projects" },
+    {
+      name: "projects compound help executes",
+      code: 0,
+      entry: "projects",
+      excluded: false,
+      tests: 1,
+      flags: ["--help", "--no-help"],
+    },
+    {
+      name: "projects compound help validates",
+      code: 1,
+      entry: "projects",
+      flags: ["--help", "--no-help", "--passWithNoTests", "--passWithNoTests"],
+      invalid: true,
+    },
+    {
+      name: "projects compound help metadata",
+      code: 0,
+      entry: "projects",
+      flags: ["--no-help", "--help", "--unknown-router-option"],
+      help: true,
+    },
     { name: "several exact files", code: 1, selectors: [target, sibling] },
     {
       name: "exact files across lanes",
@@ -154,7 +184,7 @@ describe("project runner native empty-file policy", () => {
         XDG_CONFIG_HOME: path.join(root, "config"),
         TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
         TSX_DISABLE_CACHE: "1",
-        NODE_DISABLE_COMPILE_CACHE: "1",
+        NODE_COMPILE_CACHE: path.join(preparedCli.root, "node-compile-cache"),
         COREPACK_ENABLE_NETWORK: "0",
         GIT_OPTIONAL_LOCKS: "0",
         CI: "1",
@@ -163,7 +193,6 @@ describe("project runner native empty-file policy", () => {
         OPENCLAW_TEST_PROJECTS_TIMINGS: "0",
         OPENCLAW_VITEST_MAX_WORKERS: "1",
         OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "module-cache"),
-        OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0",
         ...(scenario.parallel ? { OPENCLAW_TEST_PROJECTS_PARALLEL: "2" } : {}),
       };
       for (const name of ["home", "state", "tmp", "cache", "config"]) {
@@ -176,7 +205,7 @@ describe("project runner native empty-file policy", () => {
             bin,
             args: commandArgs,
             cwd: root,
-            env,
+            env: preparedCli.env(env),
             signal,
             stdio: ["ignore", "pipe", "pipe"],
             timeoutMs: 45_000,
@@ -205,8 +234,12 @@ it${scenario.skipped ? ".skip" : ""}("records execution", () => fs.appendFileSyn
       const output = path.join(root, "native.json");
       const args = [
         ...(scenario.entry === "projects"
-          ? ["--import", "tsx", path.join(repoRoot, "scripts/test-projects.mts")]
-          : [path.join(repoRoot, "scripts/run-vitest.mjs")]),
+          ? [
+              "--import",
+              path.join(preparedCli.root, "scripts/tsx.mjs"),
+              path.join(preparedCli.root, "scripts/test-projects.mts"),
+            ]
+          : [path.join(preparedCli.root, "scripts/run-vitest.mjs")]),
         ...(scenario.selectors ?? [target]),
         ...(scenario.emptyInvocations
           ? ["--reporter=verbose"]
@@ -241,6 +274,7 @@ it${scenario.skipped ? ".skip" : ""}("records execution", () => fs.appendFileSyn
         ).toHaveLength(scenario.emptyInvocations);
       } else if (scenario.help) {
         expect(stdout.text().match(/Usage:/gu), evidence).toHaveLength(1);
+        expect(stdout.text(), evidence).toMatch(/^vitest\//mu);
         expect(report).toBeUndefined();
       } else if (scenario.invalid) {
         expect(stderr.text()).toContain("Expected a single value for option");

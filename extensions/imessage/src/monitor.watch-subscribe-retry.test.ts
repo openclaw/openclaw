@@ -1,7 +1,10 @@
 // Imessage tests cover monitor.watch subscribe retry plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { createIMessageRpcClient, IMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import type { attachIMessageMonitorAbortHandler } from "./monitor/abort-handler.js";
@@ -30,14 +33,6 @@ vi.mock("./client.js", () => ({
 vi.mock("./monitor/abort-handler.js", () => ({
   attachIMessageMonitorAbortHandler: attachIMessageMonitorAbortHandlerMock,
 }));
-
-function createRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
 
 type MockIMessageRpcClient = IMessageRpcClient & {
   request: ReturnType<typeof vi.fn<(method: string) => Promise<unknown>>>;
@@ -88,10 +83,12 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
   });
 
   it("retries a transient watch.subscribe startup timeout without tearing down the monitor", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     const statusSink = vi.fn();
+    const firstSubscribe = createDeferred<void>();
     const firstClient = createRpcClient({
       request: async () => {
+        firstSubscribe.resolve();
         throw new Error("imsg rpc timeout (watch.subscribe)");
       },
     });
@@ -102,11 +99,13 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       .mockResolvedValueOnce(secondClient);
 
     const monitorPromise = monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config: { channels: { imessage: {} } } as never,
       runtime: runtime as never,
       statusSink,
     });
 
+    await Promise.race([firstSubscribe.promise, monitorPromise]);
     await vi.advanceTimersByTimeAsync(1_000);
     await monitorPromise;
 
@@ -150,22 +149,26 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
   });
 
   it("still fails after bounded startup retries are exhausted", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     const statusSink = vi.fn();
+    const firstSubscribe = createDeferred<void>();
     createIMessageRpcClientMock.mockImplementation(async () =>
       createRpcClient({
         request: async () => {
+          firstSubscribe.resolve();
           throw new Error("imsg rpc timeout (watch.subscribe)");
         },
       }),
     );
 
     const monitorErrorPromise = monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config: { channels: { imessage: {} } } as never,
       runtime: runtime as never,
       statusSink,
     }).catch((error: unknown) => error);
 
+    await Promise.race([firstSubscribe.promise, monitorErrorPromise]);
     await vi.advanceTimersByTimeAsync(2_000);
     const monitorError = await monitorErrorPromise;
 
@@ -198,8 +201,9 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
 
     await expect(
       monitorIMessageProvider({
+        scheduler: createTestPluginServiceScheduler(),
         config: { channels: { imessage: {} } } as never,
-        runtime: createRuntime() as never,
+        runtime: createRuntimeSpies() as never,
         statusSink,
       }),
     ).rejects.toThrow("permission denied");
@@ -210,77 +214,121 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     );
   });
 
-  it("logs one redacted diagnostic for repeated from-me drops", async () => {
-    vi.useRealTimers();
-    installIMessageStateRuntimeForTest();
-    const runtime = createRuntime();
-    let onNotification:
-      | ((message: { method: string; params: unknown }) => void | Promise<void>)
-      | undefined;
-    const runId = Date.now();
-    const client = createRpcClient({
-      waitForClose: async () => {
-        for (const [id, guid] of [
-          [43, `p:0/outbound-guid-${runId}`],
-          [44, `p:0/second-outbound-guid-${runId}`],
-        ] as const) {
-          await onNotification?.({
-            method: "message",
-            params: {
-              message: {
-                id,
-                chat_id: 456,
-                guid,
-                sender: "+15550001111",
-                is_from_me: true,
-                is_group: true,
-                text: "private message text",
-                created_at: new Date().toISOString(),
+  it.each([
+    { reason: "from me", groupScope: "none" },
+    { reason: "no mention", groupScope: "none" },
+    { reason: "no mention", groupScope: "account" },
+    { reason: "no mention", groupScope: "root" },
+  ])(
+    "logs one diagnostic per chat for $reason drops (groups scope: $groupScope)",
+    async ({ reason, groupScope }) => {
+      vi.useRealTimers();
+      installIMessageStateRuntimeForTest();
+      const runtime = createRuntimeSpies();
+      let onNotification:
+        | ((message: { method: string; params: unknown }) => void | Promise<void>)
+        | undefined;
+      const runId = Date.now();
+      const client = createRpcClient({
+        waitForClose: async () => {
+          for (const [id, chatId, guid] of [
+            [43, 456, `p:0/outbound-guid-${runId}`],
+            [44, 456, `p:0/second-outbound-guid-${runId}`],
+            [45, 457, `p:0/other-chat-guid-${runId}`],
+          ] as const) {
+            await onNotification?.({
+              method: "message",
+              params: {
+                message: {
+                  id,
+                  chat_id: chatId,
+                  guid,
+                  sender: "+15550001111",
+                  is_from_me: reason === "from me",
+                  is_group: true,
+                  text: "private message text",
+                  created_at: new Date().toISOString(),
+                },
               },
+            });
+          }
+          await Promise.resolve();
+          await Promise.resolve();
+        },
+      });
+      createIMessageRpcClientMock.mockImplementation(async (params) => {
+        onNotification = params?.onNotification;
+        return client;
+      });
+
+      await monitorIMessageProvider({
+        scheduler: createTestPluginServiceScheduler(),
+        config: {
+          agents: { entries: { main: { identity: { name: "Claw" } } } },
+          channels: {
+            imessage: {
+              dmPolicy: "open",
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+15550001111"],
+              ...(groupScope !== "none"
+                ? {
+                    groups: {
+                      "*": { requireMention: groupScope === "root" },
+                      "999": { requireMention: false, tools: { deny: ["exec"] } },
+                    },
+                    accounts: {
+                      default:
+                        groupScope === "account"
+                          ? { groups: { "*": { requireMention: true } } }
+                          : {},
+                    },
+                  }
+                : {}),
             },
-          });
-        }
-        await Promise.resolve();
-        await Promise.resolve();
-      },
-    });
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      onNotification = params?.onNotification;
-      return client;
-    });
+          },
+        },
+        runtime: runtime as never,
+      });
 
-    await monitorIMessageProvider({
-      config: { channels: { imessage: { dmPolicy: "open", groupPolicy: "open" } } } as never,
-      runtime: runtime as never,
-    });
-
-    await new Promise((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    expect(runtime.error.mock.calls).toEqual([]);
-    expect(runtime.log.mock.calls.map(([message]) => String(message))).toEqual([
-      expect.stringContaining('reason="from me"'),
-    ]);
-    const diagnostics = runtime.log.mock.calls
-      .map(([message]) => String(message))
-      .filter((message) => message.includes('reason="from me"'));
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]).toContain(
-      'account=default reason="from me" chat_id=456 group=true message_id=43 guid=present',
-    );
-    expect(diagnostics[0]).not.toContain("outbound-guid");
-    expect(diagnostics[0]).not.toContain("private message text");
-    expect(diagnostics[0]).not.toContain("+15550001111");
-  });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(runtime.error.mock.calls).toEqual([]);
+      expect(runtime.log.mock.calls.map(([message]) => String(message))).toEqual([
+        expect.stringContaining(`reason="${reason}"`),
+        expect.stringContaining(`reason="${reason}"`),
+      ]);
+      const diagnostics = runtime.log.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) => message.includes(`reason="${reason}"`));
+      expect(diagnostics).toHaveLength(2);
+      expect(diagnostics[1]).toContain("chat_id=457");
+      expect(diagnostics[0]).toContain(
+        `account=default reason="${reason}" chat_id=456 group=true message_id=43 guid=present`,
+      );
+      expect(diagnostics[0]).not.toContain("outbound-guid");
+      expect(diagnostics[0]).not.toContain("private message text");
+      expect(diagnostics[0]).not.toContain("+15550001111");
+      if (reason === "no mention") {
+        expect(diagnostics[0]).toContain('groups["456"].requireMention=false');
+        expect(diagnostics[0]).toContain("identity");
+        const groupsPath =
+          groupScope === "account"
+            ? 'channels.imessage.accounts["default"].groups'
+            : "channels.imessage.groups";
+        expect(diagnostics[0]).toContain(`${groupsPath}["456"].requireMention=false`);
+      }
+    },
+  );
 
   it("redacts the conversation identifier in rate-limit suppression warnings", async () => {
     vi.useRealTimers();
     installIMessageStateRuntimeForTest();
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     const sender = "+15550002222";
     const chatId = 456;
     const scope = `default:chat_id:${chatId}`;
-    rememberPersistedIMessageEcho({ scope, text: "loop echo" });
+    await rememberPersistedIMessageEcho({ scope, text: "loop echo" });
     let onNotification:
       | ((message: { method: string; params: unknown }) => void | Promise<void>)
       | undefined;
@@ -315,6 +363,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     });
 
     await monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config: { channels: { imessage: { groupPolicy: "open" } } },
       runtime,
     });

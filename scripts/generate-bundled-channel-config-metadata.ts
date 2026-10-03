@@ -3,12 +3,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import { asFiniteNumber } from "../packages/normalization-core/src/number-coercion.ts";
+import { asOptionalRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import {
+  normalizeTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
+  uniqueStrings,
+} from "../packages/normalization-core/src/string-normalization.ts";
 import { loadBundledPluginPublicArtifactModuleSync } from "../src/plugins/public-surface-loader.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { formatGeneratedModule } from "./lib/format-generated-module.mts";
+import { writeGeneratedOutput } from "./lib/generated-output-utils.mts";
 import { loadChannelConfigSurfaceModule } from "./load-channel-config-surface.ts";
 
 const GENERATED_BY = "scripts/generate-bundled-channel-config-metadata.ts";
 const DEFAULT_OUTPUT_PATH = "src/config/bundled-channel-config-metadata.generated.ts";
+const IDS_OUTPUT_PATH = "src/channels/bundled-channel-ids.generated.ts";
 const GENERATED_JSON_CHUNK_SIZE = 16 * 1024;
 
 type BundledPluginSource = {
@@ -31,34 +40,6 @@ const { collectBundledPluginSources } = (await import(
     repoRoot?: string;
     requirePackageJson?: boolean;
   }) => BundledPluginSource[];
-};
-
-const { formatGeneratedModule } = (await import(
-  new URL("./lib/format-generated-module.mjs", import.meta.url).href
-)) as {
-  formatGeneratedModule: (
-    source: string,
-    options: {
-      repoRoot: string;
-      outputPath: string;
-      errorLabel: string;
-    },
-  ) => string;
-};
-
-const { writeGeneratedOutput } = (await import(
-  new URL("./lib/generated-output-utils.mjs", import.meta.url).href
-)) as {
-  writeGeneratedOutput: (params: {
-    repoRoot: string;
-    outputPath: string;
-    next: string;
-    check?: boolean;
-  }) => {
-    changed: boolean;
-    wrote: boolean;
-    outputPath: string;
-  };
 };
 
 type BundledChannelConfigMetadata = {
@@ -99,104 +80,35 @@ function resolveChannelConfigSchemaModulePath(rootDir: string): string | null {
 }
 
 function resolvePackageChannelMeta(source: BundledPluginSource) {
-  const openclawMeta =
-    source.packageJson &&
-    typeof source.packageJson === "object" &&
-    !Array.isArray(source.packageJson) &&
-    "openclaw" in source.packageJson
-      ? (source.packageJson.openclaw as Record<string, unknown> | undefined)
-      : undefined;
-  const channelMeta =
-    openclawMeta &&
-    typeof openclawMeta.channel === "object" &&
-    openclawMeta.channel &&
-    !Array.isArray(openclawMeta.channel)
-      ? (openclawMeta.channel as Record<string, unknown>)
-      : undefined;
-  return channelMeta;
+  return asOptionalRecord(asOptionalRecord(source.packageJson?.openclaw)?.channel);
 }
 
-function resolveRootLabel(source: BundledPluginSource, channelId: string): string | undefined {
-  const channelMeta = resolvePackageChannelMeta(source);
-  if (channelMeta?.id === channelId && typeof channelMeta.label === "string") {
-    return channelMeta.label.trim();
+function resolveRootText(channelValue: unknown, manifestValue: unknown): string | undefined {
+  if (typeof channelValue === "string") {
+    return channelValue.trim();
   }
-  if (typeof source.manifest?.name === "string" && source.manifest.name.trim()) {
-    return source.manifest.name.trim();
-  }
-  return undefined;
+  return typeof manifestValue === "string" && manifestValue.trim()
+    ? manifestValue.trim()
+    : undefined;
 }
 
-function resolveRootDescription(
-  source: BundledPluginSource,
-  channelId: string,
-): string | undefined {
-  const channelMeta = resolvePackageChannelMeta(source);
-  if (channelMeta?.id === channelId && typeof channelMeta.blurb === "string") {
-    return channelMeta.blurb.trim();
-  }
-  if (typeof source.manifest?.description === "string" && source.manifest.description.trim()) {
-    return source.manifest.description.trim();
-  }
-  return undefined;
+type PackageChannelMeta = ReturnType<typeof resolvePackageChannelMeta>;
+
+function resolveRootAliases(channelMeta: PackageChannelMeta): string[] {
+  return uniqueStrings(
+    normalizeTrimmedStringList(channelMeta?.aliases).map((alias) => alias.toLowerCase()),
+  ).toSorted((left, right) => left.localeCompare(right));
 }
 
-function resolveRootAliases(source: BundledPluginSource, channelId: string): string[] {
-  const channelMeta = resolvePackageChannelMeta(source);
-  if (channelMeta?.id !== channelId || !Array.isArray(channelMeta.aliases)) {
+function resolveRootChannelEnvVars(channelMeta: PackageChannelMeta): string[] {
+  const env = asOptionalRecord(asOptionalRecord(channelMeta?.configuredState)?.env);
+  if (!env) {
     return [];
   }
-  return [
-    ...new Set(
-      channelMeta.aliases
-        .map((alias) => (typeof alias === "string" ? alias.trim().toLowerCase() : ""))
-        .filter((alias) => alias.length > 0),
-    ),
-  ].toSorted((left, right) => left.localeCompare(right));
-}
-
-function resolveRootOrder(source: BundledPluginSource, channelId: string): number | undefined {
-  const channelMeta = resolvePackageChannelMeta(source);
-  const order = channelMeta?.id === channelId ? channelMeta.order : undefined;
-  return asFiniteNumber(order);
-}
-
-function resolveRootConfigurable(source: BundledPluginSource, channelId: string): boolean {
-  const channelMeta = resolvePackageChannelMeta(source);
-  const exposure =
-    channelMeta?.id === channelId &&
-    channelMeta.exposure &&
-    typeof channelMeta.exposure === "object" &&
-    !Array.isArray(channelMeta.exposure)
-      ? (channelMeta.exposure as Record<string, unknown>)
-      : null;
-  return exposure?.configured !== false;
-}
-
-function resolveRootChannelEnvVars(source: BundledPluginSource, channelId: string): string[] {
-  const channelMeta = resolvePackageChannelMeta(source);
-  if (channelMeta?.id !== channelId) {
-    return [];
-  }
-  const configuredState = channelMeta.configuredState;
-  if (!configuredState || typeof configuredState !== "object" || Array.isArray(configuredState)) {
-    return [];
-  }
-  const env = (configuredState as Record<string, unknown>).env;
-  if (!env || typeof env !== "object" || Array.isArray(env)) {
-    return [];
-  }
-  const envRecord = env as Record<string, unknown>;
-  const values = [envRecord.allOf, envRecord.anyOf].flatMap((value) =>
-    Array.isArray(value) ? value : [],
+  const values = [env.allOf, env.anyOf].flatMap((value) => (Array.isArray(value) ? value : []));
+  return normalizeUniqueTrimmedStringList(values).toSorted((left, right) =>
+    left.localeCompare(right),
   );
-  return [
-    ...new Set(
-      values
-        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-        .filter((entry) => entry.length > 0),
-    ),
-  ].toSorted((left, right) => left.localeCompare(right));
 }
 
 function formatTypeScriptModule(source: string, outputPath: string, repoRoot: string): string {
@@ -244,8 +156,7 @@ function resolveChannelUnsupportedSecretRefSurfacePatterns(
   }
 }
 
-async function collectBundledChannelConfigMetadata(params?: { repoRoot?: string }) {
-  const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
+async function collectBundledChannelConfigMetadata(repoRoot: string) {
   const sources = collectBundledPluginSources({ repoRoot, requirePackageJson: true });
   const entries: BundledChannelConfigMetadata[] = [];
 
@@ -266,13 +177,15 @@ async function collectBundledChannelConfigMetadata(params?: { repoRoot?: string 
     if (!surface?.schema) {
       continue;
     }
+    const packageChannel = resolvePackageChannelMeta(source);
     for (const channelId of channelIds) {
-      const aliases = resolveRootAliases(source, channelId);
-      const order = resolveRootOrder(source, channelId);
-      const configurable = resolveRootConfigurable(source, channelId);
-      const channelEnvVars = resolveRootChannelEnvVars(source, channelId);
-      const label = resolveRootLabel(source, channelId);
-      const description = resolveRootDescription(source, channelId);
+      const channelMeta = packageChannel?.id === channelId ? packageChannel : undefined;
+      const aliases = resolveRootAliases(channelMeta);
+      const order = asFiniteNumber(channelMeta?.order);
+      const configurable = asOptionalRecord(channelMeta?.exposure)?.configured !== false;
+      const channelEnvVars = resolveRootChannelEnvVars(channelMeta);
+      const label = resolveRootText(channelMeta?.label, source.manifest?.name);
+      const description = resolveRootText(channelMeta?.blurb, source.manifest?.description);
       const unsupportedSecretRefSurfacePatterns = resolveChannelUnsupportedSecretRefSurfacePatterns(
         source,
         channelId,
@@ -298,14 +211,10 @@ async function collectBundledChannelConfigMetadata(params?: { repoRoot?: string 
   return entries.toSorted((left, right) => left.channelId.localeCompare(right.channelId));
 }
 
-async function writeBundledChannelConfigMetadataModule(params?: {
-  repoRoot?: string;
-  outputPath?: string;
-  check?: boolean;
-}) {
-  const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
-  const outputPath = params?.outputPath ?? DEFAULT_OUTPUT_PATH;
-  const entries = await collectBundledChannelConfigMetadata({ repoRoot });
+async function writeBundledChannelConfigMetadataModule(check: boolean) {
+  const repoRoot = process.cwd();
+  const outputPath = DEFAULT_OUTPUT_PATH;
+  const entries = await collectBundledChannelConfigMetadata(repoRoot);
   const chunks = formatJsonStringChunks(entries);
   const next = formatTypeScriptModule(
     `// Auto-generated by ${GENERATED_BY}. Do not edit directly.
@@ -335,27 +244,56 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = JSON.parse(
     outputPath,
     repoRoot,
   );
-  return writeGeneratedOutput({
+  const ids = entries.map(({ channelId, aliases, order, configurable, label }) => ({
+    channelId,
+    aliases,
+    order,
+    configurable,
+    label,
+  }));
+  const idsModule = formatTypeScriptModule(
+    `// Auto-generated by ${GENERATED_BY}. Do not edit directly.
+
+type BundledChannelIdMetadata = {
+  channelId: string;
+  aliases?: readonly string[];
+  order?: number;
+  configurable?: boolean;
+  label?: string;
+};
+
+export const GENERATED_BUNDLED_CHANNEL_IDS: readonly BundledChannelIdMetadata[] = ${JSON.stringify(ids, null, 2)};
+`,
+    IDS_OUTPUT_PATH,
     repoRoot,
-    outputPath,
-    next,
-    check: params?.check,
-  });
+  );
+  return [
+    writeGeneratedOutput({ repoRoot, outputPath, next, check }),
+    writeGeneratedOutput({
+      repoRoot,
+      outputPath: IDS_OUTPUT_PATH,
+      next: idsModule,
+      check,
+    }),
+  ];
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const check = process.argv.includes("--check");
-  const result = await writeBundledChannelConfigMetadataModule({ check });
-  if (!result.changed) {
-    process.exitCode = 0;
-  } else if (check) {
-    console.error(
-      `[bundled-channel-config-metadata] stale generated output at ${path.relative(process.cwd(), result.outputPath)}; run "pnpm config:channels:gen" and commit the result`,
-    );
-    process.exitCode = 1;
-  } else {
-    console.log(
-      `[bundled-channel-config-metadata] wrote ${path.relative(process.cwd(), result.outputPath)}`,
-    );
+  const results = await writeBundledChannelConfigMetadataModule(check);
+  for (const result of results) {
+    if (!result.changed) {
+      continue;
+    }
+    if (check) {
+      console.error(
+        `[bundled-channel-config-metadata] stale generated output at ${path.relative(process.cwd(), result.outputPath)}; run "pnpm config:channels:gen" and commit the result`,
+      );
+      process.exitCode = 1;
+    } else {
+      console.log(
+        `[bundled-channel-config-metadata] wrote ${path.relative(process.cwd(), result.outputPath)}`,
+      );
+    }
   }
 }

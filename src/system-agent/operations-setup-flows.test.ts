@@ -145,16 +145,16 @@ describe("system agent setup-flow operations", () => {
     expect(lines.join("\n")).toContain("openclaw onboard");
   });
 
-  it("routes one-shot model setup through the verified OpenClaw flow", async () => {
+  it("directs one-shot model setup to protected Models controls without a write", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
 
     const result = await executeSystemAgentOperation({ kind: "model-setup" }, runtime);
 
     expect(result.applied).toBe(false);
-    expect(lines.join("\n")).toContain("Run `openclaw onboard` on the machine running OpenClaw");
-    expect(lines.join("\n")).toContain("Stop the OpenClaw host");
-    expect(lines.join("\n")).toContain("restart the host");
-    expect(lines.join("\n")).not.toContain("openclaw configure --section model");
+    expect(lines.join("\n")).toContain("Settings → Models → Connect provider");
+    expect(lines.join("\n")).toContain("selected System or agent scope");
+    expect(lines.join("\n")).toContain("replacing credentials for a provider already in use");
+    expect(lines.join("\n")).not.toContain("openclaw onboard");
   });
 
   it("prints discovered channel metadata and sorted unknown-channel choices", async () => {

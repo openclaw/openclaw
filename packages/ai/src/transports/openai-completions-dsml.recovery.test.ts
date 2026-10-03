@@ -10,7 +10,6 @@ import {
   makeCompletionsModel,
   streamChunks,
 } from "./openai-completions.test-support.js";
-import { getCompat } from "./openai-transport-params.js";
 
 describe("openai completions DSML", () => {
   it("fails before a later DSML call after overflow can be authorized", async () => {
@@ -243,36 +242,6 @@ describe("openai completions DSML", () => {
     ]);
   });
 
-  it.each([
-    { finishReason: "length", stopReason: "length" },
-    { finishReason: "content_filter", stopReason: "error" },
-  ])(
-    "does not authorize recovered DeepSeek DSML calls after $finishReason",
-    async ({ finishReason, stopReason }) => {
-      const model = createDeepSeekCompletionsModel();
-      const output = createAssistantOutput(model);
-      expect(getCompat(model).thinkingFormat).toBe("deepseek");
-
-      await processCompletionsStream(
-        streamChunks([
-          makeCompletionsChunk(
-            {
-              content:
-                '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/partial.md"}</|DSML|invoke></|DSML|tool_calls>',
-            },
-            finishReason,
-          ),
-        ]),
-        output,
-        model,
-        { push() {} },
-      );
-
-      expect(output.stopReason).toBe(stopReason);
-      expect(output.content).toEqual([]);
-    },
-  );
-
   it("does not authorize recovered DeepSeek DSML calls when the stream omits a terminal", async () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
@@ -294,10 +263,13 @@ describe("openai completions DSML", () => {
   });
 
   it.each([
-    { finishReason: "stop", allowed: true },
-    { finishReason: "length", allowed: false },
-    { finishReason: "content_filter", allowed: false },
-  ])("gates doubled DSML over HTTP on $finishReason", async ({ finishReason, allowed }) => {
+    { finishReason: "stop", allowed: true, code: 'return "ready";' },
+    { finishReason: "length", allowed: false, code: 'return "ready";' },
+    { finishReason: "content_filter", allowed: false, code: 'return "ready";' },
+    { finishReason: "stop", allowed: true, code: "" },
+    { finishReason: "length", allowed: false, code: "" },
+    { finishReason: "content_filter", allowed: false, code: "" },
+  ])("gates HTTP DSML $finishReason '$code'", async ({ finishReason, allowed, code }) => {
     const server = createServer((req, res) => {
       req.resume();
       req.on("end", () => {
@@ -306,8 +278,7 @@ describe("openai completions DSML", () => {
           "cache-control": "no-cache",
           connection: "keep-alive",
         });
-        const content =
-          '<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="exec"><｜｜DSML｜｜parameter name="code" string="true">return "ready";</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>';
+        const content = `<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="exec"><｜｜DSML｜｜parameter name="code" string="true">${code}</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>`;
         for (const char of content) {
           res.write(`data: ${JSON.stringify(makeCompletionsChunk({ content: char }))}\n\n`);
         }
@@ -359,9 +330,7 @@ describe("openai completions DSML", () => {
           reason: allowed ? "toolUse" : "length",
           message: {
             stopReason: allowed ? "toolUse" : "length",
-            content: allowed
-              ? [{ type: "toolCall", name: "exec", arguments: { code: 'return "ready";' } }]
-              : [],
+            content: allowed ? [{ type: "toolCall", name: "exec", arguments: { code } }] : [],
           },
         });
       }
@@ -437,6 +406,18 @@ describe("openai completions DSML", () => {
     {
       name: "empty arguments",
       body: '<|DSML|invoke name="read"></|DSML|invoke>',
+    },
+    {
+      name: "empty non-string parameter",
+      body: '<|DSML|invoke name="read"><|DSML|parameter name="path" string="false"></|DSML|parameter></|DSML|invoke>',
+    },
+    {
+      name: "empty parameter without a string attribute",
+      body: '<|DSML|invoke name="read"><|DSML|parameter name="path"></|DSML|parameter></|DSML|invoke>',
+    },
+    {
+      name: "empty non-string parameter with a string attribute inside its name",
+      body: `<|DSML|invoke name="read"><|DSML|parameter name="path string='true' suffix" string="false"></|DSML|parameter></|DSML|invoke>`,
     },
     {
       name: "asymmetric invoke marker",

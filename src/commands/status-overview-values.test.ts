@@ -1,5 +1,6 @@
 // Status overview value tests cover compact display values for agents, events, tasks, and services.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   buildStatusAllAgentsValue,
   buildStatusEventsValue,
@@ -8,6 +9,13 @@ import {
   buildStatusSecretsValue,
   buildStatusSessionsOverviewValue,
 } from "./status-overview-values.ts";
+
+beforeEach(() => {
+  vi.spyOn(theme, "success").mockImplementation((value) => `ok(${String(value)})`);
+  vi.spyOn(theme, "warn").mockImplementation((value) => `warn(${String(value)})`);
+  vi.spyOn(theme, "muted").mockImplementation((value) => `muted(${String(value)})`);
+});
+afterEach(() => vi.restoreAllMocks());
 
 describe("status-overview-values", () => {
   it("counts active agents and formats status-all agent value", () => {
@@ -34,15 +42,11 @@ describe("status-overview-values", () => {
     expect(
       buildStatusProbesValue({
         health: undefined,
-        ok: (value) => `ok(${value})`,
-        muted: (value) => `muted(${value})`,
       }),
     ).toBe("muted(skipped (use --deep))");
     expect(
       buildStatusPluginCompatibilityValue({
         notices: [{ pluginId: "a" }, { pluginId: "a" }, { pluginId: "b" }],
-        ok: (value) => `ok(${value})`,
-        warn: (value) => `warn(${value})`,
       }),
     ).toBe("warn(3 notices · 2 plugins)");
   });
@@ -55,8 +59,12 @@ describe("status-overview-values", () => {
           paths: ["store.json", "other.json"],
           defaults: { model: "gpt-5.5", contextTokens: 12_000 },
         },
-        formatKTokens: (value) => `${Math.round(value / 1000)}k`,
       }),
-    ).toBe("2 active · default gpt-5.5 (12k ctx) · 2 stores");
+    ).toBe("2 stored · default gpt-5.5 (12k ctx) · 2 stores");
+    expect(
+      buildStatusSessionsOverviewValue({
+        sessions: { count: 0, paths: [], defaults: {} },
+      }),
+    ).toBe("0 stored · default unknown · unknown");
   });
 });

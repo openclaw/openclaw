@@ -1,16 +1,5 @@
 .sidebar-shell__invite {
   --community-invite-surface-current: var(--sidebar-bg, var(--bg));
-  --community-invite-fade-height-current: 36px;
-  --community-invite-fade-opacity-20-current: 6%;
-  --community-invite-fade-opacity-45-current: 22%;
-  --community-invite-fade-opacity-70-current: 60%;
-  --community-invite-fade-opacity-88-current: 80%;
-  --community-invite-photo-base-shade-current: rgb(0 0 0 / 30%);
-
-  position: relative;
-  z-index: 1;
-  flex: 0 0 auto;
-  margin-inline: calc(-1 * var(--sidebar-pad-x));
 }
 
 :root[data-theme-mode="light"] .sidebar-shell__invite {
@@ -19,10 +8,222 @@
     var(--sidebar-bg, var(--bg)) 70%,
     var(--bg-hover) 30%
   );
-  --community-invite-fade-height-current: 0px;
-  --community-invite-fade-gradient-current: linear-gradient(
-    to bottom,
-    transparent,
-    var(--community-invite-surface-current)
-  );
+}
+
+.community-invite-card {
+  --community-invite-copy-inset: 12px;
+
+  display: block;
+  flex: none;
+  margin: 0;
+  border-block-start: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  animation: community-invite-enter var(--duration-normal, 180ms) var(--ease-out, ease-out) both;
+
+  .invite {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 0;
+    border-radius: 0;
+    background: var(--community-invite-surface-current, var(--sidebar-bg, var(--bg)));
+    color: var(--text);
+    box-shadow: none;
+  }
+
+  .invite__header {
+    position: relative;
+    aspect-ratio: 12 / 5;
+    background: inherit;
+    flex: none;
+    overflow: hidden;
+  }
+
+  .invite__art {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      rgb(0 0 0) calc(100% - 34px),
+      transparent calc(100% - 2px)
+    );
+    mask-image: linear-gradient(
+      to bottom,
+      rgb(0 0 0) calc(100% - 34px),
+      transparent calc(100% - 2px)
+    );
+  }
+
+  .invite__marks {
+    position: absolute;
+    z-index: 1;
+    bottom: 19px;
+    left: var(--community-invite-copy-inset);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    /* Brand marks remain white over either photograph. */
+    color: rgb(255 255 255);
+    pointer-events: none;
+  }
+
+  .invite__marks svg {
+    width: 19px;
+    height: 19px;
+    fill: currentcolor;
+    stroke: none;
+    filter: drop-shadow(0 1px 1px rgb(0 0 0 / 87%)) drop-shadow(0 0 3px rgb(0 0 0 / 47%));
+  }
+
+  .invite__close {
+    position: absolute;
+    z-index: 2;
+    inset-block-start: var(--space-2, 8px);
+    inset-inline-end: var(--space-2, 8px);
+    display: grid;
+    width: 28px;
+    height: 28px;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    /* These fixed translucent colors belong to photo chrome, not the theme surface. */
+    background: rgb(0 0 0 / 42%);
+    color: rgb(255 255 255 / 76%);
+    cursor: var(--cursor-action, default);
+    transition:
+      background 120ms ease,
+      color 120ms ease;
+  }
+
+  .invite__close:hover {
+    background: rgb(255 255 255 / 14%);
+    color: rgb(255 255 255);
+  }
+
+  .invite__close:focus-visible {
+    outline: 2px solid rgb(255 255 255 / 70%);
+    outline-offset: 1px;
+  }
+
+  .invite__close svg {
+    display: block;
+    width: 15px;
+    height: 15px;
+    fill: none;
+    stroke: currentcolor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .invite__body {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 11px var(--community-invite-copy-inset) 20px;
+  }
+
+  .invite__title {
+    margin: 0;
+    color: var(--text-strong);
+    font-size: var(--control-ui-text-lg, 16px);
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+  }
+
+  .invite__text {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--control-ui-text-sm, 12px);
+    line-height: 1.45;
+  }
+
+  a.invite__cta {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-width: 0;
+    min-height: 40px;
+    padding: 3px 1px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md, 10px);
+    background: var(--bg-elevated);
+    color: var(--text);
+    cursor: pointer;
+    font-size: var(--control-ui-text-sm, 12px);
+    font-weight: 600;
+    line-height: 1.2;
+    text-align: center;
+    overflow-wrap: anywhere;
+    transition:
+      background 120ms ease,
+      border-color 120ms ease,
+      transform 120ms ease;
+  }
+
+  .invite__cta:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+
+  .invite__cta:active {
+    transform: scale(0.96);
+  }
+
+  .invite__cta:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .invite__cta svg {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    fill: currentcolor;
+    stroke: none;
+  }
+
+  .invite__links {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: var(--space-3, 12px);
+  }
+
+  @supports (corner-shape: superellipse(1.5)) {
+    .invite__cta {
+      border-radius: calc(10px * var(--openclaw-corner-radius-scale, 1.25));
+      corner-shape: superellipse(1.5);
+    }
+  }
+
+  @media (pointer: coarse) {
+    a.invite__cta {
+      min-height: 44px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    &,
+    .invite__close,
+    .invite__cta {
+      animation: none;
+      transition: none;
+    }
+  }
+}
+
+@keyframes community-invite-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
 }

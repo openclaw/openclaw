@@ -19,7 +19,10 @@ import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils.js";
 
 const METHOD = "workboard.cards.dispatch";
-const ensureProfileForEmail = vi.hoisted(() => vi.fn());
+const ensureProfileIdForEmail = vi.hoisted(() => vi.fn());
+const prepareUserProfileRoleAuthority = vi.hoisted(() =>
+  vi.fn(async (profileId: string) => ({ profileId, isCurrent: () => true })),
+);
 const getUserProfileDisplay = vi.hoisted(() =>
   vi.fn((profileId: string) => ({
     id: profileId,
@@ -28,27 +31,32 @@ const getUserProfileDisplay = vi.hoisted(() =>
     hasAvatar: false,
   })),
 );
-const resolveUserProfileId = vi.hoisted(() => vi.fn());
-const setDisplayName = vi.hoisted(() => vi.fn());
+const setCanonicalUserProfileDisplayName = vi.hoisted(() => vi.fn());
 
-vi.mock("../state/user-profiles.js", () => ({
-  ensureProfileForEmail,
+vi.mock("../state/user-profile-email.js", () => ({ ensureProfileIdForEmail }));
+vi.mock("../state/user-channel-identity-operations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-channel-identity-operations.js")>()),
+  prepareUserProfileRoleAuthority,
+}));
+
+vi.mock("../state/user-profile-writes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profile-writes.js")>()),
+  setCanonicalUserProfileDisplayName,
+}));
+
+vi.mock("../state/user-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profiles.js")>()),
   getUserProfileDisplay,
   getUserProfileListItem: vi.fn(),
-  linkEmail: vi.fn(),
-  listProfiles: vi.fn(),
-  resolveUserProfileId,
-  setAvatar: vi.fn(),
-  setDisplayName,
   UserProfileNotFoundError: class UserProfileNotFoundError extends Error {},
 }));
 
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
-  ensureProfileForEmail.mockReset();
+  ensureProfileIdForEmail.mockReset();
+  prepareUserProfileRoleAuthority.mockClear();
   getUserProfileDisplay.mockClear();
-  resolveUserProfileId.mockReset();
-  setDisplayName.mockReset();
+  setCanonicalUserProfileDisplayName.mockReset();
 });
 
 describe("gateway method authorization", () => {
@@ -242,9 +250,8 @@ describe("gateway method authorization", () => {
 
   it("allows an identified write caller to edit its own profile", async () => {
     const profile = { id: "profile-1" };
-    ensureProfileForEmail.mockReturnValue(profile);
-    resolveUserProfileId.mockReturnValue(profile.id);
-    setDisplayName.mockReturnValue(profile);
+    ensureProfileIdForEmail.mockResolvedValue(profile.id);
+    setCanonicalUserProfileDisplayName.mockResolvedValue({ profile });
 
     expect(
       await dispatchProfileMutation({
@@ -256,8 +263,7 @@ describe("gateway method authorization", () => {
   });
 
   it("requires admin when an identified write caller targets another profile", async () => {
-    ensureProfileForEmail.mockReturnValue({ id: "profile-1" });
-    resolveUserProfileId.mockReturnValue("profile-2");
+    ensureProfileIdForEmail.mockResolvedValue("profile-1");
 
     expect(
       await dispatchProfileMutation({
@@ -270,7 +276,7 @@ describe("gateway method authorization", () => {
 
   it("allows an admin caller to edit any profile", async () => {
     const profile = { id: "profile-2" };
-    setDisplayName.mockReturnValue(profile);
+    setCanonicalUserProfileDisplayName.mockResolvedValue({ profile });
 
     expect(
       await dispatchProfileMutation({
@@ -292,14 +298,8 @@ describe("gateway method authorization", () => {
         },
       );
 
-      let continueHandler = () => {};
-      const handlerCanContinue = new Promise<void>((resolve) => {
-        continueHandler = resolve;
-      });
-      let markHandlerStarted = () => {};
-      const handlerStarted = new Promise<void>((resolve) => {
-        markHandlerStarted = resolve;
-      });
+      const handlerCanContinue = createDeferredCore();
+      const handlerStarted = createDeferredCore();
       const patchHandler = sessionMutationHandlers["sessions.patch"];
       if (!patchHandler) {
         throw new Error("sessions.patch handler is not registered");
@@ -341,14 +341,14 @@ describe("gateway method authorization", () => {
         } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
         extraHandlers: {
           "sessions.patch": async (options) => {
-            markHandlerStarted();
-            await handlerCanContinue;
+            handlerStarted.resolve();
+            await handlerCanContinue.promise;
             await patchHandler(options);
           },
         },
       });
 
-      await handlerStarted;
+      await handlerStarted.promise;
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
@@ -362,7 +362,7 @@ describe("gateway method authorization", () => {
       await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
         visibility: "draft",
       }));
-      continueHandler();
+      handlerCanContinue.resolve();
       await request;
 
       expect(respond).toHaveBeenCalledWith(
@@ -598,12 +598,10 @@ describe("sessions.patchMany orchestration", () => {
           { sessionId: `session-label-race-${index}`, updatedAt: 1 },
         );
       }
-      const guardOrder: string[] = [];
       const assertCurrent = vi.fn(() => {
         throw new Error("outer all-target guard must not be delegated");
       });
       const assertTargetCurrent = vi.fn(({ sessionKey }: { sessionKey: string }) => {
-        guardOrder.push(sessionKey);
         if (sessionKey === sessionKeys[0]) {
           throw new SessionMutationAuthorizationChangedError({
             code: "INVALID_REQUEST",
@@ -624,7 +622,9 @@ describe("sessions.patchMany orchestration", () => {
       } as never);
 
       expect(assertCurrent).not.toHaveBeenCalled();
-      expect(guardOrder).toEqual(sessionKeys);
+      expect([
+        ...new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)),
+      ]).toEqual(sessionKeys);
       expect(respond).toHaveBeenCalledWith(
         true,
         {
@@ -902,7 +902,9 @@ describe("sessions.patchMany orchestration", () => {
       } as never);
 
       expect(assertCurrent).not.toHaveBeenCalled();
-      expect(assertTargetCurrent).toHaveBeenCalledTimes(3);
+      expect([
+        ...new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)),
+      ]).toEqual([0, 1, 2].map((index) => `agent:main:race-${index}`));
       expect(respond).toHaveBeenCalledWith(
         true,
         {

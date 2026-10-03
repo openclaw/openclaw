@@ -1,39 +1,159 @@
 // Workboard tests cover tools plugin behavior.
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isToolResultError } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
-import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
+import plugin from "../index.js";
 import { WorkboardStore } from "./store.js";
+import { startEmptySessionsBoardService } from "./test/sessions-board.js";
+import {
+  createWorkboardSqliteTestHarness,
+  createWorkboardSqliteTestStore,
+} from "./test/sqlite-store.js";
+import { createWorkboardSessionsBoardTools } from "./tools-sessions-board.js";
 import { createWorkboardTools } from "./tools.js";
 import { guardWorkboardToolsForWorkspaceAccess } from "./workspace-access.js";
-
-function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
-  const entries = new Map<string, T>();
-  return {
-    async register(key, value) {
-      entries.set(key, value);
-    },
-    async lookup(key) {
-      return entries.get(key);
-    },
-    async delete(key) {
-      return entries.delete(key);
-    },
-    async entries() {
-      return [...entries].flatMap(([key, value]) => (value ? [{ key, value }] : []));
-    },
-  };
-}
 
 function readPayload(result: unknown): Record<string, unknown> {
   return (result as { details?: Record<string, unknown> }).details ?? {};
 }
 
 describe("workboard tools", () => {
+  it("passes live invocation authority through the default-on Sessions board factory", async () => {
+    const store = createWorkboardSqliteTestStore();
+    await startEmptySessionsBoardService(store);
+    const board = await store.upsertBoard({ id: "sessions", kind: "sessions" });
+    using openStore = vi.spyOn(WorkboardStore, "openSqlite");
+    openStore.mockReturnValue(store);
+    const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
+    plugin.register(
+      createTestPluginApi({
+        runtimeSource: fileURLToPath(new URL("../index.ts", import.meta.url)),
+        registerTool,
+      }),
+    );
+    const [factory, options] = expectDefined(
+      registerTool.mock.calls.find(([, registration]) =>
+        registration?.names?.includes("workboard_sessions_board_update"),
+      ),
+      "Sessions board factory",
+    );
+    expect(options?.optional).not.toBe(true);
+    const context = {
+      assertInvocationCurrent() {
+        throw new Error("Caller authority is no longer active.");
+      },
+    };
+    const tools =
+      typeof factory === "function"
+        ? factory(context)
+        : "create" in factory
+          ? factory.create(context)
+          : undefined;
+    if (!Array.isArray(tools)) {
+      throw new Error("Expected Sessions board tools from the registered factory.");
+    }
+    for (const [name, input] of [
+      ["update", { scope: { includeArchived: true } }],
+      ["move", { sessionKey: "agent:main:one", columnId: "working" }],
+    ] as const) {
+      const tool = expectDefined(
+        tools.find((entry) => entry.name === `workboard_sessions_board_${name}`),
+        name,
+      );
+      await expect(tool.execute(`revoked-${name}`, input)).rejects.toThrow(
+        "Caller authority is no longer active.",
+      );
+    }
+    expect(factory).toMatchObject({ contextVersion: 2 });
+    expect(await store.getSessionsBoard("sessions")).toEqual(board);
+    expect(await store.listSessionPlacements("sessions")).toEqual([]);
+  });
+
+  it("defaults Sessions board tools only when one Sessions board exists", async () => {
+    vi.useFakeTimers();
+    const store = createWorkboardSqliteTestStore();
+    const sessionsBoard = await startEmptySessionsBoardService(store);
+    try {
+      const tools = new Map(
+        [
+          ...createWorkboardTools({ store }),
+          ...createWorkboardSessionsBoardTools({
+            store,
+            sessionsBoard,
+            caller: { assertCurrent() {} },
+          }),
+        ].map((tool) => [tool.name, tool]),
+      );
+      const read = expectDefined(tools.get("workboard_sessions_board_read"), "Sessions board read");
+      const update = expectDefined(
+        tools.get("workboard_sessions_board_update"),
+        "Sessions board update",
+      );
+      const move = expectDefined(tools.get("workboard_sessions_board_move"), "Sessions board move");
+      await expect(read.execute("none", {})).rejects.toThrow("No Sessions board exists");
+      const create = expectDefined(tools.get("workboard_board_create"), "Board create");
+      expect(Value.Check(create.parameters, { id: "sessions", kind: "sessions" })).toBe(true);
+      await create.execute("create", { id: "sessions", name: "My sessions", kind: "sessions" });
+      expect(readPayload(await read.execute("one", {}))).toMatchObject({
+        board: { id: "sessions", kind: "sessions" },
+        sessions: [],
+      });
+      await update.execute("update-one", { scope: { includeArchived: true } });
+      await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
+        sessions: { scope: { includeArchived: true } },
+      });
+      const columns = [
+        {
+          id: "stuck",
+          label: "Stuck",
+          description: "Observer health is stuck, or the run failed.",
+          match: [{ health: ["stuck"] }, { run: ["failed"] }],
+        },
+        { id: "done", label: "Done", description: "Fallback.", fallback: true },
+      ];
+      expect(Value.Check(update.parameters, { columns })).toBe(true);
+      expect(
+        Value.Check(update.parameters, {
+          columns: [{ ...columns[0], match: [] }, columns[1]],
+        }),
+      ).toBe(false);
+      await update.execute("update-any-of", { columns });
+      await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
+        sessions: { columns, scope: { includeArchived: true } },
+      });
+      await store.upsertBoard({ id: "another", kind: "sessions" });
+      for (const [tool, input] of [
+        [read, {}],
+        [update, { scope: { includeArchived: false } }],
+        [move, { sessionKey: "agent:main:example", columnId: "working" }],
+      ] as const) {
+        await expect(tool.execute("ambiguous", input)).rejects.toThrow(
+          "boardId is required when more than one Sessions board exists",
+        );
+      }
+      expect(readPayload(await read.execute("explicit", { boardId: "another" }))).toMatchObject({
+        board: { id: "another", kind: "sessions" },
+      });
+      await create.execute("create-cards", { id: "cards", kind: "cards" });
+      await expect(read.execute("cards", { boardId: "cards" })).rejects.toThrow(
+        "This board is not a Sessions board.",
+      );
+      await expect(read.execute("invalid", { boardId: 42 })).rejects.toThrow();
+      await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
+        sessions: { scope: { includeArchived: true } },
+      });
+    } finally {
+      await sessionsBoard.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("inherits the active tool filesystem boundary for workspace metadata", async () => {
-    const store = new WorkboardStore(createMemoryStore());
-    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const store = createWorkboardSqliteTestStore();
     const restrictedContext = {
       agentId: "main",
       workspaceDir: "/workspace",
@@ -41,7 +161,7 @@ describe("workboard tools", () => {
     } as const;
     const restricted = new Map(
       guardWorkboardToolsForWorkspaceAccess(
-        createWorkboardTools({ api, store, context: restrictedContext }),
+        createWorkboardTools({ store, context: restrictedContext }),
         restrictedContext,
       ).map((tool) => [tool.name, tool]),
     );
@@ -67,7 +187,7 @@ describe("workboard tools", () => {
     } as const;
     const unrestricted = new Map(
       guardWorkboardToolsForWorkspaceAccess(
-        createWorkboardTools({ api, store, context: unrestrictedContext }),
+        createWorkboardTools({ store, context: unrestrictedContext }),
         unrestrictedContext,
       ).map((tool) => [tool.name, tool]),
     );
@@ -97,7 +217,7 @@ describe("workboard tools", () => {
     } as const;
     const sandboxed = new Map(
       guardWorkboardToolsForWorkspaceAccess(
-        createWorkboardTools({ api, store, context: sandboxContext }),
+        createWorkboardTools({ store, context: sandboxContext }),
         sandboxContext,
       ).map((tool) => [tool.name, tool]),
     );
@@ -110,8 +230,7 @@ describe("workboard tools", () => {
   });
 
   it("preserves read-only sandbox authority while allowing manual card movement", async () => {
-    const store = new WorkboardStore(createMemoryStore());
-    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const store = createWorkboardSqliteTestStore();
     const context: NonNullable<Parameters<typeof guardWorkboardToolsForWorkspaceAccess>[1]> = {
       agentId: "main",
       sessionKey: "agent:main:subagent:readonly",
@@ -125,10 +244,9 @@ describe("workboard tools", () => {
       },
     };
     const tools = new Map(
-      guardWorkboardToolsForWorkspaceAccess(
-        createWorkboardTools({ api, store, context }),
-        context,
-      ).map((tool) => [tool.name, tool]),
+      guardWorkboardToolsForWorkspaceAccess(createWorkboardTools({ store, context }), context).map(
+        (tool) => [tool.name, tool],
+      ),
     );
 
     const created = readPayload(
@@ -150,19 +268,11 @@ describe("workboard tools", () => {
   });
 
   it("lists, claims, heartbeats, and reads worker context", async () => {
-    const keyed = createMemoryStore();
-    const api = {
-      runtime: {
-        state: {
-          openKeyedStore: vi.fn(() => keyed),
-        },
-      },
-    } as unknown as OpenClawPluginApi;
-    const workboardStore = new WorkboardStore(keyed);
+    const { store: workboardStore, stores } = createWorkboardSqliteTestHarness();
+    const keyed = stores.cards;
     const tools = createWorkboardTools({
-      api,
       store: workboardStore,
-      context: { agentId: "main", sessionKey: "session-1" } as never,
+      context: { agentId: "main", sessionKey: "session-1" },
     });
     const byName = new Map(tools.map((tool) => [tool.name, tool]));
 
@@ -211,7 +321,7 @@ describe("workboard tools", () => {
         ?.execute("call-2", { id: "card-1", token, note: "alive" }),
     );
     expect(heartbeat).toMatchObject({
-      metadata: { comments: [expect.objectContaining({ body: "alive" })] },
+      card: { metadata: { comments: [expect.objectContaining({ body: "alive" })] } },
     });
 
     const read = readPayload(
@@ -225,8 +335,8 @@ describe("workboard tools", () => {
         .get("workboard_release")
         ?.execute("call-4", { id: "card-1", token, status: "review" }),
     );
-    expect(released).toMatchObject({ status: "review" });
-    expect((released.metadata as { claim?: unknown } | undefined)?.claim).toBeUndefined();
+    expect(released).toMatchObject({ card: { status: "review" } });
+    expect((released.card as { metadata?: { claim?: unknown } }).metadata?.claim).toBeUndefined();
 
     const list = readPayload(await byName.get("workboard_list")?.execute("call-5", {}));
     expect(list.cards).toEqual([expect.objectContaining({ id: "card-1" })]);
@@ -238,28 +348,75 @@ describe("workboard tools", () => {
     );
   });
 
-  it("can share one store across tool instances for claim coordination", async () => {
-    const keyed = createMemoryStore();
-    const api = {
-      runtime: {
-        state: {
-          openKeyedStore: vi.fn(() => keyed),
-        },
+  it("keeps blocked-card mutations out of the host tool failure contract", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const keyed = stores.cards;
+    const tools = createWorkboardTools({
+      store,
+      context: { agentId: "main" },
+    });
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    const token = "claim-token-1";
+    await keyed.register("card-1", {
+      version: 1,
+      card: {
+        id: "card-1",
+        title: "Blocked work",
+        status: "blocked",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: { claim: { ownerId: "main", token, claimedAt: 1, lastHeartbeatAt: 1 } },
       },
-    } as unknown as OpenClawPluginApi;
-    const store = new WorkboardStore(keyed);
+    });
+
+    const calls = [
+      ["workboard_comment", { id: "card-1", token, body: "still waiting on review" }],
+      ["workboard_heartbeat", { id: "card-1", token, note: "still blocked" }],
+      ["workboard_release", { id: "card-1", token }],
+    ] as const;
+    const graded: Array<{ tool: string; isError: boolean; card: unknown }> = [];
+    for (const [name, params] of calls) {
+      const result = await expectDefined(byName.get(name), name).execute(name, params);
+      graded.push({
+        tool: name,
+        isError: isToolResultError(result),
+        card: readPayload(result).card,
+      });
+    }
+
+    const blockedCard = expect.objectContaining({ id: "card-1", status: "blocked" });
+    expect(graded).toEqual([
+      { tool: "workboard_comment", isError: false, card: blockedCard },
+      { tool: "workboard_heartbeat", isError: false, card: blockedCard },
+      { tool: "workboard_release", isError: false, card: blockedCard },
+    ]);
+    expect((await keyed.lookup("card-1"))?.card).toMatchObject({
+      status: "blocked",
+      metadata: {
+        comments: [
+          expect.objectContaining({ body: "still waiting on review" }),
+          expect.objectContaining({ body: "still blocked" }),
+        ],
+      },
+    });
+    expect((await keyed.lookup("card-1"))?.card.metadata?.claim).toBeUndefined();
+  });
+
+  it("can share one store across tool instances for claim coordination", async () => {
+    const store = createWorkboardSqliteTestStore();
     const mainTools = new Map(
       createWorkboardTools({
-        api,
         store,
-        context: { agentId: "main" } as never,
+        context: { agentId: "main" },
       }).map((tool) => [tool.name, tool]),
     );
     const otherTools = new Map(
       createWorkboardTools({
-        api,
         store,
-        context: { agentId: "other" } as never,
+        context: { agentId: "other" },
       }).map((tool) => [tool.name, tool]),
     );
     const card = await store.create({ title: "Single owner" });
@@ -272,27 +429,17 @@ describe("workboard tools", () => {
   });
 
   it("requires claim scope before creating or linking dependencies against claimed cards", async () => {
-    const keyed = createMemoryStore();
-    const api = {
-      runtime: {
-        state: {
-          openKeyedStore: vi.fn(() => keyed),
-        },
-      },
-    } as unknown as OpenClawPluginApi;
-    const store = new WorkboardStore(keyed);
+    const store = createWorkboardSqliteTestStore();
     const mainTools = new Map(
       createWorkboardTools({
-        api,
         store,
-        context: { agentId: "main" } as never,
+        context: { agentId: "main" },
       }).map((tool) => [tool.name, tool]),
     );
     const otherTools = new Map(
       createWorkboardTools({
-        api,
         store,
-        context: { agentId: "other" } as never,
+        context: { agentId: "other" },
       }).map((tool) => [tool.name, tool]),
     );
     const parent = await store.create({ title: "Claimed parent" });
@@ -325,7 +472,7 @@ describe("workboard tools", () => {
       token: claimed.token,
     });
     const child = await store.create({ title: "Claimed child" });
-    await store.claim(child.id, { ownerId: "main", token: "child-token" });
+    await store.claim(child.id, { ownerId: "child-worker", token: "child-token" });
     await expect(
       otherTools.get("workboard_link")?.execute("call-3", {
         parentId: parent.id,
@@ -352,20 +499,11 @@ describe("workboard tools", () => {
   });
 
   it("creates dependent cards and completes claimed work through tools", async () => {
-    const keyed = createMemoryStore();
-    const api = {
-      runtime: {
-        state: {
-          openKeyedStore: vi.fn(() => keyed),
-        },
-      },
-    } as unknown as OpenClawPluginApi;
-    const store = new WorkboardStore(keyed);
+    const store = createWorkboardSqliteTestStore();
     const tools = new Map(
       createWorkboardTools({
-        api,
         store,
-        context: { agentId: "main" } as never,
+        context: { agentId: "main" },
       }).map((tool) => [tool.name, tool]),
     );
 
@@ -438,20 +576,11 @@ describe("workboard tools", () => {
   });
 
   it("redacts claim tokens from dispatch tool results", async () => {
-    const keyed = createMemoryStore();
-    const api = {
-      runtime: {
-        state: {
-          openKeyedStore: vi.fn(() => keyed),
-        },
-      },
-    } as unknown as OpenClawPluginApi;
-    const store = new WorkboardStore(keyed);
+    const store = createWorkboardSqliteTestStore();
     const tools = new Map(
       createWorkboardTools({
-        api,
         store,
-        context: { agentId: "main" } as never,
+        context: { agentId: "main" },
       }).map((tool) => [tool.name, tool]),
     );
     const card = await store.create({
@@ -482,20 +611,11 @@ describe("workboard tools", () => {
   });
 
   it("exposes board lifecycle, decomposition, runs, and notification tools", async () => {
-    const keyed = createMemoryStore();
-    const api = {
-      runtime: {
-        state: {
-          openKeyedStore: vi.fn(() => keyed),
-        },
-      },
-    } as unknown as OpenClawPluginApi;
-    const store = new WorkboardStore(keyed);
+    const store = createWorkboardSqliteTestStore();
     const tools = new Map(
       createWorkboardTools({
-        api,
         store,
-        context: { agentId: "main" } as never,
+        context: { agentId: "main" },
       }).map((tool) => [tool.name, tool]),
     );
 
@@ -624,10 +744,9 @@ describe("workboard tools", () => {
   });
 
   it("moves cards with agent claim scope", async () => {
-    const store = new WorkboardStore(createMemoryStore());
-    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const store = createWorkboardSqliteTestStore();
     const tools = new Map(
-      createWorkboardTools({ api, store, context: { agentId: "agent-b" } as never }).map((tool) => [
+      createWorkboardTools({ store, context: { agentId: "agent-b" } }).map((tool) => [
         tool.name,
         tool,
       ]),

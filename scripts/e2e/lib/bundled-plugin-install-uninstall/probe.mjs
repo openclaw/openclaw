@@ -3,10 +3,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readJson } from "../fixtures/common.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
-import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
+import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
 
-const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const normalizePathForProbe = (value) => String(value ?? "").replace(/\\/g, "/");
 const bundledRuntimeFragments = (pluginDir) => [
   `/dist/extensions/${pluginDir}`,
@@ -277,7 +277,7 @@ function assertUninstalled(pluginId, pluginDir) {
   if (paths.some((entry) => pathReferencesBundledRuntime(entry, pluginDir))) {
     throw new Error(`load path still present after uninstall for ${pluginId}`);
   }
-  if (!isExplicitPluginDisableMarker(config, pluginId)) {
+  if (!hasExpectedPluginUninstallConfigState(config, pluginId)) {
     throw new Error(`exact disabled uninstall marker missing for ${pluginId}`);
   }
   if ((config.plugins?.allow || []).includes(pluginId)) {

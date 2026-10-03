@@ -7,16 +7,7 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
-
-function hasLegacyRotateBytes(value: unknown): boolean {
-  const maintenance = getRecord(value);
-  return Boolean(maintenance && Object.hasOwn(maintenance, "rotateBytes"));
-}
-
-function hasLegacyParentForkMaxTokens(value: unknown): boolean {
-  const session = getRecord(value);
-  return Boolean(session && Object.hasOwn(session, "parentForkMaxTokens"));
-}
+import { moveLegacyConfigKey } from "./legacy-config-record-shared.js";
 
 /** Match only parser-valid values that resolve to an unsafe zero-duration cutoff. */
 function isZeroDuration(val: unknown): boolean {
@@ -46,14 +37,7 @@ const LEGACY_SESSION_MAINTENANCE_ROTATE_BYTES_RULE: LegacyConfigRule = {
   path: ["session", "maintenance"],
   message:
     'session.maintenance.rotateBytes is deprecated and ignored; run "openclaw doctor --fix" to remove it.',
-  match: hasLegacyRotateBytes,
-};
-
-const LEGACY_SESSION_PARENT_FORK_MAX_TOKENS_RULE: LegacyConfigRule = {
-  path: ["session"],
-  message:
-    'session.parentForkMaxTokens was removed; parent fork sizing is automatic. Run "openclaw doctor --fix" to remove it.',
-  match: hasLegacyParentForkMaxTokens,
+  match: (value) => Object.hasOwn(getRecord(value) ?? {}, "rotateBytes"),
 };
 
 const SESSION_MAINTENANCE_PRUNE_AFTER_ZERO_RULE: LegacyConfigRule = {
@@ -90,25 +74,12 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
     legacyRules: SESSION_ALIAS_RULES,
     apply: (raw, changes) => {
       const session = getRecord(raw.session);
-      const maintenance = getRecord(session?.maintenance);
-      if (maintenance && Object.hasOwn(maintenance, "pruneDays")) {
-        if (maintenance.pruneAfter === undefined) {
-          maintenance.pruneAfter = maintenance.pruneDays;
-          changes.push("Moved session.maintenance.pruneDays → session.maintenance.pruneAfter.");
-        } else {
-          changes.push("Removed session.maintenance.pruneDays (pruneAfter already set).");
-        }
-        delete maintenance.pruneDays;
-      }
-      const resetByType = getRecord(session?.resetByType);
-      if (resetByType && Object.hasOwn(resetByType, "dm")) {
-        if (resetByType.direct === undefined) {
-          resetByType.direct = resetByType.dm;
-          changes.push("Moved session.resetByType.dm → session.resetByType.direct.");
-        } else {
-          changes.push("Removed session.resetByType.dm (direct already set).");
-        }
-        delete resetByType.dm;
+      for (const [section, legacy, canonical] of [
+        ["maintenance", "pruneDays", "pruneAfter"],
+        ["resetByType", "dm", "direct"],
+      ] as const) {
+        const owner = getRecord(session?.[section]);
+        moveLegacyConfigKey(owner, legacy, canonical, `session.${section}`, changes);
       }
     },
   }),
@@ -123,19 +94,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
       }
       delete maintenance.rotateBytes;
       changes.push("Removed deprecated session.maintenance.rotateBytes.");
-    },
-  }),
-  defineLegacyConfigMigration({
-    id: "session.parentForkMaxTokens",
-    describe: "Remove legacy session.parentForkMaxTokens",
-    legacyRules: [LEGACY_SESSION_PARENT_FORK_MAX_TOKENS_RULE],
-    apply: (raw, changes) => {
-      const session = getRecord(raw.session);
-      if (!session || !Object.hasOwn(session, "parentForkMaxTokens")) {
-        return;
-      }
-      delete session.parentForkMaxTokens;
-      changes.push("Removed session.parentForkMaxTokens; parent fork sizing is automatic.");
     },
   }),
   defineLegacyConfigMigration({
@@ -159,16 +117,12 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
           continue;
         }
         const label = String(val);
-        const fieldPath =
-          key === "resetArchiveRetention"
-            ? "session.maintenance.resetArchiveRetention"
-            : "session.maintenance.pruneAfter";
         delete maintenance[key];
         const outcome =
           key === "resetArchiveRetention"
             ? "keep-by-default archive retention applies"
             : "30d session-pruning default applies";
-        changes.push(`Removed ${fieldPath} "${label}" (zero duration); ${outcome}.`);
+        changes.push(`Removed session.maintenance.${key} "${label}" (zero duration); ${outcome}.`);
       }
     },
   }),

@@ -229,7 +229,10 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     ]);
   });
 
-  it("caps default CPU limits to the runner capacity", () => {
+  it.each([
+    ["8", "6", "8"],
+    ["", "6", "6"],
+  ])("caps default CPU limits using live=%s and shared=%s capacity", (live, shared, expected) => {
     const binDir = makeTempBin("openclaw-live-docker-auth-cpus-");
     writeExecutable(
       path.join(binDir, "timeout"),
@@ -250,7 +253,7 @@ describe("scripts/lib/live-docker-auth.sh", () => {
         [
           "source scripts/lib/live-docker-auth.sh",
           "ARGS=()",
-          "OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS=8 openclaw_live_init_docker_run_args ARGS 42s",
+          "openclaw_live_init_docker_run_args ARGS 42s",
           "printf '%s\\n' \"${ARGS[@]}\"",
         ].join("\n"),
       ],
@@ -260,6 +263,8 @@ describe("scripts/lib/live-docker-auth.sh", () => {
         env: {
           ...process.env,
           PATH: binDir,
+          OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS: live,
+          OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS: shared,
         },
       },
     );
@@ -275,7 +280,7 @@ describe("scripts/lib/live-docker-auth.sh", () => {
       "--memory",
       "8g",
       "--cpus",
-      "8",
+      expected,
       "--pids-limit",
       "2048",
     ]);
@@ -334,6 +339,44 @@ describe("scripts/lib/live-docker-auth.sh", () => {
       "2048",
     ]);
   });
+
+  it.each(["0", "1"])(
+    "prepares bind ownership with resource limits disabled=%s under nounset",
+    (disabled) => {
+      const dir = makeTempBin("openclaw-live-bind-dir-");
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-uc",
+          [
+            "source scripts/lib/live-docker-auth.sh",
+            // Capture the real helper's argv without starting Docker or changing ownership.
+            "docker() { printf '%s\\0' \"$@\"; }",
+            'openclaw_live_chown_bind_dirs_for_container_user fixture-image 1000:1000 "$1"',
+          ].join("\n"),
+          "bind-dir-test",
+          dir,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_LIVE_DOCKER_DISABLE_RESOURCE_LIMITS: disabled,
+            OPENCLAW_LIVE_DOCKER_MEMORY: "8g",
+            OPENCLAW_LIVE_DOCKER_CPUS: "16",
+            OPENCLAW_LIVE_DOCKER_PIDS_LIMIT: "2048",
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const args = result.stdout.split("\0").slice(0, -1);
+      expect(args).toContain(`${dir}:/openclaw-bind-dir-0`);
+      expect(args).toContain("OPENCLAW_BIND_DIR_USER=1000:1000");
+      expect(args).toContain("fixture-image");
+      expect(args).not.toContain("");
+      expect(args.includes("--memory")).toBe(disabled === "0");
+    },
+  );
 
   it("allows live Docker resource limits to be disabled", () => {
     const binDir = makeTempBin("openclaw-live-docker-auth-no-limits-");

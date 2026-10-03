@@ -1,5 +1,6 @@
 // Covers partial-summary recovery when compaction chunk summarization fails.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
@@ -40,11 +41,11 @@ vi.mock("../infra/retry.js", async () => {
   };
 });
 
-let summarizeWithFallback: typeof import("./compaction.test-support.js").summarizeWithFallback;
+let summarizeInStages: typeof import("./compaction.js").summarizeInStages;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ summarizeWithFallback } = await import("./compaction.test-support.js"));
+  ({ summarizeInStages } = await import("./compaction.js"));
 });
 
 describe("summarizeChunks partial summary preservation (#82952)", () => {
@@ -64,7 +65,8 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
   ];
 
   function callSummarize(messages = twoChunkMessages) {
-    return summarizeWithFallback({
+    return summarizeInStages({
+      parts: 1,
       messages,
       model: testModel,
       apiKey: "test-key", // pragma: allowlist secret
@@ -110,7 +112,8 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
     controller.abort();
 
     await expect(
-      summarizeWithFallback({
+      summarizeInStages({
+        parts: 1,
         messages: twoChunkMessages,
         model: testModel,
         apiKey: "test-key", // pragma: allowlist secret

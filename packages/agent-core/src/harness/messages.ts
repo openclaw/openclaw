@@ -1,6 +1,7 @@
-// Agent Core module implements messages behavior.
 import type { ImageContent, Message, TextContent } from "@openclaw/llm-core";
 import { parseDateStringTimestampMs as parseSessionTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { getOpenClawSystemUpdateKind } from "../operator-messages.js";
 import type {
   AgentMessage,
   BashExecutionMessage,
@@ -15,20 +16,6 @@ export type {
   CompactionSummaryMessage,
   CustomMessage,
 } from "../types.js";
-
-/** Harness-only transcript entries that can be normalized into LLM messages. */
-export type HarnessMessage =
-  | AgentMessage
-  | BashExecutionMessage
-  | CustomMessage
-  | BranchSummaryMessage
-  | CompactionSummaryMessage;
-
-// Internal session paths keep call sites explicit about this harness-owned
-// boundary even though these message roles are part of AgentMessage.
-export function asAgentMessage(message: HarnessMessage): AgentMessage {
-  return message as AgentMessage;
-}
 
 function requireSessionTimestampMs(value: string, label: string): number {
   const parsed = parseSessionTimestampMs(value);
@@ -127,70 +114,69 @@ export function createCustomMessage(
   };
 }
 
+/** Recognize the structured carrier marker shared with provider replay. */
+export function isRuntimeContextCarrier(message: AgentMessage): boolean {
+  return (
+    message.role === "custom" &&
+    (asOptionalRecord(message.details)?.runtimeContextCarrier === true ||
+      getOpenClawSystemUpdateKind(message) === "runtime-context")
+  );
+}
+
 /** Convert harness transcript messages into the LLM-facing message sequence. */
 export function convertToLlm(messages: AgentMessage[]): Message[] {
-  return messages
-    .map((m): Message | undefined => {
-      const message = m as HarnessMessage;
-      switch (message.role) {
-        case "bashExecution":
-          if (message.excludeFromContext) {
-            return undefined;
-          }
-          return {
-            role: "user",
-            content: [{ type: "text", text: bashExecutionToText(message) }],
-            timestamp: message.timestamp,
-          };
-        case "custom": {
-          if (message.excludeFromContext) {
-            return undefined;
-          }
-          const content =
-            typeof message.content === "string"
-              ? [{ type: "text" as const, text: message.content }]
-              : message.content;
-          // Preserve carrier identity so provider-owned replay and cache policy
-          // can distinguish transient context from append-only context.
-          const runtimeContextCarrier =
-            (message.details as { runtimeContextCarrier?: unknown } | undefined)
-              ?.runtimeContextCarrier === true;
-          return {
-            role: "user",
-            content,
-            timestamp: message.timestamp,
-            ...(runtimeContextCarrier ? { runtimeContextCarrier: true } : {}),
-          };
+  const llmMessages: Message[] = [];
+  // Preserve map's hole skipping and captured length without its intermediate array.
+  messages.forEach((message) => {
+    let content: (TextContent | ImageContent)[];
+    switch (message.role) {
+      case "bashExecution":
+        if (message.excludeFromContext) {
+          return;
         }
-        case "branchSummary":
-          return {
-            role: "user",
-            content: [
-              {
-                type: "text" as const,
-                text: BRANCH_SUMMARY_PREFIX + message.summary + BRANCH_SUMMARY_SUFFIX,
-              },
-            ],
-            timestamp: message.timestamp,
-          };
-        case "compactionSummary":
-          return {
-            role: "user",
-            content: [
-              {
-                type: "text" as const,
-                text: COMPACTION_SUMMARY_PREFIX + message.summary + COMPACTION_SUMMARY_SUFFIX,
-              },
-            ],
-            timestamp: normalizeCompactionSummaryTimestamp(message.timestamp),
-          };
-        case "user":
-        case "assistant":
-        case "toolResult":
-          return message;
-        default:
-          return undefined;
-      }
-    })
-    .filter((m): m is Message => m !== undefined);
+        content = [{ type: "text", text: bashExecutionToText(message) }];
+        break;
+      case "custom":
+        if (message.excludeFromContext) {
+          return;
+        }
+        content =
+          typeof message.content === "string"
+            ? [{ type: "text", text: message.content }]
+            : message.content;
+        break;
+      case "branchSummary":
+        content = [
+          { type: "text", text: BRANCH_SUMMARY_PREFIX + message.summary + BRANCH_SUMMARY_SUFFIX },
+        ];
+        break;
+      case "compactionSummary":
+        content = [
+          {
+            type: "text",
+            text: COMPACTION_SUMMARY_PREFIX + message.summary + COMPACTION_SUMMARY_SUFFIX,
+          },
+        ];
+        break;
+      case "user":
+      case "assistant":
+      case "toolResult":
+        llmMessages.push(message);
+        return;
+      default:
+        return;
+    }
+    // Preserve carrier identity so provider-owned replay and cache policy can
+    // distinguish transient context from append-only context.
+    llmMessages.push({
+      role: "user",
+      content,
+      timestamp:
+        message.role === "compactionSummary"
+          ? normalizeCompactionSummaryTimestamp(message.timestamp)
+          : message.timestamp,
+      ...(isRuntimeContextCarrier(message) ? { runtimeContextCarrier: true } : {}),
+    });
+  });
+  return llmMessages;
 }

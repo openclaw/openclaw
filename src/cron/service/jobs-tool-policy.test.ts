@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { CronStoredJob } from "../types.js";
-import { reconcileToolsAllowAuthority } from "./jobs-tool-policy.js";
+import {
+  cronJobMessageActionAuthorityInputsEqual,
+  reconcileToolsAllowAuthority,
+  resolveCronJobMessageToolAuthorityInputs,
+} from "./jobs-tool-policy.js";
 
 function toolJob(toolsAllow: string[] | undefined): CronStoredJob {
   return {
@@ -22,6 +26,22 @@ function toolJob(toolsAllow: string[] | undefined): CronStoredJob {
 describe("reconcileToolsAllowAuthority exec pin", () => {
   it("stamps the restrict-only pin only for exec-granting caps with the server fact", () => {
     const job = toolJob(["exec", "read"]);
+    reconcileToolsAllowAuthority({
+      job,
+      previouslyUsedToolRuntime: true,
+      explicitlyMutatesToolsAllow: true,
+      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+    });
+    expect(job.toolsAllowExecTarget).toEqual({ version: 1, host: "gateway", ask: "always" });
+    expect(job.toolsAllowExecTargetRequirement).toEqual({
+      version: 1,
+      target: { version: 1, host: "gateway", ask: "always" },
+      grantIndex: 0,
+    });
+  });
+
+  it("keeps the creator's exec pin on a wildcard cap", () => {
+    const job = toolJob(["*"]);
     reconcileToolsAllowAuthority({
       job,
       previouslyUsedToolRuntime: true,
@@ -102,5 +122,55 @@ describe("reconcileToolsAllowAuthority exec pin", () => {
     });
     expect(job.toolsAllowExecTarget).toBeUndefined();
     expect(job.toolsAllowExecTargetRequirement).toBeUndefined();
+  });
+});
+
+describe("account read authority inputs", () => {
+  it("binds a recorded caller origin to executable inputs but not display metadata", () => {
+    const job = {
+      ...toolJob(["message"]),
+      payload: { kind: "agentTurn" as const, message: "read", toolsAllow: ["message"] },
+      owner: { sessionKey: "agent:main:local", accountId: "work" },
+      scheduledToolPolicy: {
+        version: 1 as const,
+        mode: "account" as const,
+        ownerSessionKey: "agent:main:local",
+        ownerAccountId: "work",
+      },
+      toolsAllowProvenance: {
+        version: 1 as const,
+        source: "authenticated-requester" as const,
+        callerOrigin: { kind: "local" as const },
+      },
+    } satisfies CronStoredJob;
+
+    expect(
+      cronJobMessageActionAuthorityInputsEqual(job, {
+        ...job,
+        description: "display only",
+        displayName: "Readable name",
+      }),
+    ).toBe(true);
+    expect(
+      cronJobMessageActionAuthorityInputsEqual(job, {
+        ...job,
+        payload: { ...job.payload, message: "read something else" },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("scheduled message authority", () => {
+  it("admits message access for an automatic snapshot that runs with its owner's tools", () => {
+    const job = toolJob(["read"]);
+    job.payload = { kind: "agentTurn", message: "post", toolsAllow: ["read"] };
+    job.scheduledToolPolicy = { version: 1, mode: "trusted" };
+    expect(resolveCronJobMessageToolAuthorityInputs(job)).toBeUndefined();
+
+    // Older builds saved this snapshot without `message`; the run gets `*`.
+    Object.assign(job.payload, { toolsAllowIsDefault: true });
+    expect(resolveCronJobMessageToolAuthorityInputs(job)).toEqual({
+      policy: { version: 1, mode: "trusted" },
+    });
   });
 });

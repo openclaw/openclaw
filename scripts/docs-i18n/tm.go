@@ -6,9 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -19,8 +20,6 @@ type TMEntry struct {
 	TextHash   string `json:"text_hash"`
 	Text       string `json:"text"`
 	Translated string `json:"translated"`
-	Provider   string `json:"provider"`
-	Model      string `json:"model"`
 	SrcLang    string `json:"src_lang"`
 	TgtLang    string `json:"tgt_lang"`
 	UpdatedAt  string `json:"updated_at"`
@@ -71,10 +70,7 @@ func LoadTranslationMemory(path string) (*TranslationMemory, error) {
 
 func (tm *TranslationMemory) Get(cacheKey string) (TMEntry, bool) {
 	entry, ok := tm.entries[cacheKey]
-	if !ok {
-		return TMEntry{}, false
-	}
-	if strings.TrimSpace(entry.Translated) == "" {
+	if !ok || strings.TrimSpace(entry.Translated) == "" {
 		return TMEntry{}, false
 	}
 	return entry, true
@@ -100,25 +96,10 @@ func (tm *TranslationMemory) Save() error {
 		return err
 	}
 
-	keys := make([]string, 0, len(tm.entries))
-	for key := range tm.entries {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
 	writer := bufio.NewWriter(file)
-	for _, key := range keys {
-		entry := tm.entries[key]
-		payload, err := json.Marshal(entry)
-		if err != nil {
-			_ = file.Close()
-			return err
-		}
-		if _, err := writer.Write(payload); err != nil {
-			_ = file.Close()
-			return err
-		}
-		if _, err := writer.WriteString("\n"); err != nil {
+	encoder := json.NewEncoder(writer)
+	for _, key := range slices.Sorted(maps.Keys(tm.entries)) {
+		if err := encoder.Encode(tm.entries[key]); err != nil {
 			_ = file.Close()
 			return err
 		}

@@ -1,4 +1,9 @@
-import type { ClawAppliedExtension, ClawPackage } from "./types.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import type {
+  ClawAppliedExtension,
+  ClawPackageKind,
+  ClawPackageSource,
+} from "./manifest-contract.js";
 
 export const CLAW_PACKAGE_REF_SCHEMA_VERSION = "openclaw.clawPackageRef.v1" as const;
 export type ClawPackageRefStatus = "pending" | "complete" | "failed" | "rolled_back";
@@ -9,8 +14,8 @@ export type PersistedClawPackageRef = {
   schemaVersion: typeof CLAW_PACKAGE_REF_SCHEMA_VERSION;
   agentId: string;
   clawName: string;
-  kind: ClawPackage["kind"];
-  source: ClawPackage["source"];
+  kind: ClawPackageKind;
+  source: ClawPackageSource;
   ref: string;
   version: string;
   integrity: string;
@@ -27,8 +32,8 @@ export type PackageRefRow = {
   schema_version: string;
   agent_id: string;
   claw_name: string;
-  package_kind: ClawPackage["kind"];
-  package_source: ClawPackage["source"];
+  package_kind: ClawPackageKind;
+  package_source: ClawPackageSource;
   package_ref: string;
   package_version: string;
   package_integrity: string;
@@ -128,9 +133,9 @@ export function rowToPackageRef(row: PackageRefRow): PersistedClawPackageRef {
     status: row.package_status,
     relationship: row.relationship,
     origin: row.origin,
-    independentOwner: Number(row.independent_owner) === 1,
+    independentOwner: sqliteNumber(row.independent_owner) === 1,
     ...(extension ? { extension } : {}),
-    installedAtMs: Number(row.installed_at_ms),
-    updatedAtMs: Number(row.updated_at_ms),
+    installedAtMs: sqliteNumber(row.installed_at_ms),
+    updatedAtMs: sqliteNumber(row.updated_at_ms),
   };
 }

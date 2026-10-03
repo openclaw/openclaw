@@ -1,4 +1,3 @@
-// Agent Core module implements runtime deps behavior.
 import type { CompleteSimpleFn, StreamFn, Usage } from "@openclaw/llm-core";
 
 /** Runtime functions injected by host packages so agent-core stays provider-agnostic. */
@@ -7,12 +6,17 @@ export interface AgentCoreRuntimeDeps {
   streamSimple: StreamFn;
   /** Non-streaming completion implementation used by summarization helpers. */
   completeSimple: CompleteSimpleFn;
+  /** Keep host stream ownership through iteration and decorated terminal work. */
+  runStream?: <T>(stream: ReturnType<StreamFn>, consume: () => T) => T;
 }
 
 /** Runtime dependency subset required by streaming agent loops. */
-export type AgentCoreStreamRuntimeDeps = Pick<AgentCoreRuntimeDeps, "streamSimple">;
+export type AgentCoreStreamRuntimeDeps = Pick<AgentCoreRuntimeDeps, "streamSimple" | "runStream">;
 /** Runtime dependency subset required by summarization helpers. */
-export type AgentCoreCompletionRuntimeDeps = Pick<AgentCoreRuntimeDeps, "completeSimple"> & {
+export type AgentCoreCompletionRuntimeDeps = Pick<
+  AgentCoreRuntimeDeps,
+  "completeSimple" | "runStream"
+> & {
   /** Internal host sink for usage from auxiliary model completions. */
   internalUsageSink?: (usage: Usage) => void;
 };
@@ -37,13 +41,31 @@ export function resolveAgentCoreStreamFn(
   throw missingRuntimeDep("streamSimple");
 }
 
+/** Standalone runtimes consume directly; hosts may retain their exact stream owner. */
+export function runAgentCoreStream<T>(
+  stream: ReturnType<StreamFn>,
+  consume: () => T,
+  runtime?: Pick<AgentCoreRuntimeDeps, "runStream">,
+): T {
+  return runtime?.runStream ? runtime.runStream(stream, consume) : consume();
+}
+
 /** Drain a host-decorated stream before reading its final assistant message. */
-export async function consumeAgentCoreStream(stream: ReturnType<StreamFn>) {
-  const response = await stream;
-  for await (const _ of response) {
-    // drain
-  }
-  return response.result();
+export async function consumeAgentCoreStream(
+  stream: ReturnType<StreamFn>,
+  runtime?: Pick<AgentCoreRuntimeDeps, "runStream">,
+) {
+  return await runAgentCoreStream(
+    stream,
+    async () => {
+      const response = await stream;
+      for await (const _ of response) {
+        // drain
+      }
+      return response.result();
+    },
+    runtime,
+  );
 }
 
 /** Resolve the completion function used by non-streaming helper flows. */

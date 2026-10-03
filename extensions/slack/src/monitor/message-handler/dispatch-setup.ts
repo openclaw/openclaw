@@ -14,26 +14,29 @@ import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { formatSlackError } from "../../errors.js";
+import { hasSlackMessageIdentity } from "../../post-message-identity.js";
 import { resolveSlackStreamingConfig } from "../../stream-mode.js";
-import { resolveSlackThreadTargets } from "../../threading.js";
+import { resolveSlackThreadContext } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
-import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
 import { createSlackReplyDeliveryPlan, sanitizeSlackMonitorReplyPayload } from "../replies.js";
 import {
   isSlackStreamingEnabled,
-  resolveSlackDisableBlockStreaming,
   resolveSlackNativeProgressTaskCards,
-  resolveSlackStreamingThreadHint,
-  shouldUseStreaming,
+  resolveSlackProgressStyle,
 } from "./dispatch-helpers.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const { ctx, account, message, route } = prepared;
   const slackClient = prepared.eventScope?.client ?? ctx.app.client;
+  const slackClientOptions = {
+    ...ctx.app.webClientOptions,
+    ...(prepared.eventScope ? { teamId: prepared.eventScope.teamId } : {}),
+  };
   const slackStreamFallbackTeamId = prepared.eventScope?.teamId ?? ctx.teamId;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
@@ -87,14 +90,14 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     }
   }
 
-  const threadTargets = resolveSlackThreadTargets({
+  const threadContext = resolveSlackThreadContext({
     message,
     replyToMode: prepared.replyToMode,
   });
   const forcedReplyThreadTs = prepared.forcedReplyThreadTs;
   const slackMessageMetadata = prepared.slackMessageMetadata;
-  const statusThreadTs = forcedReplyThreadTs ?? threadTargets.statusThreadTs;
-  const isThreadReply = threadTargets.isThreadReply;
+  const statusThreadTs = forcedReplyThreadTs ?? threadContext.messageThreadId;
+  const isThreadReply = threadContext.isThreadReply;
   const replyDeliveryMode = forcedReplyThreadTs ? "off" : prepared.replyToMode;
   const sourceReplyDeliveryMode = resolveChannelMessageSourceReplyDeliveryMode({
     cfg,
@@ -121,6 +124,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const messageTs = message.ts ?? message.event_ts;
   const incomingThreadTs = message.thread_ts;
   let didSetStatus = false;
+  let statusWasSet = false;
   let didAddTypingReaction = false;
   const statusReactionsEnabled =
     prepared.ctxPayload.InboundEventKind !== "room_event" &&
@@ -171,8 +175,16 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     isThreadReply: Boolean(forcedReplyThreadTs) || isThreadReply,
   });
 
+  const slackStreaming = resolveSlackStreamingConfig({ streaming: account.config.streaming });
+  const streamThreadHint = forcedReplyThreadTs ?? replyPlan.peekThreadTs();
+  const slackProgressStyle = resolveSlackProgressStyle(account.config, Boolean(streamThreadHint));
+  const quietProgress = slackStreaming.mode === "progress" && slackProgressStyle === "none";
+
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
-  const typingReaction = ctx.typingReaction;
+  const typingReaction =
+    quietProgress && account.config.typingReaction === undefined
+      ? "hourglass_flowing_sand"
+      : ctx.typingReaction;
   // Session status is a state write, not a typing keepalive. Start it once
   // before visible output; the dispatcher owns the delivered/preview gate.
   const threadStatusGate = { hasVisibleOutput: () => false };
@@ -186,7 +198,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
       start: async () => {
         if (!didSetStatus && !threadStatusGate.hasVisibleOutput()) {
           didSetStatus = true;
-          await ctx.setSlackSessionStatus({
+          statusWasSet = await ctx.setSlackSessionStatus({
             channelId: message.channel,
             threadTs: statusThreadTs,
             status: "processing",
@@ -208,12 +220,24 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
       stop: async () => {
         if (didSetStatus) {
           didSetStatus = false;
-          await ctx.setSlackSessionStatus({
+          const reportFailure = statusWasSet;
+          statusWasSet = false;
+          const restored = await ctx.setSlackSessionStatus({
             channelId: message.channel,
             threadTs: statusThreadTs,
             status: "active",
             eventScope: prepared.eventScope,
           });
+          if (reportFailure && !restored) {
+            try {
+              runtime.error?.(
+                "Slack session status could not return to active after processing. " +
+                  "Enable verbose logging to inspect the Slack API failure.",
+              );
+            } catch {
+              // Diagnostics must not prevent the remaining typing-reaction cleanup.
+            }
+          }
         }
         // Tracked apart from the status write: a suppressed status refresh
         // still adds the reaction, and that reaction must still be removed.
@@ -248,53 +272,44 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     },
   });
 
-  const slackStreaming = resolveSlackStreamingConfig({ streaming: account.config.streaming });
-  const streamThreadHint =
-    forcedReplyThreadTs ??
-    resolveSlackStreamingThreadHint({
-      replyToMode: replyDeliveryMode,
-      incomingThreadTs,
-      messageTs,
-      isThreadReply,
-    });
   const hookRunner = getGlobalHookRunner();
   const modifyingHooksRegistered =
     (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
     (hookRunner?.hasHooks("message_sending") ?? false);
   // Portable previews and native progress cards exist before outbound modifiers accept the
   // payload. Native answer streaming stays enabled because it begins after both hook gates.
-  const allowPreHookProviderStreaming = !modifyingHooksRegistered;
+  const allowPreHookProviderStreaming =
+    !prepared.ctxPayload.GroupThread && !modifyingHooksRegistered;
   const previewStreamingEnabled =
-    allowPreHookProviderStreaming && !sourceRepliesAreToolOnly && slackStreaming.mode !== "off";
-  const hasSlackCustomIdentity = Boolean(
-    slackIdentity?.username || slackIdentity?.iconUrl || slackIdentity?.iconEmoji,
-  );
+    allowPreHookProviderStreaming &&
+    !sourceRepliesAreToolOnly &&
+    !quietProgress &&
+    slackStreaming.mode !== "off";
+  const hasSlackCustomIdentity = hasSlackMessageIdentity(slackIdentity);
   const streamingEnabled =
+    !prepared.ctxPayload.GroupThread &&
     !sourceRepliesAreToolOnly &&
     (allowPreHookProviderStreaming || slackStreaming.mode !== "progress") &&
     isSlackStreamingEnabled({
       mode: slackStreaming.mode,
       nativeStreaming: slackStreaming.nativeStreaming,
-      nativeProgressTaskCards: resolveSlackNativeProgressTaskCards(account.config),
+      nativeProgressTaskCards: resolveSlackNativeProgressTaskCards(
+        account.config,
+        slackProgressStyle,
+      ),
     });
-  const useStreaming = shouldUseStreaming({
-    streamingEnabled,
-    threadTs: streamThreadHint,
-  });
+  const useStreaming = streamingEnabled && Boolean(streamThreadHint);
+  if (streamingEnabled && !streamThreadHint) {
+    logVerbose("slack-stream: streaming disabled — no reply thread target available");
+  }
   const shouldUseDraftStream = previewStreamingEnabled && !useStreaming;
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
-  const disableBlockStreaming = sourceRepliesAreToolOnly
-    ? true
-    : resolveSlackDisableBlockStreaming({
-        useStreaming,
-        shouldUseDraftStream,
-        blockStreamingEnabled,
-      });
-
-  const onSlackDeliveryError = (err: unknown, info: { kind: string }) => {
-    runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatSlackError(err)}`));
-    replyPipeline.typingCallbacks?.onIdle?.();
-  };
+  const disableBlockStreaming =
+    sourceRepliesAreToolOnly || quietProgress || useStreaming || shouldUseDraftStream
+      ? true
+      : typeof blockStreamingEnabled === "boolean"
+        ? !blockStreamingEnabled
+        : undefined;
 
   return {
     prepared,
@@ -303,6 +318,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     message,
     route,
     slackClient,
+    slackClientOptions,
     slackStreamFallbackTeamId,
     cfg,
     runtime,
@@ -313,13 +329,10 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     isThreadReply,
     replyDeliveryMode,
     sourceReplyDeliveryMode,
-    sourceRepliesAreToolOnly,
     suppressRoomEventTyping,
     messageSentHookTarget,
     messageSentHookContext,
     messageSentDeliveryHookContext,
-    incomingThreadTs,
-    messageTs,
     statusReactionsEnabled,
     statusReactions,
     hasRepliedRef,
@@ -328,13 +341,14 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     onModelSelected,
     replyPipeline,
     slackStreaming,
+    slackProgressStyle,
+    quietProgress,
     streamThreadHint,
     previewStreamingEnabled,
     hasSlackCustomIdentity,
     shouldUseDraftStream,
     disableBlockStreaming,
     useStreaming,
-    onSlackDeliveryError,
   };
 }
 

@@ -1,18 +1,23 @@
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import type {
-  FsListDirResult,
   ProjectRecord,
   ProjectRecent,
   RemoteProject,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../components/icons.ts";
+import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { pathDisplayName } from "../../lib/path-display.ts";
 import { renderSessionMenuItem } from "./cloud-target.ts";
-import { renderWorktreeFields } from "./detail-chip.ts";
-import type { DraftBranches } from "./discovery.ts";
-import { folderDisplayName, parentFolderDisplayName } from "./path.ts";
+import { parentFolderDisplayName } from "./path.ts";
+import { renderPickerLabel } from "./picker-label.ts";
+import type { PlaceBrowserState } from "./place-browser-state.ts";
 import { renderPlaceBrowser } from "./place-browser.ts";
 import { disambiguate } from "./place-labels.ts";
+
+registerNewSessionSetupEnglish();
 
 /** Detects pasted clone URLs; the Gateway remains authoritative for host validation. */
 export function projectCloneInput(value: string): string | null {
@@ -26,6 +31,7 @@ export function projectCloneInput(value: string): string | null {
 export type DraftRemoteProject = Readonly<{
   identity: string;
   cloneUrl: string;
+  defaultBranch?: string;
   projectId?: string;
 }>;
 
@@ -36,7 +42,7 @@ function inputValue(event: Event): string {
 type ProjectChipState = Readonly<{
   label: string;
   localProjects: readonly ProjectRecord[];
-  recents: readonly ProjectRecent[];
+  recents: readonly Exclude<ProjectRecent, { kind: "project" }>[];
   showWorkspace: boolean;
 }>;
 
@@ -48,6 +54,7 @@ export function resolveProjectChip(params: {
   projects: readonly ProjectRecord[];
   recents: readonly ProjectRecent[];
   projectQuery: string;
+  freshWorkspace?: boolean;
 }): ProjectChipState {
   const folder = params.folder.trim();
   const selectedProject = params.projects.find((project) => project.id === params.projectId);
@@ -61,18 +68,20 @@ export function resolveProjectChip(params: {
       )
     : params.projects;
   return {
-    label: selectedProject
-      ? selectedProject.displayName
-      : params.selectedRemoteProject?.identity
-        ? params.selectedRemoteProject.identity
-        : folder
-          ? folderDisplayName(folder)
-          : folderDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
+    label: params.freshWorkspace
+      ? t("newSession.newWorkspace")
+      : selectedProject
+        ? selectedProject.displayName
+        : params.selectedRemoteProject?.identity
+          ? params.selectedRemoteProject.identity
+          : folder
+            ? pathDisplayName(folder)
+            : pathDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
     localProjects,
-    recents: normalizedQuery ? [] : params.recents.filter((recent) => recent.kind === "folder"),
+    recents: normalizedQuery ? [] : params.recents.filter((recent) => recent.kind !== "project"),
     showWorkspace:
       !normalizedQuery ||
-      [folderDisplayName(params.workspace), params.workspace]
+      [pathDisplayName(params.workspace), params.workspace]
         .join("\n")
         .toLowerCase()
         .includes(normalizedQuery),
@@ -80,6 +89,7 @@ export function resolveProjectChip(params: {
 }
 
 export function renderProjectChip(params: {
+  idPrefix?: string;
   state: ProjectChipState;
   browseAvailable: boolean;
   isAdmin: boolean;
@@ -96,22 +106,15 @@ export function renderProjectChip(params: {
   projectSearchLoading: boolean;
   projectSearchError: string | null;
   projectId: string;
+  freshWorkspace?: boolean;
+  onNewWorkspace?: () => void;
   gatewayLabel: string;
-  remotePlacement: boolean;
-  branches: DraftBranches | null;
-  branchesLoading: boolean;
-  baseRef: string;
-  worktreeName: string;
   submitting: boolean;
   pendingPlacement: boolean;
   popoverOpen: boolean;
   popoverHiding: boolean;
   browserOpen: boolean;
-  browserListing: FsListDirResult | null;
-  browserLoading: boolean;
-  browserError: string | null;
-  browserPathDraft: string;
-  usableBrowserPath: string | null;
+  browser: PlaceBrowserState;
   registerProjectPath: string | null;
   registeringProject: boolean;
   onGuardTransition: (event: MouseEvent) => void;
@@ -122,11 +125,7 @@ export function renderProjectChip(params: {
   onProjectQueryInput: (query: string) => void;
   onSelectRemoteProject: (project: DraftRemoteProject) => void;
   onApplyFolder: (folder: string) => void;
-  onBaseRefInput: (baseRef: string) => void;
-  onWorktreeNameInput: (name: string) => void;
   onBrowse: () => void;
-  onBrowserPathDraftChange: (value: string) => void;
-  onBrowserNavigate: (path: string | undefined) => void;
   onBrowserBack: () => void;
   onRegisterProject: (path: string) => void;
   onClose: () => void;
@@ -139,7 +138,7 @@ export function renderProjectChip(params: {
   const recentSuffixes = disambiguate(recentItems, (recent) => recent.displayName, [
     (recent) => (recent.kind === "folder" ? parentFolderDisplayName(recent.folder) : undefined),
     (recent) => (recent.kind === "folder" ? recent.folder : undefined),
-    (recent) => (recent.kind === "folder" ? recent.folder : recent.projectId),
+    (recent) => (recent.kind === "folder" ? recent.folder : recent.url),
   ]);
   const browseButton = html`
     <button
@@ -148,9 +147,11 @@ export function renderProjectChip(params: {
       data-value="browse"
       aria-pressed="false"
       aria-disabled=${browseNeedsAdmin ? "true" : nothing}
-      ?disabled=${params.submitting ||
-      params.pendingPlacement ||
-      (!params.browseAvailable && !browseNeedsAdmin)}
+      ?disabled=${
+        params.submitting ||
+        params.pendingPlacement ||
+        (!params.browseAvailable && !browseNeedsAdmin)
+      }
       @click=${() => {
         if (params.browseAvailable && !params.submitting && !params.pendingPlacement) {
           params.onBrowse();
@@ -166,12 +167,11 @@ export function renderProjectChip(params: {
   return html`
     <span class="new-session-page__select">
       <button
-        id="new-session-project-trigger"
+        id=${(params.idPrefix ?? "new-session") + "-project-trigger"}
         type="button"
-        class="new-session-page__trigger ${params.popoverHiding
-          ? "new-session-page__trigger--hiding"
-          : ""}"
-        title=${t("newSession.what")}
+        class="new-session-page__trigger ${
+          params.popoverHiding ? "new-session-page__trigger--hiding" : ""
+        }"
         aria-label="${t("newSession.what")}: ${params.state.label}"
         data-project-id=${params.projectId || nothing}
         aria-haspopup="dialog"
@@ -179,64 +179,67 @@ export function renderProjectChip(params: {
         ?disabled=${params.submitting || params.pendingPlacement}
         @click=${params.onGuardTransition}
       >
-        <span class="new-session-page__target-icon" aria-hidden="true"
-          >${params.projectId ? icons.gitBranch : icons.folder}</span
-        >
-        <span class="new-session-page__trigger-label">${params.state.label}</span>
-        <span
-          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
-          aria-hidden="true"
-          >${icons.chevronDown}</span
-        >
-        <span
-          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--mobile"
-          aria-hidden="true"
-          >${icons.chevronsUpDown}</span
-        >
+        ${renderPickerLabel(params.projectId ? icons.gitBranch : icons.folder, params.state.label)}
       </button>
     </span>
     <wa-popover
+      ${ref(syncPopoverLabel)}
       class="new-session-page__select new-session-page__project-popover new-session-page__picker-popover"
-      for="new-session-project-trigger"
+      for=${(params.idPrefix ?? "new-session") + "-project-trigger"}
       placement="bottom-start"
       without-arrow
       @wa-show=${params.onPopoverShow}
       @wa-hide=${params.onPopoverHide}
       @wa-after-hide=${params.onPopoverAfterHide}
     >
-      ${params.browserOpen
-        ? renderPlaceBrowser({
-            listing: params.browserListing,
-            label: params.gatewayLabel,
-            loading: params.browserLoading,
-            error: params.browserError,
-            pathDraft: params.browserPathDraft,
-            usablePath: params.usableBrowserPath,
-            registerProjectPath: params.registerProjectPath,
-            registeringProject: params.registeringProject,
-            onPathDraftChange: params.onBrowserPathDraftChange,
-            onNavigate: params.onBrowserNavigate,
-            onBack: params.onBrowserBack,
-            onRegisterProject: params.onRegisterProject,
-            onClose: params.onClose,
-            onApplyFolder: params.onApplyFolder,
-          })
-        : html`
-            <div class="new-session-page__picker-root">
-              <div class="new-session-page__menu-title">${t("newSession.projects")}</div>
-              ${html`
-                ${params.workspace && params.state.showWorkspace
-                  ? renderSessionMenuItem(
-                      {
-                        value: "workspace",
-                        label: folderDisplayName(params.workspace),
-                        icon: icons.folder,
-                        checked: !params.projectId && folder === params.workspace,
-                        onSelect: () => params.onApplyFolder(params.workspace),
-                      },
-                      params.submitting,
-                    )
-                  : nothing}
+      ${
+        params.browserOpen
+          ? renderPlaceBrowser({
+              browser: params.browser,
+              id: (params.idPrefix ?? "new-session") + "-place-browser",
+              label: params.gatewayLabel,
+              registerProjectPath: params.registerProjectPath,
+              registeringProject: params.registeringProject,
+              onBack: params.onBrowserBack,
+              onRegisterProject: params.onRegisterProject,
+              onClose: params.onClose,
+              onApplyFolder: params.onApplyFolder,
+            })
+          : html`
+              <div class="new-session-page__picker-root">
+                <div class="new-session-page__menu-title">${t("newSession.projects")}</div>
+                ${
+                  params.onNewWorkspace && !query
+                    ? renderSessionMenuItem(
+                        {
+                          value: "new-workspace",
+                          label: t("newSession.newWorkspace"),
+                          icon: icons.folder,
+                          sub: t("newSession.newWorkspaceDescription"),
+                          checked: params.freshWorkspace === true,
+                          onSelect: params.onNewWorkspace,
+                        },
+                        params.submitting || params.pendingPlacement,
+                      )
+                    : nothing
+                }
+                ${
+                  params.workspace && params.state.showWorkspace
+                    ? renderSessionMenuItem(
+                        {
+                          value: "workspace",
+                          label: pathDisplayName(params.workspace),
+                          icon: icons.folder,
+                          checked:
+                            !params.freshWorkspace &&
+                            !params.projectId &&
+                            folder === params.workspace,
+                          onSelect: () => params.onApplyFolder(params.workspace),
+                        },
+                        params.submitting,
+                      )
+                    : nothing
+                }
                 <label class="new-session-page__project-search">
                   <span class="sr-only">${t("newSession.projectSearchPlaceholder")}</span>
                   <input
@@ -269,127 +272,130 @@ export function renderProjectChip(params: {
                     params.submitting,
                   ),
                 )}
-                ${cloneInput && params.projectAddAvailable
-                  ? renderSessionMenuItem(
-                      {
-                        value: "project-clone-url",
-                        label: cloneInput,
-                        icon: icons.gitBranch,
-                        sub: t("newSession.cloneProject"),
-                        checked: params.selectedRemoteProject?.cloneUrl === cloneInput,
-                        onSelect: () =>
-                          params.onSelectRemoteProject({
-                            identity: cloneInput,
-                            cloneUrl: cloneInput,
-                          }),
-                      },
-                      params.submitting,
-                    )
-                  : nothing}
-                ${!cloneInput && query.length >= 2 && params.projectSearchAvailable
-                  ? html`
-                      <div class="new-session-page__menu-title">
-                        ${t("newSession.githubProjects")}
-                      </div>
-                      ${params.projectSearchCredentialMissing
-                        ? html`<div class="new-session-page__menu-note">
-                            ${t("newSession.githubTokenHint")}
-                          </div>`
-                        : nothing}
-                      ${params.projectSearchLoading
-                        ? html`<div class="new-session-page__project-status" role="status">
-                            ${t("common.loading")}
-                          </div>`
-                        : nothing}
-                      ${params.projectSearchError
-                        ? html`<div class="new-session-page__project-error" role="alert">
-                            ${params.projectSearchError}
-                          </div>`
-                        : nothing}
-                      ${params.remoteProjects.map((project) =>
-                        renderSessionMenuItem(
-                          {
-                            value: `remote-project:${project.fullName}`,
-                            label: project.fullName,
-                            icon: icons.gitBranch,
-                            sub: project.description ?? t("newSession.cloneProject"),
-                            checked: params.selectedRemoteProject?.cloneUrl === project.cloneUrl,
-                            title: project.webUrl,
-                            onSelect: () =>
-                              params.onSelectRemoteProject({
-                                identity: project.fullName,
-                                cloneUrl: project.cloneUrl,
-                              }),
-                          },
-                          params.submitting || !params.projectAddAvailable,
-                        ),
-                      )}
-                    `
-                  : nothing}
-                ${params.projects.length === 0 && params.canWrite && !params.isAdmin
-                  ? html`<div class="new-session-page__menu-note">
-                      ${t("newSession.projectsAdminHint")}
-                    </div>`
-                  : nothing}
-              `}
-              ${params.remotePlacement
-                ? html`
-                    <details>
-                      <summary class="new-session-page__menu-title">
-                        ${t("configForm.advancedDivider")}
-                      </summary>
-                      ${renderWorktreeFields({
-                        branches: params.branches,
-                        branchesLoading: params.branchesLoading,
-                        baseRef: params.baseRef,
-                        worktreeName: params.worktreeName,
-                        worktreeNameLabel: t("newSession.checkoutName"),
-                        submitting: params.submitting,
-                        pendingPlacement: params.pendingPlacement,
-                        onBaseRefInput: params.onBaseRefInput,
-                        onWorktreeNameInput: params.onWorktreeNameInput,
-                      })}
-                      <div class="new-session-page__menu-note">
-                        ${t("newSession.placementSyncsFolder", { folder: params.state.label })}
-                      </div>
-                    </details>
-                  `
-                : nothing}
-              ${params.state.recents.length > 0
-                ? html`
-                    <div class="new-session-page__menu-title">${t("newSession.recentFolders")}</div>
-                    ${recentItems.map((recent, index) =>
-                      renderSessionMenuItem(
+                ${
+                  cloneInput && params.projectAddAvailable
+                    ? renderSessionMenuItem(
                         {
-                          value:
-                            recent.kind === "project"
-                              ? `recent-project:${recent.projectId}`
-                              : `recent:${recent.folder}`,
-                          label: recent.displayName,
-                          icon: recent.kind === "project" ? icons.gitBranch : icons.folder,
-                          sub: recentSuffixes[index],
-                          checked:
-                            recent.kind === "project"
-                              ? params.projectId === recent.projectId
-                              : !params.projectId && folder === recent.folder,
-                          title: recent.kind === "project" ? undefined : recent.folder,
+                          value: "project-clone-url",
+                          label: cloneInput,
+                          icon: icons.gitBranch,
+                          sub: t("newSession.cloneProject"),
+                          checked: params.selectedRemoteProject?.cloneUrl === cloneInput,
                           onSelect: () =>
-                            recent.kind === "project"
-                              ? params.onSelectProject(recent.projectId)
-                              : params.onApplyFolder(recent.folder),
+                            params.onSelectRemoteProject({
+                              identity: cloneInput,
+                              cloneUrl: cloneInput,
+                            }),
                         },
                         params.submitting,
-                      ),
-                    )}
-                  `
-                : nothing}
-              ${browseNeedsAdmin
-                ? html`<openclaw-tooltip .content=${t("newSession.browseRequiresAdmin")}>
-                    ${browseButton}
-                  </openclaw-tooltip>`
-                : browseButton}
-            </div>
-          `}
+                      )
+                    : nothing
+                }
+                ${
+                  !cloneInput && query.length >= 2 && params.projectSearchAvailable
+                    ? html`
+                        <div class="new-session-page__menu-title">
+                          ${t("newSession.githubProjects")}
+                        </div>
+                        ${
+                          params.projectSearchCredentialMissing
+                            ? html`<div class="new-session-page__menu-note">
+                                ${t("newSession.githubTokenHint")}
+                              </div>`
+                            : nothing
+                        }
+                        ${
+                          params.projectSearchLoading
+                            ? html`<div class="new-session-page__project-status" role="status">
+                                ${t("common.loading")}
+                              </div>`
+                            : nothing
+                        }
+                        ${
+                          params.projectSearchError
+                            ? html`<div class="new-session-page__project-error" role="alert">
+                                ${params.projectSearchError}
+                              </div>`
+                            : nothing
+                        }
+                        ${params.remoteProjects.map((project) =>
+                          renderSessionMenuItem(
+                            {
+                              value: `remote-project:${project.fullName}`,
+                              label: project.fullName,
+                              icon: icons.gitBranch,
+                              sub: project.description ?? t("newSession.cloneProject"),
+                              checked: params.selectedRemoteProject?.cloneUrl === project.cloneUrl,
+                              title: project.webUrl,
+                              onSelect: () =>
+                                params.onSelectRemoteProject({
+                                  identity: project.fullName,
+                                  cloneUrl: project.cloneUrl,
+                                  ...(project.defaultBranch
+                                    ? { defaultBranch: project.defaultBranch }
+                                    : {}),
+                                }),
+                            },
+                            params.submitting || !params.projectAddAvailable,
+                          ),
+                        )}
+                      `
+                    : nothing
+                }
+                ${
+                  params.projects.length === 0 && params.canWrite && !params.isAdmin
+                    ? html`<div class="new-session-page__menu-note">
+                        ${t("newSession.projectsAdminHint")}
+                      </div>`
+                    : nothing
+                }
+                ${
+                  params.state.recents.length > 0
+                    ? html`
+                        <div class="new-session-page__menu-title">
+                          ${t("newSession.recentFolders")}
+                        </div>
+                        ${recentItems.map((recent, index) =>
+                          renderSessionMenuItem(
+                            {
+                              value:
+                                recent.kind === "repository"
+                                  ? `repository:${recent.url}`
+                                  : `recent:${recent.folder}`,
+                              label: recent.displayName,
+                              icon: recent.kind === "folder" ? icons.folder : icons.gitBranch,
+                              sub: recentSuffixes[index],
+                              checked:
+                                recent.kind === "repository"
+                                  ? params.selectedRemoteProject?.cloneUrl === recent.url
+                                  : !params.freshWorkspace &&
+                                    !params.projectId &&
+                                    folder === recent.folder,
+                              title: recent.kind === "repository" ? recent.url : recent.folder,
+                              onSelect: () =>
+                                recent.kind === "repository"
+                                  ? params.onSelectRemoteProject({
+                                      identity: recent.displayName,
+                                      cloneUrl: recent.url,
+                                    })
+                                  : params.onApplyFolder(recent.folder),
+                            },
+                            params.submitting,
+                          ),
+                        )}
+                      `
+                    : nothing
+                }
+                ${
+                  browseNeedsAdmin
+                    ? html`<openclaw-tooltip .content=${t("newSession.browseRequiresAdmin")}>
+                        ${browseButton}
+                      </openclaw-tooltip>`
+                    : browseButton
+                }
+              </div>
+            `
+      }
     </wa-popover>
   `;
 }

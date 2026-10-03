@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import fs from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -18,13 +19,14 @@ afterEach(() => vi.restoreAllMocks());
 
 async function withLogsGateway(
   options: {
-    source?: "config" | "environment";
+    source?: "config" | "environment" | "malformed";
     denied?: boolean;
     failure?: "timeout" | "disconnect" | "malformed";
   },
   run: (fixture: {
     port: string;
     requests: string[];
+    tailParams: Array<Record<string, unknown>>;
     stdout: string[];
     stderr: string[];
   }) => Promise<void>,
@@ -46,8 +48,12 @@ async function withLogsGateway(
           ...(options.source === "config" ? { remote: { url: "ws://remote.example:19001" } } : {}),
         },
       });
+      if (options.source === "malformed") {
+        await fs.writeFile(state.configPath, "{ gateway:");
+      }
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
       const requests: string[] = [];
+      const tailParams: Array<Record<string, unknown>> = [];
       server.on("connection", (socket) => {
         sendMinimalGatewayConnectChallenge(socket);
         socket.on("message", (data) => {
@@ -56,6 +62,9 @@ async function withLogsGateway(
             return;
           }
           requests.push(frame.method);
+          if (frame.method === "logs.tail") {
+            tailParams.push(frame.params ?? {});
+          }
           if (frame.method === "connect") {
             sendMinimalGatewayResponse(
               socket,
@@ -102,7 +111,7 @@ async function withLogsGateway(
         throw new ExitError(code);
       });
       try {
-        await run({ port, requests, stdout, stderr });
+        await run({ port, requests, tailParams, stdout, stderr });
       } finally {
         await closeMinimalGatewayServer(server);
       }
@@ -125,6 +134,44 @@ describe("logs local port selection", () => {
       });
     },
   );
+
+  it.each(["--limit", "--max-bytes", "--interval"])(
+    "rejects an explicitly empty numeric %s before contacting Gateway",
+    async (flag) => {
+      await withLogsGateway({}, async ({ port, requests }) => {
+        await expect(
+          runLogs(["--port", port, flag, "", "--json", "--timeout", "1500"]),
+        ).rejects.toThrow(`${flag} must be a positive integer.`);
+        expect(requests).toEqual([]);
+      });
+    },
+  );
+
+  it("preserves omitted defaults and forwards valid numeric limits to Gateway", async () => {
+    await withLogsGateway({}, async ({ port, requests, tailParams }) => {
+      await runLogs(["--port", port, "--json", "--timeout", "1500"]);
+      await expect(
+        runLogs([
+          "--port",
+          port,
+          "--limit",
+          "7",
+          "--max-bytes",
+          "4096",
+          "--interval",
+          "2",
+          "--json",
+          "--timeout",
+          "1500",
+        ]),
+      ).resolves.toBeUndefined();
+      expect(requests).toEqual(["connect", "logs.tail", "connect", "logs.tail"]);
+      expect(tailParams).toEqual([
+        { limit: 200, maxBytes: 250_000 },
+        { limit: 7, maxBytes: 4096 },
+      ]);
+    });
+  });
 
   it.each(["text", "json"])(
     "reports the rejection reason and selected port when the RPC fails in %s mode",
@@ -187,21 +234,27 @@ describe("logs local port selection", () => {
     },
   );
 
-  it("honors an explicit URL even with an unusable default URL", async () => {
-    await withLogsGateway({ source: "config" }, async ({ port, requests, stdout }) => {
-      await runLogs([
-        "--url",
-        `ws://127.0.0.1:${port}`,
-        "--token",
-        "fixture-token",
-        "--json",
-        "--timeout",
-        "1500",
-      ]);
-      expect(requests).toEqual(["connect", "logs.tail"]);
-      expect(stdout.join("")).toContain("selected local log");
-    });
-  });
+  it.each(["config", "malformed"] as const)(
+    "honors an explicit URL with unusable %s",
+    async (source) => {
+      await withLogsGateway({ source }, async ({ port, requests, stdout, stderr }) => {
+        await runLogs([
+          "--url",
+          `ws://127.0.0.1:${port}`,
+          "--token",
+          "fixture-token",
+          "--json",
+          "--timeout",
+          "1500",
+        ]);
+        expect(requests).toEqual(["connect", "logs.tail"]);
+        expect(stdout.join("")).toContain("selected local log");
+        if (source === "malformed") {
+          expect(stderr.join("")).toContain("openclaw doctor --fix");
+        }
+      });
+    },
+  );
 
   it.each(["config", "environment"] as const)(
     "still rejects an unsafe %s target without an override",

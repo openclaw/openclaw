@@ -1,5 +1,4 @@
 import { normalizeLegacyDmAliases } from "openclaw/plugin-sdk/channel-config-helpers";
-// Discord helper module supports config schema behavior.
 import {
   buildChannelAllowBotsSchema,
   buildChannelConfigSchema,
@@ -10,10 +9,8 @@ import {
   ChannelBotLoopProtectionSchema,
   ChannelDangerouslyAllowNameMatchingSchema,
   ChannelPreviewStreamingConfigSchema,
-  ChannelStreamingProgressSchema,
   ProviderCommandsSchema,
-  requireAllowlistAllowFrom,
-  requireOpenAllowFrom,
+  refineChannelDmPolicy,
   TtsConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
@@ -26,9 +23,6 @@ import { z } from "zod";
 import { discordChannelConfigUiHints } from "./config-ui-hints.js";
 
 const SecretInputSchema = buildSecretInputSchema();
-const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
-  progress: ChannelStreamingProgressSchema.optional(),
-}).strict();
 
 const DiscordIdSchema = z
   .union([z.string(), z.number()])
@@ -79,6 +73,7 @@ const DiscordThreadSchema = z
 
 const DiscordGuildChannelSchema = buildGroupEntrySchema(
   {
+    requireMentionInBotThreads: z.boolean().optional(),
     ignoreOtherMentions: z.boolean().optional(),
     users: DiscordIdListSchema.optional(),
     roles: DiscordIdListSchema.optional(),
@@ -102,6 +97,7 @@ const DiscordGuildChannelSchema = buildGroupEntrySchema(
 
 const DiscordGuildSchema = buildGroupEntrySchema(
   {
+    requireMentionInBotThreads: z.boolean().optional(),
     slug: z.string().optional(),
     ignoreOtherMentions: z.boolean().optional(),
     ...buildChannelReactionShape({
@@ -115,20 +111,16 @@ const DiscordGuildSchema = buildGroupEntrySchema(
   { omit: ["enabled", "skills", "allowFrom", "systemPrompt"] },
 );
 
-const DiscordVoiceAutoJoinSchema = z
-  .object({
-    guildId: z.string().min(1),
-    channelId: z.string().min(1),
-    whenOccupied: z.boolean().optional(),
-  })
-  .strict();
-
 const DiscordVoiceAllowedChannelSchema = z
   .object({
     guildId: z.string().min(1),
     channelId: z.string().min(1),
   })
   .strict();
+
+const DiscordVoiceAutoJoinSchema = DiscordVoiceAllowedChannelSchema.extend({
+  whenOccupied: z.boolean().optional(),
+});
 
 const DiscordVoiceRealtimeToolPolicySchema = z.enum(["safe-read-only", "owner", "none"]);
 const DiscordVoiceRealtimeConsultPolicySchema = z.enum(["auto", "always"]);
@@ -202,7 +194,7 @@ const DiscordVoiceSchema = z
 const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
   omit: ["groupAllowFrom"],
   allowFrom: DiscordIdListSchema.optional(),
-  streaming: DiscordPreviewStreamingConfigSchema.optional(),
+  streaming: ChannelPreviewStreamingConfigSchema.optional(),
 });
 
 const DiscordAccountSchemaBase = z
@@ -407,23 +399,7 @@ const DiscordConfigSchemaBase = DiscordAccountSchemaBase.safeExtend({
   accounts: z.record(z.string(), DiscordAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  const dmPolicy = value.dmPolicy ?? "pairing";
-  const allowFrom = value.allowFrom;
-  requireOpenAllowFrom({
-    policy: dmPolicy,
-    allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.discord.dmPolicy="open" requires channels.discord.allowFrom to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: dmPolicy,
-    allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.discord.dmPolicy="allowlist" requires channels.discord.allowFrom to contain at least one sender ID',
-  });
+  refineChannelDmPolicy({ channelId: "discord", value, ctx });
 
   if (!value.accounts) {
     return;
@@ -432,24 +408,7 @@ const DiscordConfigSchemaBase = DiscordAccountSchemaBase.safeExtend({
     if (!account) {
       continue;
     }
-    const effectivePolicy = account.dmPolicy ?? value.dmPolicy ?? "pairing";
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.discord.accounts.*.dmPolicy="open" requires channels.discord.accounts.*.allowFrom (or channels.discord.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.discord.accounts.*.dmPolicy="allowlist" requires channels.discord.accounts.*.allowFrom (or channels.discord.allowFrom) to contain at least one sender ID',
-    });
+    refineChannelDmPolicy({ channelId: "discord", value, accountId, ctx });
   }
 });
 

@@ -1,10 +1,7 @@
-// Mattermost plugin module implements slash commands behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
-import { isWildcardBindHost } from "./callback-host.js";
+import { normalizeCallbackPath, resolveCallbackHost } from "./callback-host.js";
 import type { MattermostClient } from "./client.js";
-
-// ─── Types ───────────────────────────────────────────────────────────────────
 
 // Mattermost rejects command descriptions above 128 UTF-8 bytes. Keep portable
 // descriptions intact until this API boundary so other channels retain their text.
@@ -62,9 +59,6 @@ export type MattermostSlashCommandPayload = {
   response_url?: string;
 };
 
-/**
- * Response format for Mattermost slash command callbacks.
- */
 export type MattermostSlashCommandResponse = {
   response_type?: "ephemeral" | "in_channel";
   text: string;
@@ -73,8 +67,6 @@ export type MattermostSlashCommandResponse = {
   goto_location?: string;
   attachments?: unknown[];
 };
-
-// ─── MM API types ────────────────────────────────────────────────────────────
 
 type MattermostCommandCreate = {
   team_id: string;
@@ -87,18 +79,6 @@ type MattermostCommandCreate = {
   auto_complete_hint?: string;
   token?: string;
   creator_id?: string;
-};
-
-type MattermostCommandUpdate = {
-  id: string;
-  team_id: string;
-  trigger: string;
-  method: typeof MATTERMOST_SLASH_POST_METHOD | "G";
-  url: string;
-  description?: string;
-  auto_complete: boolean;
-  auto_complete_desc?: string;
-  auto_complete_hint?: string;
 };
 
 export type MattermostCommandResponse = {
@@ -117,81 +97,56 @@ export type MattermostCommandResponse = {
   delete_at?: number;
 };
 
-// ─── Default commands ────────────────────────────────────────────────────────
-
 /**
  * Built-in OpenClaw commands to register as native slash commands.
  * These mirror the text-based commands already handled by the gateway.
  */
 export const DEFAULT_COMMAND_SPECS: MattermostCommandSpec[] = [
   {
-    trigger: "oc_status",
     originalName: "status",
     description: "Show session status (model, usage, uptime)",
-    autoComplete: true,
   },
   {
-    trigger: "oc_model",
     originalName: "model",
     description: "View or change the current model",
-    autoComplete: true,
     autoCompleteHint: "[model-name] [--runtime runtime]",
   },
   {
-    trigger: "oc_models",
     originalName: "models",
     description: "Browse available models",
-    autoComplete: true,
     autoCompleteHint: "[provider]",
   },
   {
-    trigger: "oc_new",
     originalName: "new",
     description: "Start a new conversation session",
-    autoComplete: true,
   },
   {
-    trigger: "oc_help",
     originalName: "help",
     description: "Show available commands",
-    autoComplete: true,
   },
   {
-    trigger: "oc_think",
     originalName: "think",
     description: "Set thinking/reasoning level",
-    autoComplete: true,
     autoCompleteHint: "[off|low|medium|high]",
   },
   {
-    trigger: "oc_reasoning",
     originalName: "reasoning",
     description: "Toggle reasoning mode",
-    autoComplete: true,
     autoCompleteHint: "[on|off]",
   },
   {
-    trigger: "oc_verbose",
     originalName: "verbose",
     description: "Toggle verbose mode",
-    autoComplete: true,
     autoCompleteHint: "[on|off]",
   },
   {
-    trigger: "oc_queue",
     originalName: "queue",
     description: "Adjust active-run queue behavior",
-    autoComplete: true,
     autoCompleteHint:
       "[steer|followup|collect|interrupt] [debounce:2s] [cap:N] [drop:old|new|summarize]",
   },
-];
+].map((spec) => Object.assign(spec, { trigger: `oc_${spec.originalName}`, autoComplete: true }));
 
-// ─── Command registration ────────────────────────────────────────────────────
-
-/**
- * List existing custom slash commands for a team.
- */
 export async function listMattermostCommands(
   client: MattermostClient,
   teamId: string,
@@ -203,9 +158,6 @@ export async function listMattermostCommands(
   );
 }
 
-/**
- * Get a custom slash command by id.
- */
 export async function getMattermostCommand(
   client: MattermostClient,
   commandId: string,
@@ -217,49 +169,15 @@ export async function getMattermostCommand(
   );
 }
 
-/**
- * Create a custom slash command on a Mattermost team.
- */
-async function createMattermostCommand(
-  client: MattermostClient,
-  params: MattermostCommandCreate,
-): Promise<MattermostCommandResponse> {
-  return await client.request<MattermostCommandResponse>("/commands", {
-    method: "POST",
-    body: JSON.stringify(params),
-  });
-}
-
-/**
- * Delete a custom slash command.
- */
 async function deleteMattermostCommand(client: MattermostClient, commandId: string): Promise<void> {
-  await client.request<Record<string, unknown>>(`/commands/${encodeURIComponent(commandId)}`, {
+  // Mattermost answers with 200 {"status":"OK"}; registration recreates the command after this.
+  await client.request<void>(`/commands/${encodeURIComponent(commandId)}`, {
     method: "DELETE",
+    discardResponse: true,
   });
 }
 
-/**
- * Update an existing custom slash command.
- */
-async function updateMattermostCommand(
-  client: MattermostClient,
-  params: MattermostCommandUpdate,
-): Promise<MattermostCommandResponse> {
-  return await client.request<MattermostCommandResponse>(
-    `/commands/${encodeURIComponent(params.id)}`,
-    {
-      method: "PUT",
-      body: JSON.stringify(params),
-    },
-  );
-}
-
-/**
- * Register all OpenClaw slash commands for a given team.
- * Skips commands that are already registered with the same trigger + callback URL.
- * Returns the list of newly created command IDs.
- */
+/** Reconcile owned commands without modifying another integration's trigger. */
 export async function registerSlashCommands(params: {
   client: MattermostClient;
   teamId: string;
@@ -274,7 +192,6 @@ export async function registerSlashCommands(params: {
     throw new Error("creatorUserId is required for slash command reconciliation");
   }
 
-  // Fetch existing commands to avoid duplicates
   let existing: MattermostCommandResponse[];
   try {
     existing = await listMattermostCommands(client, teamId);
@@ -304,11 +221,7 @@ export async function registerSlashCommands(params: {
     const ownedCommands = existingForTrigger.filter(
       (cmd) => cmd.creator_id?.trim() === normalizedCreatorUserId,
     );
-    const foreignCommands = existingForTrigger.filter(
-      (cmd) => cmd.creator_id?.trim() !== normalizedCreatorUserId,
-    );
-
-    if (ownedCommands.length === 0 && foreignCommands.length > 0) {
+    if (ownedCommands.length === 0 && existingForTrigger.length > 0) {
       log?.(
         `mattermost: trigger /${spec.trigger} already used by non-OpenClaw command(s); skipping to avoid mutating external integrations`,
       );
@@ -322,51 +235,49 @@ export async function registerSlashCommands(params: {
     }
 
     const existingCmd = ownedCommands[0];
+    const command: MattermostCommandCreate = {
+      team_id: teamId,
+      trigger: spec.trigger,
+      method: MATTERMOST_SLASH_POST_METHOD,
+      url: callbackUrl,
+      description,
+      auto_complete: spec.autoComplete,
+      auto_complete_desc: description,
+      auto_complete_hint: spec.autoCompleteHint,
+    };
 
-    const existingNeedsUpdate = existingCmd
-      ? existingCmd.url !== callbackUrl || existingCmd.method !== MATTERMOST_SLASH_POST_METHOD
-      : false;
-
-    // Already registered with the correct callback URL and method.
-    if (existingCmd && !existingNeedsUpdate) {
-      log?.(`mattermost: command /${spec.trigger} already registered (id=${existingCmd.id})`);
+    const recordCommand = (receipt: MattermostCommandResponse, managed: boolean) => {
       registered.push({
-        id: existingCmd.id,
+        id: receipt.id,
         trigger: spec.trigger,
         teamId,
-        token: existingCmd.token,
+        token: receipt.token,
         url: callbackUrl,
-        managed: false,
+        managed,
       });
+    };
+
+    if (existingCmd?.url === callbackUrl && existingCmd.method === MATTERMOST_SLASH_POST_METHOD) {
+      log?.(`mattermost: command /${spec.trigger} already registered (id=${existingCmd.id})`);
+      recordCommand(existingCmd, false);
       continue;
     }
 
     // Exists but has drifted critical callback fields: attempt to reconcile by
     // updating (useful during callback URL migrations or method drift).
-    if (existingCmd && existingNeedsUpdate) {
+    if (existingCmd) {
       log?.(
         `mattermost: command /${spec.trigger} exists with different callback settings; updating (id=${existingCmd.id})`,
       );
       try {
-        const updated = await updateMattermostCommand(client, {
-          id: existingCmd.id,
-          team_id: teamId,
-          trigger: spec.trigger,
-          method: MATTERMOST_SLASH_POST_METHOD,
-          url: callbackUrl,
-          description,
-          auto_complete: spec.autoComplete,
-          auto_complete_desc: description,
-          auto_complete_hint: spec.autoCompleteHint,
-        });
-        registered.push({
-          id: updated.id,
-          trigger: spec.trigger,
-          teamId,
-          token: updated.token,
-          url: callbackUrl,
-          managed: false,
-        });
+        const updated = await client.request<MattermostCommandResponse>(
+          `/commands/${encodeURIComponent(existingCmd.id)}`,
+          {
+            method: "PUT",
+            body: JSON.stringify({ id: existingCmd.id, ...command }),
+          },
+        );
+        recordCommand(updated, false);
         continue;
       } catch (err) {
         log?.(
@@ -380,33 +291,18 @@ export async function registerSlashCommands(params: {
           log?.(
             `mattermost: failed to delete stale command /${spec.trigger} (id=${existingCmd.id}): ${String(deleteErr)}`,
           );
-          // Can't reconcile; skip this command.
           continue;
         }
-        // Continue on to create below.
       }
     }
 
     try {
-      const created = await createMattermostCommand(client, {
-        team_id: teamId,
-        trigger: spec.trigger,
-        method: MATTERMOST_SLASH_POST_METHOD,
-        url: callbackUrl,
-        description,
-        auto_complete: spec.autoComplete,
-        auto_complete_desc: description,
-        auto_complete_hint: spec.autoCompleteHint,
+      const created = await client.request<MattermostCommandResponse>("/commands", {
+        method: "POST",
+        body: JSON.stringify(command),
       });
       log?.(`mattermost: registered command /${spec.trigger} (id=${created.id})`);
-      registered.push({
-        id: created.id,
-        trigger: spec.trigger,
-        teamId,
-        token: created.token,
-        url: callbackUrl,
-        managed: true,
-      });
+      recordCommand(created, true);
     } catch (err) {
       log?.(`mattermost: failed to register command /${spec.trigger}: ${String(err)}`);
     }
@@ -415,9 +311,6 @@ export async function registerSlashCommands(params: {
   return registered;
 }
 
-/**
- * Clean up all registered slash commands.
- */
 export async function cleanupSlashCommands(params: {
   client: MattermostClient;
   commands: MattermostRegisteredCommand[];
@@ -437,11 +330,6 @@ export async function cleanupSlashCommands(params: {
   }
 }
 
-// ─── Callback parsing ────────────────────────────────────────────────────────
-
-/**
- * Parse a Mattermost slash command callback payload from a URL-encoded or JSON body.
- */
 export function parseSlashCommandPayload(
   body: string,
   contentType?: string,
@@ -451,42 +339,18 @@ export function parseSlashCommandPayload(
   }
 
   try {
-    if (contentType?.includes("application/json")) {
-      const parsed = JSON.parse(body) as Record<string, unknown>;
-
-      // Validate required fields (same checks as the form-encoded branch)
-      const token = typeof parsed.token === "string" ? parsed.token : "";
-      const teamId = typeof parsed.team_id === "string" ? parsed.team_id : "";
-      const channelId = typeof parsed.channel_id === "string" ? parsed.channel_id : "";
-      const userId = typeof parsed.user_id === "string" ? parsed.user_id : "";
-      const command = typeof parsed.command === "string" ? parsed.command : "";
-
-      if (!token || !teamId || !channelId || !userId || !command) {
-        return null;
-      }
-
-      return {
-        token,
-        team_id: teamId,
-        team_domain: typeof parsed.team_domain === "string" ? parsed.team_domain : undefined,
-        channel_id: channelId,
-        channel_name: typeof parsed.channel_name === "string" ? parsed.channel_name : undefined,
-        user_id: userId,
-        user_name: typeof parsed.user_name === "string" ? parsed.user_name : undefined,
-        command,
-        text: typeof parsed.text === "string" ? parsed.text : "",
-        trigger_id: typeof parsed.trigger_id === "string" ? parsed.trigger_id : undefined,
-        response_url: typeof parsed.response_url === "string" ? parsed.response_url : undefined,
-      };
-    }
-
-    // Default: application/x-www-form-urlencoded
-    const params = new URLSearchParams(body);
-    const token = params.get("token");
-    const teamId = params.get("team_id");
-    const channelId = params.get("channel_id");
-    const userId = params.get("user_id");
-    const command = params.get("command");
+    const json = contentType?.includes("application/json");
+    const parsed = json ? (JSON.parse(body) as Record<string, unknown>) : undefined;
+    const form = json ? undefined : new URLSearchParams(body);
+    const read = (key: string): string | undefined => {
+      const value = form ? form.get(key) : parsed?.[key];
+      return typeof value === "string" ? value : undefined;
+    };
+    const token = read("token");
+    const teamId = read("team_id");
+    const channelId = read("channel_id");
+    const userId = read("user_id");
+    const command = read("command");
 
     if (!token || !teamId || !channelId || !userId || !command) {
       return null;
@@ -495,15 +359,15 @@ export function parseSlashCommandPayload(
     return {
       token,
       team_id: teamId,
-      team_domain: params.get("team_domain") ?? undefined,
+      team_domain: read("team_domain"),
       channel_id: channelId,
-      channel_name: params.get("channel_name") ?? undefined,
+      channel_name: read("channel_name"),
       user_id: userId,
-      user_name: params.get("user_name") ?? undefined,
+      user_name: read("user_name"),
       command,
-      text: params.get("text") ?? "",
-      trigger_id: params.get("trigger_id") ?? undefined,
-      response_url: params.get("response_url") ?? undefined,
+      text: read("text") ?? "",
+      trigger_id: read("trigger_id"),
+      response_url: read("response_url"),
     };
   } catch {
     return null;
@@ -519,7 +383,6 @@ export function resolveCommandText(
   text: string,
   triggerMap?: ReadonlyMap<string, string>,
 ): string {
-  // Use the trigger map if available for accurate name resolution
   const commandName =
     triggerMap?.get(trigger) ?? (trigger.startsWith("oc_") ? trigger.slice(3) : trigger);
   const args = text.trim();
@@ -530,47 +393,22 @@ export function normalizeSlashCommandTrigger(command: string): string {
   return command.replace(/^\//, "").trim();
 }
 
-// ─── Config resolution ───────────────────────────────────────────────────────
-
-const DEFAULT_CALLBACK_PATH = "/api/channels/mattermost/command";
-
-/**
- * Ensure the callback path starts with a leading `/` to prevent
- * malformed URLs like `http://host:portapi/...`.
- */
-function normalizeCallbackPath(path: string): string {
-  const trimmed = path.trim();
-  if (!trimmed) {
-    return DEFAULT_CALLBACK_PATH;
-  }
-  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-}
-
 export function resolveSlashCommandConfig(
   raw?: Partial<MattermostSlashCommandConfig>,
 ): MattermostSlashCommandConfig {
   return {
     native: raw?.native ?? "auto",
     nativeSkills: raw?.nativeSkills ?? "auto",
-    callbackPath: normalizeCallbackPath(raw?.callbackPath ?? DEFAULT_CALLBACK_PATH),
+    callbackPath: normalizeCallbackPath(raw?.callbackPath),
     callbackUrl: normalizeOptionalString(raw?.callbackUrl),
   };
 }
 
 export function isSlashCommandsEnabled(config: MattermostSlashCommandConfig): boolean {
-  if (config.native === true) {
-    return true;
-  }
-  if (config.native === false) {
-    return false;
-  }
   // "auto" defaults to false for mattermost (opt-in)
-  return false;
+  return config.native === true;
 }
 
-/**
- * Build the callback URL that Mattermost will POST to when a command is invoked.
- */
 export function resolveCallbackUrl(params: {
   config: MattermostSlashCommandConfig;
   gatewayPort: number;
@@ -580,16 +418,8 @@ export function resolveCallbackUrl(params: {
     return params.config.callbackUrl;
   }
 
-  let host =
-    params.gatewayHost && !isWildcardBindHost(params.gatewayHost)
-      ? params.gatewayHost
-      : "localhost";
+  const host = resolveCallbackHost(params.gatewayHost);
   const path = normalizeCallbackPath(params.config.callbackPath);
-
-  // Bracket IPv6 literals so the URL is valid: http://[::1]:3015/...
-  if (host.includes(":") && !(host.startsWith("[") && host.endsWith("]"))) {
-    host = `[${host}]`;
-  }
 
   return `http://${host}:${params.gatewayPort}${path}`;
 }

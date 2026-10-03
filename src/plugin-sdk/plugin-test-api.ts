@@ -1,9 +1,20 @@
 // Plugin test API helpers construct SDK-shaped host APIs for plugin unit tests.
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   attachPluginApiFacades,
   type OpenClawPluginApiWithoutFacades,
 } from "../plugins/api-facades.js";
+import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
+import type { PluginServiceSchedulerV1 } from "../plugins/service-scheduler.types.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { OpenClawPluginApi } from "./plugin-runtime.js";
+
+/** Real scheduling ownership with a test clock; callers join it during fixture cleanup. */
+export function createTestPluginServiceScheduler(
+  scheduler: GatewayScheduler = createTestGatewayScheduler("fake-timers"),
+): PluginServiceSchedulerV1 {
+  return createPluginServiceScheduler(scheduler).scheduler;
+}
 
 /** Partial plugin API overrides accepted by the SDK test helper. */
 export type TestPluginApiInput = Partial<OpenClawPluginApi>;
@@ -27,6 +38,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerMcpServerConnectionResolver() {},
     registerChannel() {},
     registerGatewayMethod() {},
+    registerGatewayAccessPolicy() {},
     registerSessionCatalog() {},
     registerCli() {},
     registerNodeCliFeature() {},
@@ -55,15 +67,16 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerWebFetchProvider() {},
     registerWebSearchProvider() {},
     registerWorkerProvider() {},
+    registerStorageProvider() {},
     registerInteractiveHandler() {},
     onConversationBindingResolved() {},
     registerCommand() {},
     registerContextEngine() {},
     registerCompactionProvider() {},
+    registerDecisionProvider() {},
     registerAgentHarness() {},
     registerCodexAppServerExtensionFactory() {},
     registerAgentToolResultMiddleware() {},
-    registerDetachedTaskRuntime() {},
     registerSessionExtension() {},
     enqueueNextTurnInjection: async (injection) => ({
       enqueued: false,
@@ -107,3 +120,8 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     ...(session ? { session } : {}),
   };
 }
+
+export {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";

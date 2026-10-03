@@ -1,14 +1,14 @@
-// Opencode Go plugin module implements stream behavior.
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import {
-  composeProviderStreamWrappers,
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createOpenAICompatibleCompletionsThinkingOffWrapper,
   createPayloadPatchStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { isOpencodeGoKimiNoReasoningModelId } from "./provider-catalog.js";
-import { isOpencodeGoFixedAnthropicReasoningModelId } from "./provider-policy-api.js";
+import {
+  isOpencodeGoFixedAnthropicReasoningModelId,
+  isOpencodeGoKimiNoReasoningModelId,
+} from "./provider-policy-api.js";
 import { stripOpencodeGoKimiReasoningPayload } from "./reasoning-sanitizer.js";
 import {
   createOpencodeGoStalledStreamWrapper,
@@ -16,13 +16,10 @@ import {
   OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS_DEFAULT,
 } from "./stream-termination.js";
 
-export function createOpencodeGoAttributionWrapper(
-  baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
+function createOpencodeGoAttributionWrapper(
+  baseStreamFn: NonNullable<ProviderWrapStreamFnContext["streamFn"]>,
   sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
-): ProviderWrapStreamFnContext["streamFn"] {
-  if (!baseStreamFn) {
-    return undefined;
-  }
+): NonNullable<ProviderWrapStreamFnContext["streamFn"]> {
   return (model, context, options) => {
     const api = sourceApi ?? model.api;
     // OpenAI transports already consume the central policy; Anthropic does not.
@@ -45,73 +42,68 @@ export function createOpencodeGoAttributionWrapper(
   };
 }
 
-export function createOpencodeGoWrapper(
-  baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
+function createOpencodeGoDeepSeekWrapper(
+  baseStreamFn: NonNullable<ProviderWrapStreamFnContext["streamFn"]>,
   thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"],
+): NonNullable<ProviderWrapStreamFnContext["streamFn"]> {
+  const flashStreamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+    baseStreamFn,
+    thinkingLevel,
+    shouldPatchModel: (model) =>
+      model.provider === "opencode-go" && model.id === "deepseek-v4-flash",
+    resolveReasoningEffort: (level) => (level === "low" ? "low" : level === "max" ? "max" : "high"),
+  });
+  return (
+    createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn: flashStreamFn,
+      thinkingLevel,
+      shouldPatchModel: (model) =>
+        model.provider === "opencode-go" && model.id === "deepseek-v4-pro",
+    }) ?? baseStreamFn
+  );
+}
+
+export function createOpencodeGoWireWrapper(
+  ctx: ProviderWrapStreamFnContext,
 ): ProviderWrapStreamFnContext["streamFn"] {
+  const { streamFn: baseStreamFn, thinkingLevel } = ctx;
   if (!baseStreamFn) {
     return undefined;
   }
-  const wrapped =
-    composeProviderStreamWrappers(
-      baseStreamFn,
-      (streamFn) =>
-        streamFn
-          ? createPayloadPatchStreamWrapper(
-              streamFn,
-              ({ payload }) => stripOpencodeGoKimiReasoningPayload(payload),
-              {
-                shouldPatch: ({ model }) =>
-                  model.provider === "opencode-go" && isOpencodeGoKimiNoReasoningModelId(model.id),
-              },
-            )
-          : undefined,
-      (streamFn) => {
-        if (!streamFn) {
-          return undefined;
-        }
-        const thinkingOff = createOpenAICompatibleCompletionsThinkingOffWrapper(
-          streamFn,
-          thinkingLevel,
-        );
-        return (model, context, options) =>
-          model.provider === "opencode-go" && model.id === "kimi-k3"
-            ? thinkingOff(model, context, options)
-            : streamFn(model, context, options);
-      },
-      (streamFn) =>
-        streamFn
-          ? createPayloadPatchStreamWrapper(
-              streamFn,
-              ({ payload }) => {
-                delete payload.thinking;
-                delete payload.output_config;
-              },
-              {
-                shouldPatch: ({ model }) =>
-                  model.provider === "opencode-go" &&
-                  isOpencodeGoFixedAnthropicReasoningModelId(model.id),
-              },
-            )
-          : undefined,
-      (streamFn) =>
-        createDeepSeekV4OpenAICompatibleThinkingWrapper({
-          baseStreamFn: streamFn,
-          thinkingLevel,
-          shouldPatchModel: (model) =>
-            model.provider === "opencode-go" && model.id === "deepseek-v4-flash",
-          resolveReasoningEffort: (level) =>
-            level === "low" ? "low" : level === "max" ? "max" : "high",
-        }) ?? streamFn,
-      (streamFn) =>
-        createDeepSeekV4OpenAICompatibleThinkingWrapper({
-          baseStreamFn: streamFn,
-          thinkingLevel,
-          shouldPatchModel: (model) =>
-            model.provider === "opencode-go" && model.id === "deepseek-v4-pro",
-        }) ?? streamFn,
-      createOpencodeGoAttributionWrapper,
-    ) ?? baseStreamFn;
+  const payloadStreamFn = createPayloadPatchStreamWrapper(
+    baseStreamFn,
+    ({ payload, model }) => {
+      if (isOpencodeGoKimiNoReasoningModelId(model.id)) {
+        stripOpencodeGoKimiReasoningPayload(payload);
+      } else if (isOpencodeGoFixedAnthropicReasoningModelId(model.id)) {
+        delete payload.thinking;
+        delete payload.output_config;
+      }
+    },
+    { shouldPatch: ({ model }) => model.provider === "opencode-go" },
+  );
+  const thinkingOff = createOpenAICompatibleCompletionsThinkingOffWrapper(
+    payloadStreamFn,
+    thinkingLevel,
+    ctx.sourceApi,
+  );
+  const deepSeek = createOpencodeGoDeepSeekWrapper(
+    (model, context, options) =>
+      model.provider === "opencode-go" && model.id === "kimi-k3"
+        ? thinkingOff(model, context, options)
+        : payloadStreamFn(model, context, options),
+    thinkingLevel,
+  );
+  return createOpencodeGoAttributionWrapper(deepSeek, ctx.sourceApi);
+}
+
+export function createOpencodeGoWrapper(
+  ctx: ProviderWrapStreamFnContext,
+): ProviderWrapStreamFnContext["streamFn"] {
+  const wrapped = createOpencodeGoWireWrapper(ctx);
+  if (!wrapped) {
+    return undefined;
+  }
   // Outermost layer: provider-owned stalled SSE termination so the underlying
   // OpenAI SDK request is aborted at the raw opencode-go boundary instead of
   // waiting for the shared runtime stuck-session recovery.

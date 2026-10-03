@@ -1,19 +1,19 @@
-import { createHash } from "node:crypto";
-import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { clawPackageKey } from "./application-provenance.js";
+import { digestClawValue as digest } from "./digest.js";
 import {
   digestClawPackageRef,
   replaceClawPackageRefExpected,
 } from "./package-update-provenance.js";
 import { installClawPackages } from "./packages.js";
+import type { ClawPluginRuntimeOptions } from "./plugin-runtime.js";
 import {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
   readClawPackageRefs,
   type PersistedClawPackageRef,
 } from "./provenance.js";
-import type { ClawAddPlan, ClawManifest, ClawPackage } from "./types.js";
+import type { ClawAddPlan, ClawPackage } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
 import { collectClawRollbackFailures } from "./update-rollback.js";
 
@@ -30,30 +30,21 @@ export class ClawPackageUpdateError extends Error {
   constructor(
     message: string,
     readonly partial: boolean,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "ClawPackageUpdateError";
   }
 }
 
-function digest(value: unknown): string {
-  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
-}
-
-function packageKey(value: Pick<ClawPackage, "kind" | "ref">): string {
-  return `${value.kind}:${value.ref}`;
-}
-
 export async function applyClawPackageUpdate(
   updatePlan: ClawUpdatePlan,
-  _targetManifest: ClawManifest,
   targetAddPlan: ClawAddPlan,
-  options: OpenClawStateDatabaseOptions & {
+  options: ClawPluginRuntimeOptions & {
     installPackages?: typeof installClawPackages;
     readRefs?: typeof readClawPackageRefs;
     replaceExpected?: typeof replaceClawPackageRefExpected;
     packageDeps?: PackageInstallerDeps;
-    runtime?: RuntimeEnv;
     nowMs?: number;
   },
 ): Promise<ClawPackageUpdateExecution> {
@@ -67,7 +58,7 @@ export async function applyClawPackageUpdate(
   const readRefs = options.readRefs ?? readClawPackageRefs;
   const replaceExpected = options.replaceExpected ?? replaceClawPackageRefExpected;
   const currentRefs = new Map(
-    readRefs({ ...options, agentId: updatePlan.agentId }).map((ref) => [packageKey(ref), ref]),
+    readRefs({ ...options, agentId: updatePlan.agentId }).map((ref) => [clawPackageKey(ref), ref]),
   );
   const allRefs = readRefs(options);
   const undo: Array<() => Promise<void>> = [];
@@ -194,6 +185,7 @@ export async function applyClawPackageUpdate(
         { ...targetAddPlan, actions: [targetAction] },
         {
           ...options,
+          pluginInstallMode: action.action === "change" ? "update" : "install",
           deps: {
             ...options.packageDeps,
             preflightPlugin: async (params) => {
@@ -250,7 +242,7 @@ export async function applyClawPackageUpdate(
         },
       );
       const installed = refs.find(
-        (ref) => packageKey(ref) === action.id && ref.version === target.version,
+        (ref) => clawPackageKey(ref) === action.id && ref.version === target.version,
       );
       if (!installed) {
         throw new ClawPackageUpdateError(
@@ -269,6 +261,7 @@ export async function applyClawPackageUpdate(
       throw new ClawPackageUpdateError(
         `${coerceErrorMessage(error)}; package artifact outcome requires reconciliation`,
         true,
+        { cause: error },
       );
     }
     try {
@@ -277,11 +270,13 @@ export async function applyClawPackageUpdate(
       throw new ClawPackageUpdateError(
         `${coerceErrorMessage(error)}; rollback incomplete: ${coerceErrorMessage(rollbackError)}`,
         externalMutations.length > 0,
+        { cause: new AggregateError([error, rollbackError]) },
       );
     }
     throw new ClawPackageUpdateError(
       coerceErrorMessage(error),
       error instanceof ClawPackageUpdateError ? error.partial : false,
+      { cause: error },
     );
   }
   return { appliedIds, rollback };

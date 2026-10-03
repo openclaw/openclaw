@@ -1,8 +1,5 @@
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../../plugins/hook-agent-context.js";
 import type { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
+import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import type { EmbeddedForegroundPromptContext } from "./params.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -39,6 +36,7 @@ export function buildEmbeddedForegroundPromptContext(
     messageChannel: run.messageChannel,
     messageProvider: run.messageProvider,
     clientCaps: run.clientCaps,
+    gatewayUiCommandTarget: run.gatewayUiCommandTarget,
     toolBindings: run.toolBindings,
     chatType: run.chatType,
     agentAccountId: run.agentAccountId,
@@ -72,6 +70,8 @@ export function buildEmbeddedForegroundPromptContext(
     githubPublicationAvailable: run.githubPublicationAvailable,
     conversationRecall: run.conversationRecall,
     toolOverrides: run.toolOverrides,
+    permissionMode: run.permissionMode,
+    execOverrides: run.execOverrides,
     skillsSnapshot: run.skillsSnapshot,
     currentInboundEventKind: run.currentInboundEventKind,
     clientTools: run.clientTools,
@@ -83,6 +83,7 @@ export function buildEmbeddedForegroundPromptContext(
     forceHeartbeatTool: run.forceHeartbeatTool,
     allowGatewaySubagentBinding: run.allowGatewaySubagentBinding,
     extraSystemPrompt: run.extraSystemPrompt,
+    gitCoauthorPrompt: run.gitCoauthorPrompt,
     sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
     silentReplyPromptMode: run.silentReplyPromptMode,
@@ -109,12 +110,7 @@ export function buildEmbeddedAgentEndContext(params: {
 }): AgentEndContext {
   const run = params.run;
   return {
-    runId: run.runId,
-    trace: params.trace,
-    agentId: params.agentId,
-    sessionKey: run.sessionKey,
-    sessionId: run.sessionId,
-    workspaceDir: run.workspaceDir,
+    ...buildEmbeddedAgentHookContext(run, params.agentId, params.trace),
     modelProviderId: run.provider,
     modelId: run.modelId,
     modelContextWindowTokens: run.contextTokenBudget ?? run.model.contextWindow,
@@ -125,14 +121,6 @@ export function buildEmbeddedAgentEndContext(params: {
     authProfileId: run.authProfileId,
     skillWorkshopAvailable: params.skillWorkshopAvailable,
     compacted: params.compacted,
-    trigger: run.trigger,
     ...(run.config ? { config: run.config } : {}),
-    ...buildAgentHookContextChannelFields(run),
-    ...buildAgentHookContextIdentityFields({
-      trigger: run.trigger,
-      senderId: run.senderId,
-      chatId: run.chatId,
-      channelContext: run.channelContext,
-    }),
   };
 }

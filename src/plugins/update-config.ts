@@ -1,4 +1,5 @@
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
@@ -73,16 +74,6 @@ export function buildLoadPathHelpers(existing: string[], env: NodeJS.ProcessEnv 
     changed = true;
   };
 
-  const removePath = (value: string) => {
-    const normalized = resolveUserPath(value, env);
-    if (!resolved.has(normalized)) {
-      return;
-    }
-    paths = paths.filter((entry) => resolveUserPath(entry, env) !== normalized);
-    resolved = resolveSet();
-    changed = true;
-  };
-
   const removeMatching = (predicate: (value: string) => boolean) => {
     const next = paths.filter((entry) => !predicate(entry));
     if (next.length === paths.length) {
@@ -95,7 +86,12 @@ export function buildLoadPathHelpers(existing: string[], env: NodeJS.ProcessEnv 
 
   return {
     addPath,
-    removePath,
+    removePath(value: string) {
+      const normalized = resolveUserPath(value, env);
+      if (resolved.has(normalized)) {
+        removeMatching((entry) => resolveUserPath(entry, env) === normalized);
+      }
+    },
     removeMatching,
     get changed() {
       return changed;
@@ -127,19 +123,11 @@ function pathEndsWithSegment(params: {
 
 export function isBridgeBundledPathRecord(params: {
   bridge: ExternalizedBundledPluginBridge;
-  bundledLocalPath?: string;
   record: PluginInstallRecord;
   env: NodeJS.ProcessEnv;
 }): boolean {
   if (params.record.source !== "path") {
     return false;
-  }
-  if (
-    params.bundledLocalPath &&
-    (userPathsEqual(params.record.sourcePath, params.bundledLocalPath, params.env) ||
-      userPathsEqual(params.record.installPath, params.bundledLocalPath, params.env))
-  ) {
-    return true;
   }
   const bundledPathSuffix = getExternalizedBundledPluginLegacyPathSuffix(params.bridge);
   return (
@@ -238,10 +226,7 @@ export function isExternalizedBundledPluginEnabled(params: {
       return true;
     }
   }
-  if (isBridgeChannelEnabledByConfig(params)) {
-    return true;
-  }
-  return false;
+  return isBridgeChannelEnabledByConfig(params);
 }
 
 function replacePluginIdInList(
@@ -252,14 +237,7 @@ function replacePluginIdInList(
   if (!entries || entries.length === 0 || fromId === toId || !entries.includes(fromId)) {
     return entries;
   }
-  const next: string[] = [];
-  for (const entry of entries) {
-    const value = entry === fromId ? toId : entry;
-    if (!next.includes(value)) {
-      next.push(value);
-    }
-  }
-  return next;
+  return uniqueStrings(entries.map((entry) => (entry === fromId ? toId : entry)));
 }
 
 export function migratePluginConfigId(
@@ -283,16 +261,11 @@ export function migratePluginConfigId(
   const installs = plugins.installs;
   if (installs && Object.hasOwn(installs, fromId)) {
     const record = installs[fromId];
-    const nextInstalls = { ...installs };
-    if (record && !Object.hasOwn(installs, toId)) {
-      // Plugin ids are record keys; define data properties so "__proto__" cannot invoke its setter.
-      Object.defineProperty(nextInstalls, toId, {
-        configurable: true,
-        enumerable: true,
-        value: record,
-        writable: true,
-      });
-    }
+    // Computed properties keep plugin ids such as "__proto__" as ordinary data keys.
+    const nextInstalls = {
+      ...installs,
+      ...(record && !Object.hasOwn(installs, toId) ? { [toId]: record } : {}),
+    };
     delete nextInstalls[fromId];
     ensureNextPlugins().installs = nextInstalls;
   }
@@ -301,20 +274,10 @@ export function migratePluginConfigId(
   if (entries && Object.hasOwn(entries, fromId)) {
     const entry = entries[fromId];
     const existingEntry = Object.hasOwn(entries, toId) ? entries[toId] : undefined;
-    const nextEntries = { ...entries };
-    if (entry) {
-      Object.defineProperty(nextEntries, toId, {
-        configurable: true,
-        enumerable: true,
-        value: existingEntry
-          ? {
-              ...entry,
-              ...existingEntry,
-            }
-          : entry,
-        writable: true,
-      });
-    }
+    const nextEntries = {
+      ...entries,
+      ...(entry ? { [toId]: existingEntry ? { ...entry, ...existingEntry } : entry } : {}),
+    };
     delete nextEntries[fromId];
     ensureNextPlugins().entries = nextEntries;
   }
@@ -363,12 +326,14 @@ export async function repairRegisteredOpenClawHostLink(params: {
   pluginId: string;
   record: PluginInstallRecord;
   logger: PluginUpdateLogger;
+  beforePersistentEffect?: () => void;
 }): Promise<boolean> {
   const result = await reconcileRegisteredOpenClawHostLinks({
     installRecords: { [params.pluginId]: params.record },
     extensionsDir: resolveDefaultPluginExtensionsDir(),
     mode: "repair",
     logger: params.logger,
+    beforePersistentApply: params.beforePersistentEffect,
   });
   return result.repaired > 0;
 }
@@ -376,12 +341,14 @@ export async function repairRegisteredOpenClawHostLink(params: {
 export async function repairOpenClawPeerLinksForNpmInstalls(params: {
   config: OpenClawConfig;
   logger: PluginUpdateLogger;
+  beforePersistentEffect?: () => void;
 }): Promise<boolean> {
   const result = await reconcileRegisteredOpenClawHostLinks({
     installRecords: params.config.plugins?.installs ?? {},
     extensionsDir: resolveDefaultPluginExtensionsDir(),
     mode: "repair",
     logger: params.logger,
+    beforePersistentApply: params.beforePersistentEffect,
     onPackageReadError: (error, packageDir) => {
       params.logger.warn?.(
         `Could not repair openclaw peer link at ${packageDir}: ${String(error)}`,

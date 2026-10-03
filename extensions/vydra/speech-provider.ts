@@ -1,18 +1,6 @@
-// Vydra provider module implements model/runtime integration.
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import {
-  assertOkOrThrowHttpError,
-  postJsonRequest,
-  readProviderJsonResponse,
-  resolveProviderHttpRequestConfig,
-} from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import type {
-  SpeechProviderConfig,
-  SpeechProviderOverrides,
-  SpeechProviderPlugin,
-} from "openclaw/plugin-sdk/speech-core";
-import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
+import type { SpeechProviderConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
+import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-provider";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -21,10 +9,8 @@ import {
   DEFAULT_VYDRA_BASE_URL,
   DEFAULT_VYDRA_SPEECH_MODEL,
   DEFAULT_VYDRA_VOICE_ID,
-  downloadVydraAsset,
-  extractVydraResultUrls,
   normalizeVydraBaseUrl,
-} from "./shared.js";
+} from "./defaults.js";
 
 type VydraSpeechConfig = {
   apiKey?: string;
@@ -72,19 +58,6 @@ function readVydraSpeechConfig(config: SpeechProviderConfig): VydraSpeechConfig 
   };
 }
 
-function readVydraOverrides(overrides: SpeechProviderOverrides | undefined): {
-  model?: string;
-  voiceId?: string;
-} {
-  if (!overrides) {
-    return {};
-  }
-  return {
-    model: normalizeOptionalString(overrides.model),
-    voiceId: normalizeOptionalString(overrides.voiceId),
-  };
-}
-
 export function buildVydraSpeechProvider(): SpeechProviderPlugin {
   return {
     id: "vydra",
@@ -101,12 +74,21 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
         ),
       ),
     synthesize: async (req) => {
+      const { downloadVydraAsset, extractVydraResultUrls } = await import("./shared.js");
       const config = readVydraSpeechConfig(req.providerConfig);
-      const overrides = readVydraOverrides(req.providerOverrides);
+      const overrides = req.providerOverrides;
       const apiKey = resolveSpeechProviderApiKey(config.apiKey, process.env.VYDRA_API_KEY);
       if (!apiKey) {
         throw new Error("Vydra API key missing");
       }
+      const { resolveGeneratedMediaMaxBytes } =
+        await import("openclaw/plugin-sdk/media-generation-runtime");
+      const {
+        assertOkOrThrowHttpError,
+        postJsonRequest,
+        readProviderJsonResponse,
+        resolveProviderHttpRequestConfig,
+      } = await import("openclaw/plugin-sdk/provider-http");
 
       const fetchFn = fetch;
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
@@ -124,11 +106,11 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
         });
 
       const { response, release } = await postJsonRequest({
-        url: `${baseUrl}/models/${overrides.model ?? config.model}`,
+        url: `${baseUrl}/models/${normalizeOptionalString(overrides?.model) ?? config.model}`,
         headers,
         body: {
           text: req.text,
-          voice_id: overrides.voiceId ?? config.voiceId,
+          voice_id: normalizeOptionalString(overrides?.voiceId) ?? config.voiceId,
         },
         timeoutMs: req.timeoutMs,
         fetchFn,

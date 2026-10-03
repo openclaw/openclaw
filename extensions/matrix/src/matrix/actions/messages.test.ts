@@ -1,4 +1,7 @@
 // Matrix tests cover messages plugin behavior.
+import { M_POLL_KIND_DISCLOSED, M_POLL_KIND_UNDISCLOSED } from "matrix-js-sdk/lib/@types/polls.js";
+import { PollResponseEvent } from "matrix-js-sdk/lib/extensible_events_v1/PollResponseEvent.js";
+import { PollStartEvent } from "matrix-js-sdk/lib/extensible_events_v1/PollStartEvent.js";
 import { describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
@@ -65,6 +68,7 @@ function createHistoryMessage(params: {
   body: string;
   timestamp: number;
   sender?: string;
+  threadId?: string;
   replaces?: string;
   omitNewContent?: boolean;
 }): Record<string, unknown> {
@@ -76,6 +80,9 @@ function createHistoryMessage(params: {
     content: {
       msgtype: "m.text",
       body: params.replaces ? `* ${params.body}` : params.body,
+      ...(params.threadId
+        ? { "m.relates_to": { rel_type: "m.thread", event_id: params.threadId } }
+        : {}),
       ...(params.replaces
         ? {
             "m.relates_to": { rel_type: "m.replace", event_id: params.replaces },
@@ -148,6 +155,7 @@ function createEditClient(originalContent: Record<string, unknown>) {
   const sendMessage = vi.fn().mockResolvedValue("evt-edit");
   const client = {
     getEvent: vi.fn().mockResolvedValue({ content: originalContent }),
+    getRelations: vi.fn().mockResolvedValue({ events: [], nextBatch: null }),
     getJoinedRoomMembers: vi.fn().mockResolvedValue([]),
     getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
     sendMessage,
@@ -221,10 +229,15 @@ describe("matrix message actions", () => {
     try {
       const cfg = {} as never;
       const markdown = "    @room";
-      const result = await editMatrixMessage("!room:example.org", "$original", markdown, {
-        cfg,
-        timeoutMs: 12_345,
-      });
+      const result = await editMatrixMessage(
+        "!room:example.org",
+        "$original",
+        `${markdown}  \t\n`,
+        {
+          cfg,
+          timeoutMs: 12_345,
+        },
+      );
 
       expect(result).toEqual({ eventId: "evt-edit" });
       expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", markdown, {
@@ -232,25 +245,6 @@ describe("matrix message actions", () => {
         accountId: undefined,
         client: undefined,
         timeoutMs: 12_345,
-      });
-    } finally {
-      editSpy.mockRestore();
-    }
-  });
-
-  it("preserves leading Markdown indentation while trimming trailing edit whitespace", async () => {
-    const editSpy = vi.spyOn(sendModule, "editMessageMatrix").mockResolvedValue("evt-edit");
-
-    try {
-      await editMatrixMessage("!room:example.org", "$original", "    @room  \t\n", {
-        cfg: MATRIX_ACTION_TEST_CFG,
-      });
-
-      expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", "    @room", {
-        cfg: MATRIX_ACTION_TEST_CFG,
-        accountId: undefined,
-        client: undefined,
-        timeoutMs: undefined,
       });
     } finally {
       editSpy.mockRestore();
@@ -317,16 +311,7 @@ describe("matrix message actions", () => {
     const { client, doRequest, getEvent, getRelations } = createMessagesClient({
       chunk: [
         createPollResponseEvent(),
-        {
-          event_id: "$msg",
-          sender: "@alice:example.org",
-          type: "m.room.message",
-          origin_server_ts: 10,
-          content: {
-            msgtype: "m.text",
-            body: "hello",
-          },
-        },
+        createHistoryMessage({ eventId: "$msg", body: "hello", timestamp: 10 }),
       ],
       pollRoot: createPollStartEvent({
         includeDisclosedKind: true,
@@ -364,6 +349,46 @@ describe("matrix message actions", () => {
       eventId: "$msg",
       body: "hello",
     });
+  });
+
+  it.each([
+    { kind: M_POLL_KIND_DISCLOSED.name, disclosed: true },
+    { kind: M_POLL_KIND_DISCLOSED.altName, disclosed: true },
+    { kind: M_POLL_KIND_UNDISCLOSED.name, disclosed: false },
+    { kind: M_POLL_KIND_UNDISCLOSED.altName, disclosed: false },
+  ])("preserves $kind results in room and thread history", async ({ kind, disclosed }) => {
+    const poll = PollStartEvent.from("Favorite fruit?", ["Apple", "Strawberry"], kind);
+    const pollRoot = {
+      ...poll.serialize(),
+      event_id: "$poll",
+      sender: "@alice:example.org",
+      origin_server_ts: 1,
+    };
+    const vote = {
+      ...PollResponseEvent.from(
+        poll.answers.slice(0, 1).map((answer) => answer.id),
+        "$poll",
+      ).serialize(),
+      event_id: "$vote",
+      sender: "@bob:example.org",
+      origin_server_ts: 20,
+    };
+    const { client } = createMessagesClient({
+      chunk: [vote],
+      pollRoot,
+      pollRelations: [vote],
+      threadRelations: [],
+    });
+
+    for (const threadId of [undefined, "$poll"]) {
+      const result = await readMatrixMessages("room:!room:example.org", { client, threadId });
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0]?.body).toBe(
+        disclosed
+          ? "[Poll]\nFavorite fruit?\n\n1. Apple (1 vote)\n2. Strawberry (0 votes)\n\nTotal voters: 1"
+          : "[Poll]\nFavorite fruit?\n\n1. Apple\n2. Strawberry\n\nResponses are hidden until the poll closes.",
+      );
+    }
   });
 
   it.each([
@@ -409,45 +434,25 @@ describe("matrix message actions", () => {
   });
 
   it.each([
-    {
-      direction: "backward",
-      chunk: [
-        createHistoryMessage({
-          eventId: "$edit-new",
-          body: "final text",
-          timestamp: 30,
-          replaces: "$original",
-        }),
-        createHistoryMessage({
-          eventId: "$edit-old",
-          body: "intermediate text",
-          timestamp: 20,
-          replaces: "$original",
-        }),
-        createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
-      ],
-      after: undefined,
-    },
-    {
-      direction: "forward",
-      chunk: [
-        createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
-        createHistoryMessage({
-          eventId: "$edit-old",
-          body: "intermediate text",
-          timestamp: 20,
-          replaces: "$original",
-        }),
-        createHistoryMessage({
-          eventId: "$edit-new",
-          body: "final text",
-          timestamp: 30,
-          replaces: "$original",
-        }),
-      ],
-      after: "previous-page",
-    },
-  ])("collapses valid Matrix replacements in $direction history", async ({ chunk, after }) => {
+    { direction: "backward", after: undefined },
+    { direction: "forward", after: "previous-page" },
+  ])("collapses valid Matrix replacements in $direction history", async ({ after }) => {
+    const chronological = [
+      createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
+      createHistoryMessage({
+        eventId: "$edit-old",
+        body: "intermediate text",
+        timestamp: 20,
+        replaces: "$original",
+      }),
+      createHistoryMessage({
+        eventId: "$edit-new",
+        body: "final text",
+        timestamp: 30,
+        replaces: "$original",
+      }),
+    ];
+    const chunk = after ? chronological : chronological.toReversed();
     const { client } = createMessagesClient({ chunk });
 
     const result = await readMatrixMessages("room:!room:example.org", { client, after });
@@ -650,27 +655,13 @@ describe("matrix message actions", () => {
   it("filters Matrix thread events out of main-room reads", async () => {
     const { client } = createMessagesClient({
       chunk: [
-        {
-          event_id: "$thread-reply",
-          sender: "@alice:example.org",
-          type: "m.room.message",
-          origin_server_ts: 20,
-          content: {
-            msgtype: "m.text",
-            body: "thread reply",
-            "m.relates_to": { rel_type: "m.thread", event_id: "$thread-root" },
-          },
-        },
-        {
-          event_id: "$main",
-          sender: "@alice:example.org",
-          type: "m.room.message",
-          origin_server_ts: 10,
-          content: {
-            msgtype: "m.text",
-            body: "main room",
-          },
-        },
+        createHistoryMessage({
+          eventId: "$thread-reply",
+          body: "thread reply",
+          timestamp: 20,
+          threadId: "$thread-root",
+        }),
+        createHistoryMessage({ eventId: "$main", body: "main room", timestamp: 10 }),
       ],
     });
 
@@ -702,28 +693,18 @@ describe("matrix message actions", () => {
     const { client, doRequest, getEvent, getRelations } = createMessagesClient({
       chunk: [],
       pollRelations: [
-        {
-          event_id: "$thread-reply",
-          sender: "@alice:example.org",
-          type: "m.room.message",
-          origin_server_ts: 20,
-          content: {
-            msgtype: "m.text",
-            body: "thread reply",
-            "m.relates_to": { rel_type: "m.thread", event_id: "$thread-root" },
-          },
-        },
+        createHistoryMessage({
+          eventId: "$thread-reply",
+          body: "thread reply",
+          timestamp: 20,
+          threadId: "$thread-root",
+        }),
       ],
-      pollRoot: {
-        event_id: "$thread-root",
-        sender: "@alice:example.org",
-        type: "m.room.message",
-        origin_server_ts: 10,
-        content: {
-          msgtype: "m.text",
-          body: "thread root",
-        },
-      },
+      pollRoot: createHistoryMessage({
+        eventId: "$thread-root",
+        body: "thread root",
+        timestamp: 10,
+      }),
     });
 
     const result = await readMatrixMessages("room:!room:example.org", {
@@ -791,17 +772,12 @@ describe("matrix message actions", () => {
       }),
       pollRelations: [createPollResponseEvent()],
       threadRelations: [
-        {
-          event_id: "$thread-reply",
-          sender: "@alice:example.org",
-          type: "m.room.message",
-          origin_server_ts: 20,
-          content: {
-            msgtype: "m.text",
-            body: "thread reply",
-            "m.relates_to": { rel_type: "m.thread", event_id: "$poll" },
-          },
-        },
+        createHistoryMessage({
+          eventId: "$thread-reply",
+          body: "thread reply",
+          timestamp: 20,
+          threadId: "$poll",
+        }),
       ],
     });
 
@@ -835,17 +811,12 @@ describe("matrix message actions", () => {
       chunk: [],
       pollRoot: createPollResponseEvent(),
       threadRelations: [
-        {
-          event_id: "$thread-reply",
-          sender: "@alice:example.org",
-          type: "m.room.message",
-          origin_server_ts: 20,
-          content: {
-            msgtype: "m.text",
-            body: "thread reply",
-            "m.relates_to": { rel_type: "m.thread", event_id: "$vote" },
-          },
-        },
+        createHistoryMessage({
+          eventId: "$thread-reply",
+          body: "thread reply",
+          timestamp: 20,
+          threadId: "$vote",
+        }),
       ],
     });
 
@@ -867,28 +838,18 @@ describe("matrix message actions", () => {
     const { client, doRequest, getEvent, getRelations } = createMessagesClient({
       chunk: [],
       pollRelations: [
-        {
-          event_id: "$thread-reply",
-          sender: "@alice:example.org",
-          type: "m.room.message",
-          origin_server_ts: 20,
-          content: {
-            msgtype: "m.text",
-            body: "thread reply",
-            "m.relates_to": { rel_type: "m.thread", event_id: "$thread-root" },
-          },
-        },
+        createHistoryMessage({
+          eventId: "$thread-reply",
+          body: "thread reply",
+          timestamp: 20,
+          threadId: "$thread-root",
+        }),
       ],
-      pollRoot: {
-        event_id: "$thread-root",
-        sender: "@alice:example.org",
-        type: "m.room.message",
-        origin_server_ts: 10,
-        content: {
-          msgtype: "m.text",
-          body: "thread root",
-        },
-      },
+      pollRoot: createHistoryMessage({
+        eventId: "$thread-root",
+        body: "thread root",
+        timestamp: 10,
+      }),
     });
 
     const result = await readMatrixMessages("room:!room:example.org", {
@@ -990,17 +951,12 @@ describe("matrix message actions", () => {
     const { client, doRequest, getEvent, getRelations } = createMessagesClient({
       chunk: [],
       pollRelations: [
-        {
-          event_id: "$thread-reply",
-          sender: "@alice:example.org",
-          type: "m.room.message",
-          origin_server_ts: 20,
-          content: {
-            msgtype: "m.text",
-            body: "thread reply",
-            "m.relates_to": { rel_type: "m.thread", event_id: "$thread-root" },
-          },
-        },
+        createHistoryMessage({
+          eventId: "$thread-reply",
+          body: "thread reply",
+          timestamp: 20,
+          threadId: "$thread-root",
+        }),
       ],
       pollRoot: {
         event_id: "$thread-root",

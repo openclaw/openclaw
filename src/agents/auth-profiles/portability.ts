@@ -7,10 +7,11 @@ import { AUTH_STORE_VERSION } from "./constants.js";
 import type { AuthProfileCredential, AuthProfileSecretsStore, AuthProfileStore } from "./types.js";
 
 /** Reason a credential is or is not portable into an agent copy. */
-export type AuthProfilePortabilityReason =
+type AuthProfilePortabilityReason =
   | "portable-static-credential"
   | "non-portable-oauth-refresh-token"
   | "credential-opted-out"
+  | "setup-inactive"
   | "oauth-provider-opted-in";
 
 /** Portability decision for copying credentials into an agent-local store. */
@@ -19,31 +20,23 @@ export type AuthProfilePortability = {
   reason: AuthProfilePortabilityReason;
 };
 
-// OAuth refresh material is not copied by default because it can be tied to a
-// local profile/keychain flow. Static credentials are portable unless opted out.
-function hasAgentCopyOverride(credential: AuthProfileCredential): boolean | undefined {
-  return typeof credential.copyToAgents === "boolean" ? credential.copyToAgents : undefined;
-}
-
-function hasCopyableOAuthMaterial(credential: AuthProfileCredential): boolean {
-  if (credential.type !== "oauth") {
-    return false;
-  }
-  return [credential.access, credential.refresh].some(
-    (value) => typeof value === "string" && value.trim().length > 0,
-  );
-}
-
 /** Resolves whether a credential can be copied into an agent-local store. */
 export function resolveAuthProfilePortability(
   credential: AuthProfileCredential,
 ): AuthProfilePortability {
-  const override = hasAgentCopyOverride(credential);
+  if (credential.setup?.replacement) {
+    return { portable: false, reason: "setup-inactive" };
+  }
+  const override = credential.copyToAgents;
   if (override === false) {
     return { portable: false, reason: "credential-opted-out" };
   }
   if (credential.type === "oauth") {
-    if (!hasCopyableOAuthMaterial(credential)) {
+    if (
+      ![credential.access, credential.refresh].some(
+        (value) => typeof value === "string" && value.trim().length > 0,
+      )
+    ) {
       return { portable: false, reason: "non-portable-oauth-refresh-token" };
     }
     return override === true
@@ -51,13 +44,6 @@ export function resolveAuthProfilePortability(
       : { portable: false, reason: "non-portable-oauth-refresh-token" };
   }
   return { portable: true, reason: "portable-static-credential" };
-}
-
-/** Returns true when a credential can be copied into an agent-local store. */
-export function isAuthProfileCredentialPortableForAgentCopy(
-  credential: AuthProfileCredential,
-): boolean {
-  return resolveAuthProfilePortability(credential).portable;
 }
 
 /** Builds an agent-copy store containing only portable credentials and their order. */
@@ -70,7 +56,7 @@ export function buildPortableAuthProfileStoreForAgentCopy(store: AuthProfileStor
   const skippedProfileIds: string[] = [];
   const profiles = Object.fromEntries(
     Object.entries(store.profiles).flatMap(([profileId, credential]) => {
-      if (!isAuthProfileCredentialPortableForAgentCopy(credential)) {
+      if (!resolveAuthProfilePortability(credential).portable) {
         skippedProfileIds.push(profileId);
         return [];
       }

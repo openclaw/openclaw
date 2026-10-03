@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../../i18n/index.ts";
-import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 
 type ChatRealtimeTalkConversationProps = {
   assistantName: string;
@@ -33,12 +33,14 @@ export function renderRealtimeTalkConversation(props: ChatRealtimeTalkConversati
             >
               <span class="agent-chat__voice-turn-speaker">${label}</span>
               <span class="agent-chat__voice-turn-text">${entry.text}</span>
-              ${entry.isStreaming
-                ? html`<span
-                    class="agent-chat__voice-turn-stream"
-                    aria-label=${t("chat.composer.stillListening")}
-                  ></span>`
-                : nothing}
+              ${
+                entry.isStreaming
+                  ? html`<span
+                      class="agent-chat__voice-turn-stream"
+                      aria-label=${t("chat.composer.stillListening")}
+                    ></span>`
+                  : nothing
+              }
             </div>
           `;
         },

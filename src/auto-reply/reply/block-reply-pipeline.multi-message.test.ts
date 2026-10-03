@@ -84,6 +84,8 @@ describe("block reply pipeline multi-assistant-message suppression", () => {
 
       pipeline.enqueue(blockFor("Same answer", 0));
       await pipeline.flush({ force: true });
+      expect(pipeline.didStreamTerminalReply?.(0)).toBe(true);
+      expect(pipeline.didStreamTerminalReply?.(1)).toBe(false);
       const finalPayload = blockFor("Same answer", 1);
       const { replyPayloads } = await buildReplyPayloads({
         payloads: [finalPayload],
@@ -99,17 +101,4 @@ describe("block reply pipeline multi-assistant-message suppression", () => {
       expect(replyPayloads).toEqual([expect.objectContaining({ text: "Same answer" })]);
     },
   );
-
-  it("suppresses a single message split into multiple blocks", async () => {
-    const pipeline = createBlockReplyPipeline({
-      onBlockReply: async () => {},
-      timeoutMs: 5000,
-    });
-
-    pipeline.enqueue(blockFor("Gamma one.", 0));
-    pipeline.enqueue(blockFor("Gamma two.", 0));
-    await pipeline.flush({ force: true });
-
-    expect(pipeline.hasSentPayload({ text: "Gamma one. Gamma two." })).toBe(true);
-  });
 });

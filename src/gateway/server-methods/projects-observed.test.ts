@@ -8,8 +8,6 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { createProjectsHandlers } from "./projects.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-type ProjectWorktreeService = Parameters<typeof createProjectsHandlers>[0];
-
 const seededSessions = vi.hoisted(() => ({
   store: {} as Record<string, SessionEntry>,
 }));
@@ -18,8 +16,12 @@ vi.mock("../session-utils.js", () => ({
   loadCombinedSessionStoreForGatewayCore: () => ({ store: seededSessions.store }),
 }));
 
+vi.mock("../../config/sessions/combined-store-gateway.js", () => ({
+  loadCombinedSessionStoreForGatewayCoreAsync: async () => ({ store: seededSessions.store }),
+}));
+
 vi.mock("../../projects/project-registry.js", () => ({
-  listProjectRegistry: () => [],
+  listProjectRegistry: async () => [],
   ProjectCheckoutError: class ProjectCheckoutError extends Error {},
   registerProjectRegistry: vi.fn(),
   removeProjectRegistry: vi.fn(),
@@ -59,7 +61,7 @@ function assertObservedProjectsPayload(
 
 async function listObservedProjects(params: {
   service: {
-    listRegistryRecords: () => unknown[];
+    listRegistryRecords: () => Promise<unknown[]>;
     resolveRepositoryIdentity: (checkoutPath: string) => Promise<{
       checkoutRoot: string;
       repoRoot: string;
@@ -69,13 +71,20 @@ async function listObservedProjects(params: {
   };
   client?: GatewayClient;
 }) {
-  const handlers = createProjectsHandlers(params.service as never);
+  const handlers = createProjectsHandlers({
+    listRegistryRecords: params.service.listRegistryRecords,
+    resolveRepositoryIdentities: (roots: string[]) =>
+      Promise.all(
+        roots.map((root) => params.service.resolveRepositoryIdentity(root).catch(() => undefined)),
+      ),
+  } as never);
   const responses: Parameters<RespondFn>[] = [];
+  const cfg = { agents: { list: [{ id: "main", default: true }] } };
   await handlers["projects.list"]?.({
     params: { includeObserved: true },
     respond: (...response: Parameters<RespondFn>) => responses.push(response),
     context: {
-      getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+      getRuntimeConfig: () => cfg,
     } as GatewayRequestContext,
     client: params.client ?? authenticatedClient("operator@example.com"),
   } as never);
@@ -94,6 +103,46 @@ beforeEach(() => {
 });
 
 describe("projects.list observed projects", () => {
+  it("deduplicates admitted paths and preserves result order when a checkout is unavailable", async () => {
+    seededSessions.store = Object.fromEntries(
+      Array.from({ length: 5_000 }, (_, index) => [
+        `agent:main:session-${index}`,
+        { sessionId: `session-${index}`, updatedAt: index, execCwd: `/repos/${index % 8}` },
+      ]),
+    );
+    const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => {
+      if (checkoutPath === "/repos/3") {
+        throw new Error("checkout unavailable");
+      }
+      return {
+        checkoutRoot: checkoutPath.replace("/repos/", "/physical/"),
+        repoRoot: "/physical/main",
+        originUrl: "https://example.test/project.git",
+        fingerprint: "project",
+      };
+    });
+
+    await expect(
+      listObservedProjects({
+        service: { listRegistryRecords: async () => [], resolveRepositoryIdentity },
+      }),
+    ).resolves.toEqual([
+      {
+        name: "7",
+        originUrl: "https://example.test/project.git",
+        lastUsedAt: 4_999,
+        checkouts: [7, 6, 5, 4, 2, 1, 0].map((index) => ({
+          runnerId: "gateway",
+          path: `/physical/${index}`,
+        })),
+      },
+    ]);
+    expect(resolveRepositoryIdentity).toHaveBeenCalledTimes(8);
+    expect(new Set(resolveRepositoryIdentity.mock.calls.map(([checkout]) => checkout)).size).toBe(
+      8,
+    );
+  });
+
   it.each([["operator.write"], ["operator.admin"]])(
     "returns detailed observed projects to %s callers",
     async (scope) => {
@@ -124,7 +173,7 @@ describe("projects.list observed projects", () => {
 
       await expect(
         listObservedProjects({
-          service: { listRegistryRecords: () => [], resolveRepositoryIdentity },
+          service: { listRegistryRecords: async () => [], resolveRepositoryIdentity },
           client: authenticatedClient(`${scope}@example.com`, [scope]),
         }),
       ).resolves.toEqual([
@@ -186,7 +235,7 @@ describe("projects.list observed projects", () => {
       originUrl: `https://example.test${checkoutPath}.git`,
       fingerprint: checkoutPath,
     }));
-    const service = { listRegistryRecords: () => worktrees, resolveRepositoryIdentity };
+    const service = { listRegistryRecords: async () => worktrees, resolveRepositoryIdentity };
 
     const viewer = (await listObservedProjects({
       service,
@@ -224,7 +273,7 @@ describe("projects.list observed projects", () => {
 
     const projects = (await listObservedProjects({
       service: {
-        listRegistryRecords: () => [],
+        listRegistryRecords: async () => [],
         resolveRepositoryIdentity: async (checkoutPath: string) => ({
           checkoutRoot: checkoutPath,
           repoRoot: checkoutPath,
@@ -261,7 +310,7 @@ describe("projects.list observed projects", () => {
 
     const projects = (await listObservedProjects({
       service: {
-        listRegistryRecords: () => worktrees,
+        listRegistryRecords: async () => worktrees,
         resolveRepositoryIdentity: async (checkoutPath: string) => ({
           checkoutRoot: checkoutPath,
           repoRoot: checkoutPath,
@@ -289,20 +338,20 @@ describe("projects.list observed projects", () => {
         { sessionId: `session-${index}`, updatedAt: index, execCwd: `/repos/${index}` },
       ]),
     );
-    const resolveRepositoryIdentity = vi.fn<ProjectWorktreeService["resolveRepositoryIdentity"]>(
-      async (_checkoutPath) => {
-        throw new Error("checkout unavailable");
-      },
-    );
+    const resolveRepositoryIdentity = vi.fn<
+      Parameters<typeof listObservedProjects>[0]["service"]["resolveRepositoryIdentity"]
+    >(async (_checkoutPath) => {
+      throw new Error("checkout unavailable");
+    });
 
     await expect(
       listObservedProjects({
-        service: { listRegistryRecords: () => [], resolveRepositoryIdentity },
+        service: { listRegistryRecords: async () => [], resolveRepositoryIdentity },
       }),
     ).resolves.toEqual([]);
     expect(resolveRepositoryIdentity).toHaveBeenCalledTimes(PROJECTS_LIST_MAX_IDENTITY_PROBES);
     expect(resolveRepositoryIdentity.mock.calls.length).toBeLessThanOrEqual(rawCandidateLimit);
-    expect(resolveRepositoryIdentity.mock.calls[0]?.[0]).toBe(`/repos/${rawCandidateLimit + 4}`);
+    expect(resolveRepositoryIdentity).toHaveBeenCalledWith(`/repos/${rawCandidateLimit + 4}`);
     expect(resolveRepositoryIdentity).not.toHaveBeenCalledWith("/repos/0");
   });
 });

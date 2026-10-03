@@ -1,12 +1,22 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 // Projects prepared connection identity into user-turn attribution fields.
+import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  getCommandSenderAuthority,
+  withCommandSenderAuthority,
+} from "../../auto-reply/command-sender-authority.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.types.js";
-import type { GatewayClient } from "./shared-types.js";
+import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
+import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
+import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
+import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
+import type { GatewayClient, GatewayRequestOptions } from "./shared-types.js";
 
 export function isGatewayClientProfilePending(client: GatewayClient | null): boolean {
   return Boolean(client?.authenticatedGitHubIdentitySync && !client.authenticatedUserProfile);
@@ -14,12 +24,42 @@ export function isGatewayClientProfilePending(client: GatewayClient | null): boo
 
 export function authenticatedProfileUnavailableError(
   message = "Authenticated profile verification is unavailable. Retry shortly; if this continues, contact a gateway administrator.",
+  retryAfterMs = 1_000,
 ): ErrorShape {
   return errorShape(ErrorCodes.UNAVAILABLE, message, {
     retryable: true,
-    retryAfterMs: 1_000,
+    retryAfterMs,
     details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
   });
+}
+
+export async function authorizeAuthenticatedProfileForMethod(params: {
+  client: GatewayRequestOptions["client"];
+  requiresProfile: () => boolean;
+  sessionScope?: SessionOperatorScope;
+}): Promise<ErrorShape | null> {
+  const requiresSessionProfile = params.sessionScope !== undefined;
+  const sessionProfileError = () => {
+    const actor = resolveGatewayOperatorRoleActor(params.client);
+    return requiresSessionProfile && (actor?.kind !== "operator" || !actor.profileId.trim())
+      ? errorShape(ErrorCodes.FORBIDDEN, "Session-scoped access requires a verified user profile.")
+      : null;
+  };
+  const sync = params.client?.authenticatedGitHubIdentitySync;
+  if (!sync || params.client?.authenticatedUserProfile?.profileId.trim()) {
+    return sessionProfileError();
+  }
+  if (!requiresSessionProfile && !params.requiresProfile()) {
+    return null;
+  }
+  try {
+    await sync();
+  } catch {
+    return authenticatedProfileUnavailableError();
+  }
+  return params.client?.authenticatedUserProfile?.profileId.trim()
+    ? sessionProfileError()
+    : authenticatedProfileUnavailableError();
 }
 
 export function gatewayClientSenderFields(client: GatewayClient | null): {
@@ -56,4 +96,42 @@ export function gatewayClientSessionCreator(client: GatewayClient | null) {
         ...(profile.displayName ? { label: profile.displayName } : {}),
       }
     : undefined;
+}
+
+/** Authenticated ingress facts shared by chat execution and its current caller controls. */
+export function resolveChatSendCallerContext(
+  client: GatewayClient | null | undefined,
+  clientInfo: GatewayClientInfo | undefined = client?.connect?.client,
+  originatingChannel: string = INTERNAL_MESSAGE_CHANNEL,
+) {
+  const synthetic = isSyntheticGatewayCaller(client ?? null);
+  const commandSenderAuthority = synthetic
+    ? undefined
+    : (getCommandSenderAuthority(client) ??
+      (() =>
+        client?.authenticatedUserId &&
+        !client.invalidated &&
+        !client.connectionSignal?.aborted &&
+        !isSyntheticGatewayCaller(client)
+          ? client.authenticatedUserProfile?.profileId
+          : undefined));
+  return withCommandSenderAuthority(
+    {
+      Provider: INTERNAL_MESSAGE_CHANNEL,
+      Surface: INTERNAL_MESSAGE_CHANNEL,
+      OriginatingChannel: originatingChannel,
+      ChatType: "direct",
+      ApprovalReviewerDeviceId: normalizeOptionalString(client?.connect?.device?.id),
+      ...(!synthetic && !isOperatorUiClient(clientInfo)
+        ? {
+            SenderId: clientInfo?.id,
+            SenderName: clientInfo?.displayName,
+            SenderUsername: clientInfo?.displayName,
+          }
+        : {}),
+      GatewayClientScopes: client?.connect?.scopes ?? [],
+      GatewayClientCaps: client?.connect?.caps ?? [],
+    },
+    commandSenderAuthority,
+  );
 }

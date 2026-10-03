@@ -7,6 +7,7 @@ import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
+import { shellLayoutTraits } from "../app/shell-layout-traits.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { icons } from "./icons.ts";
@@ -14,12 +15,22 @@ import "./tooltip.ts";
 
 type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
 
+const CARAPACE_STATUS_CLASS: Record<SettingsStatusKind, string> = {
+  accent: "oc-status-info",
+  danger: "oc-status-error",
+  muted: "",
+  ok: "oc-status-success",
+  warn: "oc-status-warning",
+};
+
 type SettingsRowControl = TemplateResult | typeof nothing;
 
 type SettingsRowProps = {
   title: unknown;
   description?: unknown;
   control?: SettingsRowControl;
+  /** Opts this row into the shared Carapace settings contract. */
+  carapace?: boolean;
   /** Full-width control below the text (textareas, segmented sets that wrap). */
   stacked?: boolean;
   /** Full-width control below the text through the narrow-layout breakpoint. */
@@ -31,10 +42,14 @@ export type SettingsSectionProps = {
   description?: unknown;
   /** Right-aligned inline actions next to the heading (e.g. an Add button). */
   actions?: TemplateResult;
+  /** Section notice above the group, keeping bordered callouts outside the card. */
+  notice?: TemplateResult | typeof nothing;
   /** Extra count shown next to the heading. */
   count?: number;
   /** Marks the group surface as a danger zone. */
   danger?: boolean;
+  /** Opts this section into the shared Carapace settings contract. */
+  carapace?: boolean;
 };
 
 type SettingsHelpTriggerProps = {
@@ -53,10 +68,21 @@ export type SettingsPageHeaderProps = {
 
 export function renderSettingsPage(
   children: unknown,
-  options: { wide?: boolean } = {},
+  options: { wide?: boolean; carapace?: boolean } = {},
 ): TemplateResult {
-  const className = options.wide ? "settings-page settings-page--wide" : "settings-page";
-  return html`<div class=${className}>${children}</div>`;
+  const className = [
+    "settings-page",
+    options.wide ? "settings-page--wide" : "",
+    options.carapace ? "oc-app-surface" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return html`<div
+    class=${className}
+    ${shellLayoutTraits({ settingsPage: true, settingsWide: options.wide })}
+  >
+    ${children}
+  </div>`;
 }
 
 export function renderDocsLink(url: string, label: unknown): TemplateResult {
@@ -95,14 +121,19 @@ export function renderLearnMoreLink(url: string): TemplateResult {
 
 export function renderSettingsPageHeader(props: SettingsPageHeaderProps): TemplateResult {
   return html`
-    <section class="content-header content-header--settings">
+    <section
+      class="content-header content-header--settings"
+      ${shellLayoutTraits({ toolbarHeader: true })}
+    >
       <div>
-        <div class="page-title">${props.title}</div>
+        <h1 class="page-title">${props.title}</h1>
         ${props.subtitle ? html`<div class="page-subtitle">${props.subtitle}</div>` : nothing}
       </div>
-      ${props.actions && props.actions !== nothing
-        ? html`<div class="page-header-actions">${props.actions}</div>`
-        : nothing}
+      ${
+        props.actions && props.actions !== nothing
+          ? html`<div class="page-header-actions">${props.actions}</div>`
+          : nothing
+      }
     </section>
   `;
 }
@@ -115,16 +146,26 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
   const copy =
     props.title || props.description
       ? html`
-          <div class="settings-section__copy">
-            ${props.title
-              ? html`
-                  <h2 class="settings-section__heading">
-                    ${props.title}${props.count !== undefined
-                      ? html` <span class="settings-count">${props.count}</span>`
-                      : nothing}
-                  </h2>
-                `
-              : nothing}
+          <div
+            class="settings-section__copy ${props.carapace ? "oc-settings-section-heading" : ""}"
+          >
+            ${
+              props.title
+                ? html`
+                    <h2
+                      class="settings-section__heading ${
+                        props.carapace ? "oc-settings-section-title" : ""
+                      }"
+                    >
+                      ${props.title}${
+                        props.count !== undefined
+                          ? html` <span class="settings-count">${props.count}</span>`
+                          : nothing
+                      }
+                    </h2>
+                  `
+                : nothing
+            }
             ${description}
           </div>
         `
@@ -132,46 +173,89 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
   const header =
     copy || props.actions
       ? html`
-          <div class="settings-section__header">
+          <div
+            class="settings-section__header ${props.carapace ? "oc-settings-section-header" : ""}"
+          >
             ${copy}
-            ${props.actions
-              ? html`<div class="settings-section__actions">${props.actions}</div>`
-              : nothing}
+            ${
+              props.actions
+                ? html`<div class="settings-section__actions">${props.actions}</div>`
+                : nothing
+            }
           </div>
         `
       : nothing;
-  const groupClass = props.danger ? "settings-group settings-group--danger" : "settings-group";
   return html`
-    <section class="settings-section">
-      ${header}
-      <div class=${groupClass}>${rows}</div>
+    <section class="settings-section ${props.carapace ? "oc-settings-section" : ""}">
+      ${header} ${props.notice ?? nothing} ${renderSettingsGroup(rows, props)}
     </section>
   `;
 }
 
+export function renderSettingsSummary(items: ReadonlyArray<{ label: string; value: number }>) {
+  return html`<dl class="settings-summary">
+    ${items.map(
+      (item) => html`<div class="settings-group settings-summary__tile">
+        <dt>${item.label}</dt>
+        <dd>${item.value}</dd>
+      </div>`,
+    )}
+  </dl>`;
+}
+
 /** A bare group surface without a section heading (rare; prefer sections). */
-export function renderSettingsGroup(rows: unknown, options: { danger?: boolean } = {}) {
-  const groupClass = options.danger ? "settings-group settings-group--danger" : "settings-group";
+export function renderSettingsGroup(
+  rows: unknown,
+  options: { danger?: boolean; carapace?: boolean } = {},
+) {
+  const groupClass = [
+    "settings-group",
+    options.danger ? "settings-group--danger" : "",
+    options.carapace ? "oc-settings-group" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return html`<div class=${groupClass}>${rows}</div>`;
 }
 
-export function renderSettingsRow(props: SettingsRowProps): TemplateResult {
-  const className = props.stacked
-    ? "settings-row settings-row--stacked"
-    : props.stackedOnNarrow
-      ? "settings-row settings-row--stacked-on-narrow"
-      : "settings-row";
+function renderSettingsRowText(title: unknown, description: unknown, carapace = false) {
   return html`
-    <div class=${className}>
-      <div class="settings-row__text">
-        <span class="settings-row__title">${props.title}</span>
-        ${props.description
-          ? html`<span class="settings-row__desc">${props.description}</span>`
-          : nothing}
-      </div>
-      ${props.control !== undefined && props.control !== nothing
-        ? html`<div class="settings-row__control">${props.control}</div>`
-        : nothing}
+    <div class="settings-row__text ${carapace ? "oc-settings-row-content" : ""}">
+      <span class="settings-row__title ${carapace ? "oc-settings-row-title" : ""}">${title}</span>
+      ${
+        description
+          ? html`<span class="settings-row__desc ${carapace ? "oc-settings-row-description" : ""}"
+              >${description}</span
+            >`
+          : nothing
+      }
+    </div>
+  `;
+}
+
+export function renderSettingsRow(
+  props: SettingsRowProps & { role?: "alert" | "status" },
+): TemplateResult {
+  const className = [
+    "settings-row",
+    props.stacked ? "settings-row--stacked" : "",
+    props.stackedOnNarrow ? "settings-row--stacked-on-narrow" : "",
+    props.carapace ? `oc-settings-row${props.stacked ? " oc-settings-row-stacked" : ""}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return html`
+    <div class=${className} role=${props.role ?? nothing}>
+      ${renderSettingsRowText(props.title, props.description, props.carapace)}
+      ${
+        props.control !== undefined && props.control !== nothing
+          ? html`<div
+              class="settings-row__control ${props.carapace ? "oc-settings-row-control" : ""}"
+            >
+              ${props.control}
+            </div>`
+          : nothing
+      }
     </div>
   `;
 }
@@ -182,12 +266,7 @@ export function renderSettingsNavRow(
 ): TemplateResult {
   return html`
     <button type="button" class="settings-row settings-row--nav" @click=${props.onClick}>
-      <div class="settings-row__text">
-        <span class="settings-row__title">${props.title}</span>
-        ${props.description
-          ? html`<span class="settings-row__desc">${props.description}</span>`
-          : nothing}
-      </div>
+      ${renderSettingsRowText(props.title, props.description)}
       <div class="settings-row__control">
         ${props.control ?? nothing}
         <span class="settings-row__chevron">${icons.chevronRight}</span>
@@ -210,6 +289,7 @@ export function renderSettingsToggle(props: {
       size="s"
       .checked=${live(props.checked)}
       ?disabled=${props.disabled ?? false}
+      aria-disabled="false"
       @change=${(event: Event) => {
         const target = event.currentTarget as HTMLElement & { checked: boolean };
         if (props.onChange(target.checked) === false) {
@@ -222,9 +302,9 @@ export function renderSettingsToggle(props: {
   `;
 }
 
-/** Toggle row: one <label> wraps title, description, and switch, so the whole
- * row is clickable and the checkbox gets its accessible name from the title. */
+/** The whole row activates the switch, whose accessible name follows the title. */
 export function renderSettingsToggleRow(props: {
+  icon?: unknown;
   title: unknown;
   ariaLabel?: unknown;
   description?: unknown;
@@ -260,12 +340,7 @@ export function renderSettingsToggleRow(props: {
         props.onChange(checked);
       }}
     >
-      <div class="settings-row__text">
-        <span class="settings-row__title">${props.title}</span>
-        ${props.description
-          ? html`<span class="settings-row__desc">${props.description}</span>`
-          : nothing}
-      </div>
+      ${props.icon ?? nothing} ${renderSettingsRowText(props.title, props.description)}
       <div class="settings-row__control">
         <wa-switch
           class="settings-toggle"
@@ -288,51 +363,111 @@ export function renderSettingsToggleRow(props: {
   `;
 }
 
+// Controls already show inherited values; reserve default references for overrides.
 export function renderSettingsDefaultDescription(value: string, overridden: boolean) {
-  return html`${t(overridden ? "configForm.defaultValue" : "configForm.usingDefault", { value })}`;
+  return overridden ? html`${t("configForm.defaultValue", { value })}` : undefined;
 }
 
-export function renderSettingsSegmented<T extends string>(props: {
-  value: T;
-  options: ReadonlyArray<{ value: T; label: unknown; title?: string; testId?: string }>;
-  /** The selected radio is passed so callers can anchor visual transitions. */
-  onChange: (value: T, element: HTMLElement) => void;
-  /** Optional activation for an already-selected value, such as clearing an explicit default. */
-  onReselect?: (value: T, element: HTMLElement) => void;
-  disabled?: boolean;
-  ariaLabel?: string;
-  className?: string;
-}): TemplateResult {
+export function renderSettingsSegmented<T extends string>(
+  props: {
+    value: T;
+    options: ReadonlyArray<{
+      value: T;
+      label: unknown;
+      title?: string;
+      testId?: string;
+      disabled?: boolean;
+      compactLabel?: string;
+      ariaLabel?: string;
+    }>;
+    disabled?: boolean;
+    ariaLabel?: string;
+    descriptionId?: string;
+    className?: string;
+  } & (
+    | {
+        mode?: undefined;
+        /** The selected radio is passed so callers can anchor visual transitions. */
+        onChange: (value: T, element: HTMLElement) => boolean | void;
+        onReselect?: (value: T, element: HTMLElement) => void;
+      }
+    | {
+        mode: "buttons";
+        variant?: "accent" | "primary" | "compact";
+        ariaPressed?: false;
+        onClick?: (event: MouseEvent, value: T) => void;
+        onChange: (value: T) => void;
+        onReselect?: (value: T) => void;
+      }
+  ),
+): TemplateResult<1> {
+  if (props.mode === "buttons") {
+    return html`<div
+      class="settings-segmented ${props.variant ? `settings-segmented--${props.variant}` : ""} ${props.className ?? ""}"
+      role=${props.ariaLabel ? "group" : nothing}
+      aria-label=${props.ariaLabel ?? nothing}
+    >
+      ${props.options.map(
+        (option) => html`<button
+          type="button"
+          class="settings-segmented__btn ${option.value === props.value ? "settings-segmented__btn--active" : ""} ${props.variant === "accent" ? "btn btn--sm" : ""}"
+          aria-pressed=${props.ariaPressed === false ? nothing : String(option.value === props.value)}
+          aria-label=${option.ariaLabel ?? nothing}
+          data-compact-label=${option.compactLabel ?? nothing}
+          data-test-id=${option.testId ?? nothing}
+          title=${option.title ?? nothing}
+          ?disabled=${props.disabled || option.disabled}
+          @click=${(event: MouseEvent) => {
+            props.onClick?.(event, option.value);
+            if (event.defaultPrevented || props.disabled || option.disabled) {
+              return;
+            }
+            if (option.value === props.value) {
+              props.onReselect?.(option.value);
+            } else {
+              props.onChange(option.value);
+            }
+          }}
+        >
+          ${option.label}
+        </button>`,
+      )}
+    </div>`;
+  }
   return html`
     <wa-radio-group
-      class="settings-segmented ${props.className ?? ""}"
+      class="settings-segmented  ${props.className ?? ""}"
       size="s"
+      aria-describedby=${props.descriptionId ?? nothing}
       orientation="horizontal"
       .value=${live(props.value)}
-      ?disabled=${props.disabled ?? false}
+      ?disabled=${live(props.disabled ?? false)}
       @change=${(event: Event) => {
-        const value = (event.currentTarget as HTMLElement & { value?: string }).value;
+        const group = event.currentTarget as HTMLElement & { value?: string };
+        const value = group.value;
         if (value !== undefined) {
-          const group = event.currentTarget as HTMLElement;
           const selected = [...group.querySelectorAll<HTMLElement>("wa-radio")].find(
             (radio) => radio.getAttribute("value") === value,
           );
-          props.onChange(value as T, selected ?? group);
+          if (props.onChange(value as T, selected ?? group) === false) {
+            group.value = props.value;
+          }
         }
       }}
     >
-      ${props.ariaLabel
-        ? html`<span slot="label" class="settings-control__sr-label">${props.ariaLabel}</span>`
-        : nothing}
+      ${
+        props.ariaLabel
+          ? html`<span slot="label" class="settings-control__sr-label">${props.ariaLabel}</span>`
+          : nothing
+      }
       ${props.options.map(
         (option) => html`
           <wa-radio
-            class="settings-segmented__btn ${option.value === props.value
-              ? "settings-segmented__btn--active"
-              : ""}"
+            class="settings-segmented__btn  ${option.value === props.value ? "settings-segmented__btn--active" : ""}"
             appearance="button"
             value=${option.value}
             .checked=${live(option.value === props.value)}
+            ?disabled=${live(option.disabled ?? false)}
             title=${option.title ?? nothing}
             data-test-id=${option.testId ?? nothing}
             @click=${(event: Event) => {
@@ -354,12 +489,23 @@ export function renderSettingsStatus(props: {
   kind: SettingsStatusKind;
   label: unknown;
   dot?: boolean;
+  carapace?: boolean;
 }): TemplateResult {
   const modifier = props.kind === "muted" ? "" : ` settings-status--${props.kind}`;
   return html`
-    <span class="settings-status${modifier}">
-      ${props.dot === false ? nothing : html`<span class="settings-status__dot"></span>`}
-      ${props.label}
+    <span
+      class="settings-status${modifier}${
+        props.carapace ? ` oc-status ${CARAPACE_STATUS_CLASS[props.kind]}` : ""
+      }"
+    >
+      ${
+        props.dot === false
+          ? nothing
+          : html`<span
+              class="settings-status__dot ${props.carapace ? "oc-status-indicator" : ""}"
+            ></span>`
+      }
+      <span class=${props.carapace ? "oc-status-label" : ""}>${props.label}</span>
     </span>
   `;
 }
@@ -372,13 +518,20 @@ export function renderSettingsValue(value: unknown, options: { mono?: boolean } 
   return html`<span class=${className}>${value}</span>`;
 }
 
-export function renderSettingsEmpty(message: unknown): TemplateResult {
-  return html`<div class="settings-empty">${message}</div>`;
+export function renderSettingsEmpty(
+  message: unknown,
+  options: { carapace?: boolean } = {},
+): TemplateResult {
+  return options.carapace
+    ? html`<div class="settings-empty oc-empty">
+        <div class="oc-empty-content"><p class="oc-empty-description">${message}</p></div>
+      </div>`
+    : html`<div class="settings-empty">${message}</div>`;
 }
 
 /** Shape-matched placeholder for settings rows whose content has not loaded yet. */
 export function renderSettingsLoadingSkeleton(
-  options: { label?: unknown; rows?: number } = {},
+  options: { label?: unknown; rows?: number; carapace?: boolean } = {},
 ): TemplateResult {
   const rowCount = Math.max(1, options.rows ?? 3);
   return html`
@@ -392,16 +545,28 @@ export function renderSettingsLoadingSkeleton(
         ${Array.from(
           { length: rowCount },
           (_, index) => html`
-            <div class="settings-row settings-loading-skeleton__row">
-              <div class="settings-row__text">
-                <span class="skeleton settings-loading-skeleton__title"></span>
-                <span class="skeleton settings-loading-skeleton__description"></span>
+            <div
+              class="settings-row settings-loading-skeleton__row ${
+                options.carapace ? "oc-settings-row" : ""
+              }"
+            >
+              <div class="settings-row__text ${options.carapace ? "oc-settings-row-content" : ""}">
+                <span
+                  class="skeleton settings-loading-skeleton__title ${
+                    options.carapace ? "oc-skeleton-line oc-skeleton-line-short" : ""
+                  }"
+                ></span>
+                <span
+                  class="skeleton settings-loading-skeleton__description ${
+                    options.carapace ? "oc-skeleton-line" : ""
+                  }"
+                ></span>
               </div>
               <div class="settings-row__control">
                 <span
-                  class="skeleton settings-loading-skeleton__control ${index % 2 === 0
-                    ? "settings-loading-skeleton__control--wide"
-                    : ""}"
+                  class="skeleton settings-loading-skeleton__control ${
+                    index % 2 === 0 ? "settings-loading-skeleton__control--wide" : ""
+                  }"
                 ></span>
               </div>
             </div>

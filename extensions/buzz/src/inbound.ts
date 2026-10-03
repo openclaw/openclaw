@@ -1,13 +1,15 @@
 import { normalizeURL } from "nostr-tools/utils";
 import {
   buildChannelInboundEventContext,
+  logInboundDrop,
   resolveChannelInboundRouteEnvelope,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { BuzzBus } from "./buzz-bus.js";
+import type { BuzzConfigInput } from "./config-schema.js";
 import {
   BUZZ_DIFF_MESSAGE_KIND,
   formatBuzzMessageForAgent,
@@ -55,7 +57,21 @@ export async function handleBuzzInbound(params: {
   const hasControlCommand =
     shouldComputeCommandAuthorized && runtime.channel.text.hasControlCommand(message.text, cfg);
   const groupConfig = account.config.groups?.[channelId];
-  const access = await resolveStableChannelMessageIngress({
+  const requireMention = groupConfig?.requireMention ?? true;
+  const isBotOwnedThread =
+    message.threadId &&
+    !wasMentioned &&
+    groupConfig?.requireMentionInBotThreads !== undefined &&
+    groupConfig.requireMentionInBotThreads !== requireMention
+      ? await bus.isBotOwnedThread({ channelId, threadId: message.threadId })
+      : false;
+  params.assertCurrent();
+  const mentionPolicy = resolveBotThreadMentionPolicy({
+    isBotOwnedThread,
+    requireMentionInBotThreads: groupConfig?.requireMentionInBotThreads,
+    requireMention,
+  });
+  const access = await runtime.channel.inbound.ingress.resolveStable({
     channelId: "buzz",
     accountId: account.accountId,
     identity: { key: "buzz-pubkey", entryIdPrefix: "buzz-entry" },
@@ -68,6 +84,7 @@ export async function handleBuzzInbound(params: {
     contextBinding: {
       agentId: route.agentId,
       sessionKey: route.sessionKey,
+      nativeChannelId: channelId,
       messageId: message.id,
       inboundEventKind: "user_request",
     },
@@ -76,7 +93,7 @@ export async function handleBuzzInbound(params: {
     groupAllowFrom: groupConfig?.groupAllowFrom ?? account.config.groupAllowFrom,
     policy: {
       activation: {
-        requireMention: groupConfig?.requireMention ?? true,
+        requireMention: mentionPolicy.requireMention,
         allowTextCommands: true,
       },
     },
@@ -93,6 +110,19 @@ export async function handleBuzzInbound(params: {
   const historyLimit = account.config.historyLimit ?? 0;
   if (access.ingress.admission !== "dispatch") {
     if (access.ingress.reasonCode === "activation_skipped") {
+      // SAFETY: Buzz's manifest schema validates this plugin-owned channel section before startup.
+      const buzzConfig = cfg.channels?.buzz as BuzzConfigInput | undefined;
+      const groupsPath = buzzConfig?.accounts?.[account.accountId]
+        ? `channels.buzz.accounts[${JSON.stringify(account.accountId)}].groups`
+        : "channels.buzz.groups";
+      logInboundDrop({
+        log: log.info,
+        channel: "buzz",
+        reason: "no mention",
+        target: channelId,
+        onceKey: JSON.stringify([account.accountId, channelId]),
+        hint: `Mention patterns can be derived from the agent identity name. Set ${groupsPath}[${JSON.stringify(channelId)}].requireMention=false to process messages without a mention.`,
+      });
       await recordBuzzPendingHistory({
         historyMap: params.historyMap,
         key: historyKey,
@@ -203,10 +233,7 @@ export async function handleBuzzInbound(params: {
     },
     delivery: {
       deliver: async (payload) => {
-        const text =
-          payload && typeof payload === "object" && "text" in payload
-            ? ((payload as { text?: string }).text ?? "")
-            : "";
+        const text = payload.text ?? "";
         if (!text.trim()) {
           return;
         }

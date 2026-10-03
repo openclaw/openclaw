@@ -5,7 +5,7 @@ import {
   type AiProviderRequestCapabilities,
   type AiProviderRequestPolicyInput,
 } from "../host.js";
-import type { AssistantMessage, Context, Model, OpenAICompletionsCompat } from "../types.js";
+import type { AssistantMessage, Context, Model } from "../types.js";
 
 const mockOpenAI = vi.hoisted(() => ({
   chunks: [] as unknown[],
@@ -48,10 +48,12 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
 } from "../transports/openai-completions-compat.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 
 const baseModel: Model<"openai-completions"> = {
@@ -71,11 +73,7 @@ const userMessage = { role: "user", content: "hello", timestamp: 1 } as const;
 const context: Context = { messages: [userMessage] };
 let previousAiTransportHost: ReturnType<typeof getAiTransportHost>;
 
-function createModel(
-  overrides: Partial<Model<"openai-completions">> & {
-    compat?: OpenAICompletionsCompat;
-  } = {},
-): Model<"openai-completions"> {
+function createModel(overrides: Partial<Model<"openai-completions">> = {}) {
   return { ...baseModel, ...overrides };
 }
 
@@ -210,11 +208,6 @@ function duplicatedCompatFields(compat: ResolvedOpenAICompletionsCompat): Duplic
   };
 }
 
-const legacyOpenRouterCompat = {
-  ...defaultDuplicatedCompat,
-  supportsDeveloperRole: false,
-  thinkingFormat: "openrouter",
-} satisfies DuplicatedCompatFields;
 const legacyCerebrasCompat = {
   ...defaultDuplicatedCompat,
   supportsStore: false,
@@ -230,29 +223,6 @@ const legacyMoonshotCompat = {
   supportsStrictMode: false,
 } satisfies DuplicatedCompatFields;
 const legacyCloudflareGatewayCompat = legacyMoonshotCompat;
-const legacyTogetherCompat = {
-  ...legacyMoonshotCompat,
-  thinkingFormat: "together",
-} satisfies DuplicatedCompatFields;
-const legacyZaiCompat = {
-  ...legacyXaiCompat,
-  maxTokensField: "max_tokens",
-  thinkingFormat: "zai",
-} satisfies DuplicatedCompatFields;
-const legacyXiaomiCompat = {
-  ...defaultDuplicatedCompat,
-  thinkingFormat: "deepseek",
-} satisfies DuplicatedCompatFields;
-const legacyDeepseekEndpointCompat = {
-  ...defaultDuplicatedCompat,
-  supportsStore: false,
-  supportsDeveloperRole: false,
-  thinkingFormat: "deepseek",
-} satisfies DuplicatedCompatFields;
-const legacyChutesCompat = {
-  ...legacyCerebrasCompat,
-  maxTokensField: "max_tokens",
-} satisfies DuplicatedCompatFields;
 
 const canonicalProxyCompat = {
   ...defaultDuplicatedCompat,
@@ -281,213 +251,109 @@ const canonicalDeepseekCompat = {
   ...canonicalProxyCompat,
   thinkingFormat: "deepseek",
 } satisfies DuplicatedCompatFields;
-const endpointPolicyDivergence =
-  "canonical transport endpoint policy replaces the legacy provider/URL heuristic";
 
 type MatrixParityCase = readonly [
   name: string,
   overrides: Partial<Model<"openai-completions">>,
-  legacyExpected: DuplicatedCompatFields,
   expected: DuplicatedCompatFields,
-  divergence: string | undefined,
 ];
 
 const legacyMatrixParityCases = [
-  [
-    "provider openrouter",
-    { provider: "openrouter" },
-    legacyOpenRouterCompat,
-    canonicalOpenRouterCompat,
-    endpointPolicyDivergence,
-  ],
+  ["provider openrouter", { provider: "openrouter" }, canonicalOpenRouterCompat],
   [
     "endpoint openrouter.ai",
     { provider: "custom", baseUrl: "https://openrouter.ai/api/v1" },
-    legacyOpenRouterCompat,
     canonicalOpenRouterCompat,
-    endpointPolicyDivergence,
   ],
   [
     "OpenRouter Anthropic model",
     { provider: "openrouter", id: "anthropic/claude-sonnet-4.6" },
-    { ...legacyOpenRouterCompat, supportsDeveloperRole: true },
     canonicalOpenRouterCompat,
-    endpointPolicyDivergence,
   ],
   [
     "OpenRouter OpenAI model",
     { provider: "openrouter", id: "openai/gpt-5.6-luna" },
-    { ...legacyOpenRouterCompat, supportsDeveloperRole: true },
     canonicalOpenRouterCompat,
-    endpointPolicyDivergence,
   ],
-  [
-    "provider cerebras",
-    { provider: "cerebras" },
-    legacyCerebrasCompat,
-    canonicalProxyCompat,
-    endpointPolicyDivergence,
-  ],
+  ["provider cerebras", { provider: "cerebras" }, canonicalProxyCompat],
   [
     "endpoint cerebras.ai",
     { provider: "custom", baseUrl: "https://api.cerebras.ai/v1" },
-    legacyCerebrasCompat,
     canonicalProxyCompat,
-    endpointPolicyDivergence,
   ],
-  [
-    "provider xai",
-    { provider: "xai" },
-    legacyXaiCompat,
-    canonicalProxyCompat,
-    endpointPolicyDivergence,
-  ],
+  ["provider xai", { provider: "xai" }, canonicalProxyCompat],
   [
     "endpoint api.x.ai",
     { provider: "custom", baseUrl: "https://api.x.ai/v1" },
-    legacyXaiCompat,
     canonicalProxyCompat,
-    endpointPolicyDivergence,
   ],
-  [
-    "provider moonshotai",
-    { provider: "moonshotai" },
-    legacyMoonshotCompat,
-    legacyMoonshotCompat,
-    undefined,
-  ],
-  [
-    "provider moonshotai-cn",
-    { provider: "moonshotai-cn" },
-    legacyMoonshotCompat,
-    legacyMoonshotCompat,
-    undefined,
-  ],
+  ["provider moonshotai", { provider: "moonshotai" }, legacyMoonshotCompat],
+  ["provider moonshotai-cn", { provider: "moonshotai-cn" }, legacyMoonshotCompat],
   [
     "endpoint Moonshot global",
     { provider: "custom", baseUrl: "https://api.moonshot.ai/v1" },
     legacyMoonshotCompat,
-    legacyMoonshotCompat,
-    undefined,
   ],
   [
     "endpoint Moonshot China",
     { provider: "custom", baseUrl: "https://api.moonshot.cn/v1" },
     legacyMoonshotCompat,
-    legacyMoonshotCompat,
-    undefined,
   ],
-  [
-    "provider Cloudflare Workers AI",
-    { provider: "cloudflare-workers-ai" },
-    legacyCerebrasCompat,
-    canonicalProxyCompat,
-    endpointPolicyDivergence,
-  ],
+  ["provider Cloudflare Workers AI", { provider: "cloudflare-workers-ai" }, canonicalProxyCompat],
   [
     "endpoint Cloudflare Workers AI",
     { provider: "custom", baseUrl: "https://api.cloudflare.com/client/v4/accounts/test/ai/run" },
-    legacyCerebrasCompat,
     canonicalProxyCompat,
-    endpointPolicyDivergence,
   ],
   [
     "provider Cloudflare AI Gateway",
     { provider: "cloudflare-ai-gateway" },
     legacyCloudflareGatewayCompat,
-    legacyCloudflareGatewayCompat,
-    undefined,
   ],
   [
     "endpoint Cloudflare AI Gateway",
     { provider: "custom", baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/compat" },
     legacyCloudflareGatewayCompat,
-    legacyCloudflareGatewayCompat,
-    undefined,
   ],
-  [
-    "provider opencode",
-    { provider: "opencode" },
-    legacyCerebrasCompat,
-    canonicalProxyCompat,
-    endpointPolicyDivergence,
-  ],
+  ["provider opencode", { provider: "opencode" }, canonicalProxyCompat],
   [
     "endpoint opencode.ai",
     { provider: "custom", baseUrl: "https://api.opencode.ai/v1" },
-    legacyCerebrasCompat,
     canonicalProxyCompat,
-    endpointPolicyDivergence,
   ],
   [
     "endpoint chutes.ai",
     { provider: "custom", baseUrl: "https://llm.chutes.ai/v1" },
-    legacyChutesCompat,
     canonicalChutesCompat,
-    endpointPolicyDivergence,
   ],
-  [
-    "provider together",
-    { provider: "together" },
-    legacyTogetherCompat,
-    canonicalTogetherCompat,
-    undefined,
-  ],
+  ["provider together", { provider: "together" }, canonicalTogetherCompat],
   [
     "endpoint together.ai",
     { provider: "custom", baseUrl: "https://api.together.ai/v1" },
-    legacyTogetherCompat,
     canonicalTogetherCompat,
-    undefined,
   ],
   [
     "endpoint together.xyz",
     { provider: "custom", baseUrl: "https://api.together.xyz/v1" },
-    legacyTogetherCompat,
     canonicalTogetherCompat,
-    undefined,
   ],
-  [
-    "provider zai",
-    { provider: "zai" },
-    legacyZaiCompat,
-    canonicalProxyCompat,
-    endpointPolicyDivergence,
-  ],
+  ["provider zai", { provider: "zai" }, canonicalProxyCompat],
   [
     "endpoint api.z.ai",
     { provider: "custom", baseUrl: "https://api.z.ai/api/paas/v4" },
-    legacyZaiCompat,
     canonicalZaiCompat,
-    endpointPolicyDivergence,
   ],
-  [
-    "provider xiaomi",
-    { provider: "xiaomi" },
-    legacyXiaomiCompat,
-    canonicalProxyCompat,
-    endpointPolicyDivergence,
-  ],
+  ["provider xiaomi", { provider: "xiaomi" }, canonicalProxyCompat],
   [
     "endpoint xiaomimimo.com",
     { provider: "custom", baseUrl: "https://api.xiaomimimo.com/v1" },
-    legacyXiaomiCompat,
     canonicalDeepseekCompat,
-    endpointPolicyDivergence,
   ],
-  [
-    "provider deepseek",
-    { provider: "deepseek" },
-    legacyXiaomiCompat,
-    canonicalProxyCompat,
-    endpointPolicyDivergence,
-  ],
+  ["provider deepseek", { provider: "deepseek" }, canonicalProxyCompat],
   [
     "endpoint deepseek.com",
     { provider: "custom", baseUrl: "https://api.deepseek.com/v1" },
-    legacyDeepseekEndpointCompat,
     canonicalDeepseekCompat,
-    endpointPolicyDivergence,
   ],
 ] satisfies MatrixParityCase[];
 
@@ -537,6 +403,25 @@ describe("OpenAI-compatible completions compatibility", () => {
       resolveOpenAICompletionsCompat(createModel({ provider: "modelstudio", compat })),
     ).toMatchObject(compat);
   });
+
+  it.each([undefined, false, true])(
+    "sends custom-endpoint long TTL only with explicit support: %s",
+    async (supportsLongCacheRetention) => {
+      await streamOpenAICompletions(
+        createModel({ compat: { cacheControlFormat: "anthropic", supportsLongCacheRetention } }),
+        context,
+        { apiKey: "test", cacheRetention: "long" },
+      ).result();
+      expect(mockOpenAI.payloads).toHaveLength(1);
+      const cacheControl =
+        supportsLongCacheRetention === true
+          ? { type: "ephemeral", ttl: "1h" }
+          : { type: "ephemeral" };
+      expect(JSON.stringify(mockOpenAI.payloads[0])).toContain(
+        `"cache_control":${JSON.stringify(cacheControl)}`,
+      );
+    },
+  );
 
   it.each([undefined, "anthropic"] as const)(
     "requires explicit cache format %s for Qwen behind a custom endpoint",
@@ -605,7 +490,6 @@ describe("OpenAI-compatible completions compatibility", () => {
         tools: ["alpha", "zeta"].map((name) => ({
           type: "function",
           function: { name, description: name, parameters: { type: "object", properties: {} } },
-          cache_control: name === "zeta" ? cacheControl : undefined,
         })),
       };
       // Compare wire JSON, where undefined cache fields must be omitted.
@@ -615,16 +499,10 @@ describe("OpenAI-compatible completions compatibility", () => {
 
   it.each(legacyMatrixParityCases)(
     "maps former provider matrix case %s to canonical endpoint policy",
-    (_name, overrides, legacyExpected, expected, divergence) => {
+    (_name, overrides, expected) => {
       expect(
         duplicatedCompatFields(resolveOpenAICompletionsCompat(createModel(overrides))),
       ).toEqual(expected);
-      if (divergence) {
-        expect(expected).not.toEqual(legacyExpected);
-        expect(divergence).toBe(endpointPolicyDivergence);
-      } else {
-        expect(expected).toEqual(legacyExpected);
-      }
     },
   );
 
@@ -734,7 +612,11 @@ describe("OpenAI-compatible completions compatibility", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
       }),
-      expected: { ...defaultResolvedCompat, supportsJsonSchemaResponseFormat: true },
+      expected: {
+        ...defaultResolvedCompat,
+        supportsJsonSchemaResponseFormat: true,
+        supportsPromptCacheKey: true,
+      },
     },
     {
       name: "Azure OpenAI",
@@ -757,7 +639,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
       }),
-      expected: defaultResolvedCompat,
+      expected: { ...defaultResolvedCompat, supportsPromptCacheKey: true },
     },
     {
       name: "custom proxy",
@@ -911,17 +793,32 @@ describe("OpenAI-compatible completions compatibility", () => {
       }),
       expectedHeaders: { "x-session-id": "session-123" },
     },
-  ])("sends exact $name session-affinity headers", async ({ model, expectedHeaders }) => {
-    await streamOpenAICompletions(model, context, {
-      apiKey: "test",
-      sessionId: "session-123",
-    }).result();
+    {
+      name: "OpenCode Go without caching",
+      cacheRetention: "none" as const,
+      model: createModel({ baseUrl: "https://opencode.ai/zen/go/v1" }),
+      expectedHeaders: { "x-opencode-session": "session-123" },
+    },
+    {
+      name: "OpenCode Zen",
+      model: createModel({ baseUrl: "https://opencode.ai/zen/v1" }),
+      expectedHeaders: { "x-opencode-session": "session-123" },
+    },
+  ])(
+    "sends exact $name session-affinity headers",
+    async ({ model, expectedHeaders, ...testCase }) => {
+      await streamOpenAICompletions(model, context, {
+        apiKey: "test",
+        sessionId: "session-123",
+        ...testCase,
+      }).result();
 
-    const clientOptions = mockOpenAI.clientOptions[0] as {
-      defaultHeaders?: Record<string, string>;
-    };
-    expect(clientOptions.defaultHeaders).toEqual(expectedHeaders);
-  });
+      const clientOptions = mockOpenAI.clientOptions[0] as {
+        defaultHeaders?: Record<string, string>;
+      };
+      expect(clientOptions.defaultHeaders).toEqual(expectedHeaders);
+    },
+  );
 
   it("retains replayed Z.AI thinking when reasoning is enabled", async () => {
     let payload: unknown;
@@ -944,14 +841,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         },
         { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
       ],
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsage(),
       stopReason: "toolUse",
       timestamp: 2,
     };
@@ -962,14 +852,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         messages: [
           userMessage,
           assistant,
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "done" }],
-            isError: false,
-            timestamp: 3,
-          },
+          makeTextToolResult("call_1", "lookup", "done", false, 3),
         ],
       },
       {

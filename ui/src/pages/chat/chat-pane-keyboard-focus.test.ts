@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import {
@@ -7,20 +8,96 @@ import {
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
+import {
+  configureNativeKeyTarget,
+  nativeControlNavigationCases,
+} from "./test-helpers/chat-scroll-input.ts";
+
+function createFocusedPane() {
+  const { pane } = createTestChatPane({
+    client: createGatewayBrowserClientFixture(),
+    sessions: createSessionCapabilityFixture(),
+  });
+  pane.active = true;
+  pane.presented = true;
+  const composer = document.createElement("div");
+  composer.className = "agent-chat__composer-combobox";
+  const textarea = composer.appendChild(document.createElement("textarea"));
+  pane.append(composer);
+  return { pane, focus: vi.spyOn(textarea, "focus") };
+}
 
 describe("chat pane keyboard focus", () => {
+  it.each([
+    ["range", "Home", html`<input type="range" />`, false],
+    ["input", "ArrowUp", html`<input />`, false],
+    [
+      "handled widget",
+      "PageUp",
+      html`<div @keydown=${(event: KeyboardEvent) => event.preventDefault()}>Widget</div>`,
+      false,
+    ],
+    ["transcript", "Home", html`<span>History</span>`, true],
+    ...nativeControlNavigationCases
+      .filter((testCase) => {
+        const [name, key] = testCase;
+        const fixture = testCase[4];
+        if (key !== "ArrowUp" && key !== "Home" && key !== "PageUp") {
+          return false;
+        }
+        // Windows represents non-Apple paging; native media shares one key owner.
+        if (name.startsWith("Linux ") || name.startsWith("audio ")) {
+          return false;
+        }
+        if (name.startsWith("video ") && (fixture.shiftKey || fixture.ctrlKey)) {
+          return false;
+        }
+        // Home already covers both edges of each Mac nested scrollport.
+        return !(name.startsWith("Mac ") && key === "PageUp");
+      })
+      .map(
+        ([name, key, content, controlOwned, fixture]) =>
+          [name, key, content, !controlOwned, fixture] as const,
+      ),
+  ] as const)(
+    "loads older history only when %s yields navigation",
+    async (_name, key, content, loadsHistory, fixture = {}) => {
+      vi.useFakeTimers();
+      const request = vi.fn(async () => ({ messages: [], hasMore: false }));
+      const { pane, state } = createTestChatPane({
+        client: createGatewayBrowserClientFixture({ request }),
+        sessions: createSessionCapabilityFixture(),
+      });
+      state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
+      pane.historyAutoLoadBlocked = true;
+      vi.stubGlobal("IntersectionObserver", undefined);
+      const thread = document.createElement("div");
+      render(content, thread);
+      const restorePlatform = configureNativeKeyTarget(thread.firstElementChild!, fixture);
+      thread.addEventListener("keydown", (event) => pane.handleTranscriptHistoryIntent(event));
+      try {
+        thread.firstElementChild!.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key,
+            shiftKey: fixture.shiftKey,
+            ctrlKey: fixture.ctrlKey,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        await Promise.resolve();
+        expect(request).toHaveBeenCalledTimes(loadsHistory ? 1 : 0);
+        expect(pane.historyAutoLoadBlocked).toBe(!loadsHistory);
+      } finally {
+        restorePlatform();
+        vi.unstubAllGlobals();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("keeps the letter-to-composer contract when a button is focused", () => {
-    const { pane } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.active = true;
-    pane.presented = true;
-    const composer = document.createElement("div");
-    composer.className = "agent-chat__composer-combobox";
-    const textarea = composer.appendChild(document.createElement("textarea"));
-    pane.append(composer);
-    const focus = vi.spyOn(textarea, "focus");
+    const { pane, focus } = createFocusedPane();
     const button = document.body.appendChild(document.createElement("button"));
     button.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
     button.focus();
@@ -37,17 +114,7 @@ describe("chat pane keyboard focus", () => {
   });
 
   it("distinguishes an open disclosure from an open overlay", () => {
-    const { pane } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.active = true;
-    pane.presented = true;
-    const composer = document.createElement("div");
-    composer.className = "agent-chat__composer-combobox";
-    const textarea = composer.appendChild(document.createElement("textarea"));
-    pane.append(composer);
-    const focus = vi.spyOn(textarea, "focus");
+    const { pane, focus } = createFocusedPane();
     const details = document.body.appendChild(document.createElement("details"));
     details.open = true;
     const summary = details.appendChild(document.createElement("summary"));
@@ -79,17 +146,7 @@ describe("chat pane keyboard focus", () => {
 
   it("does not steal typing focus from a shadow-root confirmation", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
-    const { pane } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.active = true;
-    pane.presented = true;
-    const composer = document.createElement("div");
-    composer.className = "agent-chat__composer-combobox";
-    const textarea = composer.appendChild(document.createElement("textarea"));
-    pane.append(composer);
-    const focus = vi.spyOn(textarea, "focus");
+    const { pane, focus } = createFocusedPane();
     const container = document.body.appendChild(document.createElement("div"));
     const modal = container.appendChild(document.createElement("openclaw-modal-dialog"));
     const cancel = modal.appendChild(document.createElement("button"));
@@ -110,17 +167,7 @@ describe("chat pane keyboard focus", () => {
   });
 
   it("does not steal typing focus from a light-DOM confirmation", () => {
-    const { pane } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.active = true;
-    pane.presented = true;
-    const composer = document.createElement("div");
-    composer.className = "agent-chat__composer-combobox";
-    const textarea = composer.appendChild(document.createElement("textarea"));
-    pane.append(composer);
-    const focus = vi.spyOn(textarea, "focus");
+    const { pane, focus } = createFocusedPane();
     const modal = document.body.appendChild(document.createElement("div"));
     modal.setAttribute("aria-modal", "true");
 

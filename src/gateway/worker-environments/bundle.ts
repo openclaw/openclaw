@@ -1,13 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import * as tar from "tar";
 import { resolveStateDir } from "../../config/paths.js";
+import { sha256File } from "../../infra/directory-durability.js";
 import { isExactSemverVersion, resolveNpmJsonEntries } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   readWorkerBundleArchiveManifest,
@@ -16,32 +20,30 @@ import {
   compareWorkerBundlePaths,
   hashWorkerBundleManifest,
   WORKER_BUNDLE_ARTIFACT_MODE,
-  WORKER_BUNDLE_MANIFEST_VERSION,
+  WORKER_BUNDLE_ARTIFACT_PATHS,
+  WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  type WorkerBundleHashEntry,
 } from "../../shared/worker-bundle-hash.js";
 import { VERSION } from "../../version.js";
-import { collectWorkerBundleManifest, type WorkerBundleManifestEntry } from "./bundle-staging.js";
+import type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js";
+import { collectWorkerBundleManifest } from "./bundle-staging.js";
 
-export { WORKER_BUNDLE_MANIFEST_VERSION };
 const OPENCLAW_NPM_REGISTRY = "https://registry.npmjs.org/";
 const NPM_RELEASE_PROOF_TIMEOUT_MS = 60_000;
 const NPM_SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 const BUNDLE_TARBALL_NAME_PATTERN = /^([a-f0-9]{64})\.tgz$/u;
 const BUNDLE_STAGING_NAME_PATTERN = /^\.staging-[A-Za-z0-9_-]+$/u;
 const BUNDLE_TEMP_NAME_PATTERN = /^[a-f0-9]{64}\.tgz\.[0-9]+\.[0-9a-f-]{36}\.tmp$/u;
-type WorkerInstallationArtifactBase = {
-  bundleHash: string;
-  openclawVersion: string;
-  protocolFeatures: readonly string[];
-};
-
-type WorkerBundleArtifact = WorkerInstallationArtifactBase & {
+const PACKAGED_BUNDLE_NAME_PATTERN = /^([a-f0-9]{64})\.tar\.gz$/u;
+const PACKAGED_BUNDLE_DIRECTORY = "dist/worker-artifacts";
+type WorkerBundleArtifact = ExpectedWorkerBuild & {
   install: "bundle";
   tarballBytes: number;
   tarballSha256: string;
   tarballPath: string;
 };
 
-export type WorkerNpmArtifact = WorkerInstallationArtifactBase & {
+export type WorkerNpmArtifact = ExpectedWorkerBuild & {
   install: "npm";
   packageIntegrity: string;
   packageSpec: string;
@@ -51,7 +53,7 @@ export type WorkerInstallationArtifact = WorkerBundleArtifact | WorkerNpmArtifac
 
 export type WorkerBundleProducer = {
   prepare: () => Promise<WorkerBundleArtifact>;
-  prune: (retainedBundleHashes: readonly string[]) => Promise<void>;
+  prune: (readRetainedBundleHashes: () => readonly string[]) => Promise<void>;
 };
 
 type WorkerBundleProducerOptions = {
@@ -116,28 +118,16 @@ type NpmPackageIdentity = {
   integrity: string;
 };
 
-function readNonEmptyString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function parseNpmPackageIdentity(value: unknown): NpmPackageIdentity | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
-  const name = readNonEmptyString(record, "name");
-  const version = readNonEmptyString(record, "version");
+  const name = normalizeOptionalString(value.name);
+  const version = normalizeOptionalString(value.version);
   const integrity =
-    readNonEmptyString(record, "integrity") ?? readNonEmptyString(record, "dist.integrity");
-  const filename = readNonEmptyString(record, "filename");
+    normalizeOptionalString(value.integrity) ?? normalizeOptionalString(value["dist.integrity"]);
+  const filename = normalizeOptionalString(value.filename);
   return name && version && integrity ? { name, version, integrity, filename } : undefined;
-}
-
-// Single-spec view/pack proofs return exactly one entry; npm 12 shape drift is
-// normalized by the shared resolver so identity verification survives upgrades.
-function unwrapNpmJsonEntry(value: unknown): unknown {
-  return resolveNpmJsonEntries(value)[0];
 }
 
 async function runNpmProofCommand(params: {
@@ -146,9 +136,8 @@ async function runNpmProofCommand(params: {
   failureMessage: string;
   runCommand: WorkerNpmProofCommandRunner;
 }): Promise<unknown> {
-  let result;
   try {
-    result = await params.runCommand(params.argv, {
+    const result = await params.runCommand(params.argv, {
       cwd: params.cwd,
       timeoutMs: NPM_RELEASE_PROOF_TIMEOUT_MS,
       env: {
@@ -156,38 +145,21 @@ async function runNpmProofCommand(params: {
         NPM_CONFIG_IGNORE_SCRIPTS: "true",
       },
     });
-  } catch {
-    throw new Error(params.failureMessage);
-  }
-  if (result.code !== 0 || result.stdoutTruncatedBytes) {
-    throw new Error(params.failureMessage);
-  }
-  try {
+    if (result.code !== 0 || result.stdoutTruncatedBytes) {
+      throw new Error(params.failureMessage);
+    }
     return JSON.parse(result.stdout.trim()) as unknown;
   } catch {
     throw new Error(params.failureMessage);
   }
 }
 
-async function updateHashFromFile(
-  hash: ReturnType<typeof createHash>,
-  filePath: string,
-): Promise<void> {
-  for await (const chunk of createReadStream(filePath)) {
-    hash.update(chunk);
-  }
-}
-
 async function hashNpmTarballIntegrity(tarballPath: string): Promise<string> {
   const hash = createHash("sha512");
-  await updateHashFromFile(hash, tarballPath);
+  for await (const chunk of createReadStream(tarballPath)) {
+    hash.update(chunk);
+  }
   return `sha512-${hash.digest("base64")}`;
-}
-
-async function hashWorkerBundleTarball(tarballPath: string): Promise<string> {
-  const hash = createHash("sha256");
-  await updateHashFromFile(hash, tarballPath);
-  return hash.digest("hex");
 }
 
 async function verifyPublishedNpmRelease(params: {
@@ -196,10 +168,12 @@ async function verifyPublishedNpmRelease(params: {
   runCommand?: WorkerNpmProofCommandRunner;
 }): Promise<string> {
   const runCommand = params.runCommand ?? runCommandWithTimeout;
-  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-npm-proof-"));
+  const temporaryRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-worker-npm-proof-"),
+  );
   try {
     const published = parseNpmPackageIdentity(
-      unwrapNpmJsonEntry(
+      resolveNpmJsonEntries(
         await runNpmProofCommand({
           argv: [
             "npm",
@@ -215,7 +189,7 @@ async function verifyPublishedNpmRelease(params: {
           failureMessage: `OpenClaw ${params.version} is not published; use the worker bundle install`,
           runCommand,
         }),
-      ),
+      )[0],
     );
     if (
       published?.name !== "openclaw" ||
@@ -242,7 +216,7 @@ async function verifyPublishedNpmRelease(params: {
         "Unable to verify the installed OpenClaw package; use the worker bundle install",
       runCommand,
     });
-    const packed = parseNpmPackageIdentity(unwrapNpmJsonEntry(packedValue));
+    const packed = parseNpmPackageIdentity(resolveNpmJsonEntries(packedValue)[0]);
     if (!packed?.filename || path.basename(packed.filename) !== packed.filename) {
       throw new Error("npm pack returned incomplete worker package metadata");
     }
@@ -290,25 +264,6 @@ async function verifyPublishedNpmRelease(params: {
   }
 }
 
-function manifestsMatch(
-  left: readonly WorkerBundleManifestEntry[],
-  right: readonly WorkerBundleManifestEntry[],
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((entry, index) => {
-      const other = right[index];
-      return (
-        other !== undefined &&
-        entry.path === other.path &&
-        entry.mode === other.mode &&
-        entry.size === other.size &&
-        entry.sha256 === other.sha256
-      );
-    })
-  );
-}
-
 async function isCachedTarball(filePath: string): Promise<boolean> {
   try {
     const stats = await fs.lstat(filePath);
@@ -326,15 +281,16 @@ async function isCachedTarball(filePath: string): Promise<boolean> {
 
 async function cachedTarballMatches(
   tarballPath: string,
-  manifest: readonly WorkerBundleManifestEntry[],
+  manifest: readonly WorkerBundleHashEntry[],
 ): Promise<boolean> {
   if (!(await isCachedTarball(tarballPath))) {
     return false;
   }
   try {
-    return manifestsMatch(
-      await readWorkerBundleArchiveManifest(tarballPath, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS),
-      manifest,
+    return (
+      hashWorkerBundleManifest(
+        await readWorkerBundleArchiveManifest(tarballPath, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS),
+      ) === hashWorkerBundleManifest(manifest)
     );
   } catch {
     return false;
@@ -343,7 +299,7 @@ async function cachedTarballMatches(
 
 async function writeTarball(params: {
   stagingRoot: string;
-  entries: readonly WorkerBundleManifestEntry[];
+  entries: readonly WorkerBundleHashEntry[];
   tarballPath: string;
 }): Promise<void> {
   const temporaryPath = `${params.tarballPath}.${process.pid}.${randomUUID()}.tmp`;
@@ -396,14 +352,9 @@ async function writeTarball(params: {
 async function pruneWorkerBundleCache(params: {
   cacheDir: string;
   currentBundleHash: string;
-  retainedBundleHashes: readonly string[];
+  readRetainedBundleHashes: () => readonly string[];
   onError?: (error: unknown) => void;
 }): Promise<void> {
-  const retained = new Set(
-    [params.currentBundleHash, ...params.retainedBundleHashes].filter((hash) =>
-      /^[a-f0-9]{64}$/u.test(hash),
-    ),
-  );
   let entries: Dirent[];
   try {
     entries = await fs.readdir(params.cacheDir, { withFileTypes: true });
@@ -413,6 +364,24 @@ async function pruneWorkerBundleCache(params: {
     }
     return;
   }
+  if (
+    !entries.some((entry) => {
+      const bundleHash = BUNDLE_TARBALL_NAME_PATTERN.exec(entry.name)?.[1];
+      return (
+        (bundleHash !== undefined && bundleHash !== params.currentBundleHash) ||
+        BUNDLE_STAGING_NAME_PATTERN.test(entry.name) ||
+        BUNDLE_TEMP_NAME_PATTERN.test(entry.name)
+      );
+    })
+  ) {
+    return;
+  }
+  // Read current references only after this queued prune finds possible cleanup work.
+  const retained = new Set(
+    [params.currentBundleHash, ...params.readRetainedBundleHashes()].filter((hash) =>
+      /^[a-f0-9]{64}$/u.test(hash),
+    ),
+  );
   for (const entry of entries.toSorted((left, right) =>
     compareWorkerBundlePaths(left.name, right.name),
   )) {
@@ -445,12 +414,20 @@ async function prepareWorkerBundle(
   options: WorkerBundleProducerOptions,
 ): Promise<WorkerBundleArtifact> {
   const packageRoot = resolvePackageRoot(options.packageRoot);
-  const cacheDir = resolveBundleCacheDir(options.cacheDir);
   const openclawVersion = (options.openclawVersion ?? VERSION).trim();
   if (!openclawVersion) {
     throw new Error("Worker bundle requires a non-empty OpenClaw version");
   }
   const protocolFeatures = normalizeProtocolFeatures(options.protocolFeatures ?? []);
+  const packaged = await resolvePackagedWorkerBundle({
+    packageRoot,
+    openclawVersion,
+    protocolFeatures,
+  });
+  if (packaged) {
+    return packaged;
+  }
+  const cacheDir = resolveBundleCacheDir(options.cacheDir);
   await fs.mkdir(cacheDir, { recursive: true });
   const stagingRoot = await fs.mkdtemp(path.join(cacheDir, ".staging-"));
   try {
@@ -462,13 +439,14 @@ async function prepareWorkerBundle(
     if (!(await cachedTarballMatches(tarballPath, manifest))) {
       await writeTarball({ stagingRoot, entries: manifest, tarballPath });
     }
+    await using handle = await fs.open(tarballPath, "r");
     return {
       install: "bundle",
       bundleHash,
       openclawVersion,
       protocolFeatures,
       tarballBytes: (await fs.stat(tarballPath)).size,
-      tarballSha256: await hashWorkerBundleTarball(tarballPath),
+      tarballSha256: (await sha256File(handle)).digest,
       tarballPath,
     };
   } finally {
@@ -476,32 +454,81 @@ async function prepareWorkerBundle(
   }
 }
 
+async function resolvePackagedWorkerBundle(params: {
+  packageRoot: string;
+  openclawVersion: string;
+  protocolFeatures: string[];
+}): Promise<WorkerBundleArtifact | null> {
+  try {
+    await fs.access(path.join(params.packageRoot, "dist/worker"));
+    return null;
+  } catch (error) {
+    if (!isRecord(error) || error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const archiveDirectory = path.join(params.packageRoot, PACKAGED_BUNDLE_DIRECTORY);
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(archiveDirectory, { withFileTypes: true });
+  } catch (error) {
+    if (isRecord(error) && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  if (entries.length !== 1 || !entries[0]!.isFile()) {
+    throw new Error("Packaged worker bundle must contain exactly one regular archive");
+  }
+  const match = PACKAGED_BUNDLE_NAME_PATTERN.exec(entries[0]!.name);
+  if (!match) {
+    throw new Error("Packaged worker bundle archive name is invalid");
+  }
+  const tarballPath = path.join(archiveDirectory, entries[0]!.name);
+  const manifest = await readWorkerBundleArchiveManifest(
+    tarballPath,
+    DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
+  );
+  const paths = new Set(manifest.map((entry) => entry.path));
+  const requiredPaths = new Set<string>(WORKER_BUNDLE_ARTIFACT_PATHS);
+  if (
+    WORKER_BUNDLE_ARTIFACT_PATHS.some((artifactPath) => !paths.has(artifactPath)) ||
+    manifest.some(
+      (entry) =>
+        !requiredPaths.has(entry.path) && !WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(entry.path),
+    )
+  ) {
+    throw new Error("Packaged worker bundle archive does not match the worker artifact contract");
+  }
+  const bundleHash = hashWorkerBundleManifest(manifest);
+  if (bundleHash !== match[1]) {
+    throw new Error("Packaged worker bundle archive name does not match its manifest hash");
+  }
+  await using handle = await fs.open(tarballPath, "r");
+  return {
+    install: "bundle",
+    bundleHash,
+    openclawVersion: params.openclawVersion,
+    protocolFeatures: params.protocolFeatures,
+    tarballBytes: (await handle.stat()).size,
+    tarballSha256: (await sha256File(handle)).digest,
+    tarballPath,
+  };
+}
+
 /** Creates a process-lifecycle bundle producer that scans the running build at most once. */
 export function createWorkerBundleProducer(
   options: WorkerBundleProducerOptions = {},
 ): WorkerBundleProducer {
-  let prepared: Promise<WorkerBundleArtifact> | undefined;
   let currentArtifact: WorkerBundleArtifact | undefined;
   let pruning = Promise.resolve();
   return {
-    prepare() {
-      if (!prepared) {
-        const pending = prepareWorkerBundle(options)
-          .then((artifact) => {
-            currentArtifact = artifact;
-            return artifact;
-          })
-          .catch((error: unknown) => {
-            if (prepared === pending) {
-              prepared = undefined;
-            }
-            throw error;
-          });
-        prepared = pending;
-      }
-      return prepared;
-    },
-    async prune(retainedBundleHashes) {
+    prepare: createLazyPromise(async () => {
+      currentArtifact = await prepareWorkerBundle(options);
+      return currentArtifact;
+    }),
+    async prune(readRetainedBundleHashes) {
       const artifact = currentArtifact;
       if (options.cacheOwnership !== "exclusive" || !artifact) {
         return;
@@ -510,7 +537,7 @@ export function createWorkerBundleProducer(
         await pruneWorkerBundleCache({
           cacheDir: resolveBundleCacheDir(options.cacheDir),
           currentBundleHash: artifact.bundleHash,
-          retainedBundleHashes,
+          readRetainedBundleHashes,
           onError: options.onCacheCleanupError,
         });
       });

@@ -1,6 +1,4 @@
 // Lightweight TTS settings resolution shared by agent prompts, status, and speech runtime.
-import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
 import { asNonArrayRecord, isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import {
   normalizeOptionalLowercaseString,
@@ -19,15 +17,22 @@ import type {
   TtsModelOverrideConfig,
   TtsProvider,
 } from "../config/types.js";
-import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeSpeechProviderId } from "./provider-registry-core.js";
 import type { SpeechProviderConfig } from "./provider-types.js";
 import { withSpeakerSelectionCompat } from "./speaker.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
-import { resolveEffectiveTtsConfig, type TtsConfigResolutionContext } from "./tts-config.js";
+import {
+  readTtsPrefs,
+  resolveEffectiveTtsConfig,
+  resolveTtsAutoModeFromPrefs,
+  resolveTtsPrefsPathValue,
+  type TtsConfigResolutionContext,
+  type TtsUserPrefs,
+} from "./tts-config.js";
 import type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "./tts-types.js";
 
 export type { ResolvedTtsConfig, ResolvedTtsModelOverrides };
+export { readTtsPrefs, type TtsUserPrefs } from "./tts-config.js";
 
 export const DEFAULT_TTS_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
@@ -37,21 +42,6 @@ let machinePrefsPathResolver: () => string | undefined = () => undefined;
 
 export function setTtsMachinePrefsPathResolver(resolver?: () => string | undefined): void {
   machinePrefsPathResolver = resolver ?? (() => undefined);
-}
-
-export type TtsUserPrefs = {
-  tts?: {
-    auto?: TtsAutoMode;
-    enabled?: boolean;
-    provider?: TtsProvider;
-    persona?: string | null;
-    maxLength?: number;
-    summarize?: boolean;
-  };
-};
-
-function resolveConfiguredTtsAutoMode(raw: TtsConfig): TtsAutoMode {
-  return normalizeTtsAutoMode(raw.auto) ?? (raw.enabled ? "always" : "off");
 }
 
 export function normalizeConfiguredSpeechProviderId(
@@ -68,48 +58,19 @@ export function normalizeTtsPersonaId(personaId: string | null | undefined): str
   return normalizeOptionalLowercaseString(personaId ?? undefined);
 }
 
-function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
-  // Scoped agent paths must win over the migrated machine-wide default.
-  if (prefsPath?.trim()) {
-    return resolveUserPath(prefsPath.trim());
-  }
-  const envPath = process.env.OPENCLAW_TTS_PREFS?.trim();
-  if (envPath) {
-    return resolveUserPath(envPath);
-  }
-  const machinePath = machinePrefsPathResolver()?.trim();
-  if (machinePath) {
-    return resolveUserPath(machinePath);
-  }
-  return path.join(resolveConfigDir(process.env), "settings", "tts.json");
-}
-
 export function resolveModelOverridePolicy(
   overrides: TtsModelOverrideConfig | undefined,
 ): ResolvedTtsModelOverrides {
   const enabled = overrides?.enabled ?? true;
-  if (!enabled) {
-    return {
-      enabled: false,
-      allowText: false,
-      allowProvider: false,
-      allowVoice: false,
-      allowModelId: false,
-      allowVoiceSettings: false,
-      allowNormalization: false,
-      allowSeed: false,
-    };
-  }
-  const allow = (value: boolean | undefined, defaultValue = true) => value ?? defaultValue;
   return {
-    enabled: true,
-    allowText: allow(overrides?.allowText),
-    allowProvider: allow(overrides?.allowProvider, false),
-    allowVoice: allow(overrides?.allowVoice),
-    allowModelId: allow(overrides?.allowModelId),
-    allowVoiceSettings: allow(overrides?.allowVoiceSettings),
-    allowNormalization: allow(overrides?.allowNormalization),
-    allowSeed: allow(overrides?.allowSeed),
+    enabled,
+    allowText: enabled && (overrides?.allowText ?? true),
+    allowProvider: enabled && (overrides?.allowProvider ?? false),
+    allowVoice: enabled && (overrides?.allowVoice ?? true),
+    allowModelId: enabled && (overrides?.allowModelId ?? true),
+    allowVoiceSettings: enabled && (overrides?.allowVoiceSettings ?? true),
+    allowNormalization: enabled && (overrides?.allowNormalization ?? true),
+    allowSeed: enabled && (overrides?.allowSeed ?? true),
   };
 }
 
@@ -127,14 +88,10 @@ export function asProviderConfig(value: unknown): SpeechProviderConfig {
   return withSpeakerSelectionCompat(asNonArrayRecord(value));
 }
 
-export function asProviderConfigMap(value: unknown): Record<string, unknown> {
-  return asNonArrayRecord(value);
-}
-
 function normalizeProviderConfigMap(
   value: unknown,
 ): Record<string, SpeechProviderConfig> | undefined {
-  const rawMap = asProviderConfigMap(value);
+  const rawMap = asNonArrayRecord(value);
   if (Object.keys(rawMap).length === 0) {
     return undefined;
   }
@@ -147,7 +104,7 @@ function normalizeProviderConfigMap(
 }
 
 function collectTtsPersonas(raw: TtsConfig): Record<string, ResolvedTtsPersona> {
-  const rawPersonas = asProviderConfigMap(raw.personas);
+  const rawPersonas = asNonArrayRecord(raw.personas);
   const personas: Record<string, ResolvedTtsPersona> = {};
   for (const [id, value] of Object.entries(rawPersonas)) {
     const normalizedId = normalizeTtsPersonaId(id);
@@ -165,29 +122,29 @@ function collectTtsPersonas(raw: TtsConfig): Record<string, ResolvedTtsPersona> 
   return personas;
 }
 
+const TTS_CONFIG_RESERVED_KEYS = new Set([
+  "auto",
+  "enabled",
+  "maxTextLength",
+  "mode",
+  "modelOverrides",
+  "persona",
+  "personas",
+  "prefsPath",
+  "provider",
+  "providers",
+  "summaryModel",
+  "timeoutMs",
+]);
+
+export function isTtsConfigReservedKey(key: string): boolean {
+  return TTS_CONFIG_RESERVED_KEYS.has(key);
+}
+
 function collectDirectProviderConfigEntries(raw: TtsConfig): Record<string, SpeechProviderConfig> {
-  const entries: Record<string, SpeechProviderConfig> = {};
-  const rawProviders = asProviderConfigMap(raw.providers);
-  for (const [providerId, value] of Object.entries(rawProviders)) {
-    const normalized = normalizeConfiguredSpeechProviderId(providerId) ?? providerId;
-    entries[normalized] = asProviderConfig(value);
-  }
-  const reservedKeys = new Set([
-    "auto",
-    "enabled",
-    "maxTextLength",
-    "mode",
-    "modelOverrides",
-    "persona",
-    "personas",
-    "prefsPath",
-    "provider",
-    "providers",
-    "summaryModel",
-    "timeoutMs",
-  ]);
+  const entries = normalizeProviderConfigMap(raw.providers) ?? {};
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (reservedKeys.has(key)) {
+    if (isTtsConfigReservedKey(key)) {
       continue;
     }
     if (!isRecord(value)) {
@@ -209,11 +166,9 @@ export function resolveTtsConfig(
   const timeoutMs = raw.timeoutMs ?? DEFAULT_TTS_TIMEOUT_MS;
   const timeoutMsSource = raw.timeoutMs === undefined ? "default" : "config";
   return {
-    auto: resolveConfiguredTtsAutoMode(raw),
+    auto: normalizeTtsAutoMode(raw.auto) ?? (raw.enabled ? "always" : "off"),
     mode: raw.mode ?? "final",
-    provider:
-      normalizeConfiguredSpeechProviderId(raw.provider) ??
-      (providerSource === "config" ? (normalizeOptionalLowercaseString(raw.provider) ?? "") : ""),
+    provider: normalizeConfiguredSpeechProviderId(raw.provider) ?? "",
     providerSource,
     persona: normalizeTtsPersonaId(raw.persona),
     personas: collectTtsPersonas(raw),
@@ -230,30 +185,7 @@ export function resolveTtsConfig(
 }
 
 export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
-  return resolveTtsPrefsPathValue(config.prefsPath);
-}
-
-export function readTtsPrefs(prefsPath: string): TtsUserPrefs {
-  try {
-    if (!existsSync(prefsPath)) {
-      return {};
-    }
-    const parsed: unknown = JSON.parse(readFileSync(prefsPath, "utf8"));
-    return asNonArrayRecord(parsed) as TtsUserPrefs;
-  } catch {
-    return {};
-  }
-}
-
-function resolveTtsAutoModeFromPrefs(prefs: TtsUserPrefs): TtsAutoMode | undefined {
-  const auto = normalizeTtsAutoMode(prefs.tts?.auto);
-  if (auto) {
-    return auto;
-  }
-  if (typeof prefs.tts?.enabled === "boolean") {
-    return prefs.tts.enabled ? "always" : "off";
-  }
-  return undefined;
+  return resolveTtsPrefsPathValue(config.prefsPath, machinePrefsPathResolver);
 }
 
 export function resolveTtsAutoMode(params: {
@@ -400,6 +332,23 @@ export function getTtsPersona(
 
 export function listTtsPersonas(config: ResolvedTtsConfig): ResolvedTtsPersona[] {
   return Object.values(config.personas).toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+export function resolveTtsPersonaList(cfg: OpenClawConfig) {
+  const config = resolveTtsConfig(cfg);
+  const prefsPath = resolveTtsPrefsPath(config);
+  const active = getTtsPersona(config, prefsPath);
+  return {
+    active: active?.id ?? null,
+    personas: listTtsPersonas(config).map((persona) => ({
+      id: persona.id,
+      label: persona.label,
+      description: persona.description,
+      provider: persona.provider,
+      fallbackPolicy: persona.fallbackPolicy,
+      providers: Object.keys(persona.providers ?? {}),
+    })),
+  };
 }
 
 export function getTtsMaxLength(prefsPath: string): number {

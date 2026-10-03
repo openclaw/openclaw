@@ -1,11 +1,13 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString as toOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
+import { resolveSessionStorePathForAcp } from "../acp/runtime/session-meta.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -44,6 +46,7 @@ type TrajectorySnapshot = {
   events: TrajectoryEvent[];
   maxStorageSeq: number;
 };
+type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM";
 
 const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
@@ -162,12 +165,17 @@ function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): void {
 
 function isRunningSession(selection: TailSelection): boolean {
   const cfg = getRuntimeConfig();
-  const acpMeta = readAcpSessionMeta({
-    sessionKey: resolveStoredSessionKeyForAgentStore({
-      cfg,
-      agentId: selection.agentId,
-      sessionKey: selection.key,
-    }),
+  const sessionKey = resolveStoredSessionKeyForAgentStore({
+    cfg,
+    agentId: selection.agentId,
+    sessionKey: selection.key,
+  });
+  const { agentId } = resolveSessionStorePathForAcp({ cfg, sessionKey });
+  const acpMeta = readAcpSessionMetaForEntry({
+    cfg,
+    sessionKey,
+    agentId,
+    entry: selection.entry,
   });
   return selection.entry.status === "running" || acpMeta?.state === "running";
 }
@@ -187,9 +195,8 @@ function buildTailSelection(params: {
 }
 
 function selectSessionsToTail(selections: TailSelection[], sessionKey?: string): TailSelection[] {
-  const requested = sessionKey?.trim();
-  if (requested) {
-    return selections.filter((selection) => selection.key === requested);
+  if (sessionKey) {
+    return selections.filter((selection) => selection.key === sessionKey);
   }
 
   const running = selections.filter((selection) => isRunningSession(selection));
@@ -217,11 +224,11 @@ function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] 
   return rows.map((row) => row.event);
 }
 
-async function followSelections(
+function followSelections(
   selections: TailSelection[],
   runtime: RuntimeEnv,
   initialSnapshots: Map<TailSelection, TrajectorySnapshot>,
-): Promise<void> {
+): Promise<FollowOutcome> {
   const states = selections.map((selection): SqliteFollowState => {
     const snapshot = initialSnapshots.get(selection);
     return {
@@ -230,7 +237,8 @@ async function followSelections(
     };
   });
 
-  await new Promise<void>((resolve) => {
+  return new Promise((resolve) => {
+    let finished = false;
     const interval = setInterval(() => {
       for (const state of states) {
         try {
@@ -241,28 +249,36 @@ async function followSelections(
               error,
             )}`,
           );
-          runtime.exit(1);
+          return finish("ERROR");
         }
       }
     }, FOLLOW_INTERVAL_MS);
 
-    const stop = () => {
-      clearInterval(interval);
-      process.off("SIGINT", stop);
-      process.off("SIGTERM", stop);
-      resolve();
+    const finish = (outcome: FollowOutcome) => {
+      if (!finished) {
+        finished = true;
+        clearInterval(interval);
+        process.off("SIGINT", stopSigint);
+        process.off("SIGTERM", stopSigterm);
+        resolve(outcome);
+      }
     };
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
+    const stopSigint = () => finish("SIGINT");
+    const stopSigterm = () => finish("SIGTERM");
+    process.once("SIGINT", stopSigint);
+    process.once("SIGTERM", stopSigterm);
   });
 }
 
-function resolveTailTargetAgent(opts: SessionsTailOptions): string | undefined {
+function resolveTailTargetAgent(
+  opts: SessionsTailOptions,
+  sessionKey: string | undefined,
+): string | undefined {
   // Keep explicit blanks for the selector to reject instead of inferring a different owner.
   if (opts.agent !== undefined || opts.store !== undefined || opts.allAgents === true) {
     return opts.agent;
   }
-  return opts.sessionKey?.trim() ? resolveAgentIdFromSessionKey(opts.sessionKey) : undefined;
+  return sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined;
 }
 
 /** Tails recent trajectory events for the selected session(s). */
@@ -276,13 +292,19 @@ export async function sessionsTailCommand(
     runtime.exit(1);
     return;
   }
+  const requestedKey = opts.sessionKey?.trim();
+  if (opts.sessionKey !== undefined && !requestedKey) {
+    runtime.error("--session-key must not be empty. Omit it to tail active sessions.");
+    runtime.exit(1);
+    return;
+  }
 
   const cfg = getRuntimeConfig();
   const targets = resolveCommandSessionStoreTargets({
     cfg,
     opts: {
       store: opts.store,
-      agent: resolveTailTargetAgent(opts),
+      agent: resolveTailTargetAgent(opts, requestedKey),
       allAgents: opts.allAgents,
     },
   });
@@ -292,6 +314,7 @@ export async function sessionsTailCommand(
     for (const { sessionKey, entry } of listSessionEntriesReadOnly({
       agentId: target.agentId,
       storePath: target.storePath,
+      projection: "list",
     })) {
       const selection = buildTailSelection({
         agentId: target.agentId,
@@ -304,10 +327,16 @@ export async function sessionsTailCommand(
       }
     }
   }
-  const selected = selectSessionsToTail(selections, opts.sessionKey);
+  const selected = selectSessionsToTail(selections, requestedKey);
   if (selected.length === 0) {
-    const suffix = opts.sessionKey ? ` for ${opts.sessionKey}` : "";
-    runtime.log(`No sessions found${suffix}.`);
+    if (requestedKey) {
+      runtime.error(
+        `Session not found: ${requestedKey}. Run ${formatCliCommand("openclaw sessions list --all-agents --json")} to choose a valid key.`,
+      );
+      runtime.exit(1);
+    } else {
+      runtime.log("No sessions found.");
+    }
     return;
   }
 
@@ -319,6 +348,7 @@ export async function sessionsTailCommand(
   }
 
   if (opts.follow) {
-    await followSelections(selected, runtime, followSnapshots);
+    const outcome = await followSelections(selected, runtime, followSnapshots);
+    runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
   }
 }

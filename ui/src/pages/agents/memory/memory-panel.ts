@@ -1,4 +1,6 @@
 import { consume } from "@lit/context";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import {
@@ -7,15 +9,18 @@ import {
   type ApplicationGateway,
   type ApplicationGatewaySnapshot,
 } from "../../../app/context.ts";
+import { shellLayoutTraits } from "../../../app/shell-layout-traits.ts";
 import {
   showConfirmDialog,
   type ConfirmDialogOptions,
 } from "../../../components/confirm-dialog.ts";
 import { renderSettingsDefaultDescription } from "../../../components/settings-ui.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { currentConfigObject } from "../../../lib/config/config-state-model.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
+import { GatewayPageController } from "../../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
 import {
@@ -34,6 +39,7 @@ import {
   resolveConfiguredDreaming,
   updateDreamingEnabled,
   type DreamingState,
+  type WikiPagePreview,
 } from "./dreaming.ts";
 import { renderDreamingToggleConfirmation } from "./toggle-confirmation.ts";
 import {
@@ -43,14 +49,7 @@ import {
   type DreamingViewState,
 } from "./view.ts";
 
-type WikiPagePreview = {
-  title: string;
-  path: string;
-  content: string;
-  totalLines?: number;
-  truncated?: boolean;
-  updatedAt?: string;
-};
+registerDreamingEnglish();
 
 type DreamingTaskScope = {
   gateway: ApplicationGateway;
@@ -58,42 +57,24 @@ type DreamingTaskScope = {
   state: DreamingState;
 };
 
-function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
+function resolveDreamingNextCycle(status: DreamingState["dreamingStatus"]): string | null {
+  const nextRunAtMs = Object.values(status?.phases ?? {})
+    .flatMap((phase) =>
+      phase.enabled && typeof phase.nextRunAtMs === "number" ? [phase.nextRunAtMs] : [],
+    )
+    .toSorted((a, b) => a - b)[0];
   return formatTimeMs(nextRunAtMs, { hour: "numeric", minute: "2-digit" }, "") || null;
 }
 
-function resolveDreamingNextCycle(status: DreamingState["dreamingStatus"]): string | null {
-  const nextRunAtMs = Object.values(status?.phases ?? {})
-    .filter((phase) => phase.enabled && typeof phase.nextRunAtMs === "number")
-    .map((phase) => phase.nextRunAtMs as number)
-    .toSorted((a, b) => a - b)[0];
-  return nextRunAtMs === undefined ? null : formatDreamNextCycle(nextRunAtMs);
-}
-
 function readWikiPagePreview(value: unknown, lookup: string): WikiPagePreview {
-  const payload =
-    value && typeof value === "object"
-      ? (value as {
-          title?: unknown;
-          path?: unknown;
-          content?: unknown;
-          updatedAt?: unknown;
-          totalLines?: unknown;
-          truncated?: unknown;
-        })
-      : null;
-  const title =
-    typeof payload?.title === "string" && payload.title.trim() ? payload.title.trim() : lookup;
-  const path =
-    typeof payload?.path === "string" && payload.path.trim() ? payload.path.trim() : lookup;
+  const payload = asOptionalObjectRecord(value);
+  const title = normalizeOptionalString(payload?.title) ?? lookup;
+  const path = normalizeOptionalString(payload?.path) ?? lookup;
   const content =
     typeof payload?.content === "string" && payload.content.length > 0
       ? payload.content
       : t("dreaming.wiki.noContent");
-  const updatedAt =
-    typeof payload?.updatedAt === "string" && payload.updatedAt.trim()
-      ? payload.updatedAt.trim()
-      : undefined;
+  const updatedAt = normalizeOptionalString(payload?.updatedAt);
   const totalLines =
     typeof payload?.totalLines === "number" && Number.isFinite(payload.totalLines)
       ? Math.max(0, Math.floor(payload.totalLines))
@@ -120,39 +101,25 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   @state() private pendingEnabled: boolean | null = null;
 
   private readonly viewState: DreamingViewState = createDreamingViewState();
-  private gatewaySource: ApplicationGateway | null = null;
-  private gatewayBindingEpoch = 0;
-  private gatewayEpoch = 0;
-  private hasBoundGatewaySource = false;
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    onSnapshot: ({ snapshot, initial, sourceChanged }) =>
+      this.applyGatewaySnapshot(
+        snapshot,
+        initial ? "initial" : sourceChanged ? "replacement" : undefined,
+      ),
+  });
   private selectedAgentId: string | null = null;
-  private readonly subscriptions = new SubscriptionsController(this)
-    .effect(
-      () => this.context?.gateway,
-      (gateway) => {
-        const sourceReplaced = this.hasBoundGatewaySource;
-        this.hasBoundGatewaySource = true;
-        this.gatewaySource = gateway;
-        const bindingEpoch = ++this.gatewayBindingEpoch;
-        this.gatewayEpoch += 1;
-        const cleanup = gateway.subscribe((snapshot) => {
-          if (this.isGatewayBindingCurrent(gateway, bindingEpoch)) {
-            this.applyGatewaySnapshot(snapshot);
-          }
-        });
-        this.applyGatewaySnapshot(gateway.snapshot, sourceReplaced ? "replacement" : "initial");
-        return cleanup;
-      },
-    )
-    .effect(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig) => {
+  private readonly subscriptions = new SubscriptionsController(this).effect(
+    () => this.context?.runtimeConfig,
+    (runtimeConfig) => {
+      this.syncConfigSnapshot();
+      return runtimeConfig.subscribe(() => {
         this.syncConfigSnapshot();
-        return runtimeConfig.subscribe(() => {
-          this.syncConfigSnapshot();
-          this.requestUpdate();
-        });
-      },
-    );
+        this.requestUpdate();
+      });
+    },
+  );
 
   override updated(changed: PropertyValues<this>) {
     if (changed.has("agentId")) {
@@ -162,36 +129,24 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    this.gatewayBindingEpoch += 1;
-    this.gatewayEpoch += 1;
-    this.gatewaySource = null;
     this.resetTransientState();
     this.dreaming = createDreamingState();
     super.disconnectedCallback();
   }
 
-  private isGatewayBindingCurrent(gateway: ApplicationGateway, bindingEpoch: number): boolean {
-    return (
-      this.isConnected &&
-      this.gatewaySource === gateway &&
-      this.gatewayBindingEpoch === bindingEpoch &&
-      this.context.gateway === gateway
-    );
-  }
-
   private captureTaskScope(): DreamingTaskScope | null {
-    const gateway = this.gatewaySource;
+    const gateway = this.gateway.gateway;
     if (!gateway) {
       return null;
     }
-    return { gateway, epoch: this.gatewayEpoch, state: this.dreaming };
+    return { gateway, epoch: this.gateway.epoch, state: this.dreaming };
   }
 
   private isTaskScopeCurrent(scope: DreamingTaskScope): boolean {
     return (
       this.isConnected &&
-      this.gatewaySource === scope.gateway &&
-      this.gatewayEpoch === scope.epoch &&
+      this.gateway.gateway === scope.gateway &&
+      this.gateway.epoch === scope.epoch &&
       this.context.gateway === scope.gateway &&
       this.dreaming === scope.state
     );
@@ -210,7 +165,6 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       connected: snapshot.phase === "connected",
       hello: snapshot.hello,
       configSnapshot: this.context.runtimeConfig.state.configSnapshot,
-      applySessionKey: snapshot.sessionKey,
       selectedAgentId: this.selectedAgentId,
     });
   }
@@ -221,11 +175,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   ) {
     const clientChanged = this.dreaming.client !== snapshot.client;
     const connectionChanged = this.dreaming.connected !== (snapshot.phase === "connected");
-    const becameConnected = snapshot.phase === "connected" && !this.dreaming.connected;
     const replaceState = sourceBind === "replacement" || clientChanged || connectionChanged;
-    if (connectionChanged) {
-      this.gatewayEpoch += 1;
-    }
     if (replaceState) {
       this.dreaming = this.createGatewayState(snapshot);
       if (sourceBind !== "initial") {
@@ -234,13 +184,8 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     } else {
       this.dreaming.connected = snapshot.phase === "connected";
       this.dreaming.hello = snapshot.hello;
-      this.dreaming.applySessionKey = snapshot.sessionKey;
     }
-    if (
-      snapshot.phase === "connected" &&
-      this.selectedAgentId &&
-      (replaceState || becameConnected)
-    ) {
+    if (snapshot.phase === "connected" && this.selectedAgentId && replaceState) {
       void this.loadAll();
     }
     this.requestUpdate();
@@ -252,7 +197,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       return;
     }
     this.selectedAgentId = agentId;
-    this.gatewayEpoch += 1;
+    this.gateway.invalidate();
     this.resetTransientState();
     this.dreaming = this.createGatewayState();
     if (agentId && this.dreaming.connected) {
@@ -440,7 +385,10 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     const selectedAgentId = dreaming.selectedAgentId ?? "";
 
     return html`
-      <section class="content-header content-header--page agent-memory-panel__header">
+      <section
+        class="content-header content-header--page agent-memory-panel__header"
+        ${shellLayoutTraits({ toolbarHeader: true })}
+      >
         <div class="page-meta">
           <div class="dreaming-header-controls">
             <button
@@ -451,12 +399,14 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
               ${refreshLoading ? t("dreaming.header.refreshing") : t("dreaming.header.refresh")}
             </button>
             <span class="muted">
-              ${configuredDreaming.engineOff
-                ? t("dreaming.header.engineOff")
-                : renderSettingsDefaultDescription(
-                    t("common.enabled"),
-                    configuredDreaming.overridden,
-                  )}
+              ${
+                configuredDreaming.engineOff
+                  ? t("dreaming.header.engineOff")
+                  : renderSettingsDefaultDescription(
+                      t("common.enabled"),
+                      configuredDreaming.overridden,
+                    )
+              }
             </span>
             <button
               class="dreams__phase-toggle ${dreamingOn ? "dreams__phase-toggle--on" : ""}"

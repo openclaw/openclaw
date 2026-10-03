@@ -1,15 +1,18 @@
-// Image operation helpers normalize image transforms and adapter calls.
 import {
-  createRastermill,
   isRastermillUnavailableError,
   RastermillUnavailableError,
-  readImageProbeFromHeader as readRastermillImageProbeFromHeader,
+  readImageProbeFromHeader,
+  type EncodedImage,
+  type EncodeOptions,
   type ImageProbe,
   type ImageMetadata,
 } from "rastermill";
-import { resolveSystemBin } from "../infra/resolve-system-bin.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
+import { convertBmpToPngWithWorker, createImageProcessor } from "./image-processor.js";
+
+export { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
+export { createImageProcessor } from "./image-processor.js";
+export { readImageProbeFromHeader };
 
 export type { ImageMetadata, ImageProbe };
 
@@ -29,7 +32,6 @@ class ImageProcessorUnavailableError extends Error {
   }
 }
 
-/** JPEG resize request passed through the media-runtime/plugin SDK surface. */
 type ResizeToJpegParams = {
   buffer: Buffer;
   maxSide: number;
@@ -37,31 +39,8 @@ type ResizeToJpegParams = {
   withoutEnlargement?: boolean;
 };
 
-/** Ordered JPEG quality ladder used when shrinking generated or attached images. */
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
-/** Shared input/output pixel cap for Rastermill-backed image operations. */
-export const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
 
-const loadPhotonRuntime = createLazyRuntimeModule(() => import("./photon.runtime.js"));
-
-/** Creates a Rastermill processor with OpenClaw temp-dir, pixel-limit, and command trust policy. */
-export function createImageProcessor() {
-  return createRastermill({
-    execution: "auto",
-    limits: {
-      inputPixels: MAX_IMAGE_INPUT_PIXELS,
-      outputPixels: MAX_IMAGE_INPUT_PIXELS,
-    },
-    temp: {
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-img-",
-    },
-    commandResolver: (command) =>
-      resolveSystemBin(command, { trust: command === "powershell" ? "strict" : "standard" }),
-  });
-}
-
-/** Detects either OpenClaw's wrapper error or Rastermill's native unavailable error. */
 export function isImageProcessorUnavailableError(err: unknown): boolean {
   return err instanceof ImageProcessorUnavailableError || isRastermillUnavailableError(err);
 }
@@ -87,19 +66,44 @@ function resolveDisplayImageMetadata(probe: ImageProbe | null): ImageMetadata | 
 
 /** Reads display dimensions from image header bytes without invoking a full image decode. */
 export function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
-  return resolveDisplayImageMetadata(readRastermillImageProbeFromHeader(buffer));
+  return resolveDisplayImageMetadata(readImageProbeFromHeader(buffer));
 }
 
-/** Reads image probe data from header bytes without invoking a full image decode. */
-export function readImageProbeFromHeader(buffer: Buffer): ImageProbe | null {
-  return readRastermillImageProbeFromHeader(buffer);
+/** Detects animated WebP before a single-frame image transform can discard its frames. */
+export function isAnimatedWebpBuffer(buffer: Buffer): boolean {
+  // Rastermill's probe has no animation flag. RFC 9649 §2.7 defines this VP8X bit.
+  return (
+    buffer.length >= 30 &&
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.toString("ascii", 8, 12) === "WEBP" &&
+    buffer.toString("ascii", 12, 16) === "VP8X" &&
+    buffer.readUInt32LE(16) >= 10 &&
+    buffer.readUInt32LE(16) <= buffer.length - 20 &&
+    (buffer.readUInt8(20) & 0x02) !== 0
+  );
 }
 
-function wrapRastermillUnavailable(operation: string, error: unknown): never {
-  if (error instanceof RastermillUnavailableError) {
-    throw new ImageProcessorUnavailableError(operation, error.message, error.causes);
+/** Confirm PNG is still without treating a truncated or capped scan as proof. */
+export function isStillPngBuffer(buffer: Buffer): boolean {
+  if (readImageProbeFromHeader(buffer)?.format !== "png") {
+    return false;
   }
-  throw error;
+  let offset = 8;
+  for (let chunks = 0; chunks < 512 && offset + 12 <= buffer.length; chunks += 1) {
+    const end = offset + 12 + buffer.readUInt32BE(offset);
+    if (end > buffer.length) {
+      return false;
+    }
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    if (type === "acTL" || type === "IEND") {
+      return false;
+    }
+    if (type === "IDAT") {
+      return true;
+    }
+    offset = end;
+  }
+  return false;
 }
 
 /** Fully probes display dimensions through Rastermill when header-only metadata is insufficient. */
@@ -109,38 +113,43 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
 
 /** Resizes or encodes image bytes as JPEG through the shared image processor. */
 export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> {
-  try {
-    return (
-      await createImageProcessor().encode(params.buffer, {
+  return (
+    await encodeImage(
+      params.buffer,
+      {
         format: "jpeg",
         resize: {
           maxSide: params.maxSide,
           enlarge: params.withoutEnlargement === false,
         },
         quality: params.quality,
-      })
-    ).data;
-  } catch (error) {
-    return wrapRastermillUnavailable("resizeToJpeg", error);
-  }
+      },
+      "resizeToJpeg",
+    )
+  ).data;
 }
 
-async function encodeImageToJpeg(buffer: Buffer, operation: string): Promise<Buffer> {
+async function encodeImage(
+  buffer: Buffer,
+  options: EncodeOptions,
+  operation: string,
+): Promise<EncodedImage> {
   try {
-    return (await createImageProcessor().encode(buffer, { format: "jpeg" })).data;
+    return await createImageProcessor().encode(buffer, options);
   } catch (error) {
-    return wrapRastermillUnavailable(operation, error);
+    if (error instanceof RastermillUnavailableError) {
+      throw new ImageProcessorUnavailableError(operation, error.message, error.causes);
+    }
+    throw error;
   }
 }
 
-/** Converts image bytes into JPEG through the shared image processor. */
 export async function convertImageToJpeg(buffer: Buffer): Promise<Buffer> {
-  return await encodeImageToJpeg(buffer, "convertImageToJpeg");
+  return (await encodeImage(buffer, { format: "jpeg" }, "convertImageToJpeg")).data;
 }
 
-/** Converts HEIC/HEIF-like image bytes into JPEG through the shared image processor. */
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
-  return await encodeImageToJpeg(buffer, "convertHeicToJpeg");
+  return (await encodeImage(buffer, { format: "jpeg" }, "convertHeicToJpeg")).data;
 }
 
 /** Converts image bytes to PNG, including BMP fallback unsupported by Rastermill's Photon gate. */
@@ -148,7 +157,7 @@ export async function convertImageToPng(buffer: Buffer): Promise<Buffer> {
   try {
     return (await createImageProcessor().encode(buffer, { format: "png" })).data;
   } catch (error) {
-    const probe = readRastermillImageProbeFromHeader(buffer);
+    const probe = readImageProbeFromHeader(buffer);
     const withinPixelLimit =
       probe &&
       probe.format === "bmp" &&
@@ -160,7 +169,7 @@ export async function convertImageToPng(buffer: Buffer): Promise<Buffer> {
     }
 
     try {
-      return (await loadPhotonRuntime()).convertBmpToPngWithPhoton(buffer);
+      return await convertBmpToPngWithWorker(buffer);
     } catch {
       throw error;
     }
@@ -178,16 +187,15 @@ export async function optimizeImageToPng(
   resizeSide: number;
   compressionLevel: number;
 }> {
-  let out;
-  try {
-    out = await createImageProcessor().encode(buffer, {
+  const out = await encodeImage(
+    buffer,
+    {
       format: "png",
       maxBytes,
       search: options?.sides === undefined ? {} : { maxSide: options.sides },
-    });
-  } catch (error) {
-    wrapRastermillUnavailable("optimizeImageToPng", error);
-  }
+    },
+    "optimizeImageToPng",
+  );
   return {
     buffer: out.data,
     optimizedSize: out.bytes,

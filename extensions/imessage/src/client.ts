@@ -1,13 +1,18 @@
-// Imessage plugin module implements client behavior.
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { recoverIMessageBridge } from "./bridge-recovery.js";
 import { expandIMessageUserPath } from "./cli-path.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { invalidateCachedIMessagePrivateApiStatus } from "./private-api-status.js";
+
+// Match only the documented Contacts reconciliation diagnostic; other Apple
+// framework messages must keep their error level.
+const IMSG_APPLE_FRAMEWORK_STDERR_PATTERN =
+  /^(?:\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ imsg\[\d+:\d+\] )?Could not fetch group for change type \d+ with identifier [^:]+:ABGroup, making it a delete change type\.$/u;
 
 type IMessageRpcError = {
   code?: number;
@@ -48,43 +53,18 @@ export class IMessageRpcRequestError extends Error {
   }
 }
 
-// A stalled bridge, as opposed to a rejected or merely slow request.
-//
-// Matches only imsg's own structured wait error, e.g.
-//   "Internal error: code=-32603 Timed out waiting for response to 'send-message'"
-// which imsg raises after publishing a request to the injected helper and
-// getting nothing back. That is first-hand evidence about the bridge.
-//
-// Deliberately excludes our own client-side timer ("imsg rpc timeout (...)"):
-// it fires when the local wrapper is slow or blocked while imsg itself is
-// healthy, so treating it as a dead bridge would evict a good capability cache
-// and point operators at `imsg launch`, the wrong repair. An ordinary rejection
-// (bad target, unknown chat) says nothing about bridge health either.
-// Module-private: request() is the only production caller, and the behavior is
-// covered through that boundary rather than by calling this directly.
+// Only imsg's helper wait error proves a bridge stall; our client timeout can
+// also mean a slow wrapper and must not evict a healthy capability cache.
 function isIMessageBridgeStall(error: unknown): boolean {
-  // Only an Error can carry a stall. Stringifying an arbitrary value here would
-  // render most objects as "[object Object]" and match nothing anyway.
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return error.message.includes("Timed out waiting for response");
+  return error instanceof Error && error.message.includes("Timed out waiting for response");
 }
 
 const BRIDGE_STALL_GUIDANCE =
   "The imsg private API bridge stopped responding. Run `imsg launch` to re-inject the dylib, " +
   "then `openclaw channels status --probe` to refresh capability detection.";
 
-// Append the actionable cause without rewriting the error.
-//
-// Normal outbound sends never consult the private-API status cache (send.ts
-// builds a client and dispatches directly), so evicting that cache alone leaves
-// them repeating an opaque timeout. Decorating here reaches every caller.
-//
-// Preserve the class, code, data, and original message text: send.ts keys
-// delayed-send reconciliation off `data.disposition`/`data.retry_safe` and
-// matches `imsg rpc timeout (send)` by regex, so the original wording has to
-// survive as a prefix.
+// Direct sends bypass the capability cache. Preserve the original error prefix,
+// class, code, and data so recovery guidance does not break send reconciliation.
 function describeIMessageBridgeStall(error: unknown): unknown {
   if (error instanceof IMessageRpcRequestError) {
     return new IMessageRpcRequestError(
@@ -125,6 +105,35 @@ function normalizeIMessageFullDiskAccessError(message: string): string | undefin
   return PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR;
 }
 
+function createLfLineFramer(onLine: (line: string) => void): {
+  write(chunk: Buffer | string): void;
+  flush(): void;
+} {
+  const decoder = new StringDecoder("utf8");
+  let buffer = "";
+  return {
+    write(chunk) {
+      buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex !== -1) {
+        const line = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        onLine(line);
+        newlineIndex = buffer.indexOf("\n");
+      }
+    },
+    flush() {
+      buffer += decoder.end();
+      if (!buffer) {
+        return;
+      }
+      const line = buffer;
+      buffer = "";
+      onLine(line);
+    },
+  };
+}
+
 export class IMessageRpcClient {
   private readonly cliPath: string;
   // The private-API cache is keyed by the *configured* cliPath (see
@@ -143,10 +152,8 @@ export class IMessageRpcClient {
   private isReaped = false;
   private child: ChildProcessWithoutNullStreams | null = null;
   private stopPromise: Promise<void> | null = null;
-  private stdoutBuffer = "";
-  private readonly stdoutDecoder = new StringDecoder("utf8");
-  private stderrBuffer = "";
-  private readonly stderrDecoder = new StringDecoder("utf8");
+  private readonly stdoutFramer = createLfLineFramer((line) => this.handleStdoutLine(line));
+  private readonly stderrFramer = createLfLineFramer((line) => this.handleStderrLine(line));
   private nextId = 1;
   private publicProcessError: string | null = null;
 
@@ -187,14 +194,14 @@ export class IMessageRpcClient {
       if (this.child !== child) {
         return;
       }
-      this.handleStdoutChunk(chunk);
+      this.stdoutFramer.write(chunk);
     });
 
     child.stderr?.on("data", (chunk) => {
       if (this.child !== child) {
         return;
       }
-      this.handleStderrChunk(chunk);
+      this.stderrFramer.write(chunk);
     });
 
     // Every process/stdio error is terminal for this RPC transport. Settle the
@@ -202,16 +209,23 @@ export class IMessageRpcClient {
     // monitor can wait forever on an unusable child. #75438 covered stdin only.
     const failFromProcessError = (err: unknown) => this.failTransport(err, child);
     child.on("error", failFromProcessError);
-    child.stdin.on("error", failFromProcessError);
-    child.stdout.on("error", failFromProcessError);
-    child.stderr.on("error", failFromProcessError);
+    for (const stream of [child.stdin, child.stdout, child.stderr]) {
+      stream.on("error", failFromProcessError);
+      stream.once("close", () => {
+        // Bun can close an errored stdio stream without emitting its error event.
+        const error = stream.errored;
+        if (error) {
+          failFromProcessError(error);
+        }
+      });
+    }
 
     child.on("close", (code, signal) => {
       if (this.child === child) {
         // Complete both byte streams before selecting the terminal error so a
         // final split diagnostic can still provide its public recovery guidance.
-        this.flushStdoutBuffer();
-        this.flushStderrBuffer();
+        this.stdoutFramer.flush();
+        this.stderrFramer.flush();
         this.child = null;
       }
       this.finish(this.buildCloseError(code, signal));
@@ -284,14 +298,17 @@ export class IMessageRpcClient {
     try {
       return await response;
     } catch (err) {
-      // Every private-API action funnels through here, so this is the one place
-      // that learns the bridge went away. Without it the cached "available"
-      // verdict never expires and each later send is dispatched into a dead
-      // bridge, surfacing an opaque -32603 instead of the actionable
-      // "run imsg launch" guidance. Clearing the entry makes the next action
-      // re-probe and report the real state.
+      // Successful capability probes have no TTL; invalidate before recovery
+      // so later actions cannot reuse the stalled bridge's available verdict.
       if (isIMessageBridgeStall(err)) {
         invalidateCachedIMessagePrivateApiStatus(this.configuredCliPath);
+        try {
+          await recoverIMessageBridge(this.configuredCliPath);
+        } catch (recoveryError) {
+          this.runtime?.error?.(
+            `imessage: automatic bridge recovery failed: ${formatErrorMessage(recoveryError)}`,
+          );
+        }
         throw describeIMessageBridgeStall(err);
       }
       throw err;
@@ -353,32 +370,6 @@ export class IMessageRpcClient {
     }
   }
 
-  private handleStdoutChunk(chunk: Buffer | string) {
-    const text = typeof chunk === "string" ? chunk : this.stdoutDecoder.write(chunk);
-    this.stdoutBuffer += text;
-
-    let newlineIndex = this.stdoutBuffer.indexOf("\n");
-    while (newlineIndex !== -1) {
-      const line = this.stdoutBuffer.slice(0, newlineIndex);
-      this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
-      this.handleStdoutLine(line);
-      newlineIndex = this.stdoutBuffer.indexOf("\n");
-    }
-  }
-
-  private flushStdoutBuffer() {
-    const tail = this.stdoutDecoder.end();
-    if (tail) {
-      this.stdoutBuffer += tail;
-    }
-    if (!this.stdoutBuffer) {
-      return;
-    }
-    const line = this.stdoutBuffer;
-    this.stdoutBuffer = "";
-    this.handleStdoutLine(line);
-  }
-
   private handleStdoutLine(line: string) {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -387,35 +378,18 @@ export class IMessageRpcClient {
     this.handleLine(trimmed);
   }
 
-  private handleStderrChunk(chunk: Buffer | string) {
-    const text = typeof chunk === "string" ? chunk : this.stderrDecoder.write(chunk);
-    this.stderrBuffer += text;
-
-    let newlineIndex = this.stderrBuffer.indexOf("\n");
-    while (newlineIndex !== -1) {
-      const line = this.stderrBuffer.slice(0, newlineIndex);
-      this.stderrBuffer = this.stderrBuffer.slice(newlineIndex + 1);
-      this.handleStderrLine(line);
-      newlineIndex = this.stderrBuffer.indexOf("\n");
-    }
-  }
-
-  private flushStderrBuffer() {
-    this.stderrBuffer += this.stderrDecoder.end();
-    if (!this.stderrBuffer) {
-      return;
-    }
-    const line = this.stderrBuffer;
-    this.stderrBuffer = "";
-    this.handleStderrLine(line);
-  }
-
   private handleStderrLine(line: string) {
     const trimmed = line.trim();
     if (!trimmed) {
       return;
     }
+    // The Full Disk Access promotion below must still see every line, including
+    // the benign ones, so record before choosing the log level.
     this.recordProcessDiagnostic(trimmed);
+    if (IMSG_APPLE_FRAMEWORK_STDERR_PATTERN.test(trimmed)) {
+      logVerbose(`imsg rpc: ${trimmed}`);
+      return;
+    }
     this.runtime?.error?.(`imsg rpc: ${trimmed}`);
   }
 

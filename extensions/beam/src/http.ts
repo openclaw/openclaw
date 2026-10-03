@@ -89,14 +89,13 @@ export function createBeamRequestHandler(params: {
         sendJson(res, 400, { ok: false, error: parsed.error });
         return true;
       }
+      const revalidatePublisher = getPluginRuntimeGatewayRequestScope()?.revalidate;
+      await revalidatePublisher?.();
       const receivedAt = params.now?.() ?? Date.now();
-      const existing = await params.store.get(parsed.value.beamId);
-      await params.store.put({
-        ...parsed.value,
-        // An anonymous replacement must not inherit a previous publisher's identity.
-        ...(client.profileId ? { uploaderProfileId: client.profileId } : {}),
-        createdAt: existing?.createdAt ?? receivedAt,
+      await params.store.upload(parsed.value, {
         receivedAt,
+        uploaderProfileId: client.profileId,
+        revalidatePublisher,
       });
       sendJson(res, 200, {
         ok: true,

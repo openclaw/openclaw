@@ -49,10 +49,7 @@ export function shouldAckReaction(params: AckReactionGateParams): boolean {
     return params.isGroup;
   }
   if (scope === "group-mentions") {
-    if (!params.isMentionableGroup) {
-      return false;
-    }
-    if (!params.canDetectMention) {
+    if (!params.isMentionableGroup || !params.canDetectMention) {
       return false;
     }
     // Whether the group *requires* a mention is a separate policy: a group that
@@ -106,13 +103,7 @@ export function removeAckReactionAfterReply(params: {
   remove: () => Promise<void>;
   onError?: (err: unknown) => void;
 }) {
-  if (!params.removeAfterReply) {
-    return;
-  }
-  if (!params.ackReactionPromise) {
-    return;
-  }
-  if (!params.ackReactionValue) {
+  if (!params.removeAfterReply || !params.ackReactionPromise || !params.ackReactionValue) {
     return;
   }
   // Only remove if the send actually succeeded; failed sends are already reported by the handle.

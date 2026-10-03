@@ -19,11 +19,8 @@ import {
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.js";
-import {
-  parseSessionTargetInput,
-  SessionTargetParseError,
-  type SessionTargetInput,
-} from "./session-ref.js";
+import { normalizeAgentIdStrict, parseAgentSessionKey } from "../routing/session-key.js";
+import { parseSessionTargetInput, SessionTargetParseError } from "./session-ref.js";
 
 export type SessionTargetGateway = {
   config?: OpenClawConfig;
@@ -35,19 +32,16 @@ export type SessionTargetGateway = {
 
 type ResolvedSessionTarget = {
   sessionKey: string;
+  agentId: string;
   gateway: SessionTargetGateway;
-  parsed: SessionTargetInput;
 };
-
-function gatewayUrlForTarget(target: SessionTargetInput): string | undefined {
-  return target.kind === "url" ? `${target.origin}${target.basePath}` : undefined;
-}
 
 export async function callSessionTargetGateway<T>(params: {
   gateway: SessionTargetGateway;
   method: string;
   request?: unknown;
-  requiredScope: "operator.read" | "operator.admin";
+  requiredScope: "operator.read" | "operator.write" | "operator.admin";
+  timeoutMs?: number;
   shortRef?: boolean;
 }): Promise<T> {
   const explicitUrl = params.gateway.url?.trim() || undefined;
@@ -60,6 +54,7 @@ export async function callSessionTargetGateway<T>(params: {
       tlsFingerprint: params.gateway.tlsFingerprint,
       method: params.method,
       params: params.request,
+      timeoutMs: params.timeoutMs,
       mode: GATEWAY_CLIENT_MODES.CLI,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       ...(explicitUrl
@@ -185,7 +180,7 @@ export async function resolveSessionTarget(params: {
   requiredScope?: "operator.read" | "operator.admin";
 }): Promise<ResolvedSessionTarget> {
   const parsed = parseSessionTargetInput(params.raw);
-  const targetUrl = gatewayUrlForTarget(parsed);
+  const targetUrl = parsed.kind === "url" ? `${parsed.origin}${parsed.basePath}` : undefined;
   if (targetUrl && params.gateway?.url) {
     throw new Error("pass one target: use either the session URL or --url, not both");
   }
@@ -204,8 +199,8 @@ export async function resolveSessionTarget(params: {
       requiredScope: params.requiredScope ?? "operator.read",
     });
     return {
-      parsed,
       gateway,
+      agentId: parsed.agentId,
       sessionKey: resolveCanonicalMainSessionKey({
         agentId: parsed.agentId,
         mainKey: agents.mainKey,
@@ -230,7 +225,12 @@ export async function resolveSessionTarget(params: {
     shortRef: ref.kind === "short",
   });
   if (result.ok) {
-    return { parsed, gateway, sessionKey: result.key };
+    const keyOwner = parseAgentSessionKey(result.key)?.agentId;
+    const owner = normalizeAgentIdStrict(result.agentId ?? keyOwner);
+    if (!owner.ok || (keyOwner && keyOwner !== owner.value)) {
+      throw new Error("Gateway returned a session without a consistent agent identity.");
+    }
+    return { gateway, sessionKey: result.key, agentId: owner.value };
   }
   if (result.candidates?.length) {
     throw new Error(formatAmbiguousCandidates(result.candidates, gateway.url));

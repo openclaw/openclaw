@@ -15,6 +15,60 @@ function detect(config: OpenClawConfig, workshopEnabled = true) {
 }
 
 describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
+  it.each([false, true])(
+    "reports the sandbox construction gate before profile advice (alsoAllow=%s)",
+    (alsoAllow) => {
+      const diagnostic = detect({
+        agents: {
+          entries: {
+            main: {
+              sandbox: { mode: "all" },
+              tools: {
+                profile: "minimal",
+                ...(alsoAllow ? { alsoAllow: ["skill_workshop"] } : {}),
+              },
+            },
+          },
+        },
+      });
+
+      expect(diagnostic).toMatchObject({ source: "agents.entries.main.sandbox.mode" });
+      expect(diagnostic?.detail).toContain("sandboxed run without library-authoring authority");
+      expect(diagnostic?.fix).toContain("non-sandboxed session");
+      expect(diagnostic?.fix).toContain("host-granted library-authoring authority");
+      expect(diagnostic?.fix).not.toContain("alsoAllow");
+    },
+  );
+
+  it("identifies inherited sandbox mode and limits non-main advice to those sessions", () => {
+    const diagnostic = detect({
+      agents: {
+        defaults: { sandbox: { mode: "non-main" } },
+        entries: { main: { tools: { profile: "minimal", alsoAllow: ["skill_workshop"] } } },
+      },
+    });
+
+    expect(diagnostic).toMatchObject({ source: "agents.defaults.sandbox.mode" });
+    expect(diagnostic?.detail).toContain("In non-main sessions");
+    expect(diagnostic?.fix).not.toContain("alsoAllow");
+  });
+
+  it("honors an agent's unsandboxed override of the inherited mode", () => {
+    expect(
+      detect({
+        agents: {
+          defaults: { sandbox: { mode: "all" } },
+          entries: {
+            main: {
+              sandbox: { mode: "off" },
+              tools: { profile: "minimal", alsoAllow: ["skill_workshop"] },
+            },
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("names the profile and exact additive grant when policy excludes the tool", () => {
     expect(detect({ tools: { profile: "messaging" } })).toMatchObject({
       source: "tools.profile",

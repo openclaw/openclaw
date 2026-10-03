@@ -2,6 +2,7 @@ import { findAssistantTranscriptRoleHeaderSpans } from "../../../packages/markdo
 import { applyConstructFallbacks } from "../../../packages/markdown-core/src/construct-fallbacks.js";
 import type { FormatCapabilityProfile } from "../../../packages/markdown-core/src/format-capabilities.js";
 import { markdownToIR, type MarkdownIR } from "../../../packages/markdown-core/src/ir.js";
+import { stripHtmlFromMarkdown } from "../../../packages/markdown-core/src/strip-html.js";
 
 type StripMarkdownOptions = {
   /** Mark parsed assistant transcript-role headers in transports without rich text. */
@@ -12,6 +13,8 @@ type StripMarkdownOptions = {
   linkStyle?: "label" | "label-and-url";
   /** Plain-text cleanup target. Speech removes decorative symbol and punctuation runs. */
   mode?: "plain-text" | "speech";
+  /** Omit authored HTML tags and raw-text content while preserving code literals. */
+  stripHtml?: boolean;
 };
 
 type PlainTextInsertion = {
@@ -38,7 +41,7 @@ function collectLinkInsertions(
 }
 
 function collectAssistantTranscriptRoleInsertions(
-  text: string,
+  source: string | MarkdownIR,
   options: StripMarkdownOptions,
 ): PlainTextInsertion[] {
   if (options.assistantTranscriptRoleHeaders !== true) {
@@ -48,26 +51,13 @@ function collectAssistantTranscriptRoleInsertions(
   if (!prefix) {
     return [];
   }
-  return findAssistantTranscriptRoleHeaderSpans(text).map((span) => ({
-    position: span.start,
-    text: prefix,
-  }));
-}
-
-function collectParsedAssistantTranscriptRoleInsertions(
-  ir: MarkdownIR,
-  options: StripMarkdownOptions,
-): PlainTextInsertion[] {
-  if (options.assistantTranscriptRoleHeaders !== true) {
-    return [];
-  }
-  const prefix = options.assistantTranscriptRolePrefix ?? "[assistant-authored transcript] ";
-  if (!prefix) {
-    return [];
-  }
-  return (ir.annotations ?? [])
-    .filter((annotation) => annotation.type === "assistant_transcript_role")
-    .map((annotation) => ({ position: annotation.start, text: prefix }));
+  const spans =
+    typeof source === "string"
+      ? findAssistantTranscriptRoleHeaderSpans(source)
+      : (source.annotations ?? []).filter(
+          (annotation) => annotation.type === "assistant_transcript_role",
+        );
+  return spans.map((span) => ({ position: span.start, text: prefix }));
 }
 
 function applyPlainTextInsertions(text: string, insertions: PlainTextInsertion[]): string {
@@ -115,7 +105,7 @@ export function stripMarkdown(
   // The IR parser preserves links when role annotations are enabled so this
   // plain-text projection can still append explicit destinations. Direct rich
   // renderers suppress overlapping active links later at their own boundary.
-  const ir = markdownToIR(text, {
+  const ir = markdownToIR(options.stripHtml ? stripHtmlFromMarkdown(text) : text, {
     assistantTranscriptRoleHeaders: options.assistantTranscriptRoleHeaders,
     autolink: false,
     blockquotePrefix: "",
@@ -137,7 +127,7 @@ export function stripMarkdown(
   const projectedIr = effectiveProfile ? applyConstructFallbacks(ir, effectiveProfile) : ir;
   const plainText = applyPlainTextInsertions(projectedIr.text, [
     ...collectLinkInsertions(projectedIr, options),
-    ...collectParsedAssistantTranscriptRoleInsertions(projectedIr, options),
+    ...collectAssistantTranscriptRoleInsertions(projectedIr, options),
   ]).trim();
   const projected = applyPlainTextInsertions(
     plainText,

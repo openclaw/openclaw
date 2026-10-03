@@ -61,8 +61,8 @@ const PROFILES = {
   full: {
     name: "full",
     provider: "openai",
-    modelId: "gpt-5.6-sol",
-    modelRef: "openai/gpt-5.6-sol",
+    modelId: "gpt-5.6-luna",
+    modelRef: "openai/gpt-5.6-luna",
     api: OPENAI_RESPONSES_API,
     baseUrl: OFFICIAL_OPENAI_BASE_URL,
     runtime: OPENCLAW_RUNTIME,

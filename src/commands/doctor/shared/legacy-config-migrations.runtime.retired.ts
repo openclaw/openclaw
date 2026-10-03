@@ -3,10 +3,10 @@ import {
   defineLegacyConfigMigration,
   ensureRecord,
   getRecord,
-  mergeMissing,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { mergeMissing } from "../../../config/merge-missing.js";
 import {
   hasConfigTrancheLegacyKeys,
   migrateConfigTranche,
@@ -18,12 +18,15 @@ import {
   hasMediaDeepgram,
   migrateDiscordVoice,
   migrateMediaDeepgram,
-  moveVoice,
   stripRetiredTuningKnobs,
 } from "./legacy-config-migrations.runtime.retired-media.js";
 import { LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD } from "./legacy-config-migrations.runtime.retired-memory-qmd.js";
 import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-eval.js";
-import { visitAgentConfigScopes, visitChannelEntries } from "./legacy-config-record-shared.js";
+import {
+  moveLegacyConfigKey,
+  visitAgentConfigScopes,
+  visitChannelEntries,
+} from "./legacy-config-record-shared.js";
 
 const rule = (
   path: string[],
@@ -34,25 +37,6 @@ const rule = (
   message: `${message} Run "openclaw doctor --fix".`,
   ...(match ? { match } : {}),
 });
-
-function moveKey(
-  owner: Record<string, unknown> | null | undefined,
-  legacyKey: string,
-  canonicalKey: string,
-  path: string,
-  changes: string[],
-): void {
-  if (!owner || !Object.hasOwn(owner, legacyKey)) {
-    return;
-  }
-  if (owner[canonicalKey] === undefined) {
-    owner[canonicalKey] = owner[legacyKey];
-    changes.push(`Moved ${path}.${legacyKey} → ${path}.${canonicalKey}.`);
-  } else {
-    changes.push(`Removed ${path}.${legacyKey} (${path}.${canonicalKey} already set).`);
-  }
-  delete owner[legacyKey];
-}
 
 function migrateMessageCrossContext(raw: Record<string, unknown>, changes: string[]): void {
   const globalMessage = getRecord(getRecord(raw.tools)?.message);
@@ -115,7 +99,7 @@ function migrateTruncateAfterCompaction(raw: Record<string, unknown>, changes: s
 function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string[]): void {
   const agents = getRecord(raw.agents);
   const defaults = getRecord(agents?.defaults);
-  moveKey(defaults, "pdfMaxBytesMb", "pdfMaxMb", "agents.defaults", changes);
+  moveLegacyConfigKey(defaults, "pdfMaxBytesMb", "pdfMaxMb", "agents.defaults", changes);
   if (defaults) {
     const mediaModels = getRecord(defaults.mediaModels) ?? {};
     for (const [legacyKey, canonicalKey] of [
@@ -144,14 +128,14 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
   }
 
   visitAgentConfigScopes(raw, (scope, path) => {
-    moveKey(
+    moveLegacyConfigKey(
       getRecord(getRecord(scope.tools)?.exec),
       "timeoutSec",
       "timeoutSeconds",
       `${path}.tools.exec`,
       changes,
     );
-    moveKey(
+    moveLegacyConfigKey(
       getRecord(getRecord(scope.sandbox)?.browser),
       "enableNoVnc",
       "noVncEnabled",
@@ -159,7 +143,7 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
       changes,
     );
   });
-  moveKey(
+  moveLegacyConfigKey(
     getRecord(getRecord(raw.tools)?.exec),
     "timeoutSec",
     "timeoutSeconds",
@@ -233,19 +217,18 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
       changes.push("Moved gateway.nodes.skills.enabled → gateway.nodes.allowSkills.");
     }
     const commands = getRecord(nodes.commands) ?? {};
-    if (Object.hasOwn(nodes, "allowCommands")) {
-      if (commands.allow === undefined) {
-        commands.allow = nodes.allowCommands;
+    for (const [legacy, canonical] of [
+      ["allowCommands", "allow"],
+      ["denyCommands", "deny"],
+    ] as const) {
+      if (!Object.hasOwn(nodes, legacy)) {
+        continue;
       }
-      delete nodes.allowCommands;
-      changes.push("Moved gateway.nodes.allowCommands → gateway.nodes.commands.allow.");
-    }
-    if (Object.hasOwn(nodes, "denyCommands")) {
-      if (commands.deny === undefined) {
-        commands.deny = nodes.denyCommands;
+      if (commands[canonical] === undefined) {
+        commands[canonical] = nodes[legacy];
       }
-      delete nodes.denyCommands;
-      changes.push("Moved gateway.nodes.denyCommands → gateway.nodes.commands.deny.");
+      delete nodes[legacy];
+      changes.push(`Moved gateway.nodes.${legacy} → gateway.nodes.commands.${canonical}.`);
     }
     if (Object.keys(commands).length > 0) {
       nodes.commands = commands;
@@ -253,7 +236,7 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
   }
 
   visitChannelEntries(raw, "slack", (entry, path) => {
-    moveKey(entry, "identity", "postAs", path, changes);
+    moveLegacyConfigKey(entry, "identity", "postAs", path, changes);
   });
 }
 
@@ -372,7 +355,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
   }
 
   visitChannelEntries(raw, "whatsapp", (entry, path) => {
-    moveKey(entry, "messagePrefix", "responsePrefix", path, changes);
+    moveLegacyConfigKey(entry, "messagePrefix", "responsePrefix", path, changes);
   });
 
   visitChannelEntries(raw, "slack", (entry, path) => {
@@ -446,6 +429,61 @@ function removeUiAssistantIdentity(raw: Record<string, unknown>, changes: string
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
   LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD,
+  defineLegacyConfigMigration({
+    id: "runtime.automatic-local-model-lean",
+    describe: "Remove onboarding-owned local model lean settings",
+    legacyRules: [
+      rule(
+        ["wizard", "localModelLeanAutoModel"],
+        "wizard.localModelLeanAutoModel is retired; local models now use Tool Search without reducing their capabilities.",
+      ),
+    ],
+    apply: (raw, changes) => {
+      const wizard = getRecord(raw.wizard);
+      if (!wizard || !Object.hasOwn(wizard, "localModelLeanAutoModel")) {
+        return;
+      }
+      const autoModel = wizard.localModelLeanAutoModel;
+      const defaults = getRecord(getRecord(raw.agents)?.defaults);
+      const model = defaults?.model;
+      const primary = typeof model === "string" ? model : getRecord(model)?.primary;
+      const experimental = getRecord(defaults?.experimental);
+      // The shipped marker owned only a matching default model's true flag.
+      // A changed model or explicit false relinquished that ownership.
+      if (experimental?.localModelLean === true) {
+        if (typeof autoModel === "string" && autoModel === primary) {
+          delete experimental.localModelLean;
+          changes.push("Removed onboarding-owned agents.defaults.experimental.localModelLean.");
+        } else {
+          changes.push(
+            "Retained explicit or unowned agents.defaults.experimental.localModelLean=true; remove it or set it to false to restore the full tool capabilities through Tool Search.",
+          );
+        }
+      }
+      delete wizard.localModelLeanAutoModel;
+      changes.push("Removed retired wizard.localModelLeanAutoModel.");
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "runtime.messages-suppress-tool-errors",
+    describe: "Remove retired tool failure warning suppression",
+    legacyRules: [
+      rule(
+        ["messages", "suppressToolErrors"],
+        "messages.suppressToolErrors is retired; tool failure warnings now appear only when a run ends without a reply.",
+      ),
+    ],
+    apply: (raw, changes) => {
+      const messages = getRecord(raw.messages);
+      if (!messages || !Object.hasOwn(messages, "suppressToolErrors")) {
+        return;
+      }
+      delete messages.suppressToolErrors;
+      changes.push(
+        "Removed messages.suppressToolErrors (tool failure warnings now appear only when a run ends without a reply).",
+      );
+    },
+  }),
   defineLegacyConfigMigration({
     id: "runtime.retired-internal-hook-handlers",
     describe: "Remove retired internal hook handler registrations",
@@ -554,11 +592,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         (_value, root) => stripRetiredTuningKnobs(structuredClone(root)),
       ),
     ],
-    apply: (raw, changes) => {
-      if (stripRetiredTuningKnobs(raw)) {
-        changes.push("Removed retired runtime tuning knobs; built-in defaults now apply.");
-      }
-    },
+    apply: stripRetiredTuningKnobs,
   }),
   defineLegacyConfigMigration({
     id: "runtime.ui-assistant-identity",
@@ -666,13 +700,8 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         delete tools.experimental;
       }
       const talkRealtime = getRecord(getRecord(raw.talk)?.realtime);
-      if (talkRealtime) {
-        moveVoice(talkRealtime, "talk.realtime", changes);
-      }
-      const channels = getRecord(raw.channels);
-      if (channels) {
-        migrateDiscordVoice(channels, changes);
-      }
+      moveLegacyConfigKey(talkRealtime, "voice", "speakerVoice", "talk.realtime", changes);
+      migrateDiscordVoice(raw, changes);
       migrateMediaDeepgram(raw, changes);
     },
   }),

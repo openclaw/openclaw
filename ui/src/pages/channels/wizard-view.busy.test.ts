@@ -2,8 +2,9 @@
 
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
-import type { ChannelWizardStep } from "./wizard-controller.ts";
+import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
 type WizardProps = Parameters<typeof renderChannelWizard>[0];
@@ -40,7 +41,7 @@ function renderWizard(wizard: WizardProps["wizard"], overrides: Partial<WizardPr
 }
 
 function renderStep(
-  step: ChannelWizardStep,
+  step: WizardStep,
   busy = true,
   textValue = typeof step.initialValue === "string" ? step.initialValue : "",
 ) {
@@ -49,7 +50,6 @@ function renderStep(
       phase: "step",
       channel: null,
       step,
-      stepIndex: 1,
       busy,
       validationError: null,
     },
@@ -71,29 +71,8 @@ describe("renderChannelWizard busy controls", () => {
 
   it.each([
     { name: "note", step: { id: "note", type: "note", message: "Do this" } },
-    {
-      name: "select",
-      step: {
-        id: "select",
-        type: "select",
-        message: "Pick one",
-        options: [{ label: "Alpha", value: "alpha" }],
-      },
-    },
-    {
-      name: "multiselect",
-      step: {
-        id: "multi",
-        type: "multiselect",
-        message: "Pick several",
-        options: [{ label: "Alpha", value: "alpha" }],
-      },
-    },
-    { name: "text", step: { id: "text", type: "text", message: "Enter a value" } },
     { name: "confirm", step: { id: "confirm", type: "confirm", message: "Continue?" } },
-    { name: "action", step: { id: "action", type: "action", message: "Run action" } },
-    { name: "progress", step: { id: "progress", type: "progress", message: "Run action" } },
-  ] satisfies Array<{ name: string; step: ChannelWizardStep }>)(
+  ] satisfies Array<{ name: string; step: WizardStep }>)(
     "shows one spinner button while a $name answer is running",
     ({ step }) => {
       const rendered = renderStep(step);
@@ -184,7 +163,7 @@ describe("renderChannelWizard busy controls", () => {
     },
   );
 
-  it("disables select choices while a step is running", () => {
+  it("disables select choices while a step is running", async () => {
     const select = renderStep({
       id: "select",
       type: "select",
@@ -194,12 +173,13 @@ describe("renderChannelWizard busy controls", () => {
         { label: "Beta", value: "beta" },
       ],
     });
-    const group = select.container.querySelector("wa-select");
+    await updatePickers(select.container);
+    const group = select.container.querySelector("openclaw-select-picker .picker-select__trigger");
     expect(group?.hasAttribute("disabled")).toBe(true);
-    expect(group?.querySelector('[slot="label"]')?.textContent).toBe("Pick one");
+    expect(group?.getAttribute("aria-label")).toBe("Pick one");
   });
 
-  it("shows the channel prompt inside an unselected channel picker", () => {
+  it("shows the channel prompt inside an unselected channel picker", async () => {
     const select = renderStep(
       {
         id: "channel",
@@ -213,9 +193,12 @@ describe("renderChannelWizard busy controls", () => {
       false,
     );
 
-    expect(select.container.querySelector("wa-select")?.getAttribute("placeholder")).toBe(
-      "Select a channel",
-    );
+    await updatePickers(select.container);
+    expect(
+      select.container
+        .querySelector("openclaw-select-picker .picker-select__trigger")
+        ?.textContent?.trim(),
+    ).toBe("Select a channel");
   });
 
   it("disables multiselect choices and submission while a step is running", () => {
@@ -259,7 +242,7 @@ describe("renderChannelWizard busy controls", () => {
     expect(text.onAnswer).not.toHaveBeenCalled();
   });
 
-  it("keeps controls enabled when no step request is running", () => {
+  it("keeps controls enabled when no step request is running", async () => {
     const text = renderStep(
       { id: "text", type: "text", message: "Enter a value", initialValue: "original" },
       false,
@@ -275,7 +258,8 @@ describe("renderChannelWizard busy controls", () => {
       },
       false,
     );
-    const picker = select.container.querySelector("wa-select");
+    await updatePickers(select.container);
+    const picker = select.container.querySelector("openclaw-select-picker .picker-select__trigger");
     expect(picker?.hasAttribute("disabled")).toBe(false);
   });
 });

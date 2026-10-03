@@ -1,33 +1,20 @@
-// Searxng helper module supports config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { resolveReadOnlyEnvSecretRef } from "openclaw/plugin-sdk/secret-ref-readonly";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const SEARXNG_BASE_URL_ENV_VAR = "SEARXNG_BASE_URL";
 const SEARXNG_BASE_URL_PATH = "plugins.entries.searxng.config.webSearch.baseUrl";
-
-type SearxngPluginConfig = {
-  webSearch?: {
-    baseUrl?: unknown;
-    categories?: string;
-    language?: string;
-  };
-};
 
 function normalizeBaseUrl(value: unknown): string | undefined {
   return normalizeSecretInput(value)?.replace(/\/+$/u, "") || undefined;
 }
 
-function resolveSearxngWebSearchConfig(
-  config?: OpenClawConfig,
-): SearxngPluginConfig["webSearch"] | undefined {
-  const pluginConfig = config?.plugins?.entries?.searxng?.config as SearxngPluginConfig | undefined;
-  const webSearch = pluginConfig?.webSearch;
-  if (webSearch && typeof webSearch === "object" && !Array.isArray(webSearch)) {
-    return webSearch;
-  }
-  return undefined;
+function resolveSearxngWebSearchConfig(config?: OpenClawConfig) {
+  return asOptionalRecord(config?.plugins?.entries?.searxng?.config?.webSearch);
 }
 
 export function resolveSearxngBaseUrl(config?: OpenClawConfig): string | undefined {

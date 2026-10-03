@@ -1,16 +1,19 @@
 import { createHmac, randomBytes } from "node:crypto";
-import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import { splitCommandArgs } from "openclaw/plugin-sdk/process-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString as readNonEmptyString,
-  parseBooleanValue,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { OpenClawExecAsk, OpenClawExecSecurity } from "./config-contracts.js";
+import type { OpenClawExecAsk, OpenClawExecSecurity } from "./config-contracts.shared.js";
 import type { CodexServiceTier } from "./protocol.js";
 
-const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
-const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
+const START_OPTIONS_KEY_SECRET = resolveGlobalSingleton(
+  Symbol.for("openclaw.codexAppServerStartOptionsKeySecret"),
+  () => randomBytes(32),
+);
 const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
 export { readNonEmptyString, readRecord };
@@ -37,10 +40,6 @@ export function isCodexFastServiceTier(value: unknown): boolean {
   return normalizeCodexServiceTier(value) === "priority";
 }
 
-export function normalizePositiveNumber(value: unknown, fallback: number): number {
-  return resolvePositiveTimerTimeoutMs(value, fallback);
-}
-
 export function normalizeHeaders(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
@@ -51,7 +50,7 @@ export function normalizeHeaders(value: unknown): Record<string, string> {
         ([key, child]) =>
           [
             key.trim(),
-            normalizeCodexAppServerSecretInput({
+            normalizeResolvedSecretInputString({
               value: child,
               path: `plugins.entries.codex.config.appServer.headers.${key}`,
             }),
@@ -59,17 +58,6 @@ export function normalizeHeaders(value: unknown): Record<string, string> {
       )
       .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1])),
   );
-}
-
-export function normalizeCodexAppServerSecretInput(params: {
-  value: unknown;
-  path: string;
-}): string | undefined {
-  return normalizeResolvedSecretInputString(params);
-}
-
-export function readBooleanEnv(value: string | undefined): boolean | undefined {
-  return parseBooleanValue(value);
 }
 
 export function readExecSecurity(value: unknown): OpenClawExecSecurity | undefined {
@@ -91,14 +79,13 @@ export function readNumberEnv(value: string | undefined): number | undefined {
 
 export function resolveArgs(configArgs: unknown, envArgs: string | undefined): string[] {
   if (Array.isArray(configArgs)) {
-    return configArgs
-      .map((entry) => readNonEmptyString(entry))
-      .filter((entry): entry is string => entry !== undefined);
+    return normalizeTrimmedStringList(configArgs);
   }
-  if (typeof configArgs === "string") {
-    return splitShellWords(configArgs);
-  }
-  return splitShellWords(envArgs ?? "");
+  // v2026.9.1 string overrides preserve backslashes and accept unfinished quotes;
+  // applying shell escaping or strict quote validation would change existing argv.
+  return splitCommandArgs(typeof configArgs === "string" ? configArgs : (envArgs ?? ""), {
+    allowUnclosedQuotes: true,
+  });
 }
 
 export function hashSecretForKey(value: string | undefined, label: string): string | null {
@@ -110,44 +97,4 @@ export function hashSecretForKey(value: string | undefined, label: string): stri
     .update("\0")
     .update(value)
     .digest("hex");
-}
-
-function getStartOptionsKeySecret(): Buffer {
-  const globalState = globalThis as typeof globalThis & {
-    [START_OPTIONS_KEY_SECRET_SYMBOL]?: Buffer;
-  };
-  globalState[START_OPTIONS_KEY_SECRET_SYMBOL] ??= randomBytes(32);
-  return globalState[START_OPTIONS_KEY_SECRET_SYMBOL];
-}
-
-function splitShellWords(value: string): string[] {
-  const words: string[] = [];
-  let current = "";
-  let quote: '"' | "'" | null = null;
-  for (const char of value) {
-    if (quote) {
-      if (char === quote) {
-        quote = null;
-      } else {
-        current += char;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (current) {
-        words.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += char;
-  }
-  if (current) {
-    words.push(current);
-  }
-  return words;
 }

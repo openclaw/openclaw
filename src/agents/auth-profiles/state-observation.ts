@@ -2,7 +2,7 @@
  * Structured logging for auth profile failure state changes.
  * Log payloads keep machine-readable fields while redacting console-facing ids.
  */
-import { redactIdentifier } from "../../logging/redact-identifier.js";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeForConsole } from "../console-sanitize.js";
 import type { AuthProfileFailureReason, ProfileUsageStats } from "./types.js";
@@ -23,18 +23,15 @@ export function logAuthProfileFailureStateChange(params: {
     params.reason === "billing" || params.reason === "auth_permanent" ? "disabled" : "cooldown";
   const previousCooldownUntil = params.previous?.cooldownUntil;
   const previousDisabledUntil = params.previous?.disabledUntil;
+  const windowKey = windowType === "disabled" ? "disabledUntil" : "cooldownUntil";
+  const previousUntil = params.previous?.[windowKey];
   // Active cooldown/disable windows are intentionally immutable; log whether
   // this update reused the existing window instead of extending it.
   const windowReused =
-    windowType === "disabled"
-      ? typeof previousDisabledUntil === "number" &&
-        Number.isFinite(previousDisabledUntil) &&
-        previousDisabledUntil > params.now &&
-        previousDisabledUntil === params.next.disabledUntil
-      : typeof previousCooldownUntil === "number" &&
-        Number.isFinite(previousCooldownUntil) &&
-        previousCooldownUntil > params.now &&
-        previousCooldownUntil === params.next.cooldownUntil;
+    typeof previousUntil === "number" &&
+    Number.isFinite(previousUntil) &&
+    previousUntil > params.now &&
+    previousUntil === params.next[windowKey];
   const safeProfileId = redactIdentifier(params.profileId, { len: 12 });
   const safeRunId = sanitizeForConsole(params.runId) ?? "-";
   const safeProvider = sanitizeForConsole(params.provider) ?? "-";

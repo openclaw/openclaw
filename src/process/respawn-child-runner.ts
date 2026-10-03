@@ -1,4 +1,3 @@
-// Respawn child runner restarts child processes after configured exits.
 import type { ChildProcess, spawn } from "node:child_process";
 import type { attachChildProcessBridge } from "./child-process-bridge.js";
 import { signalProcessTree } from "./kill-tree.js";
@@ -20,7 +19,7 @@ export function runRespawnChildWithSignalBridge(params: {
   detachForProcessTree?: boolean;
   stdioIsTerminal?: boolean;
   runtime: RespawnChildRuntime;
-  onError: (error: unknown) => void;
+  onError: (error: unknown) => void | Promise<void>;
 }): ChildProcess {
   const { command, args, env, runtime, onError } = params;
   const stdioIsTerminal = params.stdioIsTerminal ?? (process.stdin.isTTY || process.stdout.isTTY);
@@ -30,6 +29,7 @@ export function runRespawnChildWithSignalBridge(params: {
     stdio: "inherit",
     env,
     detached: detachForProcessTree,
+    windowsHide: !stdioIsTerminal,
   });
 
   // Let the child honor forwarded signals first; then terminate it so the
@@ -41,18 +41,12 @@ export function runRespawnChildWithSignalBridge(params: {
   let firstForwardedSignal: NodeJS.Signals | undefined;
   let hardKillBackstopStarted = false;
   const clearSignalTimers = (): void => {
-    if (signalExitTimer) {
-      clearTimeout(signalExitTimer);
-      signalExitTimer = undefined;
-    }
-    if (signalForceKillTimer) {
-      clearTimeout(signalForceKillTimer);
-      signalForceKillTimer = undefined;
-    }
-    if (signalHardExitTimer) {
-      clearTimeout(signalHardExitTimer);
-      signalHardExitTimer = undefined;
-    }
+    clearTimeout(signalExitTimer);
+    clearTimeout(signalForceKillTimer);
+    clearTimeout(signalHardExitTimer);
+    signalExitTimer = undefined;
+    signalForceKillTimer = undefined;
+    signalHardExitTimer = undefined;
   };
   const signalChild = (signal: "SIGTERM" | "SIGKILL"): void => {
     if (detachForProcessTree && typeof child.pid === "number" && child.pid > 0) {
@@ -106,6 +100,10 @@ export function runRespawnChildWithSignalBridge(params: {
     }
     clearSignalTimers();
     if (signal) {
+      if (process.platform !== "win32") {
+        process.kill(process.pid, signal);
+        return;
+      }
       const forwardedSignalExitCode =
         !hardKillBackstopStarted && signal === firstForwardedSignal
           ? signal === "SIGINT"
@@ -125,8 +123,14 @@ export function runRespawnChildWithSignalBridge(params: {
       return;
     }
     clearSignalTimers();
-    onError(error);
-    runtime.exit(1);
+    const reporting = onError(error);
+    const exit = () => runtime.exit(1);
+    // A failed spawn retains async diagnostics until settled, including formatter failure.
+    if (reporting) {
+      void reporting.then(exit, exit);
+    } else {
+      exit();
+    }
   });
 
   return child;

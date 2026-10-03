@@ -12,13 +12,13 @@ import {
 import { readLegacyJsonObjectStream } from "./legacy-json-object-stream.js";
 import {
   apnsRegistrationFromRow,
-  apnsRegistrationToRow,
   isValidApnsNodeId,
   normalizeApnsEnvironment,
   normalizeApnsNodeId,
   normalizeCanonicalApnsRegistration,
   type ApnsRegistration,
 } from "./push-apns-store.js";
+import { apnsRegistrationToRow } from "./push-apns-store.rows.js";
 import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
@@ -27,7 +27,6 @@ import {
   readLegacyMigrationReceiptFromDatabase,
   recordLegacyMigrationReceipt,
   resolveLegacyMigrationSourceKey,
-  type LegacyMigrationReceipt,
 } from "./state-migrations.receipts.js";
 import {
   LegacyMigrationSourceClaim,
@@ -186,7 +185,6 @@ function importAndRecordReceipt(params: {
   imported: number;
   preserved: number;
   suppressed: number;
-  receiptAuthoritative: boolean;
 } {
   const sourceKey = resolveLegacyMigrationSourceKey("apns-json", params.sourcePath);
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
@@ -201,7 +199,6 @@ function importAndRecordReceipt(params: {
           imported: 0,
           preserved: 0,
           suppressed: 0,
-          receiptAuthoritative: true,
         };
       }
 
@@ -274,38 +271,10 @@ function importAndRecordReceipt(params: {
         now,
         reportJson,
       });
-      return { sourceKey, imported, preserved, suppressed, receiptAuthoritative: false };
+      return { sourceKey, imported, preserved, suppressed };
     },
     { env: params.env },
   );
-}
-
-async function cleanupReceiptAuthoritativeSources(params: {
-  stateRoot: Root;
-  stateDir: string;
-  sourcePath: string;
-  receipt: LegacyMigrationReceipt;
-  env: NodeJS.ProcessEnv;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
-}): Promise<number> {
-  let removed = 0;
-  for (const candidate of [params.sourcePath, `${params.sourcePath}${APNS_DOCTOR_CLAIM_SUFFIX}`]) {
-    if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, candidate)))) {
-      continue;
-    }
-    // Validate ownership and drain the pinned inode before deleting receipt-retired bytes.
-    await readLegacySourceSnapshot(params.stateRoot, params.stateDir, candidate);
-    if (params.removeSource) {
-      await params.removeSource(candidate);
-    } else {
-      await params.stateRoot.remove(relativeLegacyPath(params.stateDir, candidate));
-    }
-    removed += 1;
-  }
-  if (!params.receipt.removedSource || removed > 0) {
-    markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
-  }
-  return removed;
 }
 
 async function migrateWithExclusiveStateOwnership(params: {
@@ -323,26 +292,6 @@ async function migrateWithExclusiveStateOwnership(params: {
     return { changes, warnings };
   }
 
-  const receipt = readLegacyMigrationReceipt(
-    resolveLegacyMigrationSourceKey("apns-json", params.detected.sourcePath),
-    params.env,
-  );
-  if (receipt) {
-    try {
-      const removed = await cleanupReceiptAuthoritativeSources({
-        ...params,
-        sourcePath: params.detected.sourcePath,
-        receipt,
-      });
-      if (removed > 0) {
-        notices.push("Discarded retired APNs JSON state already covered by its SQLite receipt.");
-      }
-    } catch (error) {
-      warnings.push(`APNs state is in SQLite, but legacy cleanup failed: ${String(error)}`);
-    }
-    return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
-  }
-
   const sourcePath = params.detected.sourcePath;
   const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
     stateRoot: params.stateRoot,
@@ -354,6 +303,26 @@ async function migrateWithExclusiveStateOwnership(params: {
     readSnapshot: (snapshotPath) =>
       readLegacySourceSnapshot(params.stateRoot, params.stateDir, snapshotPath),
   });
+  await source.recoverLinkedMove();
+  const receipt = readLegacyMigrationReceipt(
+    resolveLegacyMigrationSourceKey("apns-json", params.detected.sourcePath),
+    params.env,
+  );
+  if (receipt) {
+    try {
+      const removed = await source.removeRetiredSources({ removeSource: params.removeSource });
+      if (!receipt.removedSource || removed > 0) {
+        markLegacyMigrationSourceRemoved(receipt.sourceKey, params.env);
+      }
+      if (removed > 0) {
+        notices.push("Discarded retired APNs JSON state already covered by its SQLite receipt.");
+      }
+    } catch (error) {
+      warnings.push(`APNs state is in SQLite, but legacy cleanup failed: ${String(error)}`);
+    }
+    return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
+  }
+
   const hasSource = await source.exists();
   const hasClaim = await source.exists(true);
   if (hasSource && hasClaim) {
@@ -391,24 +360,15 @@ async function migrateWithExclusiveStateOwnership(params: {
     return { changes, warnings };
   }
 
-  if (activePath === sourcePath) {
-    try {
+  let result: ReturnType<typeof importAndRecordReceipt>;
+  try {
+    if (activePath === sourcePath) {
       snapshot = await source.claim({
         snapshot,
         mismatchMessage: "legacy APNs source changed before Doctor could claim it",
         beforeClaim: params.beforeClaim,
       });
-    } catch (error) {
-      const restoreError = await source.restore();
-      warnings.push(
-        `Failed migrating legacy APNs state: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-      );
-      return { changes, warnings };
     }
-  }
-
-  let result: ReturnType<typeof importAndRecordReceipt>;
-  try {
     result = importAndRecordReceipt({
       env: params.env,
       sourcePath,

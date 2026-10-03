@@ -1,4 +1,4 @@
-// Discord plugin module implements component custom id behavior.
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   escapeCustomIdFieldValue,
   needsCustomIdFieldEscaping,
@@ -91,14 +91,13 @@ export function parseDiscordComponentCustomId(
     return null;
   }
   const data = decodeParsedCustomIdData(parsed.data);
-  const componentId = data.cid;
-  if (typeof componentId !== "string" || !componentId.trim()) {
+  const componentId = readNonBlankString(data.cid);
+  if (!componentId) {
     return null;
   }
-  const modalId = data.mid;
   return {
     componentId,
-    modalId: typeof modalId === "string" && modalId.trim() ? modalId : undefined,
+    modalId: readNonBlankString(data.mid),
   };
 }
 
@@ -107,36 +106,28 @@ export function parseDiscordModalCustomId(id: string): string | null {
   if (parsed.key !== DISCORD_MODAL_CUSTOM_ID_KEY) {
     return null;
   }
-  const data = decodeParsedCustomIdData(parsed.data);
-  const modalId = data.mid;
-  if (typeof modalId !== "string" || !modalId.trim()) {
-    return null;
-  }
-  return modalId;
+  return readNonBlankString(decodeParsedCustomIdData(parsed.data).mid) ?? null;
 }
 
 function isDiscordComponentWildcardRegistrationId(id: string): boolean {
   return /^__openclaw_discord_component_[a-z_]+_wildcard__$/.test(id);
 }
 
-export function parseDiscordComponentCustomIdForInteraction(id: string): ComponentParserResult {
+function parseDiscordCustomIdForInteraction(id: string, key: string): ComponentParserResult {
   if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
     return { key: "*", data: {} };
   }
   const parsed = parseCustomId(id);
-  if (parsed.key !== DISCORD_COMPONENT_CUSTOM_ID_KEY) {
+  if (parsed.key !== key) {
     return parsed;
   }
   return { key: "*", data: decodeParsedCustomIdData(parsed.data) };
 }
 
+export function parseDiscordComponentCustomIdForInteraction(id: string): ComponentParserResult {
+  return parseDiscordCustomIdForInteraction(id, DISCORD_COMPONENT_CUSTOM_ID_KEY);
+}
+
 export function parseDiscordModalCustomIdForInteraction(id: string): ComponentParserResult {
-  if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
-    return { key: "*", data: {} };
-  }
-  const parsed = parseCustomId(id);
-  if (parsed.key !== DISCORD_MODAL_CUSTOM_ID_KEY) {
-    return parsed;
-  }
-  return { key: "*", data: decodeParsedCustomIdData(parsed.data) };
+  return parseDiscordCustomIdForInteraction(id, DISCORD_MODAL_CUSTOM_ID_KEY);
 }

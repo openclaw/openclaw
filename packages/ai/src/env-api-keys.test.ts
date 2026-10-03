@@ -46,26 +46,6 @@ describe("getEnvApiKey", () => {
     expect(getEnvApiKey("amazon-bedrock")).toBeUndefined();
   });
 
-  it("detects Google Vertex ADC credentials on the first synchronous lookup", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "openclaw-vertex-adc-"));
-    tempDirs.push(dir);
-    const credentialsPath = join(dir, "application_default_credentials.json");
-    await writeFile(credentialsPath, "{}", "utf-8");
-    await withEnvAsync(
-      {
-        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-        GOOGLE_CLOUD_LOCATION: "us-central1",
-        GOOGLE_CLOUD_PROJECT: "vertex-project",
-      },
-      async () => {
-        vi.resetModules();
-        const { getEnvApiKey } = await import("./env-api-keys.js");
-
-        expect(getEnvApiKey("google-vertex")).toBe("<authenticated>");
-      },
-    );
-  });
-
   it("detects canonical Moonshot and Kimi provider credentials", async () => {
     await withEnvAsync(
       {

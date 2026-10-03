@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, describe, expect, it } from "vitest";
+import { coerceConfig, resolveConfigForRead } from "../config/io.read-helpers.js";
+import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import {
   collectConditionalChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,
+  collectSecretInputAssignment,
   createChannelSecretTargetRegistryEntries,
   resolveChannelAccountSurface,
   type ResolverContext,
@@ -19,6 +23,21 @@ function createContext(): ResolverContext {
 }
 
 describe("createChannelSecretTargetRegistryEntries", () => {
+  it("keeps providerless refs accepted by the public assignment collector", () => {
+    const context = createContext();
+    collectSecretInputAssignment({
+      value: { source: "env", id: "SYNTHETIC_CHANNEL_KEY" },
+      path: "channels.example.token",
+      expected: "string",
+      defaults: { env: "channel-env" },
+      context,
+      apply: () => undefined,
+    });
+    expect(context.assignments.map(({ ref }) => ref)).toEqual([
+      { source: "env", provider: "channel-env", id: "SYNTHETIC_CHANNEL_KEY" },
+    ]);
+  });
+
   it("builds account and channel SecretInput targets with fixed registry metadata", () => {
     expect(
       createChannelSecretTargetRegistryEntries({
@@ -82,7 +101,7 @@ describe("createChannelSecretTargetRegistryEntries", () => {
 
   it("partitions inherited and overridden credentials by channel account", () => {
     const channel = {
-      token: { source: "env" as const, provider: "default", id: "FIXTURE_SHARED" },
+      token: { source: "env" as const, id: "FIXTURE_SHARED" },
       accounts: {
         alpha: {},
         beta: {
@@ -196,5 +215,57 @@ describe("createChannelSecretTargetRegistryEntries", () => {
     expect(new Set(collect("https://beta.example.invalid", true))).toEqual(new Set(initial));
     expect(new Set(changed).size).toBe(1);
     expect(changed[0]).not.toBe(initial[0]);
+  });
+});
+
+describe("collectSimpleChannelFieldAssignments", () => {
+  it("finds authored env refs for account keys that need bracket quoting", () => {
+    const read = resolveConfigForRead(
+      {
+        channels: {
+          discord: {
+            accounts: {
+              "0": { token: "${ACCOUNT_ZERO_TOKEN}" },
+              "prod.guild": { token: "${ACCOUNT_DOTTED_TOKEN}" },
+            },
+          },
+        },
+      },
+      {},
+    );
+    const sourceConfig = coerceConfig(read.resolvedConfigRaw);
+    setConfigResolutionFacts(sourceConfig, read.resolutionFacts);
+    const channel = asOptionalRecord(sourceConfig.channels?.discord);
+    assert(channel);
+    const context = { ...createContext(), sourceConfig };
+
+    collectSimpleChannelFieldAssignments({
+      channelKey: "discord",
+      field: "token",
+      channel,
+      surface: resolveChannelAccountSurface(channel),
+      defaults: undefined,
+      context,
+      topInactiveReason: "inactive",
+      accountInactiveReason: "inactive account",
+    });
+
+    const refByPath = new Map(
+      context.assignments.map((assignment) => [assignment.path, assignment.ref]),
+    );
+    expect([...refByPath.keys()].toSorted()).toEqual([
+      'channels.discord.accounts["0"].token',
+      'channels.discord.accounts["prod.guild"].token',
+    ]);
+    expect(refByPath.get('channels.discord.accounts["0"].token')).toEqual({
+      source: "env",
+      provider: "default",
+      id: "ACCOUNT_ZERO_TOKEN",
+    });
+    expect(refByPath.get('channels.discord.accounts["prod.guild"].token')).toEqual({
+      source: "env",
+      provider: "default",
+      id: "ACCOUNT_DOTTED_TOKEN",
+    });
   });
 });

@@ -34,6 +34,11 @@ struct NotificationManager {
         guard !Task.isCancelled else { return false }
         if status.authorizationStatus == .notDetermined {
             guard requestPermission else { return false }
+            guard AppLaunchRuntimePlan.current.allowsActivation else {
+                self.logger.warning(
+                    "Notification permission deferred by --no-activate; relaunch without the flag and retry.")
+                return false
+            }
             let granted = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
             guard !Task.isCancelled else { return false }
             if granted != true {
@@ -52,7 +57,6 @@ struct NotificationManager {
             content.sound = UNNotificationSound(named: UNNotificationSoundName(soundName))
         }
 
-        // Set interruption level based on priority
         if let priority {
             switch priority {
             case .passive:
@@ -198,7 +202,7 @@ final class BackgroundSessionNotifications: NSObject, UNUserNotificationCenterDe
                     let alert = NSAlert()
                     alert.messageText = "Background Session Notification Expired"
                     alert.informativeText = "Open the session from its Gateway's session list."
-                    alert.runModal()
+                    AppActivation.shared.presentAlert(alert)
                 }
             }
             self.remove(self.actions.retire([identifier]))

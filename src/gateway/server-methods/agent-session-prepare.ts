@@ -3,62 +3,28 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { hasGeneratedMediaCompletionEvent } from "../../agents/internal-event-contract.js";
 import {
-  evaluateSessionFreshness,
-  hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   resolveAgentMainSessionKey,
   resolveChannelResetConfig,
-  resolveSessionLifecycleTimestamps,
   resolveSessionResetPolicy,
   resolveSessionResetType,
-  resolveSessionWorkStartError,
-  resolveTerminalMainSessionTranscriptRegistryCheck,
   type SessionEntry,
-  type SessionFreshness,
 } from "../../config/sessions.js";
-import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
-import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
+import { hasSessionTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
-import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   respondDeletedAgentSession,
+  resolveAgentSessionWorkStartError,
   type RestoredCronContinuation,
 } from "../agent-turn/agent-handler-helpers.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadSessionEntry } from "../session-utils.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
+import { evaluateAgentSessionReuse } from "./agent-session-patch.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-type PreparedAgentSession = {
-  cfg: OpenClawConfig;
-  storePath: string;
-  entry?: SessionEntry;
-  canonicalKey: string;
-  storeKeys?: string[];
-  maintenanceConfig: ReturnType<typeof resolveMaintenanceConfigFromInput>;
-  canonicalSessionAgentId: string;
-  resetPolicy: ReturnType<typeof resolveSessionResetPolicy>;
-  now: number;
-  freshness: SessionFreshness | undefined;
-  visibleRequest: boolean;
-  mainSessionKey: string;
-  isSystemGatewayRun: boolean;
-  usableRequestedSessionId?: string;
-  sessionId: string;
-  isNewSession: boolean;
-  rotatedSessionId: boolean;
-  touchInteraction: boolean;
-  sessionPersistedBeforeGatewayAdmission: boolean;
-  effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
-  restoredCronContinuationIdentity?: Pick<
-    RestoredCronContinuation,
-    "lifecycleRevision" | "sessionId"
-  >;
-  failedSessionTranscriptMissing: (entry: SessionEntry | undefined) => boolean;
-};
 
 export function prepareAgentSession(params: {
   cfg: OpenClawConfig;
@@ -73,7 +39,7 @@ export function prepareAgentSession(params: {
   effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   preAttachmentSession?: { canonicalKey: string; sessionId?: string };
   respond: GatewayRequestHandlerOptions["respond"];
-}): PreparedAgentSession | undefined {
+}) {
   const requestedSessionAgent = resolveRequestedSessionAgentId(
     params.cfg,
     params.requestedSessionKey,
@@ -101,7 +67,9 @@ export function prepareAgentSession(params: {
   }
 
   let effectiveBootstrapContextRunKind = params.effectiveBootstrapContextRunKind;
-  let restoredCronContinuationIdentity: PreparedAgentSession["restoredCronContinuationIdentity"];
+  let restoredCronContinuationIdentity:
+    | Pick<RestoredCronContinuation, "lifecycleRevision" | "sessionId">
+    | undefined;
   const isGeneratedMediaCronContinuation =
     hasGeneratedMediaCompletionEvent(params.request.internalEvents) &&
     parseCronRunScopeSuffix(canonicalKey).runId !== undefined;
@@ -162,27 +130,16 @@ export function prepareAgentSession(params: {
     params.preAttachmentSession?.canonicalKey === canonicalKey
       ? params.preAttachmentSession
       : undefined;
-  if (sessionExistedBeforeAttachmentSetup && !entry) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `Session "${canonicalKey}" was deleted while starting work. Retry.`,
-      ),
-    );
-    return undefined;
-  }
   if (
     sessionExistedBeforeAttachmentSetup &&
-    entry?.sessionId !== sessionExistedBeforeAttachmentSetup.sessionId
+    (!entry || entry.sessionId !== sessionExistedBeforeAttachmentSetup.sessionId)
   ) {
     params.respond(
       false,
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        `Session "${canonicalKey}" changed while starting work. Retry.`,
+        `Session "${canonicalKey}" ${entry ? "changed" : "was deleted"} while starting work. Retry.`,
       ),
     );
     return undefined;
@@ -198,7 +155,7 @@ export function prepareAgentSession(params: {
   ) {
     return undefined;
   }
-  const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
+  const archivedSessionError = resolveAgentSessionWorkStartError(canonicalKey, entry);
   if (archivedSessionError) {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
     return undefined;
@@ -214,29 +171,6 @@ export function prepareAgentSession(params: {
       channel: sessionDeliveryChannel(entry) ?? params.recipientChannel,
     }),
   });
-  const lifecycleTimestamps = entry
-    ? resolveSessionLifecycleTimestamps({
-        entry,
-        storePath,
-        agentId: canonicalSessionAgentId,
-        sessionKey: canonicalKey,
-      })
-    : undefined;
-  const skipImplicitExpiry =
-    params.expectedExistingSessionId !== undefined ||
-    restoredCronContinuationIdentity !== undefined ||
-    entry?.modelSelectionLocked === true ||
-    (resetPolicy.configured !== true && hasProviderOwnedSession(entry));
-  const freshness = entry
-    ? skipImplicitExpiry
-      ? ({ fresh: true } satisfies SessionFreshness)
-      : evaluateSessionFreshness({
-          updatedAt: entry.updatedAt,
-          ...lifecycleTimestamps,
-          now,
-          policy: resetPolicy,
-        })
-    : undefined;
   const visibleRequest =
     effectiveBootstrapContextRunKind !== "cron" &&
     effectiveBootstrapContextRunKind !== "heartbeat" &&
@@ -246,15 +180,13 @@ export function prepareAgentSession(params: {
       return false;
     }
     try {
-      return (
-        readTranscriptStatsSync({
-          agentId: canonicalSessionAgentId,
-          sessionId: candidateEntry.sessionId,
-          sessionKey: canonicalKey,
-          storePath,
-          sessionEntry: candidateEntry,
-        }).eventCount === 0
-      );
+      return !hasSessionTranscriptEventsSync({
+        agentId: canonicalSessionAgentId,
+        sessionId: candidateEntry.sessionId,
+        sessionKey: canonicalKey,
+        storePath,
+        sessionEntry: candidateEntry,
+      });
     } catch {
       return true;
     }
@@ -262,49 +194,22 @@ export function prepareAgentSession(params: {
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: canonicalSessionAgentId });
   const isSystemGatewayRun =
     effectiveBootstrapContextRunKind === "cron" || effectiveBootstrapContextRunKind === "heartbeat";
-  const requestedSessionMatchesEntry = Boolean(
-    params.requestedSessionId && entry?.sessionId?.trim() === params.requestedSessionId,
-  );
-  const terminalMainTranscriptCheck =
-    isSystemGatewayRun || requestedSessionMatchesEntry
-      ? undefined
-      : resolveTerminalMainSessionTranscriptRegistryCheck({
-          entry,
-          sessionScope: cfg.session?.scope,
-          sessionKey: canonicalKey,
-          agentId: canonicalSessionAgentId,
-          mainKey: cfg.session?.mainKey,
-          storePath,
-        });
-  const terminalMainTranscriptNewerThanRegistry = terminalMainTranscriptCheck
-    ? hasTerminalMainSessionTranscriptNewerThanRegistrySync({
-        entry,
-        sessionScope: cfg.session?.scope,
-        sessionKey: canonicalKey,
-        agentId: canonicalSessionAgentId,
-        mainKey: cfg.session?.mainKey,
-        storePath,
-      })
-    : false;
-  const recoverableTerminalSession =
-    Boolean(entry?.sessionId) &&
-    visibleRequest &&
-    isRecoverableTerminalSessionStatus(entry?.status);
-  const canReuseSession =
-    Boolean(entry?.sessionId) &&
-    ((freshness?.fresh ?? false) || recoverableTerminalSession) &&
-    !failedSessionTranscriptMissing(entry) &&
-    !terminalMainTranscriptNewerThanRegistry;
-  const usableRequestedSessionId =
-    params.requestedSessionId && (!entry?.sessionId || canReuseSession)
-      ? params.requestedSessionId
-      : undefined;
-  const sessionId =
-    usableRequestedSessionId ?? (canReuseSession ? entry?.sessionId : undefined) ?? randomUUID();
-  const isNewSession =
-    !entry ||
-    (!canReuseSession && !usableRequestedSessionId) ||
-    Boolean(usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId);
+  const reuse = evaluateAgentSessionReuse({
+    freshEntry: entry,
+    cfg,
+    sessionAgentId: canonicalSessionAgentId,
+    canonicalSessionKey: canonicalKey,
+    storePath,
+    expectedExistingSessionId: params.expectedExistingSessionId,
+    hasRestoredCronContinuation: restoredCronContinuationIdentity !== undefined,
+    resetPolicy,
+    now,
+    requestedSessionId: params.requestedSessionId,
+    isSystemGatewayRun,
+    visibleRequest,
+    failedSessionTranscriptMissing,
+  });
+  const sessionId = reuse.sessionId ?? randomUUID();
   return {
     cfg,
     storePath,
@@ -315,13 +220,13 @@ export function prepareAgentSession(params: {
     canonicalSessionAgentId,
     resetPolicy,
     now,
-    freshness,
+    freshness: reuse.freshness,
     visibleRequest,
     mainSessionKey,
     isSystemGatewayRun,
-    usableRequestedSessionId,
+    usableRequestedSessionId: reuse.usableRequestedSessionId,
     sessionId,
-    isNewSession,
+    isNewSession: reuse.isNewSession,
     rotatedSessionId: Boolean(entry?.sessionId && entry.sessionId !== sessionId),
     touchInteraction: visibleRequest,
     sessionPersistedBeforeGatewayAdmission: entry !== undefined,

@@ -1,6 +1,5 @@
-import { once } from "node:events";
-import { createServer } from "node:http";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { discoverLlamaServer } from "./discovery.js";
 
@@ -17,59 +16,75 @@ describe("llama-server discovery projection", () => {
     clearLiveCatalogCacheForTests();
   });
 
-  it("projects shared model rows and llama.cpp properties", async () => {
-    discoverRowsMock.mockResolvedValue({
-      kind: "success",
-      health: "loading",
-      fetchedAt: 123,
-      rows: [
-        {
-          model: {
-            id: "qwen/model:Q4_K_M",
-            object: "model",
-            status: { value: "sleeping" },
+  it.each([
+    {
+      name: "advertised reasoning effort",
+      caps: { supports_reasoning_effort: true },
+      reasoning: true,
+    },
+    {
+      name: "unsupported reasoning effort",
+      caps: { supports_reasoning_effort: false },
+      reasoning: false,
+    },
+    { name: "absent reasoning effort", caps: {}, reasoning: false },
+  ])(
+    "projects shared model rows and llama.cpp properties with $name",
+    async ({ caps, reasoning }) => {
+      discoverRowsMock.mockResolvedValue({
+        kind: "success",
+        health: "loading",
+        fetchedAt: 123,
+        rows: [
+          {
+            model: {
+              id: "qwen/model:Q4_K_M",
+              object: "model",
+              status: { value: "sleeping" },
+            },
+            props: {
+              default_generation_settings: { n_ctx: 32_768 },
+              chat_template_caps: { ...caps, supports_tools: true, supports_tool_calls: true },
+            },
           },
-          props: {
-            default_generation_settings: { n_ctx: 32_768 },
-            chat_template_caps: { supports_tools: true, supports_tool_calls: true },
-          },
-        },
-      ],
-    });
+        ],
+      });
 
-    await expect(
-      discoverLlamaServer({ baseUrl: "http://localhost:8080/v1", cacheTtlMs: 0 }),
-    ).resolves.toMatchObject({
-      kind: "success",
-      endpoint: {
-        origin: "http://localhost:8080",
-        inferenceBaseUrl: "http://localhost:8080/v1",
-      },
-      models: [
-        {
-          status: "sleeping",
-          config: {
-            id: "qwen/model:Q4_K_M",
-            contextWindow: 32_768,
-            compat: { supportsTools: true },
-          },
+      await expect(
+        discoverLlamaServer({ baseUrl: "http://localhost:8080/v1", cacheTtlMs: 0 }),
+      ).resolves.toMatchObject({
+        kind: "success",
+        endpoint: {
+          origin: "http://localhost:8080",
+          inferenceBaseUrl: "http://localhost:8080/v1",
         },
-      ],
-    });
-    expect(discoverRowsMock).toHaveBeenCalledWith({
-      baseUrl: "http://localhost:8080/v1",
-      serverBaseUrl: "http://localhost:8080",
-      apiKey: undefined,
-      headers: undefined,
-      label: "llama-server",
-      healthPath: "/health",
-      modelsPathOrder: "server-first",
-      routerModelProps: true,
-      timeoutMs: 5_000,
-      signal: undefined,
-      rawResult: true,
-    });
-  });
+        models: [
+          {
+            status: "sleeping",
+            config: {
+              id: "qwen/model:Q4_K_M",
+              reasoning,
+              contextWindow: 32_768,
+              compat: { supportsTools: true, supportsReasoningEffort: reasoning },
+            },
+          },
+        ],
+      });
+      expect(discoverRowsMock).toHaveBeenCalledWith({
+        baseUrl: "http://localhost:8080/v1",
+        serverBaseUrl: "http://localhost:8080",
+        apiKey: undefined,
+        headers: undefined,
+        label: "llama-server",
+        healthPath: "/health",
+        modelsPathOrder: "server-first",
+        routerModelProps: true,
+        timeoutMs: 5_000,
+        signal: undefined,
+        rawResult: true,
+      });
+    },
+  );
 
   it("attaches the normalized endpoint to shared discovery failures", async () => {
     discoverRowsMock.mockResolvedValue({
@@ -99,37 +114,26 @@ describe("llama-server discovery projection", () => {
     );
     discoverRowsMock.mockImplementation(actual.discoverOpenAICompatibleLocalModels);
     const requests: string[] = [];
-    const server = createServer((request, response) => {
-      requests.push(request.url ?? "");
-      if (request.url === "/models") {
-        response.end(body);
-      } else if (request.url === "/v1/models") {
-        response.setHeader("Content-Type", "application/json");
-        response.end(JSON.stringify({ data: [{ id: "local-model", object: "model" }] }));
-      } else {
-        response.end("{}");
-      }
-    });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected a listening TCP server");
-      }
-      await expect(
-        discoverLlamaServer({ baseUrl: `http://127.0.0.1:${address.port}`, cacheTtlMs: 0 }),
-      ).resolves.toMatchObject({
-        kind: "success",
-        models: [{ config: { id: "local-model" } }],
-      });
-      expect(requests).toEqual(["/health", "/models", "/v1/models", "/props"]);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+    await withServer(
+      (request, response) => {
+        requests.push(request.url ?? "");
+        if (request.url === "/models") {
+          response.end(body);
+        } else if (request.url === "/v1/models") {
+          response.setHeader("Content-Type", "application/json");
+          response.end(JSON.stringify({ data: [{ id: "local-model", object: "model" }] }));
+        } else {
+          response.end("{}");
+        }
+      },
+      async (baseUrl) => {
+        await expect(discoverLlamaServer({ baseUrl, cacheTtlMs: 0 })).resolves.toMatchObject({
+          kind: "success",
+          models: [{ config: { id: "local-model" } }],
+        });
+        expect(requests).toEqual(["/health", "/models", "/v1/models", "/props"]);
+      },
+    );
   });
 
   it.each([
@@ -143,45 +147,35 @@ describe("llama-server discovery projection", () => {
     discoverRowsMock.mockImplementation(actual.discoverOpenAICompatibleLocalModels);
     let modelId = "anonymous-model";
     const modelRequests: Array<string | undefined> = [];
-    const server = createServer((request, response) => {
-      response.setHeader("Content-Type", "application/json");
-      if (request.url === "/models") {
-        modelRequests.push(request.headers.authorization);
-        response.end(JSON.stringify({ data: [{ id: modelId, status: { value: "unloaded" } }] }));
-      } else {
-        response.end("{}");
-      }
-    });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected a listening TCP server");
-      }
-      const baseUrl = `http://127.0.0.1:${address.port}`;
-      await expect(discoverLlamaServer({ baseUrl })).resolves.toMatchObject({
-        kind: "success",
-        models: [{ config: { id: "anonymous-model" } }],
-      });
-      modelId = "fresh-model";
-      await expect(discoverLlamaServer({ baseUrl, ...access })).resolves.toMatchObject({
-        kind: "success",
-        models: [{ config: { id: "fresh-model" } }],
-      });
-      await expect(discoverLlamaServer({ baseUrl })).resolves.toMatchObject({
-        kind: "success",
-        models: [{ config: { id: "anonymous-model" } }],
-      });
-      expect(modelRequests).toEqual([
-        undefined,
-        "cacheTtlMs" in access ? undefined : "Bearer endpoint-key",
-      ]);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+    await withServer(
+      (request, response) => {
+        response.setHeader("Content-Type", "application/json");
+        if (request.url === "/models") {
+          modelRequests.push(request.headers.authorization);
+          response.end(JSON.stringify({ data: [{ id: modelId, status: { value: "unloaded" } }] }));
+        } else {
+          response.end("{}");
+        }
+      },
+      async (baseUrl) => {
+        await expect(discoverLlamaServer({ baseUrl })).resolves.toMatchObject({
+          kind: "success",
+          models: [{ config: { id: "anonymous-model" } }],
+        });
+        modelId = "fresh-model";
+        await expect(discoverLlamaServer({ baseUrl, ...access })).resolves.toMatchObject({
+          kind: "success",
+          models: [{ config: { id: "fresh-model" } }],
+        });
+        await expect(discoverLlamaServer({ baseUrl })).resolves.toMatchObject({
+          kind: "success",
+          models: [{ config: { id: "anonymous-model" } }],
+        });
+        expect(modelRequests).toEqual([
+          undefined,
+          "cacheTtlMs" in access ? undefined : "Bearer endpoint-key",
+        ]);
+      },
+    );
   });
 });

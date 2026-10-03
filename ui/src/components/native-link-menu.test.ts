@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { i18n } from "../i18n/index.ts";
-import { NativeLinkMenu, type NativeLinkMenuAction } from "./native-link-menu.ts";
-import "./tooltip.ts";
+import { de } from "../i18n/locales/de.ts";
+import { NativeLinkMenu, type NativeLinkMenuAction } from "./native-link-menu.runtime.ts";
+import { settleTooltip } from "./tooltip.test-support.ts";
 
 const NATIVE_LINK_MENU_ELEMENT_NAME = `test-openclaw-native-link-menu-${crypto.randomUUID()}`;
 const containers: HTMLElement[] = [];
@@ -66,7 +68,7 @@ describe("native link menu", () => {
 
     expect(
       items.map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
-    ).toEqual(["Open in Sidebar", "Open in Default Browser", "Copy Link"]);
+    ).toEqual(["Open in Browser Panel", "Open in Default Browser", "Copy Link"]);
 
     items[0]?.click();
     expect(calls).toEqual(["close", "inline"]);
@@ -77,19 +79,27 @@ describe("native link menu", () => {
     const dropdown = menu.querySelector<DropdownElement>("wa-dropdown");
     expect(dropdown).not.toBeNull();
     await dropdown?.updateComplete;
+    const englishLabel = dropdown?.getAttribute("aria-label");
 
     await i18n.setLocale("de");
     await menu.updateComplete;
 
-    expect(menu.querySelector("wa-dropdown")?.getAttribute("aria-label")).toBe("Link-Aktionen");
+    const german = flattenTranslations(de);
+    expect(dropdown?.getAttribute("aria-label")).not.toBe(englishLabel);
+    expect(dropdown?.getAttribute("aria-label")).toBe(german.get("nativeLinkMenu.label"));
     await vi.waitFor(() =>
       expect(dropdown?.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
-        "Link-Aktionen",
+        german.get("nativeLinkMenu.label"),
       ),
     );
     expect(
       menuItems(menu).map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
-    ).toEqual(["In der Seitenleiste öffnen", "Im Standardbrowser öffnen", "Link kopieren"]);
+    ).toEqual([
+      // Changed English copy falls back until the post-merge locale refresh.
+      german.get("nativeLinkMenu.openInline") ?? "Open in Browser Panel",
+      german.get("nativeLinkMenu.openExternal"),
+      german.get("nativeLinkMenu.copy"),
+    ]);
   });
 
   it("renders shortcut hints and dispatches actions from bare letter keys", async () => {
@@ -130,6 +140,7 @@ describe("native link menu", () => {
     menu.append(tooltip);
     await tooltip.updateComplete;
     tooltip.anchor.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+    await settleTooltip(tooltip);
     const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
     await popup.updateComplete;
     expect(popup.open).toBe(true);

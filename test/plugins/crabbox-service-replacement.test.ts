@@ -5,10 +5,8 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import crabboxPlugin from "../../extensions/crabbox/index.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry.js";
-import {
-  PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
-  startPluginServices,
-} from "../../src/plugins/services.js";
+import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "../../src/plugins/services.js";
+import { startPluginServices } from "../../src/plugins/services.test-support.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
 
 describe("Crabbox service replacement", () => {
@@ -56,17 +54,20 @@ describe("Crabbox service replacement", () => {
           }
         }
         return {
-          stdout: JSON.stringify({
-            id: "cbx_replacement",
-            providerMetadata: { instanceProfileAttached: false },
-            host: "worker.example.test",
-            sshHost: "worker.example.test",
-            sshKey: "/mock/worker-key",
-            sshPort: 2222,
-            sshUser: "openclaw",
-            ready: true,
-            state: "running",
-          }),
+          stdout:
+            argv[1] === "--version"
+              ? "999.0.0"
+              : JSON.stringify({
+                  id: "cbx_replacement",
+                  providerMetadata: { instanceProfileAttached: false },
+                  host: "worker.example.test",
+                  sshHost: "worker.example.test",
+                  sshKey: "/mock/worker-key",
+                  sshPort: 2222,
+                  sshUser: "openclaw",
+                  ready: true,
+                  state: "running",
+                }),
           stderr: "",
           code: 0,
           signal: null,
@@ -83,6 +84,7 @@ describe("Crabbox service replacement", () => {
         registerService: (service) => {
           registry.services.push({
             pluginId: "crabbox",
+            id: service.id.trim(),
             service,
             source: "test",
             origin: "bundled",

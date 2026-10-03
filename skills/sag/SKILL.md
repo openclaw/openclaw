@@ -7,7 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "🔊",
-        "requires": { "bins": ["sag"], "env": ["ELEVENLABS_API_KEY"] },
+        "requires": { "bins": ["sag"] },
         "primaryEnv": "ELEVENLABS_API_KEY",
         "install":
           [
@@ -31,6 +31,7 @@ API key (required)
 
 - `ELEVENLABS_API_KEY` (preferred)
 - `SAG_API_KEY` also supported by the CLI
+- Key file via `--api-key-file`, `ELEVENLABS_API_KEY_FILE`, or `SAG_API_KEY_FILE`
 
 Quick start
 

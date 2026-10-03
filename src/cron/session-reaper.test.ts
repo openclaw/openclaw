@@ -1,63 +1,52 @@
 // Cron session reaper tests cover cleanup of sessions created by scheduled runs.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as mediaGeneration from "../agents/media-generation-activity.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../agents/media-generation-activity.test-support.js";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as sessionEntryReader from "../config/sessions/session-entry-read-runtime.js";
+import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   listKnownSessionStoreAgentIds,
   resolveExistingAgentSessionStoreTargetsSync,
 } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { initializeSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import {
-  isSameOpenClawAgentDatabasePath,
   listOpenClawRegisteredAgentDatabases,
   unregisterOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { drainSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions as sweepCronRunSessionsImpl } from "./session-reaper.js";
-import { resetReaperThrottle } from "./session-reaper.test-support.js";
+import { resetReaperThrottle, seedSessionEntries } from "./session-reaper.test-support.js";
 
 const { listSessionEntriesCore, patchSessionEntryCore, replaceSessionEntry } = sessionAccessor;
-
-const taskStatusMocks = vi.hoisted(() => ({
-  buildPendingSet: vi.fn<() => Set<string>>(() => new Set()),
-}));
+const { explicitSqliteCloseReleasesNativeResources: keepsMaintenanceWorker } =
+  await initializeSqliteRuntimeCapabilities();
 
 function sweepCronRunSessions(
   params: Omit<Parameters<typeof sweepCronRunSessionsImpl>[0], "agentId">,
 ) {
   return sweepCronRunSessionsImpl({ ...params, agentId: "main" });
-}
-
-vi.mock("../tasks/task-status-access.js", () => ({
-  buildPendingGeneratedMediaSessionKeySet: taskStatusMocks.buildPendingSet,
-}));
-
-function createTestLogger(): Logger {
-  return {
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-  };
-}
-
-async function seedSessionEntries(
-  storePath: string,
-  entries: Record<string, SessionEntry>,
-): Promise<void> {
-  for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ agentId: "main", storePath, sessionKey }, entry);
-  }
 }
 
 function readSessionEntries(storePath: string): Record<string, SessionEntry> {
@@ -95,23 +84,43 @@ describe("isCronRunSessionKey", () => {
 });
 
 describe("sweepCronRunSessions", () => {
-  const tempDirs: string[] = [];
+  let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
   let tmpDir: string;
   let storePath: string;
-  const log = createTestLogger();
+  let buildPendingSet: MockInstance<typeof mediaGeneration.buildPendingGeneratedMediaSessionKeySet>;
+  const log = {
+    debug: vi.fn<Logger["debug"]>(),
+    info: vi.fn<Logger["info"]>(),
+    warn: vi.fn<Logger["warn"]>(),
+    error: vi.fn<Logger["error"]>(),
+  } satisfies Logger;
 
   beforeEach(async () => {
-    resetReaperThrottle();
-    taskStatusMocks.buildPendingSet.mockReset().mockReturnValue(new Set());
-    tmpDir = makeTempDir(tempDirs, "cron-reaper-");
+    state = await createOpenClawTestState({
+      scenario: "minimal",
+      env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" },
+    });
+    tmpDir = state.root;
     storePath = path.join(tmpDir, "sessions.json");
+    resetReaperThrottle();
+    subagentRuns.clear();
+    clearSubagentRunsReadCacheForTest();
+    resetGeneratedMediaTaskActivityForTests();
+    log.warn.mockClear();
+    buildPendingSet = vi.spyOn(mediaGeneration, "buildPendingGeneratedMediaSessionKeySet");
   });
 
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    cleanupTempDirs(tempDirs);
+  afterEach(async () => {
+    buildPendingSet?.mockRestore();
+    if (!state) {
+      return;
+    }
+    await drainSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+    subagentRuns.clear();
+    clearSubagentRunsReadCacheForTest();
+    resetGeneratedMediaTaskActivityForTests();
+    await state.cleanup();
+    state = undefined;
   });
 
   it("prunes expired cron run sessions", async () => {
@@ -123,6 +132,7 @@ describe("sweepCronRunSessions", () => {
       },
       "agent:main:cron:job1:run:old-run": {
         sessionId: "old-run",
+        skillsSnapshot: { prompt: "retained prompt", skills: [] },
         updatedAt: now - 25 * 3_600_000, // 25h ago — expired
       },
       "agent:main:cron:job1:run:old-run:subagent:worker": {
@@ -176,6 +186,124 @@ describe("sweepCronRunSessions", () => {
       sessionId: "regular-session",
       updatedAt: now - 100 * 3_600_000,
     });
+  });
+
+  it("keeps an idle sweep off the host data-SQL path", async () => {
+    const now = Date.now();
+    await seedSessionEntries(storePath, {
+      "agent:main:cron:job1:run:recent-run": {
+        sessionId: "recent-run",
+        updatedAt: now - 1 * 3_600_000,
+      },
+      "agent:main:main": {
+        sessionId: "unrelated",
+        updatedAt: now,
+        skillsSnapshot: { prompt: "unrelated prompt".repeat(1_000), skills: [] },
+      },
+    });
+    const hostSql = observeHostDataSql();
+    try {
+      expect(await sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log })).toEqual({
+        swept: true,
+        pruned: 0,
+      });
+      for (const call of hostSql.calls) {
+        expect(call).not.toHaveBeenCalled();
+      }
+    } finally {
+      hostSql.restore();
+    }
+  });
+
+  it.each(["invalid JSON", "missing timestamp", "noncanonical key", "invalid participant"])(
+    "refuses selection when an unrelated row has %s",
+    async (defect) => {
+      const exactStorePath = path.join(tmpDir, "shared.sqlite");
+      const sessionKey = "agent:main:matrix:group:!room:example.org";
+      await seedSessionEntries(exactStorePath, {
+        [sessionKey]: { sessionId: "unrelated", updatedAt: 1 },
+      });
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: exactStorePath });
+      if (defect === "invalid participant") {
+        await sessionAccessor.recordSessionParticipant(
+          { agentId: "main", storePath: exactStorePath, sessionKey },
+          {
+            identity: { type: "agent", id: "peer" },
+            promptedAt: 1,
+          },
+        );
+        database.db
+          .prepare("UPDATE session_participants SET identity_namespace = ? WHERE session_key = ?")
+          .run("{}", sessionKey);
+      } else if (defect === "noncanonical key") {
+        database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+          JSON.stringify({
+            sessionId: "unrelated",
+            updatedAt: 1,
+            delivery: {
+              kind: "external",
+              route: { channel: "matrix", accountId: "work", target: { to: "!Room:example.org" } },
+              context: { channel: "matrix", accountId: "work", to: "!Room:example.org" },
+              origin: { provider: "matrix", to: "!Room:example.org", accountId: "work" },
+            },
+          }),
+          sessionKey,
+        );
+      } else {
+        database.db
+          .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+          .run(
+            defect === "invalid JSON" ? "{" : JSON.stringify({ sessionId: "unrelated" }),
+            sessionKey,
+          );
+      }
+      const warn = vi.fn();
+      expect(
+        await sweepCronRunSessions({
+          sessionStorePath: exactStorePath,
+          nowMs: Date.now(),
+          log: { ...log, warn },
+        }),
+      ).toEqual({ swept: false, pruned: 0 });
+      expect(warn).toHaveBeenCalledWith(
+        { err: expect.stringMatching(/canonical|invalid persisted|participant identity/) },
+        "cron-reaper: failed to sweep session store",
+      );
+    },
+  );
+
+  it("keeps a candidate whose retained prompt changes after worker discovery", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:job:run:changed";
+    const entry = {
+      sessionId: "changed",
+      updatedAt: now - 25 * 3_600_000,
+      skillsSnapshot: { prompt: "before", skills: [] },
+    };
+    await seedSessionEntries(storePath, { [sessionKey]: entry });
+    const read = sessionEntryReader.readExpiredCronRunEntriesInWorker;
+    const intercept = vi
+      .spyOn(sessionEntryReader, "readExpiredCronRunEntriesInWorker")
+      .mockImplementationOnce(async (input) => {
+        const candidates = await read(input);
+        expect(candidates[0]?.entry.skillsSnapshot?.prompt).toBe("before");
+        await replaceSessionEntry(
+          { agentId: "main", storePath, sessionKey },
+          {
+            ...entry,
+            skillsSnapshot: { prompt: "after", skills: [] },
+          },
+        );
+        return candidates;
+      });
+    try {
+      expect(
+        (await sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log })).pruned,
+      ).toBe(0);
+      expect(readSessionEntries(storePath)[sessionKey]?.skillsSnapshot?.prompt).toBe("after");
+    } finally {
+      intercept.mockRestore();
+    }
   });
 
   it("commits expired rows and warns when transcript archive retention cleanup fails", async () => {
@@ -241,7 +369,11 @@ describe("sweepCronRunSessions", () => {
         storePath: exactStorePath,
         sessionKey: mainKey,
       },
-      { sessionId: "main-run", updatedAt: now - 1 * 3_600_000 },
+      {
+        sessionId: "main-run",
+        updatedAt: now - 1 * 3_600_000,
+        skillsSnapshot: { prompt: "foreground prompt", skills: [] },
+      },
     );
     await replaceSessionEntry(
       {
@@ -252,7 +384,8 @@ describe("sweepCronRunSessions", () => {
       },
       { sessionId: "ops-run", updatedAt: now - 25 * 3_600_000 },
     );
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabaseByPathAsync(exactStorePath);
+    closeOpenClawAgentDatabasesForTest(exactStorePath);
     unregisterOpenClawAgentDatabase({ agentId: "main", path: exactStorePath });
     expect(
       listOpenClawRegisteredAgentDatabases().filter((entry) =>
@@ -285,6 +418,22 @@ describe("sweepCronRunSessions", () => {
         log,
       }),
     ).toEqual({ swept: true, pruned: 0 });
+    const workersCreated = maintenanceLane.pool.getSnapshot().workersCreated;
+    let foregroundRead:
+      | ReturnType<typeof sessionEntryReader.readSessionEntriesFromStoreInWorker>
+      | undefined;
+    if (keepsMaintenanceWorker) {
+      const closeResources = maintenanceLane.pool.closeResources.bind(maintenanceLane.pool);
+      vi.spyOn(maintenanceLane.pool, "closeResources").mockImplementationOnce((key) => {
+        const closing = closeResources(key);
+        foregroundRead = sessionEntryReader.readSessionEntriesFromStoreInWorker({
+          agentId: "main",
+          storePath: exactStorePath,
+          sessionKeys: [mainKey],
+        });
+        return closing;
+      });
+    }
     const result = await sweepCronRunSessionsImpl({
       agentId: "ops",
       sessionStorePath: exactStorePath,
@@ -293,6 +442,21 @@ describe("sweepCronRunSessions", () => {
     });
 
     expect(result).toEqual({ swept: true, pruned: 1 });
+    if (keepsMaintenanceWorker) {
+      expect(foregroundRead).toBeDefined();
+      expect(await foregroundRead).toMatchObject({
+        entries: [
+          {
+            sessionKey: mainKey,
+            entry: {
+              sessionId: "main-run",
+              skillsSnapshot: { prompt: "foreground prompt", skills: [] },
+            },
+          },
+        ],
+      });
+      expect(maintenanceLane.pool.getSnapshot().workersCreated).toBe(workersCreated);
+    }
     expect(
       sessionAccessor.loadSessionEntry({
         agentId: "main",
@@ -342,7 +506,7 @@ describe("sweepCronRunSessions", () => {
       },
     };
     await seedSessionEntries(storePath, store);
-    taskStatusMocks.buildPendingSet.mockReturnValue(new Set([sessionKey]));
+    mediaGeneration.registerGeneratedMediaTaskActivity("pending-media", sessionKey, "main");
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -350,7 +514,8 @@ describe("sweepCronRunSessions", () => {
       log,
     });
 
-    expect(result.pruned).toBe(0);
+    expect(result).toEqual({ swept: true, pruned: 0 });
+    expect(log.warn).not.toHaveBeenCalled();
     expect(readSessionEntries(storePath)).toEqual(store);
   });
 
@@ -369,7 +534,7 @@ describe("sweepCronRunSessions", () => {
         },
       },
     });
-    taskStatusMocks.buildPendingSet.mockReturnValue(new Set([sessionKey]));
+    mediaGeneration.registerGeneratedMediaTaskActivity("pending-media", sessionKey, "main");
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -377,7 +542,8 @@ describe("sweepCronRunSessions", () => {
       log,
     });
 
-    expect(result.pruned).toBe(0);
+    expect(result).toEqual({ swept: true, pruned: 0 });
+    expect(log.warn).not.toHaveBeenCalled();
     expect(readSessionEntries(storePath)[sessionKey]).toMatchObject({
       updatedAt: now - 25 * 3_600_000,
       cronRunContinuation: {
@@ -387,6 +553,104 @@ describe("sweepCronRunSessions", () => {
         basePersisted: false,
       },
     });
+  });
+
+  it("retains an expired continuation until its native child and completion settle", async () => {
+    const now = Date.now();
+    const parentKey = "agent:main:cron:job1:run:pending-parent";
+    const idleKey = "agent:main:cron:job1:run:idle-sibling";
+    const parent: SessionEntry = {
+      sessionId: "pending-parent",
+      delivery: { kind: "none" },
+      updatedAt: now - 25 * 3_600_000,
+      cronRunContinuation: {
+        lifecycleRevision: "revision-parent",
+        phase: "ready",
+        basePersisted: true,
+      },
+    };
+    await seedSessionEntries(storePath, {
+      [parentKey]: parent,
+      [idleKey]: { ...parent, sessionId: "idle-sibling" },
+    });
+    const child = createSubagentRunRecord({
+      runId: "pending-child",
+      requesterSessionKey: parentKey,
+      expectsCompletionMessage: true,
+      delivery: { status: "pending" },
+    });
+    subagentRuns.set(child.runId, child);
+
+    const first = await sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log });
+    expect(first).toEqual({ swept: true, pruned: 1 });
+    expect(readSessionEntries(storePath)).toEqual({ [parentKey]: parent });
+
+    child.execution = { status: "terminal", endedAt: now, outcome: { status: "ok" } };
+    child.delivery = { status: "in_progress", disposition: "session_queued" };
+    const pendingDelivery = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now + 5 * 60_000,
+      log,
+    });
+    expect(pendingDelivery).toEqual({ swept: true, pruned: 0 });
+    expect(readSessionEntries(storePath)).toEqual({ [parentKey]: parent });
+
+    child.delivery = { status: "delivered", disposition: "delivered" };
+    const settled = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now + 10 * 60_000,
+      log,
+    });
+    expect(settled).toEqual({ swept: true, pruned: 1 });
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(readSessionEntries(storePath)).toEqual({});
+  });
+
+  it("retains a continuation when a child is admitted after retention selection", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:job1:run:late-child-parent";
+    const writerKey = "agent:main:main";
+    const parent: SessionEntry = {
+      sessionId: "late-child-parent",
+      delivery: { kind: "none" },
+      updatedAt: now - 25 * 3_600_000,
+      cronRunContinuation: {
+        lifecycleRevision: "revision-parent",
+        phase: "ready",
+        basePersisted: true,
+      },
+    };
+    await seedSessionEntries(storePath, {
+      [sessionKey]: parent,
+      [writerKey]: { sessionId: "unrelated-writer", updatedAt: now },
+    });
+    const writerStarted = createDeferred();
+    const releaseWriter = createDeferred();
+    const writer = patchSessionEntryCore({ storePath, sessionKey: writerKey }, async () => {
+      writerStarted.resolve();
+      await releaseWriter.promise;
+      return {};
+    });
+    await writerStarted.promise;
+
+    const sweep = sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log });
+    const child = createSubagentRunRecord({
+      runId: "child-admitted-during-retention",
+      requesterSessionKey: sessionKey,
+      expectsCompletionMessage: true,
+      delivery: { status: "pending" },
+    });
+    subagentRuns.set(child.runId, child);
+    try {
+      releaseWriter.resolve();
+      const result = await sweep;
+      expect(result).toEqual({ swept: true, pruned: 0 });
+      expect(log.warn).not.toHaveBeenCalled();
+      expect(readSessionEntries(storePath)[sessionKey]).toEqual(parent);
+    } finally {
+      releaseWriter.resolve();
+      await Promise.allSettled([writer, sweep]);
+    }
   });
 
   it("prunes expired orphaned continuation owners", async () => {
@@ -419,7 +683,7 @@ describe("sweepCronRunSessions", () => {
       log,
     });
 
-    expect(result.pruned).toBe(2);
+    expect(result).toEqual({ swept: true, pruned: 2 });
     expect(readSessionEntries(storePath)).toEqual({});
   });
 
@@ -473,6 +737,55 @@ describe("sweepCronRunSessions", () => {
       releaseWriter.resolve();
       await Promise.allSettled([writer, sweep, admissionPromise]);
     }
+  });
+
+  it("prunes idle siblings while skipping rows claimed by an in-flight run", async () => {
+    const now = Date.now();
+    const busyKey = "agent:main:cron:job1:run:busy-run";
+    const idleKey = "agent:main:cron:job2:run:idle-run";
+    await seedSessionEntries(storePath, {
+      [busyKey]: {
+        sessionId: "busy-run",
+        updatedAt: now - 25 * 3_600_000,
+      },
+      [idleKey]: {
+        sessionId: "idle-run",
+        updatedAt: now - 25 * 3_600_000,
+      },
+    });
+
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: ["busy-run"],
+      assertAllowed: () => {},
+    });
+    const warn = vi.fn();
+    const busyLog: Logger = { ...log, warn };
+
+    try {
+      const result = await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now,
+        log: busyLog,
+      });
+
+      expect(result.swept).toBe(true);
+      expect(result.pruned).toBe(1);
+      expect(warn).not.toHaveBeenCalled();
+      const remaining = readSessionEntries(storePath);
+      expect(remaining[busyKey]).toMatchObject({ sessionId: "busy-run" });
+      expect(remaining[idleKey]).toBeUndefined();
+    } finally {
+      admission.release();
+    }
+
+    const retry = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now + 5 * 60_000,
+      log: busyLog,
+    });
+    expect(retry).toEqual({ swept: true, pruned: 1 });
+    expect(readSessionEntries(storePath)[busyKey]).toBeUndefined();
   });
 
   it("respects custom retention", async () => {
@@ -673,9 +986,9 @@ describe("sweepCronRunSessions", () => {
     const eacces = Object.assign(new Error("EACCES: permission denied, open 'sessions.json'"), {
       code: "EACCES",
     });
-    const listSpy = vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation(() => {
-      throw eacces;
-    });
+    const listSpy = vi
+      .spyOn(sessionEntryReader, "readExpiredCronRunEntriesInWorker")
+      .mockRejectedValue(eacces);
 
     try {
       const first = await sweepCronRunSessions({
@@ -731,7 +1044,7 @@ describe("sweepCronRunSessions", () => {
       },
     };
     await seedSessionEntries(storePath, store);
-    taskStatusMocks.buildPendingSet.mockClear();
+    buildPendingSet.mockClear();
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -739,8 +1052,8 @@ describe("sweepCronRunSessions", () => {
       log,
     });
 
-    expect(result.pruned).toBe(1);
-    expect(taskStatusMocks.buildPendingSet).not.toHaveBeenCalled();
+    expect(result).toEqual({ swept: true, pruned: 1 });
+    expect(buildPendingSet).not.toHaveBeenCalled();
   });
 
   it("builds one pending-media snapshot for multiple expired continuations", async () => {
@@ -760,7 +1073,7 @@ describe("sweepCronRunSessions", () => {
         cronRunContinuation: continuation,
       },
     });
-    taskStatusMocks.buildPendingSet.mockReturnValue(new Set([keptKey]));
+    mediaGeneration.registerGeneratedMediaTaskActivity("kept-media", keptKey, "main");
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -768,8 +1081,8 @@ describe("sweepCronRunSessions", () => {
       log,
     });
 
-    expect(result.pruned).toBe(1);
-    expect(taskStatusMocks.buildPendingSet).toHaveBeenCalledOnce();
+    expect(result).toEqual({ swept: true, pruned: 1 });
+    expect(buildPendingSet).toHaveBeenCalledOnce();
     expect(Object.keys(readSessionEntries(storePath))).toEqual([keptKey]);
   });
 });

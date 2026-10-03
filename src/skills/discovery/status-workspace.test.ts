@@ -7,7 +7,7 @@ import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
-import type { SkillEntry } from "../types.js";
+import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { buildWorkspaceSkillStatus } from "./status.js";
 
 const tempDirs: string[] = [];
@@ -27,15 +27,7 @@ function makeEntry(params: {
   source?: string;
   os?: string[];
   requires?: { bins?: string[]; env?: string[]; config?: string[] };
-  install?: Array<{
-    id: string;
-    kind: "brew" | "download";
-    bins?: string[];
-    formula?: string;
-    os?: string[];
-    url?: string;
-    label?: string;
-  }>;
+  install?: SkillInstallSpec[];
 }): SkillEntry {
   const filePath = `/tmp/${params.name}/SKILL.md`;
   const baseDir = `/tmp/${params.name}`;
@@ -78,6 +70,38 @@ function requireSkillEntry(entry: SkillEntry | undefined, name: string): SkillEn
 }
 
 describe("buildWorkspaceSkillStatus", () => {
+  it.each([
+    [true, true, ["download", "go", "node", "uv", "brew"], "brew-4"],
+    [false, true, ["brew", "node", "uv"], "uv-2"],
+    [false, true, ["brew", "go", "node"], "node-2"],
+    [false, true, ["go", "brew", "download"], "brew-1"],
+    [true, false, ["brew", "download", "go"], "go-2"],
+    [true, false, ["brew", "download"], "download-1"],
+    [true, false, ["brew"], "brew-0"],
+    [true, false, ["node", "node"], "node-0"],
+  ] as const)(
+    "preserves installer preference (prefer brew: %s, available: %s, kinds: %j)",
+    async (preferBrew, brewAvailable, kinds, expectedId) => {
+      const workspaceDir = await createTempWorkspaceDir();
+      if (brewAvailable) {
+        await fs.writeFile(path.join(workspaceDir, "brew"), "", { mode: 0o755 });
+      }
+      const entry = makeEntry({
+        name: "installer-preference",
+        install: kinds.map((kind) => ({ kind })),
+      });
+      const report = withEnv({ PATH: brewAvailable ? workspaceDir : "" }, () =>
+        buildWorkspaceSkillStatus(workspaceDir, {
+          entries: [entry],
+          config: { skills: { install: { preferBrew } } },
+        }),
+      );
+      expect(
+        requireReportedSkill(report, entry.skill.name).install.map((option) => option.id),
+      ).toEqual([expectedId]);
+    },
+  );
+
   it("keeps config-disabled skills visible in status when eligibility is passed", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     await writeSkill({
@@ -131,32 +155,6 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill.install[0]?.id).toBe("brew");
   });
 
-  it("honors legacy clawdbot skill metadata requirements and install hints", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "legacy-skill"),
-      name: "legacy-skill",
-      description: "Legacy metadata",
-      metadata:
-        '{"clawdbot":{"requires":{"bins":["fakebin"]},"install":[{"id":"brew","kind":"brew","formula":"fakebin","bins":["fakebin"],"label":"Install fakebin"}]}}',
-    });
-
-    const report = withEnv({ PATH: "" }, () =>
-      buildWorkspaceSkillStatus(workspaceDir, {
-        managedSkillsDir: path.join(workspaceDir, ".managed"),
-      }),
-    );
-    const skill = requireReportedSkill(report, "legacy-skill");
-
-    expect(skill.eligible).toBe(false);
-    expect(skill.requirements.bins).toEqual(["fakebin"]);
-    expect(skill.missing.bins).toEqual(["fakebin"]);
-    expect(skill.install[0]?.id).toBe("brew");
-    expect(skill.install[0]?.kind).toBe("brew");
-    expect(skill.install[0]?.label).toBe("Install fakebin");
-    expect(skill.install[0]?.bins).toEqual(["fakebin"]);
-  });
-
   it("respects OS-gated skills", () => {
     const entry = makeEntry({
       name: "os-skill",
@@ -173,22 +171,6 @@ describe("buildWorkspaceSkillStatus", () => {
       expect(skill.eligible).toBe(false);
       expect(skill.missing.os).toEqual(["darwin"]);
     }
-  });
-  it("marks bundled skills blocked by allowlist", () => {
-    const entry = makeEntry({
-      name: "peekaboo",
-      source: "openclaw-bundled",
-    });
-
-    const report = buildWorkspaceSkillStatus("/tmp/ws", {
-      entries: [entry],
-      config: { skills: { allowBundled: ["other-skill"] } },
-    });
-    const skill = requireReportedSkill(report, "peekaboo");
-
-    expect(skill.blockedByAllowlist).toBe(true);
-    expect(skill.eligible).toBe(false);
-    expect(skill.bundled).toBe(true);
   });
 
   it("requires explicit enablement before exposing bundled coding-agent", async () => {
@@ -250,33 +232,36 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(enabledStatus?.missing.config).toStrictEqual([]);
   });
 
-  it("does not mark an overridden workspace skill as bundled by bundled name alone", async () => {
-    const bundledDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-"));
-    tempDirs.push(bundledDir);
-    await writeSkill({
-      dir: path.join(bundledDir, "peekaboo"),
-      name: "peekaboo",
-      description: "Bundled peekaboo",
-    });
-
-    await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledDir }, async () => {
-      const report = buildWorkspaceSkillStatus("/tmp/ws", {
-        entries: [
-          makeEntry({
-            name: "peekaboo",
-            source: "openclaw-workspace",
-          }),
-        ],
-        config: { skills: { allowBundled: ["other-skill"] } },
+  it.each(["openclaw-workspace", "unknown"])(
+    "does not mark a %s skill as bundled by bundled name alone",
+    async (source) => {
+      const bundledDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-"));
+      tempDirs.push(bundledDir);
+      await writeSkill({
+        dir: path.join(bundledDir, "peekaboo"),
+        name: "peekaboo",
+        description: "Bundled peekaboo",
       });
-      const skill = requireReportedSkill(report, "peekaboo");
 
-      expect(skill.source).toBe("openclaw-workspace");
-      expect(skill.bundled).toBe(false);
-      expect(skill.blockedByAllowlist).toBe(false);
-      expect(skill.eligible).toBe(true);
-    });
-  });
+      await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledDir }, async () => {
+        const report = buildWorkspaceSkillStatus("/tmp/ws", {
+          entries: [
+            makeEntry({
+              name: "peekaboo",
+              source,
+            }),
+          ],
+          config: { skills: { allowBundled: ["other-skill"] } },
+        });
+        const skill = requireReportedSkill(report, "peekaboo");
+
+        expect(skill.source).toBe(source);
+        expect(skill.bundled).toBe(false);
+        expect(skill.blockedByAllowlist).toBe(false);
+        expect(skill.eligible).toBe(true);
+      });
+    },
+  );
 
   it("filters install options by OS", () => {
     const entry = makeEntry({

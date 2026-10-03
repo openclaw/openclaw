@@ -237,14 +237,46 @@ function findPackageForPath(pathname) {
   return packageName === undefined ? undefined : packages.get(packageName);
 }
 
-function findTarballForPath(pathname) {
+function findPackageTargetForPath(pathname) {
   for (const entry of packages.values()) {
-    const prefix = `/${entry.encodedPackageName}/-/`;
-    if (!pathname.toLowerCase().startsWith(prefix.toLowerCase())) {
+    const prefixes = [
+      `/${entry.encodedPackageName}/`,
+      `/${encodeURIComponent(entry.packageName)}/`,
+      `/${entry.packageName}/`,
+    ];
+    const prefix = prefixes.find((candidate) =>
+      pathname.toLowerCase().startsWith(candidate.toLowerCase()),
+    );
+    if (!prefix) {
       continue;
     }
-    for (const versionEntry of entry.versions.values()) {
-      if (pathname.endsWith(`/${versionEntry.tarballName}`)) {
+    const encodedTarget = pathname.slice(prefix.length);
+    if (!encodedTarget || encodedTarget.includes("/")) {
+      continue;
+    }
+    try {
+      return { entry, target: decodeURIComponent(encodedTarget) };
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function findTarballForPath(pathname) {
+  for (const entry of packages.values()) {
+    const prefixes = [`/${entry.encodedPackageName}/-/`, `/${entry.packageName}/-/`];
+    const prefix = prefixes.find((candidate) =>
+      pathname.toLowerCase().startsWith(candidate.toLowerCase()),
+    );
+    if (!prefix) {
+      continue;
+    }
+    const requestedName = pathname.slice(prefix.length);
+    const packageBaseName = entry.packageName.split("/").at(-1);
+    for (const [version, versionEntry] of entry.versions) {
+      const canonicalTarballName = `${packageBaseName}-${version}.tgz`;
+      if (requestedName === versionEntry.tarballName || requestedName === canonicalTarballName) {
         return versionEntry;
       }
     }
@@ -361,6 +393,18 @@ async function handleRequest(request, response) {
     return;
   }
 
+  const packageTarget = findPackageTargetForPath(url.pathname);
+  if (packageTarget) {
+    const metadata = await metadataWithPublishedVersions(packageTarget.entry, baseUrl);
+    const version = metadata["dist-tags"]?.[packageTarget.target] ?? packageTarget.target;
+    const manifest = metadata.versions?.[version];
+    if (manifest) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(`${JSON.stringify(manifest)}\n`);
+      return;
+    }
+  }
+
   const tarballEntry = findTarballForPath(url.pathname);
   if (tarballEntry) {
     response.writeHead(200, {
@@ -393,5 +437,14 @@ const server = http.createServer((request, response) => {
 const bindHost = process.env.OPENCLAW_NPM_REGISTRY_BIND_HOST || "127.0.0.1";
 const requestedPort = Number(process.env.OPENCLAW_NPM_REGISTRY_PORT || 0);
 server.listen(requestedPort, bindHost, () => {
-  fs.writeFileSync(portFile, String(server.address().port));
+  // Callers use file existence as readiness; publish only the complete port.
+  const tempFile = `${portFile}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tempFile, String(server.address().port));
+    fs.renameSync(tempFile, portFile);
+    // Node test callers own IPC; shell callers retain the atomic port-file receipt.
+    process.send?.(server.address().port);
+  } finally {
+    fs.rmSync(tempFile, { force: true });
+  }
 });

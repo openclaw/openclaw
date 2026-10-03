@@ -1,13 +1,10 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type {
   WebPushDevicePreferences,
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
-import type {
-  NativeNotificationsPermission,
-  NativeNotificationTestOutcome,
-} from "../../app/native-notifications.ts";
-import type { WebPushSnapshot } from "../../app/web-push.ts";
+import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsRow,
@@ -20,34 +17,30 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
+import type { ConfigProps } from "./view-types.ts";
 
 registerSettingsEnglish();
 
-// Leaf props contract: view.ts imports this module, so importing ConfigProps
-// back from view.ts would create an import cycle. ConfigProps is structurally
-// assignable to this subset.
-type NotificationsSectionProps = {
-  connected: boolean;
-  nativeNotifications?: {
-    permission: NativeNotificationsPermission | "unknown";
-    test: NativeNotificationTestOutcome | null;
-  };
-  onNativeNotificationsRequestPermission?: () => void;
-  onNativeNotificationsSendTest?: () => void;
-  webPush?: WebPushSnapshot;
-  onWebPushSubscribe?: () => void;
-  onWebPushUnsubscribe?: () => void;
-  onWebPushTest?: () => void;
-  onWebPushSetUserPreferences?: (preferences: WebPushNotificationPreferences) => void;
-  onWebPushSetDevicePreferences?: (preferences: WebPushDevicePreferences) => void;
-};
+type NotificationsSectionProps = Pick<
+  ConfigProps,
+  | "connected"
+  | "nativeNotifications"
+  | "onNativeNotificationsRequestPermission"
+  | "onNativeNotificationsSendTest"
+  | "webPush"
+  | "onWebPushSubscribe"
+  | "onWebPushUnsubscribe"
+  | "onWebPushTest"
+  | "onWebPushSetUserPreferences"
+  | "onWebPushSetDevicePreferences"
+>;
 
 const WEB_PUSH_CATEGORIES = [
   ["approvalRequested", () => t("configView.notifications.approvalRequested")],
   ["agentFinished", () => t("configView.notifications.agentFinished")],
   ["agentQuestion", () => t("configView.notifications.agentQuestion")],
+  ["humanMentioned", () => t("configView.notifications.humanMentioned")],
   ["scheduledTaskFailed", () => t("configView.notifications.scheduledTaskFailed")],
-  ["backgroundTaskFailed", () => t("configView.notifications.backgroundTaskFailed")],
 ] as const;
 
 function minutesToTime(value: number): string {
@@ -174,7 +167,7 @@ function renderUserNotificationPreferences(
         ${WEB_PUSH_CATEGORIES.map(([key, label]) =>
           renderSettingsToggleRow({
             title: label(),
-            checked: preferences.categories[key],
+            checked: preferences.categories[key] === true,
             onChange: (checked) =>
               patch({ categories: { ...preferences.categories, [key]: checked } }),
           }),
@@ -191,11 +184,13 @@ function renderUserNotificationPreferences(
           checked: preferences.quietHours.enabled,
           onChange: (enabled) => patch({ quietHours: { ...preferences.quietHours, enabled } }),
         })}
-        ${preferences.quietHours.enabled
-          ? renderQuietHoursWindowRows(preferences.quietHours, (quietHours) =>
-              patch({ quietHours }),
-            )
-          : nothing}
+        ${
+          preferences.quietHours.enabled
+            ? renderQuietHoursWindowRows(preferences.quietHours, (quietHours) =>
+                patch({ quietHours }),
+              )
+            : nothing
+        }
         ${renderAgentIdsRow(preferences.agentIds, (agentIds) => patch({ agentIds }))}
       </div>
     </section>
@@ -258,9 +253,11 @@ function renderDeviceNotificationPreferences(
                     },
             }),
         })}
-        ${deviceQuietHours?.enabled
-          ? renderQuietHoursWindowRows(deviceQuietHours, (quietHours) => patch({ quietHours }))
-          : nothing}
+        ${
+          deviceQuietHours?.enabled
+            ? renderQuietHoursWindowRows(deviceQuietHours, (quietHours) => patch({ quietHours }))
+            : nothing
+        }
         ${renderSettingsSelectRow({
           title: t("configView.notifications.onlyAgents"),
           value: preferences.agentIds === undefined ? "inherit" : "override",
@@ -270,9 +267,11 @@ function renderDeviceNotificationPreferences(
           ],
           onChange: (value) => patch({ agentIds: value === "inherit" ? undefined : [] }),
         })}
-        ${preferences.agentIds !== undefined
-          ? renderAgentIdsRow(preferences.agentIds, (agentIds) => patch({ agentIds }))
-          : nothing}
+        ${
+          preferences.agentIds !== undefined
+            ? renderAgentIdsRow(preferences.agentIds, (agentIds) => patch({ agentIds }))
+            : nothing
+        }
         ${WEB_PUSH_CATEGORIES.map(([key, label]) =>
           renderSettingsSelectRow({
             title: label(),
@@ -315,95 +314,111 @@ function nativeNotificationsStatus(permission: NativeNotificationsPermission | "
   }
 }
 
+function renderNotificationSection(
+  title: string,
+  status: TemplateResult,
+  rows: TemplateResult,
+  description: TemplateResult | typeof nothing = nothing,
+) {
+  return html`
+    <section class="settings-section" id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}>
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${title}</h2>
+        <div class="settings-section__actions">${status}</div>
+      </div>
+      ${description}
+      <div class="settings-group">${rows}</div>
+    </section>
+  `;
+}
+
 export function renderNotificationsSection(props: NotificationsSectionProps) {
   const native = props.nativeNotifications;
   if (native) {
     const status = nativeNotificationsStatus(native.permission);
     const testPending = native.test?.state === "pending";
     const actionButton =
-      native.permission === "notDetermined"
+      native.permission === "notDetermined" || native.permission === "denied"
         ? html`
             <button
-              class="btn primary"
+              class=${native.permission === "notDetermined" ? "btn primary" : "btn"}
               @click=${() => props.onNativeNotificationsRequestPermission?.()}
             >
-              ${t("configView.notifications.enable")}
+              ${t(
+                native.permission === "notDetermined"
+                  ? "configView.notifications.enable"
+                  : "configView.notifications.openSystemSettings",
+              )}
             </button>
           `
-        : native.permission === "denied"
+        : native.permission === "granted"
           ? html`
-              <button class="btn" @click=${() => props.onNativeNotificationsRequestPermission?.()}>
-                ${t("configView.notifications.openSystemSettings")}
+              <button
+                class="btn primary"
+                ?disabled=${testPending}
+                @click=${() => props.onNativeNotificationsSendTest?.()}
+              >
+                ${testPending ? icons.loader : icons.send}
+                ${
+                  testPending
+                    ? t("configView.notifications.sendingTest")
+                    : t("configView.notifications.sendTest")
+                }
               </button>
             `
-          : native.permission === "granted"
-            ? html`
-                <button
-                  class="btn primary"
-                  ?disabled=${testPending}
-                  @click=${() => props.onNativeNotificationsSendTest?.()}
-                >
-                  ${testPending ? icons.loader : icons.send}
-                  ${testPending
-                    ? t("configView.notifications.sendingTest")
-                    : t("configView.notifications.sendTest")}
-                </button>
-              `
-            : nothing;
+          : nothing;
 
     return html`
-      <div class="settings-page">
-        <section class="settings-section" id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}>
-          <div class="settings-section__header">
-            <h2 class="settings-section__heading">${t("configView.notifications.nativeTitle")}</h2>
-            <div class="settings-section__actions">${renderSettingsStatus(status)}</div>
-          </div>
-          <div class="settings-group">
+      <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
+        ${renderNotificationSection(
+          t("configView.notifications.nativeTitle"),
+          renderSettingsStatus(status),
+          html`
             ${renderSettingsRow({
               title: t("configView.notifications.permission"),
               control: renderSettingsValue(status.label),
             })}
-            ${actionButton !== nothing
-              ? html`
-                  <div class="settings-row">
-                    <div class="settings-row__control">${actionButton}</div>
-                  </div>
-                `
-              : nothing}
-            ${native.permission === "denied"
-              ? renderSettingsRow({
-                  title: t("configView.notifications.blocked"),
-                  description: t("configView.notifications.nativeBlockedHint"),
-                  control: renderSettingsStatus({
-                    kind: "danger",
-                    label: t("configView.notifications.denied"),
-                  }),
-                })
-              : nothing}
-            ${native.test
-              ? renderSettingsRow({
-                  title: t("configView.notifications.testOutcome"),
-                  description: native.test.state === "error" ? native.test.message : undefined,
-                  control: renderSettingsStatus(
-                    native.test.state === "pending"
-                      ? {
-                          kind: "accent",
-                          label: t("configView.notifications.sendingTest"),
-                        }
-                      : native.test.state === "sent"
-                        ? {
-                            kind: "ok",
-                            label: t("configView.notifications.testQueued"),
-                          }
-                        : {
-                            kind: "danger",
-                            label: t("configView.notifications.testFailed"),
-                          },
-                  ),
-                })
-              : nothing}
-          </div>
-        </section>
+            ${
+              actionButton !== nothing
+                ? html`
+                    <div class="settings-row">
+                      <div class="settings-row__control">${actionButton}</div>
+                    </div>
+                  `
+                : nothing
+            }
+            ${
+              native.permission === "denied"
+                ? renderSettingsRow({
+                    title: t("configView.notifications.blocked"),
+                    description: t("configView.notifications.nativeBlockedHint"),
+                    control: renderSettingsStatus({
+                      kind: "danger",
+                      label: t("configView.notifications.denied"),
+                    }),
+                  })
+                : nothing
+            }
+            ${
+              native.test
+                ? renderSettingsRow({
+                    title: t("configView.notifications.testOutcome"),
+                    description: native.test.state === "error" ? native.test.message : undefined,
+                    control: renderSettingsStatus({
+                      kind: testPending ? "accent" : native.test.state === "sent" ? "ok" : "danger",
+                      label: t(
+                        testPending
+                          ? "configView.notifications.sendingTest"
+                          : native.test.state === "sent"
+                            ? "configView.notifications.testQueued"
+                            : "configView.notifications.testFailed",
+                      ),
+                    }),
+                  })
+                : nothing
+            }
+          `,
+        )}
       </div>
     `;
   }
@@ -411,18 +426,11 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
   const push = props.webPush;
   if (!push) {
     return html`
-      <div class="settings-page">
-        <section class="settings-section" id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}>
-          <div class="settings-section__header">
-            <h2 class="settings-section__heading">${t("configView.notifications.title")}</h2>
-            <div class="settings-section__actions">
-              ${renderSettingsStatus({
-                kind: "muted",
-                label: t("configView.notifications.unavailable"),
-              })}
-            </div>
-          </div>
-          <div class="settings-group">
+      <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
+        ${renderNotificationSection(
+          t("configView.notifications.title"),
+          renderSettingsStatus({ kind: "muted", label: t("configView.notifications.unavailable") }),
+          html`
             <div class="settings-row">
               <div class="settings-row__text">
                 <span class="settings-row__desc">
@@ -430,8 +438,8 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
                 </span>
               </div>
             </div>
-          </div>
-        </section>
+          `,
+        )}
       </div>
     `;
   }
@@ -481,15 +489,17 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             >
               ${icons.x} ${t("configView.notifications.unsubscribe")}
             </button>
-            ${registered
-              ? html`<button
-                  class="btn primary"
-                  ?disabled=${push.loading || !props.connected}
-                  @click=${() => props.onWebPushTest?.()}
-                >
-                  ${icons.send} ${t("configView.notifications.sendTest")}
-                </button>`
-              : nothing}
+            ${
+              registered
+                ? html`<button
+                    class="btn primary"
+                    ?disabled=${push.loading || !props.connected}
+                    @click=${() => props.onWebPushTest?.()}
+                  >
+                    ${icons.send} ${t("configView.notifications.sendTest")}
+                  </button>`
+                : nothing
+            }
           `
         : html`
             <button
@@ -498,28 +508,21 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
               @click=${() => props.onWebPushSubscribe?.()}
             >
               ${push.loading ? icons.loader : nothing}
-              ${push.loading
-                ? t("configView.notifications.subscribing")
-                : t("configView.notifications.enable")}
+              ${
+                push.loading
+                  ? t("configView.notifications.subscribing")
+                  : t("configView.notifications.enable")
+              }
             </button>
           `
       : nothing;
 
   return html`
-    <div class="settings-page">
-      <section class="settings-section" id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}>
-        <div class="settings-section__header">
-          <h2 class="settings-section__heading">${t("configView.notifications.title")}</h2>
-          <div class="settings-section__actions">
-            ${renderSettingsStatus({ kind: statusKind, label: statusLabel })}
-          </div>
-        </div>
-        ${push.permission === "install-required"
-          ? html`<p class="settings-section__desc">
-              ${t("configView.notifications.iosInstallRequired")}
-            </p>`
-          : nothing}
-        <div class="settings-group">
+    <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
+      ${renderNotificationSection(
+        t("configView.notifications.title"),
+        renderSettingsStatus({ kind: statusKind, label: statusLabel }),
+        html`
           ${renderSettingsRow({
             title: t("configView.notifications.browserSupport"),
             control: renderSettingsValue(
@@ -539,46 +542,61 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
               label: subscriptionLabel,
             }),
           })}
-          ${actionButtons !== nothing
-            ? html`
-                <div class="settings-row">
-                  <div class="settings-row__control">${actionButtons}</div>
-                </div>
-              `
-            : nothing}
-          ${push.permission === "denied"
-            ? renderSettingsRow({
-                title: t("configView.notifications.blocked"),
-                description: t("configView.notifications.blockedHint"),
-                control: renderSettingsStatus({
-                  kind: "danger",
-                  label: t("configView.notifications.denied"),
-                }),
-              })
-            : nothing}
-          ${push.error
-            ? html`
-                <div class="settings-row">
-                  <div class="settings-row__text">
-                    <span class="cfg-field__error">${formatUiExternalText(push.error)}</span>
+          ${
+            actionButtons !== nothing
+              ? html`
+                  <div class="settings-row">
+                    <div class="settings-row__control">${actionButtons}</div>
                   </div>
-                </div>
-              `
-            : nothing}
-        </div>
-      </section>
-      ${registered && push.preferences
-        ? html`<div class="settings-page" ?inert=${push.loading}>
-            ${push.preferences.durableIdentity
-              ? renderUserNotificationPreferences(push.preferences.user, (preferences) =>
-                  props.onWebPushSetUserPreferences?.(preferences),
-                )
-              : nothing}
-            ${renderDeviceNotificationPreferences(push.preferences.device, (preferences) =>
-              props.onWebPushSetDevicePreferences?.(preferences),
-            )}
-          </div>`
-        : nothing}
+                `
+              : nothing
+          }
+          ${
+            push.permission === "denied"
+              ? renderSettingsRow({
+                  title: t("configView.notifications.blocked"),
+                  description: t("configView.notifications.blockedHint"),
+                  control: renderSettingsStatus({
+                    kind: "danger",
+                    label: t("configView.notifications.denied"),
+                  }),
+                })
+              : nothing
+          }
+          ${
+            push.error
+              ? html`
+                  <div class="settings-row">
+                    <div class="settings-row__text">
+                      <span class="cfg-field__error">${formatUiExternalText(push.error)}</span>
+                    </div>
+                  </div>
+                `
+              : nothing
+          }
+        `,
+        push.permission === "install-required"
+          ? html`<p class="settings-section__desc">
+              ${t("configView.notifications.iosInstallRequired")}
+            </p>`
+          : nothing,
+      )}
+      ${
+        registered && push.preferences
+          ? html`<div class="settings-stack" ?inert=${push.loading}>
+              ${
+                push.preferences.durableIdentity
+                  ? renderUserNotificationPreferences(push.preferences.user, (preferences) =>
+                      props.onWebPushSetUserPreferences?.(preferences),
+                    )
+                  : nothing
+              }
+              ${renderDeviceNotificationPreferences(push.preferences.device, (preferences) =>
+                props.onWebPushSetDevicePreferences?.(preferences),
+              )}
+            </div>`
+          : nothing
+      }
     </div>
   `;
 }

@@ -6,7 +6,6 @@ import { constants as fsConstants, existsSync, realpathSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { CodexAppServerStartOptions, CodexManagedCommandOrder } from "./config.js";
 import { resolveMacOSDesktopCodexAppServerCommandCandidates } from "./desktop-app-paths.js";
@@ -59,13 +58,22 @@ export async function resolveManagedCodexAppServerStartOptions(
     startOptions.managedCommandOrder ?? "package-first",
   );
   const pathExists = options.pathExists ?? commandPathExists;
-  const commandPaths = await findManagedCodexAppServerCommandPaths({
-    candidateCommandPaths,
-    pathExists,
-    platform,
-  });
-  const commandPath = expectDefined(commandPaths[0], "resolved managed Codex command path");
-  const managedFallbackCommandPaths = commandPaths.slice(1);
+  const commandPaths: string[] = [];
+  for (const commandPath of candidateCommandPaths) {
+    if (await pathExists(commandPath, platform)) {
+      commandPaths.push(commandPath);
+    }
+  }
+  const [commandPath, ...managedFallbackCommandPaths] = commandPaths;
+  if (commandPath === undefined) {
+    throw new Error(
+      [
+        `Managed Codex app-server binary was not found for ${MANAGED_CODEX_APP_SERVER_PACKAGE}.`,
+        "Reinstall or update OpenClaw, or run pnpm install in a source checkout.",
+        "Set plugins.entries.codex.config.appServer.command or OPENCLAW_CODEX_APP_SERVER_BIN to use a custom Codex binary.",
+      ].join(" "),
+    );
+  }
 
   return {
     ...startOptions,
@@ -132,9 +140,7 @@ export function isManagedCodexDesktopCommand(
 ): boolean {
   return (
     platform === "darwin" &&
-    resolveMacOSDesktopCodexAppServerCommandCandidates(platform).some(
-      (candidate) => candidate === command,
-    )
+    resolveMacOSDesktopCodexAppServerCommandCandidates(platform).includes(command)
   );
 }
 
@@ -142,7 +148,7 @@ function resolveManagedCodexPackageRootForCommand(
   command: string,
   platform: NodeJS.Platform,
 ): string | undefined {
-  const pathApi = pathForPlatform(platform);
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
   const commandPaths = [command];
   try {
     commandPaths.unshift(realpathSync(command));
@@ -214,17 +220,18 @@ function resolveManagedCodexAppServerCommandCandidates(
 ): string[] {
   const packageCommand = resolveManagedCodexPackageEntrypoint(pluginRoot);
   const packageCommandPaths = packageCommand ? [packageCommand] : [];
+  if (managedCommandOrder === "package-only") {
+    return packageCommandPaths;
+  }
   const desktopCommandPaths = resolveMacOSDesktopCodexAppServerCommandCandidates(platform);
   // Ordinary turns must honor the pinned package version. Computer Use opts
   // into the desktop app owner because its macOS TCC permissions live there.
-  const orderedCommandPaths =
-    managedCommandOrder === "desktop-first"
-      ? [...desktopCommandPaths, ...packageCommandPaths]
-      : [...packageCommandPaths, ...desktopCommandPaths];
-  return orderedCommandPaths;
+  return managedCommandOrder === "desktop-first"
+    ? [...desktopCommandPaths, ...packageCommandPaths]
+    : [...packageCommandPaths, ...desktopCommandPaths];
 }
 
-function resolveManagedCodexPackageEntrypoint(pluginRoot: string): string | undefined {
+export function resolveManagedCodexPackageEntrypoint(pluginRoot: string): string | undefined {
   try {
     // Use the pinned package's official launcher on every OS. It owns platform
     // selection, manager environment markers, signal forwarding, and exit status.
@@ -234,34 +241,6 @@ function resolveManagedCodexPackageEntrypoint(pluginRoot: string): string | unde
   } catch {
     return undefined;
   }
-}
-
-function pathForPlatform(platform: NodeJS.Platform): typeof path {
-  return platform === "win32" ? path.win32 : path.posix;
-}
-
-async function findManagedCodexAppServerCommandPaths(params: {
-  candidateCommandPaths: readonly string[];
-  pathExists: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
-  platform: NodeJS.Platform;
-}): Promise<string[]> {
-  const commandPaths: string[] = [];
-  for (const commandPath of params.candidateCommandPaths) {
-    if (await params.pathExists(commandPath, params.platform)) {
-      commandPaths.push(commandPath);
-    }
-  }
-  if (commandPaths.length > 0) {
-    return commandPaths;
-  }
-
-  throw new Error(
-    [
-      `Managed Codex app-server binary was not found for ${MANAGED_CODEX_APP_SERVER_PACKAGE}.`,
-      "Reinstall or update OpenClaw, or run pnpm install in a source checkout.",
-      "Set plugins.entries.codex.config.appServer.command or OPENCLAW_CODEX_APP_SERVER_BIN to use a custom Codex binary.",
-    ].join(" "),
-  );
 }
 
 async function commandPathExists(filePath: string, platform: NodeJS.Platform): Promise<boolean> {

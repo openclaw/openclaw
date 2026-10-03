@@ -43,37 +43,6 @@ describe("RequestClient", () => {
     vi.useRealTimers();
   });
 
-  it("tracks queued requests and enforces maxQueueSize", async () => {
-    const firstResponse = createDeferred<Response>();
-    const queuedResponses = [
-      firstResponse.promise,
-      Promise.resolve(createJsonResponse({ ok: true })),
-    ];
-    const fetchSpy = vi.fn(async () => {
-      const response = queuedResponses.shift();
-      if (!response) {
-        throw new Error("unexpected request");
-      }
-      return await response;
-    });
-    const client = new RequestClient("test-token", {
-      fetch: fetchSpy,
-      maxQueueSize: 2,
-    });
-
-    const first = client.get("/users/@me");
-    const second = client.get("/users/@me");
-
-    expect(client.queueSize).toBe(2);
-    await expect(client.get("/users/@me")).rejects.toThrow(/queue is full/);
-
-    firstResponse.resolve(createJsonResponse({ id: "u1" }));
-
-    await expect(first).resolves.toEqual({ id: "u1" });
-    await expect(second).resolves.toEqual({ ok: true });
-    expect(client.queueSize).toBe(0);
-  });
-
   it("defaults non-finite REST client numeric options before scheduling requests", async () => {
     const fetchSpy = vi.fn(async (input: string | URL | Request) => {
       expect(new URL(readRequestUrl(input)).pathname).toBe("/api/v10/guilds/g1/roles");
@@ -83,18 +52,6 @@ describe("RequestClient", () => {
       fetch: fetchSpy,
       apiVersion: Number.NaN,
       timeout: Number.NaN,
-      maxQueueSize: Number.NaN,
-      scheduler: {
-        maxConcurrency: Number.NaN,
-        maxRateLimitRetries: Number.NaN,
-        lanes: {
-          background: {
-            maxQueueSize: Number.NaN,
-            staleAfterMs: Number.NaN,
-            weight: Number.NaN,
-          },
-        },
-      },
     });
 
     await expect(client.get("/guilds/g1/roles")).resolves.toEqual({ ok: true });
@@ -116,36 +73,10 @@ describe("RequestClient", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
-  it("uses the default background stale timeout for non-finite lane overrides", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const firstResponse = createDeferred<Response>();
-    const fetchSpy = vi.fn(async () => await firstResponse.promise);
-    const client = new RequestClient("test-token", {
-      fetch: fetchSpy,
-      scheduler: {
-        maxConcurrency: 1,
-        lanes: {
-          background: { staleAfterMs: Number.NaN },
-        },
-      },
-    });
-
-    const first = client.get("/guilds/g1/roles");
-    const stale = client.get("/guilds/g2/roles");
-    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
-
-    await vi.advanceTimersByTimeAsync(20_001);
-    firstResponse.resolve(createJsonResponse({ ok: "first" }));
-
-    await expect(first).resolves.toEqual({ ok: "first" });
-    await expect(stale).rejects.toThrow(/Dropped stale background request/);
-  });
-
   it("dispatches critical interaction callbacks before older background requests", async () => {
-    const firstResponse = createDeferred<Response>();
+    const releaseWorkers = createDeferred<void>();
+    const blockers = Array.from({ length: 4 }, (_, index) => `/guilds/blocked-${index}/roles`);
     const responses = new Map<string, Promise<Response>>([
-      ["/guilds/g1/roles", firstResponse.promise],
       ["/interactions/123/token/callback", Promise.resolve(createJsonResponse({ ok: "critical" }))],
       ["/guilds/g2/roles", Promise.resolve(createJsonResponse({ ok: "background" }))],
     ]);
@@ -153,6 +84,10 @@ describe("RequestClient", () => {
       const url =
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       const path = new URL(url).pathname.replace(/^\/api\/v\d+/, "");
+      if (blockers.includes(path)) {
+        await releaseWorkers.promise;
+        return createJsonResponse({ ok: "first" });
+      }
       const response = responses.get(path);
       if (!response) {
         throw new Error(`unexpected request ${path}`);
@@ -161,21 +96,20 @@ describe("RequestClient", () => {
     });
     const client = new RequestClient("test-token", {
       fetch: fetchSpy,
-      scheduler: { maxConcurrency: 1 },
     });
 
-    const first = client.get("/guilds/g1/roles");
+    const active = blockers.map((path) => client.get(path));
     const background = client.get("/guilds/g2/roles");
     const critical = client.post("/interactions/123/token/callback", { body: { type: 5 } });
 
-    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
-    firstResponse.resolve(createJsonResponse({ ok: "first" }));
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    releaseWorkers.resolve();
 
-    await expect(first).resolves.toEqual({ ok: "first" });
+    await Promise.all(active);
     await expect(critical).resolves.toEqual({ ok: "critical" });
     await expect(background).resolves.toEqual({ ok: "background" });
     expect(fetchSpy.mock.calls.map(([input]) => new URL(readRequestUrl(input)).pathname)).toEqual([
-      "/api/v10/guilds/g1/roles",
+      ...blockers.map((path) => `/api/v10${path}`),
       "/api/v10/interactions/123/token/callback",
       "/api/v10/guilds/g2/roles",
     ]);
@@ -188,17 +122,14 @@ describe("RequestClient", () => {
     const fetchSpy = vi.fn(async () => await firstResponse.promise);
     const client = new RequestClient("test-token", {
       fetch: fetchSpy,
-      scheduler: {
-        maxConcurrency: 1,
-        lanes: { background: { staleAfterMs: 50 } },
-      },
+      timeout: 30_000,
     });
 
     const first = client.get("/guilds/g1/roles");
-    const stale = client.get("/guilds/g2/roles");
+    const stale = client.get("/guilds/g1/roles");
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
 
-    await vi.advanceTimersByTimeAsync(51);
+    await vi.advanceTimersByTimeAsync(20_001);
     firstResponse.resolve(createJsonResponse({ ok: "first" }));
 
     await expect(first).resolves.toEqual({ ok: "first" });
@@ -212,22 +143,20 @@ describe("RequestClient", () => {
   it("keeps standard mutations queued until Discord accepts or rejects them", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    const firstResponse = createDeferred<Response>();
-    const fetchSpy = vi.fn(async () =>
-      fetchSpy.mock.calls.length === 1
-        ? await firstResponse.promise
-        : createJsonResponse({ ok: true }),
-    );
+    const releaseWorkers = createDeferred<void>();
+    const fetchSpy = vi.fn(async () => {
+      if (fetchSpy.mock.calls.length <= 4) {
+        await releaseWorkers.promise;
+      }
+      return createJsonResponse({ ok: true });
+    });
     const client = new RequestClient("test-token", {
       fetch: fetchSpy,
-      scheduler: {
-        maxConcurrency: 1,
-        lanes: {
-          background: { staleAfterMs: 50 },
-          standard: { staleAfterMs: 50 },
-        },
-      },
+      timeout: 30_000,
     });
+    const active = Array.from({ length: 4 }, (_, index) =>
+      client.post(`/channels/blocked-${index}/messages`, { body: { content: "hold" } }),
+    );
 
     const requests = [
       client.post("/channels/c1/messages", { body: { content: "send" } }),
@@ -240,10 +169,11 @@ describe("RequestClient", () => {
       client.delete("/webhooks/app/token/messages/@original"),
       client.post("/applications/app/commands", { body: { name: "ping" } }),
     ];
-    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
 
-    await vi.advanceTimersByTimeAsync(51);
-    firstResponse.resolve(createJsonResponse({ ok: true }));
+    await vi.advanceTimersByTimeAsync(20_001);
+    releaseWorkers.resolve();
+    await Promise.all(active);
 
     await expect(Promise.all(requests)).resolves.toEqual([
       { ok: true },
@@ -254,7 +184,7 @@ describe("RequestClient", () => {
       { ok: true },
       { ok: true },
     ]);
-    expect(fetchSpy).toHaveBeenCalledTimes(requests.length);
+    expect(fetchSpy).toHaveBeenCalledTimes(requests.length + active.length);
     const metrics = client.getSchedulerMetrics();
     expect(metrics.droppedByLane).toEqual({ critical: 0, standard: 0, background: 0 });
     expect(metrics.queueSize).toBe(0);
@@ -271,7 +201,6 @@ describe("RequestClient", () => {
     );
     const client = new RequestClient("test-token", {
       fetch: fetchSpy,
-      scheduler: { maxConcurrency: 2 },
     });
 
     const first = client.get("/channels/c1/messages");
@@ -305,7 +234,6 @@ describe("RequestClient", () => {
     });
     const client = new RequestClient("test-token", {
       fetch: fetchSpy,
-      scheduler: { maxConcurrency: 2 },
     });
 
     const channel = client.get("/channels/c1/messages");
@@ -463,7 +391,8 @@ describe("RequestClient", () => {
     expect(client.getSchedulerMetrics().buckets).toStrictEqual([]);
   });
 
-  it("honors maxRateLimitRetries for queued requests", async () => {
+  it("limits queued rate-limited requests to three retries", async () => {
+    vi.useFakeTimers();
     const fetchSpy = vi.fn(async () =>
       createJsonResponse(
         { message: "Rate limited", retry_after: 0.1, global: false },
@@ -475,11 +404,12 @@ describe("RequestClient", () => {
     );
     const client = new RequestClient("test-token", {
       fetch: fetchSpy,
-      scheduler: { maxRateLimitRetries: 0 },
     });
 
-    await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 0.1 });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const rejected = expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 0.1 });
+    await vi.advanceTimersByTimeAsync(300);
+    await rejected;
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
     expect(client.queueSize).toBe(0);
   });
 
@@ -758,13 +688,6 @@ describe("RequestClient", () => {
     );
   });
 
-  it("still parses normal-sized REST response payloads under the cap", async () => {
-    const fetchSpy = vi.fn(async () => createJsonResponse({ id: "channel", name: "general" }));
-    const client = new RequestClient("test-token", { fetch: fetchSpy, queueRequests: false });
-
-    await expect(client.get("/channels/c1")).resolves.toEqual({ id: "channel", name: "general" });
-  });
-
   it("parses raw gzip-compressed JSON response bodies", async () => {
     const body = gzipSync(Buffer.from(JSON.stringify([{ id: "m1", content: "hello" }])));
     const client = new RequestClient("test-token", {
@@ -851,10 +774,7 @@ describe("RequestClient", () => {
       expect(init?.headers).toBeInstanceOf(Headers);
       expect((init!.headers as Headers).get("Content-Type")).toBeNull();
       expect(init?.body).toBeInstanceOf(FormData);
-      return new Response(JSON.stringify({ id: "msg" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return Response.json({ id: "msg" });
     });
     const client = new RequestClient("test-token", { fetch: fetchSpy, queueRequests: false });
 

@@ -1,5 +1,6 @@
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import { ensureRecord } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   canAutoMigrateLegacyLosslessCompaction,
@@ -37,7 +38,6 @@ export function rewriteAgentCompactionRefs(params: {
   agent: MutableRecord;
   path: string;
   agentId?: string;
-  currentRuntime?: string;
   inheritedModelRef?: string;
   inheritedCompaction?: unknown;
   inheritedCompactionPath?: string;
@@ -55,7 +55,6 @@ export function rewriteAgentCompactionRefs(params: {
     cfg: params.cfg,
     agent: params.agent,
     agentId: params.agentId,
-    currentRuntime: params.currentRuntime,
     inheritedModelRef: params.inheritedModelRef,
     env: params.env,
   });
@@ -224,7 +223,6 @@ function removeUnsupportedCodexCompactionOverrides(params: {
 
 export function maybeMigrateLegacyLosslessCompactionConfig(params: {
   cfg: OpenClawConfig;
-  ignoreLegacyAgentRuntimePins?: boolean;
   env?: NodeJS.ProcessEnv;
 }): string[] {
   const root = params.cfg as MutableRecord;
@@ -250,14 +248,11 @@ export function maybeMigrateLegacyLosslessCompactionConfig(params: {
   ) {
     return [];
   }
-  const plugins = ensureMutablePath(root, ["plugins"]);
-  const slots = ensureMutablePath(plugins, ["slots"]);
-  const entries = ensureMutablePath(plugins, ["entries"]);
-  const entry = asMutableRecord(entries[LOSSLESS_CONTEXT_ENGINE_ID]) ?? {};
-  if (entries[LOSSLESS_CONTEXT_ENGINE_ID] !== entry) {
-    entries[LOSSLESS_CONTEXT_ENGINE_ID] = entry;
-  }
-  const config = ensureMutablePath(entry, ["config"]);
+  const plugins = ensureRecord(root, "plugins");
+  const slots = ensureRecord(plugins, "slots");
+  const entries = ensureRecord(plugins, "entries");
+  const entry = ensureRecord(entries, LOSSLESS_CONTEXT_ENGINE_ID);
+  const config = ensureRecord(entry, "config");
   const changes: string[] = [];
   if (slots.contextEngine !== LOSSLESS_CONTEXT_ENGINE_ID) {
     slots.contextEngine = LOSSLESS_CONTEXT_ENGINE_ID;
@@ -356,7 +351,7 @@ function ensureLosslessLlmPolicy(params: {
   if (!params.summaryModel) {
     return;
   }
-  const llm = ensureMutablePath(params.entry, ["llm"]);
+  const llm = ensureRecord(params.entry, "llm");
   if (llm.allowModelOverride !== true) {
     llm.allowModelOverride = true;
     params.changes.push(
@@ -432,16 +427,4 @@ function readMutablePath(root: MutableRecord, pathLabel: string): MutableRecord 
 
 function readCompactionOwnerPathForKeyPath(path: string): string {
   return path.replace(/\.(model|provider)$/, "").replace(/\.compaction$/, "");
-}
-
-function ensureMutablePath(root: MutableRecord, path: readonly string[]): MutableRecord {
-  let cursor = root;
-  for (const part of path) {
-    const next = asMutableRecord(cursor[part]) ?? {};
-    if (cursor[part] !== next) {
-      cursor[part] = next;
-    }
-    cursor = next;
-  }
-  return cursor;
 }

@@ -32,12 +32,6 @@ import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 type AllowlistScope = "dm" | "group" | "all";
 type AllowlistAction = "list" | "add" | "remove";
 type AllowlistTarget = "both" | "config" | "store";
-type ResolvedAllowlistName = {
-  input: string;
-  resolved: boolean;
-  name?: string | null;
-};
-
 type AllowlistCommand =
   | {
       action: "list";
@@ -205,11 +199,13 @@ async function updatePairingStoreAllowlist(params: {
   channelId: ChannelId;
   accountId?: string;
   entry: string;
+  assertCurrent?: () => void;
 }) {
   const storeEntry = {
     channel: params.channelId,
     entry: params.entry,
     accountId: params.accountId,
+    ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
   };
   if (params.action === "add") {
     await addChannelAllowFromStoreEntry(storeEntry);
@@ -221,6 +217,7 @@ async function updatePairingStoreAllowlist(params: {
     await removeChannelAllowFromStoreEntry({
       channel: params.channelId,
       entry: params.entry,
+      ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
     });
   }
 }
@@ -240,23 +237,9 @@ async function resolveAllowlistNames(params: {
     entries: params.entries,
   });
   return new Map(
-    (resolved ?? []).flatMap((entry: ResolvedAllowlistName) =>
+    (resolved ?? []).flatMap((entry) =>
       entry.resolved && entry.name ? [[entry.input, entry.name] as const] : [],
     ),
-  );
-}
-
-async function readAllowlistConfig(params: {
-  cfg: OpenClawConfig;
-  channelId: ChannelId;
-  accountId?: string | null;
-}) {
-  const plugin = getChannelPlugin(params.channelId);
-  return (
-    (await plugin?.allowlist?.readConfig?.({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    })) ?? {}
   );
 }
 
@@ -282,6 +265,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       return nonOwner;
     }
   }
+  const assertOwnerCurrent = params.command.assertOwnerCurrent;
 
   const channelId =
     normalizeChatChannelId(parsed.channel) ??
@@ -315,14 +299,20 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     if (!plugin?.allowlist?.readConfig && !supportsStore) {
       return commandReply(`⚠️ ${channelId} does not expose allowlist configuration.`);
     }
-    const storeAllowFrom = supportsStore
-      ? await readChannelAllowFromStore(channelId, process.env, accountId).catch(() => [])
-      : [];
-    const configState = await readAllowlistConfig({
-      cfg: params.cfg,
-      channelId,
-      accountId,
-    });
+    let storeAllowFrom: string[] = [];
+    let storeReadFailed = false;
+    if (supportsStore) {
+      try {
+        storeAllowFrom = await readChannelAllowFromStore(channelId, process.env, accountId);
+      } catch {
+        storeReadFailed = true;
+      }
+    }
+    const configState =
+      (await getChannelPlugin(channelId)?.allowlist?.readConfig?.({
+        cfg: params.cfg,
+        accountId,
+      })) ?? {};
 
     const dmAllowFrom = (configState.dmAllowFrom ?? []).map(String);
     const groupAllowFrom = (configState.groupAllowFrom ?? []).map(String);
@@ -373,7 +363,11 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     if (showDm) {
       lines.push(`DM allowFrom (config): ${formatEntryList(dmDisplay, resolvedDm)}`);
     }
-    if (supportsStore && storeAllowFrom.length > 0) {
+    if (supportsStore && storeReadFailed) {
+      lines.push(
+        "Paired allowFrom (store): unavailable (read failed). Retry this command; if it still fails, run openclaw doctor.",
+      );
+    } else if (supportsStore && storeAllowFrom.length > 0) {
       lines.push(`Paired allowFrom (store): ${formatEntryList(normalizeValues(storeAllowFrom))}`);
     }
     if (showGroup) {
@@ -479,6 +473,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
           action: parsed.action,
           entry: parsed.entry,
           applyConfigEdit,
+          assertCurrent: assertOwnerCurrent,
         });
       } catch (error) {
         if (error instanceof AutoReplyConfigMutationError) {
@@ -499,6 +494,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
         channelId,
         accountId,
         entry: parsed.entry,
+        assertCurrent: assertOwnerCurrent,
       });
     }
 
@@ -511,7 +507,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     if (shouldTouchStore) {
       locations.push("pairing store");
     }
-    const targetLabel = locations.length > 0 ? locations.join(" + ") : "no-op";
+    const targetLabel = locations.join(" + ");
     return commandReply(`✅ ${scopeLabel} allowlist ${actionLabel}: ${targetLabel}.`);
   }
 
@@ -537,9 +533,9 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     channelId,
     accountId,
     entry: parsed.entry,
+    assertCurrent: assertOwnerCurrent,
   });
 
   const actionLabel = parsed.action === "add" ? "added" : "removed";
-  const scopeLabel = parsed.scope === "group" ? "group" : "DM";
-  return commandReply(`✅ ${scopeLabel} allowlist ${actionLabel} in pairing store.`);
+  return commandReply(`✅ DM allowlist ${actionLabel} in pairing store.`);
 };

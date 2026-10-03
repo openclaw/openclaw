@@ -3,33 +3,21 @@ import {
   type WorkboardCard,
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
-// Workboard plugin module implements command behavior.
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
-import {
-  dispatchAndStartWorkboardCards,
-  type WorkboardSubagentRuntime,
-  type WorkboardWorktreeRuntime,
-} from "./dispatcher.js";
+import type { ResolveAgentWorkspaceRuntime } from "./dispatcher-workspace.js";
+import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
 import {
   canonicalizeWorkboardWorkspaceAccess,
   resolveAgentWorkboardWorkspaceRuntime,
   resolveCommandWorkboardWorkspaceAccess,
   resolveWorkboardAgentWorkspace,
-  type WorkboardTargetWorkspaceRuntime,
   type WorkboardWorkspaceAccess,
 } from "./workspace-access.js";
 
 const ADMIN_SCOPE = "operator.admin";
 const WRITE_SCOPE = "operator.write";
-
-type WorkboardCommandApi = {
-  runtime: {
-    subagent: WorkboardSubagentRuntime;
-    worktrees: WorkboardWorktreeRuntime;
-  };
-};
 
 function splitArgs(input: string | undefined): string[] {
   return (input ?? "").trim().split(/\s+/).filter(Boolean);
@@ -67,30 +55,20 @@ function formatCardDetails(card: WorkboardCard): string {
   return lines.join("\n");
 }
 
-function normalizeTitle(tokens: string[]): string {
-  return tokens.join(" ").trim();
-}
-
 function isWorkboardStatus(value: string): value is WorkboardStatus {
   return (WORKBOARD_STATUSES as readonly string[]).includes(value);
-}
-
-function canMutateWorkboard(params: {
-  senderIsOwner?: boolean;
-  gatewayClientScopes?: readonly string[];
-}): boolean {
-  const scopes = params.gatewayClientScopes;
-  if (scopes) {
-    return scopes.includes(ADMIN_SCOPE) || scopes.includes(WRITE_SCOPE);
-  }
-  return params.senderIsOwner === true;
 }
 
 function requireWriteAccess(params: {
   senderIsOwner?: boolean;
   gatewayClientScopes?: readonly string[];
 }): { text: string; isError: true } | undefined {
-  if (canMutateWorkboard(params)) {
+  const scopes = params.gatewayClientScopes;
+  if (
+    scopes
+      ? scopes.includes(ADMIN_SCOPE) || scopes.includes(WRITE_SCOPE)
+      : params.senderIsOwner === true
+  ) {
     return undefined;
   }
   return {
@@ -100,19 +78,14 @@ function requireWriteAccess(params: {
 }
 
 async function handleWorkboardCommand(params: {
-  api: WorkboardCommandApi;
+  api: Pick<OpenClawPluginApi, "runtime">;
   store: WorkboardStore;
   args?: string;
   senderIsOwner?: boolean;
+  assertOwnerCurrent?: () => void;
   gatewayClientScopes?: readonly string[];
   resolveAgentWorkspace?: (agentId?: string) => string;
-  resolveAgentWorkspaceRuntime?: (
-    agentId: string | undefined,
-    sessionKey: string,
-    workspaceDir: string,
-    modelProvider?: string,
-    modelId?: string,
-  ) => WorkboardTargetWorkspaceRuntime | Promise<WorkboardTargetWorkspaceRuntime>;
+  resolveAgentWorkspaceRuntime?: ResolveAgentWorkspaceRuntime;
   workspaceAccess?: WorkboardWorkspaceAccess;
 }): Promise<{ text: string; isError?: boolean }> {
   const [action = "list", ...rest] = splitArgs(params.args);
@@ -141,26 +114,28 @@ async function handleWorkboardCommand(params: {
     const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
     return card ? { text: formatCardDetails(card) } : { text: error, isError: true };
   }
-  if (action === "create") {
+  if (action === "create" || action === "move" || action === "dispatch") {
     const accessError = requireWriteAccess(params);
     if (accessError) {
       return accessError;
     }
-    const title = normalizeTitle(rest);
+  }
+  if (action === "create") {
+    const title = rest.join(" ").trim();
     if (!title) {
       return { text: "Usage: /workboard create <title>", isError: true };
     }
     const workspaceAccess = await canonicalizeWorkboardWorkspaceAccess(
       params.workspaceAccess ?? { unrestricted: true },
     );
-    const card = await params.store.create({ title, workspaceAccess });
+    const card = await params.store.create(
+      { title, workspaceAccess },
+      undefined,
+      params.assertOwnerCurrent,
+    );
     return { text: `Created ${card.id.slice(0, 8)} ${card.title}` };
   }
   if (action === "move") {
-    const accessError = requireWriteAccess(params);
-    if (accessError) {
-      return accessError;
-    }
     const id = rest[0];
     const statusIndex = rest.indexOf("--status");
     const status = statusIndex >= 0 ? rest[statusIndex + 1] : undefined;
@@ -181,13 +156,15 @@ async function handleWorkboardCommand(params: {
     if (!card) {
       return { text: error, isError: true };
     }
-    return { text: formatCardLine(await params.store.move(card.id, status, undefined)) };
+    return {
+      text: formatCardLine(
+        await params.store.move(card.id, status, undefined, undefined, {
+          assertOwnerCurrent: params.assertOwnerCurrent,
+        }),
+      ),
+    };
   }
   if (action === "dispatch") {
-    const accessError = requireWriteAccess(params);
-    if (accessError) {
-      return accessError;
-    }
     const workspaceAccess = params.workspaceAccess ?? { unrestricted: true };
     const result = await dispatchAndStartWorkboardCards({
       store: params.store,
@@ -198,6 +175,7 @@ async function handleWorkboardCommand(params: {
         resolveAgentWorkspace: params.resolveAgentWorkspace,
         resolveAgentWorkspaceRuntime: params.resolveAgentWorkspaceRuntime,
         workspaceAccess,
+        assertOwnerCurrent: params.assertOwnerCurrent,
       },
     });
     return {
@@ -228,6 +206,7 @@ export function registerWorkboardCommand(params: {
         store: params.store,
         args: ctx.args,
         senderIsOwner: ctx.senderIsOwner,
+        assertOwnerCurrent: ctx.gatewayClientScopes ? undefined : ctx.assertOwnerCurrent,
         gatewayClientScopes: ctx.gatewayClientScopes,
         resolveAgentWorkspace: (agentId) => resolveWorkboardAgentWorkspace(ctx.config, agentId),
         resolveAgentWorkspaceRuntime: (agentId, sessionKey, workspaceDir, modelProvider, modelId) =>

@@ -4,17 +4,17 @@ import SwiftUI
 
 extension VoiceWakeOverlayController {
     func present() {
-        if !self.enableUI || ProcessInfo.processInfo.isRunningTests {
-            if !self.model.isVisible {
-                self.model.isVisible = true
-            }
-            return
-        }
+        let isFirst = !self.model.isVisible
+        if isFirst { self.model.isVisible = true }
+        self.presentation.present(self, isFirst)
+    }
+
+    func presentWindow(isFirst: Bool) {
+        if !self.enableUI || ProcessInfo.processInfo.isRunningTests { return }
         self.ensureWindow()
         self.hostingView?.rootView = VoiceWakeOverlayView(controller: self)
         let target = self.targetFrame()
-        let isFirst = !self.model.isVisible
-        if isFirst { self.model.isVisible = true }
+        let actions = self.actions()
         OverlayPanelFactory.present(
             window: self.window,
             isFirstPresent: isFirst,
@@ -24,11 +24,11 @@ extension VoiceWakeOverlayController {
                     level: .info,
                     "overlay present windowShown textLen=\(self.model.text.count, privacy: .public)")
                 // Keep the status item in “listening” mode until we explicitly dismiss the overlay.
-                AppStateStore.shared.startVoiceEars()
+                actions?.didPresent()
             },
             onAlreadyVisible: { window in
                 self.updateWindowFrame(animate: true)
-                window.orderFrontRegardless()
+                AppActivation.shared.orderFrontRegardless(window: window)
             })
     }
 
@@ -49,9 +49,12 @@ extension VoiceWakeOverlayController {
 
     /// Reassert window ordering when other panels are shown.
     func bringToFrontIfVisible() {
+        self.presentation.bringToFront(self)
+    }
+
+    func bringNativeWindowToFront() {
         guard self.model.isVisible, let window = self.window else { return }
-        window.level = Self.preferredWindowLevel
-        window.orderFrontRegardless()
+        AppActivation.shared.orderFrontRegardless(window: window, level: Self.preferredWindowLevel)
     }
 
     func targetFrame() -> NSRect {
@@ -66,7 +69,39 @@ extension VoiceWakeOverlayController {
     }
 
     func updateWindowFrame(animate: Bool = false) {
+        self.presentation.updateFrame(self, animate)
+    }
+
+    func updateNativeWindowFrame(animate: Bool) {
         OverlayPanelFactory.applyFrame(window: self.window, target: self.targetFrame(), animate: animate)
+    }
+
+    func animateWindowDismissal(
+        reason: DismissReason,
+        outcome: SendOutcome,
+        completion: @escaping @MainActor @Sendable (DismissalCompletion) -> Void)
+    {
+        guard self.enableUI else {
+            completion(.disabledUI)
+            return
+        }
+        guard let window else {
+            completion(.missingWindow)
+            return
+        }
+        let target = self.dismissTargetFrame(for: window.frame, reason: reason, outcome: outcome)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            if let target {
+                window.animator().setFrame(target, display: true)
+            }
+            window.animator().alphaValue = 0
+        } completionHandler: {
+            Task { @MainActor in
+                completion(.animated(finishWindow: { window.orderOut(nil) }))
+            }
+        }
     }
 
     func measuredHeight() -> CGFloat {
@@ -92,13 +127,6 @@ extension VoiceWakeOverlayController {
 
         let contentHeight = ceil(used.height + (textInset.height * 2))
         let total = contentHeight + self.verticalPadding * 2
-        // Defer the overflow state mutation to break the SwiftUI onChange → measuredHeight →
-        // isOverflowing → re-render → onChange synchronous render loop (fixes #43480).
-        let overflowing = total > self.maxHeight
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.model.isOverflowing != overflowing else { return }
-            self.model.isOverflowing = overflowing
-        }
         return max(self.minHeight, min(total, self.maxHeight))
     }
 

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
@@ -694,9 +695,11 @@ describe("prepared Docker publication", () => {
     const build = prepare.jobs.build;
     const steps = build.steps as {
       id?: string;
+      name?: string;
       uses?: string;
       run?: string;
       if?: string;
+      "continue-on-error"?: boolean;
       with?: Record<string, unknown>;
     }[];
     expect(build.strategy.matrix.include).toEqual([
@@ -715,6 +718,7 @@ describe("prepared Docker publication", () => {
       });
       expect(String(step.with?.["build-args"]).split("\n")).toEqual(
         expect.arrayContaining([
+          "GITHUB_ACTIONS=true",
           "GIT_COMMIT=${{ inputs.release_sha }}",
           "OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve.outputs.built_at }}",
           "OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve.outputs.version }}",
@@ -734,6 +738,18 @@ describe("prepared Docker publication", () => {
     expect(String(browser?.with?.["build-args"]).split("\n")).toContain(
       "OPENCLAW_INSTALL_BROWSER=1",
     );
+    for (const [variant, buildId] of [
+      ["default", "build"],
+      ["browser", "build-browser"],
+    ]) {
+      const relay = steps.find((step) => step.name === `Relay ${variant} image limit warnings`);
+      expect(relay?.if).toBe(`\${{ always() && steps.${buildId}.outputs.metadata != '' }}`);
+      expect(relay?.run).toContain('["buildx.build.ref"]');
+      expect(relay?.["continue-on-error"]).toBe(true);
+      expect(relay?.run).toContain('docker buildx history logs --progress plain "$build_ref"');
+      expect(relay?.run).toContain("::notice title=Build limit warning relay skipped::");
+      expect(relay?.run).toContain("node workflow-source/scripts/relay-build-limit-warnings.mts");
+    }
     const smoke = steps.findIndex((step) =>
       step.run?.includes("docker-release-artifacts.mjs prepare"),
     );
@@ -770,7 +786,38 @@ describe("prepared Docker publication", () => {
     expect(publish.jobs.prepare.uses).toBe("./.github/workflows/docker-release-prepare.yml");
     expect(publish.jobs.prepare.secrets).toBeUndefined();
     expect(publish.concurrency).toBeUndefined();
-    expect(publish.jobs.publish.environment).toBe("docker-release");
+    const approval = publish.jobs.approve;
+    const writer = publish.jobs.publish;
+    expect(approval, "approval must not hold the global publication lock").toBeDefined();
+    expect(approval.environment).toBe("docker-release");
+    expect(approval.permissions).toEqual({});
+    expect(approval.concurrency).toBeUndefined();
+    expect(JSON.stringify(approval)).not.toContain("secrets.");
+    expect(approval.needs).toEqual(["validate_release_identity", "prepare"]);
+    expect(writer.environment).toBeUndefined();
+    expect(writer.needs).toEqual(["validate_release_identity", "prepare", "approve"]);
+    for (const [identity, prepared, approved, cancelled, canApprove, canPublish] of [
+      ["success", "success", "success", false, true, true],
+      ["success", "skipped", "success", false, true, true],
+      ["failure", "success", "success", false, false, false],
+      ["success", "failure", "success", false, false, false],
+      ["success", "success", "failure", false, true, false],
+      ["success", "success", "skipped", false, true, false],
+      ["success", "success", "cancelled", false, true, false],
+      ["success", "success", "success", true, false, false],
+    ] as const) {
+      const context = {
+        cancelled: () => cancelled,
+        needs: {
+          validate_release_identity: { result: identity },
+          prepare: { result: prepared },
+          approve: { result: approved },
+        },
+      };
+      const evaluate = (condition: string) => runInNewContext(condition.slice(3, -2), context);
+      expect(evaluate(approval.if)).toBe(canApprove);
+      expect(evaluate(writer.if)).toBe(canPublish);
+    }
     expect(publish.jobs.publish.concurrency).toEqual({
       group: "docker-release-publish",
       "cancel-in-progress": false,

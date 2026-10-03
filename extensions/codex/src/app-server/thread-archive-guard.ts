@@ -34,12 +34,13 @@ export async function assertCodexArchiveDescendantsUnowned(params: {
 
   const seenCursors = new Set<string>();
   const seenThreadIds = new Set<string>([ancestorThreadId]);
+  let archived = false;
   let cursor: string | undefined;
 
   for (let pageIndex = 0; pageIndex < MAX_DESCENDANT_PAGES; pageIndex += 1) {
     const response = await params.listPage({
       ancestorThreadId,
-      archived: false,
+      archived,
       limit: DESCENDANT_PAGE_LIMIT,
       sortKey: "created_at",
       sortDirection: "desc",
@@ -75,7 +76,14 @@ export async function assertCodexArchiveDescendantsUnowned(params: {
 
     const nextCursor = readNextCursor(response.nextCursor);
     if (!nextCursor) {
-      return;
+      if (archived) {
+        return;
+      }
+      // Native archive also stops archived descendants resumed through collaboration.
+      archived = true;
+      cursor = undefined;
+      seenCursors.clear();
+      continue;
     }
     if (seenCursors.has(nextCursor)) {
       throw new Error("Codex app-server returned a repeated descendant-list cursor");

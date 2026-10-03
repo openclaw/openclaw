@@ -1,0 +1,108 @@
+.chat-outbox-recovery {
+  margin: 12px 16px;
+  max-height: 40vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.chat-outbox-recovery > summary {
+  padding: 12px 16px;
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.chat-outbox-recovery__summary-preview {
+  display: block;
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--muted);
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-outbox-recovery[open] .chat-outbox-recovery__summary-preview {
+  display: none;
+}
+
+.chat-outbox-recovery__content {
+  display: grid;
+  gap: 12px;
+  padding: 0 16px 16px;
+  user-select: text;
+}
+
+.chat-outbox-recovery__content p {
+  margin: 0;
+}
+
+.chat-outbox-recovery__meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-outbox-recovery__error,
+.chat-outbox-recovery__warning {
+  color: var(--warn);
+}
+
+.chat-outbox-recovery-row,
+.chat-outbox-recovery__message {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-outbox-recovery-row {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.chat-outbox-recovery__kind {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-outbox-recovery-row:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.chat-outbox-recovery__message {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-inline-start: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.chat-outbox-recovery__preview {
+  color: var(--text-strong);
+  font-size: 15px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.chat-outbox-recovery__attachments {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.chat-outbox-recovery__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chat-outbox-recovery-row .btn {
+  max-width: 100%;
+  white-space: normal;
+  text-align: start;
+}

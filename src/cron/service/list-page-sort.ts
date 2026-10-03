@@ -9,7 +9,7 @@ export function sortCronJobs(
   const dir = sortDir === "desc" ? -1 : 1;
   // Explicit options bypass native localeCompare caching; keep collation local to this sort.
   let compareNames: Intl.Collator["compare"] | undefined;
-  return jobs.toSorted((a, b) => {
+  jobs.sort((a, b) => {
     let cmp = 0;
     if (sortBy === "name") {
       const aName = typeof a.name === "string" ? a.name : "";
@@ -37,4 +37,5 @@ export function sortCronJobs(
     const bId = typeof b.id === "string" ? b.id : "";
     return aId.localeCompare(bId);
   });
+  return jobs;
 }

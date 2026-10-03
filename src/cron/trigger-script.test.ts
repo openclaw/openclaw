@@ -5,18 +5,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
-import { BEFORE_TOOL_CALL_HOOK_CONTEXT } from "../agents/before-tool-call-metadata.js";
+import { getBeforeToolCallHookContext } from "../agents/before-tool-call-metadata.js";
 import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "../agents/code-mode.js";
 import { clearToolSearchCatalog } from "../agents/tool-search.js";
 import { jsonResult, type AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createCronScriptRuntime } from "./trigger-script.js";
+import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
 type EvaluatorDeps = Parameters<typeof createCronScriptRuntime>[0];
 type HeadlessParams = Parameters<NonNullable<EvaluatorDeps["runHeadless"]>>[0];
 type PrepareParams = Parameters<NonNullable<EvaluatorDeps["prepareRuntime"]>>[0];
 
-const beforeToolCallTesting = { BEFORE_TOOL_CALL_HOOK_CONTEXT };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function completed(params: { value: unknown; output?: unknown[] }): CodeModeHeadlessResult {
@@ -45,14 +44,8 @@ function createPreparedRuntime(config: OpenClawConfig) {
     { config, agentId: "main", sessionKey: "cron:test:trigger" },
   );
   return {
-    tools: [tool],
-    ctx: {
-      config,
-      runtimeConfig: config,
-      agentId: "main",
-      sessionKey: "cron:test:trigger",
-    },
-    hookContext: { config, agentId: "main", sessionKey: "cron:test:trigger" },
+    createTools: () => [tool],
+    context: { config, agentId: "main", sessionKey: "cron:test:trigger" },
   };
 }
 
@@ -84,7 +77,7 @@ describe("cron trigger script evaluator", () => {
     let aborts = 0;
     const prepared = createPreparedRuntime(config);
     const gate: AnyAgentTool = {
-      ...prepared.tools[0],
+      ...prepared.createTools()[0],
       name: "gate",
       label: "Gate",
       description: "Wait for the local fixture",
@@ -104,7 +97,7 @@ describe("cron trigger script evaluator", () => {
     };
     const runtime = createCronScriptRuntime({
       config,
-      prepareRuntime: async () => ({ ...prepared, tools: [gate] }),
+      prepareRuntime: async () => ({ ...prepared, createTools: () => [gate] }),
       runHeadless: (params) => {
         context = params.ctx;
         return runCodeModeScriptHeadless(params);
@@ -186,35 +179,50 @@ describe("cron trigger script evaluator", () => {
     },
   );
 
-  it("runs the documented exec contract from a canonically captured pinned cap", async () => {
-    const workspaceDir = tempDirs.make("openclaw-cron-canonical-cap-");
-    // The configured default exec host is a nonexistent node: only the
-    // restrict-only gateway pin can make this command run.
-    const config = {
-      agents: { defaults: { workspace: workspaceDir } },
-      tools: {
-        exec: {
-          host: "node",
-          node: "configured-node-must-not-run",
-          security: "full",
-          ask: "off",
-        },
+  it.each([
+    { host: "auto", expected: { kind: "evaluated", fire: false } },
+    {
+      host: "node",
+      expected: {
+        kind: "error",
+        code: "internal_error",
+        error: expect.stringContaining(
+          "exec host not allowed (requested gateway; configured host is node",
+        ),
       },
-    } as OpenClawConfig;
-    const evaluate = createCronScriptRuntime({ config }).evaluateTrigger;
+    },
+  ] as const)(
+    "honors current host $host for a canonically captured pinned exec cap",
+    async ({ host, expected }) => {
+      const workspaceDir = tempDirs.make("openclaw-cron-canonical-cap-");
+      // Automatic placement must honor the pin despite the script's node request;
+      // an explicit current node restriction must reject the captured Gateway host.
+      const config: OpenClawConfig = {
+        agents: { defaults: { workspace: workspaceDir } },
+        tools: {
+          exec: {
+            host,
+            node: "configured-node-must-not-run",
+            security: "full",
+            ask: "off",
+          },
+        },
+      };
+      const evaluate = createCronScriptRuntime({ config }).evaluateTrigger;
 
-    await expect(
-      evaluate({
-        jobId: "job-canonical-pinned-exec",
-        script:
-          'await exec({ command: "printf openclaw-canonical-ok", host: "node", node: "remote" }); return { fire: false };',
-        state: null,
-        toolsAllow: ["exec", "process"],
-        scheduledToolPolicy: { version: 1, mode: "trusted" },
-        execTarget: { version: 1, host: "gateway" },
-      }),
-    ).resolves.toEqual({ kind: "evaluated", fire: false });
-  });
+      await expect(
+        evaluate({
+          jobId: "job-canonical-pinned-exec",
+          script:
+            'await exec({ command: "printf openclaw-canonical-ok", host: "node", node: "remote" }); return { fire: false };',
+          state: null,
+          toolsAllow: ["exec", "process"],
+          scheduledToolPolicy: { version: 1, mode: "trusted" },
+          execTarget: { version: 1, host: "gateway" },
+        }),
+      ).resolves.toEqual(expected);
+    },
+  );
 
   it("keeps an uncanonicalized alias-name cap fail-closed for exec", async () => {
     const workspaceDir = tempDirs.make("openclaw-cron-alias-collision-");
@@ -328,11 +336,11 @@ describe("cron trigger script evaluator", () => {
   });
 
   it("uses a fresh hook run scope for each evaluation", async () => {
-    const contexts: Array<Record<symbol, unknown>> = [];
+    const runIds: Array<string | undefined> = [];
     const { evaluate, prepareRuntime } = createEvaluator(
       vi.fn(async (params) => {
         const wrapped = params.ctx.catalogRef?.current?.entries[0]?.tool;
-        contexts.push((wrapped ?? {}) as Record<symbol, unknown>);
+        runIds.push(wrapped ? getBeforeToolCallHookContext(wrapped)?.runId : undefined);
         return completed({ value: { fire: false } });
       }),
     );
@@ -341,10 +349,6 @@ describe("cron trigger script evaluator", () => {
     await evaluate({ jobId: "job-loop-scope", script: "return result", state: null });
 
     expect(prepareRuntime).toHaveBeenCalledOnce();
-    const runIds = contexts.map((tool) => {
-      const context = tool[beforeToolCallTesting.BEFORE_TOOL_CALL_HOOK_CONTEXT];
-      return (context as { runId?: string } | undefined)?.runId;
-    });
     expect(runIds[0]).toMatch(/^cron-trigger:job-loop-scope:/);
     expect(runIds[1]).toMatch(/^cron-trigger:job-loop-scope:/);
     expect(runIds[1]).not.toBe(runIds[0]);
@@ -725,7 +729,10 @@ describe("cron script runtime elapsed-time budgets", () => {
         const preparedRuntime = createPreparedRuntime(config);
         const runtime = createCronScriptRuntime({
           config,
-          prepareRuntime: async () => ({ ...preparedRuntime, tools: [shiftClock, observeClock] }),
+          prepareRuntime: async () => ({
+            ...preparedRuntime,
+            createTools: () => [shiftClock, observeClock],
+          }),
         });
         const sharedScript =
           "await Promise.all([shift_clock({}), observe_clock({})]); await observe_clock({});";

@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-// Devices page renders the pending device pairing-request rows.
 import { html, nothing } from "lit";
 import {
   resolvePendingDeviceApprovalState,
@@ -7,9 +6,11 @@ import {
   type PendingDeviceApprovalKind,
 } from "../../../../src/shared/device-pairing-access.js";
 import { icons } from "../../components/icons.ts";
+import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatList, formatRelativeTimestamp } from "../../lib/format.ts";
 import type { PairedDevice, PendingDevice } from "../../lib/nodes/index.ts";
+import { renderDeviceEntryMenu } from "./entry-menu.ts";
 import { renderDeviceTile } from "./view-shared.ts";
 import type { DevicesProps } from "./view.types.ts";
 
@@ -32,11 +33,7 @@ function lookupPairedDevice(
   pairedByDeviceId: ReadonlyMap<string, PairedDevice>,
   request: Pick<PendingDevice, "deviceId" | "publicKey">,
 ): PairedDevice | undefined {
-  const deviceId = normalizeOptionalString(request.deviceId);
-  if (!deviceId) {
-    return undefined;
-  }
-  const paired = pairedByDeviceId.get(deviceId);
+  const paired = pairedByDeviceId.get(normalizeOptionalString(request.deviceId) ?? "");
   if (!paired) {
     return undefined;
   }
@@ -59,19 +56,14 @@ function formatAccessSummary(access: DevicePairingAccessSummary | null): string 
 }
 
 function renderPendingApprovalNote(kind: PendingDeviceApprovalKind) {
-  switch (kind) {
-    case "scope-upgrade":
-      return t("devices.inventory.scopeUpgrade");
-    case "role-upgrade":
-      return t("devices.inventory.roleUpgrade");
-    case "re-approval":
-      return t("devices.inventory.reapproval");
-    case "new-pairing":
-      return t("devices.inventory.newPairing");
-  }
-  const exhaustiveKind: never = kind;
-  void exhaustiveKind;
-  throw new Error("unsupported pending approval kind");
+  return t(
+    {
+      "scope-upgrade": "devices.inventory.scopeUpgrade",
+      "role-upgrade": "devices.inventory.roleUpgrade",
+      "re-approval": "devices.inventory.reapproval",
+      "new-pairing": "devices.inventory.newPairing",
+    }[kind],
+  );
 }
 
 function renderPendingDevice(req: PendingDevice, props: DevicesProps, paired?: PairedDevice) {
@@ -79,33 +71,25 @@ function renderPendingDevice(req: PendingDevice, props: DevicesProps, paired?: P
   const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : t("common.na");
   const approval = resolvePendingDeviceApprovalState(req, paired);
   const repair = req.isRepair ? ` · ${t("devices.inventory.repair")}` : "";
-  const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
   return html`
     <div class="settings-row device-entry">
       ${renderDeviceTile(icons.monitorSmartphone)}
-      <div class="settings-row__text">
-        <span class="settings-row__title">${name}</span>
-        <span class="settings-row__desc">${req.deviceId}${ip}</span>
+      <div class="device-entry__body">
+        <div class="device-entry__heading">
+          <span class="settings-row__title">${name}</span>
+          <span class="device-entry__status"
+            >${renderSettingsStatus({
+              kind: "warn",
+              label: t("devices.inventory.pendingApproval"),
+            })}</span
+          >
+        </div>
         <span class="settings-row__desc">
           ${t("devices.inventory.requestedAt", {
             note: renderPendingApprovalNote(approval.kind),
             time: age,
           })}${repair}
         </span>
-        <span class="settings-row__desc">
-          ${t("devices.inventory.requestedAccess", {
-            access: formatAccessSummary(approval.requested),
-          })}
-        </span>
-        ${approval.approved
-          ? html`
-              <span class="settings-row__desc">
-                ${t("devices.inventory.approvedAccess", {
-                  access: formatAccessSummary(approval.approved),
-                })}
-              </span>
-            `
-          : nothing}
       </div>
       <div class="settings-row__control">
         <button
@@ -122,7 +106,33 @@ function renderPendingDevice(req: PendingDevice, props: DevicesProps, paired?: P
         >
           ${t("devices.inventory.reject")}
         </button>
+        ${renderDeviceEntryMenu(props, { name, deviceId: req.deviceId })}
       </div>
+      <details class="device-entry__details">
+        <summary>${t("devices.inventory.details")}</summary>
+        <dl class="device-entry__facts">
+          <dt class="settings-row__desc">${t("devices.inventory.deviceIdLabel")}</dt>
+          <dd class="settings-row__value settings-row__value--mono" title=${req.deviceId}>
+            ${req.deviceId}
+          </dd>
+          ${
+            req.remoteIp
+              ? html`<dt class="settings-row__desc">${t("devices.inventory.remoteIpLabel")}</dt>
+                  <dd class="settings-row__value settings-row__value--mono">${req.remoteIp}</dd>`
+              : nothing
+          }
+          <dt class="settings-row__desc">${t("devices.inventory.requestedAccessLabel")}</dt>
+          <dd class="settings-row__value">${formatAccessSummary(approval.requested)}</dd>
+          ${
+            approval.approved
+              ? html`<dt class="settings-row__desc">
+                    ${t("devices.inventory.approvedAccessLabel")}
+                  </dt>
+                  <dd class="settings-row__value">${formatAccessSummary(approval.approved)}</dd>`
+              : nothing
+          }
+        </dl>
+      </details>
     </div>
   `;
 }

@@ -3,14 +3,12 @@
  * Narrows CLI discovery to the provider/profile selected by model auth routing
  * so runtime auth setup avoids broad CLI probing.
  */
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { CLAUDE_CLI_PROFILE_ID } from "./constants.js";
+import { resolveExplicitAuthOrderSelection } from "./explicit-order.js";
 import type { AuthProfileStore } from "./types.js";
 
 const CLAUDE_CLI_PROVIDER_ID = "claude-cli";
@@ -86,7 +84,6 @@ function resolveExternalCliAuthScopeFromAuthSelection(params: {
         ...discoveredProfileIds.filter((profileId) => profileId !== params.userPinnedAuthProfileId),
       ]
     : discoveredProfileIds;
-  let sawCompatibleOrderedProfile = false;
   let selectedProviderId: string | undefined;
   let compatibleProfileCount = 0;
   for (const profileId of profileIds) {
@@ -98,9 +95,8 @@ function resolveExternalCliAuthScopeFromAuthSelection(params: {
       continue;
     }
     compatibleProfileCount += 1;
-    if (!sawCompatibleOrderedProfile) {
+    if (compatibleProfileCount === 1) {
       selectedProviderId = resolved.externalCliProviderId;
-      sawCompatibleOrderedProfile = true;
     }
     if (resolved.externalCliProviderId) {
       providerIds.push(resolved.externalCliProviderId);
@@ -134,17 +130,12 @@ function resolveConfiguredAuthProfileOrder(params: {
     workspaceDir: params.workspaceDir,
   });
   const orderedProfileIds =
-    resolveAuthProfileOrderEntries({
-      order: params.store?.order,
-      provider: params.provider,
+    resolveExplicitAuthOrderSelection({
+      storeOrder: params.store?.order,
+      configuredOrder: params.cfg?.auth?.order,
+      providerKey: params.provider,
       providerAuthKey,
-    }) ??
-    resolveAuthProfileOrderEntries({
-      order: params.cfg?.auth?.order,
-      provider: params.provider,
-      providerAuthKey,
-    }) ??
-    [];
+    }).order ?? [];
   return [
     ...new Set(
       orderedProfileIds
@@ -152,19 +143,6 @@ function resolveConfiguredAuthProfileOrder(params: {
         .filter((profileId): profileId is string => Boolean(profileId)),
     ),
   ];
-}
-
-function resolveAuthProfileOrderEntries(params: {
-  order?: Record<string, string[]>;
-  provider: string;
-  providerAuthKey: string;
-}): string[] | undefined {
-  return (
-    findNormalizedProviderValue(params.order, params.providerAuthKey) ??
-    (normalizeProviderId(params.providerAuthKey) === normalizeProviderId(params.provider)
-      ? undefined
-      : findNormalizedProviderValue(params.order, params.provider))
-  );
 }
 
 function resolveExternalCliProviderIdForCompatibleAuthProfile(params: {
@@ -191,7 +169,10 @@ function resolveExternalCliProviderIdForCompatibleAuthProfile(params: {
     workspaceDir: params.workspaceDir,
   };
   const providerAuthKey = resolveProviderIdForAuth(params.provider, authAliasParams);
-  const profileAuthKey = resolveProviderIdForAuth(profileProvider, authAliasParams);
+  const profileAuthKey = resolveProviderIdForAuth(profileProvider, {
+    ...authAliasParams,
+    storedCredential: true,
+  });
   if (!providerAuthKey || profileAuthKey !== providerAuthKey) {
     return { compatible: false };
   }

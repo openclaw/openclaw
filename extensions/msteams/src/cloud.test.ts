@@ -1,154 +1,77 @@
-// Msteams tests cover cloud plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveMSTeamsSdkCloudOptions,
   validateMSTeamsProactiveServiceUrlBoundary,
 } from "./cloud.js";
 
+const publicUrl = "https://smba.trafficmanager.net";
+const chinaUrl = "https://msteams.botframework.azure.cn";
+const governmentUrl = "https://smba.infra.dod.teams.microsoft.us";
+
 describe("resolveMSTeamsSdkCloudOptions", () => {
-  it("defaults to public cloud without an explicit serviceUrl", () => {
-    expect(resolveMSTeamsSdkCloudOptions({})).toEqual({ cloud: "Public" });
+  it.each([
+    [{}, { cloud: "Public" }],
+    [{ cloud: "China" }, { cloud: "China" }],
+    [
+      { cloud: "USGovDoD", serviceUrl: ` ${governmentUrl}/teams ` },
+      { cloud: "USGovDoD", serviceUrl: `${governmentUrl}/teams` },
+    ],
+  ] as const)("resolves %j", (config, expected) => {
+    expect(resolveMSTeamsSdkCloudOptions(config)).toEqual(expected);
   });
 
-  it("passes serviceUrl override through with default public cloud", () => {
-    expect(
-      resolveMSTeamsSdkCloudOptions({
-        serviceUrl: " https://smba.infra.gcc.teams.microsoft.com/teams ",
-      }),
-    ).toEqual({
-      cloud: "Public",
-      serviceUrl: "https://smba.infra.gcc.teams.microsoft.com/teams",
-    });
-  });
-
-  it("requires serviceUrl when US government cloud is configured", () => {
+  it("requires a service URL for government clouds", () => {
     expect(() => resolveMSTeamsSdkCloudOptions({ cloud: "USGov" })).toThrow(
       /channels\.msteams\.cloud=USGov requires channels\.msteams\.serviceUrl/,
     );
   });
-
-  it("allows China cloud without a configured global serviceUrl", () => {
-    expect(resolveMSTeamsSdkCloudOptions({ cloud: "China" })).toEqual({
-      cloud: "China",
-    });
-  });
-
-  it("passes configured cloud and serviceUrl through to the SDK", () => {
-    expect(
-      resolveMSTeamsSdkCloudOptions({
-        cloud: "USGovDoD",
-        serviceUrl: " https://smba.infra.dod.teams.microsoft.us/teams ",
-      }),
-    ).toEqual({
-      cloud: "USGovDoD",
-      serviceUrl: "https://smba.infra.dod.teams.microsoft.us/teams",
-    });
-  });
 });
 
-describe("validateMSTeamsProactiveServiceUrlBoundary", () => {
-  it("allows public-cloud stored serviceUrls with the default public cloud", () => {
-    expect(() =>
-      validateMSTeamsProactiveServiceUrlBoundary({
-        cloud: "Public",
-        conversationId: "19:conversation@thread.tacv2",
-        storedServiceUrl: "https://smba.trafficmanager.net/amer/",
-      }),
-    ).not.toThrow();
-  });
+describe("proactive service URL boundary", () => {
+  const conversationId = "19:conversation@thread.tacv2";
+  it.each([
+    ["USGov", "not a URL", "not a URL", "cloud=USGov requires channels.msteams.serviceUrl"],
+    ["China", publicUrl, "not a URL", "not a Microsoft Teams China Bot Framework"],
+    ["Public", chinaUrl, "not a URL", "requires channels.msteams.cloud=China"],
+    ["Public", publicUrl, " ", "stored conversation reference is missing a valid serviceUrl"],
+    ["Public", undefined, "https://other.example/teams", "not a Microsoft Teams public-cloud"],
+    ["China", undefined, publicUrl, "not a Microsoft Teams China Bot Framework"],
+    ["USGovDoD", governmentUrl, publicUrl, "does not match configured Teams SDK serviceUrl host"],
+  ] as const)(
+    "rejects %s configured=%s stored=%s",
+    (cloud, configuredServiceUrl, storedServiceUrl, reason) => {
+      expect(() =>
+        validateMSTeamsProactiveServiceUrlBoundary({
+          cloud,
+          conversationId,
+          configuredServiceUrl,
+          storedServiceUrl,
+        }),
+      ).toThrow(reason);
+    },
+  );
 
-  it("blocks non-public stored serviceUrls when public cloud is configured", () => {
-    expect(() =>
-      validateMSTeamsProactiveServiceUrlBoundary({
-        cloud: "Public",
-        conversationId: "19:conversation@thread.tacv2",
-        storedServiceUrl: "https://smba.infra.gcc.example/teams",
-      }),
-    ).toThrow(/not a Microsoft Teams public-cloud Bot Connector endpoint/);
-  });
-
-  it("allows China cloud stored serviceUrls on the Azure China Bot Framework boundary", () => {
-    expect(() =>
-      validateMSTeamsProactiveServiceUrlBoundary({
-        cloud: "China",
-        conversationId: "19:conversation@thread.tacv2",
-        storedServiceUrl: "https://msteams.botframework.azure.cn/teams/",
-      }),
-    ).not.toThrow();
-  });
-
-  it("blocks non-China serviceUrls when China cloud is configured without a serviceUrl", () => {
-    expect(() =>
-      validateMSTeamsProactiveServiceUrlBoundary({
-        cloud: "China",
-        conversationId: "19:conversation@thread.tacv2",
-        storedServiceUrl: "https://smba.trafficmanager.net/teams/",
-      }),
-    ).toThrow(/not a Microsoft Teams China Bot Framework channel endpoint/);
-  });
-
-  it("blocks configured non-China serviceUrls when China cloud is configured", () => {
-    expect(() =>
-      validateMSTeamsProactiveServiceUrlBoundary({
-        cloud: "China",
-        conversationId: "19:conversation@thread.tacv2",
-        storedServiceUrl: "https://smba.trafficmanager.net/teams/",
-        configuredServiceUrl: "https://smba.trafficmanager.net/teams",
-      }),
-    ).toThrow(/configured Teams serviceUrl .*not a Microsoft Teams China Bot Framework/);
-  });
-
-  it("blocks configured China serviceUrls unless China cloud is configured", () => {
-    expect(() =>
-      validateMSTeamsProactiveServiceUrlBoundary({
-        cloud: "Public",
-        conversationId: "19:conversation@thread.tacv2",
-        storedServiceUrl: "https://msteams.botframework.azure.cn/teams/",
-        configuredServiceUrl: "https://msteams.botframework.azure.cn/teams",
-      }),
-    ).toThrow(/requires channels\.msteams\.cloud=China/);
-  });
-
-  it("requires serviceUrl when non-public cloud is configured", () => {
-    expect(() =>
-      validateMSTeamsProactiveServiceUrlBoundary({
-        cloud: "USGov",
-        conversationId: "19:conversation@thread.tacv2",
-        storedServiceUrl: "https://gov.example.us/teams",
-      }),
-    ).toThrow(/cloud=USGov requires channels\.msteams\.serviceUrl/);
-  });
-
-  it("blocks configured serviceUrl host mismatches", () => {
-    expect(() =>
-      validateMSTeamsProactiveServiceUrlBoundary({
-        cloud: "USGovDoD",
-        conversationId: "19:conversation@thread.tacv2",
-        storedServiceUrl: "https://dod-a.example.mil/teams",
-        configuredServiceUrl: "https://dod-b.example.mil/teams",
-      }),
-    ).toThrow(/does not match configured Teams SDK serviceUrl host/);
-  });
-
-  it("allows configured serviceUrl host matches with different paths", () => {
-    expect(() =>
-      validateMSTeamsProactiveServiceUrlBoundary({
-        cloud: "USGov",
-        conversationId: "19:conversation@thread.tacv2",
-        storedServiceUrl: "https://connector.example.cn/teams-region/",
-        configuredServiceUrl: "https://connector.example.cn/teams",
-      }),
-    ).not.toThrow();
-  });
-
-  it("allows configured China serviceUrl host matches with different paths", () => {
-    expect(() =>
-      validateMSTeamsProactiveServiceUrlBoundary({
-        cloud: "China",
-        conversationId: "19:conversation@thread.tacv2",
-        storedServiceUrl: "https://msteams.botframework.azure.cn/teams-region/",
-        configuredServiceUrl: "https://msteams.botframework.azure.cn/teams",
-      }),
-    ).not.toThrow();
-  });
+  it.each([
+    ["Public", undefined, `${publicUrl}/amer/`],
+    ["China", "not a URL", "https://botframework.azure.cn/teams/"],
+    ["China", undefined, `${chinaUrl}/teams/`],
+    [
+      "USGov",
+      `${governmentUrl}/configured/?query=1#fragment`,
+      ` ${governmentUrl.toUpperCase()}/different/// `,
+    ],
+    ["China", `${chinaUrl}/configured/`, `${chinaUrl}/different/`],
+  ] as const)(
+    "admits %s configured=%s stored=%s",
+    (cloud, configuredServiceUrl, storedServiceUrl) => {
+      expect(() =>
+        validateMSTeamsProactiveServiceUrlBoundary({
+          cloud,
+          conversationId,
+          configuredServiceUrl,
+          storedServiceUrl,
+        }),
+      ).not.toThrow();
+    },
+  );
 });

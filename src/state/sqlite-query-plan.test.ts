@@ -1,7 +1,9 @@
 // SQLite query-plan tests pin hot OpenClaw state indexes used by perf proof.
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -58,6 +60,72 @@ afterEach(() => {
 });
 
 describe("sqlite hot query plans", () => {
+  it("searches failed delivery ranges with and without planner statistics", () => {
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+    const { db } = database;
+    db.exec(`
+      INSERT INTO delivery_queue_entries
+        (queue_name, id, status, entry_json, enqueued_at, updated_at, failed_at)
+      VALUES
+        ('z', 'null', 'failed', '{}', 1, 1, NULL),
+        ('a', 'late', 'failed', '{}', 1, 1, 30),
+        ('a', 'b', 'failed', '{}', 1, 1, 10),
+        ('a', 'a', 'failed', '{}', 1, 1, 10),
+        ('a', 'null', 'failed', '{}', 1, 1, NULL),
+        ('a', 'pending', 'pending', '{}', 1, 1, 0),
+        ('pending-only', 'pending', 'pending', '{}', 1, 1, NULL);
+      WITH RECURSIVE history(n) AS (
+        VALUES(1) UNION ALL SELECT n + 1 FROM history WHERE n < 200
+      )
+      INSERT INTO delivery_queue_entries
+        (queue_name, id, status, entry_json, enqueued_at, updated_at, failed_at)
+      SELECT 'history-' || (n % 10), CAST(n AS TEXT), 'completed', '{}', 1, 1, 0
+        FROM history;
+    `);
+
+    for (const analyzed of [false, true]) {
+      if (analyzed) {
+        db.exec("ANALYZE");
+      }
+      let countSql = "";
+      const reads = trackSqliteStatementExecutions(db, ["countFailed"], (sql) => {
+        countSql = sql;
+        return "countFailed";
+      });
+      try {
+        expect(countFailedDeliveryQueueEntriesInDatabase(database)).toEqual([
+          { queueName: "a", count: 4, oldestFailedAt: 10 },
+          { queueName: "z", count: 1 },
+        ]);
+        expect(reads.counts.countFailed).toBe(1);
+      } finally {
+        reads.restore();
+      }
+      const countPlan = explainQueryPlan(db, countSql, ["failed"]);
+      expect(countPlan).toContain(
+        "SEARCH delivery_queue_entries USING COVERING INDEX idx_delivery_queue_failed (status=?)",
+      );
+      expect(countPlan).not.toContain("SCAN");
+      expect(countPlan).not.toContain("USE TEMP B-TREE");
+
+      const listingSql = `SELECT id, failed_at FROM delivery_queue_entries
+        WHERE queue_name = ? AND status = ? ORDER BY failed_at ASC, id ASC`;
+      const listingPlan = explainQueryPlan(db, listingSql, ["a", "failed"]);
+      expect(listingPlan).toContain(
+        "SEARCH delivery_queue_entries USING COVERING INDEX idx_delivery_queue_failed (status=? AND queue_name=?)",
+      );
+      expect(listingPlan).not.toContain("USE TEMP B-TREE");
+      expect(db.prepare(listingSql).all("a", "failed")).toEqual([
+        { id: "null", failed_at: null },
+        { id: "a", failed_at: 10 },
+        { id: "b", failed_at: 10 },
+        { id: "late", failed_at: 30 },
+      ]);
+    }
+  });
+
   it("uses shared state indexes for list and queue queries", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({
@@ -88,18 +156,32 @@ describe("sqlite hot query plans", () => {
          LIMIT 50
       `,
     });
-    expectPlanUsesIndex({
-      db: database.db,
-      indexName: "idx_plugin_state_listing",
-      params: ["telegram", "kv"],
-      sql: `
+    const pluginListingPlan = explainQueryPlan(
+      database.db,
+      `
         SELECT entry_key, value_json
           FROM plugin_state_entries
          WHERE plugin_id = ? AND namespace = ?
          ORDER BY created_at ASC, entry_key
          LIMIT 50
       `,
-    });
+      ["telegram", "kv"],
+    );
+    expect(pluginListingPlan).toContain("idx_plugin_state_listing");
+    expect(pluginListingPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+    for (const namespace of [undefined, "kv"]) {
+      expectPlanIncludes({
+        db: database.db,
+        expected: "USING COVERING INDEX idx_plugin_state_listing",
+        params: namespace ? ["telegram", namespace, 1000] : ["telegram", 1000],
+        sql: `
+          SELECT count(*)
+            FROM plugin_state_entries
+           WHERE plugin_id = ? ${namespace ? "AND namespace = ?" : ""}
+             AND (expires_at IS NULL OR expires_at > ?)
+        `,
+      });
+    }
     expectPlanUsesIndex({
       db: database.db,
       indexName: "idx_channel_ingress_pending",
@@ -186,6 +268,16 @@ describe("sqlite hot query plans", () => {
          ORDER BY session_key
       `,
     });
+    for (const activeOnly of [false, true]) {
+      expectPlanUsesIndex({
+        db: database.db,
+        indexName: "idx_agent_session_nodes_entry_not_valid",
+        params: [1],
+        sql: `SELECT entry_json FROM session_nodes WHERE entry_valid != ?${
+          activeOnly ? " AND archived_at IS NULL" : ""
+        }`,
+      });
+    }
     const latestMessagePlan = explainQueryPlan(
       database.db,
       `

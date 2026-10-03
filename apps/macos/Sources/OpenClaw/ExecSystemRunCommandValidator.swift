@@ -24,46 +24,19 @@ enum ExecSystemRunCommandValidator {
         "zsh",
     ])
 
-    private static let posixOrPowerShellInlineWrapperNames = Set([
-        "ash",
-        "bash",
-        "dash",
-        "fish",
-        "ksh",
-        "powershell",
-        "pwsh",
-        "sh",
-        "zsh",
-    ])
-
     private static let shellMultiplexerWrapperNames = Set(["busybox", "toybox"])
     private static let posixInlineCommandFlags = Set(["-lc", "-c", "--command"])
     private static let powershellInlineCommandFlags = Set(["-c", "-command", "--command"])
 
-    private struct EnvUnwrapResult {
-        let argv: [String]
-        let usesModifiers: Bool
-    }
-
     static func resolve(command: [String], rawCommand: String?) -> ValidationResult {
-        let normalizedRaw = self.normalizeRaw(rawCommand)
-        let shell = ExecShellWrapperParser.extract(command: command, rawCommand: nil)
-        let shellCommand = shell.isWrapper ? self.trimmedNonEmpty(shell.command) : nil
-
-        let envManipulationBeforeShellWrapper = self.hasEnvManipulationBeforeShellWrapper(command)
-        let shellWrapperPositionalArgv = self.hasTrailingPositionalArgvAfterInlineCommand(command)
-        let mustBindDisplayToFullArgv = envManipulationBeforeShellWrapper || shellWrapperPositionalArgv
+        let normalizedRaw = rawCommand?.nonEmpty
+        let shell = self.displayShell(command)
         let canonicalDisplay = ExecCommandFormatter.displayString(for: command)
-        let legacyShellDisplay: String? = if let shellCommand, !mustBindDisplayToFullArgv {
-            shellCommand
-        } else {
-            nil
-        }
 
         if let raw = normalizedRaw {
             let matchesCanonical = raw == canonicalDisplay
             let matchesLegacyCanonical = raw == ExecCommandFormatter.legacyDisplayString(for: command)
-            let matchesLegacyShellText = legacyShellDisplay == raw
+            let matchesLegacyShellText = shell.command == raw
             if !matchesCanonical, !matchesLegacyCanonical, !matchesLegacyShellText {
                 return .invalid(message: "INVALID_REQUEST: rawCommand does not match command")
             }
@@ -74,37 +47,28 @@ enum ExecSystemRunCommandValidator {
             evaluationRawCommand: self.allowlistEvaluationRawCommand(
                 normalizedRaw: normalizedRaw,
                 shellIsWrapper: shell.isWrapper,
-                previewCommand: legacyShellDisplay)))
+                previewCommand: shell.command)))
     }
 
     static func allowlistEvaluationRawCommand(command: [String], rawCommand: String?) -> String? {
-        let normalizedRaw = self.normalizeRaw(rawCommand)
-        let shell = ExecShellWrapperParser.extract(command: command, rawCommand: nil)
-        let shellCommand = shell.isWrapper ? self.trimmedNonEmpty(shell.command) : nil
-
-        let envManipulationBeforeShellWrapper = self.hasEnvManipulationBeforeShellWrapper(command)
-        let shellWrapperPositionalArgv = self.hasTrailingPositionalArgvAfterInlineCommand(command)
-        let mustBindDisplayToFullArgv = envManipulationBeforeShellWrapper || shellWrapperPositionalArgv
-        let previewCommand: String? = if let shellCommand, !mustBindDisplayToFullArgv {
-            shellCommand
-        } else {
-            nil
-        }
+        let normalizedRaw = rawCommand?.nonEmpty
+        let shell = self.displayShell(command)
 
         return self.allowlistEvaluationRawCommand(
             normalizedRaw: normalizedRaw,
             shellIsWrapper: shell.isWrapper,
-            previewCommand: previewCommand)
+            previewCommand: shell.command)
     }
 
-    private static func normalizeRaw(_ rawCommand: String?) -> String? {
-        let trimmed = rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func trimmedNonEmpty(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+    private static func displayShell(_ command: [String]) -> ExecShellWrapperParser.ParsedShellWrapper {
+        let shell = ExecShellWrapperParser.extract(command: command, rawCommand: nil)
+        let envManipulation = self.hasEnvManipulationBeforeShellWrapper(command)
+        let positionalArguments = self.hasTrailingPositionalArgvAfterInlineCommand(command)
+        return .init(
+            isWrapper: shell.isWrapper,
+            command: shell.isWrapper && !envManipulation && !positionalArguments
+                ? shell.command?.nonEmpty
+                : nil)
     }
 
     private static func allowlistEvaluationRawCommand(
@@ -129,83 +93,8 @@ enum ExecSystemRunCommandValidator {
         return base
     }
 
-    private static func isEnvAssignment(_ token: String) -> Bool {
-        token.range(of: #"^[A-Za-z_][A-Za-z0-9_]*=.*"#, options: .regularExpression) != nil
-    }
-
-    private static func hasEnvInlineValuePrefix(_ lowerToken: String) -> Bool {
-        ExecEnvOptions.inlineValuePrefixes.contains { lowerToken.hasPrefix($0) }
-    }
-
-    private static func unwrapEnvInvocationWithMetadata(_ argv: [String]) -> EnvUnwrapResult? {
-        var idx = 1
-        var expectsOptionValue = false
-        var usesModifiers = false
-
-        while idx < argv.count {
-            let token = argv[idx].trimmingCharacters(in: .whitespacesAndNewlines)
-            if token.isEmpty {
-                idx += 1
-                continue
-            }
-            if expectsOptionValue {
-                expectsOptionValue = false
-                usesModifiers = true
-                idx += 1
-                continue
-            }
-            if token == "--" {
-                idx += 1
-                break
-            }
-            if token == "-" {
-                usesModifiers = true
-                idx += 1
-                break
-            }
-            if self.isEnvAssignment(token) {
-                usesModifiers = true
-                idx += 1
-                continue
-            }
-            if !token.hasPrefix("-") || token == "-" {
-                break
-            }
-
-            let lower = token.lowercased()
-            let flag = lower.split(separator: "=", maxSplits: 1).first.map(String.init) ?? lower
-            if ExecEnvOptions.flagOnly.contains(flag) {
-                usesModifiers = true
-                idx += 1
-                continue
-            }
-            if ExecEnvOptions.withValue.contains(flag) {
-                usesModifiers = true
-                if !lower.contains("=") {
-                    expectsOptionValue = true
-                }
-                idx += 1
-                continue
-            }
-            if self.hasEnvInlineValuePrefix(lower) {
-                usesModifiers = true
-                idx += 1
-                continue
-            }
-            return nil
-        }
-
-        if expectsOptionValue {
-            return nil
-        }
-        guard idx < argv.count else {
-            return nil
-        }
-        return EnvUnwrapResult(argv: Array(argv[idx...]), usesModifiers: usesModifiers)
-    }
-
     private static func unwrapShellMultiplexerInvocation(_ argv: [String]) -> [String]? {
-        guard let token0 = self.trimmedNonEmpty(argv.first) else {
+        guard let token0 = argv.first?.nonEmpty else {
             return nil
         }
         let wrapper = self.normalizeExecutableToken(token0)
@@ -239,17 +128,18 @@ enum ExecSystemRunCommandValidator {
         if depth >= ExecEnvInvocationUnwrapper.maxWrapperDepth {
             return false
         }
-        guard let token0 = self.trimmedNonEmpty(argv.first) else {
+        guard let token0 = argv.first?.nonEmpty else {
             return false
         }
 
         let normalized = self.normalizeExecutableToken(token0)
         if normalized == "env" {
-            guard let envUnwrap = self.unwrapEnvInvocationWithMetadata(argv) else {
+            guard let envUnwrap = ExecEnvInvocationUnwrapper.unwrapWithMetadata(argv, skippingEmptyArguments: true)
+            else {
                 return false
             }
             return self.hasEnvManipulationBeforeShellWrapper(
-                envUnwrap.argv,
+                envUnwrap.command,
                 depth: depth + 1,
                 envManipulationSeen: envManipulationSeen || envUnwrap.usesModifiers)
         }
@@ -272,11 +162,11 @@ enum ExecSystemRunCommandValidator {
 
     private static func hasTrailingPositionalArgvAfterInlineCommand(_ argv: [String]) -> Bool {
         let wrapperArgv = self.unwrapShellWrapperArgv(argv)
-        guard let token0 = self.trimmedNonEmpty(wrapperArgv.first) else {
+        guard let token0 = wrapperArgv.first?.nonEmpty else {
             return false
         }
         let wrapper = self.normalizeExecutableToken(token0)
-        guard self.posixOrPowerShellInlineWrapperNames.contains(wrapper) else {
+        guard wrapper != "cmd", self.shellWrapperNames.contains(wrapper) else {
             return false
         }
 
@@ -304,18 +194,20 @@ enum ExecSystemRunCommandValidator {
     private static func unwrapShellWrapperArgv(_ argv: [String]) -> [String] {
         var current = argv
         for _ in 0..<ExecEnvInvocationUnwrapper.maxWrapperDepth {
-            guard let token0 = self.trimmedNonEmpty(current.first) else {
+            guard let token0 = current.first?.nonEmpty else {
                 break
             }
             let normalized = self.normalizeExecutableToken(token0)
             if normalized == "env" {
-                guard let envUnwrap = self.unwrapEnvInvocationWithMetadata(current),
-                      !envUnwrap.usesModifiers,
-                      !envUnwrap.argv.isEmpty
+                guard let envUnwrap = ExecEnvInvocationUnwrapper.unwrapWithMetadata(
+                    current,
+                    skippingEmptyArguments: true),
+                    !envUnwrap.usesModifiers,
+                    !envUnwrap.command.isEmpty
                 else {
                     break
                 }
-                current = envUnwrap.argv
+                current = envUnwrap.command
                 continue
             }
             if let shellMultiplexer = self.unwrapShellMultiplexerInvocation(current) {
@@ -327,20 +219,12 @@ enum ExecSystemRunCommandValidator {
         return current
     }
 
-    private static func findInlineCommandTokenMatch(
-        _ argv: [String],
-        flags: Set<String>,
-        allowCombinedC: Bool) -> ExecInlineCommandParser.Match?
-    {
-        ExecInlineCommandParser.findMatch(argv, flags: flags, allowCombinedC: allowCombinedC)
-    }
-
     private static func resolveInlineCommandTokenIndex(
         _ argv: [String],
         flags: Set<String>,
         allowCombinedC: Bool) -> Int?
     {
-        guard let match = self.findInlineCommandTokenMatch(argv, flags: flags, allowCombinedC: allowCombinedC) else {
+        guard let match = ExecInlineCommandParser.findMatch(argv, flags: flags, allowCombinedC: allowCombinedC) else {
             return nil
         }
         if match.inlineCommand != nil {
@@ -358,30 +242,15 @@ enum ExecSystemRunCommandValidator {
             return self.extractCmdInlineCommand(argv)
         }
         if normalizedWrapper == "powershell" || normalizedWrapper == "pwsh" {
-            return self.extractInlineCommandByFlags(
+            return ExecInlineCommandParser.extractInlineCommand(
                 argv,
                 flags: self.powershellInlineCommandFlags,
-                allowCombinedC: false)
+                allowCombinedC: false)?.nonEmpty
         }
-        return self.extractInlineCommandByFlags(
+        return ExecInlineCommandParser.extractInlineCommand(
             argv,
             flags: self.posixInlineCommandFlags,
-            allowCombinedC: true)
-    }
-
-    private static func extractInlineCommandByFlags(
-        _ argv: [String],
-        flags: Set<String>,
-        allowCombinedC: Bool) -> String?
-    {
-        guard let match = self.findInlineCommandTokenMatch(argv, flags: flags, allowCombinedC: allowCombinedC) else {
-            return nil
-        }
-        if let inlineCommand = match.inlineCommand {
-            return inlineCommand
-        }
-        let nextIndex = match.tokenIndex + match.valueTokenOffset
-        return self.trimmedNonEmpty(nextIndex < argv.count ? argv[nextIndex] : nil)
+            allowCombinedC: true)?.nonEmpty
     }
 
     private static func extractCmdInlineCommand(_ argv: [String]) -> String? {

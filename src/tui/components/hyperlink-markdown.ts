@@ -1,4 +1,3 @@
-// Hyperlink markdown helpers render markdown links with TUI hyperlink styling.
 import type {
   Component,
   DefaultTextStyle,
@@ -7,13 +6,13 @@ import type {
 } from "@earendil-works/pi-tui";
 import { Markdown } from "@earendil-works/pi-tui";
 import { addOsc8Hyperlinks, extractUrls } from "../osc8-hyperlinks.js";
-import { isolateRtlRenderedLine, sanitizeMarkdownSource } from "../tui-formatters.js";
+import { isolateRtlRenderedLine, sanitizeTerminalControlsAndBinary } from "../tui-formatters.js";
 
 function sanitizeMarkdownDisplayText(text: string): string {
   if (!text) {
     return text;
   }
-  return sanitizeMarkdownSource(text) || "(no output)";
+  return sanitizeTerminalControlsAndBinary(text) || "(no output)";
 }
 
 /**
@@ -23,7 +22,7 @@ function sanitizeMarkdownDisplayText(text: string): string {
  */
 export class HyperlinkMarkdown implements Component {
   private inner: Markdown;
-  private urls: string[];
+  private urls: ReadonlySet<string>;
   private cachedRender?: { width: number; lines: string[] };
 
   constructor(

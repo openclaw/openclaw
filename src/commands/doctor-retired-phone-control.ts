@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 const PHONE_CONTROL_PLUGIN_ID = "phone-control";
 const ARM_STATE_NAMESPACE = "armed";
@@ -45,10 +46,6 @@ type RetiredPhoneControlCleanupPlan = {
 
 function resolveLegacyArmStatePath(env: NodeJS.ProcessEnv): string {
   return path.join(resolveStateDir(env), "plugins", PHONE_CONTROL_PLUGIN_ID, "armed.json");
-}
-
-function resolveStateDatabasePath(env: NodeJS.ProcessEnv): string {
-  return path.join(resolveStateDir(env), "state", "openclaw.sqlite");
 }
 
 type StatePathInspection =
@@ -141,7 +138,7 @@ async function readRetiredArmStates(env: NodeJS.ProcessEnv): Promise<{
   warnings: string[];
 }> {
   const legacyPath = resolveLegacyArmStatePath(env);
-  const databasePath = resolveStateDatabasePath(env);
+  const databasePath = resolveOpenClawStateSqlitePath(env);
   const [legacyInspection, databaseInspection] = await Promise.all([
     inspectStatePath(legacyPath, "retired Phone Control lease state"),
     inspectStatePath(databasePath, "OpenClaw state database"),
@@ -229,15 +226,12 @@ function withCommandLists(
   params: { allow?: string[]; deny?: string[] },
 ): OpenClawConfig {
   const commands = { ...cfg.gateway?.nodes?.commands };
-  if (params.allow === undefined || params.allow.length === 0) {
-    delete commands.allow;
-  } else {
-    commands.allow = params.allow;
-  }
-  if (params.deny === undefined || params.deny.length === 0) {
-    delete commands.deny;
-  } else {
-    commands.deny = params.deny;
+  for (const key of ["allow", "deny"] as const) {
+    if (params[key]?.length) {
+      commands[key] = params[key];
+    } else {
+      delete commands[key];
+    }
   }
   const nodes = { ...cfg.gateway?.nodes };
   delete nodes.commands;
@@ -260,14 +254,15 @@ export async function prepareRetiredPhoneControlCleanup(params: {
 }): Promise<RetiredPhoneControlCleanupPlan> {
   const env = params.env ?? process.env;
   const residue = await readRetiredArmStates(env);
+  const unchanged: RetiredPhoneControlCleanupPlan = {
+    config: params.cfg,
+    configChanges: [],
+    cleanupPending: residue.cleanupPending,
+    cleanupSafe: residue.cleanupSafe,
+    warnings: residue.warnings,
+  };
   if (!residue.cleanupSafe) {
-    return {
-      config: params.cfg,
-      configChanges: [],
-      cleanupPending: residue.cleanupPending,
-      cleanupSafe: false,
-      warnings: residue.warnings,
-    };
+    return unchanged;
   }
   const leaseAddedAllows = new Set(
     residue.states.flatMap((state) => readStringArrayField(state, "addedToAllow")),
@@ -298,13 +293,7 @@ export async function prepareRetiredPhoneControlCleanup(params: {
   const allowChanged = Boolean(currentAllow && nextAllow?.length !== currentAllow.length);
   const denyChanged = reconstructedDeny.length !== (currentDeny?.length ?? 0);
   if (!allowChanged && !denyChanged && !removeSeededDeny) {
-    return {
-      config: params.cfg,
-      configChanges: [],
-      cleanupPending: residue.cleanupPending,
-      cleanupSafe: residue.cleanupSafe,
-      warnings: residue.warnings,
-    };
+    return unchanged;
   }
 
   const configChanges: string[] = [];
@@ -318,14 +307,12 @@ export async function prepareRetiredPhoneControlCleanup(params: {
     configChanges.push("Removed the retired Phone Control setup deny seed.");
   }
   return {
+    ...unchanged,
     config: withCommandLists(params.cfg, {
       allow: nextAllow,
       deny: nextDeny,
     }),
     configChanges,
-    cleanupPending: residue.cleanupPending,
-    cleanupSafe: residue.cleanupSafe,
-    warnings: residue.warnings,
   };
 }
 
@@ -364,7 +351,7 @@ export async function finalizeRetiredPhoneControlCleanup(params: {
   }
 
   const databaseInspection = await inspectStatePath(
-    resolveStateDatabasePath(env),
+    resolveOpenClawStateSqlitePath(env),
     "OpenClaw state database",
   );
   if (databaseInspection.status === "unsafe") {

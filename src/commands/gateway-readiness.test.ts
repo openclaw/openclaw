@@ -1,7 +1,8 @@
 // Gateway readiness tests cover readiness checks, status details, and failure messages.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
-import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
+import { ensureDashboardGatewayReady } from "./gateway-readiness.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 type StatusOverrides = Omit<Partial<DaemonStatus>, "service"> & {
   service?: Omit<DaemonStatus["service"], "loaded">;
@@ -47,13 +48,9 @@ function createStatus(overrides: StatusOverrides = {}): DaemonStatus {
   };
 }
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
 
-describe("ensureGatewayReadyForOperation", () => {
+describe("ensureDashboardGatewayReady", () => {
   beforeEach(() => {
     runtime.log.mockClear();
     runtime.error.mockClear();
@@ -69,9 +66,8 @@ describe("ensureGatewayReadyForOperation", () => {
     );
     const confirm = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "run a command",
       deps: { gatherStatus, confirm },
     });
 
@@ -90,10 +86,8 @@ describe("ensureGatewayReadyForOperation", () => {
       const confirm = vi.fn().mockResolvedValue(false);
       const installGateway = vi.fn();
       const startGateway = vi.fn();
-      const result = await ensureGatewayReadyForOperation({
+      const result = await ensureDashboardGatewayReady({
         runtime,
-        operation: "open the dashboard",
-        readyWhenReachable: true,
         interactive: true,
         deps: { gatherStatus: async () => status, confirm, installGateway, startGateway },
       });
@@ -113,9 +107,8 @@ describe("ensureGatewayReadyForOperation", () => {
     const gatherStatus = vi.fn().mockResolvedValue(createStatus());
     const confirm = vi.fn().mockResolvedValue(false);
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
       interactive: true,
       deps: { gatherStatus, confirm },
     });
@@ -148,9 +141,8 @@ describe("ensureGatewayReadyForOperation", () => {
     const installGateway = vi.fn().mockResolvedValue(undefined);
     const startGateway = vi.fn().mockResolvedValue(undefined);
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
       yes: true,
       deps: { gatherStatus, installGateway, startGateway },
     });
@@ -187,9 +179,8 @@ describe("ensureGatewayReadyForOperation", () => {
     const installGateway = vi.fn().mockResolvedValue(undefined);
     const startGateway = vi.fn().mockResolvedValue(undefined);
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
       yes: true,
       deps: { gatherStatus, installGateway, startGateway },
     });
@@ -228,9 +219,8 @@ describe("ensureGatewayReadyForOperation", () => {
     const installGateway = vi.fn();
     const startGateway = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
       interactive: true,
       deps: {
         gatherStatus: vi.fn().mockResolvedValue(status),
@@ -264,9 +254,8 @@ describe("ensureGatewayReadyForOperation", () => {
     });
     const confirm = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
       interactive: true,
       deps: { gatherStatus: vi.fn().mockResolvedValue(status), confirm },
     });
@@ -299,10 +288,8 @@ describe("ensureGatewayReadyForOperation", () => {
     });
     const confirm = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
-      readyWhenReachable: true,
       interactive: true,
       deps: { gatherStatus: vi.fn().mockResolvedValue(status), confirm },
     });
@@ -332,10 +319,8 @@ describe("ensureGatewayReadyForOperation", () => {
     });
     const confirm = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
-      readyWhenReachable: true,
       interactive: true,
       deps: { gatherStatus: vi.fn().mockResolvedValue(status), confirm },
     });
@@ -366,10 +351,8 @@ describe("ensureGatewayReadyForOperation", () => {
     });
     const confirm = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
-      readyWhenReachable: true,
       interactive: true,
       deps: { gatherStatus: vi.fn().mockResolvedValue(status), confirm },
     });
@@ -399,10 +382,8 @@ describe("ensureGatewayReadyForOperation", () => {
     });
     const startGateway = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
-      readyWhenReachable: true,
       deps: { gatherStatus: vi.fn().mockResolvedValue(status), startGateway },
     });
 
@@ -425,10 +406,8 @@ describe("ensureGatewayReadyForOperation", () => {
     });
     const confirm = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
-      readyWhenReachable: true,
       interactive: true,
       deps: { gatherStatus: vi.fn().mockResolvedValue(status), confirm },
     });
@@ -459,10 +438,8 @@ describe("ensureGatewayReadyForOperation", () => {
     });
     const confirm = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
-      readyWhenReachable: true,
       interactive: true,
       deps: { gatherStatus: vi.fn().mockResolvedValue(status), confirm },
     });

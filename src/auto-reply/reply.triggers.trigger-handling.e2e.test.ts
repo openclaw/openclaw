@@ -1,7 +1,7 @@
 /** E2E tests for auto-reply trigger and command handling. */
 import fs from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   expectInlineCommandHandledAndStripped,
   getAbortEmbeddedAgentRunMock,
@@ -15,7 +15,7 @@ import {
   expectBareNewOrResetAcknowledged,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { renderControlUiAgentFailureCopy } from "../agents/failover/user-copy.js";
 import { resolveSessionKey } from "../config/sessions.js";
 import {
@@ -23,13 +23,31 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
 import type { MsgContext } from "./templating.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
-type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
+type GetReplyFromConfig = typeof import("./reply/get-reply.js").getReplyFromConfig;
+
+async function withUnavailableThinkingCatalog(
+  run: (
+    catalog: MockInstance<
+      typeof import("../agents/model-catalog.runtime.js").loadProviderScopedThinkingCatalog
+    >,
+  ) => Promise<void>,
+): Promise<void> {
+  const catalog = vi
+    .spyOn(await import("../agents/model-catalog.runtime.js"), "loadProviderScopedThinkingCatalog")
+    .mockRejectedValue(new Error("thinking catalog unavailable"));
+  try {
+    return await run(catalog);
+  } finally {
+    catalog.mockRestore();
+  }
+}
 
 const TEST_PRIMARY_PROFILE_ID = "openai:primary@example.test";
 const TEST_SECONDARY_PROFILE_ID = "openai:secondary@example.test";
@@ -65,7 +83,7 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
       if (/context window exceeded/i.test(message)) {
         return "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.";
       }
-      return renderControlUiAgentFailureCopy(message);
+      return renderControlUiAgentFailureCopy();
     };
     const stripHeartbeat = (text?: string) => {
       const trimmed = text?.trim();
@@ -300,8 +318,11 @@ function makeUnauthorizedWhatsAppCfg(home: string) {
   return baseCfg;
 }
 
-async function expectResetBlockedForNonOwner(params: { home: string }): Promise<void> {
-  const { home } = params;
+async function expectResetBlockedForNonOwner(params: {
+  home: string;
+  command: "/new" | "/reset";
+}): Promise<void> {
+  const { home, command } = params;
   const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
   runEmbeddedAgentMock.mockClear();
   const cfg = makeCfg(home);
@@ -318,18 +339,21 @@ async function expectResetBlockedForNonOwner(params: { home: string }): Promise<
     ...cfg.session,
     store: join(home, "blocked-reset.sessions.json"),
   };
-  const res = await getReplyFromConfig(
-    {
-      Body: "/reset",
-      From: "+1003",
-      To: "+2000",
-      CommandAuthorized: false,
-    },
-    {},
-    cfg,
-  );
-  expect(res).toBeUndefined();
-  expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  await withUnavailableThinkingCatalog(async (catalog) => {
+    const res = await getReplyFromConfig(
+      {
+        Body: command,
+        From: "+1003",
+        To: "+2000",
+        CommandAuthorized: false,
+      },
+      {},
+      cfg,
+    );
+    expect(res).toBeUndefined();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(catalog).not.toHaveBeenCalled();
+  });
 }
 
 function mockEmbeddedOk() {
@@ -361,7 +385,7 @@ describe("trigger handling", () => {
   for (const testCase of [
     {
       error: "sandbox is not defined.",
-      expected: renderControlUiAgentFailureCopy("sandbox is not defined."),
+      expected: renderControlUiAgentFailureCopy(),
     },
     {
       error: "Context window exceeded",
@@ -422,10 +446,12 @@ describe("trigger handling", () => {
 
       const cfg = makeStartupContextCfg(home);
 
-      const res = await runAuthorizedSmsCommand("/new", cfg);
-
-      expect(maybeReplyText(res)).toBe("✅ New session started.");
-      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      await withUnavailableThinkingCatalog(async (catalog) => {
+        const res = await runAuthorizedSmsCommand("/new", cfg);
+        expect(maybeReplyText(res)).toBe("✅ New session started.");
+        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+        expect(catalog).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -442,10 +468,25 @@ describe("trigger handling", () => {
 
       const cfg = makeStartupContextCfg(home, { applyOn: ["reset"] });
 
-      const res = await runAuthorizedSmsCommand("/RESET", cfg);
+      await withUnavailableThinkingCatalog(async (catalog) => {
+        const res = await runAuthorizedSmsCommand("/RESET", cfg);
+        expect(maybeReplyText(res)).toBe("✅ Session reset.");
+        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+        expect(catalog).not.toHaveBeenCalled();
+      });
+    });
+  });
 
-      expect(maybeReplyText(res)).toBe("✅ Session reset.");
-      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  it("resolves model capabilities when /new includes follow-up text", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedAgentMock = mockRunEmbeddedAgentText("hello", 1);
+      await withUnavailableThinkingCatalog(async (catalog) => {
+        await expect(runAuthorizedSmsCommand("/new take notes", makeCfg(home))).rejects.toThrow(
+          "thinking catalog unavailable",
+        );
+        expect(catalog).toHaveBeenCalledOnce();
+        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -860,7 +901,9 @@ describe("trigger handling", () => {
   it("handles bare session reset, inline commands, and unauthorized inline status", async () => {
     await withTempHome(async (home) => {
       await expectBareNewOrResetAcknowledged({ home, body: "/new", getReplyFromConfig });
-      await expectResetBlockedForNonOwner({ home });
+      for (const command of ["/new", "/reset"] as const) {
+        await expectResetBlockedForNonOwner({ home, command });
+      }
       await expectInlineCommandHandledAndStripped({
         home,
         getReplyFromConfig,
@@ -879,6 +922,21 @@ describe("trigger handling", () => {
       expect(inlineRunEmbeddedAgentMock).toHaveBeenCalled();
       const prompt = inlineRunEmbeddedAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
       expect(prompt).toContain("/status");
+    });
+  });
+
+  it("keeps fixture files until asynchronous database custody closes", async () => {
+    await withTempHome(async (home) => {
+      const markerPath = join(home, "custody.txt");
+      await fs.writeFile(markerPath, "retained until close");
+      registerOpenClawAgentDatabaseAsyncResource({
+        agentId: "main",
+        path: join(home, "custody.sqlite"),
+        revoke: () => {},
+        close: async () => {
+          await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("retained until close");
+        },
+      });
     });
   });
 });

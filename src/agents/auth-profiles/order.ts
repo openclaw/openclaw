@@ -17,13 +17,18 @@ import {
   resolveTokenExpiryState,
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
-import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
+import { resolveExplicitAuthOrderSelection } from "./explicit-order.js";
+import { isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
+import { dedupeProfileIds } from "./profile-list.js";
+import { isSetupCredentialAccessible } from "./setup-access.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import {
   clearExpiredCooldowns,
   isProfileInCooldown,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
+
+export { resolveExplicitAuthOrderSelection };
 
 /** Reason a profile is or is not eligible for provider auth. */
 export type AuthProfileEligibilityReasonCode =
@@ -38,7 +43,19 @@ type AuthProfileEligibility = {
   reasonCode: AuthProfileEligibilityReasonCode;
 };
 
-const OPENAI_PROVIDER_ID = "openai";
+function isAuthProfileRuntimeSettlementCandidate(params: {
+  credential: AuthProfileCredential | undefined;
+  eligibility: AuthProfileEligibility;
+  includePendingOAuthRefresh?: boolean;
+}): boolean {
+  return (
+    params.eligibility.eligible ||
+    (params.includePendingOAuthRefresh === true &&
+      params.eligibility.reasonCode === "expired" &&
+      params.credential?.type === "oauth" &&
+      isPendingOAuthRefreshFence(params.credential))
+  );
+}
 
 function isProfileProviderCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
@@ -49,6 +66,7 @@ function isProfileProviderCompatibleWithAuthProvider(params: {
   const providerKey = resolveProviderIdForAuth(params.provider, {
     config: params.cfg,
     ...params.authAliasLookupParams,
+    storedCredential: true,
   });
   return providerKey === params.providerAuthKey;
 }
@@ -75,12 +93,8 @@ function listProfilesCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
   store: AuthProfileStore;
-  provider: string;
   providerAuthKey: string;
 }): string[] {
-  if (params.providerAuthKey !== OPENAI_PROVIDER_ID) {
-    return listProfilesForProvider(params.store, params.provider);
-  }
   return Object.entries(params.store.profiles)
     .filter(([, credential]) =>
       isProfileProviderCompatibleWithAuthProvider({
@@ -91,24 +105,6 @@ function listProfilesCompatibleWithAuthProvider(params: {
       }),
     )
     .map(([profileId]) => profileId);
-}
-
-function resolveProviderAuthMode(
-  cfg: OpenClawConfig | undefined,
-  provider: string,
-): string | undefined {
-  const providers = cfg?.models?.providers;
-  if (!providers) {
-    return undefined;
-  }
-  const entry = findNormalizedProviderValue(providers, provider);
-  const auth = entry?.auth;
-  return typeof auth === "string" ? auth : undefined;
-}
-
-function providerAllowsAwsSdkAuth(cfg: OpenClawConfig | undefined, provider: string): boolean {
-  const authMode = resolveProviderAuthMode(cfg, provider);
-  return authMode === "aws-sdk";
 }
 
 /** Returns true when config declares an aws-sdk auth profile for a provider. */
@@ -130,11 +126,14 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
     resolveProviderIdForAuth(profileConfig.provider, {
       config: params.cfg,
       ...params.authAliasLookupParams,
+      storedCredential: true,
     }) !== providerAuthKey
   ) {
     return false;
   }
-  return providerAllowsAwsSdkAuth(params.cfg, providerAuthKey);
+  return (
+    findNormalizedProviderValue(params.cfg?.models?.providers, providerAuthKey)?.auth === "aws-sdk"
+  );
 }
 
 /** Resolves whether a profile can be used for a provider right now. */
@@ -145,6 +144,8 @@ export function resolveAuthProfileEligibility(params: {
   provider: string;
   profileId: string;
   now?: number;
+  /** Runtime resolvers may observe a durable pending refresh through settlement. */
+  includePendingOAuthRefresh?: boolean;
 }): AuthProfileEligibility {
   const providerAuthKey = resolveProviderIdForAuth(params.provider, {
     config: params.cfg,
@@ -163,6 +164,9 @@ export function resolveAuthProfileEligibility(params: {
       return { eligible: true, reasonCode: "ok" };
     }
     return { eligible: false, reasonCode: "profile_missing" };
+  }
+  if (!isSetupCredentialAccessible({ profileId: params.profileId, credential: cred })) {
+    return { eligible: false, reasonCode: "setup_inactive" };
   }
   if (
     !isProfileProviderCompatibleWithAuthProvider({
@@ -197,8 +201,17 @@ export function resolveAuthProfileEligibility(params: {
     credential: cred,
     now: params.now,
   });
+  if (
+    isAuthProfileRuntimeSettlementCandidate({
+      credential: cred,
+      eligibility: credentialEligibility,
+      includePendingOAuthRefresh: params.includePendingOAuthRefresh,
+    })
+  ) {
+    return { eligible: true, reasonCode: "ok" };
+  }
   return {
-    eligible: credentialEligibility.eligible,
+    eligible: false,
     reasonCode: credentialEligibility.reasonCode,
   };
 }
@@ -212,8 +225,12 @@ type ResolveAuthProfileOrderParams = {
   preferredProfile?: string;
   /** Model that will consume the profile, for model-scoped cooldowns. */
   forModel?: string;
+  /** Account-wide selection ignores windows limited to one model. */
+  cooldownScope?: "all-models";
   /** Read-only status keeps unresolved refs ordered so availability remains unknown. */
   readinessMode?: "execution" | "read-only";
+  /** Runtime resolvers may observe a durable pending refresh through settlement. */
+  includePendingOAuthRefresh?: boolean;
 };
 
 export type AuthProfileOrderResolution = {
@@ -222,27 +239,17 @@ export type AuthProfileOrderResolution = {
   hasExplicitOrder: boolean;
 };
 
-/** Shares stored-over-config order precedence with CLI runtime selection. */
-export function resolveExplicitAuthOrderSelection(params: {
-  storeOrder: AuthProfileStore["order"] | undefined;
-  configuredOrder: Record<string, string[]> | undefined;
-  providerKey: string;
-  providerAuthKey: string;
-}): {
-  order: string[] | undefined;
-  fromStore: boolean;
-} {
-  const { storeOrder, configuredOrder, providerKey, providerAuthKey } = params;
-  const stored =
-    findNormalizedProviderValue(storeOrder, providerAuthKey) ??
-    findNormalizedProviderValue(storeOrder, providerKey);
-  return {
-    order:
-      stored ??
-      findNormalizedProviderValue(configuredOrder, providerAuthKey) ??
-      findNormalizedProviderValue(configuredOrder, providerKey),
-    fromStore: stored !== undefined,
-  };
+/** Session pins lead the shared order without discarding its failover candidates. */
+export function prependAuthProfilePin(
+  resolution: AuthProfileOrderResolution,
+  profileId: string | undefined,
+): AuthProfileOrderResolution {
+  return profileId
+    ? {
+        ...resolution,
+        profileIds: [profileId, ...resolution.profileIds.filter((id) => id !== profileId)],
+      }
+    : resolution;
 }
 
 /** Resolves ordered usable auth profiles plus whether an explicit order owns selection. */
@@ -257,9 +264,9 @@ export function resolveAuthProfileOrderWithMetadata(
   });
   const now = Date.now();
 
-  // Clear any cooldowns that have expired since the last check so profiles
-  // get a fresh error count and are not immediately re-penalized on the
-  // next transient failure. See #3604.
+  // Clear expired windows so profiles become eligible for a half-open probe.
+  // Rate-limit counts persist until success to back off repeated failed probes;
+  // other transient failures still receive a fresh counter. See #3604.
   clearExpiredCooldowns(store, now);
   const { order: explicitOrder, fromStore: explicitOrderFromStore } =
     resolveExplicitAuthOrderSelection({
@@ -284,7 +291,6 @@ export function resolveAuthProfileOrderWithMetadata(
     cfg,
     authAliasLookupParams: params.authAliasLookupParams,
     store,
-    provider,
     providerAuthKey,
   });
   const baseOrder =
@@ -301,6 +307,7 @@ export function resolveAuthProfileOrderWithMetadata(
       provider,
       profileId,
       now,
+      includePendingOAuthRefresh: params.includePendingOAuthRefresh,
     });
     return (
       eligibility.eligible ||
@@ -324,51 +331,36 @@ export function resolveAuthProfileOrderWithMetadata(
   }
 
   const deduped = dedupeProfileIds(filtered);
+  const cooldownModel = params.cooldownScope === "all-models" ? null : forModel;
+  const isInCooldown = (profileId: string) =>
+    isProfileInCooldown(store, profileId, now, cooldownModel);
+  const unusableUntil = (profileId: string) =>
+    resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}, cooldownModel);
 
-  // Explicit order remains a hard user/config preference, but cooldown tracking
-  // moves temporarily bad profiles behind available ones.
-  if (explicitOrder && explicitOrder.length > 0 && !repairedFallbackToStoreProfiles) {
-    const available: string[] = [];
-    const inCooldown: Array<{ profileId: string; cooldownUntil: number }> = [];
-
-    for (const profileId of deduped) {
-      if (isProfileInCooldown(store, profileId, now, forModel)) {
-        const cooldownUntil =
-          resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}, forModel) ?? now;
-        inCooldown.push({ profileId, cooldownUntil });
-      } else {
-        available.push(profileId);
-      }
+  const available: string[] = [];
+  const inCooldown: Array<{ profileId: string; cooldownUntil: number }> = [];
+  for (const profileId of deduped) {
+    if (isInCooldown(profileId)) {
+      inCooldown.push({ profileId, cooldownUntil: unusableUntil(profileId) ?? now });
+    } else {
+      available.push(profileId);
     }
+  }
 
-    const cooldownSorted = inCooldown
+  // Explicit order remains a hard user/config preference. Automatic ordering
+  // uses lastUsed instead of lastGood so healthy profiles are not starved.
+  const ordered = [
+    ...(explicitOrder && explicitOrder.length > 0 && !repairedFallbackToStoreProfiles
+      ? available
+      : orderProfilesByMode(available, store, now)),
+    ...inCooldown
       .toSorted((a, b) => a.cooldownUntil - b.cooldownUntil)
-      .map((entry) => entry.profileId);
-
-    const ordered = [...available, ...cooldownSorted];
-
-    // Explicit user choice still wins when it is part of the filtered order.
-    if (preferredProfile && ordered.includes(preferredProfile)) {
-      return {
-        profileIds: [preferredProfile, ...ordered.filter((e) => e !== preferredProfile)],
-        hasExplicitOrder: true,
-      };
-    }
-    return { profileIds: ordered, hasExplicitOrder: true };
-  }
-
-  // Otherwise, use round-robin by lastUsed. lastGood is intentionally ignored
-  // because prioritizing it would starve other healthy profiles.
-  const sorted = orderProfilesByMode(deduped, store, now, forModel);
-
-  if (preferredProfile && sorted.includes(preferredProfile)) {
-    return {
-      profileIds: [preferredProfile, ...sorted.filter((e) => e !== preferredProfile)],
-      hasExplicitOrder: explicitOrder !== undefined,
-    };
-  }
-
-  return { profileIds: sorted, hasExplicitOrder: explicitOrder !== undefined };
+      .map((entry) => entry.profileId),
+  ];
+  return prependAuthProfilePin(
+    { profileIds: ordered, hasExplicitOrder: explicitOrder !== undefined },
+    preferredProfile && ordered.includes(preferredProfile) ? preferredProfile : undefined,
+  );
 }
 
 /** Resolves ordered usable auth profile ids for a provider. */
@@ -376,26 +368,9 @@ export function resolveAuthProfileOrder(params: ResolveAuthProfileOrderParams): 
   return resolveAuthProfileOrderWithMetadata(params).profileIds;
 }
 
-function orderProfilesByMode(
-  order: string[],
-  store: AuthProfileStore,
-  now: number,
-  forModel?: string,
-): string[] {
-  // Partition into available and in-cooldown
-  const available: string[] = [];
-  const inCooldown: string[] = [];
-
-  for (const profileId of order) {
-    if (isProfileInCooldown(store, profileId, now, forModel)) {
-      inCooldown.push(profileId);
-    } else {
-      available.push(profileId);
-    }
-  }
-
+function orderProfilesByMode(order: string[], store: AuthProfileStore, now: number): string[] {
   // Sort by type, OAuth expiry state, then lastUsed for round-robin within each tier.
-  const scored = available.map((profileId) => {
+  const scored = order.map((profileId) => {
     const profile = store.profiles[profileId];
     const type = profile?.type;
     const typeScore = type === "oauth" ? 0 : type === "token" ? 1 : type === "api_key" ? 2 : 3;
@@ -409,30 +384,10 @@ function orderProfilesByMode(
     return { profileId, typeScore, expiryScore, lastUsed };
   });
 
-  // Primary sort: type preference (oauth > token > api_key).
-  const sorted = scored
-    .toSorted((a, b) => {
-      // First by type (oauth > token > api_key)
-      if (a.typeScore !== b.typeScore) {
-        return a.typeScore - b.typeScore;
-      }
-      if (a.expiryScore !== b.expiryScore) {
-        return a.expiryScore - b.expiryScore;
-      }
-      // Then by lastUsed (oldest first)
-      return a.lastUsed - b.lastUsed;
-    })
+  return scored
+    .toSorted(
+      (a, b) =>
+        a.typeScore - b.typeScore || a.expiryScore - b.expiryScore || a.lastUsed - b.lastUsed,
+    )
     .map((entry) => entry.profileId);
-
-  // Append cooldown profiles at the end (sorted by cooldown expiry, soonest first)
-  const cooldownSorted = inCooldown
-    .map((profileId) => ({
-      profileId,
-      cooldownUntil:
-        resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}, forModel) ?? now,
-    }))
-    .toSorted((a, b) => a.cooldownUntil - b.cooldownUntil)
-    .map((entry) => entry.profileId);
-
-  return [...sorted, ...cooldownSorted];
 }

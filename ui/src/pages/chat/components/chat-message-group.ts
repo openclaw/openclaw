@@ -1,125 +1,84 @@
 import { html, nothing } from "lit";
-import { resolveLocalUserName } from "../../../app/user-identity.ts";
-import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
+import { repeat } from "lit/directives/repeat.js";
+import { groupToolCalls, type ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import { icons } from "../../../components/icons.ts";
-import {
-  personActivityLink,
-  renderPersonName,
-  type PersonActivityRouting,
-} from "../../../components/person-activity-link.ts";
+import { personActivityLink, renderPersonName } from "../../../components/person-activity-link.ts";
 import { t } from "../../../i18n/index.ts";
-import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import type { MessageGroup, ToolCard } from "../../../lib/chat/chat-types.ts";
+import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
-import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import {
   readToolApprovalReviewOutcome,
   readToolApprovalReviews,
   resolveToolApprovalReviewOutcome,
 } from "../../../lib/chat/tool-approval-reviews.ts";
-import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
+import {
+  describeToolGroup,
+  summarizeToolGroup,
+  readPreparedActivity,
+} from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
+import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
+import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
+import { resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
 import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
-import type { TurnRecap } from "../chat-progress.ts";
-import {
-  persistedMessageEntryId,
-  readPendingSendFailure,
-  type AssistantMessageExpansionState,
-} from "../chat-thread.ts";
-import { hasForwardedSource } from "../chat-turn-boundary.ts";
+import { transcriptRunId } from "../chat-thread-run-identity.ts";
+import { persistedMessageEntryId, readPendingSendStatus } from "../chat-thread.ts";
+import { hasForwardedSource, isInterSessionGroup } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
+import { activityHeadline, selectActivityHeadline } from "./chat-activity-headline.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderRewindButton } from "./chat-message-confirmation.ts";
+import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
 import {
+  FULL_MESSAGE_RETRY_REVISION_LIMIT,
+  hasMessageActionButtons,
   renderMessageActionButtons,
   renderReplyButton,
+  prepareChatMessageRender,
   resolveMessageActionDetails,
-  type MessageActionDetails,
-  type MessageReplyTarget,
 } from "./chat-message-markdown.ts";
-import { renderChatSendStatus, type ChatSendStatusActions } from "./chat-message-send-status.ts";
+import { messageReactionOptions, renderGroupMessageReactions } from "./chat-message-reactions.ts";
+import { renderChatSendStatus } from "./chat-message-send-status.ts";
 import {
-  renderStreamGroupParts,
-  type StreamGroupOptions,
-  type StreamGroupPart,
-} from "./chat-message-stream.ts";
+  isOwnSenderGroup,
+  isSourceOnlyUserGroup,
+  resolveMessageGroupSenderLabel,
+} from "./chat-message-sender.ts";
+import { emptyGroupFooter, renderStreamGroupParts } from "./chat-message-stream.ts";
 import type { AssistantMessageDisclosure } from "./chat-message-text.ts";
 import { extractGroupMeta, renderMessageMeta } from "./chat-message-timestamp.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
-  isRunningToolCard,
+  NO_REPLY_LINE,
+  renderReplyLine,
+  renderReplyLineConnector,
+  resolveGroupReplyLine,
+  resolveMessageReplyLine,
+} from "./chat-reply-attribution.ts";
+import { chatResponsiveLayout } from "./chat-responsive-layout.ts";
+import { renderInterSessionActivity } from "./chat-session-activity.ts";
+import {
   renderBrowserTabPreviews,
-  resolveToolRowText,
-  shouldToggleSelectableDisclosure,
+  renderToolCard,
   syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
-import { shouldAnimateUserTurnEntry } from "./chat-user-turn-entry.ts";
+import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
-
-type ActiveContinuation = {
-  parts: StreamGroupPart[];
-  options: StreamGroupOptions;
-};
-
-type ReplyPreview = MessageReplyTarget & { sourceMessageId: string };
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
 
-type RenderMessageGroupOptions = Omit<
-  GroupedMessageRenderOptions,
-  | "isStreaming"
-  | "duplicateCount"
-  | "assistantMessageDisclosure"
-  | "messageActions"
-  | "entryId"
-  | "entryAnimated"
-  | "resolveReplyPreview"
-> &
-  ChatSendStatusActions &
-  Parameters<typeof renderForwardedAvatar>[1] & {
-    latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
-    /** Configured main-session key; an agent's main source labels as the agent. */
-    mainKey?: string;
-    onOpenSidebar?: (content: SidebarContent) => void;
-    loadFullAssistantMessage?: SidebarFullMessageLoader;
-    getAssistantMessageExpansion?: (
-      messageId: string,
-    ) => AssistantMessageExpansionState | undefined;
-    onToggleAssistantMessageExpanded?: (messageId: string) => void;
-    userId?: string | null;
-    userName?: string | null;
-    /** Routing for peer sender names; absent leaves them plain text. */
-    personActivity?: PersonActivityRouting;
-    userAvatar?: string | null;
-    showAvatarGutter?: boolean;
-    showAssistantAvatar?: boolean;
-    contextWindow?: number | null;
-    onReply?: (target: MessageReplyTarget) => void;
-    resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
-    onRewind?: () => void;
-    rewindDisabled?: boolean;
-    activeContinuation?: ActiveContinuation;
-    turnRecap?: TurnRecap;
-    frameContent?: unknown;
-    frameActionOwner?: MessageGroup["messages"][number] | null;
-    latestAssistant?: boolean;
-  };
-
-// Each automatic load attempt costs 2 revisions (loading, then error), so
-// this bounds auto-retries to 3 before the manual retry affordance takes over.
-const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;
-
-function prepareMessageActions(
+function prepareGroupMessage(
   group: MessageGroup,
   item: MessageGroup["messages"][number],
   opts: RenderMessageGroupOptions,
-): MessageActionDetails | null {
-  const details = resolveMessageActionDetails({
+) {
+  const source = prepareChatMessageRender(item.message);
+  const details = resolveMessageActionDetails(source, {
     ...opts,
-    message: item.message,
     messageId: item.key,
     canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
     senderLabel: resolveMessageGroupSenderLabel(group, opts),
@@ -136,16 +95,15 @@ function prepareMessageActions(
       opts.onToggleAssistantMessageExpanded?.(messageId);
     }
   }
-  return details;
+  return { item, source, actions: details };
 }
 
-function buildGroupedMessageRenderOptions(
+function renderPreparedGroupMessage(
   group: MessageGroup,
-  item: MessageGroup["messages"][number],
   index: number,
-  opts: RenderMessageGroupOptions,
-  actionDetails: MessageActionDetails | null = prepareMessageActions(group, item, opts),
-): GroupedMessageRenderOptions {
+  opts: RenderMessageGroupOptions & Pick<GroupedMessageRenderOptions, "replyLine">,
+  { item, source, actions: actionDetails }: ReturnType<typeof prepareGroupMessage>,
+) {
   let assistantMessageDisclosure: AssistantMessageDisclosure | undefined;
   const fullMessage = actionDetails?.fullMessage;
   if (fullMessage && opts.loadFullAssistantMessage && opts.onToggleAssistantMessageExpanded) {
@@ -154,36 +112,32 @@ function buildGroupedMessageRenderOptions(
       expansion?.status === "error" && expansion.revision >= FULL_MESSAGE_RETRY_REVISION_LIMIT;
     assistantMessageDisclosure = {
       expanded: expansion?.status === "loaded",
-      ...(expansion?.status === "loaded" ? { markdown: actionDetails?.markdown } : {}),
+      ...(expansion?.status === "loaded"
+        ? { markdown: actionDetails?.markdown, message: expansion.message }
+        : {}),
       // Manual re-entry once the bounded automatic retries gave up.
       ...(retriesExhausted
         ? { onRetryFullMessage: () => opts.onToggleAssistantMessageExpanded?.(messageId) }
         : {}),
     };
   }
-  return {
-    ...opts,
-    isStreaming: group.isStreaming && index === group.messages.length - 1,
-    entryId: persistedMessageEntryId(item.message) ?? undefined,
-    entryAnimated:
-      normalizeRoleForGrouping(group.role) === "user" &&
-      shouldAnimateUserTurnEntry(item.key, item.message),
-    duplicateCount: item.duplicateCount ?? 1,
-    showToolCalls: opts.showToolCalls ?? true,
-    autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
-    assistantMessageDisclosure,
-    messageActions: actionDetails,
-  };
-}
-
-function isPeerSenderGroup(
-  group: Pick<MessageGroup, "sender">,
-  userId: string | null | undefined,
-): boolean {
-  const identity = group.sender?.identity;
-  return Boolean(
-    group.sender && !(userId && identity?.type === "profile" && identity.id === userId),
-  );
+  const isStreaming = group.isStreaming && index === group.messages.length - 1;
+  return html`${renderGroupedMessage(
+    source,
+    item.key,
+    {
+      ...opts,
+      isStreaming,
+      entryId: persistedMessageEntryId(item.message) ?? undefined,
+      entryRef: opts.entryRefFor?.(item.key),
+      duplicateCount: item.duplicateCount ?? 1,
+      showToolCalls: opts.showToolCalls ?? true,
+      autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
+      assistantMessageDisclosure,
+      messageActions: actionDetails,
+    },
+    opts.onOpenSidebar,
+  )}${renderGroupMessageReactions(group, actionDetails, isStreaming, opts)}`;
 }
 
 export function renderActivityGroup(
@@ -195,22 +149,84 @@ export function renderActivityGroup(
   if (!firstGroup || opts.showToolCalls === false) {
     return nothing;
   }
-  const cards = groups.flatMap((group) =>
-    group.messages.flatMap((item) => extractToolCardsCached(item.message)),
+  const entries = groups.flatMap((group) => group.messages);
+  const cards: ToolCard[] = [];
+  const toolContexts = new Map<ToolCard, { messageKey: string; disclosureId: string }>();
+  const preparedByCard = new Map<ToolCard, ReturnType<typeof readPreparedActivity>[number]>();
+  const currentRunActivity = new Set<ReturnType<typeof readPreparedActivity>[number]>();
+  const activity = entries.flatMap((entry) => {
+    const prepared = readPreparedActivity(entry.message);
+    if (
+      opts.runActive &&
+      opts.activityRunId &&
+      (!opts.activityGroupKey || groups.some((group) => group.key === opts.activityGroupKey)) &&
+      transcriptRunId(entry.message) === opts.activityRunId
+    ) {
+      prepared.forEach((item) => currentRunActivity.add(item));
+    }
+    const byCallId = new Map(prepared.map((item) => [item.toolCallId, item]));
+    for (const [index, card] of extractToolCardsCached(entry.message).entries()) {
+      cards.push(card);
+      toolContexts.set(card, {
+        messageKey: entry.key,
+        disclosureId: `${entry.key}:toolcard:${index}`,
+      });
+      const item = card.callId ? byCallId.get(card.callId) : undefined;
+      if (item) {
+        preparedByCard.set(card, item);
+      }
+    }
+    return prepared;
+  });
+  const visibleActivity = activity.filter(
+    (item) => !item.hideFromChannelProgress && !item.suppressChannelProgress,
   );
-  const latestGroup = groups[groups.length - 1] ?? firstGroup;
-  const latestCards = latestGroup.messages.flatMap((item) => extractToolCardsCached(item.message));
-  // While a run is live, the newest still-running call names the group so
-  // the collapsed header reads like a status line; afterwards it aggregates.
-  const runningCard = opts.runActive
-    ? latestCards.findLast((card) => isRunningToolCard(card, opts.runActive))
-    : undefined;
-  const groupSummaryLabel = runningCard
-    ? `${resolveToolRowText(runningCard, opts.runActive)}…`
-    : summarizeToolGroup(cards.map((card) => ({ name: card.name, args: card.args })));
+  const currentActivity = [
+    ...new Map(
+      visibleActivity
+        .filter((item) => currentRunActivity.has(item))
+        .map((item) => [item.toolCallId ?? item.itemId, item]),
+    ).values(),
+  ];
+  const cardGroups = groupToolCalls(cards);
+  const headline = selectActivityHeadline(currentActivity, cardGroups, preparedByCard);
+  const visibleCalls = new Set(visibleActivity.map((item) => item.toolCallId ?? item.itemId));
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
+  const groupSummaryLabel = summarizeToolGroup(visibleActivity, {
+    includeInlineOutcomes: activityExpanded,
+  });
+  const toolCardOverrides = new Map<ToolCard, unknown>();
+  function renderOperation(group: ToolCallGroup<ToolCard>): unknown {
+    const { card, children } = group;
+    const context = toolContexts.get(card)!;
+    const expanded = opts.isToolExpanded?.(context.disclosureId) ?? false;
+    const descendants: ToolCard[] = [];
+    const pending = [...children];
+    for (const child of pending) {
+      descendants.push(child.card);
+      pending.push(...child.children);
+      toolCardOverrides.set(child.card, nothing);
+    }
+    return renderToolCard(card, {
+      ...opts,
+      messageKey: context.messageKey,
+      expanded,
+      onToggleExpanded: () => opts.onToggleToolExpanded?.(context.disclosureId, expanded),
+      activityCards: [card, ...descendants],
+      children: children.length
+        ? html`${expanded ? children.map(renderOperation) : nothing}`
+        : undefined,
+    });
+  }
+  if (activityExpanded) {
+    for (const group of cardGroups) {
+      if (group.children.length > 0) {
+        toolCardOverrides.set(group.card, renderOperation(group));
+      }
+    }
+  }
   const approvalReviews = cards.flatMap((card) => readToolApprovalReviews(card.details));
   const recordedReviewOutcomes = cards.flatMap((card) => {
     const outcome = readToolApprovalReviewOutcome(card.details);
@@ -219,12 +235,13 @@ export function renderActivityGroup(
   const reviewOutcome = resolveToolApprovalReviewOutcome(approvalReviews, recordedReviewOutcomes);
   const reviewer = approvalReviews[0]?.label ?? "Review";
   const reviewAriaLabel = reviewOutcome
-    ? t(`chat.toolCards.review.${reviewOutcome === "reviewing" ? "reviewing" : reviewOutcome}`, {
-        reviewer,
-      })
+    ? t(`chat.toolCards.review.${reviewOutcome}`, { reviewer })
     : "";
   const content = html`
-    <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
+    <div
+      class="chat-activity-group ${activityExpanded ? "is-open" : ""}"
+      data-file-session-key=${firstGroup.senderSession?.sessionKey ?? nothing}
+    >
       <button
         class="chat-inline-disclosure chat-activity-group__summary"
         type="button"
@@ -232,46 +249,65 @@ export function renderActivityGroup(
         aria-controls=${activityBodyId}
         @pointerenter=${syncToolDisclosureOverflow}
         @focus=${syncToolDisclosureOverflow}
-        @click=${(event: MouseEvent) => {
-          if (shouldToggleSelectableDisclosure(event)) {
-            opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded);
-          }
-        }}
+        @click=${() => opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded)}
       >
-        <span class="chat-activity-group__icon">${icons.listTree}</span>
-        <span class="chat-tool-disclosure__content">
-          <span class="chat-activity-group__label" title=${groupSummaryLabel}
-            >${groupSummaryLabel}</span
-          >
-        </span>
-        ${reviewOutcome
-          ? html`<span
-              class="chat-activity-group__review-status"
-              data-outcome=${reviewOutcome}
-              role="img"
-              aria-label=${reviewAriaLabel}
-              >${reviewOutcome === "denied"
-                ? icons.shieldX
-                : reviewOutcome === "reviewing"
-                  ? icons.shieldQuestion
-                  : icons.shieldCheck}</span
-            >`
-          : nothing}
+        ${activityHeadline(
+          JSON.stringify([opts.sessionKey, opts.connectionEpoch, opts.activityRunId]),
+          headline,
+          groupSummaryLabel,
+          currentActivity,
+          opts.pluginToolIcons,
+        )}
+        ${
+          headline
+            ? describeToolGroup(visibleActivity)
+                .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
+                .map(({ label }) => html`<span class="muted">${label}</span>`)
+            : nothing
+        }
+        ${
+          reviewOutcome
+            ? html`<span
+                class="chat-activity-group__review-status"
+                data-outcome=${reviewOutcome}
+                role="img"
+                aria-label=${reviewAriaLabel}
+                >${
+                  reviewOutcome === "denied"
+                    ? icons.shieldX
+                    : reviewOutcome === "reviewing"
+                      ? icons.shieldQuestion
+                      : icons.shieldCheck
+                }</span
+              >`
+            : nothing
+        }
+        ${
+          activityExpanded
+            ? nothing
+            : renderToolOutcomeSummary(
+                cards.filter((card) => card.callId && visibleCalls.has(card.callId)),
+                true,
+                visibleActivity,
+              )
+        }
         <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
       <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>
-        ${activityExpanded
-          ? groups.map((group) =>
-              group.messages.map((item, index) =>
-                renderGroupedMessage(
-                  item.message,
-                  item.key,
-                  buildGroupedMessageRenderOptions(group, item, index, opts),
-                  opts.onOpenSidebar,
+        ${
+          activityExpanded
+            ? groups.map((group) =>
+                group.messages.map((item, index) =>
+                  renderPreparedGroupMessage(
+                    group,
+                    index,
+                    { ...opts, toolCardOverrides },
+                    prepareGroupMessage(group, item, opts),
+                  ),
                 ),
-              ),
-            )
-          : nothing}
+              )
+            : nothing
+        }
       </div>
       ${renderBrowserTabPreviews(groups, opts)}
     </div>
@@ -280,40 +316,12 @@ export function renderActivityGroup(
     ? content
     : html`
         <div
-          class="chat-group tool chat-group--activity chat-group--with-footer"
+          class="chat-group tool chat-group--turn-block chat-group--activity chat-group--with-footer"
           data-chat-row-key=${firstGroup.key}
         >
           <div class="chat-group-messages">${content}</div>
         </div>
       `;
-}
-
-export function resolveMessageGroupSenderLabel(
-  group: Pick<MessageGroup, "role" | "sender" | "senderLabel" | "messages">,
-  opts: Pick<RenderMessageGroupOptions, "assistantName" | "userId" | "userName" | "userAvatar">,
-): string {
-  const normalizedRole = normalizeRoleForGrouping(group.role);
-  const assistantName = opts.assistantName ?? "Assistant";
-  const resolvedUserName = resolveLocalUserName({
-    name: opts.userName ?? null,
-    avatar: opts.userAvatar ?? null,
-  });
-  const userLabel = group.senderLabel?.trim();
-  const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
-  const isCurrentUser = normalizedRole === "user" && Boolean(group.sender) && !isPeerGroup;
-  return normalizedRole === "user"
-    ? isCurrentUser
-      ? resolvedUserName
-      : (userLabel ?? resolvedUserName)
-    : normalizedRole === "assistant"
-      ? (userLabel ?? assistantName)
-      : normalizedRole === "tool"
-        ? t("chat.messages.toolSender")
-        : group.messages.every((item) =>
-              Boolean(workspaceResultConflictFromTranscript(item.message)),
-            )
-          ? t("chat.workspaceConflict.eventSender")
-          : normalizedRole;
 }
 
 function isActivityMessageGroup(group: MessageGroup): boolean {
@@ -328,48 +336,141 @@ function isActivityMessageGroup(group: MessageGroup): boolean {
   );
 }
 
-export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessageGroupOptions) {
+function resolveFileLinkOwnerOptions(group: MessageGroup, options: RenderMessageGroupOptions) {
+  const sourceSessionKey = group.senderSession?.sessionKey;
+  const owned: RenderMessageGroupOptions = sourceSessionKey
+    ? {
+        ...options,
+        fileLinkSessionKey: sourceSessionKey,
+        onOpenWorkspaceFile:
+          options.onOpenWorkspaceFile &&
+          ((target) => {
+            const ownedTarget = { ...target, sessionKey: sourceSessionKey };
+            options.onOpenWorkspaceFile?.(ownedTarget);
+          }),
+        onOpenSidebar:
+          options.onOpenSidebar &&
+          ((content) =>
+            options.onOpenSidebar?.(
+              content.kind === "markdown"
+                ? { ...content, fileLinkSessionKey: sourceSessionKey }
+                : content,
+            )),
+      }
+    : options;
+  return owned;
+}
+
+export function renderMessageGroupContent(group: MessageGroup, options: RenderMessageGroupOptions) {
+  const opts = resolveFileLinkOwnerOptions(group, options);
   if (isActivityMessageGroup(group)) {
     return renderActivityGroup([group], opts, "continuation");
   }
-  const messages = group.messages.map((item, index) =>
-    renderGroupedMessage(
-      item.message,
-      item.key,
-      buildGroupedMessageRenderOptions(group, item, index, opts),
-      opts.onOpenSidebar,
-    ),
+  const messageOptions = { ...opts, isForwarded: hasForwardedSource(group) };
+  const messages = repeat(
+    group.messages,
+    (item) => item.key,
+    (item, index) =>
+      renderPreparedGroupMessage(
+        group,
+        index,
+        messageOptions,
+        prepareGroupMessage(group, item, opts),
+      ),
   );
-  return html`${messages}${opts.showToolCalls === false
-    ? nothing
-    : renderBrowserTabPreviews([group], opts)}`;
+  return html`${messages}${
+    opts.showToolCalls === false ? nothing : renderBrowserTabPreviews([group], opts)
+  }`;
 }
 
-export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
-  const normalizedRole = normalizeRoleForGrouping(group.role);
-  const isWorkspaceConflict = group.messages.every((item) =>
-    Boolean(workspaceResultConflictFromTranscript(item.message)),
-  );
-  const assistantName = opts.assistantName ?? "Assistant";
-  const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
-  const isForwarded = normalizedRole === "assistant" && hasForwardedSource(group);
+export function renderMessageGroup(group: MessageGroup, options: RenderMessageGroupOptions) {
   const sourceSessionKey = group.senderSession?.sessionKey;
+  const opts = resolveFileLinkOwnerOptions(group, options);
+  if (isInterSessionGroup(group)) {
+    return renderInterSessionActivity(group, opts, (item, index) => {
+      const prepared = prepareGroupMessage(group, item, opts);
+      return {
+        content: renderPreparedGroupMessage(
+          group,
+          index,
+          {
+            ...opts,
+            isForwarded: true,
+            onToggleUserMessageExpanded: undefined,
+            replyLine: resolveGroupReplyLine(
+              { ...group, messages: [item] },
+              opts.resolveReplyPreview,
+            ),
+          },
+          prepared,
+        ),
+        actions: prepared.actions ? renderMessageActionButtons(prepared.actions, opts) : nothing,
+      };
+    });
+  }
+  const normalizedRole = normalizeRoleForGrouping(group.role);
+  const sourceOnly = isSourceOnlyUserGroup(group);
+  const showAvatar =
+    normalizedRole !== "user" || Boolean(group.sender || group.senderLabel?.trim());
+  const assistantName = opts.assistantName ?? "Assistant";
+  const isOwnGroup = isOwnSenderGroup(group, opts.userId);
+  const isPeerGroup =
+    normalizedRole === "user" && Boolean(opts.userId && group.sender) && !isOwnGroup;
+  const forwardedSource = hasForwardedSource(group);
+  const isForwarded = normalizedRole === "assistant" && forwardedSource;
+  const replyLine = opts.frameContent
+    ? (opts.frameReplyLine ?? NO_REPLY_LINE)
+    : resolveGroupReplyLine(group, opts.resolveReplyPreview);
+  // Only a strip naming this same participant replaces the sender label; a
+  // shared display name does not. An assistant group is its agent's identity;
+  // a user group without a typed identity has none to compare, so it keeps its name.
+  const ownIdentity =
+    group.sender?.identity ??
+    (normalizedRole === "assistant"
+      ? {
+          type: "agent" as const,
+          id: group.senderSession?.agentId ?? opts.agentId ?? DEFAULT_AGENT_ID,
+        }
+      : undefined);
+  const replyIdentity = replyLine.sender?.identity;
+  const showSenderName =
+    !(
+      ownIdentity &&
+      replyIdentity?.type === ownIdentity.type &&
+      replyIdentity.id === ownIdentity.id
+    ) &&
+    !isForwarded &&
+    !sourceOnly &&
+    (normalizedRole !== "user" || !isOwnGroup || opts.showOwnSenderName !== false);
+  const visibleSources = group.sourceClients?.filter(
+    (source) => gatewayClientKind(source) !== "web",
+  );
   const who = resolveMessageGroupSenderLabel(group, opts);
   const roleClass =
-    normalizedRole === "user"
-      ? "user"
-      : normalizedRole === "assistant"
-        ? "assistant"
-        : normalizedRole === "tool"
-          ? "tool"
-          : isWorkspaceConflict
-            ? "workspace-conflict"
-            : "other";
-  const showAvatarGutter = opts.showAvatarGutter !== false;
-  const assistantAvatarIdentity = { name: assistantName, avatar: opts.assistantAvatar ?? null };
-  const persistUserIdentity = normalizedRole === "user" && showAvatarGutter;
+    normalizedRole === "user" || normalizedRole === "assistant" || normalizedRole === "tool"
+      ? normalizedRole
+      : group.messages.every((item) => workspaceResultConflictFromTranscript(item.message))
+        ? "workspace-conflict"
+        : "other";
+  const avatarPlacement = opts.avatarPlacement ?? "gutter";
+  const renderSenderIdentity = () => html`${
+    !showSenderName
+      ? nothing
+      : renderPersonName(
+          who,
+          // Only other people's messages: your own name links nowhere useful.
+          isPeerGroup && group.sender?.identity?.type === "profile"
+            ? personActivityLink(group.sender.identity.id, opts.personActivity, who)
+            : null,
+          "chat-sender-name",
+        )
+  }
+  ${
+    visibleSources?.length
+      ? html`<span class="chat-message-source">${messageClientSourcesLabel(visibleSources)}</span>`
+      : nothing
+  }`;
 
-  // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
 
   if (normalizedRole === "tool" && opts.showToolCalls === false) {
@@ -381,39 +482,40 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   }
 
   const ownsRunFrame = opts.frameContent !== undefined;
+  // Tool activity and live narration are blocks of the turn whose answer follows:
+  // no identity, footer or actions of their own, only the run-block gap.
+  const isTurnBlock =
+    normalizedRole === "tool" ||
+    (normalizedRole === "assistant" &&
+      !opts.searchResult &&
+      !ownsRunFrame &&
+      !isForwarded &&
+      resolveAssistantReplyPhase(group.messages[0]?.message) === "commentary");
   const actionOwners = ownsRunFrame
     ? opts.frameActionOwner
       ? [opts.frameActionOwner]
       : []
     : group.messages;
-  const messageActionDetails = actionOwners.map((item) => prepareMessageActions(group, item, opts));
+  const preparedMessages = actionOwners.map((item) => prepareGroupMessage(group, item, opts));
   const lastMessageIndex = group.messages.length - 1;
-  const footerActionDetails = ownsRunFrame
-    ? (messageActionDetails[0] ?? null)
-    : (messageActionDetails[lastMessageIndex] ?? null);
-  const footerActionMessageKey = ownsRunFrame
-    ? opts.frameActionOwner?.key
-    : group.messages[lastMessageIndex]?.key;
+  const footerActionDetails = preparedMessages.at(-1)?.actions ?? null;
+  const footerActionMessageKey = actionOwners.at(-1)?.key;
   const hasUserFooterActions =
     normalizedRole === "user" &&
-    Boolean(
-      (footerActionDetails?.replyTarget && opts.onReply) ||
-      (opts.onRewind && !opts.rewindDisabled) ||
-      footerActionDetails?.markdown,
-    );
+    ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
   const userFooterActions = hasUserFooterActions
     ? html`
         <div
           class="chat-group-footer-actions"
           data-message-actions-for=${footerActionMessageKey ?? nothing}
         >
-          ${footerActionDetails?.replyTarget && opts.onReply
-            ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
-            : nothing}
+          ${
+            footerActionDetails?.replyTarget && opts.onReply
+              ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
+              : nothing
+          }
           ${opts.onRewind && !opts.rewindDisabled ? renderRewindButton(opts.onRewind) : nothing}
-          ${footerActionDetails?.markdown
-            ? renderMessageActionButtons(footerActionDetails, {})
-            : nothing}
+          ${renderMessageActionButtons(footerActionDetails, messageReactionOptions(group, opts))}
         </div>
       `
     : nothing;
@@ -426,119 +528,188 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       : normalizedRole === "user" && group.sender
         ? resolveIdentityHue(group.sender)
         : null;
-  const sendFailure = readPendingSendFailure(group.messages.at(-1)?.message);
-  const replyToLabel =
-    normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
-  const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
+  const sendStatus = readPendingSendStatus(group.messages.at(-1)?.message);
 
+  const inlineUserAvatar =
+    normalizedRole === "user" &&
+    avatarPlacement === "gutter" &&
+    (isPeerGroup || Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown));
+  const avatar =
+    showAvatar &&
+    !isTurnBlock &&
+    avatarPlacement === "gutter" &&
+    (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
+      ? isForwarded
+        ? renderForwardedAvatar(group.senderSession?.agentId, opts)
+        : renderChatAvatar(
+            group.role,
+            {
+              agentId: opts.agentId,
+              name: assistantName,
+              avatar: opts.assistantAvatar ?? null,
+              textAvatar: opts.assistantTextAvatar,
+            },
+            // Missing historical attribution is not evidence that the viewer sent it.
+            isOwnGroup
+              ? { name: opts.userName ?? null, avatar: opts.userAvatar ?? null }
+              : undefined,
+            group.sender,
+          )
+      : nothing;
+
+  // A reserved line keeps the resolved layout; its connector waits for the name.
+  const holdsReplyRow = replyLine.state !== "hidden" && avatar !== nothing;
   return html`
     <div
-      class="chat-group ${roleClass} chat-group--with-footer${opts.latestAssistant
-        ? " chat-group--latest-assistant"
-        : ""}${isPeerGroup ? " chat-group--peer" : ""}${isForwarded
-        ? " chat-group--forwarded"
-        : ""}${senderHue === null ? "" : " chat-group--sender-tint"}"
+      class="chat-group ${roleClass} chat-group--with-footer${
+        isTurnBlock ? " chat-group--turn-block" : ""
+      }${
+        opts.latestAssistant ? " chat-group--latest-assistant" : ""
+      }${isPeerGroup ? " chat-group--peer" : ""}${
+        isForwarded ? " chat-group--forwarded" : ""
+      }${senderHue === null ? "" : " chat-group--sender-tint"}${holdsReplyRow ? " chat-group--reply" : ""}"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
+      data-file-session-key=${sourceSessionKey ?? nothing}
     >
-      ${normalizedRole !== "tool" &&
-      showAvatarGutter &&
-      (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
-        ? isForwarded
-          ? renderForwardedAvatar(group.senderSession?.agentId, opts)
-          : renderChatAvatar(
-              group.role,
-              assistantAvatarIdentity,
-              {
-                name: opts.userName ?? null,
-                avatar: opts.userAvatar ?? null,
-              },
-              opts.resourceBasePath,
-              opts.assistantAttachmentAuthToken,
-              group.sender,
-            )
-        : nothing}
+      ${inlineUserAvatar ? nothing : avatar}
       <div class="chat-group-messages">
-        ${isForwarded ? renderForwardedAttribution(group, opts) : nothing}
-        ${replyToLabel
-          ? html`
-              <div class="chat-reply-attribution" title=${replyToTitle} aria-label=${replyToTitle}>
-                <span class="chat-reply-attribution__icon" aria-hidden="true"
-                  >${icons.cornerDownLeft}</span
-                >
-                <span>${replyToLabel}</span>
-              </div>
-            `
-          : nothing}
-        ${opts.frameContent ??
-        group.messages.map((item, index) => {
-          const actionDetails = messageActionDetails[index];
-          return html`
-            ${renderGroupedMessage(
-              item.message,
-              item.key,
-              buildGroupedMessageRenderOptions(group, item, index, opts, actionDetails),
-              opts.onOpenSidebar,
-            )}
-            ${actionDetails && index < lastMessageIndex && !ownsRunFrame
-              ? html`
-                  <div class="chat-message-actions-row" data-message-actions-for=${item.key}>
-                    ${renderMessageActionButtons(actionDetails, opts)}
-                  </div>
-                `
-              : nothing}
-          `;
-        })}
-        ${ownsRunFrame || opts.showToolCalls === false
-          ? nothing
-          : renderBrowserTabPreviews([group], opts)}
-        ${opts.activeContinuation
-          ? renderStreamGroupParts(
-              opts.activeContinuation.parts,
-              opts.activeContinuation.options,
-              "continuation",
-            )
-          : opts.turnRecap
-            ? renderTurnRecapRow(opts.turnRecap, { presentation: "continuation" })
-            : nothing}
+        ${forwardedSource ? renderForwardedAttribution(group, opts) : nothing}
+        ${renderReplyLine(replyLine, opts)}
+        ${
+          opts.frameContent ??
+          chatResponsiveLayout((mobile) =>
+            repeat(
+              preparedMessages,
+              (prepared) => prepared.item.key,
+              (prepared, index) => {
+                const { item, actions: actionDetails } = prepared;
+                const actions =
+                  hasMessageActionButtons(actionDetails, opts) &&
+                  index < lastMessageIndex &&
+                  !isTurnBlock
+                    ? mobile
+                      ? html`<div class="chat-group-footer chat-message-footer">
+                          <div class="chat-group-footer__meta">
+                            ${renderSenderIdentity()}
+                            ${renderMessageMeta(prepared.source.normalizedMessage.timestamp, null)}
+                          </div>
+                          <div
+                            class="chat-group-footer-actions"
+                            data-message-actions-for=${item.key}
+                          >
+                            ${renderMessageActionButtons(actionDetails, opts)}
+                          </div>
+                        </div>`
+                      : html`<div
+                          class="chat-message-actions-row"
+                          data-message-actions-for=${item.key}
+                        >
+                          ${renderMessageActionButtons(actionDetails, opts)}
+                        </div>`
+                    : nothing;
+                // Assistant groups carry one line; your own replies keep theirs in the
+                // bubble, and a participant's sits above the message beside its avatar.
+                const line =
+                  normalizedRole === "assistant"
+                    ? NO_REPLY_LINE
+                    : resolveMessageReplyLine(
+                        prepared.source.normalizedMessage,
+                        opts.resolveReplyPreview,
+                        opts.userId,
+                        isPeerGroup || group.replyShared,
+                      );
+                const peerHoldsRow = isPeerGroup && line.state !== "hidden";
+                const message = renderPreparedGroupMessage(
+                  group,
+                  index,
+                  {
+                    ...opts,
+                    isForwarded: forwardedSource,
+                    replyLine: isPeerGroup ? undefined : line,
+                    avatar:
+                      !peerHoldsRow &&
+                      inlineUserAvatar &&
+                      (isPeerGroup || index === lastMessageIndex)
+                        ? avatar
+                        : undefined,
+                  },
+                  prepared,
+                );
+                const peerLine = isPeerGroup ? renderReplyLine(line, opts) : nothing;
+                return html`
+                  ${
+                    peerHoldsRow
+                      ? html`<div class="chat-message--reply">
+                          ${peerLine} ${message}${avatar} ${renderReplyLineConnector(line, avatar)}
+                        </div>`
+                      : html`${peerLine}${message}`
+                  }
+                  ${actions}
+                `;
+              },
+            ),
+          )
+        }
+        ${
+          ownsRunFrame || opts.showToolCalls === false
+            ? nothing
+            : renderBrowserTabPreviews([group], opts)
+        }
+        ${
+          opts.activeContinuation
+            ? renderStreamGroupParts(
+                opts.activeContinuation.parts,
+                opts.activeContinuation.options,
+                "continuation",
+              )
+            : opts.turnRecap
+              ? renderTurnRecapRow(opts.turnRecap, { presentation: "continuation" })
+              : nothing
+        }
       </div>
-      ${normalizedRole === "tool" || group.isStreaming || opts.activeContinuation
-        ? nothing
-        : html`<div
-            class="chat-group-footer ${persistUserIdentity
-              ? "chat-group-footer--persistent-identity"
-              : ""}${sendFailure ? " chat-group-footer--send-failure" : ""}"
-          >
-            <div class="chat-group-footer__meta">
-              ${isPeerGroup ? nothing : userFooterActions}
-              ${normalizedRole === "user" && !showAvatarGutter
-                ? renderChatAuthorAvatar(group.sender)
-                : nothing}
-              ${isForwarded
-                ? nothing
-                : renderPersonName(
-                    who,
-                    // Only other people's messages: your own name links nowhere useful.
-                    isPeerGroup && group.sender?.identity?.type === "profile"
-                      ? personActivityLink(group.sender.identity.id, opts.personActivity)
-                      : null,
-                    "chat-sender-name",
-                  )}
-              ${renderChatSendStatus(sendFailure, opts)} ${renderMessageMeta(group.timestamp, meta)}
-            </div>
-            ${isPeerGroup
-              ? userFooterActions
-              : normalizedRole !== "user" && footerActionDetails
-                ? html`
-                    <div
-                      class="chat-group-footer-actions"
-                      data-message-actions-for=${footerActionMessageKey ?? nothing}
-                    >
-                      ${renderMessageActionButtons(footerActionDetails, opts)}
-                    </div>
-                  `
-                : nothing}
-          </div>`}
+      ${
+        isTurnBlock
+          ? nothing
+          : group.isStreaming || opts.activeContinuation
+            ? emptyGroupFooter
+            : html`<div
+                class="chat-group-footer ${
+                  normalizedRole === "user" &&
+                  (visibleSources?.length ||
+                    isPeerGroup ||
+                    (showSenderName && avatarPlacement !== "footer"))
+                    ? "chat-group-footer--persistent-identity"
+                    : ""
+                }${sendStatus ? " chat-group-footer--send-status" : ""}"
+              >
+                ${isPeerGroup ? nothing : userFooterActions}
+                <div class="chat-group-footer__meta">
+                  ${
+                    normalizedRole === "user" && showAvatar && avatarPlacement === "footer"
+                      ? renderChatAuthorAvatar(group.sender)
+                      : nothing
+                  }
+                  ${renderSenderIdentity()} ${renderChatSendStatus(sendStatus, opts)}
+                  ${renderMessageMeta(group.timestamp, meta)}
+                </div>
+                ${
+                  isPeerGroup
+                    ? userFooterActions
+                    : normalizedRole !== "user" && footerActionDetails
+                      ? html`
+                          <div
+                            class="chat-group-footer-actions"
+                            data-message-actions-for=${footerActionMessageKey ?? nothing}
+                          >
+                            ${renderMessageActionButtons(footerActionDetails, opts)}
+                          </div>
+                        `
+                      : nothing
+                }
+              </div>`
+      }
+      ${renderReplyLineConnector(replyLine, avatar)}
     </div>
   `;
 }

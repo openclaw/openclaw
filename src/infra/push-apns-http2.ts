@@ -1,4 +1,3 @@
-// Opens APNs HTTP/2 sessions with optional managed proxy tunneling.
 import { once } from "node:events";
 import http2 from "node:http2";
 import tls from "node:tls";
@@ -12,6 +11,7 @@ import {
   type ActiveManagedProxyUrl,
 } from "./net/proxy/active-proxy-state.js";
 import type { ManagedProxyTlsOptions } from "./net/proxy/proxy-tls.js";
+import { apnsSendInvalidatedError } from "./push-apns-send-current.js";
 
 const APNS_DEFAULT_PORT = "443";
 
@@ -56,10 +56,6 @@ type ProbeApnsHttp2ReachabilityViaProxyResult = {
   responseHeaders: Record<string, string>;
 };
 
-function apnsAbortError(signal: AbortSignal): Error {
-  return signal.reason instanceof Error ? signal.reason : new Error("APNs send invalidated");
-}
-
 function assertApnsAuthority(authority: string): ApnsAuthority {
   let parsed: URL;
   try {
@@ -97,10 +93,9 @@ function normalizeConnectProxyUrl(proxyUrl: URL): URL {
     decodeURIComponent(normalized.username);
     decodeURIComponent(normalized.password);
   } catch (err) {
-    throw new Error(
-      `Proxy CONNECT failed via ${normalized.origin}: ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err },
-    );
+    const detail =
+      err instanceof URIError ? "URI malformed" : err instanceof Error ? err.message : String(err);
+    throw new Error(`Proxy CONNECT failed via ${normalized.origin}: ${detail}`, { cause: err });
   }
   return normalized;
 }
@@ -129,7 +124,7 @@ async function openApnsTlsTunnel(params: {
   const abortController = new AbortController();
   const abortFromCaller = () => {
     if (params.signal) {
-      abortController.abort(apnsAbortError(params.signal));
+      abortController.abort(apnsSendInvalidatedError(params.signal));
     }
   };
   params.signal?.addEventListener("abort", abortFromCaller, { once: true });
@@ -197,7 +192,7 @@ async function openProxiedApnsHttp2Session(params: {
 
   if (params.signal?.aborted) {
     tlsSocket.destroy();
-    throw apnsAbortError(params.signal);
+    throw apnsSendInvalidatedError(params.signal);
   }
 
   // The CONNECT helper already completed the target TLS handshake; reuse that
@@ -216,7 +211,7 @@ export async function connectApnsHttp2Session(
   const proxyUrl = getActiveManagedProxyUrl();
   if (!proxyUrl) {
     if (params.signal?.aborted) {
-      throw apnsAbortError(params.signal);
+      throw apnsSendInvalidatedError(params.signal);
     }
     return http2.connect(authority);
   }

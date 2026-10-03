@@ -10,11 +10,22 @@
   recoverable, multiplying polling, cancellation, and identity checks.
 - Live-cache failures needed structured classification: invalid key, empty provider output, timeout, or real cache regression.
 - Background watchers accumulated and made interruption recovery harder.
+- Hand-rolled watchers matched children by display title, missed them among
+  thousands of runs, parsed GitHub 502 bodies as job failures, and re-reported
+  after every restart. `pnpm frv watch` replaced them.
+- A failed-jobs rerun during a GitHub 5xx storm left 17 queued runner-less
+  duplicate jobs in the new attempt. `pnpm frv rerun --child` sends one request
+  and checks the new attempt for duplicates.
 
 ## Better Defaults
 
-- Run provider-secret preflight first. Require real `/models` or equivalent endpoint checks for release-blocking providers.
-- Keep one watcher open. Use child summaries every few minutes, not every few seconds.
+- Run provider-secret preflight first. Required providers need a real completion
+  to prove inference entitlement; a successful `/models` request proves only
+  authentication. The current verifier probes inference only for Anthropic;
+  OpenAI and Fireworks remain authentication-only. Record and complete their
+  missing inference proof before expensive dispatch, using the existing live
+  provider lane with the same credential source.
+- Keep one `pnpm frv watch` open; its default one-minute polling is enough.
 - Fetch failed-job logs only after a job reaches a terminal failing state.
 - Prefer same-parent failed-job reruns when the original inputs still select the
   right work.

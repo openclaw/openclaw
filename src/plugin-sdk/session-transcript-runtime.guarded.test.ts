@@ -1,6 +1,5 @@
 import fs from "node:fs";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { setRuntimeConfigSnapshot } from "../config/io.js";
+import { afterEach, assert, beforeEach, describe, expect, it } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
@@ -8,6 +7,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  onInternalSessionTranscriptUpdate,
+  type InternalSessionTranscriptUpdate,
+} from "../sessions/transcript-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -18,99 +21,57 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  appendSessionTranscriptMessageByIdentityStrict,
-  appendSessionTranscriptMessagesByIdentity,
-  readSessionTranscriptEvents,
+  appendSessionTranscriptMessageByIdentityStrict as appendStrict,
+  appendSessionTranscriptMessagesByIdentity as appendGroup,
+  readSessionTranscriptEvents as readEvents,
+  readVisibleSessionTranscriptMessageEntries as readEntries,
   type SessionTranscriptReadParams,
 } from "./session-transcript-runtime.js";
 
 describe("guarded session transcript runtime SDK", () => {
   let state: OpenClawTestState;
-  let storePath: string;
-
   beforeEach(async () => {
     state = await createOpenClawTestState({ prefix: "openclaw-sdk-transcript-", applyEnv: false });
-    storePath = state.path("sessions.json");
   });
-
   afterEach(async () => {
     closeOpenClawAgentDatabasesForTest();
     await state.cleanup();
   });
 
-  describe.each([
-    { name: "default main-agent store", agentId: "main", store: "default" },
-    { name: "non-main agent and explicit env", agentId: "secondary", store: "env" },
-    { name: "incognito store", agentId: "secondary", store: "incognito" },
-    { name: "incognito store and explicit env", agentId: "secondary", store: "incognito-env" },
-    {
-      name: "explicit incognito store and env",
-      agentId: "secondary",
-      store: "incognito-env-explicit",
-    },
-    { name: "configured store", agentId: "secondary", store: "configured" },
-    { name: "runtime snapshot store", agentId: "secondary", store: "snapshot" },
-    { name: "explicit store overriding configuration", agentId: "secondary", store: "explicit" },
-  ] as const)("guarded writes with $name", ({ agentId, store }) => {
-    const incognito = store.startsWith("incognito");
-    const explicitEnv = store === "env" || store.startsWith("incognito-env");
-    const explicitStore = store === "explicit" || store === "incognito-env-explicit";
-    let scope: SessionTranscriptReadParams & { config?: OpenClawConfig };
-    let persistedScope: SessionTranscriptReadParams & { storePath: string };
-
-    beforeEach(async () => {
-      if (!explicitEnv) {
-        state.applyEnv();
-      }
-      const config: OpenClawConfig | undefined =
-        store === "configured" || store === "snapshot" || store === "explicit"
-          ? { session: { store: state.path("configured", "{agentId}", "sessions.json") } }
-          : undefined;
-      if (store === "snapshot" && config) {
-        setRuntimeConfigSnapshot(config);
-      }
-      const resolvedStorePath =
-        store === "incognito-env-explicit"
-          ? resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env })
-          : store === "explicit"
-            ? storePath
-            : resolveSessionStorePathCore(config?.session?.store, { agentId, env: state.env });
-      scope = {
-        agentId,
-        sessionId: "fresh-session",
-        sessionKey: `agent:${agentId}:${incognito ? "dashboard:incognito-" : ""}fresh-session`,
-        ...(explicitEnv ? { env: state.env } : {}),
-        ...(config && store !== "snapshot" ? { config } : {}),
-        ...(explicitStore ? { storePath: resolvedStorePath } : {}),
-      };
-      persistedScope = { ...scope, storePath: resolvedStorePath };
-      const entry = {
-        sessionId: scope.sessionId,
-        updatedAt: 10,
-        activeWriterRunId: "current-writer",
-      };
-      if (incognito && explicitEnv) {
-        await upsertSessionEntryCore(persistedScope, entry);
-        return;
-      }
-      // sessions.create uses this owner to create the row and header without an initial task.
+  async function seed(route: "default" | "configured" | "incognito") {
+    const agentId = route === "default" ? "main" : "secondary";
+    const incognito = route === "incognito";
+    if (!incognito) {
+      state.applyEnv();
+    }
+    const config: OpenClawConfig | undefined =
+      route === "configured"
+        ? { session: { store: state.path("configured", "{agentId}", "sessions.json") } }
+        : undefined;
+    const storePath = incognito
+      ? resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env })
+      : resolveSessionStorePathCore(config?.session?.store, { agentId, env: state.env });
+    const scope: SessionTranscriptReadParams & { config?: OpenClawConfig } = {
+      agentId,
+      sessionId: "fresh-session",
+      sessionKey: `agent:${agentId}:${incognito ? "dashboard:incognito-" : ""}fresh-session`,
+      ...(incognito ? { env: state.env, storePath } : {}),
+      ...(config ? { config } : {}),
+    };
+    const persistedScope = { ...scope, storePath };
+    const entry = {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+      activeWriterRunId: "current-writer",
+    };
+    if (incognito) {
+      await upsertSessionEntryCore(persistedScope, entry);
+    } else {
       await expect(
-        createSessionEntryWithTranscript(persistedScope, () => ({
-          ok: true,
-          entry,
-        })),
+        createSessionEntryWithTranscript(persistedScope, () => ({ ok: true, entry })),
       ).resolves.toMatchObject({ ok: true });
-    });
-
-    afterEach(() => {
-      if (incognito) {
-        const target = { agentId, env: state.env };
-        expect(fs.existsSync(resolveOpenClawAgentSqlitePath(target))).toBe(false);
-        expect(fs.existsSync(resolveIncognitoOpenClawAgentSqlitePath(target))).toBe(false);
-      }
-    });
-
-    const withSupersededWriter = <T>(run: () => Promise<T>) =>
+    }
+    const superseded = <T>(run: () => Promise<T>) =>
       withOwnedSessionTranscriptWrites(
         {
           sessionTarget: { ...persistedScope, expectedWriterRunId: "superseded-writer" },
@@ -118,98 +79,125 @@ describe("guarded session transcript runtime SDK", () => {
         },
         run,
       );
+    return { scope, persistedScope, superseded };
+  }
 
-    it("atomically appends and idempotently replays an ordered message group", async () => {
-      const messages = [
-        {
-          eventId: "batch-assistant",
-          idempotencyLookup: "scan" as const,
-          message: { role: "assistant", content: "checking", idempotencyKey: "batch:assistant" },
-          now: 1_000,
-        },
-        {
-          eventId: "batch-result",
-          idempotencyLookup: "scan" as const,
-          message: { role: "toolResult", content: "done", idempotencyKey: "batch:result" },
-          now: 2_000,
-        },
-      ];
+  it("appends and replays an ordered incognito group with explicit env", async () => {
+    const { scope, persistedScope } = await seed("incognito");
+    const messages = [
+      {
+        eventId: "batch-assistant",
+        idempotencyLookup: "scan" as const,
+        message: { role: "assistant", content: "checking", idempotencyKey: "batch:assistant" },
+        now: 1_000,
+      },
+      {
+        eventId: "batch-result",
+        idempotencyLookup: "scan" as const,
+        message: { role: "toolResult", content: "done", idempotencyKey: "batch:result" },
+        now: 2_000,
+      },
+    ];
+    const appended = await appendGroup({ ...scope, messages });
+    const replayed = await appendGroup({ ...scope, messages });
+    expect(appended.map((result) => result.appended)).toEqual([true, true]);
+    expect(replayed.map((result) => result.appended)).toEqual([false, false]);
+    const events = await readEvents(persistedScope);
+    expect(events).toHaveLength(3);
+    expect(events.slice(1)).toMatchObject([
+      { id: "batch-assistant", parentId: null },
+      { id: "batch-result", parentId: "batch-assistant" },
+    ]);
+    const target = { agentId: "secondary", env: state.env };
+    expect(fs.existsSync(resolveOpenClawAgentSqlitePath(target))).toBe(false);
+    expect(fs.existsSync(resolveIncognitoOpenClawAgentSqlitePath(target))).toBe(false);
+  });
 
-      const appended = await appendSessionTranscriptMessagesByIdentity({ ...scope, messages });
-      const replayed = await appendSessionTranscriptMessagesByIdentity({ ...scope, messages });
-
-      expect(appended.map((result) => result.appended)).toEqual([true, true]);
-      expect(replayed.map((result) => result.appended)).toEqual([false, false]);
-      const events = await readSessionTranscriptEvents(persistedScope);
-      expect(events).toHaveLength(3);
-      expect(events.slice(1)).toMatchObject([
-        { id: "batch-assistant", parentId: null },
-        { id: "batch-result", parentId: "batch-assistant" },
-      ]);
-
-      await expect(
-        withSupersededWriter(() =>
-          appendSessionTranscriptMessagesByIdentity({ ...scope, messages }),
-        ),
-      ).rejects.toThrow("Transcript session changed before batch append");
-
-      await upsertSessionEntryCore(persistedScope, {
-        sessionId: "replacement-session",
-        updatedAt: 20,
-      });
-      await expect(
-        appendSessionTranscriptMessagesByIdentity({ ...scope, messages }),
-      ).rejects.toThrow("Transcript session changed before batch append");
-      await expect(readSessionTranscriptEvents(persistedScope)).resolves.toEqual(events);
-      await expect(
-        readSessionTranscriptEvents({ ...persistedScope, sessionId: "replacement-session" }),
-      ).resolves.toEqual([]);
-    });
-
-    it("distinguishes strict singleton results, suppression, and session rebound", async () => {
+  it("publishes a configured strict assistant with run ownership once and keeps default writes silent", async () => {
+    const { scope, persistedScope } = await seed("configured");
+    const updates: InternalSessionTranscriptUpdate[] = [];
+    const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
+    try {
       const message = {
         role: "assistant",
-        content: [{ type: "text", text: "persisted" }],
+        content: [{ type: "text", text: "persisted answer" }],
+        stopReason: "stop",
         timestamp: 1_000,
-        idempotencyKey: "strict:assistant",
+        idempotencyKey: "native:attempt:assistant",
       };
-      await expect(
-        appendSessionTranscriptMessageByIdentityStrict({ ...scope, message }),
-      ).resolves.toMatchObject({ kind: "result", result: { appended: true } });
-
-      await expect(
-        appendSessionTranscriptMessageByIdentityStrict({
-          ...scope,
-          message: { role: "user", content: "blocked" },
-          prepareMessageAfterIdempotencyCheck: () => undefined,
+      const params = { ...scope, message, runId: "current-writer", updateMode: "inline" as const };
+      const written = await appendStrict(params);
+      assert(written.kind === "result");
+      const [entry] = await readEntries(persistedScope);
+      assert(entry);
+      expect(entry.message).toMatchObject({ ...message, __openclaw: { runId: "current-writer" } });
+      expect(written.result.message).toEqual(entry.message);
+      expect(updates).toEqual([
+        expect.objectContaining({
+          message: entry.message,
+          messageId: entry.entryId,
+          messageSeq: 1,
+          runId: "current-writer",
         }),
-      ).resolves.toEqual({ kind: "suppressed" });
-      const events = await readSessionTranscriptEvents(persistedScope);
-      expect(events).toEqual([
-        expect.objectContaining({ type: "session" }),
-        expect.objectContaining({ type: "message", message }),
       ]);
-
-      await expect(
-        withSupersededWriter(() =>
-          appendSessionTranscriptMessageByIdentityStrict({ ...scope, message }),
-        ),
-      ).resolves.toEqual({ kind: "rejected", reason: "session-rebound" });
-
-      await upsertSessionEntryCore(persistedScope, {
-        sessionId: "replacement-session",
-        updatedAt: 20,
+      await expect(appendStrict(params)).resolves.toMatchObject({
+        kind: "result",
+        result: { appended: false, messageId: entry.entryId },
       });
       await expect(
-        appendSessionTranscriptMessageByIdentityStrict({
+        appendStrict({
           ...scope,
-          message: { role: "assistant", content: "stale" },
+          message: { ...message, idempotencyKey: "separate-journal:assistant" },
         }),
-      ).resolves.toEqual({ kind: "rejected", reason: "session-rebound" });
-      await expect(readSessionTranscriptEvents(persistedScope)).resolves.toEqual(events);
-      await expect(
-        readSessionTranscriptEvents({ ...persistedScope, sessionId: "replacement-session" }),
-      ).resolves.toEqual([]);
+      ).resolves.toMatchObject({ kind: "result", result: { appended: true } });
+      expect(updates).toHaveLength(1);
+      expect(await readEntries(persistedScope)).toHaveLength(2);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("distinguishes strict singleton results, suppression, and rebound without a store path", async () => {
+    const { scope, persistedScope, superseded } = await seed("default");
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "persisted" }],
+      timestamp: 1_000,
+      idempotencyKey: "strict:assistant",
+    };
+    await expect(appendStrict({ ...scope, message })).resolves.toMatchObject({
+      kind: "result",
+      result: { appended: true },
     });
+    await expect(
+      appendStrict({
+        ...scope,
+        message: { role: "user", content: "blocked" },
+        prepareMessageAfterIdempotencyCheck: () => undefined,
+      }),
+    ).resolves.toEqual({ kind: "suppressed" });
+    const events = await readEvents(persistedScope);
+    expect(events).toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({ type: "message", message }),
+    ]);
+    await expect(superseded(() => appendStrict({ ...scope, message }))).resolves.toEqual({
+      kind: "rejected",
+      reason: "session-rebound",
+    });
+    await upsertSessionEntryCore(persistedScope, {
+      sessionId: "replacement-session",
+      updatedAt: 20,
+    });
+    await expect(
+      appendStrict({
+        ...scope,
+        message: { role: "assistant", content: "stale" },
+      }),
+    ).resolves.toEqual({ kind: "rejected", reason: "session-rebound" });
+    await expect(readEvents(persistedScope)).resolves.toEqual(events);
+    await expect(
+      readEvents({ ...persistedScope, sessionId: "replacement-session" }),
+    ).resolves.toEqual([]);
   });
 });

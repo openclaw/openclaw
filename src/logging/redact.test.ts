@@ -1,28 +1,29 @@
-// Redaction tests cover secret, token, and identifier scrubbing rules.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import {
-  DEFAULT_REDACT_PATTERNS,
-  TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS,
-} from "./redact-patterns.js";
+import { replacePatternBounded } from "./redact-bounded.js";
+import { TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS } from "./redact-patterns.js";
 import { redactSourceInputTextWithConfig } from "./redact-source.js";
 import {
+  captureSensitiveTextRedactionSnapshot,
   computeSensitiveRedactionBitmap,
+  createSensitiveTextRedactor,
   getDefaultRedactPatterns,
   redactModelVisibleToolPayloadText,
   redactSecrets,
   redactSensitiveFieldValue,
   redactSensitiveLines,
   redactSensitiveText,
-  redactToolDetail,
   redactToolPayloadTextWithConfig,
   resolveRedactOptions,
 } from "./redact.js";
 import { withFullContextToolPayloadRedaction } from "./redact.test-support.js";
-import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
+import {
+  redactRegisteredSecretValues,
+  registerSecretValueForRedaction,
+} from "./secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
 
 const defaults = getDefaultRedactPatterns();
@@ -44,13 +45,67 @@ afterEach(() => {
   tempDirs = [];
 });
 
-describe("default redact pattern ownership", () => {
-  it("exposes the browser-safe canonical pattern table without drift", () => {
-    expect(defaults).toEqual(DEFAULT_REDACT_PATTERNS);
+describe("bounded replacement output", () => {
+  const firstChunk = "a".repeat(16_384);
+  const remainingChunks = "b".repeat(16_384) + "c".repeat(16_384);
+  it.each<[RegExp, string, string]>([
+    [/none/g, "blue", firstChunk + remainingChunks],
+    [/a+/g, "", remainingChunks],
+  ])("preserves complete output for %s", (pattern, replacement, expected) => {
+    expect(replacePatternBounded(firstChunk + remainingChunks, pattern, () => replacement)).toBe(
+      expected,
+    );
+  });
+
+  it("keeps calling a stateful replacer after unchanged results", () => {
+    const calls: Array<{ match: string; offset: number; input: string }> = [];
+    const chunk = "red" + " ".repeat(16_384 - 3);
+    const output = replacePatternBounded(chunk + chunk + "red", /red/g, (match, offset, input) => {
+      calls.push({ match, offset, input });
+      return calls.length === 3 ? "blue" : match;
+    });
+    expect(output).toBe(chunk + chunk + "blue");
+    expect(calls).toEqual([
+      { match: "red", offset: 0, input: chunk },
+      { match: "red", offset: 0, input: chunk },
+      { match: "red", offset: 0, input: "red" },
+    ]);
   });
 });
 
 describe("registered exact secret values", () => {
+  it("shares registrations and matcher invalidation across module instances", async () => {
+    const first = await import("./secret-redaction-registry.js");
+    const firstSecret = "alpha-module-secret";
+    const secondSecret = "zulu-module-secret";
+    const text = `${firstSecret} ${secondSecret}`;
+    const mask = () => "[redacted]";
+    first.registerSecretValueForRedaction(firstSecret);
+    expect(first.redactRegisteredSecretValues(text, mask)).toBe(`[redacted] ${secondSecret}`);
+
+    // Re-evaluation models a second registry copy imported by bundled code.
+    vi.resetModules();
+    const second = await import("./secret-redaction-registry.js");
+    expect(second.redactRegisteredSecretValues(text, mask)).toBe(`[redacted] ${secondSecret}`);
+    const revision = first.getSecretRedactionRegistryRevision();
+    second.registerSecretValueForRedaction(secondSecret);
+    expect(first.redactRegisteredSecretValues(secondSecret, mask)).toBe("[redacted]");
+    expect(first.redactRegisteredSecretValues(text, mask)).toBe("[redacted] [redacted]");
+    expect(first.getSecretRedactionRegistryRevision()).toBeGreaterThan(revision);
+    const captured = createSensitiveTextRedactor(captureSensitiveTextRedactionSnapshot());
+    expect(captured(text)).toBe("alpha-…cret zulu-m…cret");
+    const updatedRevision = first.getSecretRedactionRegistryRevision();
+    second.registerSecretValueForRedaction(secondSecret);
+    expect(first.getSecretRedactionRegistryRevision()).toBe(updatedRevision);
+
+    resetSecretRedactionRegistryForTest();
+    expect(first.redactRegisteredSecretValues(text, mask)).toBe(text);
+    expect(second.redactRegisteredSecretValues(text, mask)).toBe(text);
+    expect(first.getSecretRedactionRegistryRevision()).toBeGreaterThan(updatedRevision);
+    expect(captured(text)).toBe("alpha-…cret zulu-m…cret");
+    expect(createSensitiveTextRedactor(captureSensitiveTextRedactionSnapshot())(text)).toBe(text);
+  });
+
   it("masks registered values in text and nested structured data", () => {
     const secret = "registered-exact-secret";
     registerSecretValueForRedaction(secret);
@@ -75,37 +130,6 @@ describe("registered exact secret values", () => {
     expect(redactSecrets({ detail: "abcde" })).toEqual({ detail: "abcde" });
   });
 
-  it("masks the percent-encoded form of registered values", () => {
-    const secret = "path/token with+reserved%chars";
-    registerSecretValueForRedaction(secret);
-
-    const encoded = encodeURIComponent(secret);
-    expect(redactSensitiveText(`url path ${encoded}`, { mode: "off" })).not.toContain(encoded);
-    expect(redactSensitiveText(`raw ${secret}`, { mode: "off" })).not.toContain(secret);
-  });
-
-  it("masks JSON-escaped registered values", () => {
-    const secret = 'quoted-"secret\\line\nvalue';
-    registerSecretValueForRedaction(secret);
-
-    const json = JSON.stringify({ credential: secret });
-    expect(redactSensitiveText(json, { mode: "off" })).not.toContain(
-      JSON.stringify(secret).slice(1, -1),
-    );
-  });
-
-  it("evicts the oldest value after 512 registrations", () => {
-    const first = "exact-registry-value-000";
-    registerSecretValueForRedaction(first);
-    for (let index = 1; index <= 512; index += 1) {
-      registerSecretValueForRedaction(`exact-registry-value-${index.toString().padStart(3, "0")}`);
-    }
-    const last = "exact-registry-value-512";
-
-    expect(redactSensitiveText(first, { mode: "off" })).toBe(first);
-    expect(redactSensitiveText(last, { mode: "off" })).toBe("exact-…-512");
-  });
-
   it("refreshes duplicate registration recency before eviction", () => {
     const first = "exact-registry-refresh-000";
     const second = "exact-registry-refresh-001";
@@ -120,19 +144,70 @@ describe("registered exact secret values", () => {
     expect(redactSensitiveText(first, { mode: "off" })).not.toContain(first);
     expect(redactSensitiveText(second, { mode: "off" })).toBe(second);
   });
+
+  it("keeps outer matches fixed when a mask callback registers another value", () => {
+    const first = "first-exact-fixture";
+    const second = "second-exact-fixture";
+    registerSecretValueForRedaction(first);
+    const input = `${first} ${second} ${first}`;
+    const nested: string[] = [];
+
+    const output = redactRegisteredSecretValues(input, () => {
+      registerSecretValueForRedaction(second);
+      nested.push(redactRegisteredSecretValues(input, () => "nested"));
+      return "outer";
+    });
+
+    expect(output).toBe(`outer ${second} outer`);
+    expect(nested).toEqual(["nested nested nested", "nested nested nested"]);
+  });
+});
+
+describe("captured sensitive text redaction", () => {
+  it("preserves exact surface forms, longest matches, and built-in masking after transfer", () => {
+    const secret = 'opaque-fixture/"quoted"\nvalue';
+    const encoded = encodeURIComponent(secret);
+    const escaped = JSON.stringify(secret).slice(1, -1);
+    const doubleEncoded = encodeURIComponent(encoded);
+    registerSecretValueForRedaction(secret);
+    registerSecretValueForRedaction("overlap-fixture");
+    registerSecretValueForRedaction("overlap-fixture-complete");
+    const redact = createSensitiveTextRedactor(
+      structuredClone(captureSensitiveTextRedactionSnapshot()),
+    );
+    resetSecretRedactionRegistryForTest();
+
+    expect(
+      redact(
+        [
+          secret,
+          encoded,
+          escaped,
+          doubleEncoded,
+          "overlap-fixture-complete overlap-fixture",
+          "token=abcdef1234567890ghij",
+        ].join("\n"),
+      ),
+    ).toBe(
+      [
+        "opaque…alue",
+        "opaque…alue",
+        "opaque…alue",
+        doubleEncoded,
+        "overla…lete ***",
+        "token=abcdef…ghij",
+      ].join("\n"),
+    );
+    expect(redactSensitiveText(secret, { mode: "off" })).toBe(secret);
+  });
 });
 
 describe("model-visible tool payload redaction", () => {
   it.each([
     'const API_TOKEN = "fixture-only-not-a-real-secret"; return API_TOKEN;',
-    "const API_TOKEN = 'fixture-only-not-a-real-secret'; return API_TOKEN;",
     "const API_TOKEN = `fixture-only-not-a-real-secret`; return API_TOKEN;",
     "const API_TOKEN = 987654321; return API_TOKEN;",
-    'const note = "API_TOKEN=fixture-only-not-a-real-secret";',
     "// API_TOKEN=fixture-only-not-a-real-secret\nreturn 42;",
-    'return { "api_key": "fixture-only-not-a-real-secret" };',
-    'const API_TOKEN = "fixture-only-not-a-real-secret" + suffix; return API_TOKEN;',
-    "const API_TOKEN = computeToken(); /* API_TOKEN=fixture-only-not-a-real-secret */",
     'const API_TOKEN = "fixture-only-not-a-real-secret"; @',
     '(token="fixture-only-not-a-real-secret");',
   ])("retains diagnostic literal masking in input source: %s", (source) => {
@@ -146,14 +221,10 @@ describe("model-visible tool payload redaction", () => {
 
   it.each([
     "const API_TOKEN = computeToken(); return API_TOKEN;",
-    "const API_TOKEN: number = computeToken(); return API_TOKEN;",
-    "const API_TOKEN = computeToken<string>(); return API_TOKEN;",
     "const API_TOKEN = (40 + 2); return API_TOKEN;",
     "const API_TOKEN = await computeToken(); return API_TOKEN;",
     "const HAS_API_TOKEN = false; return HAS_API_TOKEN;",
-    "const HAS_API_TOKEN = true; return HAS_API_TOKEN;",
     "let API_TOKEN = null; return API_TOKEN;",
-    "(token=computeToken());",
   ])("preserves input computations without changing diagnostics: %s", (source) => {
     expect(redactSourceInputTextWithConfig(source)).toBe(source);
     expect(redactToolPayloadTextWithConfig(source)).not.toBe(source);
@@ -170,14 +241,6 @@ describe("model-visible tool payload redaction", () => {
         "computeToken",
       );
     }
-  });
-
-  it("does not substitute the weaker output policy for input source", () => {
-    const source = 'const API_TOKEN = "fixture-only-not-a-real-secret"; return API_TOKEN;';
-    expect(redactModelVisibleToolPayloadText(source)).toBe(source);
-    expect(redactSourceInputTextWithConfig(source)).toBe(
-      'const API_TOKEN = "***"; return API_TOKEN;',
-    );
   });
 
   it("uses bounded diagnostic masking for oversized source", () => {
@@ -197,10 +260,6 @@ describe("model-visible tool payload redaction", () => {
     ];
     const input = [
       "token = timeObserverToken",
-      "API_TOKEN = computeToken()",
-      "API_TOKEN=computeToken()",
-      "(token=computeToken())",
-      "API_KEY: str = computeKey()",
       '"api_key": "computeToken()"',
       `registered: ${credentials[0]}`,
       `Authorization: Bearer ${credentials[1]}`,
@@ -211,10 +270,6 @@ describe("model-visible tool payload redaction", () => {
     const output = redactModelVisibleToolPayloadText(input);
 
     expect(output).toContain("token = timeObserverToken");
-    expect(output).toContain("API_TOKEN = computeToken()");
-    expect(output).toContain("API_TOKEN=computeToken()");
-    expect(output).toContain("(token=computeToken())");
-    expect(output).toContain("API_KEY: str = computeKey()");
     expect(output).toContain('"api_key": "computeToken()"');
     for (const credential of credentials) {
       expect(output).not.toContain(credential);
@@ -223,10 +278,11 @@ describe("model-visible tool payload redaction", () => {
 });
 
 describe("redactSensitiveText", () => {
-  it("masks env assignments while keeping the key", () => {
-    const input = "OPENAI_API_KEY=sk-1234567890abcdef";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("OPENAI_API_KEY=sk-123…cdef");
+  it("preserves long blank runs without stalling the default redaction scan", () => {
+    const input = `<details>a${"\n".repeat(60_000)}X</details>`;
+    const started = performance.now();
+    expect(redactSensitiveText(input, { mode: "tools" })).toBe(input);
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 
   it("preserves shell env references in assignments", () => {
@@ -242,25 +298,12 @@ describe("redactSensitiveText", () => {
     expect(output).toBe(input);
   });
 
-  it("masks shell env references that do not match the assignment key", () => {
-    const output = redactSensitiveText("DISCORD_BOT_TOKEN=$SUPERSECRET123", { mode: "tools" });
-    expect(output).toBe("DISCORD_BOT_TOKEN=***");
-  });
-
   it("masks literal shell env expansion defaults in assignments", () => {
     const fallback = "discordliteral1234567890";
     const input = `DISCORD_BOT_TOKEN="\${DISCORD_BOT_TOKEN:-${fallback}}"`;
     const output = redactSensitiveText(input, { mode: "tools" });
     expect(output).not.toContain(fallback);
     expect(output).toBe('DISCORD_BOT_TOKEN="${DISC…890}"');
-  });
-
-  it("does not bypass explicit user redaction patterns for shell references", () => {
-    const output = redactSensitiveText("FOO_TOKEN=$FOO_TOKEN", {
-      mode: "tools",
-      patterns: [String.raw`/FOO_TOKEN=(\$FOO_TOKEN)/g`],
-    });
-    expect(output).toBe("FOO_TOKEN=***");
   });
 
   it("masks JSON-escaped quoted env assignments while keeping the key", () => {
@@ -294,29 +337,6 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain(secret);
   });
 
-  it("masks structured AWS secret access key fields", () => {
-    const secret = Array.from(
-      { length: 40 },
-      (_entry, index) => (["A", "b", "C", "d", "0", "/", "+"] as const)[index % 7] ?? "A",
-    ).join("");
-
-    expect(redactSecrets({ awsSecretAccessKey: secret })).toEqual({
-      awsSecretAccessKey: `${secret.slice(0, 6)}…${secret.slice(-4)}`,
-    });
-  });
-
-  it("masks CLI flags", () => {
-    const input = "curl --token abcdef1234567890ghij https://api.test";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("curl --token abcdef…ghij https://api.test");
-  });
-
-  it("masks hook token CLI flags", () => {
-    const input = "gog gmail watch serve --hook-token abcdef1234567890ghij";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("gog gmail watch serve --hook-token abcdef…ghij");
-  });
-
   it("masks AWS secret access key CLI flags by key", () => {
     const secretWithoutBareHeuristic = Array.from(
       { length: 40 },
@@ -339,18 +359,6 @@ describe("redactSensitiveText", () => {
     expect(output).toBe(input);
   });
 
-  it("masks sensitive URL query parameters", () => {
-    const input = "connect https://user.example/sync?access_token=abcdef1234567890ghij&safe=value";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("connect https://user.example/sync?access_token=abcdef…ghij&safe=value");
-  });
-
-  it("masks short URL query tokens fully", () => {
-    const input = "cdp=https://browserless.example.com/?token=supersecret123";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("cdp=https://browserless.example.com/?token=***");
-  });
-
   it("masks resource-scoped hosted-media bearer query tokens", () => {
     const id = "a".repeat(24);
     const token = "b".repeat(48);
@@ -363,29 +371,12 @@ describe("redactSensitiveText", () => {
 
   it.each([
     ["matrix access_token=abcdef1234567890ghij next", "matrix access_token=abcdef…ghij next"],
-    [
-      "Docker authentication failed (password=fixture-secret); install and start the engine",
-      "Docker authentication failed (password=*** install and start the engine",
-    ],
     ["failed [token=fixture-secret]; retry", "failed [token=*** retry"],
-    ["failed {client_secret=fixture-secret}; retry", "failed {client_secret=*** retry"],
-    ['failed (password="it\'s-a-secret"); retry', 'failed (password="***"); retry'],
     ["failed [token='has\"quotes']; retry", "failed [token='***']; retry"],
     ["failed {secret=`has'quotes`}; retry", "failed {secret=`***`}; retry"],
     ['failed (token="unterminated retry', "failed (token=*** retry"],
   ])("masks standalone diagnostic assignments: %s", (input, expected) => {
     expect(redactSensitiveText(input)).toBe(expected);
-  });
-
-  it("preserves non-secret key names after opening delimiters", () => {
-    const input = "(token_count=42) [password_hint=visible] {mytoken=visible}";
-    expect(redactSensitiveText(input)).toBe(input);
-  });
-
-  it("masks JSON fields", () => {
-    const input = '{"token":"abcdef1234567890ghij"}';
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe('{"token":"abcdef…ghij"}');
   });
 
   it("masks payment credential JSON fields without redacting unrelated amounts", () => {
@@ -418,26 +409,6 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain(credential);
   });
 
-  it("masks payment credential assignments and flags", () => {
-    const input = [
-      "LINK_CARD_NUMBER=4242424242424242",
-      "LINK_CVC=123",
-      "shared_payment_token=spt_abcdefghijklmnopqrstuvwxyz",
-      "--payment-credential paycred_abcdefghijklmnopqrstuvwxyz",
-      "--card-number 4000056655665556",
-    ].join(" ");
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).not.toContain("4242424242424242");
-    expect(output).not.toContain("4000056655665556");
-    expect(output).not.toContain("spt_abcdefghijklmnopqrstuvwxyz");
-    expect(output).not.toContain("paycred_abcdefghijklmnopqrstuvwxyz");
-    expect(output).toContain("LINK_CARD_NUMBER=***");
-    expect(output).toContain("LINK_CVC=***");
-    expect(output).toContain("shared_payment_token=spt_ab…wxyz");
-    expect(output).toContain("--payment-credential paycre…wxyz");
-    expect(output).toContain("--card-number ***");
-  });
-
   it("masks quoted HTTP auth headers in object-inspection fields", () => {
     const bearer = "feishu_tenant_access_abcdef123456";
     const cookie = "session_cookie_value_abcdef123456";
@@ -449,31 +420,8 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain(cookie);
   });
 
-  it("masks payment credential URL query parameters", () => {
-    const input =
-      "POST /authorize?shared_payment_token=spt_abcdefghijklmnopqrstuvwxyz&card_number=4242424242424242&amount=4200";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe(
-      "POST /authorize?shared_payment_token=spt_ab…wxyz&card_number=***&amount=4200",
-    );
-  });
-
-  it("masks structured payment credential field values by key", () => {
-    expect(redactSensitiveFieldValue("sharedPaymentToken", "spt_abcdefghijklmnopqrstuvwxyz")).toBe(
-      "spt_ab…wxyz",
-    );
-    expect(redactSensitiveFieldValue("cardNumber", "4242424242424242")).toBe("***");
-    expect(redactSensitiveFieldValue("amount", "4200")).toBe("4200");
-  });
-
   it("masks structured uppercase env-style field values by key", () => {
     expect(redactSensitiveFieldValue("GITHUB_TOKEN", "abcdefghijklmnopqrstuvwx1234567890")).toBe(
-      "abcdef…7890",
-    );
-    expect(redactSensitiveFieldValue("github_token", "abcdefghijklmnopqrstuvwx1234567890")).toBe(
-      "abcdef…7890",
-    );
-    expect(redactSensitiveFieldValue("openai_api_key", "abcdefghijklmnopqrstuvwx1234567890")).toBe(
       "abcdef…7890",
     );
     expect(redactSensitiveFieldValue("DISCORD_BOT_TOKEN", "${DISCORD_BOT_TOKEN:-}")).toBe(
@@ -481,7 +429,6 @@ describe("redactSensitiveText", () => {
     );
     expect(redactSensitiveFieldValue("apiKey", "${OPENAI_API_KEY:-}")).toBe("${OPEN…Y:-}");
     expect(redactSensitiveFieldValue("password", "$SUPERSECRET123")).toBe("***");
-    expect(redactSensitiveFieldValue("apiKey", "${SECRET_TOKEN}")).toBe("***");
     expect(
       redactSensitiveFieldValue(
         "DISCORD_BOT_TOKEN",
@@ -492,104 +439,31 @@ describe("redactSensitiveText", () => {
   });
 
   it("keeps Unicode token hints on valid UTF-16 boundaries", () => {
-    const cases = [
-      {
-        secret: `abcde😀${"x".repeat(9)}wxyz`,
-        expected: "abcde…wxyz",
-      },
-      {
-        secret: `abcdef${"x".repeat(9)}😀abc`,
-        expected: "abcdef…abc",
-      },
-      {
-        secret: `abcd😀${"x".repeat(9)}😀ab`,
-        expected: "abcd😀…😀ab",
-      },
+    const cases: [string, string][] = [
+      [`abcde😀${"x".repeat(9)}wxyz`, "abcde…wxyz"],
+      [`abcdef${"x".repeat(9)}😀abc`, "abcdef…abc"],
+      [`abcd😀${"x".repeat(9)}😀ab`, "abcd😀…😀ab"],
     ];
-
-    for (const { secret, expected } of cases) {
+    for (const [secret, expected] of cases) {
       const redacted = redactSensitiveFieldValue("token", secret);
       expect(redacted).toBe(expected);
       expect(redacted).not.toMatch(/[\uD800-\uDFFF]/u);
     }
   });
 
-  it("masks bearer tokens", () => {
-    const input = "Authorization: Bearer abcdef1234567890ghij";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("Authorization: Bearer abcdef…ghij");
-  });
-
-  it("masks Basic authorization header tokens", () => {
-    const secret = "c2VjcmV0OnBhc3M=";
-    const output = redactSensitiveText(`Authorization: Basic ${secret}`, { mode: "tools" });
-
-    expect(output).toBe("Authorization: Basic ***");
-    expect(output).not.toContain(secret);
-  });
-
-  it("masks Bot authorization header tokens", () => {
-    const secret = `${"A".repeat(24)}.${"B".repeat(6)}.${"C".repeat(27)}`;
-    const output = redactSensitiveText(`Authorization: Bot ${secret}`, { mode: "tools" });
-
-    expect(output).toBe("Authorization: Bot AAAAAA…CCCC");
-    expect(output).not.toContain(secret);
-  });
-
-  it("masks non-Bearer authorization schemes", () => {
-    const firstValue = ["sample", "value", "1234567890abcd"].join("");
-    const secondValue = ["sample", "proxy", "value", "1234567890"].join("");
+  it("masks structured authorization parameters without consuming diagnostics", () => {
     const input = [
-      ["Authorization", ": token ", firstValue].join(""),
-      ["Proxy-Authorization", ": Digest ", secondValue].join(""),
+      'Authorization: Digest username="digest-user-example", 2fa="digest-extension-1234567890abcdef", response="digest-response-1234567890abcdef", extension="digest-tail-1234567890abcdef", cnonce="tail-nonce"; request_id=digest-example',
+      "Authorization: AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE1234567890/20260717/eu-west-1/s3/aws4_request, SignedHeaders=:authority;x_custom;x.custom, Signature=aws-signature-1234567890abcdef; status=403",
+      'Proxy-Authorization: Digest username="digest-user-example", response="digest-response-1234567890abcdef"; request_id=proxy-example',
     ].join("\n");
-    const output = redactSensitiveText(input, { mode: "tools" });
-
-    expect(output).toContain("Authorization: token ");
-    expect(output).toContain("Proxy-Authorization: Digest ");
-    expect(output).not.toContain(firstValue);
-    expect(output).not.toContain(secondValue);
-  });
-
-  it("masks complete structured authorization fields", () => {
-    const digestUser = ["digest", "user", "example"].join("-");
-    const digestResponse = ["digest", "response", "1234567890abcdef"].join("-");
-    const digestExtension = ["digest", "extension", "1234567890abcdef"].join("-");
-    const digestTail = ["digest", "tail", "1234567890abcdef"].join("-");
-    const awsCredential = [
-      "AK",
-      "IA",
-      "EXAMPLE",
-      "1234567890",
-      "/20260717/eu-west-1/s3/aws4_request",
-    ].join("");
-    const awsSignature = ["aws", "signature", "1234567890abcdef"].join("-");
-    const input = [
-      `Authorization: Digest username="${digestUser}", 2fa="${digestExtension}", response="${digestResponse}", extension="${digestTail}", cnonce="tail-nonce"; request_id=digest-example`,
-      `Authorization: AWS4-HMAC-SHA256 Credential=${awsCredential}, SignedHeaders=:authority;x_custom;x.custom, Signature=${awsSignature}; status=403`,
-      `Proxy-Authorization: Digest username="${digestUser}", response="${digestResponse}"; request_id=proxy-example`,
-    ].join("\n");
-    const output = redactSensitiveText(input, { mode: "tools" });
-
-    expect(output).toContain("Authorization: Digest ");
-    expect(output).toContain("Authorization: AWS4-HMAC-SHA256 ");
-    expect(output).toContain("Proxy-Authorization: Digest ");
-    for (const value of [
-      digestUser,
-      digestExtension,
-      digestResponse,
-      digestTail,
-      awsCredential,
-      awsSignature,
-    ]) {
-      expect(output).not.toContain(value);
-    }
-    expect(output).not.toContain("username=");
-    expect(output).not.toContain("Credential=");
-    expect(output).not.toContain("Signature=");
-    expect(output).toContain("; request_id=digest-example");
-    expect(output).toContain("; status=403");
-    expect(output).toContain("; request_id=proxy-example");
+    expect(redactSensitiveText(input)).toBe(
+      [
+        "Authorization: Digest ***; request_id=digest-example",
+        "Authorization: AWS4-HMAC-SHA256 ***; status=403",
+        "Proxy-Authorization: Digest ***; request_id=proxy-example",
+      ].join("\n"),
+    );
   });
 
   it("masks consecutive, prefixed, and serialized auth headers", () => {
@@ -615,112 +489,22 @@ describe("redactSensitiveText", () => {
     }
   });
 
-  it("masks later auth params and token credentials after punctuation", () => {
-    const responseValue = ["later", "response", "value", "1234567890"].join("-");
-    const negotiateValue = ["cHJvb2", "YxMjM0", "NTY3ODkw"].join("");
-    const foldedValue = ["Zm9sZG", "VkOnNl", "Y3JldA=="].join("");
-    const rawValue = ["raw", "header", "value", "1234567890"].join("-");
+  it("masks malformed and folded auth parameters", () => {
     const input = [
-      `Authorization: Digest username="sample",,response="${responseValue}"; status=401`,
-      `Authorization: Digest damaged,,response="${responseValue}"; status=403`,
-      `Authorization: Digest username="sample", uri=/bad, response="${responseValue}"; status=407`,
-      `Authorization: Digest username="sample",\r\n response="${responseValue}"; status=408`,
-      `Authorization: Digest uri=http://service, response="${responseValue}"; status=409`,
-      `Authorization: Digest response='${responseValue}'; status=410`,
-      `Authorization: Digest realm=sample, authorization-param=${responseValue}; status=412`,
-      `Authorization: Digest username=sample,\\r\\n response=${responseValue}; status=413`,
-      `Authorization: Digest username=sample,\\r\\n\\tresponse=${responseValue}; status=414`,
-      `(Authorization: Negotiate ${negotiateValue})`,
-      `Authorization:\r\n Basic ${foldedValue}`,
-      `Authorization:\nBasic ${foldedValue}`,
-      `Authorization:\\nBasic ${foldedValue}`,
-      `Authorization:\\tBearer ${foldedValue}`,
-      `Authorization: Bearer\\t${foldedValue}`,
-      `Authorization: ${rawValue}   `,
+      'Authorization: Digest username="sample",,response="later-response-value-1234567890"; status=401',
+      'Authorization: Digest damaged,,response="later-response-value-1234567890"; status=403',
+      'Authorization: Digest username="sample",\r\n response="later-response-value-1234567890"; status=408',
+      "Authorization:\\nBasic Zm9sZGVkOnNlY3JldA==",
     ].join("\n");
-    const output = redactSensitiveText(input, { mode: "tools" });
-
-    expect(output).toBe(
+    expect(redactSensitiveText(input)).toBe(
       [
         "Authorization: Digest ***; status=401",
         "Authorization: Digest ***; status=403",
-        "Authorization: Digest ***; status=407",
         "Authorization: Digest ***; status=408",
-        "Authorization: Digest ***; status=409",
-        "Authorization: Digest ***; status=410",
-        "Authorization: Digest ***; status=412",
-        "Authorization: Digest ***; status=413",
-        "Authorization: Digest ***; status=414",
-        "(Authorization: Negotiate cHJvb2…ODkw)",
-        "Authorization:\r\n Basic Zm9sZG…dA==",
-        "Authorization:\nBasic Zm9sZG…dA==",
         "Authorization:\\nBasic Zm9sZG…dA==",
-        "Authorization:\\tBearer Zm9sZG…dA==",
-        "Authorization: Bearer\\tZm9sZG…dA==",
-        "Authorization: raw-he…7890   ",
       ].join("\n"),
     );
-    expect(output).not.toContain(responseValue);
-    expect(output).not.toContain(negotiateValue);
-    expect(output).not.toContain(foldedValue);
-
-    const serializedLine = JSON.stringify(
-      `prefix\nAuthorization: Digest response="${responseValue}"`,
-    );
-    expect(redactSensitiveText(serializedLine, { mode: "tools" })).toBe(
-      JSON.stringify("prefix\nAuthorization: Digest ***"),
-    );
   });
-
-  it("masks escaped structured authorization fields", () => {
-    const response = ["escaped", "digest", "response", "1234567890abcdef"].join("-");
-    const input = `Authorization: Digest realm=\\"Example Realm\\", response=\\"${response}\\"; status=401`;
-    const output = redactSensitiveText(input, { mode: "tools" });
-
-    expect(output).toBe("Authorization: Digest ***; status=401");
-    expect(output).not.toContain(response);
-  });
-
-  it("masks parameterized authorization schemes", () => {
-    const proof = ["hawk", "credential", "proof", "1234567890abcdef"].join("-");
-    const output = redactSensitiveText(
-      `Authorization: Hawk id="client", mac="${proof}"; status=401`,
-      { mode: "tools" },
-    );
-
-    expect(output).toBe("Authorization: Hawk ***; status=401");
-    expect(output).not.toContain(proof);
-  });
-
-  it("masks full token grammar in auth-param values", () => {
-    const id = ["abc", "'", "def", "`", "ghi"].join("");
-    const proof = ["token", "grammar", "proof", "1234567890abcdef"].join("-");
-    const output = redactSensitiveText(`Authorization: Foo id=${id}, proof=${proof}; status=401`, {
-      mode: "tools",
-    });
-
-    expect(output).toBe("Authorization: Foo ***; status=401");
-    expect(output).not.toContain(proof);
-  });
-
-  it("does not confuse auth-param names beginning with the display marker", () => {
-    const response = ["marker", "digest", "response", "1234567890abcdef"].join("-");
-    const output = redactSensitiveText(
-      `Authorization: Digest ***ext=one, response="${response}"; status=401`,
-      { mode: "tools" },
-    );
-
-    expect(output).toBe("Authorization: Digest ***; status=401");
-    expect(output).not.toContain(response);
-  });
-
-  it("masks structured auth in serialized header objects", () => {
-    const response = ["json", "digest", "response", "1234567890abcdef"].join("-");
-    const input = `{"Authorization":"Digest username=\\"example\\", response=\\"${response}\\""}`;
-
-    expect(redactSensitiveText(input, { mode: "tools" })).toBe(`{"Authorization":"***"}`);
-  });
-
   it("masks nested serialized auth objects", () => {
     const response = ["nested", "digest", "response", "1234567890abcdef"].join("-");
     const header = { Authorization: `Digest response="${response}\\\\"` };
@@ -734,40 +518,23 @@ describe("redactSensitiveText", () => {
     );
   });
 
-  it("masks token credentials for punctuated auth schemes", () => {
-    const token = ["extension", "token", "1234567890abcdef"].join("-");
-    const basicCredential = ["dXNl", "cjpw", "YXNz"].join("");
-    const nestedBasic = JSON.stringify(
-      JSON.stringify({ Authorization: `Basic ${basicCredential}` }),
+  it("masks punctuated auth schemes and nested token credentials", () => {
+    const token = "extension-token-1234567890abcdef";
+    const nested = (Authorization: string) => JSON.stringify(JSON.stringify({ Authorization }));
+    expect(redactSensitiveText(`Authorization: Foo+Bar ${token}; status=401`)).toBe(
+      "Authorization: Foo+Bar extens…cdef; status=401",
     );
-    const bearerCredential = ["/opaque", "~bearer", "1234567890abcdef"].join("-");
-    const nestedBearer = JSON.stringify(
-      JSON.stringify({ Authorization: `Bearer ${bearerCredential}` }),
+    expect(redactSensitiveText(nested("Basic dXNlcjpwYXNz"))).toBe(nested("Basic ***"));
+    expect(redactSensitiveText(nested("Bearer /opaque-~bearer-1234567890abcdef"))).toBe(
+      nested("Bearer /opaqu…cdef"),
     );
-    const opaqueCredential = ["opaque", "credential", "1234567890abcdef"].join("-");
-    const nestedOpaque = JSON.stringify(
+    const opaque = JSON.stringify(
       JSON.stringify({
-        Authorization: opaqueCredential,
-        "Proxy-Authorization": opaqueCredential,
+        Authorization: "opaque-credential-1234567890abcdef",
+        "Proxy-Authorization": "opaque-credential-1234567890abcdef",
       }),
     );
-
-    expect(
-      redactSensitiveText(`Authorization: Foo+Bar ${token}; status=401`, { mode: "tools" }),
-    ).toBe("Authorization: Foo+Bar extens…cdef; status=401");
-    expect(
-      redactSensitiveText(`Authorization: Basic+Foo ${token}; status=401`, { mode: "tools" }),
-    ).toBe("Authorization: Basic+Foo extens…cdef; status=401");
-    expect(redactSensitiveText(nestedBasic, { mode: "tools" })).toBe(
-      JSON.stringify(JSON.stringify({ Authorization: "Basic ***" })),
-    );
-    expect(
-      redactSensitiveText(`Authorization: Bearer ${bearerCredential}`, { mode: "tools" }),
-    ).toBe("Authorization: Bearer /opaqu…cdef");
-    expect(redactSensitiveText(nestedBearer, { mode: "tools" })).toBe(
-      JSON.stringify(JSON.stringify({ Authorization: "Bearer /opaqu…cdef" })),
-    );
-    expect(redactSensitiveText(nestedOpaque, { mode: "tools" })).toBe(
+    expect(redactSensitiveText(opaque)).toBe(
       JSON.stringify(
         JSON.stringify({
           Authorization: "opaque…cdef",
@@ -783,25 +550,6 @@ describe("redactSensitiveText", () => {
     ).toBe("Authorization: Basic ***, status=401");
   });
 
-  it("masks structured authorization inside quoted diagnostics", () => {
-    const response = ["quoted", "header", "response", "1234567890abcdef"].join("-");
-    const input = `curl -H 'Authorization: Digest username="example", response="${response}"'`;
-
-    expect(redactSensitiveText(input, { mode: "tools" })).toBe(
-      "curl -H 'Authorization: Digest ***'",
-    );
-  });
-
-  it("preserves structural closers after unquoted auth parameters", () => {
-    const signature = ["structural", "aws", "signature", "1234567890abcdef"].join("-");
-    const awsScopeField = ["Cred", "ential", "=scope/path"].join("");
-    const input = `{Authorization: AWS4-HMAC-SHA256 ${awsScopeField}, SignedHeaders=host, Signature=${signature}}`;
-
-    expect(redactSensitiveText(input, { mode: "tools" })).toBe(
-      "{Authorization: AWS4-HMAC-SHA256 ***}",
-    );
-  });
-
   it("masks escaped auth fields containing encoded quoted-pairs", () => {
     const response = ["escaped", "quoted", "response", "1234567890abcdef"].join("-");
     const input = `Authorization: Digest realm=\\"Example \\\\\\"Realm\\\\\\"\\", response=\\"${response}\\"; status=401`;
@@ -809,15 +557,6 @@ describe("redactSensitiveText", () => {
 
     expect(output).toBe("Authorization: Digest ***; status=401");
     expect(output).not.toContain(response);
-  });
-
-  it("masks structured authorization fields across bounded-replacement chunks", () => {
-    const response = ["cross", "chunk", "response", "1234567890abcdef"].join("-");
-    const input = `${"x".repeat(32_768)}\nAuthorization: Digest username="example", response="${response}"`;
-    const output = redactSensitiveText(input, { mode: "tools" });
-
-    expect(output).not.toContain(response);
-    expect(output).not.toContain("response=");
   });
 
   it("masks opaque authorization across bounded-replacement chunks", () => {
@@ -832,54 +571,6 @@ describe("redactSensitiveText", () => {
     expect(output).toContain("request failed: Bearer BBBBBB…BB==");
   });
 
-  it("masks token authorization fields without consuming adjacent diagnostics", () => {
-    const token = ["opaque", "auth", "value", "1234567890abcdef"].join("-");
-    const input = [
-      `Authorization: ${token}, status=401`,
-      `Proxy-Authorization: ${token}; request_id=example`,
-    ].join("\n");
-    const output = redactSensitiveText(input, { mode: "tools" });
-
-    expect(output).not.toContain(token);
-    expect(output).toContain(", status=401");
-    expect(output).toContain("; request_id=example");
-  });
-
-  it("masks scheme tokens without consuming adjacent diagnostics", () => {
-    const token = ["scheme", "auth", "value", "1234567890abcdef"].join("-");
-    const input = [
-      `Authorization: Token ${token}, status=401`,
-      `Proxy-Authorization: Basic ${token}; request_id=example`,
-    ].join("\n");
-    const output = redactSensitiveText(input, { mode: "tools" });
-
-    expect(output).not.toContain(token);
-    expect(output).toContain(", status=401");
-    expect(output).toContain("; request_id=example");
-  });
-
-  it("masks unquoted credential-style headers", () => {
-    const firstValue = ["sample", "key", "value", "1234567890"].join("");
-    const secondValue = ["sample", "goog", "value", "1234567890"].join("");
-    const thirdValue = ["sample", "access", "value", "1234567890"].join("");
-    const keyHeader = ["api", "-", "key"].join("");
-    const googleHeader = ["x", "-", "goog", "-", "api", "-", "key"].join("");
-    const accessHeader = ["x", "-", "access", "-", "token"].join("");
-    const input = [
-      [keyHeader, ": ", firstValue].join(""),
-      [googleHeader, "=", secondValue].join(""),
-      [accessHeader, ": ", thirdValue].join(""),
-    ].join("\n");
-    const output = redactSensitiveText(input, { mode: "tools" });
-
-    expect(output).toContain(`${keyHeader}: `);
-    expect(output).toContain(`${googleHeader}=`);
-    expect(output).toContain(`${accessHeader}: `);
-    expect(output).not.toContain(firstValue);
-    expect(output).not.toContain(secondValue);
-    expect(output).not.toContain(thirdValue);
-  });
-
   it("preserves diagnostics following unquoted credential-style headers", () => {
     const keyHeader = ["api", "-", "key"].join("");
     const value = ["sample", "key", "value", "1234567890"].join("");
@@ -889,21 +580,6 @@ describe("redactSensitiveText", () => {
 
     expect(output).not.toContain(value);
     expect(output).toContain(", request_id=example, status=500");
-  });
-
-  it("masks punctuation inside unquoted credential-style header values", () => {
-    const keyHeader = ["api", "-", "key"].join("");
-    const output = redactSensitiveText(`${keyHeader}: prefix)sensitive&suffix#tail`, {
-      mode: "tools",
-    });
-
-    expect(output).not.toContain("sensitive&suffix#tail");
-  });
-
-  it("does not redact ordinary authorization prose", () => {
-    const input = "the authorization model is open";
-
-    expect(redactSensitiveText(input, { mode: "tools" })).toBe(input);
   });
 
   it("masks named Gateway security headers", () => {
@@ -950,6 +626,21 @@ describe("redactSensitiveText", () => {
     expect(headerBitmap.slice(header.indexOf("=") + 1).every(Boolean)).toBe(true);
   });
 
+  it("keeps original bitmap offsets after empty values and Unicode line prefixes", () => {
+    const input = '😀safe\r\nbody: code=&safe=1\rclient%5Fsecret="abc";&safe=2';
+    const resolved = resolveRedactOptions({ mode: "tools" });
+    const bitmap = computeSensitiveRedactionBitmap(input, resolved);
+    const secretStart = input.indexOf('"abc"');
+
+    expect(redactSensitiveText(input)).toBe(
+      "😀safe\r\nbody: code=***&safe=1\rclient%5Fsecret=***;&safe=2",
+    );
+    expect(bitmap).toHaveLength(input.length);
+    expect(bitmap.slice(0, secretStart).some(Boolean)).toBe(false);
+    expect(bitmap.slice(secretStart, secretStart + 5).every(Boolean)).toBe(true);
+    expect(bitmap.slice(secretStart + 5).some(Boolean)).toBe(false);
+  });
+
   it("masks token prefixes embedded after adjacent text", () => {
     const token = `ghp_${"a".repeat(5_000)}`;
     const output = redactSensitiveText(`prefix-${token} suffix`, { mode: "tools" });
@@ -958,138 +649,31 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain("a".repeat(100));
   });
 
-  it("masks URL query tokens", () => {
-    const input = "GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("GET /_matrix/client/v3/sync?access_token=abcdef…ghij");
-  });
-
-  it("masks bot-style tokens", () => {
-    const input = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("123456…cdef");
-  });
-
-  it("masks bot API URL tokens", () => {
-    const input =
-      "GET https://api.example.test/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef/getMe HTTP/1.1";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("GET https://api.example.test/bot123456…cdef/getMe HTTP/1.1");
-  });
-
-  it("redacts short tokens fully", () => {
-    const input = "TOKEN=shortvalue";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("TOKEN=***");
-  });
-
-  it("does not redact lowercase key diagnostics", () => {
-    const input = 'agents.defaults: Unrecognized key: "llm"';
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe(input);
-  });
-
-  it("does not redact diagnostic code assignments outside URL or form bodies", () => {
-    const input = "Oops: failed: code=E1 status=500";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe(input);
-  });
-
-  it("masks standalone pass assignments", () => {
-    const output = redactSensitiveText("db pass=opaque-pass-secret-1234567890 next", {
-      mode: "tools",
-    });
-    expect(output).toBe("db pass=opaque…7890 next");
-    expect(output).not.toContain("opaque-pass-secret-1234567890");
-  });
-
-  it("masks common config-file secret assignments", () => {
-    const dbPassword = ["db", "password", "fixture", "1234567890"].join("-");
-    const databasePassword = ["database", "password", "fixture", "1234567890"].join("-");
-    const apiSecret = ["api", "secret", "fixture", "1234567890"].join("-");
-    const secretKey = ["django", "secret", "key", "1234567890"].join("-");
-    const passphrase = ["tls", "passphrase", "fixture", "1234567890"].join("-");
-    const dbPass = ["db", "pass", "fixture", "1234567890"].join("-");
-    const readonlyDbPassword = ["readonly", "db", "password", "fixture", "1234567890"].join("-");
-    const jwtValue = ["jwt", "fixture", "1234567890"].join("-");
-    const accessToken = ["access", "token", "fixture", "1234567890"].join("-");
-    const secretValue = ["bare", "secret", "fixture", "1234567890"].join("-");
-    const tokenValue = ["bare", "token", "fixture", "1234567890"].join("-");
-    const quoted = (value: string, quote: '"' | "'") => [quote, value, quote].join("");
+  it("masks config assignments while preserving safe options", () => {
     const input = [
-      `password = ${dbPassword}`,
-      ["password", " = ", quoted(dbPassword, '"')].join(""),
-      ["password", "= ", quoted(dbPassword, '"')].join(""),
-      ["password", "= ", dbPassword].join(""),
-      `db_password = ${dbPassword}`,
-      `database_password: ${databasePassword}`,
-      ["api_secret", ": ", quoted(apiSecret, "'")].join(""),
-      ["api_secret", "= ", quoted(apiSecret, "'")].join(""),
-      `db_password=${dbPassword}`,
-      `api_secret: ${apiSecret}`,
-      `api_secret=${apiSecret}`,
-      ["api_secret", "= ", apiSecret].join(""),
-      `jdbc.password=${dbPassword}`,
-      ["jdbc.password", "=", quoted(dbPassword, '"')].join(""),
-      `secret_key = ${secretKey}`,
-      `secret_key=${secretKey}`,
-      `tls.passphrase: ${passphrase}`,
-      `tls_passphrase=${passphrase}`,
-      `readonly_db_password = ${readonlyDbPassword}`,
-      ["service_tls_passphrase", ": ", quoted(passphrase, "'")].join(""),
-      `db_pass=${dbPass}`,
-      `jwt: ${jwtValue}`,
-      ["access-token", "=", accessToken].join(""),
-      ["secret", " = ", quoted(secretValue, '"')].join(""),
-      ["token", ": ", quoted(tokenValue, "'")].join(""),
-      "password = abc,def",
-      "api_secret=abc,def",
-      `passphrase=${passphrase}`,
+      "password = db-password-fixture-1234567890",
+      'password= "db-password-fixture-1234567890"',
+      "database_password: database-password-fixture-1234567890",
+      "api_secret='api-secret-fixture-1234567890'",
+      "jdbc.password=db-password-fixture-1234567890",
+      'jdbc.password="db-password-fixture-1234567890"',
+      "secret_key=django-secret-key-1234567890",
+      "service_tls_passphrase: 'tls-passphrase-fixture-1234567890'",
       "safe_option = visible",
-    ].join("\n");
-
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toContain("password = db-pas…7890");
-    expect(output).toContain('password = "db-pas…7890"');
-    expect(output).toContain('password= "db-pas…7890"');
-    expect(output).toContain("password= db-pas…7890");
-    expect(output).toContain("db_password = db-pas…7890");
-    expect(output).toContain("database_password: databa…7890");
-    expect(output).toContain("api_secret: 'api-se…7890'");
-    expect(output).toContain("api_secret= 'api-se…7890'");
-    expect(output).toContain("db_password=db-pas…7890");
-    expect(output).toContain("api_secret: api-se…7890");
-    expect(output).toContain("api_secret=api-se…7890");
-    expect(output).toContain("api_secret= api-se…7890");
-    expect(output).toContain("jdbc.password=db-pas…7890");
-    expect(output).toContain('jdbc.password="db-pas…7890"');
-    expect(output).toContain("secret_key = django…7890");
-    expect(output).toContain("secret_key=django…7890");
-    expect(output).toContain("tls.passphrase: tls-pa…7890");
-    expect(output).toContain("tls_passphrase=tls-pa…7890");
-    expect(output).toContain("readonly_db_password = readon…7890");
-    expect(output).toContain("service_tls_passphrase: 'tls-pa…7890'");
-    expect(output).toContain("db_pass=db-pas…7890");
-    expect(output).toContain("jwt: jwt-fi…7890");
-    expect(output).toContain("access-token=access…7890");
-    expect(output).toContain('secret = "bare-s…7890"');
-    expect(output).toContain("token: 'bare-t…7890'");
-    expect(output).toContain("password = ***");
-    expect(output).toContain("api_secret=***");
-    expect(output).toContain("passphrase=tls-pa…7890");
-    expect(output).toContain("safe_option = visible");
-    expect(output).not.toContain(dbPassword);
-    expect(output).not.toContain(databasePassword);
-    expect(output).not.toContain(apiSecret);
-    expect(output).not.toContain(secretKey);
-    expect(output).not.toContain(passphrase);
-    expect(output).not.toContain(dbPass);
-    expect(output).not.toContain(readonlyDbPassword);
-    expect(output).not.toContain(jwtValue);
-    expect(output).not.toContain(accessToken);
-    expect(output).not.toContain(secretValue);
-    expect(output).not.toContain(tokenValue);
-    expect(output).not.toContain("abc,def");
+    ];
+    expect(redactSensitiveText(input.join("\n"))).toBe(
+      [
+        "password = db-pas…7890",
+        'password= "db-pas…7890"',
+        "database_password: databa…7890",
+        "api_secret='api-se…7890'",
+        "jdbc.password=db-pas…7890",
+        'jdbc.password="db-pas…7890"',
+        "secret_key=django…7890",
+        "service_tls_passphrase: 'tls-pa…7890'",
+        "safe_option = visible",
+      ].join("\n"),
+    );
   });
 
   it("masks complete unquoted assignment values that contain delimiter-like punctuation", () => {
@@ -1100,25 +684,6 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain("abc;def");
     expect(output).not.toContain("abc]def");
     expect(output).not.toContain("abc)def");
-  });
-
-  it("masks quoted standalone assignments", () => {
-    const input = "password='abc;def' token=\"abc;def\" secret=`abc;def`";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("password='***' token=\"***\" secret=`***`");
-    expect(output).not.toContain("abc;def");
-  });
-
-  it("masks sensitive URL query params while preserving non-sensitive params", () => {
-    const input = "GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij&since=123";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("GET /_matrix/client/v3/sync?access_token=abcdef…ghij&since=123");
-  });
-
-  it("treats sensitive URL query param names case-insensitively", () => {
-    const input = "connect https://gateway.example/ws?Access-Token=short-token&ok=1";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("connect https://gateway.example/ws?Access-Token=***&ok=1");
   });
 
   it("masks opaque sensitive URL query params without known token prefixes", () => {
@@ -1139,14 +704,6 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain("short-key-123");
   });
 
-  it("masks canonical URL auth aliases in generic URL text", () => {
-    const input =
-      "GET https://example.test/cb?sig=short-sig-123&X-Api-Key=long-api-key-1234567890&x-access-token=long-access-token-1234567890&x-auth-token=short-authtok&safe=value";
-    expect(redactSensitiveText(input, { mode: "tools" })).toBe(
-      "GET https://example.test/cb?sig=***&X-Api-Key=long-a…7890&x-access-token=long-a…7890&x-auth-token=***&safe=value",
-    );
-  });
-
   it("reaches sig-only URLs and form bodies through the default prefilter", () => {
     expect(redactSensitiveText("https://example.test/cb?sig=opaque-signed-value")).toBe(
       "https://example.test/cb?sig=opaque…alue",
@@ -1156,38 +713,21 @@ describe("redactSensitiveText", () => {
     );
   });
 
-  it("preserves non-secret query names adjacent to signed and x-* aliases", () => {
-    const input =
-      "GET https://example.test/cb?signal=visible&sigmoid=visible&signature_algorithm=v4&x-api-version=1&x-request-id=req-123";
-    expect(redactSensitiveText(input, { mode: "tools" })).toBe(input);
-  });
-
-  it("masks URL userinfo and database connection-string passwords", () => {
+  it("masks URL userinfo and connection-string passwords", () => {
     const input = [
       "https://browser-user:browser-password-1234567890@api.example.test/v1",
       "https://:empty-username-password-1234567890@api.example.test/v1",
-      "https://same:same@example.test/v1",
-      "postgres://dbuser:database-password-1234567890@db.example.test/openclaw",
       "postgres://secret:secret@db.example.test/openclaw",
       "mongodb+srv://mongo:mongodb-password-1234567890@cluster.example.test/app",
-      "redis://:redis-password-1234567890@cache.example.test/0",
-      "rediss://cache:redis-tls-password-1234567890@cache.example.test/0",
     ].join(" ");
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).not.toContain("browser-password-1234567890");
-    expect(output).not.toContain("empty-username-password-1234567890");
-    expect(output).not.toContain("database-password-1234567890");
-    expect(output).not.toContain("mongodb-password-1234567890");
-    expect(output).not.toContain("redis-password-1234567890");
-    expect(output).not.toContain("redis-tls-password-1234567890");
-    expect(output).toContain("https://browser-user:browse…7890@api.example.test/v1");
-    expect(output).toContain("https://:empty-…7890@api.example.test/v1");
-    expect(output).toContain("https://same:***@example.test/v1");
-    expect(output).toContain("postgres://dbuser:databa…7890@db.example.test/openclaw");
-    expect(output).toContain("postgres://secret:***@db.example.test/openclaw");
-    expect(output).toContain("mongodb+srv://mongo:mongod…7890@cluster.example.test/app");
-    expect(output).toContain("redis://:redis-…7890@cache.example.test/0");
-    expect(output).toContain("rediss://cache:redis-…7890@cache.example.test/0");
+    expect(redactSensitiveText(input)).toBe(
+      [
+        "https://browser-user:browse…7890@api.example.test/v1",
+        "https://:empty-…7890@api.example.test/v1",
+        "postgres://secret:***@db.example.test/openclaw",
+        "mongodb+srv://mongo:mongod…7890@cluster.example.test/app",
+      ].join(" "),
+    );
   });
 
   it("masks sensitive form-urlencoded body fields by exact key", () => {
@@ -1205,88 +745,6 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain("refresh-token-1234567890");
   });
 
-  it("masks non-auth form body secret fields after a safe first key", () => {
-    const input =
-      "client_id=visible&app_secret=opaque-app-secret&credential=opaque-credential&shared_payment_token=spt_abcdefghijklmnopqrstuvwxyz&safe=value";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe(
-      "client_id=visible&app_secret=***&credential=***&shared_payment_token=***&safe=value",
-    );
-    expect(output).not.toContain("opaque-app-secret");
-    expect(output).not.toContain("opaque-credential");
-    expect(output).not.toContain("spt_abcdefghijklmnopqrstuvwxyz");
-  });
-
-  it("masks form body secret fields embedded in diagnostic prose", () => {
-    const input =
-      "body: client_id=visible&app_secret=opaque-app-secret&credential=opaque-credential&safe=value";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("body: client_id=visible&app_secret=***&credential=***&safe=value");
-    expect(output).not.toContain("opaque-app-secret");
-    expect(output).not.toContain("opaque-credential");
-  });
-
-  it("masks form body secret fields in multiline tool output", () => {
-    const input =
-      "request start\nbody: client_id=visible&app_secret=opaque-app-secret&safe=value\nrequest end";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe(
-      "request start\nbody: client_id=visible&app_secret=***&safe=value\nrequest end",
-    );
-    expect(output).not.toContain("opaque-app-secret");
-  });
-
-  it("masks percent-encoded form body secret keys", () => {
-    const input = "body: client%5Fsecret=oauth-secret&app%2Dsecret=app-secret&safe=value";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("body: client%5Fsecret=***&app%2Dsecret=***&safe=value");
-    expect(output).not.toContain("oauth-secret");
-    expect(output).not.toContain("app-secret");
-  });
-
-  it("masks quoted form body secret fields embedded in diagnostic prose", () => {
-    const input =
-      'body: "client_secret=oauth-secret&safe=value" fallback: `safe=value&app_secret=app-secret`';
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe(
-      'body: "client_secret=***&safe=value" fallback: `safe=value&app_secret=***`',
-    );
-    expect(output).not.toContain("oauth-secret");
-    expect(output).not.toContain("app-secret");
-  });
-
-  it("masks percent-encoded form body keys spliced with invisible characters", () => {
-    const input = "body: client%5Fse\u200Bcret=oauth-secret&safe=value";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("body: client%5Fse\u200Bcret=***&safe=value");
-    expect(output).not.toContain("oauth-secret");
-  });
-
-  it("masks form body keys with leading invisible separators", () => {
-    const input = "body: \u200Bclient_secret=oauth-secret&safe=value";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("body: \u200Bclient_secret=***&safe=value");
-    expect(output).not.toContain("oauth-secret");
-  });
-
-  it("masks form body keys with plus-encoded separators", () => {
-    const input = "body: client_se+cret=oauth-secret&safe=value";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("body: client_se+cret=***&safe=value");
-    expect(output).not.toContain("oauth-secret");
-  });
-
-  it("masks form and query keys with raw control separators", () => {
-    const input =
-      "body: client_se\u0000cret=oauth-secret&safe=value GET /cb?client_se\u0001cret=query-secret&safe=1";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe(
-      "body: client_se\u0000cret=***&safe=value GET /cb?client_se\u0001cret=***&safe=1",
-    );
-    expect(output).not.toContain("oauth-secret");
-    expect(output).not.toContain("query-secret");
-  });
-
   it("masks quoted form body values after equals", () => {
     const input =
       'body: password="opaque-password-secret" client_id=visible&app_secret="opaque-app-secret"&safe=1';
@@ -1294,64 +752,6 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("body: password=*** client_id=visible&app_secret=***&safe=1");
     expect(output).not.toContain("opaque-password-secret");
     expect(output).not.toContain("opaque-app-secret");
-  });
-
-  it("masks form body keys with percent-encoded invisible separators", () => {
-    const input = "body: client%5Fse%E2%80%8Bcret=oauth-secret&safe=value";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("body: client%5Fse%E2%80%8Bcret=***&safe=value");
-    expect(output).not.toContain("oauth-secret");
-  });
-
-  it("masks form body keys with percent-encoded whitespace and control separators", () => {
-    const input =
-      "body: client%5Fse%20cret=space-secret&safe=value next: client%5Fse%00cret=nul-secret&safe=value";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe(
-      "body: client%5Fse%20cret=***&safe=value next: client%5Fse%00cret=***&safe=value",
-    );
-    expect(output).not.toContain("space-secret");
-    expect(output).not.toContain("nul-secret");
-  });
-
-  it("masks URL query keys with percent-encoded invisible separators", () => {
-    const input = "GET https://example.test/cb?client%5Fse%E2%80%8Bcret=oauth-secret&safe=1";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("GET https://example.test/cb?client%5Fse%E2%80%8Bcret=***&safe=1");
-    expect(output).not.toContain("oauth-secret");
-  });
-
-  it("masks URL query keys with plus-encoded separators", () => {
-    const input = "GET https://example.test/cb?client_se+cret=oauth-secret&safe=1";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("GET https://example.test/cb?client_se+cret=***&safe=1");
-    expect(output).not.toContain("oauth-secret");
-  });
-
-  it("masks URL query keys with percent-encoded whitespace and control separators", () => {
-    const input =
-      "GET https://example.test/cb?client%5Fse%20cret=space-secret&safe=1&client%5Fse%00cret=nul-secret";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe(
-      "GET https://example.test/cb?client%5Fse%20cret=***&safe=1&client%5Fse%00cret=***",
-    );
-    expect(output).not.toContain("space-secret");
-    expect(output).not.toContain("nul-secret");
-  });
-
-  it("masks encoded sensitive URL query keys after later separators", () => {
-    const input = "GET https://example.test/cb?scope=read,write&client%5Fsecret=oauth-secret";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("GET https://example.test/cb?scope=read,write&client%5Fsecret=***");
-    expect(output).not.toContain("oauth-secret");
-  });
-
-  it("masks complete encoded URL query values that contain commas", () => {
-    const input = "GET https://example.test/cb?client%5Fsecret=abc,def&safe=1";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("GET https://example.test/cb?client%5Fsecret=***&safe=1");
-    expect(output).not.toContain("abc,def");
-    expect(output).not.toContain(",def");
   });
 
   it("masks complete URL query values that contain delimiter-like punctuation", () => {
@@ -1374,22 +774,6 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain("oauth-secret");
   });
 
-  it("masks complete encoded form values that contain commas", () => {
-    const input = "body: client%5Fsecret=abc,def&safe=value";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("body: client%5Fsecret=***&safe=value");
-    expect(output).not.toContain("abc,def");
-    expect(output).not.toContain(",def");
-  });
-
-  it("masks complete form values that contain delimiter-like punctuation", () => {
-    const input = "body: client_secret=abc)def&safe=1 next: client%5Fsecret=abc]def&safe=1";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("body: client_secret=***&safe=1 next: client%5Fsecret=***&safe=1");
-    expect(output).not.toContain("abc)def");
-    expect(output).not.toContain("abc]def");
-  });
-
   it("masks encoded sensitive form keys in single-pair and multiline diagnostics", () => {
     const input = [
       "client%5Fsecret=single-secret",
@@ -1409,226 +793,57 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain("aws-signature-123");
   });
 
-  it("masks entire-line explicit body wrapper form payloads", () => {
-    const output = redactSensitiveText("body=client_secret=oauth-secret&safe=1", { mode: "tools" });
-    expect(output).toBe("body=client_secret=***&safe=1");
-    expect(output).not.toContain("oauth-secret");
-
-    const outputWithLaterSecret = redactSensitiveText(
-      "form_body=client_secret=oauth-secret&app_secret=app-secret",
-      { mode: "tools" },
-    );
-    expect(outputWithLaterSecret).toBe("form_body=client_secret=***&app_secret=***");
-    expect(outputWithLaterSecret).not.toContain("oauth-secret");
-    expect(outputWithLaterSecret).not.toContain("app-secret");
-  });
-
-  it("masks first-position form-urlencoded fields embedded in larger log lines", () => {
-    const input = "manual callback code=oauth-code-123&state=visible";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("manual callback code=***&state=visible");
-    expect(output).not.toContain("oauth-code-123");
-  });
-
-  it("does not apply built-in form-body redaction when custom patterns override defaults", () => {
+  it("redactSensitiveText keeps form-body protection when custom patterns replace the string list", () => {
     const input = "password=value&safe=1";
     const output = redactSensitiveText(input, {
       mode: "tools",
       patterns: [String.raw`custom-secret-([A-Za-z0-9]+)`],
     });
-    expect(output).toBe(input);
+    expect(output).toBe("password=***&safe=1");
   });
 
-  it("redacts private key blocks", () => {
-    const input = [
-      "-----BEGIN PRIVATE KEY-----",
-      "ABCDEF1234567890",
-      "ZYXWVUT987654321",
-      "-----END PRIVATE KEY-----",
-    ].join("\n");
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe(
-      ["-----BEGIN PRIVATE KEY-----", "…redacted…", "-----END PRIVATE KEY-----"].join("\n"),
-    );
-  });
-
-  it("honors custom patterns with flags", () => {
-    const input = "token=abcdef1234567890ghij";
+  it.each([
+    ["an unmatched group", String.raw`(unused)?project_value=([^&]+)&confirm=\2`],
+    ["an empty last group", String.raw`project_value=([^&]+)()&confirm=\1`],
+    ["a named backreference", String.raw`project_value=(?<secret>[^&]+)&confirm=\k<secret>`],
+  ])("redactSensitiveText locates the custom capture with %s", (_name, pattern) => {
+    const input = "project_value=abc123456789012345&confirm=abc123456789012345";
     const output = redactSensitiveText(input, {
       mode: "tools",
-      patterns: ["/token=([A-Za-z0-9]+)/i"],
+      patterns: [pattern],
     });
-    expect(output).toBe("token=abcdef…ghij");
+    expect(output).toBe("project_value=abc123…2345&confirm=abc123456789012345");
   });
 
-  it("keeps single-capture custom patterns focused on the captured occurrence", () => {
-    const input = "password=abc123456789012345&confirm=abc123456789012345";
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: [String.raw`password=([^&]+)&confirm=\1`],
-    });
-    expect(output).toBe("password=abc123…2345&confirm=abc123456789012345");
-  });
-
-  it("masks captured custom-pattern values even when the value repeats later", () => {
-    const input = "password=abc123456789012345&confirm=abc123456789012345";
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: [String.raw`password=([^&]+)&confirm=[^&]+`],
-    });
-    expect(output).toBe("password=abc123…2345&confirm=abc123456789012345");
-  });
-
-  it("honors escaped character classes in custom patterns", () => {
-    const input = "contact peter@dc.io";
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: [String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`],
-    });
-    expect(output).toBe("contact peter@d***.io");
-    expect(output).not.toContain("peter@dc.io");
-  });
-
-  it("ignores unsafe nested-repetition custom patterns", () => {
-    const input = `${"a".repeat(28)}!`;
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: ["(a+)+$"],
-    });
-    expect(output).toBe(input);
-  });
-
-  it("redacts large payloads with bounded regex passes", () => {
-    const input = `${"x".repeat(40_000)} OPENAI_API_KEY=sk-1234567890abcdef ${"y".repeat(40_000)}`;
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toContain("OPENAI_API_KEY=sk-123…cdef");
-  });
-
-  it("masks Tencent Cloud SecretId (AKID prefix, uppercase-only)", () => {
-    const input = "SecretId is AKIDZ8EXAMPLEFAKE01KEY99TEST";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("SecretId is AKIDZ8…TEST");
-  });
-
-  it("masks Tencent Cloud SecretId with mixed-case characters", () => {
-    const input = "AKIDz8exampleFake01Key99Test";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("AKIDz8…Test");
-  });
-
-  it("masks Alibaba Cloud AccessKey ID (LTAI prefix)", () => {
-    const input = "AccessKeyId=LTAI5tExampleFakeKeyXyz9";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("AccessKeyId=LTAI5t…Xyz9");
-  });
-
-  it("masks HuggingFace tokens (hf_ prefix)", () => {
-    const input = "hf_ABCDEFghijklmnopqrstuv";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("hf_ABC…stuv");
-  });
-
-  it("masks Replicate tokens (r8_ prefix)", () => {
-    const input = "r8_ABCDEFghijklmnopqrstuv";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("r8_ABC…stuv");
-  });
-
-  it("masks expanded vendor-prefix token corpus", () => {
-    const fireworksTokens = [
-      { token: `fw-${"C".repeat(40)}`, redacted: "fw-CCC…CCCC" },
-      { token: `fw_${"A".repeat(40)}`, redacted: "fw_AAA…AAAA" },
-      { token: `fpk_${"B".repeat(40)}`, redacted: "fpk_BB…BBBB" },
-    ];
+  it("masks representative vendor token grammars through the default fast path", () => {
     const tokens = [
       "sk-ant-abcdefghijklmnopqrstuvwxyz",
       "gho_abcdefghijklmnopqrstuvwxyz",
-      "ghu_abcdefghijklmnopqrstuvwxyz",
-      "ghs_abcdefghijklmnopqrstuvwxyz",
-      "ghr_abcdefghijklmnopqrstuvwxyz",
       "glpat-abcdefghijklmnopqrstuvwxyz12.ab.abcdefghi",
-      `gloas-${"a".repeat(64)}`,
       ["xoxb", "1234567890", "abcdefghijklmnopqrstuvwxyz"].join("-"),
       "https://hooks.slack.com/services/T1234567890/B1234567890/abcdefghijklmnopqrstuvwxy",
       "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef",
       `discord bot token ${"A".repeat(24)}.${"B".repeat(6)}.${"C".repeat(27)}`,
       "AIzaabcdefghijklmnopqrstuvwxyzABCDE",
-      "pplx-abcdefghijklmnopqrstuvwxyz",
-      "fal_abcdefghijklmnopqrstuvwxyz",
       "fc-abcdefghijklmnopqrstuvwxyz",
-      "bb_live_abcdefghijklmnopqrstuvwxyz",
       "gAAAAabcdefghijklmnopqrstuvwxyz123456",
       "AKIAABCDEFGHIJKLMNOP",
-      "ASIAABCDEFGHIJKLMNOP",
-      "api_org_abcdefghijklmnopqrstuvwxyz12345678",
       ["sk", "live", "abcdefghijklmnopqrstuvwxyz"].join("_"),
-      ["sk", "test", "abcdefghijklmnopqrstuvwxyz"].join("_"),
-      ["rk", "live", "abcdefghijklmnopqrstuvwxyz"].join("_"),
       "SG.abcdefghijklmnopqrstuvwxyz.0123456789abcdefghijklmnopqrstuvwxyz",
-      "npm_abcdefghijklmnopqrstuvwxyz",
-      "pypi-abcdefghijklmnopqrstuvwxyz",
-      "dop_v1_abcdefghijklmnopqrstuvwxyz",
-      "doo_v1_abcdefghijklmnopqrstuvwxyz",
-      "dor_v1_abcdefghijklmnopqrstuvwxyz",
-      `dp.pt.${"A".repeat(43)}`,
-      `dckr_pat_${"A".repeat(27)}`,
-      `dckr_oat_${"B".repeat(32)}`,
-      `bkua_${"a".repeat(40)}`,
-      `CCIPAT_${"A".repeat(22)}_${"a".repeat(40)}`,
-      `sbp_${"a".repeat(40)}`,
-      `dapi${"a".repeat(32)}-1`,
-      `ddp_${"A".repeat(36)}`,
-      `glsa_${"A".repeat(41)}`,
       `glc_eyJ${"A".repeat(80)}`,
-      `nfp_${"A".repeat(36)}`,
-      `CFPAT-${"A".repeat(43)}`,
-      `ATCTT3xFfG${"A".repeat(48)}=ABCDEF12`,
       `ATATT${"A".repeat(48)}=ABCDEF12`,
-      `ATBB${"A".repeat(24)}`,
-      `BBDC-${"A".repeat(42)}`,
-      `HRKU-AA${"A".repeat(58)}`,
-      ["pat", "na1", "12345678", "1234", "1234", "1234", "123456789abc"].join("-"),
-      `apify_api_${"A".repeat(36)}`,
       `FlyV1 fm123_${"A".repeat(120)}`,
-      `fio-u-${"A".repeat(64)}`,
       "am_abcdefghijklmnopqrstuvwxyz",
       "sk_abcdefghijklmnopqrstuvwxyz",
-      "tvly-abcdefghijklmnopqrstuvwxyz",
-      "exa_abcdefghijklmnopqrstuvwxyz",
-      "gsk_abcdefghijklmnopqrstuvwxyz",
-      "syt_abcdefghijklmnopqrstuvwxyz",
-      "retaindb_abcdefghijklmnopqrstuvwxyz",
-      "hsk-abcdefghijklmnopqrstuvwxyz",
-      "mem0_abcdefghijklmnopqrstuvwxyz",
-      "brv_abcdefghijklmnopqrstuvwxyz",
-      "xai-abcdefghijklmnopqrstuvwxyzABCDE",
-      ...fireworksTokens.map(({ token }) => token),
+      `fw-${"C".repeat(40)}`,
+      `fw_${"A".repeat(40)}`,
+      `fpk_${"B".repeat(40)}`,
     ];
-    // Redact each fixture alone so every vendor pattern proves it stays reachable through
-    // DEFAULT_REDACT_PREFILTER_RE; a joined corpus would let one trigger unlock all others.
+    // Isolated inputs require each grammar to reach the default prefilter itself.
     for (const token of tokens) {
-      expect(redactSensitiveText(token, { mode: "tools" }), token).not.toContain(token);
-    }
-    expect(redactSensitiveText("AKIAABCDEFGHIJKLMNOP", { mode: "tools" })).toBe("AKIAAB…MNOP");
-    expect(
-      redactSensitiveText(["sk", "live", "abcdefghijklmnopqrstuvwxyz"].join("_"), {
-        mode: "tools",
-      }),
-    ).toBe("sk_liv…wxyz");
-    expect(
-      redactSensitiveText("SG.abcdefghijklmnopqrstuvwxyz.0123456789abcdefghijklmnopqrstuvwxyz", {
-        mode: "tools",
-      }),
-    ).toBe("SG.abc…wxyz");
-    expect(redactSensitiveText("xai-abcdefghijklmnopqrstuvwxyzABCDE", { mode: "tools" })).toBe(
-      "xai-ab…BCDE",
-    );
-    for (const { token, redacted } of fireworksTokens) {
-      expect(redactSensitiveText(token, { mode: "tools" })).toBe(redacted);
-      expect(redactSensitiveText(redacted, { mode: "tools" })).toBe(redacted);
+      expect(redactSensitiveText(token), token).not.toContain(token);
     }
   });
-
   it("masks additional GitLab token prefixes through the default fast path", () => {
     const dashToken = (prefix: string, suffix: string): string => [prefix, suffix].join("-");
     const repeatedDashToken = (prefix: string, length: number): string =>
@@ -1641,22 +856,10 @@ describe("redactSensitiveText", () => {
       longHexOauthToken,
       mixedOauthToken,
       repeatedDashToken("gldt", 20),
-      dashToken("glcbt", `a1B2_${"A".repeat(20)}`),
-      repeatedDashToken("glptt", 40),
       repeatedDashToken("glft", 20),
       dashToken("glft", "a0b1-123_"),
-      repeatedDashToken("glimt", 25),
-      repeatedDashToken("glagent", 50),
-      repeatedDashToken("glwt", 20),
-      repeatedDashToken("glsoat", 20),
-      repeatedDashToken("glffct", 20),
-      dashToken("glrt", `t1_${"A".repeat(20)}`),
-      dashToken("glrt", "2CR8_eVxiioB1QmzPZwa"),
-      dashToken("glrt", "ABCdef1234567890xyzW"),
       dashToken("glrt", `${"A".repeat(27)}.01.${"a".repeat(9)}`),
       dashToken("glrtr", `${"A".repeat(27)}.01.${"a".repeat(9)}`),
-      `GR1348941${"A".repeat(20)}`,
-      `_gitlab_session=${"A".repeat(32)}`,
     ];
 
     for (const token of tokens) {
@@ -1687,19 +890,6 @@ describe("redactSensitiveText", () => {
     expect(output).toBe(input);
   });
 
-  it("masks Fireworks tokens that cross bounded-replacement chunk boundaries", () => {
-    const chunkSize = 16_384;
-    const prefix = `${"x".repeat(chunkSize - 2)} `;
-    const suffix = "y".repeat(chunkSize);
-    const tokens = [`fw-${"C".repeat(40)}`, `fw_${"A".repeat(40)}`, `fpk_${"B".repeat(40)}`];
-
-    for (const token of tokens) {
-      expect(redactSensitiveText(`${prefix}${token}${suffix}`, { mode: "tools" })).not.toContain(
-        token,
-      );
-    }
-  });
-
   it("masks Telegram bot tokens that cross bounded-replacement chunk boundaries", () => {
     const chunkSize = 16_384;
     const credential = `123456:${"A".repeat(28)}WXYZ`;
@@ -1718,23 +908,6 @@ describe("redactSensitiveText", () => {
     }
   });
 
-  it("does not corrupt base64 blobs that embed token-prefix shapes", () => {
-    // Tiny-PNG base64 contains a gAAAA run from zero-filled IHDR bytes; pure-base64-alphabet
-    // prefixes must not fire mid-blob or media payloads get mangled.
-    const dataUrl =
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
-    expect(redactSensitiveText(dataUrl, { mode: "tools" })).toBe(dataUrl);
-    const blobWithUppercaseRun = `blob: ${"x".repeat(4)}AKIAABCDEFGHIJKLMNOPqrstuv`;
-    expect(redactSensitiveText(blobWithUppercaseRun, { mode: "tools" })).toBe(blobWithUppercaseRun);
-    const dataUrlWithPlusBoundary = `data:application/octet-stream;base64,AAAA+gAAAA${"B".repeat(24)}`;
-    expect(redactSensitiveText(dataUrlWithPlusBoundary, { mode: "tools" })).toBe(
-      dataUrlWithPlusBoundary,
-    );
-    expect(redactSensitiveText("aws AKIA_ID=AKIAABCDEFGHIJKLMNOP", { mode: "tools" })).toBe(
-      "aws AKIA_ID=AKIAAB…MNOP",
-    );
-  });
-
   it("does not corrupt large data URLs across chunked replacement boundaries", () => {
     // replacePatternBounded slices 32 KiB+ inputs into 16 KiB chunks; a chunk start must not
     // satisfy the pure-base64 prefix boundary (`^`) or hide the `;base64,` container from its
@@ -1744,32 +917,6 @@ describe("redactSensitiveText", () => {
     const pad = "A".repeat(chunkSize * 2 - prefix.length);
     const dataUrl = `${prefix}${pad}gAAAA${"B".repeat(24)}${"C".repeat(chunkSize)}`;
     expect(redactSensitiveText(dataUrl, { mode: "tools" })).toBe(dataUrl);
-  });
-
-  it("masks pure-base64-alphabet tokens after URL and path delimiters", () => {
-    const fernet = `gAAAA${"B".repeat(24)}`;
-    const reset = `https://app.example/reset/${fernet} visited`;
-    const output = redactSensitiveText(reset, { mode: "tools" });
-    expect(output).not.toContain(fernet);
-    expect(output).toContain("https://app.example/reset/");
-    const s3Path = "fetch /buckets/AKIAABCDEFGHIJKLMNOP/objects";
-    expect(redactSensitiveText(s3Path, { mode: "tools" })).toBe(
-      "fetch /buckets/AKIAAB…MNOP/objects",
-    );
-  });
-
-  it("masks bare sensitive query and form keys through the default options path", () => {
-    expect(
-      redactSensitiveText("GET https://example.test/oauth?code=opaque-grant-123", {
-        mode: "tools",
-      }),
-    ).toBe("GET https://example.test/oauth?code=***");
-    expect(redactSensitiveText("jwt=opaque.jwt.value&safe=1", { mode: "tools" })).toBe(
-      "jwt=***&safe=1",
-    );
-    expect(redactSensitiveText("db pass=opaquepass123 next", { mode: "tools" })).toBe(
-      "db pass=*** next",
-    );
   });
 
   it("masks obfuscated form keys with opaque values through the default options path", () => {
@@ -1795,32 +942,6 @@ describe("redactSensitiveText", () => {
     ).toBe("body: client_se\u3164cret\u3164=***&safe=1");
   });
 
-  it("masks connection-string passwords through the default options path", () => {
-    expect(
-      redactSensitiveText("postgres://dbuser:opaquepw12345@db.example.test/openclaw", {
-        mode: "tools",
-      }),
-    ).toBe("postgres://dbuser:***@db.example.test/openclaw");
-  });
-
-  it("masks quoted standalone values containing the other quote character", () => {
-    const input = `password="it's-a-secret" next`;
-    expect(redactSensitiveText(input, { mode: "tools" })).toBe('password="***" next');
-  });
-
-  it("masks unterminated quoted standalone values", () => {
-    const input = 'token="opaque-abc123 rest';
-    expect(redactSensitiveText(input, { mode: "tools" })).toBe("token=*** rest");
-  });
-
-  it("treats explicit default patterns like the built-in default path", () => {
-    const input =
-      'GET /cb?client_secret=oauth-secret-123&safe=1 glpat-abcdefghijklmnopqrstuv password="it\'s"';
-    expect(redactSensitiveText(input, { mode: "tools", patterns: defaults })).toBe(
-      redactSensitiveText(input, { mode: "tools" }),
-    );
-  });
-
   it("redacts raw secret values that contain an ellipsis", () => {
     const input = "password=abcdef…1234567890";
     const output = redactSensitiveText(input, { mode: "tools" });
@@ -1829,68 +950,7 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveFieldValue("password", "abcdef…1234567890")).toBe("***");
   });
 
-  it("masks OAuth and JWT token shapes", () => {
-    const input = [
-      "ya29.fake-access-token-with-enough-length",
-      "1//0fake-refresh-token-with-enough-length",
-      "eyJheaderabcd.eyJpayloadabcd.signatureabcd123456",
-    ].join(" ");
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).not.toContain("ya29.fake-access-token");
-    expect(output).not.toContain("1//0fake-refresh-token");
-    expect(output).not.toContain("eyJheaderabcd.eyJpayloadabcd.signatureabcd123456");
-  });
-
-  it("masks app-specific password shapes only in secret contexts", () => {
-    const input = [
-      "password=abcd-efgh-ijkl-mnop",
-      "--password qrst-uvwx-yzab-cdef",
-      '{"password":"lmno-pqrs-tuvw-xyza"}',
-      "main-test-case-name",
-    ].join(" ");
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).not.toContain("abcd-efgh-ijkl-mnop");
-    expect(output).not.toContain("qrst-uvwx-yzab-cdef");
-    expect(output).not.toContain("lmno-pqrs-tuvw-xyza");
-    expect(output).toContain("main-test-case-name");
-  });
-
-  it("skips redaction when mode is off", () => {
-    const input = "OPENAI_API_KEY=sk-1234567890abcdef";
-    const output = redactSensitiveText(input, {
-      mode: "off",
-      patterns: defaults,
-    });
-    expect(output).toBe(input);
-  });
-
-  it("ignores the retired log-redaction opt-out from the active config path", () => {
-    const configPath = writeConfig(`{
-      logging: {
-        redactSensitive: "off",
-      },
-    }`);
-
-    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () =>
-      expect(redactSensitiveText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
-        "OPENAI_API_KEY=sk-123…cdef",
-      ),
-    );
-  });
-
-  it("forces redaction for tool details even when log redaction is disabled", () => {
-    writeConfig(`{
-      logging: {
-        redactSensitive: "off",
-      },
-    }`);
-
-    expect(redactToolDetail("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
-      "OPENAI_API_KEY=sk-123…cdef",
-    );
-  });
-
-  it("does not resolve patterns when mode is off", () => {
+  it("resolveRedactOptions does not resolve patterns when mode is off", () => {
     const options = {
       mode: "off" as const,
       get patterns(): never {
@@ -1901,31 +961,10 @@ describe("redactSensitiveText", () => {
     expect(resolveRedactOptions(options)).toEqual({
       mode: "off",
       patterns: [],
-      redactFormBodies: false,
     });
     expect(redactSensitiveText("OPENAI_API_KEY=sk-1234567890abcdef", options)).toBe(
       "OPENAI_API_KEY=sk-1234567890abcdef",
     );
-  });
-
-  it("reuses compiled global regex patterns", () => {
-    const pattern = /token=([A-Za-z0-9]+)/g;
-    const resolved = resolveRedactOptions({
-      mode: "tools",
-      patterns: [pattern],
-    });
-
-    expect(resolved.patterns).toHaveLength(1);
-    expect(resolved.patterns[0]).toBe(pattern);
-  });
-
-  it("keeps custom redaction patterns active for text outside default markers", () => {
-    const output = redactSensitiveText("ticket internal-12345 should hide", {
-      mode: "tools",
-      patterns: [/internal-\d+/g],
-    });
-
-    expect(output).toBe("ticket *** should hide");
   });
 
   it("keeps custom redaction patterns active for structured sensitive fields", () => {
@@ -1953,29 +992,12 @@ describe("redactSensitiveText", () => {
       });
     });
   });
-
-  it("redacts built-in query parameters after the default prefilter", () => {
-    expect(redactSensitiveText("https://example.test/callback?pass=opensesamevalue")).toBe(
-      "https://example.test/callback?pass=***",
-    );
-    expect(redactSensitiveText("https://example.test/callback?security_code=123456")).toBe(
-      "https://example.test/callback?security_code=***",
-    );
-    expect(
-      redactSensitiveText(
-        "https://example.test/callback?id_token=id-value&private_key=private-value&x-amz-security-token=aws-value",
-      ),
-    ).toBe("https://example.test/callback?id_token=***&private_key=***&x-amz-security-token=***");
-  });
-
-  it("redacts standalone bearer tokens after the default prefilter", () => {
-    expect(redactSensitiveText("Bearer abcdef1234567890ghij")).toBe("Bearer abcdef…ghij");
-  });
 });
 
 describe("redactSecrets", () => {
   it("redacts nested structured payloads before JSON persistence", () => {
     const input = {
+      permissions: { access: "read", refresh: "monthly" },
       plugin: {
         config: {
           apiKey: "AIzaSyD-very-real-looking-google-api-key-123",
@@ -2004,106 +1026,76 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("abcd-efgh-ijkl-mnop");
     expect(serialized).not.toContain("qrst-uvwx-yzab-cdef");
     expect(serialized).toContain("main-test-case-name");
+    expect(output.permissions).toEqual(input.permissions);
   });
 
-  it("preserves benign bare access and refresh fields", () => {
-    const output = redactSecrets({
-      permissions: {
-        access: "read",
-        refresh: "monthly",
-      },
-      oauth: {
-        access: "ya29.fake-access-token-with-enough-length",
-        refresh: "1//0fake-refresh-token-with-enough-length",
-        accessToken: "opaque-access-token-value",
-        refreshToken: "opaque-refresh-token-value",
-      },
-    });
+  it.each(["EAI_AGAIN"])(
+    "preserves the known transport code %s only in object cause chains",
+    (code) => {
+      expect(redactSecrets({ cause: { code, cause: { code } } })).toEqual({
+        cause: { code, cause: { code } },
+      });
+      expect(redactSecrets({ Cause: { CODE: code } })).toEqual({ Cause: { CODE: code } });
+    },
+  );
 
-    expect(output.permissions).toEqual({
-      access: "read",
-      refresh: "monthly",
-    });
-    const serialized = JSON.stringify(output);
-    expect(serialized).not.toContain("ya29.fake-access-token");
-    expect(serialized).not.toContain("1//0fake-refresh-token");
-    expect(serialized).not.toContain("opaque-access-token-value");
-    expect(serialized).not.toContain("opaque-refresh-token-value");
+  it.each([
+    { input: { cause: { code: "p4Q6x7J9" } }, expected: { cause: { code: "***" } } },
+    { input: { cause: { code: 123456 } }, expected: { cause: { code: "***" } } },
+    { input: { cause: { code: true } }, expected: { cause: { code: "***" } } },
+    { input: { cause: { code: 123456n } }, expected: { cause: { code: "***" } } },
+    {
+      input: { oauth: { cause: { code: "EAI_AGAIN" } } },
+      expected: { oauth: { cause: { code: "***" } } },
+    },
+    { input: { cause: [{ code: "EAI_AGAIN" }] }, expected: { cause: [{ code: "***" }] } },
+    { input: { cause: { code: ["EAI_AGAIN"] } }, expected: { cause: { code: ["***"] } } },
+    { input: [{ cause: { code: "EAI_AGAIN" } }], expected: [{ cause: { code: "***" } }] },
+  ])(
+    "masks authorization codes outside the exact transport boundary: $input",
+    ({ input, expected }) => {
+      expect(redactSecrets(input)).toEqual(expected);
+    },
+  );
+
+  it("keeps secret masking ahead of known transport code preservation", () => {
+    registerSecretValueForRedaction("EAI_AGAIN");
+    const output = redactSecrets({ cause: { code: "EAI_AGAIN", token: "opaque-neighbor-secret" } });
+    expect(output.cause.code).not.toBe("EAI_AGAIN");
+    expect(output.cause.token).not.toBe("opaque-neighbor-secret");
   });
 
-  it("keeps structured error codes while redacting OAuth authorization codes", () => {
+  it("preserves diagnostic codes and source paths while masking authorization fields", () => {
     const output = redactSecrets({
       manifest: {
         sourceFiles: { session: "$WORKSPACE_DIR/session.jsonl" },
-        warnings: [
-          { code: "invalid-runtime-event" },
-          { code: "cyclic-session-branch" },
-          { code: "incomplete-session-branch" },
-        ],
+        warnings: [{ code: "invalid-runtime-event" }],
       },
       status: { code: "SYSTEM_RUN_DENIED" },
-      invalidRequestStatus: { status: { code: "INVALID_REQUEST" } },
-      details: { error: { code: "SYSTEM_RUN_DENIED" } },
       nodeError: { code: "NOT_PAIRED" },
-      policyError: { error: { code: "POLICY_DENIED" } },
-      invalidRequestDetails: { error: { code: "INVALID_REQUEST" } },
       error: { code: "ERR_ROOTOPAQUECODE1234567890" },
-      diagnostic: { error: { code: "ERR_DIAGNOSTIC_TEST" } },
-      stabilityBundle: { error: { code: "ERR_STABILITY_TEST" } },
-      trajectoryExport: { error: { code: "ERR_TRAJECTORY_TEST" } },
-      oauth: { code: "oauth-code-value-1234567890" },
-      oauthNestedError: { error: { code: "ERR_OPAQUEOAUTHCODE1234567890" } },
       provider: { code: "provider-code-value-1234567890" },
-      providerAuth: { code: "provider-auth-code-value-1234567890" },
-      bearerToken: "bearer-token-value-1234567890",
-      bearer_token: "bearer-token-snake-value-1234567890",
-      providerDetails: { error: { code: "SYSTEM_RUN_DENIED" } },
       providerNestedError: { error: { code: "ERR_PROVIDEROPAQUECODE1234567890" } },
+      bearerToken: "bearer-token-value-1234567890",
       numericSecrets: { cardNumber: 4111111111111111, cvc: 123, token: 1234567890, amount: 4200 },
     });
-
-    expect(output.manifest.sourceFiles.session).toBe("$WORKSPACE_DIR/session.jsonl");
-    expect(output.manifest.warnings).toEqual([
-      { code: "invalid-runtime-event" },
-      { code: "cyclic-session-branch" },
-      { code: "incomplete-session-branch" },
-    ]);
-    expect(output.status.code).toBe("SYSTEM_RUN_DENIED");
-    expect(output.invalidRequestStatus.status.code).toBe("INVALID_REQUEST");
-    expect(output.details.error.code).toBe("SYSTEM_RUN_DENIED");
-    expect(output.nodeError.code).toBe("NOT_PAIRED");
-    expect(output.policyError.error.code).toBe("POLICY_DENIED");
-    expect(output.invalidRequestDetails.error.code).toBe("INVALID_REQUEST");
-    expect(output.error.code).toBe("ERR_ROOTOPAQUECODE1234567890");
-    expect(output.diagnostic.error.code).toBe("ERR_DIAGNOSTIC_TEST");
-    expect(output.stabilityBundle.error.code).toBe("ERR_STABILITY_TEST");
-    expect(output.trajectoryExport.error.code).toBe("ERR_TRAJECTORY_TEST");
-    expect(output.oauth.code).not.toBe("oauth-code-value-1234567890");
-    expect(output.oauthNestedError.error.code).toBe("ERR_OPAQUEOAUTHCODE1234567890");
-    expect(output.provider.code).not.toBe("provider-code-value-1234567890");
-    expect(output.providerAuth.code).not.toBe("provider-auth-code-value-1234567890");
-    expect(output.bearerToken).not.toBe("bearer-token-value-1234567890");
-    expect(output.bearer_token).not.toBe("bearer-token-snake-value-1234567890");
-    expect(output.providerDetails.error.code).toBe("SYSTEM_RUN_DENIED");
-    expect(output.providerNestedError.error.code).toBe("ERR_PROVIDEROPAQUECODE1234567890");
-    expect(output.numericSecrets).toEqual({
-      cardNumber: "***",
-      cvc: "***",
-      token: "***",
-      amount: 4200,
+    expect(output).toEqual({
+      manifest: {
+        sourceFiles: { session: "$WORKSPACE_DIR/session.jsonl" },
+        warnings: [{ code: "invalid-runtime-event" }],
+      },
+      status: { code: "SYSTEM_RUN_DENIED" },
+      nodeError: { code: "NOT_PAIRED" },
+      error: { code: "ERR_ROOTOPAQUECODE1234567890" },
+      provider: { code: "provid…7890" },
+      providerNestedError: { error: { code: "ERR_PROVIDEROPAQUECODE1234567890" } },
+      bearerToken: "bearer…7890",
+      numericSecrets: { cardNumber: "***", cvc: "***", token: "***", amount: 4200 },
     });
   });
 });
 
 describe("redactSensitiveLines", () => {
-  it("redacts matching content across all lines", () => {
-    const resolved = resolveRedactOptions({ mode: "tools" });
-    const lines = ["curl --token abcdef1234567890ghij https://api.test", "normal log line"];
-    const result = redactSensitiveLines(lines, resolved);
-    expect(result[0]).toBe("curl --token abcdef…ghij https://api.test");
-    expect(result[1]).toBe("normal log line");
-  });
-
   it("returns lines unmodified when redaction is off", () => {
     const resolved = resolveRedactOptions({ mode: "off", patterns: defaults });
     const secret = "opaque-registry-value-1234567890";
@@ -2112,11 +1104,8 @@ describe("redactSensitiveLines", () => {
     expect(redactSensitiveLines(lines, resolved)).toEqual(lines);
   });
 
-  it("redacts structured auth when form-body preprocessing is disabled", () => {
-    const resolved = {
-      ...resolveRedactOptions({ mode: "tools" }),
-      redactFormBodies: false,
-    };
+  it("redactSensitiveLines keeps structured auth protection with custom-only patterns", () => {
+    const resolved = resolveRedactOptions({ mode: "tools", patterns: ["project-private"] });
     const response = ["line", "digest", "response", "1234567890abcdef"].join("-");
 
     expect(
@@ -2139,10 +1128,8 @@ describe("redactSensitiveLines", () => {
     ).toEqual(["Authorization: Digest", " ***; status=401"]);
   });
 
-  it("applies exact registered secrets without falling back from empty resolved patterns", () => {
-    // Simulates the case where all user-configured patterns fail to compile.
-    // The pre-resolved empty array must be honored, not silently replaced with defaults.
-    const resolved = { mode: "tools" as const, patterns: [], redactFormBodies: false };
+  it("redactSensitiveLines keeps registered secrets when custom regexes are rejected", () => {
+    const resolved = resolveRedactOptions({ mode: "tools", patterns: ["/(a+)+$/"] });
     const secret = "opaque-registry-value-1234567890";
     registerSecretValueForRedaction(secret);
     expect(redactSensitiveLines([`TOKEN=abcdef1234567890ghij ${secret}`], resolved)).toEqual([

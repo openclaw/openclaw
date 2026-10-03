@@ -158,6 +158,12 @@ Every account entry needs its own `accessToken` (the env var covers only the def
 
 `allowFrom` is a hard allowlist of Twitch user IDs. When it is set, `allowedRoles` is ignored; leave `allowFrom` unset to use role-based access instead.
 
+In the setup wizard, **Disabled** blocks all chat by writing an empty `allowFrom` list. **Open** removes the user ID allowlist and allows all roles. **Allowlist** keeps a nonempty user ID list; otherwise, it removes the empty override and allows moderators and VIPs. All three choices require an @mention.
+
+Choosing **Open** or **Disabled** discards any previous user IDs. Switching back to **Allowlist** does not restore them; configure `allowFrom` again to restrict access to specific IDs.
+
+Existing configurations with no `allowFrom` and empty or absent `allowedRoles` remain open. There is no automatic migration because those values do not record whether Disabled was intended. Reselect **Disabled** in setup or configure `allowFrom: []` to block chat.
+
 **Available roles:** `"moderator"`, `"owner"`, `"vip"`, `"subscriber"`, `"all"`.
 
 <Tabs>
@@ -398,7 +404,7 @@ When replying in a Twitch conversation, omit `to` to use the current conversatio
 
 ## Related
 
-- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Channel routing](/channels/channel-routing) — session routing for messages
 - [Channels Overview](/channels) — all supported channels
 - [Groups](/channels/groups) — group chat behavior and mention gating
 - [Pairing](/channels/pairing) — DM authentication and pairing flow

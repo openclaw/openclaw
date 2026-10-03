@@ -1,4 +1,3 @@
-// Discord plugin module implements commands behavior.
 import {
   ApplicationCommandOptionType,
   ApplicationCommandType,
@@ -63,16 +62,6 @@ function findSelectedSubcommand(
     : undefined;
 }
 
-function findCommandOption(
-  options: CommandOptions | undefined,
-  name: string | undefined,
-): CommandOption | undefined {
-  if (!name) {
-    return undefined;
-  }
-  return options?.find((option) => option.name === name);
-}
-
 export function resolveFocusedCommandOptionAutocompleteHandler(
   command: DiscordCommand,
   interaction: AutocompleteInteraction,
@@ -82,7 +71,9 @@ export function resolveFocusedCommandOptionAutocompleteHandler(
     command.commandKind === "group"
       ? findSelectedSubcommand(command.subcommands, interaction)?.options
       : command.options;
-  const autocomplete = findCommandOption(options, focusedName)?.autocomplete;
+  const autocomplete = focusedName
+    ? options?.find((option) => option.name === focusedName)?.autocomplete
+    : undefined;
   return typeof autocomplete === "function" ? autocomplete : undefined;
 }
 
@@ -104,7 +95,6 @@ export abstract class BaseCommand {
   ];
   permission?: bigint | bigint[];
   components?: BaseMessageInteractiveComponent[];
-  guildIds?: string[];
   abstract serializeOptions(): unknown[] | undefined;
   serialize(): RESTPostAPIApplicationCommandsJSONBody {
     return clean({
@@ -143,7 +133,7 @@ export abstract class Command extends BaseCommand {
         return { ...rest, autocomplete: true };
       }
       return option;
-    }) as unknown[];
+    });
   }
 }
 

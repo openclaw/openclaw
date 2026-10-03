@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime shared behavior.
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createMatrixQaClient, type MatrixQaRoomObserver } from "../substrate/client.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
@@ -25,6 +24,14 @@ export type MatrixQaActorId = "driver" | "observer";
 
 export type MatrixQaSyncState = Partial<Record<MatrixQaActorId, string>>;
 type MatrixQaSyncStreams = Partial<Record<MatrixQaActorId, MatrixQaRoomObserver>>;
+type MatrixQaActorSyncParams = {
+  accessToken: string;
+  actorId: MatrixQaActorId;
+  baseUrl: string;
+  observedEvents: MatrixQaObservedEvent[];
+  syncState: MatrixQaSyncState;
+  syncStreams?: MatrixQaSyncStreams;
+};
 
 export type MatrixQaScenarioContext = {
   baseUrl: string;
@@ -109,6 +116,7 @@ export {
   buildMatrixToolProgressPrompt,
   buildMatrixToolProgressTaskContent,
   buildMentionPrompt,
+  MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY,
   MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME,
 } from "./scenario-runtime-prompts.js";
 
@@ -149,14 +157,6 @@ export function buildMatrixReplyArtifact(
     relatesTo: event.relatesTo,
     sender: event.sender,
     ...(token ? { tokenMatched: doesMatrixQaReplyBodyMatchToken(event, token) } : {}),
-  };
-}
-
-export function buildMatrixNoticeArtifact(event: MatrixQaObservedEvent) {
-  return {
-    bodyPreview: truncateMatrixQaPreview(event.body?.trim()),
-    eventId: event.eventId,
-    sender: event.sender,
   };
 }
 
@@ -207,44 +207,6 @@ export function assertThreadReplyArtifact(
   }
 }
 
-function readMatrixQaSyncCursor(syncState: MatrixQaSyncState, actorId: MatrixQaActorId) {
-  return syncState[actorId];
-}
-
-function writeMatrixQaSyncCursor(
-  syncState: MatrixQaSyncState,
-  actorId: MatrixQaActorId,
-  since?: string,
-) {
-  if (since) {
-    syncState[actorId] = since;
-  }
-}
-
-function getOrCreateMatrixQaActorSyncStream(params: {
-  accessToken: string;
-  actorId: MatrixQaActorId;
-  baseUrl: string;
-  observedEvents: MatrixQaObservedEvent[];
-  syncState: MatrixQaSyncState;
-  syncStreams?: MatrixQaSyncStreams;
-}) {
-  const existingStream = params.syncStreams?.[params.actorId];
-  if (existingStream) {
-    return existingStream;
-  }
-  const stream = createMatrixQaRoomObserver({
-    accessToken: params.accessToken,
-    baseUrl: params.baseUrl,
-    observedEvents: params.observedEvents,
-    since: readMatrixQaSyncCursor(params.syncState, params.actorId),
-  });
-  if (params.syncStreams) {
-    params.syncStreams[params.actorId] = stream;
-  }
-  return stream;
-}
-
 export function createMatrixQaScenarioClient(params: {
   accessToken: string;
   actorId?: MatrixQaActorId;
@@ -255,14 +217,12 @@ export function createMatrixQaScenarioClient(params: {
 }) {
   const syncObserver =
     params.actorId && params.observedEvents && params.syncState && params.syncStreams
-      ? getOrCreateMatrixQaActorSyncStream({
+      ? (params.syncStreams[params.actorId] ??= createMatrixQaRoomObserver({
           accessToken: params.accessToken,
-          actorId: params.actorId,
           baseUrl: params.baseUrl,
           observedEvents: params.observedEvents,
-          syncState: params.syncState,
-          syncStreams: params.syncStreams,
-        })
+          since: params.syncState[params.actorId],
+        }))
       : undefined;
   return createMatrixQaClient({
     accessToken: params.accessToken,
@@ -272,33 +232,26 @@ export function createMatrixQaScenarioClient(params: {
 }
 
 export function createMatrixQaDriverScenarioClient(context: MatrixQaScenarioContext) {
-  return createMatrixQaScenarioClient({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
+  return createMatrixQaScenarioClient(resolveMatrixQaActorSyncParams(context, "driver"));
+}
+
+export function resolveMatrixQaActorSyncParams(
+  context: MatrixQaScenarioContext,
+  actorId: MatrixQaActorId,
+): MatrixQaActorSyncParams {
+  return {
+    accessToken: context[`${actorId}AccessToken`],
+    actorId,
     baseUrl: context.baseUrl,
     observedEvents: context.observedEvents,
     syncState: context.syncState,
     syncStreams: context.syncStreams,
-  });
+  };
 }
 
-export async function primeMatrixQaActorCursor(params: {
-  accessToken: string;
-  actorId: MatrixQaActorId;
-  baseUrl: string;
-  observedEvents: MatrixQaObservedEvent[];
-  syncState: MatrixQaSyncState;
-  syncStreams?: MatrixQaSyncStreams;
-}) {
-  const client = createMatrixQaScenarioClient({
-    accessToken: params.accessToken,
-    actorId: params.actorId,
-    baseUrl: params.baseUrl,
-    observedEvents: params.observedEvents,
-    syncState: params.syncState,
-    syncStreams: params.syncStreams,
-  });
-  const existingSince = readMatrixQaSyncCursor(params.syncState, params.actorId);
+async function primeMatrixQaActorCursor(params: MatrixQaActorSyncParams) {
+  const client = createMatrixQaScenarioClient(params);
+  const existingSince = params.syncState[params.actorId];
   if (existingSince) {
     return { client, startSince: existingSince };
   }
@@ -310,14 +263,7 @@ export async function primeMatrixQaActorCursor(params: {
 }
 
 export async function primeMatrixQaDriverScenarioClient(context: MatrixQaScenarioContext) {
-  return await primeMatrixQaActorCursor({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
-    baseUrl: context.baseUrl,
-    observedEvents: context.observedEvents,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
-  });
+  return await primeMatrixQaActorCursor(resolveMatrixQaActorSyncParams(context, "driver"));
 }
 
 export function advanceMatrixQaActorCursor(params: {
@@ -326,7 +272,10 @@ export function advanceMatrixQaActorCursor(params: {
   nextSince?: string;
   startSince: string;
 }) {
-  writeMatrixQaSyncCursor(params.syncState, params.actorId, params.nextSince ?? params.startSince);
+  const since = params.nextSince ?? params.startSince;
+  if (since) {
+    params.syncState[params.actorId] = since;
+  }
 }
 
 type MatrixQaScenarioClient = ReturnType<typeof createMatrixQaScenarioClient>;
@@ -373,31 +322,20 @@ export async function assertNoSutReplyWindow(params: {
   };
 }
 
-export async function runConfigurableTopLevelScenario(params: {
-  accessToken: string;
-  actorId: MatrixQaActorId;
-  baseUrl: string;
-  observedEvents: MatrixQaObservedEvent[];
-  replyPredicate?: (
-    event: MatrixQaObservedEvent,
-    params: { driverEventId: string; token: string },
-  ) => boolean;
-  roomId: string;
-  syncState: MatrixQaSyncState;
-  syncStreams?: MatrixQaSyncStreams;
-  sutUserId: string;
-  timeoutMs: number;
-  tokenPrefix: string;
-  withMention?: boolean;
-}) {
-  const { client, startSince } = await primeMatrixQaActorCursor({
-    accessToken: params.accessToken,
-    actorId: params.actorId,
-    baseUrl: params.baseUrl,
-    observedEvents: params.observedEvents,
-    syncState: params.syncState,
-    syncStreams: params.syncStreams,
-  });
+export async function runConfigurableTopLevelScenario(
+  params: MatrixQaActorSyncParams & {
+    replyPredicate?: (
+      event: MatrixQaObservedEvent,
+      params: { driverEventId: string; token: string },
+    ) => boolean;
+    roomId: string;
+    sutUserId: string;
+    timeoutMs: number;
+    tokenPrefix: string;
+    withMention?: boolean;
+  },
+) {
+  const { client, startSince } = await primeMatrixQaActorCursor(params);
   const token = buildMatrixQaToken(params.tokenPrefix);
   const body =
     params.withMention === false
@@ -429,51 +367,13 @@ export async function runConfigurableTopLevelScenario(params: {
   });
   return {
     body,
+    client,
     driverEventId,
     reply: buildMatrixReplyArtifact(matched.event, token),
+    since: matched.since,
+    startSince,
     token,
   };
-}
-
-async function runTopLevelMentionScenario(params: {
-  accessToken: string;
-  actorId: MatrixQaActorId;
-  baseUrl: string;
-  observedEvents: MatrixQaObservedEvent[];
-  roomId: string;
-  syncState: MatrixQaSyncState;
-  syncStreams?: MatrixQaSyncStreams;
-  sutUserId: string;
-  timeoutMs: number;
-  tokenPrefix: string;
-  withMention?: boolean;
-}) {
-  return await runConfigurableTopLevelScenario(params);
-}
-
-export async function runDriverTopLevelMentionScenario(params: {
-  baseUrl: string;
-  driverAccessToken: string;
-  observedEvents: MatrixQaObservedEvent[];
-  roomId: string;
-  syncState: MatrixQaSyncState;
-  syncStreams?: MatrixQaSyncStreams;
-  sutUserId: string;
-  timeoutMs: number;
-  tokenPrefix: string;
-}) {
-  return await runTopLevelMentionScenario({
-    accessToken: params.driverAccessToken,
-    actorId: "driver",
-    baseUrl: params.baseUrl,
-    observedEvents: params.observedEvents,
-    roomId: params.roomId,
-    syncState: params.syncState,
-    syncStreams: params.syncStreams,
-    sutUserId: params.sutUserId,
-    timeoutMs: params.timeoutMs,
-    tokenPrefix: params.tokenPrefix,
-  });
 }
 
 export async function runAssertedDriverTopLevelScenario(params: {
@@ -482,13 +382,9 @@ export async function runAssertedDriverTopLevelScenario(params: {
   roomId?: string;
   tokenPrefix: string;
 }) {
-  const result = await runDriverTopLevelMentionScenario({
-    baseUrl: params.context.baseUrl,
-    driverAccessToken: params.context.driverAccessToken,
-    observedEvents: params.context.observedEvents,
+  const result = await runConfigurableTopLevelScenario({
+    ...resolveMatrixQaActorSyncParams(params.context, "driver"),
     roomId: params.roomId ?? params.context.roomId,
-    syncState: params.context.syncState,
-    syncStreams: params.context.syncStreams,
     sutUserId: params.context.sutUserId,
     timeoutMs: params.context.timeoutMs,
     tokenPrefix: params.tokenPrefix,
@@ -497,26 +393,15 @@ export async function runAssertedDriverTopLevelScenario(params: {
   return result;
 }
 
-export async function waitForMembershipEvent(params: {
-  accessToken: string;
-  actorId: MatrixQaActorId;
-  baseUrl: string;
-  membership: "invite" | "join" | "leave";
-  observedEvents: MatrixQaObservedEvent[];
-  roomId: string;
-  stateKey: string;
-  syncState: MatrixQaSyncState;
-  syncStreams?: MatrixQaSyncStreams;
-  timeoutMs: number;
-}) {
-  const { client, startSince } = await primeMatrixQaActorCursor({
-    accessToken: params.accessToken,
-    actorId: params.actorId,
-    baseUrl: params.baseUrl,
-    observedEvents: params.observedEvents,
-    syncState: params.syncState,
-    syncStreams: params.syncStreams,
-  });
+export async function waitForMembershipEvent(
+  params: MatrixQaActorSyncParams & {
+    membership: "invite" | "join" | "leave";
+    roomId: string;
+    stateKey: string;
+    timeoutMs: number;
+  },
+) {
+  const { client, startSince } = await primeMatrixQaActorCursor(params);
   const matched = await client.waitForRoomEvent({
     observedEvents: params.observedEvents,
     predicate: (event) =>
@@ -547,7 +432,7 @@ export async function runTopologyScopedTopLevelScenario(params: {
   withMention?: boolean;
 }) {
   const roomId = resolveMatrixQaScenarioRoomId(params.context, params.roomKey);
-  const result = await runTopLevelMentionScenario({
+  const result = await runConfigurableTopLevelScenario({
     accessToken: params.accessToken,
     actorId: params.actorId,
     baseUrl: params.context.baseUrl,
@@ -580,34 +465,19 @@ export async function runTopologyScopedTopLevelScenario(params: {
   } satisfies MatrixQaScenarioExecution;
 }
 
-export async function runNoReplyExpectedScenario(params: {
-  accessToken: string;
-  actorId: MatrixQaActorId;
-  actorUserId: string;
-  baseUrl: string;
-  body: string;
-  mentionUserIds?: string[];
-  observedEvents: MatrixQaObservedEvent[];
-  roomId: string;
-  sendClient?: MatrixQaScenarioClient;
-  syncState: MatrixQaSyncState;
-  syncStreams?: MatrixQaSyncStreams;
-  sutUserId: string;
-  replyPredicate?: (
-    event: MatrixQaObservedEvent,
-    match: { driverEventId: string; token: string },
-  ) => boolean;
-  timeoutMs: number;
-  token: string;
-}) {
-  const { client, startSince } = await primeMatrixQaActorCursor({
-    accessToken: params.accessToken,
-    actorId: params.actorId,
-    baseUrl: params.baseUrl,
-    observedEvents: params.observedEvents,
-    syncState: params.syncState,
-    syncStreams: params.syncStreams,
-  });
+export async function runNoReplyExpectedScenario(
+  params: MatrixQaActorSyncParams & {
+    actorUserId: string;
+    body: string;
+    mentionUserIds?: string[];
+    roomId: string;
+    sendClient?: MatrixQaScenarioClient;
+    sutUserId: string;
+    timeoutMs: number;
+    token: string;
+  },
+) {
+  const { client, startSince } = await primeMatrixQaActorCursor(params);
   const sendClient = params.sendClient ?? client;
   const triggerEventId = await sendClient.sendTextMessage({
     body: params.body,
@@ -626,11 +496,7 @@ export async function runNoReplyExpectedScenario(params: {
         return false;
       }
       return (
-        observedTriggerEvent &&
-        event.sender === params.sutUserId &&
-        event.type === "m.room.message" &&
-        (params.replyPredicate?.(event, { driverEventId: triggerEventId, token: params.token }) ??
-          true)
+        observedTriggerEvent && event.sender === params.sutUserId && event.type === "m.room.message"
       );
     },
     roomId: params.roomId,

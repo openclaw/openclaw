@@ -7,18 +7,14 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { coerceSecretRef } from "../../config/types.secrets.js";
+import { parseSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  getOAuthApiKey,
-  getOAuthProviders,
-  type OAuthCredentials,
-  type OAuthProviderId,
-} from "../../llm/oauth.js";
+import { getOAuthApiKey, getOAuthProviders, type OAuthCredentials } from "../../llm/oauth.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
   resolveProviderOAuthCredentialWithPlugin,
+  resolveProviderOAuthRefreshCapabilityWithPlugin,
 } from "../../plugins/provider-runtime.runtime.js";
 import { secretRefKey } from "../../secrets/ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
@@ -26,6 +22,7 @@ import {
   findActiveDegradedSecretOwner,
   SecretSurfaceUnavailableError,
 } from "../../secrets/runtime-degraded-state.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { authProfilesLog, CLAUDE_CLI_PROFILE_ID } from "./constants.js";
@@ -35,8 +32,13 @@ import {
 } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
-import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
-import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
+import { createOAuthManager } from "./oauth-manager.js";
+import {
+  OAuthManagerRefreshError,
+  isSettledOAuthRefreshFailure,
+  markOAuthRefreshFailureSettled,
+  OAuthRefreshFailureError,
+} from "./oauth-refresh-failure.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -45,39 +47,15 @@ import {
   hasRuntimeAuthProfileStoreSnapshot,
   updateRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
+import { getSetupCredentialRuntimeProfile, isSetupCredentialAccessible } from "./setup-access.js";
+import { loadAuthProfileStoreForSecretsRuntime } from "./store-runtime.js";
 import {
-  loadAuthProfileStoreForSecretsRuntime,
+  findPersistedAuthProfileCredential,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 
-function listOAuthProviderIds(): string[] {
-  if (typeof getOAuthProviders !== "function") {
-    return [];
-  }
-  const providers = getOAuthProviders();
-  if (!Array.isArray(providers)) {
-    return [];
-  }
-  return providers
-    .map((provider) =>
-      provider &&
-      typeof provider === "object" &&
-      "id" in provider &&
-      typeof provider.id === "string"
-        ? provider.id
-        : undefined,
-    )
-    .filter((providerId): providerId is string => typeof providerId === "string");
-}
-
-const OAUTH_PROVIDER_IDS = new Set<string>(listOAuthProviderIds());
-
-const isOAuthProvider = (provider: string): provider is OAuthProviderId =>
-  OAUTH_PROVIDER_IDS.has(provider);
-
-const resolveOAuthProvider = (provider: string): OAuthProviderId | null =>
-  isOAuthProvider(provider) ? provider : null;
+const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
 
 /** Bearer-token auth modes that are interchangeable (oauth tokens and raw tokens). */
 const BEARER_AUTH_MODES = new Set(["oauth", "token"]);
@@ -98,7 +76,6 @@ function isProfileConfigCompatible(params: {
   profileId: string;
   provider: string;
   mode: "api_key" | "token" | "oauth";
-  allowOAuthTokenCompatibility?: boolean;
 }): boolean {
   const profileConfig = params.cfg?.auth?.profiles?.[params.profileId];
   if (profileConfig && profileConfig.provider !== params.provider) {
@@ -132,14 +109,9 @@ type ResolveApiKeyForProfileResult = {
   credential?: AuthProfileCredential;
 };
 
-function buildApiKeyProfileResult(params: {
-  apiKey: string;
-  provider: string;
-  email?: string;
-  profileId: string;
-  profileType: AuthProfileCredential["type"];
-  credential?: AuthProfileCredential;
-}): ResolveApiKeyForProfileResult {
+function buildApiKeyProfileResult(
+  params: ResolveApiKeyForProfileResult,
+): ResolveApiKeyForProfileResult {
   const result = {
     apiKey: params.apiKey,
     provider: params.provider,
@@ -162,13 +134,9 @@ function buildApiKeyProfileResult(params: {
   return result as ResolveApiKeyForProfileResult;
 }
 
-function extractErrorMessage(error: unknown): string {
-  return formatErrorMessage(error);
-}
-
 /** Detect provider errors caused by single-use OAuth refresh token races. */
 function isRefreshTokenReusedError(error: unknown): boolean {
-  const message = normalizeLowercaseStringOrEmpty(extractErrorMessage(error));
+  const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(error));
   return (
     message.includes("refresh_token_reused") ||
     message.includes("refresh token has already been used") ||
@@ -183,6 +151,9 @@ type ResolveApiKeyForProfileParams = {
   agentDir?: string;
   forceRefresh?: boolean;
   allowProfileFallback?: boolean;
+  signal?: AbortSignal;
+  /** Reject an OAuth credential before the resolver persists, adopts, or returns it. */
+  validateOAuthCredential?: (credential: OAuthCredential) => void;
 };
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
@@ -204,14 +175,30 @@ async function refreshOAuthCredential(
     throw new OAuthProviderConfiguredUnavailableError(credential.provider);
   }
 
-  const oauthProvider = resolveOAuthProvider(credential.provider);
-  if (!oauthProvider || typeof getOAuthApiKey !== "function") {
+  if (!OAUTH_PROVIDER_IDS.has(credential.provider)) {
     return null;
   }
-  const result = await getOAuthApiKey(oauthProvider, {
+  const result = await getOAuthApiKey(credential.provider, {
     [credential.provider]: credential,
   });
   return result?.newCredentials ?? null;
+}
+
+async function canRefreshOAuthCredential(
+  credential: OAuthCredential,
+  context: { cfg?: OpenClawConfig } = {},
+): Promise<boolean> {
+  const pluginCapability = await resolveProviderOAuthRefreshCapabilityWithPlugin({
+    provider: credential.provider,
+    config: context.cfg,
+  });
+  if (pluginCapability.status === "available") {
+    return true;
+  }
+  if (pluginCapability.status === "configured-unavailable") {
+    throw new OAuthProviderConfiguredUnavailableError(credential.provider);
+  }
+  return OAUTH_PROVIDER_IDS.has(credential.provider);
 }
 
 /** Refresh one OAuth credential and merge provider-returned token fields. */
@@ -232,36 +219,56 @@ export async function refreshOAuthCredentialForRuntime(params: {
 const oauthManager = createOAuthManager({
   buildApiKey: buildOAuthApiKey,
   refreshCredential: refreshOAuthCredential,
-  readBootstrapCredential: ({ store, profileId, credential }) =>
-    readExternalCliBootstrapCredential({
-      store,
-      profileId,
-      credential,
-    }),
-  isRefreshTokenReusedError,
+  canRefreshCredential: canRefreshOAuthCredential,
+  readBootstrapCredential: readExternalCliBootstrapCredential,
 });
-
-/** Clear in-process OAuth refresh queues between isolated tests. */
-function resetOAuthRefreshQueuesForTest(): void {
-  oauthManager.resetRefreshQueuesForTest();
-}
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.oauthTestApi")] = {
     isRefreshTokenReusedError,
-    resetOAuthRefreshQueuesForTest,
+    resetOAuthRefreshQueuesForTest: oauthManager.resetRefreshQueuesForTest,
   };
+}
+
+async function resolveOAuthProfileAccess(
+  params: ResolveApiKeyForProfileParams,
+  credential: OAuthCredential,
+): Promise<ResolveApiKeyForProfileResult | null> {
+  const resolved = await oauthManager.resolveOAuthAccess({
+    store: params.store,
+    profileId: params.profileId,
+    credential,
+    agentDir: params.agentDir,
+    cfg: params.cfg,
+    forceRefresh: params.forceRefresh,
+    validateCredential: params.validateOAuthCredential,
+    signal: params.signal,
+  });
+  return resolved
+    ? buildApiKeyProfileResult({
+        apiKey: resolved.apiKey,
+        provider: resolved.credential.provider,
+        email: resolved.credential.email ?? credential.email,
+        profileId: params.profileId,
+        profileType: credential.type,
+        credential: resolved.credential,
+      })
+    : null;
 }
 
 async function tryResolveOAuthProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<ResolveApiKeyForProfileResult | null> {
   const { cfg, store, profileId } = params;
-  if (isRetiredOAuthProfileId(profileId)) {
+  if (profileId === CLAUDE_CLI_PROFILE_ID) {
     return null;
   }
   const cred = store.profiles[profileId];
-  if (!cred || cred.type !== "oauth") {
+  if (
+    !cred ||
+    cred.type !== "oauth" ||
+    !isSetupCredentialAccessible({ profileId, credential: cred, agentDir: params.agentDir })
+  ) {
     return null;
   }
   if (
@@ -275,29 +282,9 @@ async function tryResolveOAuthProfile(
     return null;
   }
 
-  const resolved = await oauthManager.resolveOAuthAccess({
-    store,
-    profileId,
-    credential: cred,
-    agentDir: params.agentDir,
-    cfg,
-    forceRefresh: params.forceRefresh,
-  });
-  if (!resolved) {
-    return null;
-  }
-  return buildApiKeyProfileResult({
-    apiKey: resolved.apiKey,
-    provider: resolved.credential.provider,
-    email: resolved.credential.email ?? cred.email,
-    profileId,
-    profileType: cred.type,
-    credential: resolved.credential,
-  });
-}
-
-function isRetiredOAuthProfileId(profileId: string): boolean {
-  return profileId === CLAUDE_CLI_PROFILE_ID;
+  const resolved = await resolveOAuthProfileAccess(params, cred);
+  params.signal?.throwIfAborted();
+  return resolved;
 }
 
 function authProfileSecretRefKey(
@@ -306,9 +293,9 @@ function authProfileSecretRefKey(
 ): string | undefined {
   const ref =
     profile.type === "api_key"
-      ? (coerceSecretRef(profile.keyRef, defaults) ?? coerceSecretRef(profile.key, defaults))
+      ? (parseSecretRef(profile.keyRef, defaults) ?? parseSecretRef(profile.key, defaults))
       : profile.type === "token"
-        ? (coerceSecretRef(profile.tokenRef, defaults) ?? coerceSecretRef(profile.token, defaults))
+        ? (parseSecretRef(profile.tokenRef, defaults) ?? parseSecretRef(profile.token, defaults))
         : null;
   return ref ? secretRefKey(ref) : undefined;
 }
@@ -319,9 +306,11 @@ function resolveRuntimeAuthProfile(params: {
   profile: AuthProfileCredential;
   defaults: SecretDefaults | undefined;
 }): { profile: AuthProfileCredential; published: boolean } {
-  const runtimeProfile = getRuntimeAuthProfileStoreSnapshotCore(params.agentDir)?.profiles[
-    params.profileId
-  ];
+  const setupProfile = getSetupCredentialRuntimeProfile(params);
+  const runtimeProfile =
+    setupProfile === undefined
+      ? getRuntimeAuthProfileStoreSnapshotCore(params.agentDir)?.profiles[params.profileId]
+      : setupProfile;
   const inputRefKey = authProfileSecretRefKey(params.profile, params.defaults);
   const runtimeRefKey = runtimeProfile
     ? authProfileSecretRefKey(runtimeProfile, params.defaults)
@@ -368,7 +357,7 @@ function throwUnmaterializedAuthProfileSecretRef(params: {
   agentDir?: string;
   profileId: string;
   pathSuffix: "key" | "token";
-  ref: NonNullable<ReturnType<typeof coerceSecretRef>>;
+  ref: NonNullable<ReturnType<typeof parseSecretRef>>;
 }): never {
   throw new SecretSurfaceUnavailableError({
     ownerKind: "account",
@@ -384,14 +373,24 @@ function throwUnmaterializedAuthProfileSecretRef(params: {
 export async function resolveApiKeyForProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<ResolveApiKeyForProfileResult | null> {
+  params.signal?.throwIfAborted();
   const { cfg, store, profileId } = params;
-  const storedProfile = store.profiles[profileId];
-  if (!storedProfile) {
+  const storedProfile = isUserModelAuthProfileId(profileId)
+    ? findPersistedAuthProfileCredential({ agentDir: params.agentDir, profileId })
+    : store.profiles[profileId];
+  if (
+    !storedProfile ||
+    !isSetupCredentialAccessible({
+      profileId,
+      credential: storedProfile,
+      agentDir: params.agentDir,
+    })
+  ) {
     return null;
   }
   // Claude owns this native login slot. Legacy persisted copies must never
   // resolve, refresh, or leave OpenClaw as bearer tokens.
-  if (isRetiredOAuthProfileId(profileId)) {
+  if (profileId === CLAUDE_CLI_PROFILE_ID) {
     return null;
   }
   const configForRefResolution = cfg ?? getRuntimeConfig();
@@ -409,8 +408,6 @@ export async function resolveApiKeyForProfile(
       profileId,
       provider: cred.provider,
       mode: cred.type,
-      // Compatibility: treat "oauth" config as compatible with stored token profiles.
-      allowOAuthTokenCompatibility: true,
     })
   ) {
     return null;
@@ -422,63 +419,40 @@ export async function resolveApiKeyForProfile(
     profileIds: [profileId],
     context: `auth profile ${profileId}`,
   });
-  if (cred.type === "api_key") {
-    if (!evaluateStoredCredentialEligibility({ credential: cred }).eligible) {
-      return null;
+  if (cred.type === "api_key" || cred.type === "token") {
+    if (cred.type === "api_key") {
+      if (!evaluateStoredCredentialEligibility({ credential: cred }).eligible) {
+        return null;
+      }
+    } else {
+      const expiryState = resolveTokenExpiryState(cred.expires);
+      if (expiryState === "expired" || expiryState === "invalid_expires") {
+        return null;
+      }
     }
     assertRuntimeAuthProfileSecretOwnerAvailable({
       agentDir: params.agentDir,
       profileId,
       published: runtimeProfile.published,
     });
-    const keyRef =
-      coerceSecretRef(cred.keyRef, refDefaults) ?? coerceSecretRef(cred.key, refDefaults);
-    const key = normalizeOptionalSecretInput(cred.key);
-    if (keyRef && (!runtimeProfile.published || !key)) {
+    const inlineValue = cred.type === "api_key" ? cred.key : cred.token;
+    const ref =
+      parseSecretRef(cred.type === "api_key" ? cred.keyRef : cred.tokenRef, refDefaults) ??
+      parseSecretRef(inlineValue, refDefaults);
+    const apiKey = normalizeOptionalSecretInput(inlineValue);
+    if (ref && (!runtimeProfile.published || !apiKey)) {
       throwUnmaterializedAuthProfileSecretRef({
         agentDir: params.agentDir,
         profileId,
-        pathSuffix: "key",
-        ref: keyRef,
+        pathSuffix: cred.type === "api_key" ? "key" : "token",
+        ref,
       });
     }
-    if (!key) {
+    if (!apiKey) {
       return null;
     }
     return buildApiKeyProfileResult({
-      apiKey: key,
-      provider: cred.provider,
-      email: cred.email,
-      profileId,
-      profileType: cred.type,
-    });
-  }
-  if (cred.type === "token") {
-    const expiryState = resolveTokenExpiryState(cred.expires);
-    if (expiryState === "expired" || expiryState === "invalid_expires") {
-      return null;
-    }
-    assertRuntimeAuthProfileSecretOwnerAvailable({
-      agentDir: params.agentDir,
-      profileId,
-      published: runtimeProfile.published,
-    });
-    const tokenRef =
-      coerceSecretRef(cred.tokenRef, refDefaults) ?? coerceSecretRef(cred.token, refDefaults);
-    const token = normalizeOptionalSecretInput(cred.token);
-    if (tokenRef && (!runtimeProfile.published || !token)) {
-      throwUnmaterializedAuthProfileSecretRef({
-        agentDir: params.agentDir,
-        profileId,
-        pathSuffix: "token",
-        ref: tokenRef,
-      });
-    }
-    if (!token) {
-      return null;
-    }
-    return buildApiKeyProfileResult({
-      apiKey: token,
+      apiKey,
       provider: cred.provider,
       email: cred.email,
       profileId,
@@ -487,30 +461,16 @@ export async function resolveApiKeyForProfile(
   }
 
   try {
-    const resolved = await oauthManager.resolveOAuthAccess({
-      store,
-      agentDir: params.agentDir,
-      profileId,
-      credential: cred,
-      cfg,
-      forceRefresh: params.forceRefresh,
-    });
-    if (!resolved) {
-      return null;
-    }
-    return buildApiKeyProfileResult({
-      apiKey: resolved.apiKey,
-      provider: resolved.credential.provider,
-      email: resolved.credential.email ?? cred.email,
-      profileId,
-      profileType: cred.type,
-      credential: resolved.credential,
-    });
+    const resolved = await resolveOAuthProfileAccess(params, cred);
+    params.signal?.throwIfAborted();
+    return resolved;
   } catch (error) {
+    params.signal?.throwIfAborted();
+    let settlementComplete = isSettledOAuthRefreshFailure(error);
     let refreshedStore =
       error instanceof OAuthManagerRefreshError
         ? error.getRefreshedStore()
-        : loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+        : loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
     const surfacedCause =
       error instanceof OAuthManagerRefreshError && error.cause ? error.cause : error;
     if (isRefreshTokenReusedError(surfacedCause)) {
@@ -527,6 +487,7 @@ export async function resolveApiKeyForProfile(
         });
         clearedLastGood = true;
       } catch (cleanupError) {
+        settlementComplete = false;
         // The refresh failure owns the operator diagnosis; stale last-good cleanup is secondary.
         authProfilesLog.warn("failed to clear stale OAuth last-good state after refresh failure", {
           error: formatErrorMessage(cleanupError),
@@ -547,7 +508,7 @@ export async function resolveApiKeyForProfile(
         }
       }
       if (clearedLastGood) {
-        refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+        refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
       }
     }
     const fallbackProfileId =
@@ -567,23 +528,27 @@ export async function resolveApiKeyForProfile(
           profileId: fallbackProfileId,
           agentDir: params.agentDir,
           forceRefresh: params.forceRefresh,
+          validateOAuthCredential: params.validateOAuthCredential,
+          signal: params.signal,
         });
+        params.signal?.throwIfAborted();
         if (fallbackResolved) {
           return fallbackResolved;
         }
       } catch {
+        params.signal?.throwIfAborted();
         // keep original error
       }
     }
 
-    const message = extractErrorMessage(surfacedCause);
+    const message = formatErrorMessage(surfacedCause);
     const hint = await formatAuthDoctorHint({
       cfg,
       store: refreshedStore,
       provider: cred.provider,
       profileId,
     });
-    throw new OAuthRefreshFailureError({
+    const failure = new OAuthRefreshFailureError({
       provider: cred.provider,
       profileId,
       message:
@@ -592,5 +557,9 @@ export async function resolveApiKeyForProfile(
         (hint ? `\n\n${hint}` : ""),
       cause: error,
     });
+    if (settlementComplete) {
+      markOAuthRefreshFailureSettled(failure);
+    }
+    throw failure;
   }
 }

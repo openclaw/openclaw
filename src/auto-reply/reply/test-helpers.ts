@@ -18,21 +18,24 @@ export function createMockReplyOperation(
   const failMock = vi.fn();
   const freezeAbortMock = vi.fn();
   const retainFailureUntilCompleteMock = vi.fn();
-  const updateSessionIdMock = vi.fn();
-  const sessionId = overrides.sessionId ?? "session";
+  let sessionId = overrides.sessionId ?? "session";
+  const updateSessionIdMock = vi.fn((nextSessionId: string) => {
+    sessionId = nextSessionId;
+  });
   let toolAuthorityFingerprint = overrides.toolAuthorityFingerprint;
-  let toolAuthorityProjector:
-    | Parameters<ReplyOperation["bindToolAuthorityProjector"]>[0]
-    | undefined;
+  let toolAuthoritySnapshot: Parameters<ReplyOperation["bindToolAuthoritySnapshot"]>[0] | undefined;
   let toolAuthorityRoute: ReplyOperation["toolAuthorityRoute"];
   const replyOperation: ReplyOperation = {
     key: overrides.key ?? "main",
-    sessionId,
+    get sessionId() {
+      return sessionId;
+    },
     turnKind: "visible",
     abortSignal: overrides.abortSignal ?? new AbortController().signal,
     resetTriggered: false,
     terminalRecovery: false,
     acceptedSteeredInboundAudio: false,
+    sourceReplyDelivered: false,
     get toolAuthorityFingerprint() {
       return toolAuthorityFingerprint;
     },
@@ -44,7 +47,7 @@ export function createMockReplyOperation(
     staleExpiryReason: undefined,
     startedAtMs: Date.now(),
     lastActivityAtMs: Date.now(),
-    hasOwnedSessionId: vi.fn((candidate: string) => candidate === sessionId),
+    captureOwnedSessionIds: vi.fn(() => new Set([sessionId])),
     recordActivity: vi.fn(),
     setPhase: vi.fn(),
     markWaitingForDeferredMaintenance: vi.fn(),
@@ -52,20 +55,41 @@ export function createMockReplyOperation(
     markWaitingForGlobalLane: vi.fn(),
     markGlobalLaneWaitEnded: vi.fn(),
     markTerminalRecovery: vi.fn(),
-    markAcceptedSteeredInboundAudio: vi.fn(),
-    bindToolAuthorityFingerprint: vi.fn((fingerprint) => {
+    markSteeredInputAccepted: vi.fn(),
+    markSourceReplyDelivered: vi.fn(),
+    bindToolAuthoritySnapshot: vi.fn((snapshot) => {
+      if (replyOperation.result || (toolAuthoritySnapshot && toolAuthoritySnapshot !== snapshot)) {
+        throw new Error("Reply operation cannot change tool authority after admission");
+      }
+      if (toolAuthoritySnapshot) {
+        return;
+      }
+      const fingerprint = snapshot.fingerprint();
+      if (!fingerprint) {
+        throw new Error("Reply operation tool authority fingerprint is required");
+      }
+      toolAuthoritySnapshot = snapshot;
       toolAuthorityFingerprint = fingerprint;
     }),
-    bindToolAuthorityProjector: vi.fn((projector) => {
-      toolAuthorityProjector = projector;
+    projectToolAuthorityFingerprint: vi.fn((overlay) => {
+      if (replyOperation.result || !toolAuthoritySnapshot || !toolAuthorityRoute) {
+        return undefined;
+      }
+      try {
+        return toolAuthoritySnapshot.project(overlay, toolAuthorityRoute);
+      } catch {
+        return undefined;
+      }
     }),
-    projectToolAuthorityFingerprint: vi.fn((overlay) =>
-      toolAuthorityProjector && toolAuthorityRoute
-        ? toolAuthorityProjector(overlay, toolAuthorityRoute)
-        : undefined,
-    ),
+    setAutomaticFallbackRoute: vi.fn(),
     bindToolAuthorityRoute: vi.fn((route) => {
-      toolAuthorityRoute = route;
+      if (replyOperation.result || !toolAuthoritySnapshot) {
+        throw new Error("Reply operation has no active tool authority snapshot");
+      }
+      const fingerprint = toolAuthoritySnapshot.fingerprint(route);
+      toolAuthorityRoute = { ...route };
+      toolAuthorityFingerprint = fingerprint;
+      return fingerprint;
     }),
     updateSessionId: updateSessionIdMock,
     updateSessionKey: vi.fn(),
@@ -74,7 +98,6 @@ export function createMockReplyOperation(
     freezeAbort: freezeAbortMock,
     retainFailureUntilComplete: retainFailureUntilCompleteMock,
     complete: vi.fn(),
-    completeThen: vi.fn((afterClear) => afterClear()),
     completeWithAfterClearBarrier: vi.fn(),
     fail: failMock,
     abortByUser: vi.fn(() => true),

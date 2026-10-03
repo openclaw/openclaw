@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type DeliverFn = (
-  event: webhook.Event,
+  events: readonly webhook.Event[],
   destination: string,
   control: Record<string, unknown>,
 ) => Promise<void>;
@@ -57,8 +57,6 @@ async function resolveMediaMaxBytes(opts: {
   });
 
   createLineBot({
-    channelAccessToken: "test-token",
-    channelSecret: "test-secret",
     config: configWith(opts.configuredMediaMaxMb),
     ...(opts.optionMediaMaxMb === undefined ? {} : { mediaMaxMb: opts.optionMediaMaxMb }),
   });
@@ -66,7 +64,7 @@ async function resolveMediaMaxBytes(opts: {
   if (!deliver) {
     throw new Error("createLineBot did not build a spool deliver callback");
   }
-  await deliver({ type: "message" } as webhook.Event, "destination", {});
+  await deliver([{ type: "message" } as webhook.Event], "destination", {});
 
   const context = handleLineWebhookEventsMock.mock.calls.at(-1)?.[1];
   if (typeof context?.mediaMaxBytes !== "number") {
@@ -132,8 +130,6 @@ describe("createLineBot pending history cap", () => {
       },
     };
     createLineBot({
-      channelAccessToken: "test-token",
-      channelSecret: "test-secret",
       accountId: "work",
       config: {
         messages: { groupChat: { historyLimit: 7 } },
@@ -141,7 +137,7 @@ describe("createLineBot pending history cap", () => {
       } as unknown as OpenClawConfig,
     });
 
-    await deliver?.({ type: "message" } as webhook.Event, "destination", {});
+    await deliver?.([{ type: "message" } as webhook.Event], "destination", {});
     expect(handleLineWebhookEventsMock.mock.calls.at(-1)?.[1].historyLimit).toBe(testCase.expected);
   });
 });

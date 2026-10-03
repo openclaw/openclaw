@@ -499,7 +499,9 @@ suite.define(() => {
       await captureDocumentProof(surface.page, "after-remote-gateway-confirmation.png");
       await pauseRecordedProof(surface.page);
 
-      await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+      await confirmation
+        .getByRole("button", { name: "Switch to remote-gateway.example", exact: true })
+        .click();
       await waitForApprovalPage(surface.page);
       const request = await surface.gateway.waitForRequest("approval.get");
       expect(request.params).toEqual({ id: APPROVAL_ID });
@@ -663,5 +665,38 @@ suite.define(() => {
       .poll(() => surface.page.getByRole("button", { name: "Allow once" }).isEnabled())
       .toBe(true);
     expect(surface.pageErrors).toEqual([]);
+  });
+  it("keeps the approval document and final actions inside app-owned safe areas", async () => {
+    const surface = await createSurface({
+      basePath: "",
+      pending: pendingApproval(""),
+      viewport: { width: 375, height: 500 },
+    });
+    try {
+      await surface.page.goto(approvalUrl(""));
+      await waitForApprovalPage(surface.page);
+      const bounds = await surface.page.evaluate(() => {
+        const root = document.documentElement;
+        root.style.setProperty("--safe-area-top", "34px");
+        root.style.setProperty("--safe-area-right", "20px");
+        root.style.setProperty("--safe-area-bottom", "21px");
+        root.style.setProperty("--safe-area-left", "18px");
+        const page = document.querySelector(".approval-page")!.getBoundingClientRect();
+        return { top: page.top, bottom: page.bottom, left: page.left, right: page.right };
+      });
+      expect(bounds).toEqual({ top: 34, bottom: 479, left: 18, right: 355 });
+      const allow = surface.page.getByRole("button", { name: "Allow once", exact: true });
+      await allow.scrollIntoViewIfNeeded();
+      const action = await allow.boundingBox();
+      expect(action!.y).toBeGreaterThanOrEqual(34);
+      expect(action!.y + action!.height).toBeLessThanOrEqual(479);
+      const back = surface.page.locator(".approval-page__back-link");
+      await back.scrollIntoViewIfNeeded();
+      const link = await back.boundingBox();
+      expect(link!.y + link!.height).toBeLessThanOrEqual(479);
+      expect(surface.pageErrors).toEqual([]);
+    } finally {
+      await closeRecordedSurface(surface, "approval-safe-area.webm");
+    }
   });
 });

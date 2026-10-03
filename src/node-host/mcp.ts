@@ -10,6 +10,7 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
@@ -17,7 +18,7 @@ import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/s
 import {
   connectMcpClient,
   disposeMcpClient,
-  isStatefulMcpHttpSessionExpired,
+  isMcpHttpSessionExpired,
 } from "../agents/mcp-client-lifecycle.js";
 import { redactMcpDiagnosticError } from "../agents/mcp-error.js";
 import { createMcpJsonSchemaValidator } from "../agents/mcp-json-schema-validator.js";
@@ -177,13 +178,6 @@ function reserveDescriptorName(baseName: string, usedNames: Set<string>): string
   }
 }
 
-function normalizeInputSchema(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return { type: "object", properties: {}, additionalProperties: true };
-}
-
 /** Builds provider-safe MCP descriptors in stable server/tool order. */
 function buildNodeMcpToolDescriptors(
   listedTools: ReadonlyArray<{ serverName: string; tool: Tool }>,
@@ -206,7 +200,11 @@ function buildNodeMcpToolDescriptors(
           "MCP tool",
         NODE_MCP_DESCRIPTION_MAX_CHARS,
       ),
-      parameters: normalizeInputSchema(tool.inputSchema),
+      parameters: asOptionalRecord(tool.inputSchema) ?? {
+        type: "object",
+        properties: {},
+        additionalProperties: true,
+      },
       command: NODE_MCP_TOOLS_CALL_COMMAND,
       mcp: { server: serverName, tool: toolName },
     };
@@ -259,9 +257,9 @@ async function listAllTools(
   return { tools: normalized.tools, metadata: normalized.metadata };
 }
 
-function disposeNodeHostMcpSession(session: NodeHostMcpSession): Promise<void> {
+async function disposeNodeHostMcpSession(session: NodeHostMcpSession): Promise<void> {
   session.abortController.abort(new Error("node host MCP session retired"));
-  return disposeMcpClient(session);
+  await disposeMcpClient(session);
 }
 
 /** Starts process-lifetime MCP server state for the node host. */
@@ -589,7 +587,7 @@ export async function startNodeHostMcpManager(
         validateResult?.(result);
         return result;
       } catch (error) {
-        const sessionExpired = isStatefulMcpHttpSessionExpired(session, error);
+        const sessionExpired = isMcpHttpSessionExpired(session, error);
         if (sessionExpired && invalidateCurrent(state, session)) {
           enqueueWork(state, async () => {
             await disposeNodeHostMcpSession(session);

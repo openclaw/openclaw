@@ -2,9 +2,11 @@
 
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.GatewayBootstrapHandoff
 import ai.openclaw.app.gateway.GatewayCustomHeaders
 import ai.openclaw.app.gateway.GatewayRegistryStore
 import ai.openclaw.app.gateway.GatewayStoreMigration
+import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.parseHexColorArgb
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.content.Context
@@ -19,7 +21,6 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
 
@@ -55,8 +56,9 @@ data class GatewayCredentials(
     )
 }
 
-internal val defaultSidebarPageOrder = listOf("settings", "work", "home", "skills", "threads")
-internal val defaultSidebarVisiblePages = defaultSidebarPageOrder
+internal val defaultSidebarVisiblePages = listOf("home", "threads", "skills", "work")
+internal val defaultSidebarPageOrder =
+  defaultSidebarVisiblePages + listOf("agents", "automations", "usage", "skill-workshop", "dreaming", "terminal", "desktop")
 
 internal fun sanitizeSidebarPageOrder(pageIds: List<String>): List<String> {
   val knownIds = defaultSidebarPageOrder.toSet()
@@ -73,13 +75,13 @@ internal fun sanitizeSidebarVisiblePages(pageIds: List<String>): List<String> {
   return supplied.ifEmpty { defaultSidebarVisiblePages }
 }
 
-/**
- * Reactive settings facade for Android node preferences and encrypted gateway credentials.
- */
 class SecurePrefs(
   context: Context,
   private val securePrefsOverride: SharedPreferences? = null,
 ) {
+  private val gatewayCredentialLock = Any()
+  private val gatewayCredentialRevisions = mutableMapOf<String, Long>()
+
   companion object {
     private const val displayNameKey = "node.displayName"
     private const val locationModeKey = "location.enabledMode"
@@ -107,6 +109,7 @@ class SecurePrefs(
     private const val preferredAudioInputDeviceKey = "voice.preferredAudioInputDevice"
     private const val voiceWakeEnabledKey = "voiceWake.enabled"
     private const val voiceWakeWordsKey = "voiceWake.triggerWords"
+    private const val appearanceTextScaleKey = "appearance.textScale"
     private const val appearanceThemeModeKey = "appearance.themeMode"
     private const val appearanceThemeFamilyKey = "appearance.themeFamily"
     private const val appearanceAccentArgbKey = "appearance.accentArgb"
@@ -139,7 +142,15 @@ class SecurePrefs(
       .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
       .build()
   }
-  private val securePrefs: SharedPreferences by lazy { securePrefsOverride ?: createSecurePrefs(appContext, securePrefsName) }
+  private val securePrefs: SharedPreferences by lazy {
+    securePrefsOverride ?: EncryptedSharedPreferences.create(
+      appContext,
+      securePrefsName,
+      masterKey,
+      EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+      EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+    )
+  }
 
   private val _instanceId = MutableStateFlow(loadOrCreateInstanceId())
   val instanceId: StateFlow<String> = _instanceId
@@ -149,7 +160,7 @@ class SecurePrefs(
   // gateway-state read, which is the earliest the registry can be observed.
   val gatewayRegistry: GatewayRegistryStore by lazy {
     GatewayStoreMigration(this).run()
-    GatewayRegistryStore(this, ::handleActiveGatewayChanged)
+    GatewayRegistryStore(this)
   }
 
   private val _displayName =
@@ -220,33 +231,25 @@ class SecurePrefs(
 
   private val storedQuietStart =
     normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietStartKey, "22:00").orEmpty())
-      ?: "22:00"
   private val storedQuietEnd =
     normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00").orEmpty())
-      ?: "07:00"
   private val storedQuietHoursEnabled =
     plainPrefs.getBoolean(notificationsForwardingQuietHoursEnabledKey, false) &&
-      normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietStartKey, "22:00").orEmpty()) != null &&
-      normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00").orEmpty()) != null
+      storedQuietStart != null && storedQuietEnd != null
 
   private val _notificationForwardingQuietHoursEnabled =
     MutableStateFlow(storedQuietHoursEnabled)
   val notificationForwardingQuietHoursEnabled: StateFlow<Boolean> = _notificationForwardingQuietHoursEnabled
 
-  private val _notificationForwardingQuietStart = MutableStateFlow(storedQuietStart)
+  private val _notificationForwardingQuietStart = MutableStateFlow(storedQuietStart ?: "22:00")
   val notificationForwardingQuietStart: StateFlow<String> = _notificationForwardingQuietStart
 
-  private val _notificationForwardingQuietEnd = MutableStateFlow(storedQuietEnd)
+  private val _notificationForwardingQuietEnd = MutableStateFlow(storedQuietEnd ?: "07:00")
   val notificationForwardingQuietEnd: StateFlow<String> = _notificationForwardingQuietEnd
 
   private val _notificationForwardingMaxEventsPerMinute =
     MutableStateFlow(plainPrefs.getInt(notificationsForwardingMaxEventsPerMinuteKey, 20).coerceAtLeast(1))
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> = _notificationForwardingMaxEventsPerMinute
-
-  private val _notificationForwardingSessionKey by lazy {
-    MutableStateFlow(loadNotificationForwardingSessionKey(gatewayRegistry.activeStableId.value))
-  }
-  val notificationForwardingSessionKey: StateFlow<String?> get() = _notificationForwardingSessionKey
 
   private val _voiceMicEnabled = MutableStateFlow(plainPrefs.getBoolean(voiceMicEnabledKey, false))
   val voiceMicEnabled: StateFlow<Boolean> = _voiceMicEnabled
@@ -268,6 +271,10 @@ class SecurePrefs(
     MutableStateFlow(plainPrefs.getString(preferredAudioInputDeviceKey, null)?.takeIf(String::isNotBlank))
   val preferredAudioInputDevice: StateFlow<String?> = _preferredAudioInputDevice
 
+  private val _appearanceTextScale =
+    MutableStateFlow(AppearanceTextScale.fromPercent(plainPrefs.all[appearanceTextScaleKey] as? Int))
+  val appearanceTextScale: StateFlow<AppearanceTextScale> = _appearanceTextScale
+
   private val _appearanceThemeMode =
     MutableStateFlow(AppearanceThemeMode.fromRawValue(plainPrefs.getString(appearanceThemeModeKey, null)))
   val appearanceThemeMode: StateFlow<AppearanceThemeMode> = _appearanceThemeMode
@@ -286,15 +293,15 @@ class SecurePrefs(
     migrateAppearancePreferenceSyncState()
   }
 
-  private val _modelFavorites = MutableStateFlow(loadChatModelRefs(chatModelFavoritesKey))
+  private val _modelFavorites = MutableStateFlow(loadStringList(chatModelFavoritesKey))
   val modelFavorites: StateFlow<List<String>> = _modelFavorites
 
-  private val _modelRecents = MutableStateFlow(loadChatModelRefs(chatModelRecentsKey))
+  private val _modelRecents = MutableStateFlow(loadStringList(chatModelRecentsKey))
   val modelRecents: StateFlow<List<String>> = _modelRecents
 
   // Custom session group names the user created locally; assigned groups also
   // persist server-side via the session category field (mirrors web localStorage).
-  private val _sessionCustomGroups = MutableStateFlow(loadChatModelRefs(sessionCustomGroupsKey))
+  private val _sessionCustomGroups = MutableStateFlow(loadStringList(sessionCustomGroupsKey))
   val sessionCustomGroups: StateFlow<List<String>> = _sessionCustomGroups
 
   private val _sidebarPageOrder = MutableStateFlow(loadSidebarPageOrder())
@@ -303,63 +310,33 @@ class SecurePrefs(
   private val _sidebarVisiblePages = MutableStateFlow(loadSidebarVisiblePages())
   val sidebarVisiblePages: StateFlow<List<String>> = _sidebarVisiblePages
 
-  fun setLastDiscoveredStableId(value: String) {
-    val trimmed = value.trim()
-    plainPrefs.edit { putString("gateway.lastDiscoveredStableID", trimmed) }
-    _lastDiscoveredStableId.value = trimmed
-  }
+  fun setLastDiscoveredStableId(value: String) = _lastDiscoveredStableId.persistString("gateway.lastDiscoveredStableID", value.trim())
 
-  fun setDisplayName(value: String) {
-    val trimmed = value.trim()
-    plainPrefs.edit { putString(displayNameKey, trimmed) }
-    _displayName.value = trimmed
-  }
+  fun setDisplayName(value: String) = _displayName.persistString(displayNameKey, value.trim())
 
-  fun setCameraEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(cameraEnabledKey, value) }
-    _cameraEnabled.value = value
-  }
+  fun setCameraEnabled(value: Boolean) = _cameraEnabled.persistBoolean(cameraEnabledKey, value)
 
   fun setLocationMode(mode: LocationMode) {
     plainPrefs.edit { putString(locationModeKey, mode.rawValue) }
     _locationMode.value = mode
   }
 
-  fun setLocationPreciseEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("location.preciseEnabled", value) }
-    _locationPreciseEnabled.value = value
-  }
+  fun setLocationPreciseEnabled(value: Boolean) = _locationPreciseEnabled.persistBoolean("location.preciseEnabled", value)
 
-  fun setPreventSleep(value: Boolean) {
-    plainPrefs.edit { putBoolean("screen.preventSleep", value) }
-    _preventSleep.value = value
-  }
+  fun setPreventSleep(value: Boolean) = _preventSleep.persistBoolean("screen.preventSleep", value)
 
-  fun setManualEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("gateway.manual.enabled", value) }
-    _manualEnabled.value = value
-  }
+  fun setManualEnabled(value: Boolean) = _manualEnabled.persistBoolean("gateway.manual.enabled", value)
 
-  fun setManualHost(value: String) {
-    val trimmed = value.trim()
-    plainPrefs.edit { putString("gateway.manual.host", trimmed) }
-    _manualHost.value = trimmed
-  }
+  fun setManualHost(value: String) = _manualHost.persistString("gateway.manual.host", value.trim())
 
   fun setManualPort(value: Int) {
     plainPrefs.edit { putInt("gateway.manual.port", value) }
     _manualPort.value = value
   }
 
-  fun setManualTls(value: Boolean) {
-    plainPrefs.edit { putBoolean("gateway.manual.tls", value) }
-    _manualTls.value = value
-  }
+  fun setManualTls(value: Boolean) = _manualTls.persistBoolean("gateway.manual.tls", value)
 
-  fun setOnboardingCompleted(value: Boolean) {
-    plainPrefs.edit { putBoolean("onboarding.completed", value) }
-    _onboardingCompleted.value = value
-  }
+  fun setOnboardingCompleted(value: Boolean) = _onboardingCompleted.persistBoolean("onboarding.completed", value)
 
   fun grantInstalledAppsDisclosureConsent() {
     plainPrefs.edit {
@@ -377,10 +354,7 @@ class SecurePrefs(
     _installedAppsSharingEnabled.value = false
   }
 
-  fun setAccessibilityControlEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(accessibilityControlEnabledKey, value) }
-    _accessibilityControlEnabled.value = value
-  }
+  fun setAccessibilityControlEnabled(value: Boolean) = _accessibilityControlEnabled.persistBoolean(accessibilityControlEnabledKey, value)
 
   private fun loadInstalledAppsSharingEnabled(): Boolean {
     val enabled = plainPrefs.getBoolean(installedAppsSharingEnabledKey, false)
@@ -417,36 +391,30 @@ class SecurePrefs(
     val maxEvents = plainPrefs.getInt(notificationsForwardingMaxEventsPerMinuteKey, 20)
     val quietStart =
       normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietStartKey, "22:00").orEmpty())
-        ?: "22:00"
     val quietEnd =
       normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00").orEmpty())
-        ?: "07:00"
     // NotificationListenerService owns a separate SecurePrefs facade, so resolve the persisted
     // pointer per event rather than trusting that facade's process-local registry flow.
     val sessionKey = loadNotificationForwardingSessionKey(gatewayRegistry.storedActiveStableId())
 
     val quietHoursEnabled =
       plainPrefs.getBoolean(notificationsForwardingQuietHoursEnabledKey, false) &&
-        normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietStartKey, "22:00").orEmpty()) != null &&
-        normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00").orEmpty()) != null
+        quietStart != null && quietEnd != null
 
     return NotificationForwardingPolicy(
       enabled = plainPrefs.getBoolean(notificationsForwardingEnabledKey, defaultNotificationForwardingEnabled),
       mode = mode,
       packages = packages,
       quietHoursEnabled = quietHoursEnabled,
-      quietStart = quietStart,
-      quietEnd = quietEnd,
+      quietStart = quietStart ?: "22:00",
+      quietEnd = quietEnd ?: "07:00",
       maxEventsPerMinute = maxEvents.coerceAtLeast(1),
       sessionKey = sessionKey,
       selfPackageName = normalizedAppPackage,
     )
   }
 
-  internal fun setNotificationForwardingEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(notificationsForwardingEnabledKey, value) }
-    _notificationForwardingEnabled.value = value
-  }
+  internal fun setNotificationForwardingEnabled(value: Boolean) = _notificationForwardingEnabled.persistBoolean(notificationsForwardingEnabledKey, value)
 
   internal fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
     plainPrefs.edit { putString(notificationsForwardingModeKey, mode.rawValue) }
@@ -459,12 +427,10 @@ class SecurePrefs(
         .asSequence()
         .map { it.trim() }
         .filter { it.isNotEmpty() }
-        .toSet()
-        .toList()
+        .distinct()
         .sorted()
-    // Persist deterministic JSON so settings diffs and state restoration are stable.
-    val encoded = JsonArray(sanitized.map { JsonPrimitive(it) }).toString()
-    plainPrefs.edit { putString(notificationsForwardingPackagesKey, encoded) }
+        .toList()
+    persistStringList(notificationsForwardingPackagesKey, sanitized)
     _notificationForwardingPackages.value = sanitized.toSet()
   }
 
@@ -491,37 +457,32 @@ class SecurePrefs(
     return true
   }
 
-  internal fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
-    val normalized = value.coerceAtLeast(1)
-    plainPrefs.edit {
-      putInt(notificationsForwardingMaxEventsPerMinuteKey, normalized)
-    }
-    _notificationForwardingMaxEventsPerMinute.value = normalized
-  }
-
   internal fun setNotificationForwardingSessionKey(value: String?) {
     val stableId = gatewayRegistry.activeStableId.value ?: return
     val normalized = value?.trim()?.takeIf { it.isNotEmpty() }
     plainPrefs.edit {
       putString(notificationForwardingSessionKeyKey(stableId), normalized.orEmpty())
     }
-    _notificationForwardingSessionKey.value = normalized
   }
 
   fun loadGatewayCredentials(stableId: String): GatewayCredentials {
-    // Credential reads are gateway state; force the lazy registry so the one-time
-    // legacy migration has run before the first per-gateway bundle is resolved.
+    // The lazy migration can write credentials; initialize it before taking the
+    // credential lock so concurrent first access cannot invert those locks.
     gatewayRegistry
-    val raw = securePrefs.getString(gatewayCredentialsKey(stableId), null) ?: return GatewayCredentials()
-    return runCatching { json.decodeFromString<GatewayCredentials>(raw).normalized() }.getOrDefault(GatewayCredentials())
+    return synchronized(gatewayCredentialLock) {
+      val raw = securePrefs.getString(gatewayCredentialsKey(stableId), null) ?: return GatewayCredentials()
+      return runCatching { json.decodeFromString<GatewayCredentials>(raw).normalized() }.getOrDefault(GatewayCredentials())
+    }
   }
 
   fun saveGatewayCredentials(
     stableId: String,
     credentials: GatewayCredentials,
   ) {
-    securePrefs.edit {
-      putString(gatewayCredentialsKey(stableId), json.encodeToString(credentials.normalized()))
+    synchronized(gatewayCredentialLock) {
+      val key = gatewayCredentialsKey(stableId)
+      gatewayCredentialRevisions[key] = (gatewayCredentialRevisions[key] ?: 0L) + 1L
+      securePrefs.edit { putString(key, json.encodeToString(credentials.normalized())) }
     }
   }
 
@@ -535,7 +496,34 @@ class SecurePrefs(
   }
 
   fun clearGatewayCredentials(stableId: String) {
-    securePrefs.edit { remove(gatewayCredentialsKey(stableId)) }
+    synchronized(gatewayCredentialLock) {
+      val key = gatewayCredentialsKey(stableId)
+      gatewayCredentialRevisions[key] = (gatewayCredentialRevisions[key] ?: 0L) + 1L
+      securePrefs.edit { remove(key) }
+    }
+  }
+
+  internal fun prepareGatewayBootstrapHandoff(
+    stableId: String,
+    bootstrapToken: String,
+    allowStoredTokenRecovery: Boolean,
+  ): GatewayBootstrapHandoff {
+    gatewayRegistry
+    return synchronized(gatewayCredentialLock) {
+      val key = gatewayCredentialsKey(stableId)
+      val revision = gatewayCredentialRevisions[key]
+      val credentials = loadGatewayCredentials(stableId)
+      GatewayBootstrapHandoff(allowStoredTokenRecovery) {
+        synchronized(gatewayCredentialLock) {
+          when {
+            gatewayCredentialRevisions[key] != revision -> false
+            credentials.bootstrapToken == null -> true
+            credentials.bootstrapToken != bootstrapToken.trim() -> false
+            else -> commitSecureStrings(mapOf(key to json.encodeToString(credentials.copy(bootstrapToken = null))))
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -591,9 +579,6 @@ class SecurePrefs(
 
   fun clearNotificationForwardingSessionKey(stableId: String) {
     plainPrefs.edit { remove(notificationForwardingSessionKeyKey(stableId)) }
-    if (gatewayRegistry.activeStableId.value == stableId) {
-      _notificationForwardingSessionKey.value = null
-    }
   }
 
   fun getString(key: String): String? = securePrefs.getString(key, null)
@@ -611,6 +596,22 @@ class SecurePrefs(
     key: String,
     value: String,
   ): Boolean = securePrefs.edit().putString(key, value).commit()
+
+  internal fun commitSecureStrings(values: Map<String, String?>): Boolean =
+    synchronized(securePrefs) {
+      val previous = values.keys.associateWith { securePrefs.getString(it, null) }
+      val editor = securePrefs.edit()
+      values.forEach { (key, value) -> if (value == null) editor.remove(key) else editor.putString(key, value) }
+      val committed = runCatching { editor.commit() }.getOrDefault(false)
+      if (!committed) {
+        // commit(false) can still publish its changes in memory. Keep failed handoffs
+        // from looking complete to a later reconnect in this process.
+        securePrefs.edit {
+          previous.forEach { (key, value) -> if (value == null) remove(key) else putString(key, value) }
+        }
+      }
+      return committed
+    }
 
   fun remove(key: String) {
     securePrefs.edit { remove(key) }
@@ -673,22 +674,6 @@ class SecurePrefs(
       ?.trim()
       ?.takeIf { it.isNotEmpty() }
 
-  private fun handleActiveGatewayChanged(stableId: String?) {
-    _notificationForwardingSessionKey.value = loadNotificationForwardingSessionKey(stableId)
-  }
-
-  private fun createSecurePrefs(
-    context: Context,
-    name: String,
-  ): SharedPreferences =
-    EncryptedSharedPreferences.create(
-      context,
-      name,
-      masterKey,
-      EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-      EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-    )
-
   private fun loadOrCreateInstanceId(): String {
     val existing = plainPrefs.getString("node.instanceId", null)?.trim()
     if (!existing.isNullOrBlank()) return existing
@@ -703,39 +688,21 @@ class SecurePrefs(
     if (existing.isNotEmpty() && existing != "Android Node") return existing
 
     // Replace the historical generic name with a device-specific default once.
-    val candidate = DeviceNames.bestDefaultNodeName(context).trim()
-    val resolved = candidate.ifEmpty { "Android Node" }
+    val resolved = DeviceNames.bestDefaultNodeName(context)
 
     plainPrefs.edit { putString(displayNameKey, resolved) }
     return resolved
   }
 
-  fun setVoiceMicEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(voiceMicEnabledKey, value) }
-    _voiceMicEnabled.value = value
-  }
+  fun setVoiceMicEnabled(value: Boolean) = _voiceMicEnabled.persistBoolean(voiceMicEnabledKey, value)
 
-  fun setVoiceWakeEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(voiceWakeEnabledKey, value) }
-    _voiceWakeEnabled.value = value
-  }
+  fun setVoiceWakeEnabled(value: Boolean) = _voiceWakeEnabled.persistBoolean(voiceWakeEnabledKey, value)
 
-  fun setVoiceWakeWords(words: List<String>) {
-    val sanitized = VoiceWakePreferences.sanitizeTriggerWords(words)
-    plainPrefs.edit { putString(voiceWakeWordsKey, JsonArray(sanitized.map(::JsonPrimitive)).toString()) }
-    _voiceWakeWords.value = sanitized
-  }
+  fun setVoiceWakeWords(words: List<String>) = _voiceWakeWords.persistStringList(voiceWakeWordsKey, VoiceWakePreferences.sanitizeTriggerWords(words))
 
-  fun setSpeakerEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("voice.speakerEnabled", value) }
-    _speakerEnabled.value = value
-  }
+  fun setSpeakerEnabled(value: Boolean) = _speakerEnabled.persistBoolean("voice.speakerEnabled", value)
 
-  fun setPreferredCameraFacing(value: String) {
-    val facing = value.takeIf { it == "back" } ?: "front"
-    plainPrefs.edit { putString(preferredCameraFacingKey, facing) }
-    _preferredCameraFacing.value = facing
-  }
+  fun setPreferredCameraFacing(value: String) = _preferredCameraFacing.persistString(preferredCameraFacingKey, value.takeIf { it == "back" } ?: "front")
 
   fun setPreferredAudioInputDevice(value: String?) {
     val key = value?.takeIf(String::isNotBlank)
@@ -756,21 +723,23 @@ class SecurePrefs(
   }
 
   private fun loadPendingAppearancePreferences(): List<PendingAppearancePreference> {
-    val stored = plainPrefs.getString(appearancePendingPreferencesKey, null)
+    val stored = plainPrefs.getString(appearancePendingPreferencesKey, null) ?: return emptyList()
     val decoded =
-      stored?.let {
-        runCatching { json.decodeFromString<List<PendingAppearancePreference>>(it) }.getOrNull()
-      }
-    if (decoded != null) {
-      return deduplicatePendingAppearancePreferences(
-        decoded.filter { preference ->
-          preference.key in appearanceSyncKeys &&
-            !preference.gatewayStableId.isNullOrBlank() &&
-            !preference.profileId.isNullOrBlank()
-        },
-      )
-    }
-    return emptyList()
+      runCatching { json.decodeFromString<List<PendingAppearancePreference>>(stored) }.getOrNull()
+        ?: return emptyList()
+    return deduplicatePendingAppearancePreferences(
+      decoded.filter { preference ->
+        preference.key in appearanceSyncKeys &&
+          !preference.gatewayStableId.isNullOrBlank() &&
+          !preference.profileId.isNullOrBlank()
+      },
+    )
+  }
+
+  @Synchronized
+  fun setAppearanceTextScale(scale: AppearanceTextScale) {
+    plainPrefs.edit { putInt(appearanceTextScaleKey, scale.percent) }
+    _appearanceTextScale.value = scale
   }
 
   @Synchronized
@@ -1079,37 +1048,46 @@ class SecurePrefs(
       } else {
         _modelFavorites.value + trimmed
       }
-    persistChatModelRefs(chatModelFavoritesKey, next)
-    _modelFavorites.value = next
+    _modelFavorites.persistStringList(chatModelFavoritesKey, next)
   }
 
   fun recordModelRecent(ref: String) {
     val trimmed = ref.trim()
     if (trimmed.isEmpty()) return
-    val next = (listOf(trimmed) + _modelRecents.value.filterNot { it == trimmed }).take(maxChatModelRecents)
-    persistChatModelRefs(chatModelRecentsKey, next)
-    _modelRecents.value = next
+    _modelRecents.persistStringList(chatModelRecentsKey, (listOf(trimmed) + _modelRecents.value.filterNot { it == trimmed }).take(maxChatModelRecents))
   }
 
-  fun setSessionCustomGroups(groups: List<String>) {
-    val sanitized = groups.map(String::trim).filter { it.isNotEmpty() }.distinct()
-    persistChatModelRefs(sessionCustomGroupsKey, sanitized)
-    _sessionCustomGroups.value = sanitized
+  fun setSessionCustomGroups(groups: List<String>) = _sessionCustomGroups.persistStringList(sessionCustomGroupsKey, groups.map(String::trim).filter { it.isNotEmpty() }.distinct())
+
+  fun setSidebarPageOrder(pageIds: List<String>) = _sidebarPageOrder.persistStringList(sidebarPageOrderKey, sanitizeSidebarPageOrder(pageIds))
+
+  fun setSidebarVisiblePages(pageIds: List<String>) = _sidebarVisiblePages.persistStringList(sidebarVisiblePagesKey, sanitizeSidebarVisiblePages(pageIds))
+
+  private fun MutableStateFlow<Boolean>.persistBoolean(
+    key: String,
+    next: Boolean,
+  ) {
+    plainPrefs.edit { putBoolean(key, next) }
+    value = next
   }
 
-  fun setSidebarPageOrder(pageIds: List<String>) {
-    val sanitized = sanitizeSidebarPageOrder(pageIds)
-    persistChatModelRefs(sidebarPageOrderKey, sanitized)
-    _sidebarPageOrder.value = sanitized
+  private fun MutableStateFlow<String>.persistString(
+    key: String,
+    next: String,
+  ) {
+    plainPrefs.edit { putString(key, next) }
+    value = next
   }
 
-  fun setSidebarVisiblePages(pageIds: List<String>) {
-    val sanitized = sanitizeSidebarVisiblePages(pageIds)
-    persistChatModelRefs(sidebarVisiblePagesKey, sanitized)
-    _sidebarVisiblePages.value = sanitized
+  private fun MutableStateFlow<List<String>>.persistStringList(
+    key: String,
+    next: List<String>,
+  ) {
+    this@SecurePrefs.persistStringList(key, next)
+    value = next
   }
 
-  private fun persistChatModelRefs(
+  private fun persistStringList(
     key: String,
     refs: List<String>,
   ) {
@@ -1117,26 +1095,7 @@ class SecurePrefs(
     plainPrefs.edit { putString(key, encoded) }
   }
 
-  private fun loadNotificationForwardingPackages(): Set<String> {
-    val raw = plainPrefs.getString(notificationsForwardingPackagesKey, null)?.trim()
-    if (raw.isNullOrEmpty()) {
-      return emptySet()
-    }
-    return try {
-      val element = json.parseToJsonElement(raw)
-      val array = element as? JsonArray ?: return emptySet()
-      array
-        .mapNotNull { item ->
-          when (item) {
-            is JsonNull -> null
-            is JsonPrimitive -> item.content.trim().takeIf { it.isNotEmpty() }
-            else -> null
-          }
-        }.toSet()
-    } catch (_: Throwable) {
-      emptySet()
-    }
-  }
+  private fun loadNotificationForwardingPackages(): Set<String> = loadStringList(notificationsForwardingPackagesKey).toSet()
 
   private fun loadLocationMode(): LocationMode {
     val raw = plainPrefs.getString(locationModeKey, "off")
@@ -1162,28 +1121,23 @@ class SecurePrefs(
     return migratedValue
   }
 
-  private fun loadSidebarPageOrder(): List<String> = sanitizeSidebarPageOrder(loadChatModelRefs(sidebarPageOrderKey))
+  private fun loadSidebarPageOrder(): List<String> = sanitizeSidebarPageOrder(loadStringList(sidebarPageOrderKey))
 
   private fun loadSidebarVisiblePages(): List<String> =
     if (!plainPrefs.contains(sidebarVisiblePagesKey)) {
       defaultSidebarVisiblePages
     } else {
-      sanitizeSidebarVisiblePages(loadChatModelRefs(sidebarVisiblePagesKey))
+      sanitizeSidebarVisiblePages(loadStringList(sidebarVisiblePagesKey))
     }
 
-  private fun loadChatModelRefs(key: String): List<String> {
+  private fun loadStringList(key: String): List<String> {
     val raw = plainPrefs.getString(key, null)?.trim()
     if (raw.isNullOrEmpty()) return emptyList()
     return try {
       val array = json.parseToJsonElement(raw) as? JsonArray ?: return emptyList()
       array
-        .mapNotNull { item ->
-          when (item) {
-            is JsonNull -> null
-            is JsonPrimitive -> item.content.trim().takeIf { it.isNotEmpty() }
-            else -> null
-          }
-        }.distinct()
+        .mapNotNull { it.asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) }
+        .distinct()
     } catch (_: Throwable) {
       emptyList()
     }

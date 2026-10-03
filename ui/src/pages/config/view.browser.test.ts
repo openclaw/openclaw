@@ -1,11 +1,13 @@
 // Control UI tests cover config behavior.
 import { render } from "lit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import "../../styles.css";
-import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import { renderConfigForm } from "../../components/config-form.ts";
+import "../../styles.css";
+import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
+import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
+import { baseProps, renderConfigView } from "./config-view.test-support.ts";
 import { createConfigViewState, renderConfig, type ConfigProps } from "./view.ts";
 
 describe("config view", () => {
@@ -13,108 +15,6 @@ describe("config view", () => {
   // steady state where raw diffs parse synchronously.
   beforeAll(async () => {
     await warmJson5();
-  });
-
-  const baseProps = () => ({
-    raw: "{\n}\n",
-    originalRaw: "{\n}\n",
-    valid: true,
-    issues: [],
-    loading: false,
-    saving: false,
-    applying: false,
-    updating: false,
-    connected: true,
-    schema: {
-      type: "object",
-      properties: {},
-    },
-    schemaLoading: false,
-    uiHints: {},
-    formMode: "form" as const,
-    viewState: createConfigViewState(),
-    showModeToggle: true,
-    formValue: {},
-    originalValue: {},
-    activeSection: null,
-    activeSubsection: null,
-    onRawChange: vi.fn(),
-    onFormModeChange: vi.fn(),
-    onViewStateChange: vi.fn(),
-    onFormPatch: vi.fn(),
-    onFormRemove: vi.fn(),
-    onSectionChange: vi.fn(),
-    onSave: vi.fn(),
-    onRawDiscard: vi.fn(),
-    onSubsectionChange: vi.fn(),
-    version: "2026.3.11",
-    theme: "claw" as ThemeName,
-    themeOverridden: false,
-    themeProvenance: "default" as const,
-    themeResetValue: "claw" as ThemeName,
-    themeMode: "system" as ThemeMode,
-    themeModeOverridden: false,
-    themeModeProvenance: "default" as const,
-    themeModeResetValue: "system" as ThemeMode,
-    fontUi: undefined,
-    fontChat: undefined,
-    fontUiProvenance: "default" as const,
-    fontChatProvenance: "default" as const,
-    setFontUi: vi.fn(),
-    setFontChat: vi.fn(),
-    accent: undefined,
-    accentOverridden: false,
-    accentProvenance: "default" as const,
-    systemLocale: "en" as const,
-    localeOverride: undefined,
-    localeOverridden: false,
-    localeProvenance: "default" as const,
-    localeResetValue: undefined,
-    onLocaleChange: vi.fn(),
-    setTheme: vi.fn(),
-    setThemeMode: vi.fn(),
-    setAccent: vi.fn(),
-    hasCustomTheme: false,
-    customThemeLabel: null,
-    customThemeSourceUrl: null,
-    customThemeImportUrl: "",
-    customThemeImportBusy: false,
-    customThemeImportMessage: null,
-    customThemeImportExpanded: false,
-    customThemeImportFocusToken: 0,
-    onCustomThemeImportUrlChange: vi.fn(),
-    onImportCustomTheme: vi.fn(),
-    onClearCustomTheme: vi.fn(),
-    onOpenCustomThemeImport: vi.fn(),
-    textScale: 100,
-    textScaleOverridden: false,
-    setTextScale: vi.fn(),
-    sidebarLiveActivity: true,
-    setSidebarLiveActivity: vi.fn(),
-    hiddenSessionCatalogIds: new Set<string>(),
-    hiddenSessionCatalogLabels: new Map<string, string>(),
-    setSessionCatalogHidden: vi.fn(),
-    chatMessageMaxWidth: undefined,
-    setChatMessageMaxWidth: vi.fn(),
-    chatCollapseTaskProgress: false,
-    setChatCollapseTaskProgress: vi.fn(),
-    showAdvancedSettings: false,
-    setShowAdvancedSettings: vi.fn(),
-    chatSendShortcut: "enter" as const,
-    chatSendShortcutOverridden: false,
-    chatSendShortcutProvenance: "default" as const,
-    chatSendShortcutResetValue: "enter" as const,
-    setChatSendShortcut: vi.fn(),
-    chatFollowUpMode: undefined,
-    chatFollowUpModeOverridden: false,
-    chatFollowUpModeProvenance: "default" as const,
-    serverQueueMode: "steer" as const,
-    setChatFollowUpMode: vi.fn(),
-    resetChatFollowUpMode: vi.fn(),
-    catalogOpenTarget: "viewer" as const,
-    setCatalogOpenTarget: vi.fn(),
-    gatewayUrl: "",
-    assistantName: "OpenClaw",
   });
 
   it("lets config pages grow with their content instead of creating an inner viewport", async () => {
@@ -146,7 +46,6 @@ describe("config view", () => {
       lastRunCommit: "abc1234",
       lastRunCommand: "onboard",
       lastRunMode: "local",
-      localModelLeanAutoModel: "internal/model",
       securityAcknowledgedAt: "2026-08-29T12:00:00Z",
     };
     const schema = {
@@ -177,7 +76,6 @@ describe("config view", () => {
     expect(setup.open).toBe(false);
     setup.open = true;
     expect(setup.textContent).toContain(wizard.lastRunVersion);
-    expect(setup.textContent).not.toContain(wizard.localModelLeanAutoModel);
     expect(setup.textContent).not.toContain(wizard.securityAcknowledgedAt);
     expect(setup.querySelectorAll("input, textarea, select")).toHaveLength(0);
     expect(onFormPatch).not.toHaveBeenCalled();
@@ -278,32 +176,11 @@ describe("config view", () => {
     );
   }
 
-  function renderConfigView(overrides: Partial<ConfigProps> = {}): {
-    container: HTMLElement;
-    props: ConfigProps;
-  } {
-    const container = document.createElement("div");
-    const props = {
-      ...baseProps(),
-      ...overrides,
-    };
-    const rerender = () =>
-      render(
-        renderConfig({
-          ...props,
-          onViewStateChange: rerender,
-        }),
-        container,
-      );
-    rerender();
-    return { container, props };
-  }
-
   function normalizedText(container: HTMLElement): string {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
 
-  it("names the theme's chat face and maps typography sentinels back to unset overrides", () => {
+  it("names the theme's chat face and maps typography sentinels back to unset overrides", async () => {
     const { container, props } = renderConfigView({
       theme: "dash",
       fontUi: "geist",
@@ -312,27 +189,27 @@ describe("config view", () => {
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
     });
-    const ui = queryRequired(container, "#settings-font-ui", HTMLElement) as HTMLElement & {
-      value: string;
-    };
-    const chat = queryRequired(container, "#settings-font-chat", HTMLElement) as HTMLElement & {
-      value: string;
-    };
-    expect(ui.querySelector('wa-option[value="theme"]')?.textContent).toContain("Dash · DM Sans");
-    expect(chat.querySelector('wa-option[value="theme"]')?.textContent).toContain(
+    await updatePickers(container);
+    const ui = queryRequired(container, "#settings-font-ui", HTMLElement).closest<SelectPicker>(
+      "openclaw-select-picker",
+    )!;
+    const chat = queryRequired(container, "#settings-font-chat", HTMLElement).closest<SelectPicker>(
+      "openclaw-select-picker",
+    )!;
+    expect(ui.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
+      "Dash · DM Sans",
+    );
+    expect(chat.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
       "Dash · Fraunces",
     );
     expect(ui.closest(".settings-row")?.textContent).toContain("Saved to your profile");
-    expect(ui.querySelectorAll("wa-option")).toHaveLength(11);
-    expect(chat.querySelectorAll("wa-option")).toHaveLength(11);
-    Object.defineProperty(ui, "value", { configurable: true, value: "lora" });
-    ui.dispatchEvent(new Event("change"));
+    expect(ui.querySelectorAll('[role="option"]')).toHaveLength(11);
+    expect(chat.querySelectorAll('[role="option"]')).toHaveLength(11);
+    await choosePickerValue(ui, "lora");
     expect(props.setFontUi).toHaveBeenLastCalledWith("lora");
-    Object.defineProperty(ui, "value", { configurable: true, value: "theme" });
-    ui.dispatchEvent(new Event("change"));
+    await choosePickerValue(ui, "theme");
     expect(props.setFontUi).toHaveBeenLastCalledWith(undefined);
-    Object.defineProperty(chat, "value", { configurable: true, value: "theme" });
-    chat.dispatchEvent(new Event("change"));
+    await choosePickerValue(chat, "theme");
     expect(props.setFontChat).toHaveBeenLastCalledWith(undefined);
   });
 
@@ -345,7 +222,7 @@ describe("config view", () => {
     });
     const inheritedInput =
       inherited.container.querySelector<HTMLInputElement>("[data-accent-custom]");
-    expect(inherited.container.querySelector("#settings-accent-status")?.textContent).toContain(
+    expect(inherited.container.querySelector("#settings-accent-status")?.textContent).not.toContain(
       "Using inherited accent",
     );
     expect(inheritedInput?.getAttribute("aria-describedby")).toBe("settings-accent-status");
@@ -718,7 +595,6 @@ describe("config view", () => {
       },
       uiHints: { "gateway.mode": { advanced: false } },
       formValue: { gateway: { mode: "remote" } },
-      originalValue: { gateway: { mode: "local" } },
     });
 
     expect(container.querySelector(".config-actions")).toBeNull();
@@ -765,7 +641,11 @@ describe("config view", () => {
     // The capability refuses form submissions until the raw draft is saved or
     // discarded, so the raw actions stay on screen and Form remains gated.
     expect(container.querySelector(".config-raw-actions")).not.toBeNull();
-    expect(findButtonByText(container, "Form").disabled).toBe(true);
+    const formButton = findButtonByText(container, "Form");
+    const rawButton = findButtonByText(container, "Raw");
+    expect(formButton.disabled).toBe(true);
+    expect(formButton.getAttribute("aria-pressed")).toBe("false");
+    expect(rawButton.getAttribute("aria-pressed")).toBe("true");
   });
 
   it("disables raw save/discard without changes and locks the editor while busy", () => {
@@ -803,7 +683,6 @@ describe("config view", () => {
       },
       uiHints: { "gateway.mode": { advanced: false } },
       formValue: { gateway: { mode: "remote" } },
-      originalValue: { gateway: { mode: "local" } },
     });
     expect(container.querySelector(".config-content input")?.hasAttribute("disabled")).toBe(true);
   });
@@ -837,7 +716,6 @@ describe("config view", () => {
         },
       },
       formValue: { lastTouchedAt: "2026-07-13T00:00:00.000Z" },
-      originalValue: { lastTouchedAt: "2026-07-13T00:00:00.000Z" },
     };
 
     render(renderConfig({ ...props, formMode: "form" }), container);
@@ -870,12 +748,12 @@ describe("config view", () => {
         },
       },
       formValue: { gateway: { mode: "local" } },
-      originalValue: { gateway: { mode: "local" } },
     });
 
     const formButton = findButtonByText(container, "Form");
     const rawButton = findButtonByText(container, "Raw");
-    expect([...formButton.classList]).toEqual(["config-mode-toggle__btn", "active"]);
+    expect(formButton.getAttribute("aria-pressed")).toBe("true");
+    expect(rawButton.getAttribute("aria-pressed")).toBe("false");
     expect(rawButton.disabled).toBe(true);
     expect(rawButton.getAttribute("title")).toBe("Raw mode unavailable for this snapshot");
     expect(container.querySelector(".config-raw-field")).toBeNull();
@@ -979,6 +857,42 @@ describe("config view", () => {
     expect(queryRequired(expanded.container, `#${controlledPanelId}`, HTMLDivElement).hidden).toBe(
       false,
     );
+    expect(
+      queryRequired(
+        expanded.container,
+        ".config-accordion-group__item--active",
+        HTMLButtonElement,
+      ).getAttribute("aria-current"),
+    ).toBe("true");
+    expect(
+      collapsed.container
+        .querySelector(".config-accordion-group__item")
+        ?.hasAttribute("aria-current"),
+    ).toBe(false);
+  });
+
+  it("exposes the selected Form/Raw mode through aria-pressed", () => {
+    const base = {
+      schema: {
+        type: "object",
+        properties: {
+          gateway: { type: "object", properties: { mode: { type: "string" } } },
+        },
+      },
+      formValue: { gateway: { mode: "local" } },
+    } as const;
+    const formMode = renderConfigView({ ...base, formMode: "form" });
+    expect(findButtonByText(formMode.container, "Form").getAttribute("aria-pressed")).toBe("true");
+    expect(findButtonByText(formMode.container, "Raw").getAttribute("aria-pressed")).toBe("false");
+
+    const rawMode = renderConfigView({
+      ...base,
+      formMode: "raw",
+      raw: "{}\n",
+      originalRaw: "{}\n",
+    });
+    expect(findButtonByText(rawMode.container, "Form").getAttribute("aria-pressed")).toBe("false");
+    expect(findButtonByText(rawMode.container, "Raw").getAttribute("aria-pressed")).toBe("true");
   });
 
   it("renders the virtual Notifications tab on Notifications settings", () => {
@@ -993,7 +907,6 @@ describe("config view", () => {
         properties: {},
       },
       formValue: {},
-      originalValue: {},
       webPush: {
         supported: true,
         permission: "default",
@@ -1180,10 +1093,6 @@ describe("config view", () => {
         channels: { telegram: "on" },
         messages: { inbox: "smart" },
       },
-      originalValue: {
-        channels: { telegram: "on" },
-        messages: { inbox: "smart" },
-      },
     });
     document.body.append(container);
 
@@ -1308,10 +1217,6 @@ describe("config view", () => {
         channels: { telegram: "enabled" },
         models: {},
       },
-      originalValue: {
-        channels: { telegram: "enabled" },
-        models: {},
-      },
     });
 
     expect(
@@ -1339,11 +1244,6 @@ describe("config view", () => {
       },
       uiHints: { "auth.order": { advanced: false } },
       formValue: {
-        auth: {
-          order: {},
-        },
-      },
-      originalValue: {
         auth: {
           order: {},
         },
@@ -1376,10 +1276,6 @@ describe("config view", () => {
         },
       },
       formValue: {
-        auth: {},
-        gateway: {},
-      },
-      originalValue: {
         auth: {},
         gateway: {},
       },
@@ -1445,11 +1341,6 @@ describe("config view", () => {
           mode: "remote",
         },
       },
-      originalValue: {
-        gateway: {
-          mode: "local",
-        },
-      },
       onRawChange,
     };
     const rerender = () =>
@@ -1486,7 +1377,8 @@ describe("config view", () => {
   it("does not render a pending-changes panel for form drafts (they auto-save)", () => {
     const { container } = renderConfigView({
       formValue: { boundary: "after" },
-      originalValue: { boundary: "before" },
+      raw: '{ boundary: "after" }',
+      originalRaw: '{ boundary: "before" }',
     });
 
     expect(container.querySelector(".config-diff")).toBeNull();
@@ -1507,15 +1399,6 @@ describe("config view", () => {
           discord: {
             token: {
               id: "TOKEN_AFTER",
-            },
-          },
-        },
-      },
-      originalValue: {
-        channels: {
-          discord: {
-            token: {
-              id: "TOKEN_BEFORE",
             },
           },
         },
@@ -1567,9 +1450,6 @@ describe("config view", () => {
       formValue: {
         token: "TOKEN_A_AFTER",
       },
-      originalValue: {
-        token: "TOKEN_A_BEFORE",
-      },
     };
     const rerender = () =>
       render(
@@ -1600,9 +1480,6 @@ describe("config view", () => {
     props.originalRaw = '{\n  token: "TOKEN_B_BEFORE"\n}\n';
     props.formValue = {
       token: "TOKEN_B_AFTER",
-    };
-    props.originalValue = {
-      token: "TOKEN_B_BEFORE",
     };
     rerender();
 
@@ -1649,13 +1526,6 @@ describe("config view", () => {
           },
         },
       },
-      originalValue: {
-        integrations: {
-          "foo.bar": {
-            credential: "TOKEN_BEFORE",
-          },
-        },
-      },
     };
     const rerender = () =>
       render(
@@ -1695,11 +1565,6 @@ describe("config view", () => {
           mode: "remote",
         },
       },
-      originalValue: {
-        gateway: {
-          mode: "local",
-        },
-      },
     };
     const rerender = () =>
       render(
@@ -1721,7 +1586,7 @@ describe("config view", () => {
     ).toBe("gateway.mode");
 
     props.raw = props.originalRaw;
-    props.formValue = props.originalValue;
+    props.formValue = { gateway: { mode: "local" } };
     rerender();
 
     expect(container.querySelector(".config-diff")).toBeNull();
@@ -1752,13 +1617,6 @@ describe("config view", () => {
         },
       },
     };
-    const secretRefOriginalValue = {
-      channels: {
-        discord: {
-          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-        },
-      },
-    };
     const { container } = renderConfigView({
       schema: secretRefSchema,
       uiHints: {
@@ -1766,7 +1624,6 @@ describe("config view", () => {
       },
       formMode: "form",
       formValue: secretRefValue,
-      originalValue: secretRefOriginalValue,
       onFormPatch,
     });
 
@@ -1789,7 +1646,6 @@ describe("config view", () => {
           "channels.discord.token": { sensitive: true, advanced: false },
         },
         formValue: secretRefValue,
-        originalValue: secretRefOriginalValue,
       }),
       container,
     );
@@ -1818,11 +1674,6 @@ describe("config view", () => {
       },
       uiHints: { "gateway.mode": { advanced: false } },
       formValue: {
-        gateway: {
-          mode: { malformed: true },
-        },
-      },
-      originalValue: {
         gateway: {
           mode: { malformed: true },
         },
@@ -1907,7 +1758,7 @@ describe("config view", () => {
     expect(findButtonByText(customContainer, "Claw").getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("shows Appearance default descriptions", () => {
+  it("keeps Appearance defaults quiet while retaining the controls", () => {
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
@@ -1920,18 +1771,8 @@ describe("config view", () => {
     });
     const text = normalizedText(container);
 
-    for (const expected of [
-      "Using default: System",
-      "Using default: Claw",
-      "Using default: 100%",
-      "Using default: Enabled",
-      "Using default: 48rem",
-      "Using default: Enter",
-      "Using default: OpenClaw viewer",
-      "Using default: Disabled",
-    ]) {
-      expect(text).toContain(expected);
-    }
+    expect(text).not.toContain("Using default:");
+    expect(text).toContain("Stored in this browser only");
     const lobsterPreviews = container.querySelectorAll(".lobsterdex__mini");
     expect(lobsterPreviews).toHaveLength(42);
     expect([...lobsterPreviews].every((preview) => preview.getAttribute("role") === "img")).toBe(
@@ -1957,7 +1798,6 @@ describe("config view", () => {
       themeModeOverridden: true,
       setThemeMode,
       accent: "#52c99a",
-      accentOverridden: true,
       setAccent,
       textScale: 110,
       textScaleOverridden: true,
@@ -1983,8 +1823,8 @@ describe("config view", () => {
       .find((button) => button.textContent?.includes("100%"))
       ?.click();
 
-    expect(setTheme).toHaveBeenCalledWith("claw", expect.any(Object));
-    expect(setThemeMode).toHaveBeenCalledWith("system", expect.any(Object));
+    expect(setTheme).toHaveBeenCalledWith("claw");
+    expect(setThemeMode).toHaveBeenCalledWith("system");
     expect(setAccent).toHaveBeenCalledWith(undefined);
     expect(setTextScale).toHaveBeenCalledWith(100);
   });
@@ -2019,8 +1859,8 @@ describe("config view", () => {
     findButtonByText(themeSection, "Claw").click();
     themeSection.querySelector<HTMLElement>('wa-radio[value="system"]')?.click();
 
-    expect(setTheme).toHaveBeenCalledWith("claw", expect.any(Object));
-    expect(setThemeMode).toHaveBeenCalledWith("system", expect.any(Object));
+    expect(setTheme).toHaveBeenCalledWith("claw");
+    expect(setThemeMode).toHaveBeenCalledWith("system");
   });
 
   it("renders rejected theme and locale edits as browser-only fallbacks", () => {
@@ -2065,7 +1905,7 @@ describe("config view", () => {
 
     findButtonByText(themeSection, "Claw").click();
 
-    expect(setTheme).toHaveBeenCalledWith("claw", expect.any(Object));
+    expect(setTheme).toHaveBeenCalledWith("claw");
   });
 
   it("shows pending synced preferences without claiming they already synced", () => {
@@ -2121,7 +1961,8 @@ describe("config view", () => {
     );
     for (const title of [
       "Message width",
-      "Collapse task progress by default",
+      "Show task progress cards",
+      "Collapse task progress by default on desktop",
       "Open external sessions in",
       "Hold microphone button to start dictation",
     ]) {
@@ -2141,14 +1982,14 @@ describe("config view", () => {
     const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
       (candidate) =>
         candidate.querySelector(".settings-row__title")?.textContent?.trim() ===
-        "Collapse task progress by default",
+        "Collapse task progress by default on desktop",
     );
     const toggle = row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
 
     expect(toggle?.checked).toBe(false);
     row?.click();
     expect(setChatCollapseTaskProgress).toHaveBeenCalledWith(true);
-    expect(row?.textContent).toContain("Using default: Disabled");
+    expect(row?.textContent).not.toContain("Using default:");
     expect(row?.textContent).toContain("Stored in this browser only");
   });
 
@@ -2197,7 +2038,7 @@ describe("config view", () => {
     const customButton = findButtonByText(container, "Light Green");
     expect(customButton.disabled).toBe(false);
     customButton.click();
-    expect(setTheme).toHaveBeenCalledWith("custom", { element: customButton });
+    expect(setTheme).toHaveBeenCalledWith("custom");
 
     const replaceButton = findButtonContainingText(container, "Replace Light Green");
     const clearButton = findButtonContainingText(container, "Clear Light Green");
@@ -2267,7 +2108,8 @@ describe("config view", () => {
       "steer",
       "queue",
     ]);
-    expect(container.textContent).toContain("Using server default (steer)");
+    expect(container.textContent).not.toContain("Using server default");
+    expect(followUpSelect.selectedOptions[0]?.textContent?.trim()).toBe("Server default (steer)");
     const microphoneSelect = queryRequired(
       container,
       "[data-settings-microphone]",

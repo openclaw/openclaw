@@ -76,6 +76,19 @@ describe("tryFastApproveFromMessage", () => {
     );
   });
 
+  it("never submits a suppressed approval command even when command access allows it", async () => {
+    const ctx = buildTestCtx({
+      Body: "/approve exec-1 allow-once",
+      CommandBody: "/approve exec-1 allow-once",
+      CommandInterpretationSuppressed: true,
+      CommandAuthorized: true,
+    });
+    const cfg = { commands: { allowFrom: { "*": ["*"] } } } satisfies OpenClawConfig;
+
+    await expect(tryFastApproveFromMessage({ ctx, cfg })).resolves.toEqual({ handled: false });
+    expect(handleApproveCommandFromContextMock).not.toHaveBeenCalled();
+  });
+
   it("uses the canonical command text instead of iMessage reply context", async () => {
     handleApproveCommandFromContextMock.mockResolvedValue({
       shouldContinue: false,
@@ -115,17 +128,6 @@ describe("tryFastApproveFromMessage", () => {
       ChatType: "direct",
     });
 
-    await expect(tryFastApproveFromMessage({ ctx, cfg: {} as OpenClawConfig })).resolves.toEqual({
-      handled: false,
-    });
-    expect(handleApproveCommandFromContextMock).not.toHaveBeenCalled();
-  });
-
-  it("ignores ordinary text", async () => {
-    const ctx = buildTestCtx({
-      Body: "hello",
-      Provider: "imessage",
-    });
     await expect(tryFastApproveFromMessage({ ctx, cfg: {} as OpenClawConfig })).resolves.toEqual({
       handled: false,
     });

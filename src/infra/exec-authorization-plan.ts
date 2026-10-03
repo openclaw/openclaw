@@ -198,20 +198,14 @@ function riskBeforeStepExecutable(risk: CommandRisk, step: CommandStep): boolean
   return riskInsideStep(risk, step) && risk.span.endIndex <= step.executableSpan.startIndex;
 }
 
-function stepReasons(step: CommandStep, risks: readonly CommandRisk[]): string[] {
+function stepReasons(
+  step: CommandStep,
+  risks: readonly CommandRisk[],
+  kinds: ReadonlySet<CommandRisk["kind"]> = PROMPT_ONLY_RISKS,
+): string[] {
   const reasons: string[] = [];
   for (const risk of risks) {
-    if (PROMPT_ONLY_RISKS.has(risk.kind) && riskInsideStep(risk, step)) {
-      reasons.push(risk.kind);
-    }
-  }
-  return uniqueStrings(reasons);
-}
-
-function nonReusableStepReasons(step: CommandStep, risks: readonly CommandRisk[]): string[] {
-  const reasons: string[] = [];
-  for (const risk of risks) {
-    if (NON_REUSABLE_RISKS.has(risk.kind) && riskInsideStep(risk, step)) {
+    if (kinds.has(risk.kind) && riskInsideStep(risk, step)) {
       reasons.push(risk.kind);
     }
   }
@@ -274,14 +268,11 @@ function isPathScopedExecutableToken(token: string): boolean {
   return token.includes("/") || token.includes("\\");
 }
 
-function hasResolvedExecutionPath(segment: ExecCommandSegment): boolean {
-  const execution = segment.resolution?.execution;
-  return Boolean(execution?.resolvedPath?.trim() || execution?.resolvedRealPath?.trim());
-}
-
 function isUnresolvedPathScopedExecutable(segment: ExecCommandSegment): boolean {
+  const execution = segment.resolution?.execution;
   return (
-    isPathScopedExecutableToken(segment.argv[0]?.trim() ?? "") && !hasResolvedExecutionPath(segment)
+    isPathScopedExecutableToken(segment.argv[0]?.trim() ?? "") &&
+    !(execution?.resolvedPath?.trim() || execution?.resolvedRealPath?.trim())
   );
 }
 
@@ -411,7 +402,7 @@ function createCandidate(params: {
     params.transport.kind === "direct" &&
     extractBindableShellWrapperInlineCommand(params.segment.argv);
   const stepPromptReasons = stepReasons(params.step, params.risks);
-  const stepNonReusableReasons = nonReusableStepReasons(params.step, params.risks);
+  const stepNonReusableReasons = stepReasons(params.step, params.risks, NON_REUSABLE_RISKS);
   const preludeReasons = hasCommandPrelude(params.step)
     ? shellWrapperPreludeReasons({ step: params.step, risks: params.risks })
     : [];
@@ -501,10 +492,6 @@ function groupsFromSteps(params: {
   }
 
   for (const entry of sorted) {
-    if (current.length === 0) {
-      current = [entry];
-      continue;
-    }
     const previous = current[current.length - 1];
     if (!previous) {
       current = [entry];
@@ -516,15 +503,11 @@ function groupsFromSteps(params: {
       current.push(entry);
       continue;
     }
-    const opToNext =
-      operator === "&&" || operator === "||" || operator === ";" || operator === "&"
-        ? operator
-        : ";";
     groups.push(
       finalizeGroup({
         steps: current,
         relationship: "simple",
-        opToNext,
+        opToNext: operator ?? ";",
         transport: params.transport,
         risks: params.risks,
       }),
@@ -579,22 +562,6 @@ function shouldUseWrapperPayload(params: {
   );
 }
 
-function applyWrapperPayloadPersistenceBoundary(params: {
-  wrapper: CommandStepWithSegment;
-  groups: ExecAuthorizationGroup[];
-}): ExecAuthorizationGroup[] {
-  if (!isUnresolvedPathScopedExecutable(params.wrapper.segment)) {
-    return params.groups;
-  }
-  return params.groups.map((group) => ({
-    ...group,
-    candidates: group.candidates.map((candidate) => ({
-      ...candidate,
-      allowAlways: false,
-    })),
-  }));
-}
-
 function wrapperPayloadPlan(params: {
   context: PlanningContext;
   allowNestedPayload: boolean;
@@ -621,22 +588,8 @@ function wrapperPayloadPlan(params: {
     return null;
   }
   const carriedSteps = positionalCarrierSteps({ wrapper, context: params.context });
-  if (carriedSteps) {
-    const transport: ExecAuthorizationTransport = {
-      kind: "shell-wrapper",
-      wrapperSegment: wrapper.segment,
-      wrapperArgv: wrapper.segment.argv,
-      wrapperPrefix: wrapperPrefixForStep(wrapper.step),
-      inlineCommand: wrapperRisk.payload,
-    };
-    const groups = groupsFromSteps({
-      steps: carriedSteps,
-      transport,
-      risks: params.risks,
-    });
-    return groups.length > 0 ? applyWrapperPayloadPersistenceBoundary({ wrapper, groups }) : null;
-  }
   if (
+    !carriedSteps &&
     !shouldUseWrapperPayload({
       wrapperCommandId: wrapper.step.id,
       topLevelSteps: params.topLevelSteps,
@@ -660,12 +613,12 @@ function wrapperPayloadPlan(params: {
     ? params.operators.filter((operator) => operator.parentCommandId === wrapper.step.id)
     : params.operators;
   const groups = groupsFromSteps({
-    steps: nestedStepsForWrapper,
-    operators: operatorsForWrapper,
+    steps: carriedSteps ?? nestedStepsForWrapper,
+    operators: carriedSteps ? undefined : operatorsForWrapper,
     transport,
     risks: params.risks,
   });
-  return groups.length > 0 ? applyWrapperPayloadPersistenceBoundary({ wrapper, groups }) : null;
+  return groups.length > 0 ? groups : null;
 }
 
 function dialectForArgv(argv: readonly string[]): ExecAuthorizationDialect {
@@ -842,7 +795,7 @@ export async function planExecAuthorization(params: {
         const nestedSegments = shellPlan.groups.flatMap((group) =>
           group.candidates.map((candidate) => candidate.sourceSegment),
         );
-        if (wrapperSegment && canUseReusableWrapperPayloadCandidates(nestedSegments)) {
+        if (canUseReusableWrapperPayloadCandidates(nestedSegments)) {
           const persistNestedPayloads = !isUnresolvedPathScopedExecutable(wrapperSegment);
           const groups = shellPlan.groups.map((group) => ({
             ...group,

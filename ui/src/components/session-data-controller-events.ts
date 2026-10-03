@@ -1,8 +1,9 @@
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
 import type {
   SessionCapability,
   SessionListOptions,
@@ -14,8 +15,21 @@ import type {
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 
+// Chat panes announce catalog adoptions so rows bind immediately.
+export function subscribeSessionCatalogBrowserEvents(
+  onContinued: EventListener,
+  onPageActivation: EventListener,
+): () => void {
+  document.addEventListener(CATALOG_SESSION_CONTINUED_EVENT, onContinued);
+  document.addEventListener("visibilitychange", onPageActivation);
+  return () => {
+    document.removeEventListener(CATALOG_SESSION_CONTINUED_EVENT, onContinued);
+    document.removeEventListener("visibilitychange", onPageActivation);
+  };
+}
+
 type SidebarSessionListOwner = {
-  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly context: ApplicationContext | undefined;
   sessionResultsByAgent: Record<string, NonNullable<SessionListSnapshot["result"]>>;
   sessionsResult: SessionListSnapshot["result"];
   sessionsAgentId: SessionListSnapshot["agentId"];
@@ -51,7 +65,9 @@ function pruneSidebarAgentSessionCaches(
   const retainedAgentIds = new Set(agentIds.map(normalizeAgentId));
   for (const agentId of Object.keys(owner.sessionResultsByAgent)) {
     if (!retainedAgentIds.has(agentId)) {
-      delete owner.sessionResultsByAgent[agentId];
+      const next = { ...owner.sessionResultsByAgent };
+      delete next[agentId];
+      owner.sessionResultsByAgent = next;
     }
   }
   if (owner.sessionsAgentId && !retainedAgentIds.has(normalizeAgentId(owner.sessionsAgentId))) {
@@ -112,7 +128,10 @@ export function publishSidebarSessionList(
   owner.sessionsResult = snapshot.result;
   owner.sessionsAgentId = snapshot.agentId;
   if (snapshot.result && snapshot.agentId) {
-    owner.sessionResultsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result;
+    const agentId = normalizeAgentId(snapshot.agentId);
+    if (owner.sessionResultsByAgent[agentId] !== snapshot.result) {
+      owner.sessionResultsByAgent = { ...owner.sessionResultsByAgent, [agentId]: snapshot.result };
+    }
   }
 }
 
@@ -141,6 +160,33 @@ export function subscribeFilteredSidebarSessions(
     unsubscribe();
     publishSidebarSessionError(owner, null, "list");
   };
+}
+
+export function scheduleFilteredSidebarSessions(
+  owner: Pick<SidebarSessionListOwner, "context"> & {
+    readonly isSessionDataHostConnected: boolean;
+    refreshSidebarSessions(): Promise<void>;
+  },
+  readSubscription: () => (() => void) | null,
+): Promise<void> {
+  const context = owner.context;
+  const subscription = readSubscription();
+  if (!context || !subscription) {
+    return Promise.resolve();
+  }
+  return context.connectionBootstrap.run(
+    subscription,
+    async () => {
+      if (
+        owner.context === context &&
+        readSubscription() === subscription &&
+        owner.isSessionDataHostConnected
+      ) {
+        await owner.refreshSidebarSessions();
+      }
+    },
+    { background: true },
+  );
 }
 
 export function refreshSidebarSessionList(
@@ -172,24 +218,31 @@ export function refreshSidebarSessionList(
 type SessionGatewayEventOwner = {
   presencePayload: PresencePayload | undefined;
   handleSessionCatalogHostEvent(payload: unknown): void;
-  handleSessionCatalogPresence(payload: unknown): void;
+  handleSessionCatalogChanged(payload: unknown): void;
   requestSessionDataUpdate(): void;
 };
 
 export function subscribeSessionDataGatewayEvents(
-  gateway: ApplicationContext<RouteId>["gateway"],
+  gateway: ApplicationContext["gateway"],
   owner: SessionGatewayEventOwner,
 ): () => void {
   return gateway.subscribeEvents((event) => {
     if (event.event === "sessions.catalog.host") {
-      owner.handleSessionCatalogHostEvent(event.payload);
+      if (canCallGatewayMethod(gateway.snapshot, "sessions.catalog.list", "operator.read")) {
+        owner.handleSessionCatalogHostEvent(event.payload);
+      }
+      return;
+    }
+    if (event.event === "sessions.catalog.changed") {
+      if (canCallGatewayMethod(gateway.snapshot, "sessions.catalog.list", "operator.read")) {
+        owner.handleSessionCatalogChanged(event.payload);
+      }
       return;
     }
     if (event.event === "presence") {
       const presence = readPresenceEntries(event.payload);
       owner.presencePayload = presence ? { presence } : undefined;
       owner.requestSessionDataUpdate();
-      owner.handleSessionCatalogPresence(event.payload);
     }
   });
 }

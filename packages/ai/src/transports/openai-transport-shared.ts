@@ -12,15 +12,22 @@ import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { getAiTransportHost } from "../host.js";
 import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
-/** Shared options, usage shape, cache identity, ordering, and stream scheduling for OpenAI APIs. */
 import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
 import { headersToRecord } from "../utils/headers.js";
-import { notifyProviderHttpResponse, transportAbortError } from "./transport-stream-shared.js";
+import { notifyProviderHttpResponse } from "./transport-stream-shared.js";
 
 export { sortPromptCacheToolsByName as sortTransportToolsByName } from "../utils/prompt-cache-stability.js";
 
-const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
-const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
+const OPENAI_RESPONSE_MODEL_HEADER_NAMES = new Set(["openai-model", "x-openai-model"]);
+const OPENAI_RESPONSE_MODEL_EVENT_TYPES = new Set([
+  "response.created",
+  "response.in_progress",
+  "response.completed",
+  "response.done",
+  "response.incomplete",
+  "response.failed",
+]);
+const OPENAI_DATED_MODEL_SUFFIX = /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
 
 export const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 export const log = {
@@ -36,6 +43,120 @@ export const log = {
 };
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
+
+const OPENAI_RESPONSE_MODEL_CONFLICT = "Conflicting OpenAI response model attestations";
+
+function splitOpenAIResponseModelHeader(value: string | null | undefined): string[] {
+  return value
+    ? value
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean)
+    : [];
+}
+
+function readOpenAIResponseModelHeaders(headers: Headers): string[] {
+  return [...OPENAI_RESPONSE_MODEL_HEADER_NAMES].flatMap((name) =>
+    splitOpenAIResponseModelHeader(headers.get(name)),
+  );
+}
+
+function readOpenAIResponseModelHeaderRecord(headers: unknown): string[] {
+  if (!isRecord(headers)) {
+    return [];
+  }
+  return Object.entries(headers)
+    .filter(([name]) => OPENAI_RESPONSE_MODEL_HEADER_NAMES.has(name.toLowerCase()))
+    .flatMap(([, value]) =>
+      typeof value === "string" ? splitOpenAIResponseModelHeader(value) : [],
+    );
+}
+
+function readOpenAIResponseModelEvent(event: unknown): string[] {
+  if (!isRecord(event)) {
+    return [];
+  }
+  const response = isRecord(event.response) ? event.response : undefined;
+  return [
+    ...(OPENAI_RESPONSE_MODEL_EVENT_TYPES.has(String(event.type)) &&
+    typeof response?.model === "string" &&
+    response.model.trim()
+      ? [response.model.trim()]
+      : []),
+    ...readOpenAIResponseModelHeaderRecord(response?.headers),
+    ...readOpenAIResponseModelHeaderRecord(event.headers),
+  ];
+}
+
+function reconcileOpenAIResponseModels(
+  current: string | undefined,
+  observed: string,
+): string | undefined {
+  if (!current || current === observed) {
+    return observed;
+  }
+  const currentBase = current.replace(OPENAI_DATED_MODEL_SUFFIX, "");
+  const observedBase = observed.replace(OPENAI_DATED_MODEL_SUFFIX, "");
+  if (currentBase !== observedBase) {
+    return undefined;
+  }
+  // Prefer dated provider evidence when the lifecycle event reports the
+  // documented undated id and a response header reports its concrete release.
+  if (currentBase === current && observedBase !== observed) {
+    return observed;
+  }
+  if (observedBase === observed && currentBase !== current) {
+    return current;
+  }
+  return undefined;
+}
+
+export function createResponseModelTracker(enabled = true) {
+  let responseModel: string | undefined;
+  const observe = (models: readonly string[]) => {
+    for (const model of models) {
+      const reconciled = reconcileOpenAIResponseModels(responseModel, model);
+      if (!reconciled) {
+        throw new Error(OPENAI_RESPONSE_MODEL_CONFLICT);
+      }
+      responseModel = reconciled;
+    }
+  };
+  const begin = (headers?: Headers) => {
+    responseModel = undefined;
+    if (enabled && headers) {
+      observe(readOpenAIResponseModelHeaders(headers));
+    }
+  };
+  const observeEvent = (event: unknown) => {
+    if (enabled) {
+      observe(readOpenAIResponseModelEvent(event));
+    }
+    return responseModel;
+  };
+  const resolve = () => responseModel;
+  return {
+    begin,
+    observeEvent,
+    resolve,
+    track(
+      response: Pick<Response, "headers"> | undefined,
+      stream: AsyncIterable<unknown>,
+    ): AsyncIterable<unknown> {
+      if (!enabled) {
+        return stream;
+      }
+      return (async function* () {
+        begin(response?.headers);
+        for await (const event of stream) {
+          observeEvent(event);
+          yield event;
+        }
+      })();
+    },
+    terminalOptions: enabled ? { resolveResponseModel: resolve } : {},
+  };
+}
 
 export function resolveOpenAIClientBaseUrl(
   model: Pick<Model, "provider" | "baseUrl">,
@@ -74,12 +195,8 @@ type MutableOpenAICompletionsReasoningBatch = {
   hasVisibleText: boolean;
 };
 
-const EMPTY_OPENAI_COMPLETIONS_REASONING_BATCH: OpenAICompletionsReasoningBatch = {
-  deltas: [],
-  mirroredThinking: [],
-  hasThinking: false,
-  hasVisibleText: false,
-};
+const EMPTY_OPENAI_COMPLETIONS_REASONING_BATCH: OpenAICompletionsReasoningBatch =
+  createOpenAICompletionsReasoningBatch();
 
 const OPENAI_COMPLETIONS_REASONING_FIELDS = [
   "reasoning_content",
@@ -97,24 +214,23 @@ function appendOpenAICompletionsReasoningDelta(
     batch.hasVisibleText = true;
   }
   const previous = batch.deltas[batch.deltas.length - 1];
-  if (!previous || previous.kind !== next.kind) {
+  if (
+    !previous ||
+    previous.kind !== next.kind ||
+    (next.kind === "thinking" &&
+      previous.kind === "thinking" &&
+      previous.signature !== next.signature)
+  ) {
     batch.deltas.push(next);
     if (next.kind === "thinking") {
       batch.mirroredThinking.push(next.text);
     }
     return;
   }
-  if (next.kind === "thinking" && previous.kind === "thinking") {
-    if (previous.signature !== next.signature) {
-      batch.deltas.push(next);
-      batch.mirroredThinking.push(next.text);
-      return;
-    }
-    previous.text += next.text;
-    batch.mirroredThinking[batch.mirroredThinking.length - 1] += next.text;
-    return;
-  }
   previous.text += next.text;
+  if (next.kind === "thinking") {
+    batch.mirroredThinking[batch.mirroredThinking.length - 1] += next.text;
+  }
 }
 
 function createOpenAICompletionsReasoningBatch(): MutableOpenAICompletionsReasoningBatch {
@@ -206,6 +322,7 @@ export type MutableAssistantOutput = Omit<AssistantMessage, "content" | "usage">
 export function parseOpenAICompletionsUsage(
   rawUsage: NonNullable<ChatCompletionChunk["usage"]> & {
     cost?: unknown;
+    cache_creation_input_tokens?: number;
     prompt_cache_hit_tokens?: number;
     prompt_tokens_details?: { cache_creation_input_tokens?: number };
   },
@@ -217,10 +334,21 @@ export function parseOpenAICompletionsUsage(
   const cacheWrite =
     rawUsage.prompt_tokens_details?.cache_write_tokens ??
     rawUsage.prompt_tokens_details?.cache_creation_input_tokens ??
+    rawUsage.cache_creation_input_tokens ??
     0;
   const input = Math.max(0, (rawUsage.prompt_tokens || 0) - cacheRead - cacheWrite);
   const output = rawUsage.completion_tokens || 0;
   const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
+  const hasCoherentContext =
+    [
+      rawUsage.prompt_tokens,
+      rawUsage.completion_tokens,
+      rawUsage.total_tokens,
+      cacheRead,
+      cacheWrite,
+    ].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0) &&
+    rawUsage.prompt_tokens >= cacheRead + cacheWrite &&
+    rawUsage.total_tokens >= rawUsage.prompt_tokens + rawUsage.completion_tokens;
   const usage: MutableAssistantOutput["usage"] = {
     input,
     output,
@@ -232,6 +360,13 @@ export function parseOpenAICompletionsUsage(
     Number.isFinite(reasoningTokens)
       ? { reasoningTokens }
       : {}),
+    contextUsage: hasCoherentContext
+      ? {
+          state: "available",
+          promptTokens: rawUsage.prompt_tokens,
+          totalTokens: Math.max(input + output + cacheRead + cacheWrite, rawUsage.total_tokens),
+        }
+      : { state: "unavailable" },
     totalTokens: input + output + cacheRead + cacheWrite,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
@@ -259,16 +394,6 @@ export function createOpenAIProviderAcceptanceHook(
   return () => notifyProviderHttpResponse({ options, response, model });
 }
 
-type ModelStreamCooperativeScheduler = {
-  afterEvent: () => Promise<void>;
-};
-
-export function throwIfModelStreamAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    throw transportAbortError(signal);
-  }
-}
-
 /** Measure one UTF-8 append without double-counting a surrogate pair split across chunks. */
 export function measureUtf8AppendBytes(bufferEndsWithHighSurrogate: boolean, chunk: string) {
   let bytes = Buffer.byteLength(chunk, "utf8");
@@ -284,32 +409,6 @@ export function measureUtf8AppendBytes(bufferEndsWithHighSurrogate: boolean, chu
   return {
     bytes,
     endsWithHighSurrogate: finalCodeUnit >= 0xd800 && finalCodeUnit <= 0xdbff,
-  };
-}
-
-export function createModelStreamCooperativeScheduler(
-  signal?: AbortSignal,
-): ModelStreamCooperativeScheduler {
-  let lastYieldedAt = Date.now();
-  let eventsSinceYield = 0;
-  return {
-    async afterEvent() {
-      throwIfModelStreamAborted(signal);
-      eventsSinceYield += 1;
-      const now = Date.now();
-      if (
-        eventsSinceYield < MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS &&
-        now - lastYieldedAt < MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS
-      ) {
-        return;
-      }
-      eventsSinceYield = 0;
-      lastYieldedAt = now;
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-      throwIfModelStreamAborted(signal);
-    },
   };
 }
 

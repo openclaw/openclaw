@@ -14,14 +14,11 @@ enum VoiceWakeTestState: Equatable {
 }
 
 final class VoiceWakeTester {
-    private let recognizer: SFSpeechRecognizer?
     private var audioEngine: AVAudioEngine?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var isStopping = false
     private var isFinalizing = false
-    private var detectionStart: Date?
-    private var lastHeard: Date?
     private var lastLoggedText: String?
     private var lastLoggedAt: Date?
     private var lastTranscript: String?
@@ -29,13 +26,8 @@ final class VoiceWakeTester {
     private var silenceTask: Task<Void, Never>?
     private var currentTriggers: [String] = []
     private var holdingAfterDetect = false
-    private var detectedText: String?
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake")
     private let silenceWindow: TimeInterval = 1.0
-
-    init(locale: Locale = .current) {
-        self.recognizer = SFSpeechRecognizer(locale: locale)
-    }
 
     func start(
         triggers: [String],
@@ -47,14 +39,11 @@ final class VoiceWakeTester {
         self.isStopping = false
         self.isFinalizing = false
         self.holdingAfterDetect = false
-        self.detectedText = nil
-        self.lastHeard = nil
         self.lastLoggedText = nil
         self.lastLoggedAt = nil
         self.lastTranscript = nil
         self.lastTranscriptAt = nil
-        self.silenceTask?.cancel()
-        self.silenceTask = nil
+        SimpleTaskSupport.stop(task: &self.silenceTask)
         self.currentTriggers = triggers
         let chosenLocale = localeID.flatMap { Locale(identifier: $0) } ?? Locale.current
         let recognizer = SFSpeechRecognizer(locale: chosenLocale)
@@ -82,6 +71,8 @@ final class VoiceWakeTester {
         }
 
         let granted = try await Self.ensurePermissions()
+        // The test panel may close while a system permission prompt is open.
+        try Task.checkCancellation()
         guard granted else {
             throw NSError(
                 domain: "VoiceWakeTester",
@@ -90,7 +81,6 @@ final class VoiceWakeTester {
         }
 
         self.logInputSelection(preferredMicID: micID)
-        self.configureSession(preferredMicID: micID)
 
         guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
             self.audioEngine = nil
@@ -103,13 +93,11 @@ final class VoiceWakeTester {
         let engine = AVAudioEngine()
         self.audioEngine = engine
 
-        self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        let request = self.recognitionRequest
-        if let request {
-            try SpeechRecognitionRequestPolicy.configurePassiveVoiceWake(
-                request,
-                supportsOnDeviceRecognition: recognizer.supportsOnDeviceRecognition)
-        }
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        self.recognitionRequest = request
+        try SpeechRecognitionRequestPolicy.configurePassiveVoiceWake(
+            request,
+            supportsOnDeviceRecognition: recognizer.supportsOnDeviceRecognition)
 
         let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
@@ -131,12 +119,9 @@ final class VoiceWakeTester {
             onUpdate(.listening)
         }
 
-        self.detectionStart = Date()
-        self.lastHeard = self.detectionStart
+        guard let activeRequest = recognitionRequest else { return }
 
-        guard let request = recognitionRequest else { return }
-
-        self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+        self.recognitionTask = recognizer.recognitionTask(with: activeRequest) { [weak self] result, error in
             guard let self, !self.isStopping else { return }
             let text = result?.bestTranscription.formattedString ?? ""
             let segments = result.map { WakeWordSpeechSegments.from(
@@ -172,13 +157,9 @@ final class VoiceWakeTester {
         }
     }
 
-    func stop() {
-        self.stop(force: true)
-    }
-
     func finalize(timeout: TimeInterval = 1.5) {
         guard self.recognitionTask != nil else {
-            self.stop(force: true)
+            self.stop()
             return
         }
         self.isFinalizing = true
@@ -191,13 +172,13 @@ final class VoiceWakeTester {
             guard let self else { return }
             try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
             if !self.isStopping {
-                self.stop(force: true)
+                self.stop()
             }
         }
     }
 
-    private func stop(force: Bool) {
-        if force { self.isStopping = true }
+    func stop() {
+        self.isStopping = true
         self.isFinalizing = false
         self.recognitionRequest?.endAudio()
         self.recognitionTask?.cancel()
@@ -209,15 +190,11 @@ final class VoiceWakeTester {
         }
         self.audioEngine = nil
         self.holdingAfterDetect = false
-        self.detectedText = nil
-        self.lastHeard = nil
-        self.detectionStart = nil
         self.lastLoggedText = nil
         self.lastLoggedAt = nil
         self.lastTranscript = nil
         self.lastTranscriptAt = nil
-        self.silenceTask?.cancel()
-        self.silenceTask = nil
+        SimpleTaskSupport.stop(task: &self.silenceTask)
         self.currentTriggers = []
     }
 
@@ -229,7 +206,6 @@ final class VoiceWakeTester {
         onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void) async
     {
         if !text.isEmpty {
-            self.lastHeard = Date()
             self.lastTranscript = text
             self.lastTranscriptAt = Date()
         }
@@ -246,12 +222,11 @@ final class VoiceWakeTester {
         if let match = acceptedMatch {
             self.holdingAfterDetect = true
             let detectedText = match.command.isEmpty ? (match.trigger ?? text) : match.command
-            self.detectedText = detectedText
             self.logger.info("voice wake detected (test) (len=\(detectedText.count))")
-            await MainActor.run { AppStateStore.shared.startVoiceEars() }
+            await MainActor.run { AppStateStore.shared.earBoostActive = true }
             self.stop()
             await MainActor.run {
-                AppStateStore.shared.stopVoiceEars()
+                AppStateStore.shared.earBoostActive = false
                 onUpdate(.detected(detectedText))
             }
             return
@@ -265,12 +240,12 @@ final class VoiceWakeTester {
             Task { @MainActor in onUpdate(.finalizing) }
         }
         if let errorMessage {
-            self.stop(force: true)
+            self.stop()
             Task { @MainActor in onUpdate(.failed(errorMessage)) }
             return
         }
         if isFinal {
-            self.stop(force: true)
+            self.stop()
             let state: VoiceWakeTestState = text.isEmpty
                 ? .failed("No speech detected")
                 : .failed("No trigger heard: “\(text)”")
@@ -300,78 +275,39 @@ final class VoiceWakeTester {
             transcript: transcript,
             triggers: triggers,
             segments: segments)
-        let gaps = Self.debugCandidateGaps(triggers: triggers, segments: segments)
-        let segmentSummary = Self.debugSegments(segments)
         let matchSummary = VoiceWakeRecognitionDebugSupport.matchSummary(match)
 
         self.logger.debug(
             "voicewake test transcript='\(transcript, privacy: .private)' textOnly=\(summary.textOnly) " +
                 "isFinal=\(isFinal) timing=\(summary.timingCount)/\(segments.count) " +
-                "\(matchSummary) gaps=[\(gaps, privacy: .private)] segments=[\(segmentSummary, privacy: .private)]")
-    }
-
-    private static func debugSegments(_ segments: [WakeWordSegment]) -> String {
-        segments.map { seg in
-            let start = String(format: "%.2f", seg.start)
-            let end = String(format: "%.2f", seg.end)
-            return "\(seg.text)@\(start)-\(end)"
-        }.joined(separator: ", ")
+                "\(matchSummary) " +
+                "gaps=[\(Self.debugCandidateGaps(triggers: triggers, segments: segments), privacy: .private)] " +
+                "segments=[\(VoiceWakeRecognitionDebugSupport.segmentSummary(segments), privacy: .private)]")
     }
 
     private static func debugCandidateGaps(triggers: [String], segments: [WakeWordSegment]) -> String {
-        let tokens = self.normalizeSegments(segments)
+        let tokens = segments.compactMap { segment -> (normalized: String, segment: WakeWordSegment)? in
+            let normalized = VoiceWakeTextUtils.normalizeToken(segment.text)
+            return normalized.isEmpty ? nil : (normalized, segment)
+        }
         guard !tokens.isEmpty else { return "" }
-        let triggerTokens = self.normalizeTriggers(triggers)
+        let triggerTokens = triggers.map(VoiceWakeTextUtils.normalizedTokens)
         var gaps: [String] = []
 
         for trigger in triggerTokens {
-            let count = trigger.tokens.count
+            let count = trigger.count
             guard count > 0, tokens.count > count else { continue }
             for i in 0...(tokens.count - count - 1) {
-                let matched = (0..<count).allSatisfy { tokens[i + $0].normalized == trigger.tokens[$0] }
+                let matched = (0..<count).allSatisfy { tokens[i + $0].normalized == trigger[$0] }
                 if !matched { continue }
-                let triggerEnd = tokens[i + count - 1].end
-                let nextToken = tokens[i + count]
+                let triggerEnd = tokens[i + count - 1].segment.end
+                let nextToken = tokens[i + count].segment
                 let gap = nextToken.start - triggerEnd
                 let formatted = String(format: "%.2f", gap)
-                gaps.append("\(trigger.tokens.joined(separator: " ")):\(formatted)s")
+                gaps.append("\(trigger.joined(separator: " ")):\(formatted)s")
             }
         }
         return gaps.joined(separator: ", ")
-    }
-
-    private struct DebugToken {
-        let normalized: String
-        let start: TimeInterval
-        let end: TimeInterval
-    }
-
-    private struct DebugTriggerTokens {
-        let tokens: [String]
-    }
-
-    private static func normalizeTriggers(_ triggers: [String]) -> [DebugTriggerTokens] {
-        var output: [DebugTriggerTokens] = []
-        for trigger in triggers {
-            let tokens = trigger
-                .split(whereSeparator: { $0.isWhitespace })
-                .map { VoiceWakeTextUtils.normalizeToken(String($0)) }
-                .filter { !$0.isEmpty }
-            if tokens.isEmpty { continue }
-            output.append(DebugTriggerTokens(tokens: tokens))
-        }
-        return output
-    }
-
-    private static func normalizeSegments(_ segments: [WakeWordSegment]) -> [DebugToken] {
-        segments.compactMap { segment in
-            let normalized = VoiceWakeTextUtils.normalizeToken(segment.text)
-            guard !normalized.isEmpty else { return nil }
-            return DebugToken(
-                normalized: normalized,
-                start: segment.start,
-                end: segment.end)
-        }
     }
 
     private func scheduleSilenceCheck(
@@ -401,19 +337,14 @@ final class VoiceWakeTester {
             guard let match else { return }
             self.holdingAfterDetect = true
             let detectedText = match.command.isEmpty ? (match.trigger ?? lastText) : match.command
-            self.detectedText = detectedText
             self.logger.info("voice wake detected (test, silence) (len=\(detectedText.count))")
-            await MainActor.run { AppStateStore.shared.startVoiceEars() }
+            await MainActor.run { AppStateStore.shared.earBoostActive = true }
             self.stop()
             await MainActor.run {
-                AppStateStore.shared.stopVoiceEars()
+                AppStateStore.shared.earBoostActive = false
                 onUpdate(.detected(detectedText))
             }
         }
-    }
-
-    private func configureSession(preferredMicID: String?) {
-        _ = preferredMicID
     }
 
     private func logInputSelection(preferredMicID: String?) {
@@ -424,6 +355,11 @@ final class VoiceWakeTester {
     }
 
     private nonisolated static func ensurePermissions() async throws -> Bool {
+        guard AppLaunchRuntimePlan.current.allowsActivation else {
+            let granted = PermissionManager.voiceWakePermissionsGranted()
+            if !granted { PermissionManager.reportDeferredRequest() }
+            return granted
+        }
         let speechStatus = SFSpeechRecognizer.authorizationStatus()
         if speechStatus == .notDetermined {
             let granted = await withCheckedContinuation { continuation in

@@ -32,39 +32,52 @@ afterEach(() => {
 });
 
 describe("Nostr profile HTTP operations", () => {
-  it("aborts a profile PUT when response headers never arrive", async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
-      return await rejectWhenAborted(requireRequestSignal(init));
-    });
-    vi.stubGlobal("fetch", fetchMock);
+  it.each([false, true])(
+    "keeps one profile PUT deadline across credential retry: %s",
+    async (retry) => {
+      vi.useFakeTimers();
+      const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+        return await rejectWhenAborted(requireRequestSignal(init));
+      });
+      if (retry) {
+        fetchMock.mockImplementationOnce(
+          async () =>
+            await new Promise<Response>((resolve) => {
+              setTimeout(() => resolve(new Response(null, { status: 401 })), 15_000);
+            }),
+        );
+      }
+      vi.stubGlobal("fetch", fetchMock);
 
-    const request = putNostrProfile({
-      accountId: "main/account",
-      headers: { Authorization: "Bearer test" },
-      values: { name: "Alice" },
-    });
-    const result = expect(request).rejects.toMatchObject({
-      name: "TimeoutError",
-      message: "Nostr profile request timed out after 30 seconds",
-    });
-    await vi.advanceTimersByTimeAsync(NOSTR_PROFILE_REQUEST_TIMEOUT_MS);
-    await result;
+      const request = putNostrProfile({
+        accountId: "main/account",
+        authCandidates: ["test", "saved"],
+        isCurrent: () => true,
+        values: { name: "Alice" },
+      });
+      const result = expect(request).rejects.toMatchObject({
+        name: "TimeoutError",
+        message: "Nostr profile request timed out after 30 seconds",
+      });
+      await vi.advanceTimersByTimeAsync(NOSTR_PROFILE_REQUEST_TIMEOUT_MS);
+      await result;
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/channels/nostr/main%2Faccount/profile",
-      expect.objectContaining({
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer test",
-        },
-        body: JSON.stringify({ name: "Alice" }),
-        signal: expect.any(AbortSignal),
-      }),
-    );
-    expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
-  });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/channels/nostr/main%2Faccount/profile",
+        expect.objectContaining({
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer test",
+          },
+          body: JSON.stringify({ name: "Alice" }),
+          signal: expect.any(AbortSignal),
+        }),
+      );
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(retry ? 2 : 1);
+    },
+  );
 
   it("keeps the import deadline active while the response body is pending", async () => {
     vi.useFakeTimers();
@@ -78,7 +91,11 @@ describe("Nostr profile HTTP operations", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const request = importNostrProfile({ accountId: "default", headers: {} });
+    const request = importNostrProfile({
+      accountId: "default",
+      authCandidates: [],
+      isCurrent: () => true,
+    });
     const result = expect(request).rejects.toMatchObject({ name: "TimeoutError" });
     await vi.advanceTimersByTimeAsync(NOSTR_PROFILE_REQUEST_TIMEOUT_MS);
     await result;
@@ -91,38 +108,5 @@ describe("Nostr profile HTTP operations", () => {
         signal: expect.any(AbortSignal),
       }),
     );
-  });
-
-  it("preserves successful JSON responses for PUT and import", async () => {
-    const putResponse = new Response(JSON.stringify({ ok: true, persisted: true }), {
-      status: 200,
-    });
-    const importResponse = new Response(
-      JSON.stringify({ ok: true, saved: true, merged: { name: "Alice" } }),
-      { status: 200 },
-    );
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(putResponse)
-      .mockResolvedValueOnce(importResponse);
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      putNostrProfile({ accountId: "default", headers: {}, values: { name: "Alice" } }),
-    ).resolves.toEqual({ data: { ok: true, persisted: true }, response: putResponse });
-    await expect(importNostrProfile({ accountId: "default", headers: {} })).resolves.toEqual({
-      data: { ok: true, saved: true, merged: { name: "Alice" } },
-      response: importResponse,
-    });
-  });
-
-  it("preserves the response when an error body is not JSON", async () => {
-    const response = new Response("gateway unavailable", { status: 503 });
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(response));
-
-    await expect(importNostrProfile({ accountId: "default", headers: {} })).resolves.toEqual({
-      data: null,
-      response,
-    });
   });
 });

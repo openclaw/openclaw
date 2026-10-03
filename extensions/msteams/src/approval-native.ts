@@ -1,10 +1,7 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type {
-  ChannelApprovalKind,
-  ChannelApprovalNativeRuntimeAdapter,
-} from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -119,14 +116,14 @@ const resolveMSTeamsOriginTarget = createChannelNativeOriginTargetResolver({
 });
 
 const msTeamsLazyApprovalNativeRuntime = createLazyChannelApprovalNativeRuntimeAdapter({
+  capabilityBoundary: true,
   eventKinds: ["exec", "plugin", "system-agent"],
   isConfigured: ({ cfg, accountId }) => isMSTeamsNativeApprovalClientEnabled({ cfg, accountId }),
   shouldHandle: ({ cfg, accountId, approvalKind, request }) =>
     shouldHandleMSTeamsNativeApprovalRequest({ cfg, accountId, approvalKind, request }),
   load: async () => {
     const { msTeamsApprovalNativeRuntime } = await import("./approval-handler.runtime.js");
-    // SAFETY: Core only returns payloads and entries produced by this same typed runtime.
-    return msTeamsApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter;
+    return msTeamsApprovalNativeRuntime;
   },
 });
 
@@ -143,7 +140,7 @@ const msTeamsNativeApprovalCapability = createApproverRestrictedNativeApprovalCa
   channel: "msteams",
   channelLabel: "Microsoft Teams",
   describeExecApprovalSetup: () =>
-    "Approve it from the Web UI or terminal UI for now. Microsoft Teams supports native approvals when the bot is configured. Configure `channels.msteams.allowFrom` or `channels.msteams.defaultTo` with Microsoft Entra object ID approvers.",
+    "Approve it from the Web UI for now. Microsoft Teams supports native approvals when the bot is configured. Configure `channels.msteams.allowFrom` or `channels.msteams.defaultTo` with Microsoft Entra object ID approvers.",
   listAccountIds: msteamsConfigAdapter.listAccountIds,
   hasApprovers: ({ cfg, accountId }) => getMSTeamsApprovalApprovers({ cfg, accountId }).length > 0,
   isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>

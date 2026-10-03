@@ -1,6 +1,7 @@
 {
   "id": "mistral",
-  "icon": "https://cdn.simpleicons.org/mistralai",
+  "categories": ["models"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
@@ -20,6 +21,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "mistral": "mistral"
+    },
     "providers": {
       "mistral": {
         "baseUrl": "https://api.mistral.ai/v1",

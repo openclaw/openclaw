@@ -1,6 +1,9 @@
-// User-turn transcript type contracts shared by runtime and queue option types.
+import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
+import type { MessageClientSource } from "../chat/message-client-source.js";
 import type { TranscriptSenderIdentity } from "../chat/sender-identity.js";
+import type { AttachedChatWorkContext } from "../chat/work-context.js";
 import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
@@ -15,13 +18,12 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { MediaFactInput } from "../media/media-facts.js";
 import type { InputProvenance } from "./input-provenance.js";
 
-type UserTurnSessionEntry = SessionEntry;
-
 export type PersistedUserTurnMediaInput = Pick<
   MediaFactInput,
   | "contentType"
   | "durationMs"
   | "fileName"
+  | "origin"
   | "height"
   | "hydrationSuppressed"
   | "messageId"
@@ -41,11 +43,15 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
   /** Private transcript correlation; never authorizes an execution. */
   idempotencyKey?: string;
   provenance?: InputProvenance;
-  __openclaw?: Record<string, unknown>;
+  __openclaw?: Record<string, unknown> & { humanMentions?: readonly HumanMention[] };
 };
 
 export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeFromContext"> & {
   text?: string | null;
+  /** Authored text and its captured reference; model content stays unchanged. */
+  workContext?: AttachedChatWorkContext;
+  /** Explicit human selections bound to UTF-16 offsets in text. */
+  mentions?: readonly HumanMention[];
   media?: readonly PersistedUserTurnMediaInput[] | null;
   /** Restart-safe native image placement; model-visible prompt bytes remain separate. */
   mediaImageLayout?: {
@@ -72,6 +78,8 @@ export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeF
   } | null;
   /** Durable transport correlation; stored privately and never rendered into model input. */
   transport?: {
+    /** Reported client sources retained through collection; never sender authority. */
+    clients?: readonly MessageClientSource[];
     channel?: string;
     conversationRef?: string;
     messageId?: string;
@@ -100,13 +108,13 @@ type UserTurnBeforeMessageWrite = (params: {
   sessionKey?: string;
 }) => AgentMessage | null;
 
-type UserTurnTranscriptPersistenceTarget = {
+export type UserTurnTranscriptTarget = {
   sessionId: string;
   expectedSessionId?: string;
   initialSessionEntry?: SessionEntry;
   sessionKey: string;
-  sessionEntry: UserTurnSessionEntry | undefined;
-  sessionStore?: Record<string, UserTurnSessionEntry>;
+  sessionEntry: SessionEntry | undefined;
+  sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   agentId: string;
   threadId?: string | number;
@@ -115,9 +123,13 @@ type UserTurnTranscriptPersistenceTarget = {
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
 };
 
-export type UserTurnTranscriptTarget = UserTurnTranscriptPersistenceTarget;
-
 export type UserTurnTranscriptAdmissionReceipt = TranscriptTurnAdmission;
+
+export type UserTurnOriginalInputCommit = Readonly<{
+  /** Committed source bytes; collected inputs retain each original source message. */
+  message: PersistedUserTurnMessage;
+  anchor: TranscriptEntryAnchor;
+}>;
 
 /** Native producer facts for the current host-admitted prompt; never a message replacement. */
 export type UserTurnTranscriptAnnotation = Readonly<{
@@ -132,7 +144,7 @@ export type UserTurnTranscriptPersistResult = {
   /** True only when this call inserted the transcript message. */
   appended?: boolean;
   sessionFile: string;
-  sessionEntry: UserTurnSessionEntry | undefined;
+  sessionEntry: SessionEntry | undefined;
   messageId: string;
   message: PersistedUserTurnMessage;
   admission: UserTurnTranscriptAdmissionReceipt;
@@ -142,31 +154,26 @@ export type UserTurnTranscriptTargetResolver =
   | UserTurnTranscriptTarget
   | (() => UserTurnTranscriptTarget | undefined | Promise<UserTurnTranscriptTarget | undefined>);
 
-export type PersistUserTurnTranscriptParams = {
+export type PersistUserTurnTranscriptParams = UserTurnTranscriptTarget & {
+  beforeFreshMessageCommit?: () => void;
   sessionTurnMutation?: SessionTranscriptTurnMutation;
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
-  sessionId: string;
-  expectedSessionId?: string;
-  initialSessionEntry?: SessionEntry;
-  sessionKey: string;
-  sessionEntry: UserTurnSessionEntry | undefined;
-  sessionStore?: Record<string, UserTurnSessionEntry>;
-  storePath?: string;
-  agentId: string;
   logicalTurnId?: string;
-  threadId?: string | number;
-  cwd?: string;
-  config?: unknown;
   updateMode?: UserTurnTranscriptUpdateMode;
-  beforeMessageWrite?: UserTurnBeforeMessageWrite;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+  onOriginalInputCommitted?: (commit: UserTurnOriginalInputCommit) => void;
 };
 
 type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
 
 export type CreateUserTurnTranscriptRecorderParams = {
+  /** Authenticated input identity independent of prepared media paths. */
+  pendingInputRequestFingerprint?: string;
+  trackInputCompletion?: boolean;
+  /** Trusted settle replay candidates; storage must match the complete original request hash. */
+  pendingInputReplaySourceSessionKeys?: readonly string[];
   /** Exact admitted source recorders consumed by this collected transcript message. */
   pendingInputSources?: readonly UserTurnTranscriptRecorder[];
   sessionTurnMutation?: SessionTranscriptTurnMutation;
@@ -177,60 +184,82 @@ export type CreateUserTurnTranscriptRecorderParams = {
   updateMode?: UserTurnTranscriptUpdateMode;
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
   errorContext?: string;
+  /** Revalidate the original input at fresh commit, not at ACK or preparation. */
+  assertOriginalInputCommit?: () => void;
   onPersistenceError?: (error: unknown) => void;
   onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
+  /** Fresh original input only, after durable append and before transcript publication. */
+  onOriginalInputCommitted?: (commit: UserTurnOriginalInputCommit) => void;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+};
+
+type UserTurnPersistenceOptions = {
+  target?: UserTurnTranscriptTargetResolver;
+  updateMode?: UserTurnTranscriptUpdateMode;
+  cwd?: string;
 };
 
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
+  /** Committed input, accepted pending custody, and blocked notices are exempt. */
+  assertOriginalInputCommit?: () => void;
   /** Durable input custody leaves the active transcript unchanged until execution owns it. */
-  stageApproved?: (options: { runId: string; assertCurrent: () => void }) => Promise<boolean>;
+  stageApproved?: (options: {
+    runId: string;
+    assertCurrent: () => void;
+    assertAdmittedCurrent?: () => void;
+    assertCompletionCurrent?: () => void;
+  }) => Promise<boolean>;
+  getProcessingCompletion?: () => AgentRunTerminalOutcome | undefined;
+  /** Released synchronous SDK contract; internal recorders use completeProcessingAsync. */
+  completeProcessing?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome | undefined;
+  completeProcessingAsync?: (
+    outcome: AgentRunTerminalOutcome,
+  ) => Promise<AgentRunTerminalOutcome | undefined>;
   getPendingInputMessage?: () => PersistedUserTurnMessage | undefined;
   isPendingInputConsumed?: () => boolean;
   withPendingInput?: <T>(run: () => T) => T;
   finishPendingInput?: (disposition: "cancelled" | "interrupted") => void;
+  /** Join accepted completion and disposition writes before releasing the turn's admission. */
+  waitForPendingInputSettlement?: () => Promise<void>;
   /** Replaces generated current-turn text before runtime persistence/provider submission. */
   replaceTextBeforePersistence?: (text: string) => void;
   /** Confirms exact-run steering provenance after transcript commitment is proven. */
   confirmSteerTargetRunIdForPersistence?: (targetRunId: string) => Promise<void>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
-  setAdmissionHandler?: (handler: (admission: UserTurnTranscriptAdmissionReceipt) => void) => void;
+  /** Persistence and `waitForRuntimePersistence` settle the handler's write and reject on its failure. */
+  setAdmissionHandler?: (
+    handler: (admission: UserTurnTranscriptAdmissionReceipt) => void | Promise<void>,
+  ) => void;
   markSentToProvider?: () => void;
   markRuntimePersistencePending: (pending: Promise<void>) => void;
   markRuntimePersisted: (
     message?: PersistedUserTurnMessage,
     anchor?: TranscriptEntryAnchor | UserTurnTranscriptAdmissionReceipt,
+    persistence?: { appended: boolean },
   ) => void;
   markBlocked: () => void;
   hasPersisted: () => boolean;
   isBlocked: () => boolean;
   hasRuntimePersistencePending: () => boolean;
   waitForRuntimePersistence: () => Promise<void>;
-  persistApproved: (params?: {
-    target?: UserTurnTranscriptTargetResolver;
-    updateMode?: UserTurnTranscriptUpdateMode;
-    cwd?: string;
-    expectedSessionId?: string;
-    expectedSessionState?: SessionTranscriptTurnExpectedState;
-    sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
-    /** Allow a later explicit persistence attempt when this attempt appends nothing. */
-    retryIfUnpersisted?: boolean;
-  }) => Promise<UserTurnTranscriptPersistResult | undefined>;
-  persistBlocked: (
-    message: PersistedUserTurnMessage,
-    params?: {
-      target?: UserTurnTranscriptTargetResolver;
-      updateMode?: UserTurnTranscriptUpdateMode;
-      cwd?: string;
+  persistApproved: (
+    params?: UserTurnPersistenceOptions & {
+      expectedSessionId?: string;
+      expectedSessionState?: SessionTranscriptTurnExpectedState;
+      sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+      /** Allow a later explicit persistence attempt when this attempt appends nothing. */
+      retryIfUnpersisted?: boolean;
     },
   ) => Promise<UserTurnTranscriptPersistResult | undefined>;
-  persistFallback: (params?: {
-    target?: UserTurnTranscriptTargetResolver;
-    updateMode?: UserTurnTranscriptUpdateMode;
-    cwd?: string;
-  }) => Promise<UserTurnTranscriptPersistResult | undefined>;
+  persistBlocked: (
+    message: PersistedUserTurnMessage,
+    params?: UserTurnPersistenceOptions,
+  ) => Promise<UserTurnTranscriptPersistResult | undefined>;
+  persistFallback: (
+    params?: UserTurnPersistenceOptions,
+  ) => Promise<UserTurnTranscriptPersistResult | undefined>;
 };

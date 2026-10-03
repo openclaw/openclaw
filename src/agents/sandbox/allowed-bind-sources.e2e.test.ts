@@ -114,7 +114,7 @@ function buildSandboxConfig(): SandboxConfig {
 }
 
 async function startMember(member: Member): Promise<string> {
-  const name = await ensureSandboxContainer({
+  const { containerName: name } = await ensureSandboxContainer({
     scopeKey: member.id,
     workspaceDir: member.workspaceDir,
     agentWorkspaceDir: member.agentWorkspaceDir,

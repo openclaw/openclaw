@@ -6,6 +6,8 @@ import {
 // Keep transient network policy aligned across retries and process-level handling.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+export const WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE = "ERR_WEBSOCKET_NON_RETRYABLE_CLOSE";
+
 const TRANSIENT_NETWORK_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
@@ -29,6 +31,7 @@ const TRANSIENT_NETWORK_CODES = new Set([
   "EPROTO",
   "ERR_SSL_WRONG_VERSION_NUMBER",
   "ERR_SSL_PROTOCOL_RETURNED_AN_ERROR",
+  "ERR_WEBSOCKET_TRANSPORT",
 ]);
 
 const TRANSIENT_NETWORK_ERROR_NAMES = new Set([
@@ -61,13 +64,9 @@ const RETRYABLE_CONNECTION_ERROR_CODE_RE =
   /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_SOCKET)\b/i;
 
 function isWrappedFetchFailedMessage(message: string): boolean {
-  if (message === "fetch failed") {
-    return true;
-  }
-
   // Keep wrapped variants (for example "...: fetch failed") while avoiding broad
   // matches like "Web fetch failed (404): ..." that are not transport failures.
-  return /:\s*fetch failed$/.test(message);
+  return message === "fetch failed" || /:\s*fetch failed$/.test(message);
 }
 
 export function hasRetryableConnectionErrorCode(message: string): boolean {
@@ -79,7 +78,16 @@ export function isTransientNetworkError(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  for (const candidate of collectNestedErrorCandidates(err)) {
+  const candidates = collectNestedErrorCandidates(err);
+  if (
+    candidates.some(
+      (candidate) =>
+        extractErrorCodeOrErrno(candidate) === WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE,
+    )
+  ) {
+    return false;
+  }
+  for (const candidate of candidates) {
     const code = extractErrorCodeOrErrno(candidate);
     if (code && TRANSIENT_NETWORK_CODES.has(code)) {
       return true;
@@ -98,13 +106,11 @@ export function isTransientNetworkError(err: unknown): boolean {
     if (!message) {
       continue;
     }
-    if (TRANSIENT_NETWORK_MESSAGE_CODE_RE.test(message)) {
-      return true;
-    }
-    if (isWrappedFetchFailedMessage(message)) {
-      return true;
-    }
-    if (TRANSIENT_NETWORK_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
+    if (
+      TRANSIENT_NETWORK_MESSAGE_CODE_RE.test(message) ||
+      isWrappedFetchFailedMessage(message) ||
+      TRANSIENT_NETWORK_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))
+    ) {
       return true;
     }
   }

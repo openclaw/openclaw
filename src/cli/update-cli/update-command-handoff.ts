@@ -1,28 +1,42 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV, isGatewayServiceEnv } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { inspectServiceProcessMembershipSync } from "../../daemon/service-process-membership.js";
 import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceState,
 } from "../../daemon/service-types.js";
+import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { resolveInstallationTarget } from "../../infra/installation-target-context.js";
-import { writeRestartSentinel } from "../../infra/restart-sentinel.js";
-import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
-import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart-budget.js";
+import { inspectSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
-import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-control-plane-sentinel.js";
+import {
+  CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
+  CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
+  readControlPlaneUpdateSentinelMeta,
+  UPDATE_RUN_ID_ENV,
+  writeControlPlaneUpdateRestartSentinel,
+} from "../../infra/update-control-plane-sentinel.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
+import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import {
   cancelManagedServiceUpdateHandoff,
+  isCurrentForegroundUpdateHandoffProcess,
+  parkForegroundUpdateHandoff,
   startManagedServiceUpdateHandoff,
   transferManagedServiceUpdateHandoff,
 } from "../../infra/update-managed-service-handoff.js";
-import { buildUpdateRestartSentinelPayload } from "../../infra/update-restart-sentinel-payload.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { defaultRuntime } from "../../runtime.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
+import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { isPidAlive } from "../../shared/pid-alive.js";
 import { formatInstallationTargetCommand } from "../installation-target-format.js";
+import { printResult } from "./progress.js";
 import { resolveNodeRunner, UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import { releaseUpdateCommandPreflightForHandoff } from "./update-command-executor.js";
 import { resolveOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 function parsePositivePid(value: unknown): number | null {
@@ -33,20 +47,138 @@ function parsePositivePid(value: unknown): number | null {
   return /^\d+$/u.test(trimmed) ? (parseStrictPositiveInteger(trimmed) ?? null) : null;
 }
 
-export function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
+/** EX_TEMPFAIL: ownership transferred successfully, but the update is not terminal yet. */
+const UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE = 75;
+
+const GATEWAY_ANCESTRY_SHELL_GUIDANCE =
+  "Run this command from a shell outside the gateway service.";
+
+export function gatewayServiceMembershipBlock(
+  pid: unknown,
+  ancestry = inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true }),
+  systemdControlGroup?: string,
+  onAbsentSource?: () => void,
+) {
   const gatewayPid = parsePositivePid(pid);
   if (gatewayPid === null) {
-    return undefined;
+    // Scheduled Tasks retain the ancestry fallback until their owner exposes Job membership.
+    return process.platform === "win32"
+      ? undefined
+      : createUpdatePreflightFailure(
+          "service-membership-unverified",
+          undefined,
+          "managed-service-preflight",
+        );
   }
-  const inherited =
-    isGatewayServiceEnv(process.env) &&
-    parsePositivePid(process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV]) === gatewayPid;
-  if (!inherited && !getSelfAndAncestorPidsSync().has(gatewayPid)) {
-    return undefined;
+  if (!ancestry.pids.has(gatewayPid)) {
+    const membership =
+      process.platform === "win32"
+        ? "outside"
+        : inspectServiceProcessMembershipSync(gatewayPid, process.platform, systemdControlGroup);
+    if (membership === "inside") {
+      return createUpdatePreflightFailure(
+        "inside-gateway-service",
+        undefined,
+        "managed-service-preflight",
+      );
+    }
+    if (membership === "unknown") {
+      return createUpdatePreflightFailure(
+        "service-membership-unverified",
+        undefined,
+        "managed-service-preflight",
+      );
+    }
+    const unverified =
+      !ancestry.complete &&
+      (process.platform !== "win32" ||
+        (isGatewayServiceEnv(process.env) &&
+          parsePositivePid(process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV]) === gatewayPid &&
+          isPidAlive(gatewayPid)));
+    if (!unverified && membership === "absent") {
+      onAbsentSource?.();
+    }
+    return unverified
+      ? createUpdatePreflightFailure(
+          "service-ancestry-unverified",
+          undefined,
+          "managed-service-preflight",
+        )
+      : undefined;
   }
-  return `This command is running inside the gateway process tree.
-Gateway PID ${gatewayPid} is an ancestor of this process, so this command cannot safely stop or restart the gateway that owns it.
-Run this command from a shell outside the gateway service, or stop the gateway service first and retry.`;
+  // Shared by doctor and update: never advise stopping the service from here,
+  // because the stop would kill the caller and nothing restarts the gateway.
+  return {
+    ...createUpdatePreflightFailure(
+      "inside-gateway-process-tree",
+      undefined,
+      "managed-service-preflight",
+    ),
+    message: `This command is running inside the gateway process tree (gateway PID ${gatewayPid}).
+Stopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.
+${GATEWAY_ANCESTRY_SHELL_GUIDANCE}`,
+  };
+}
+
+const ANCESTRY_BLOCK_MARKER = "inside the gateway process tree";
+const UPDATE_CHAT_HANDOFF_GUIDANCE =
+  "From chat, the OpenClaw owner can start the update with the gateway update action or /update, which hands it to a managed helper.";
+
+/** Update-specific follow-up for an ancestry block: the chat path hands off to the managed helper. */
+export function formatUpdateAncestryBlockMessage(blockMessage: string): string {
+  if (!blockMessage.includes(ANCESTRY_BLOCK_MARKER)) {
+    return blockMessage;
+  }
+  const updateBlockMessage = blockMessage
+    .split("\n")
+    .filter((line) => line !== GATEWAY_ANCESTRY_SHELL_GUIDANCE)
+    .join("\n");
+  return updateBlockMessage.includes(UPDATE_CHAT_HANDOFF_GUIDANCE)
+    ? updateBlockMessage
+    : `${updateBlockMessage}\n${UPDATE_CHAT_HANDOFF_GUIDANCE}`;
+}
+
+export function gatewayMaintenanceBlock(
+  state: GatewayServiceState,
+  root: string,
+  operation: "stop" | "handoff" = "stop",
+  onAbsentSource?: () => void,
+) {
+  const ancestry = inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true });
+  const store = createManagedHandoffLeaseStore();
+  const claim = store.read(resolveUpdateInstallRoot(root));
+  const lease = claim.kind === "current" ? claim.lease : undefined;
+  // PartOf makes a primary stop terminal for its separately supervised fixer.
+  // A current lease plus exact live ancestry only refuses self-stop; copied
+  // environment or claims never grant maintenance or cancellation exemptions.
+  if (
+    lease?.action.kind === "triage" &&
+    lease.action.phase === "running" &&
+    lease.action.lifetime.kind === "native" &&
+    lease.action.lifetime.placement.kind === "attached" &&
+    lease.action.lifetime.unit === `${resolveSystemdServiceName(state.env)}.service` &&
+    [lease.executor, lease.helper].every(
+      (owner) =>
+        ancestry.pids.has(owner.pid) &&
+        isPidAlive(owner.pid) &&
+        store.readProcessStartIdentity(owner.pid) === owner.startIdentity,
+    )
+  ) {
+    return createUpdatePreflightFailure(
+      "inside-triage-process-tree",
+      undefined,
+      "managed-service-preflight",
+    );
+  }
+  return operation === "handoff" ||
+    (!state.running && parsePositivePid(state.runtime?.pid) === null)
+    ? undefined
+    : gatewayServiceMembershipBlock(
+        state.runtime?.pid,
+        ancestry,
+        state.runtime?.systemd?.controlGroup,
+        onAbsentSource,
+      );
 }
 
 export async function handoffUpdateFromGateway(params: {
@@ -68,18 +200,16 @@ export async function handoffUpdateFromGateway(params: {
     return false;
   }
   const parentPid = parsePositivePid(params.state.runtime?.pid);
+  if (
+    !parentPid ||
+    !inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true }).pids.has(parentPid)
+  ) {
+    return false;
+  }
   const supervisor =
     detectRespawnSupervisor(process.env, process.platform, {
       includeLinuxOpenClawGatewayServiceMarker: true,
-    }) ??
-    (gatewayAncestryBlockMessage(parentPid)
-      ? process.platform === "linux"
-        ? "systemd"
-        : "launchd"
-      : null);
-  if (!parentPid || !supervisor) {
-    return false;
-  }
+    }) ?? (process.platform === "linux" ? "systemd" : "launchd");
   params.stopProgress();
   const env = resolveOwnedManagedUpdateEnv({
     serviceEnv: params.state.env,
@@ -93,7 +223,12 @@ export async function handoffUpdateFromGateway(params: {
       "Cannot locate the installed updater; run `openclaw doctor` before retrying.",
     );
   }
+  if (params.opts.run?.executorFence) {
+    releaseUpdateCommandPreflightForHandoff(params.opts.run.executorFence);
+    delete params.opts.run.executorFence;
+  }
   const started = await startManagedServiceUpdateHandoff({
+    runId: params.opts.run?.runId,
     root: params.root,
     invocationCwd: params.invocationCwd,
     parentPid,
@@ -107,12 +242,14 @@ export async function handoffUpdateFromGateway(params: {
     tag: params.tag,
     devTarget: params.devTarget,
     acceptCapabilities: params.opts.acceptCapabilities,
-    meta: {},
+    admission: params.opts.admission,
+    reapplyLocalOverrides: params.opts.reapplyLocalOverrides,
+    meta: { runId: params.opts.run?.runId },
   });
   if (started.status === "joined") {
     throw new UpdatePreMutationError(
       "managed-service-handoff-already-running",
-      "Another managed update is already running. Inspect `openclaw status --all` before retrying.",
+      "Another managed update is already running. Check progress with `openclaw update status`.",
     );
   }
   const identity = {
@@ -121,7 +258,7 @@ export async function handoffUpdateFromGateway(params: {
     installRoot: started.installRoot,
   };
   const target = resolveInstallationTarget(env);
-  const statusCommand = formatInstallationTargetCommand(["openclaw", "status", "--all"], target, {
+  const statusCommand = formatInstallationTargetCommand(["openclaw", "update", "status"], target, {
     env,
   });
   const healthCommand = formatInstallationTargetCommand(
@@ -129,8 +266,9 @@ export async function handoffUpdateFromGateway(params: {
     target,
     { env },
   );
-  const guidance = `Update continues outside the Gateway process. Log: ${started.logPath}\nFollow up: ${statusCommand}; ${healthCommand}.`;
+  const guidance = `Update is not finished. It will continue in the background so it can restart the Gateway.\nLog: ${started.logPath}\nCheck progress: ${statusCommand}`;
   const result: UpdateRunResult = {
+    runId: params.opts.run?.runId,
     status: "skipped",
     mode: params.mode,
     root: started.installRoot,
@@ -148,11 +286,15 @@ export async function handoffUpdateFromGateway(params: {
     durationMs: 0,
   };
   try {
-    await writeRestartSentinel(
-      buildUpdateRestartSentinelPayload({
+    await writeControlPlaneUpdateRestartSentinel(
+      {
         result,
-        meta: { handoffId: started.handoffId, root: started.installRoot },
-      }),
+        meta: {
+          runId: params.opts.run?.runId,
+          handoffId: started.handoffId,
+          root: started.installRoot,
+        },
+      },
       env,
     );
     if (!(await transferManagedServiceUpdateHandoff(identity))) {
@@ -164,10 +306,67 @@ export async function handoffUpdateFromGateway(params: {
     await cancelManagedServiceUpdateHandoff(identity);
     throw error;
   }
-  if (params.opts.json) {
-    defaultRuntime.writeJson(result);
-  } else {
-    defaultRuntime.log(guidance);
+  if (params.opts.run) {
+    recordUpdateRunStep(
+      params.opts.run.runId,
+      { step: "managed-service update handoff", status: "completed", endedAtMs: Date.now() },
+      { env: params.opts.run.env },
+    );
+  }
+  await printResult(result, params.opts, { nextAction: guidance });
+  process.exitCode = UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE;
+  return true;
+}
+
+export async function parkForegroundUpdateForActivation(
+  params: { root: string; opts: UpdateCommandOptions },
+  assertCurrent: () => void,
+): Promise<void> {
+  assertCurrent();
+  const run = params.opts.run;
+  if (run?.completionOwner === "gateway-restart" && !run.gatewayRestartRequired) {
+    await parkForegroundUpdateHandoff({ root: params.root, run });
+    assertCurrent();
+  }
+}
+
+/** Invalid handoff metadata may not fall back to another native owner. */
+export async function resolveForegroundUpdateAdmission(params: {
+  root: string | undefined;
+  env?: NodeJS.ProcessEnv;
+  meta?: Awaited<ReturnType<typeof readControlPlaneUpdateSentinelMeta>>;
+  expectedForeground?: true;
+}): Promise<boolean> {
+  const env = params.env ?? process.env;
+  const meta =
+    params.meta === undefined ? await readControlPlaneUpdateSentinelMeta(env) : params.meta;
+  const claimed = meta?.completionOwner === "gateway-restart";
+  if (
+    !claimed &&
+    !params.expectedForeground &&
+    !meta?.foregroundOrigin &&
+    !(env[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]?.trim() && meta === null)
+  ) {
+    return false;
+  }
+  if (
+    !claimed ||
+    !params.root ||
+    !(await isCurrentForegroundUpdateHandoffProcess({
+      root: params.root,
+      runId: env[UPDATE_RUN_ID_ENV],
+      env,
+    }))
+  ) {
+    throw new UpdatePreMutationError(
+      "managed-service-preflight",
+      "The update handoff metadata or this Gateway's current ownership could not be verified. Retry the update from its current owner.",
+      createUpdatePreflightFailure(
+        "foreground-handoff-unverified",
+        undefined,
+        "managed-service-preflight",
+      ),
+    );
   }
   return true;
 }

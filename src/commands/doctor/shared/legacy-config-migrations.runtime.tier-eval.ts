@@ -1,21 +1,13 @@
 // Tier-eval config compatibility migration and its scoped traversal helpers.
 import { ensureRecord, getRecord } from "../../../config/legacy.shared.js";
+import { resolveExactExecModeFromPolicy } from "../../../infra/exec-approvals-core.js";
 import {
   deleteRetiredPath,
   visitAgentConfigScopes,
   visitChannelEntries,
 } from "./legacy-config-record-shared.js";
 
-const TIER_EVAL_RETIRED_ROOT_PATHS = [
-  ["cloudWorkers", "profiles", "*", "lifetime"],
-  ["meta", "lastTouchedAt"],
-  ["hooks", "internal", "installs"],
-  ["cron", "store"],
-  ["plugins", "bundledDiscovery"],
-  ["tts", "prefsPath"],
-  ["logging", "redactSensitive"],
-  ["commands", "useAccessGroups"],
-  ["gateway", "controlUi", "allowInsecureAuth"],
+const TIER_EVAL_RETIRED_MEMORY_PATHS = [
   ["memory", "search", "remote", "nonBatchConcurrency"],
   ["memory", "search", "remote", "batch", "wait"],
   ["memory", "search", "remote", "batch", "concurrency"],
@@ -28,18 +20,22 @@ const TIER_EVAL_RETIRED_ROOT_PATHS = [
   ["memory", "search", "query", "hybrid"],
 ] as const;
 
+const TIER_EVAL_RETIRED_ROOT_PATHS = [
+  ["cloudWorkers", "profiles", "*", "lifetime"],
+  ["meta", "lastTouchedAt"],
+  ["hooks", "internal", "installs"],
+  ["cron", "store"],
+  ["plugins", "bundledDiscovery"],
+  ["tts", "prefsPath"],
+  ["logging", "redactSensitive"],
+  ["commands", "useAccessGroups"],
+  ["gateway", "controlUi", "allowInsecureAuth"],
+  ...TIER_EVAL_RETIRED_MEMORY_PATHS,
+] as const;
+
 const TIER_EVAL_RETIRED_AGENT_PATHS = [
   ["groupChat", "visibleReplies"],
-  ["memory", "search", "remote", "nonBatchConcurrency"],
-  ["memory", "search", "remote", "batch", "wait"],
-  ["memory", "search", "remote", "batch", "concurrency"],
-  ["memory", "search", "remote", "batch", "pollIntervalMs"],
-  ["memory", "search", "remote", "batch", "timeoutMinutes"],
-  ["memory", "search", "local", "contextSize"],
-  ["memory", "search", "local", "modelCacheDir"],
-  ["memory", "search", "store", "driver"],
-  ["memory", "search", "sync"],
-  ["memory", "search", "query", "hybrid"],
+  ...TIER_EVAL_RETIRED_MEMORY_PATHS,
   ["heartbeat", "ackMaxChars"],
   ["heartbeat", "includeReasoning"],
   ["heartbeat", "includeSystemPromptSection"],
@@ -93,62 +89,31 @@ function migrateExecMode(
     delete exec.ask;
     return;
   }
-  const securityValid =
-    exec.security === "deny" || exec.security === "allowlist" || exec.security === "full";
-  const askValid = exec.ask === "on-miss" || exec.ask === "always" || exec.ask === "off";
+  const ownSecurity =
+    exec.security === "deny" || exec.security === "allowlist" || exec.security === "full"
+      ? exec.security
+      : undefined;
+  const ownAsk =
+    exec.ask === "on-miss" || exec.ask === "always" || exec.ask === "off" ? exec.ask : undefined;
   if (
-    (Object.hasOwn(exec, "security") && !securityValid) ||
-    (Object.hasOwn(exec, "ask") && !askValid)
+    (Object.hasOwn(exec, "security") && !ownSecurity) ||
+    (Object.hasOwn(exec, "ask") && !ownAsk)
   ) {
     return;
   }
-  const security = securityValid ? exec.security : inheritedPolicy?.security;
-  const ask = askValid ? exec.ask : inheritedPolicy?.ask;
+  const security = ownSecurity ?? inheritedPolicy?.security;
+  const ask = ownAsk ?? inheritedPolicy?.ask;
   if (!security || !ask) {
     return;
   }
-  if (ask === "always" || (security === "full" && ask === "on-miss")) {
+  const mode = resolveExactExecModeFromPolicy({ security, ask });
+  if (!mode) {
     return;
   }
-  exec.mode =
-    security === "deny"
-      ? "deny"
-      : security === "allowlist" && ask === "off"
-        ? "allowlist"
-        : security === "full"
-          ? "full"
-          : "ask";
+  exec.mode = mode;
   changes.push(`Moved ${path}.tools.exec.security/ask → ${path}.tools.exec.mode.`);
   delete exec.security;
   delete exec.ask;
-}
-
-function migrateCliBackendSessionArgs(
-  scope: Record<string, unknown>,
-  path: string,
-  changes: string[],
-): void {
-  const backends = getRecord(scope.cliBackends);
-  if (!backends) {
-    return;
-  }
-  for (const [backendId, value] of Object.entries(backends)) {
-    const backend = getRecord(value);
-    if (!backend || !Object.hasOwn(backend, "sessionArg")) {
-      continue;
-    }
-    if (backend.sessionArgs === undefined && typeof backend.sessionArg === "string") {
-      backend.sessionArgs = [backend.sessionArg, "{sessionId}"];
-      changes.push(
-        `Moved ${path}.cliBackends.${backendId}.sessionArg → ${path}.cliBackends.${backendId}.sessionArgs.`,
-      );
-    } else {
-      changes.push(
-        `Removed ${path}.cliBackends.${backendId}.sessionArg (sessionArgs already set).`,
-      );
-    }
-    delete backend.sessionArg;
-  }
 }
 
 function migrateSignalEndpoint(
@@ -217,17 +182,14 @@ function migrateChannelAliases(raw: Record<string, unknown>, changes: string[]):
     if (!Object.hasOwn(entry, "serviceAccountRef")) {
       return;
     }
-    if (entry.serviceAccount !== undefined) {
-      changes.push(
-        `Moved ${path}.serviceAccountRef → ${path}.serviceAccount (SecretRef precedence preserved).`,
-      );
-      entry.serviceAccount = entry.serviceAccountRef;
-      delete entry.serviceAccountRef;
-      return;
-    }
+    const hadServiceAccount = entry.serviceAccount !== undefined;
     entry.serviceAccount = entry.serviceAccountRef;
     delete entry.serviceAccountRef;
-    changes.push(`Moved ${path}.serviceAccountRef → ${path}.serviceAccount.`);
+    changes.push(
+      hadServiceAccount
+        ? `Moved ${path}.serviceAccountRef → ${path}.serviceAccount (SecretRef precedence preserved).`
+        : `Moved ${path}.serviceAccountRef → ${path}.serviceAccount.`,
+    );
   });
 }
 
@@ -288,26 +250,18 @@ function migrateMessagesResponsePrefix(raw: Record<string, unknown>, changes: st
 }
 
 function migratePresenceEnabled(raw: Record<string, unknown>, changes: string[]): boolean {
-  let changed = false;
   const wideArea = getRecord(getRecord(raw.discovery)?.wideArea);
-  if (wideArea && Object.hasOwn(wideArea, "enabled")) {
-    if (
-      wideArea.enabled === false &&
-      typeof wideArea.domain === "string" &&
-      wideArea.domain.trim()
-    ) {
-      delete wideArea.enabled;
-      delete wideArea.domain;
-      changes.push(
-        "Removed disabled discovery.wideArea activation fields; domain presence now enables wide-area discovery.",
-      );
-      changed = true;
-    } else {
-      delete wideArea.enabled;
-      changed = true;
-    }
+  if (!wideArea || !Object.hasOwn(wideArea, "enabled")) {
+    return false;
   }
-  return changed;
+  if (wideArea.enabled === false && typeof wideArea.domain === "string" && wideArea.domain.trim()) {
+    delete wideArea.domain;
+    changes.push(
+      "Removed disabled discovery.wideArea activation fields; domain presence now enables wide-area discovery.",
+    );
+  }
+  delete wideArea.enabled;
+  return true;
 }
 
 function migrateWebEnabled(raw: Record<string, unknown>, changes: string[]): boolean {
@@ -425,7 +379,6 @@ export function migrateTierEvalTranche(raw: Record<string, unknown>, changes: st
     if (path !== "agents.defaults") {
       migrateExecMode(scope, path, changes, inheritedExecPolicy);
     }
-    migrateCliBackendSessionArgs(scope, path, changes);
     for (const retiredPath of TIER_EVAL_RETIRED_AGENT_PATHS) {
       stripped = deleteRetiredPath(scope, retiredPath) || stripped;
     }
@@ -435,29 +388,13 @@ export function migrateTierEvalTranche(raw: Record<string, unknown>, changes: st
   for (const retiredPath of TIER_EVAL_RETIRED_ROOT_PATHS) {
     stripped = deleteRetiredPath(raw, retiredPath) || stripped;
   }
-  const secrets = getRecord(raw.secrets);
-  const providers = getRecord(secrets?.providers);
-  if (providers) {
-    for (const provider of Object.values(providers)) {
-      const entry = getRecord(provider);
-      if (entry) {
-        stripped =
-          Object.hasOwn(entry, "allowInsecurePath") ||
-          Object.hasOwn(entry, "allowSymlinkCommand") ||
-          stripped;
-        delete entry.allowInsecurePath;
-        delete entry.allowSymlinkCommand;
-      }
+  for (const owner of [
+    ...Object.values(getRecord(getRecord(raw.secrets)?.providers) ?? {}),
+    getRecord(getRecord(raw.security)?.installPolicy)?.exec,
+  ]) {
+    for (const key of ["allowInsecurePath", "allowSymlinkCommand"]) {
+      stripped = deleteRetiredPath(owner, [key]) || stripped;
     }
-  }
-  const installExec = getRecord(getRecord(getRecord(raw.security)?.installPolicy)?.exec);
-  if (installExec) {
-    stripped =
-      Object.hasOwn(installExec, "allowInsecurePath") ||
-      Object.hasOwn(installExec, "allowSymlinkCommand") ||
-      stripped;
-    delete installExec.allowInsecurePath;
-    delete installExec.allowSymlinkCommand;
   }
   if (stripped || changes.length > initialChangeCount) {
     changes.push(

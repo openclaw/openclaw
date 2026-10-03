@@ -1,4 +1,3 @@
-// Freezes the central failover classifier before the refactor-02 consolidation.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
@@ -9,7 +8,6 @@ const providerRuntimeMocks = vi.hoisted(() => ({
 // and compiled payload probes cover the real provider boundary.
 vi.mock("../../plugins/provider-failover.js", () => providerRuntimeMocks);
 
-import { resolveReplyFailoverFacts } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import {
   classifyFailoverSignal,
   isAuthErrorMessage,
@@ -21,6 +19,7 @@ import {
 } from "./classify.js";
 import { failoverClassificationCorpus } from "./failover-classification.corpus.cases.test-support.js";
 import { classifyProviderRequestFacets } from "./request-error-facets.js";
+import { resolveReplyFailoverFacts } from "./request-error-facts.js";
 import type { FailoverSignal } from "./signal.js";
 
 afterEach(() => {
@@ -51,7 +50,75 @@ describe("golden failover classification corpus", () => {
   });
 });
 
-describe("cross-layer drift (documents current behavior, see refactor-02)", () => {
+describe("cross-layer failover behavior", () => {
+  it.each([503, 529])("classifies body-only HTTP %s failures", (status) => {
+    const signal = {
+      message: "Provider rejected request",
+      details: [`${status} status code (no body)`],
+    };
+    expect(classifyFailoverSignal(signal)).toEqual({
+      kind: "reason",
+      reason: status === 529 ? "overloaded" : "server_error",
+    });
+  });
+
+  it("does not infer permanent model removal from availability prose alone", () => {
+    const message = "The model is not available. Please try again later.";
+    expect(classifyFailoverSignal({ message })).toBeNull();
+    expect(classifyReplyRequest({ message })?.code).not.toBe("provider_model_unavailable");
+  });
+
+  it.each([
+    ...[504, 522, 524].map((status) => ({
+      signal: { status, message: "The model is not available. Please try again later." },
+      reason: "timeout",
+    })),
+    ...[500, 502, 503, 520, 521, 523].map((status) => ({
+      signal: { status, message: "The model is not available. Please try again later." },
+      reason: "server_error",
+    })),
+    {
+      signal: {
+        message:
+          '{"type":"error","error":{"type":"overloaded_error","message":"The model is not available due to high demand."}}',
+      },
+      reason: "overloaded",
+    },
+    {
+      signal: { errorType: "server_error", message: "The model is not available." },
+      reason: "server_error",
+    },
+    {
+      signal: {
+        message: "The model is not available.",
+        details: ['{"error":{"type":"overloaded_error","message":"Overloaded"}}'],
+      },
+      reason: "overloaded",
+    },
+    {
+      signal: {
+        status: 529,
+        message: '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      },
+      reason: "overloaded",
+    },
+    {
+      signal: {
+        status: 500,
+        message:
+          '{"error":{"type":"server_error","message":"An error occurred while processing your request."}}',
+      },
+      reason: "server_error",
+    },
+    {
+      signal: { message: "Selected model is at capacity. Please try a different model." },
+      reason: "overloaded",
+    },
+  ])("keeps outage evidence transient: $signal", ({ signal, reason }) => {
+    expect(classifyFailoverSignal(signal)).toEqual({ kind: "reason", reason });
+    expect(classifyReplyRequest(signal)?.code).not.toBe("provider_model_unavailable");
+  });
+
   it.each([
     ["Ollama setup pull", "Failed to download gemma4:e2b: pull stream ended before success"],
     ["OpenRouter music", "OpenRouter music generation stream ended before completion"],
@@ -67,7 +134,6 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
   it("ignores an embedded 429 substring outside a status context", () => {
     const message = "request id req-4291 failed";
 
-    // FIXED(refactor-02): was rate_limit, now null
     expect(isRateLimitErrorMessage(message)).toBe(false);
     expect(classifyFailoverSignal({ message })).toBeNull();
   });
@@ -75,7 +141,6 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
   it("classifies a bare HTTP 503 service-unavailable response as overloaded", () => {
     const message = "503 service unavailable";
 
-    // FIXED(refactor-02): was timeout, now overloaded
     expect(isTimeoutErrorMessage(message)).toBe(false);
     expect(isOverloadedErrorMessage(message)).toBe(true);
     expect(isServerErrorMessage(message)).toBe(false);
@@ -85,7 +150,6 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
       reason: "overloaded",
     });
     const facet = classifyProviderRequestFacets({ message });
-    // MOVED(refactor-02): reply layer now consumes the single classifier plus substrate facets.
     expect(facet).toBe("provider-internal-503");
     expect(classifyReplyRequest({ message })).toMatchObject({
       code: "provider_internal_error",
@@ -96,13 +160,12 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
   it("renders rate-limit copy from the classified reason", () => {
     const message = "429 Too Many Requests: model overloaded";
 
-    // FIXED(refactor-02): user copy follows the canonical failover reason.
     expect(classifyFailoverSignal({ message })).toEqual({
       kind: "reason",
       reason: "rate_limit",
     });
     expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: message })).toBe(
-      "⚠️ API rate limit reached. Please try again later.",
+      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
     );
   });
 
@@ -116,7 +179,6 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     });
     const truncatedMessage = longMessage.slice(0, 511);
 
-    // FIXED(refactor-02): was false, now true
     expect(longMessage.length).toBeGreaterThan(512);
     expect(truncatedMessage.length).toBeLessThan(512);
     expect(isBillingErrorMessage(longMessage)).toBe(true);
@@ -127,7 +189,6 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     const message = "403 Forbidden: insufficient permissions";
 
     const classification = classifyFailoverSignal({ message });
-    // MOVED(refactor-02): reply mapping preserves the HTTP-403 copy boundary from typed facts.
     expect(isAuthErrorMessage(message)).toBe(true);
     expect(classification).toEqual({ kind: "reason", reason: "auth" });
     expect(classifyReplyRequest({ message, status: 403 })).toBeUndefined();
@@ -138,7 +199,6 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     const signal = { message, status: 429 };
     const facet = classifyProviderRequestFacets(signal);
 
-    // MOVED(refactor-02): quota-flavored 429 is a substrate facet, not reply text parsing.
     expect(facet).toBe("quota-429");
     expect(classifyReplyRequest(signal)).toMatchObject({
       code: "provider_rate_limit_or_quota_error",
@@ -152,7 +212,6 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     const classification = classifyFailoverSignal(signal);
     const facet = classifyProviderRequestFacets(signal);
 
-    // MOVED(refactor-02): HTTP status and canonical auth classification select reply copy.
     expect(classification).toEqual({ kind: "reason", reason: "auth" });
     expect(facet).toBeNull();
     expect(classifyReplyRequest(signal)).toMatchObject({ code: "provider_authentication_error" });
@@ -164,7 +223,6 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
   ])("preserves provider-internal guidance for %s", (message) => {
     const facet = classifyProviderRequestFacets({ message });
 
-    // MOVED(refactor-02): provider-internal copy selection now consumes a substrate facet.
     expect(facet).toBe("provider-internal");
     expect(classifyReplyRequest({ message })).toMatchObject({ code: "provider_internal_error" });
   });
@@ -174,10 +232,12 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     const classification = classifyFailoverSignal({ message });
     const facet = classifyProviderRequestFacets({ message });
 
-    // MOVED(refactor-02): model availability copy consumes the canonical typed reason.
     expect(classification).toEqual({ kind: "reason", reason: "model_not_found" });
     expect(facet).toBeNull();
-    expect(classifyReplyRequest({ message })).toMatchObject({ code: "provider_model_unavailable" });
+    expect(classifyReplyRequest({ message })).toMatchObject({
+      code: "provider_model_unavailable",
+      userMessage: expect.stringContaining("Choose another model in the Control UI"),
+    });
   });
 
   it.each([
@@ -191,7 +251,6 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
   ])("preserves conversation-state guidance for %s", (message) => {
     const facet = classifyProviderRequestFacets({ message });
 
-    // MOVED(refactor-02): conversation-state copy selection now consumes a substrate facet.
     expect(facet).toBe("conversation-state");
     expect(classifyReplyRequest({ message })).toMatchObject({
       code: "provider_conversation_state_error",
@@ -208,7 +267,6 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
       rateLimit: true,
     },
   ])("records generic throttling normalization for $message", (row) => {
-    // FIXED(refactor-02): generic matching owns throttling; provider-specific duplicates are gone.
     // "throttling disabled" still matches by decision; it is unrealistic provider error text.
     expect(isRateLimitErrorMessage(row.message)).toBe(row.rateLimit);
     expect(classifyFailoverSignal({ message: row.message })).toEqual({

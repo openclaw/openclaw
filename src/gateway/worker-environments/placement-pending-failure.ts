@@ -11,24 +11,22 @@ import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
   clearWorkerTurnToolState,
-} from "./placement-session-tool-operations.js";
-import { signalWorkerTurnClaimClosed } from "./placement-turn-claims.js";
-import {
-  isCurrentWorkerWorkspacePendingResultOwner,
-  type WorkerWorkspacePendingResult,
-} from "./placement-workspace-result.js";
+} from "./placement-session-tool-operations.kernel.js";
+import type { PlacementTurnClaimReceipt } from "./placement-turn-claims.types.js";
+import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime) {
-  const { now, path, write } = runtime;
+  const { now, write } = runtime;
   return {
     failWorkspaceResultAndReleaseTurn(
       pending: WorkerWorkspacePendingResult,
       error: unknown,
-    ): WorkerSessionPlacementRecord {
+    ): PlacementTurnClaimReceipt {
       const sessionId = required(pending.sessionId, "session id");
       const recoveryError = boundedWorkerError(error);
-      const outcome = write((db) => {
+      return write((db) => {
         const current = getRequired(db, sessionId);
         if (!isCurrentWorkerWorkspacePendingResultOwner(current, pending)) {
           throw new Error(`Session ${sessionId} workspace result owner changed before failure`);
@@ -142,15 +140,9 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
         if (removed.numAffectedRows !== 1n) {
           throw new Error(`Session ${sessionId} workspace result changed during failure`);
         }
-        return {
-          record: getRequired(db, sessionId),
-          releasedClaim,
-        };
+        const record = getRequired(db, sessionId);
+        return { placement: record, closedClaim: releasedClaim ?? undefined };
       });
-      if (outcome.releasedClaim) {
-        signalWorkerTurnClaimClosed(path, outcome.releasedClaim);
-      }
-      return outcome.record;
     },
   };
 }

@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -13,7 +14,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   commitArgs,
   createContentGuardFixture,
+  installFormattingRecorder,
   installPreCommitFixture,
+  readFormatterLog,
   literals,
   rulePath,
   ruleSetting,
@@ -25,20 +28,6 @@ import {
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
-
-function installFormattingRecorder(dir: string, body = ""): string {
-  const logPath = path.join(dir, "hook-tool.log");
-  writeExecutable(
-    path.join(dir, "node_modules/.bin"),
-    "oxfmt",
-    `#!/usr/bin/env bash
-set -euo pipefail
-printf 'oxfmt %s\n' "$*" >> hook-tool.log
-${body}
-`,
-  );
-  return logPath;
-}
 
 function installRunNodeToolFixture(dir: string): void {
   mkdirSync(path.join(dir, "scripts", "pre-commit"), { recursive: true });
@@ -56,13 +45,6 @@ function splitNonEmptyLines(output: string): string[] {
     }
   }
   return lines;
-}
-
-function readFormatterLog(logPath: string): string[] {
-  if (!existsSync(logPath)) {
-    return [];
-  }
-  return splitNonEmptyLines(readFileSync(logPath, "utf8"));
 }
 
 afterEach(() => {
@@ -90,98 +72,6 @@ describe("git-hooks/pre-commit (integration)", () => {
 
     const staged = splitNonEmptyLines(run(dir, "git", ["diff", "--cached", "--name-only"]));
     expect(staged).toEqual(["--all"]);
-  });
-
-  it("skips formatting staged files while a merge commit is in progress", () => {
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-merge-");
-    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
-    installPreCommitFixture(dir);
-    const logPath = installFormattingRecorder(dir);
-
-    writeFileSync(path.join(dir, "changed.ts"), "export const value = 1;\n", "utf8");
-    run(dir, "git", ["add", "--", "changed.ts"]);
-    run(dir, "git", [
-      "-c",
-      "user.name=Test User",
-      "-c",
-      "user.email=test@example.invalid",
-      "commit",
-      "-q",
-      "-m",
-      "initial",
-    ]);
-    run(dir, "git", ["checkout", "-q", "-b", "side"]);
-    writeFileSync(path.join(dir, "changed.ts"), "export const value = 2;\n", "utf8");
-    run(dir, "git", ["add", "--", "changed.ts"]);
-    run(dir, "git", [
-      "-c",
-      "user.name=Test User",
-      "-c",
-      "user.email=test@example.invalid",
-      "commit",
-      "-q",
-      "-m",
-      "side change",
-    ]);
-    run(dir, "git", ["checkout", "-q", "main"]);
-    run(dir, "git", [
-      "-c",
-      "user.name=Test User",
-      "-c",
-      "user.email=test@example.invalid",
-      "merge",
-      "--no-commit",
-      "--no-ff",
-      "side",
-    ]);
-
-    expect(existsSync(path.join(dir, ".git", "MERGE_HEAD"))).toBe(true);
-    expect(run(dir, "git", ["diff", "--cached", "--name-only"])).toBe("changed.ts");
-
-    run(dir, "bash", ["git-hooks/pre-commit"]);
-
-    expect(readFormatterLog(logPath)).toEqual([]);
-
-    writeFileSync(path.join(dir, "changed.ts"), literals[0]);
-    run(dir, "git", ["add", "--", "changed.ts"]);
-    expect(runFailure(dir, "bash", ["git-hooks/pre-commit"]).stderr).toContain(
-      "Blocked staged content",
-    );
-    expect(readFormatterLog(logPath)).toEqual([]);
-  });
-
-  it.each([
-    ["cherry-pick", "CHERRY_PICK_HEAD", "file"],
-    ["revert", "REVERT_HEAD", "file"],
-    ["rebase head", "REBASE_HEAD", "file"],
-    ["merge rebase state", "rebase-merge", "dir"],
-    ["apply rebase state", "rebase-apply", "dir"],
-  ])("skips formatting staged files while %s metadata is present", (_label, gitPath, kind) => {
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-sequencer-");
-    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
-    installPreCommitFixture(dir);
-    const logPath = installFormattingRecorder(dir);
-
-    writeFileSync(path.join(dir, "changed.ts"), "export const value = 1;\n", "utf8");
-    run(dir, "git", ["add", "--", "changed.ts"]);
-
-    const metadataPath = path.join(dir, ".git", gitPath);
-    if (kind === "dir") {
-      mkdirSync(metadataPath, { recursive: true });
-    } else {
-      writeFileSync(metadataPath, "sequencer state\n", "utf8");
-    }
-
-    run(dir, "bash", ["git-hooks/pre-commit"]);
-
-    expect(readFormatterLog(logPath)).toEqual([]);
-
-    writeFileSync(path.join(dir, "changed.ts"), literals[1]);
-    run(dir, "git", ["add", "--", "changed.ts"]);
-    expect(runFailure(dir, "bash", ["git-hooks/pre-commit"]).stderr).toContain(
-      "Blocked staged content",
-    );
-    expect(readFormatterLog(logPath)).toEqual([]);
   });
 
   it.each(["configured", "unconfigured", "external"])(
@@ -215,7 +105,7 @@ describe("git-hooks/pre-commit (integration)", () => {
       });
 
       expect(readFormatterLog(logPath)).toEqual([
-        "oxfmt --write --no-error-on-unmatched-pattern changed.ts",
+        "oxfmt --write --threads=1 --no-error-on-unmatched-pattern changed.ts",
       ]);
       if (mode === "external") {
         writeFileSync(path.join(dir, "changed.ts"), literals[0]);
@@ -226,6 +116,78 @@ describe("git-hooks/pre-commit (integration)", () => {
       }
     },
   );
+
+  it("formats only staged bytes of a partially staged file and preserves the working tree", () => {
+    const dir = createContentGuardFixture(tempDirs);
+    writeExecutable(
+      path.join(dir, "node_modules/.bin"),
+      "oxfmt",
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf 'oxfmt %s\n' "$*" >> hook-tool.log
+case "$*" in *--stdin-filepath=*) sed 's/FORMAT_ME/FORMATTED/' ;; esac
+`,
+    );
+    const staged = "export const value = FORMAT_ME;\n";
+    const working = `${staged}export const unstagedOnly = 1;\n`;
+    stage(dir, "partial.ts", staged);
+    writeFileSync(path.join(dir, "partial.ts"), working);
+
+    run(dir, "git", commitArgs);
+
+    expect(run(dir, "git", ["show", "HEAD:partial.ts"])).toBe("export const value = FORMATTED;");
+    expect(readFileSync(path.join(dir, "partial.ts"), "utf8")).toBe(working);
+    expect(readFormatterLog(path.join(dir, "hook-tool.log"))).toEqual([
+      "oxfmt --stdin-filepath=partial.ts",
+    ]);
+  });
+
+  it("preserves formatted staged content when the working-tree copy is deleted", () => {
+    const dir = createContentGuardFixture(tempDirs);
+    stage(dir, "gone.ts", "export const keep = 1;\n");
+    unlinkSync(path.join(dir, "gone.ts"));
+
+    run(dir, "git", commitArgs);
+
+    expect(run(dir, "git", ["show", "HEAD:gone.ts"])).toBe("export const keep = 1;");
+    expect(existsSync(path.join(dir, "gone.ts"))).toBe(false);
+  });
+
+  it("leaves staged symlinks untouched even when retargeted in the working tree", () => {
+    const dir = createContentGuardFixture(tempDirs);
+    writeFileSync(path.join(dir, "target-a.ts"), "const unformatted =  1\n", "utf8");
+    writeFileSync(path.join(dir, "target-b.ts"), "const other = 2;\n", "utf8");
+    symlinkSync("target-a.ts", path.join(dir, "alias.ts"));
+    run(dir, "git", ["add", "--", "alias.ts"]);
+    unlinkSync(path.join(dir, "alias.ts"));
+    symlinkSync("target-b.ts", path.join(dir, "alias.ts"));
+
+    run(dir, "git", commitArgs);
+
+    expect(run(dir, "git", ["show", "HEAD:alias.ts"])).toBe("target-a.ts");
+    expect(readFileSync(path.join(dir, "alias.ts"), "utf8")).toBe("const other = 2;\n");
+  });
+
+  it("fails instead of staging empty formatter output for a partially staged file", () => {
+    const dir = createContentGuardFixture(tempDirs);
+    // Drain stdin so SIGPIPE cannot preempt the hook's empty-output check.
+    writeExecutable(
+      path.join(dir, "node_modules/.bin"),
+      "oxfmt",
+      "#!/bin/sh\ncat >/dev/null\nexit 0\n",
+    );
+    stage(dir, "partial.ts", "export const value = 1;\n");
+    writeFileSync(
+      path.join(dir, "partial.ts"),
+      "export const value = 1;\nexport const extra = 2;\n",
+    );
+
+    const result = runFailure(dir, "git", commitArgs);
+
+    expect(result.stderr).toContain("Formatter returned no output");
+    expect(run(dir, "git", ["show", ":partial.ts"])).toBe("export const value = 1;");
+    expect(runFailure(dir, "git", ["rev-parse", "--verify", "HEAD"]).status).not.toBe(0);
+  });
 
   it("does not run the changed-scope check for non-doc staged changes", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-no-check-changed-");
@@ -273,31 +235,6 @@ describe("git-hooks/pre-commit (integration)", () => {
     const staged = splitNonEmptyLines(run(dir, "git", ["diff", "--cached", "--name-only"]));
     expect(staged).toEqual([".agents/skills/discord-clawd/SKILL.md", ".gitignore"]);
   });
-
-  it("does not invoke pnpm when FAST_COMMIT is set", () => {
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-fast-");
-    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
-
-    const fakeBinDir = installPreCommitFixture(dir);
-    writeFileSync(path.join(dir, "package.json"), '{"name":"tmp"}\n', "utf8");
-    writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
-
-    writeExecutable(
-      fakeBinDir,
-      "pnpm",
-      "#!/usr/bin/env bash\necho 'pnpm should not run when FAST_COMMIT is enabled' >&2\nexit 99\n",
-    );
-
-    writeFileSync(path.join(dir, "tracked.txt"), "hello\n", "utf8");
-    run(dir, "git", ["add", "--", "tracked.txt"]);
-
-    run(dir, "bash", ["git-hooks/pre-commit"], {
-      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
-      FAST_COMMIT: "1",
-    });
-
-    expect(run(dir, "git", ["diff", "--cached", "--name-only"])).toBe("tracked.txt");
-  });
 });
 
 describe("staged content guard", () => {
@@ -335,14 +272,14 @@ describe("staged content guard", () => {
   );
 
   it.each(["payload.txt", "payload.ts"])(
-    "blocks working-tree bytes restaged by the real formatter path: %s",
+    "keeps unstaged working-tree bytes out of the commit: %s",
     (name) => {
       const dir = fixture();
       stage(dir, name, "clean staged version\n");
       writeFileSync(path.join(dir, name), literals[0]);
-      blocked(dir, [name], true);
-      expect(run(dir, "git", ["show", `:${name}`])).toBe(literals[0]);
-      expect(runFailure(dir, "git", ["rev-parse", "--verify", "HEAD"]).status).not.toBe(0);
+      run(dir, "git", commitArgs);
+      expect(run(dir, "git", ["show", `HEAD:${name}`])).toBe("clean staged version");
+      expect(readFileSync(path.join(dir, name), "utf8")).toBe(literals[0]);
     },
   );
 
@@ -427,9 +364,9 @@ describe("staged content guard", () => {
     const formerRulePath = "scripts/pre-commit/blocked-literals.txt";
     stage(dir, formerRulePath, literals[0]);
     blocked(dir, [formerRulePath]);
-    // Long paths cross the byte budget before 64 entries; short paths cross the count budget.
+    // Long paths cross the byte budget first; short paths also cross the 256-entry count budget.
     const batchPaths = [];
-    for (let i = 0; i < 140; i++) {
+    for (let i = 0; i < 600; i++) {
       const suffix = i < 70 ? `/${"x".repeat(180)}/${"y".repeat(180)}` : "";
       const name = `batch-${String(i).padStart(3, "0")}${suffix}.txt`;
       mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
@@ -566,6 +503,245 @@ describe("staged content guard", () => {
 });
 
 describe("scripts/pre-commit/run-node-tool.sh", () => {
+  function toolingFixture() {
+    const dir = createContentGuardFixture(tempDirs);
+    const owner = makeTempRepoRoot(tempDirs, "openclaw-hook-tooling-");
+    run(owner, "git", ["init", "-q", "--initial-branch=main"]);
+    for (const root of [dir, owner]) {
+      run(root, "git", ["remote", "add", "origin", "https://github.com/example/project.git"]);
+      writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({ devDependencies: { oxfmt: "0.68.0" } }),
+      );
+    }
+    rmSync(path.join(dir, "node_modules"), { recursive: true });
+    const pkg = path.join(owner, "node_modules/oxfmt");
+    const bindingName = `@oxfmt/binding-${process.platform}-${process.arch}`;
+    const binding = path.join(owner, "node_modules", bindingName);
+    const dependency = path.join(owner, "node_modules/tinypool");
+    mkdirSync(pkg, { recursive: true });
+    mkdirSync(binding, { recursive: true });
+    mkdirSync(dependency, { recursive: true });
+    writeFileSync(
+      path.join(dependency, "package.json"),
+      JSON.stringify({ name: "tinypool", version: "2.1.2", main: "index.cjs" }),
+    );
+    writeFileSync(path.join(dependency, "index.cjs"), "module.exports = {};\n");
+    writeFileSync(
+      path.join(pkg, "package.json"),
+      JSON.stringify({
+        name: "oxfmt",
+        version: "0.68.0",
+        bin: { oxfmt: "cli.cjs" },
+        dependencies: { tinypool: "2.1.2" },
+        optionalDependencies: { [bindingName]: "0.68.0" },
+      }),
+    );
+    writeFileSync(
+      path.join(binding, "package.json"),
+      JSON.stringify({
+        name: bindingName,
+        version: "0.68.0",
+        os: [process.platform],
+        cpu: [process.arch],
+        main: "binding.cjs",
+      }),
+    );
+    writeFileSync(path.join(binding, "binding.cjs"), "module.exports = {};\n");
+    const cli = path.join(pkg, "cli.cjs");
+    const formatter = `const fs = require("node:fs");
+if (process.argv[2] === "--version") { console.log("Version: 0.68.0"); process.exit(0); }
+fs.writeFileSync("formatter-call.json", JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }));
+if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdout.write(fs.readFileSync(0, "utf8").replace("FORMAT_ME", "FORMATTED"));
+`;
+    writeFileSync(cli, formatter);
+    return {
+      dir,
+      owner,
+      pkg,
+      binding,
+      dependency,
+      cli,
+      formatter,
+      env: { OPENCLAW_PR_TOOLING_ROOT: owner },
+    };
+  }
+
+  it.each(["environment", "config", "canonical"])(
+    "uses the %s tooling owner with task cwd and exact arguments",
+    (selection) => {
+      const fixture = toolingFixture();
+      let { dir } = fixture;
+      const { owner, env } = fixture;
+      if (selection === "config") {
+        run(dir, "git", ["config", "openclaw.pr.toolingRoot", owner]);
+        env.OPENCLAW_PR_TOOLING_ROOT = "";
+      } else if (selection === "canonical") {
+        run(owner, "git", ["add", "package.json"]);
+        run(owner, "git", ["commit", "-qm", "tooling fixture"]);
+        dir = path.join(owner, "task");
+        run(owner, "git", ["worktree", "add", "--detach", dir, "HEAD"]);
+        installPreCommitFixture(dir);
+        rmSync(path.join(dir, "node_modules"), { recursive: true });
+        env.OPENCLAW_PR_TOOLING_ROOT = "";
+      } else {
+        run(dir, "git", ["config", "openclaw.pr.toolingRoot", path.join(owner, "missing")]);
+      }
+      const args = ["--write", "space name.ts", ":(exclude)literal.ts", "line\nbreak.ts"];
+      run(dir, "/bin/bash", ["scripts/pre-commit/run-node-tool.sh", "oxfmt", ...args], env);
+      expect(JSON.parse(readFileSync(path.join(dir, "formatter-call.json"), "utf8"))).toEqual({
+        cwd: dir,
+        args,
+      });
+      expect(existsSync(path.join(dir, "node_modules"))).toBe(false);
+      expect(existsSync(path.join(owner, "formatter-call.json"))).toBe(false);
+    },
+  );
+
+  it.each([
+    "wrong pin",
+    "wrong package",
+    "unrelated",
+    "sparse",
+    "subdirectory",
+    "escaped package",
+    "wrong platform",
+    "wrong binding pin",
+    "broken binding",
+    "wrong dependency pin",
+    "escaped dependency",
+    "drift",
+  ])("rejects %s before formatting", (kind) => {
+    const { dir, owner, pkg, binding, dependency, cli, formatter, env } = toolingFixture();
+    if (kind === "wrong pin" || kind === "wrong package") {
+      const manifest = JSON.parse(readFileSync(path.join(pkg, "package.json"), "utf8"));
+      if (kind === "wrong pin") {
+        manifest.version = "0.60.0";
+      } else {
+        manifest.name = "another-formatter";
+      }
+      writeFileSync(path.join(pkg, "package.json"), JSON.stringify(manifest));
+    } else if (kind === "unrelated") {
+      run(owner, "git", [
+        "remote",
+        "set-url",
+        "origin",
+        "https://github.com/example/unrelated.git",
+      ]);
+    } else if (kind === "sparse") {
+      run(owner, "git", ["config", "core.sparseCheckout", "true"]);
+    } else if (kind === "subdirectory") {
+      env.OPENCLAW_PR_TOOLING_ROOT = pkg;
+    } else if (kind === "escaped package") {
+      const outside = makeTempRepoRoot(tempDirs, "openclaw-outside-formatter-");
+      rmSync(pkg, { recursive: true });
+      symlinkSync(outside, pkg);
+    } else if (kind === "wrong platform" || kind === "wrong binding pin") {
+      const manifest = JSON.parse(readFileSync(path.join(binding, "package.json"), "utf8"));
+      if (kind === "wrong platform") {
+        manifest.cpu = ["unsupported"];
+      } else {
+        manifest.version = "0.60.0";
+      }
+      writeFileSync(path.join(binding, "package.json"), JSON.stringify(manifest));
+    } else if (kind === "broken binding") {
+      writeFileSync(
+        path.join(binding, "binding.cjs"),
+        'throw new Error("unusable native binding");',
+      );
+    } else if (kind === "wrong dependency pin") {
+      const manifest = JSON.parse(readFileSync(path.join(dependency, "package.json"), "utf8"));
+      manifest.version = "1.0.0";
+      writeFileSync(path.join(dependency, "package.json"), JSON.stringify(manifest));
+    } else if (kind === "escaped dependency") {
+      const outside = makeTempRepoRoot(tempDirs, "openclaw-outside-dependency-");
+      rmSync(dependency, { recursive: true });
+      writeFileSync(
+        path.join(outside, "package.json"),
+        JSON.stringify({ name: "tinypool", version: "2.1.2", main: "index.cjs" }),
+      );
+      writeFileSync(path.join(outside, "index.cjs"), "module.exports = {};\n");
+      symlinkSync(outside, dependency);
+    } else {
+      writeFileSync(
+        cli,
+        formatter.replace(
+          "console.log",
+          `fs.appendFileSync(${JSON.stringify(path.join(pkg, "package.json"))}, " "); console.log`,
+        ),
+      );
+    }
+    const result = runFailure(
+      dir,
+      "/bin/bash",
+      ["scripts/pre-commit/run-node-tool.sh", "oxfmt", "--write", "a.ts"],
+      env,
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Cannot use tooling-owner oxfmt");
+    expect(existsSync(path.join(dir, "formatter-call.json"))).toBe(false);
+    expect(existsSync(path.join(dir, "node_modules"))).toBe(false);
+  });
+
+  it.each(["false", "0", "override"])("allows inactive NAPI_RS_FORCE_WASI=%s", (value) => {
+    const { dir, owner, env } = toolingFixture();
+    const args = ["--write", "space name.ts"];
+    run(dir, "/bin/bash", ["scripts/pre-commit/run-node-tool.sh", "oxfmt", ...args], {
+      ...env,
+      NAPI_RS_FORCE_WASI: value,
+    });
+    expect(JSON.parse(readFileSync(path.join(dir, "formatter-call.json"), "utf8"))).toEqual({
+      cwd: dir,
+      args,
+    });
+    expect(existsSync(path.join(dir, "node_modules"))).toBe(false);
+    expect(existsSync(path.join(owner, "formatter-call.json"))).toBe(false);
+  });
+
+  it.each([
+    ["NAPI_RS_NATIVE_LIBRARY_PATH", "override"],
+    ["NAPI_RS_FORCE_WASI", "true"],
+    ["NAPI_RS_FORCE_WASI", "error"],
+    ["NAPI_RS_WASI_FLAVOR", "wasm32-wasi"],
+  ])("rejects the platform override %s=%s before formatting", (key, value) => {
+    const { dir, env } = toolingFixture();
+    const result = runFailure(
+      dir,
+      "/bin/bash",
+      ["scripts/pre-commit/run-node-tool.sh", "oxfmt", "--write", "a.ts"],
+      { ...env, [key]: value },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Cannot qualify an overridden formatter platform binding");
+    expect(existsSync(path.join(dir, "formatter-call.json"))).toBe(false);
+  });
+
+  it("keeps partial-stage and private-content guards around the tooling formatter", () => {
+    const { dir, env } = toolingFixture();
+    stage(dir, "partial.ts", "export const value = FORMAT_ME;\n");
+    const working = `export const value = FORMAT_ME;\n// ${literals[0]}\n`;
+    writeFileSync(path.join(dir, "partial.ts"), working);
+    run(dir, "git", commitArgs, env);
+    expect(run(dir, "git", ["show", "HEAD:partial.ts"])).toBe("export const value = FORMATTED;");
+    expect(readFileSync(path.join(dir, "partial.ts"), "utf8")).toBe(working);
+    rmSync(path.join(dir, "formatter-call.json"));
+    stage(dir, "blocked.ts", literals[1]);
+    const failed = runFailure(dir, "git", commitArgs, env);
+    expect(failed.stderr).toContain("Blocked staged content");
+    expect(failed.stderr).not.toContain(literals[1]);
+    expect(existsSync(path.join(dir, "formatter-call.json"))).toBe(false);
+  });
+
+  it("propagates a tooling formatter failure through the hook without committing", () => {
+    const { dir, cli, formatter, env } = toolingFixture();
+    writeFileSync(cli, `${formatter}\nprocess.exit(23);\n`);
+    stage(dir, "a.ts", "export const value = 1;\n");
+    const failed = runFailure(dir, "git", commitArgs, env);
+    expect(failed.status).toBe(1);
+    expect(failed.stderr).toContain("[pre-commit] FAILED (exit 23)");
+    expect(runFailure(dir, "git", ["rev-parse", "--verify", "HEAD"]).status).not.toBe(0);
+  });
+
   it("runs the installed local tool without invoking pnpm", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-run-node-tool-local-");
     installRunNodeToolFixture(dir);

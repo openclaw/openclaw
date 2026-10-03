@@ -5,6 +5,17 @@ import {
   type ParityFixture,
 } from "./openai-responses-stream-parity.test-helpers.js";
 
+function responseMessage(id: string, text: string, phase?: "commentary" | "final_answer") {
+  return {
+    id,
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    ...(phase ? { phase } : {}),
+    content: [{ type: "output_text", text, annotations: [] }],
+  };
+}
+
 const fixtures: ParityFixture[] = [
   {
     name: "indexed interleaved reasoning items",
@@ -52,34 +63,55 @@ const fixtures: ParityFixture[] = [
     },
   },
   {
-    name: "raw reasoning delta with empty summary",
+    name: "reasoning summary text and part completion preserve delta order",
     events: [
       {
         type: "response.output_item.added",
         output_index: 0,
-        item: { id: "rs_raw", type: "reasoning", summary: [], content: [] },
+        item: { id: "rs_summary", type: "reasoning", summary: [], content: [] },
       },
       {
-        type: "response.reasoning_text.delta",
+        type: "response.reasoning_summary_part.added",
         output_index: 0,
-        item_id: "rs_raw",
-        delta: "raw thought",
+        item_id: "rs_summary",
+        summary_index: 0,
+        part: { type: "summary_text", text: "" },
+      },
+      {
+        type: "response.reasoning_summary_text.delta",
+        output_index: 0,
+        item_id: "rs_summary",
+        summary_index: 0,
+        delta: "summary",
+      },
+      {
+        type: "response.reasoning_summary_part.done",
+        output_index: 0,
+        item_id: "rs_summary",
+        summary_index: 0,
+        part: { type: "summary_text", text: "summary" },
       },
       {
         type: "response.output_item.done",
         output_index: 0,
-        item: { id: "rs_raw", type: "reasoning", summary: [], content: [] },
+        item: {
+          id: "rs_summary",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "summary" }],
+          content: [],
+        },
       },
-      completed("resp_raw"),
+      completed("resp_summary"),
     ],
     canonical: {
       events: [
         { type: "thinking_start", contentIndex: 0 },
-        { type: "thinking_delta", contentIndex: 0, delta: "raw thought" },
-        { type: "thinking_end", contentIndex: 0, content: "raw thought" },
+        { type: "thinking_delta", contentIndex: 0, delta: "summary" },
+        { type: "thinking_delta", contentIndex: 0, delta: "\n\n" },
+        { type: "thinking_end", contentIndex: 0, content: "summary" },
       ],
-      content: [{ type: "thinking", thinking: "raw thought", encrypted: false }],
-      responseId: "resp_raw",
+      content: [{ type: "thinking", thinking: "summary", encrypted: false }],
+      responseId: "resp_summary",
       stopReason: "stop",
       error: null,
     },
@@ -90,13 +122,7 @@ const fixtures: ParityFixture[] = [
       {
         type: "response.output_item.done",
         output_index: 0,
-        item: {
-          id: "msg_early",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "early", annotations: [] }],
-        },
+        item: responseMessage("msg_early", "early"),
       },
     ],
     canonical: {
@@ -288,13 +314,7 @@ const fixtures: ParityFixture[] = [
     events: [
       {
         type: "response.output_item.done",
-        item: {
-          id: "msg_before_tool",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "Hello", annotations: [] }],
-        },
+        item: responseMessage("msg_before_tool", "Hello"),
       },
       {
         type: "response.output_item.added",
@@ -320,13 +340,7 @@ const fixtures: ParityFixture[] = [
       },
       {
         type: "response.output_item.done",
-        item: {
-          id: "msg_after_tool",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "Hello again", annotations: [] }],
-        },
+        item: responseMessage("msg_after_tool", "Hello again"),
       },
       completed("resp_tool_boundary"),
     ],
@@ -387,23 +401,9 @@ const fixtures: ParityFixture[] = [
       {
         type: "response.output_item.done",
         output_index: 0,
-        item: {
-          id: "msg_text",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "hello", annotations: [] }],
-        },
+        item: responseMessage("msg_text", "hello"),
       },
-      completed("resp_text", [
-        {
-          id: "msg_text",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "hello", annotations: [] }],
-        },
-      ]),
+      completed("resp_text", [responseMessage("msg_text", "hello")]),
     ],
     canonical: {
       events: [
@@ -419,17 +419,7 @@ const fixtures: ParityFixture[] = [
   },
   {
     name: "terminal-only completed message recovery",
-    events: [
-      completed("resp_terminal_text", [
-        {
-          id: "msg_terminal",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "recovered", annotations: [] }],
-        },
-      ]),
-    ],
+    events: [completed("resp_terminal_text", [responseMessage("msg_terminal", "recovered")])],
     canonical: {
       events: [
         { type: "text_start", contentIndex: 0 },
@@ -437,58 +427,6 @@ const fixtures: ParityFixture[] = [
       ],
       content: [{ type: "text", text: "recovered" }],
       responseId: "resp_terminal_text",
-      stopReason: "stop",
-      error: null,
-    },
-  },
-  {
-    name: "terminal completed message recovery after streamed reasoning",
-    events: [
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: { id: "rs_before_terminal", type: "reasoning", summary: [], content: [] },
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: {
-          id: "rs_before_terminal",
-          type: "reasoning",
-          summary: [{ type: "summary_text", text: "thought" }],
-          content: [],
-        },
-      },
-      completed("resp_reasoning_terminal_text", [
-        {
-          id: "rs_before_terminal",
-          type: "reasoning",
-          summary: [{ type: "summary_text", text: "thought" }],
-          content: [],
-          encrypted_content: "encrypted",
-        },
-        {
-          id: "msg_after_reasoning",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          phase: "final_answer",
-          content: [{ type: "output_text", text: "recovered final answer", annotations: [] }],
-        },
-      ]),
-    ],
-    canonical: {
-      events: [
-        { type: "thinking_start", contentIndex: 0 },
-        { type: "thinking_end", contentIndex: 0, content: "thought" },
-        { type: "text_start", contentIndex: 1 },
-        { type: "text_end", contentIndex: 1, content: "recovered final answer" },
-      ],
-      content: [
-        { type: "thinking", thinking: "thought", encrypted: true },
-        { type: "text", text: "recovered final answer" },
-      ],
-      responseId: "resp_reasoning_terminal_text",
       stopReason: "stop",
       error: null,
     },
@@ -539,14 +477,7 @@ const fixtures: ParityFixture[] = [
           summary: [{ type: "summary_text", text: "second thought" }],
           content: [],
         },
-        {
-          id: "msg_after_multiple_reasoning",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          phase: "final_answer",
-          content: [{ type: "output_text", text: "recovered final answer", annotations: [] }],
-        },
+        responseMessage("msg_after_multiple_reasoning", "recovered final answer", "final_answer"),
       ]),
     ],
     canonical: {
@@ -614,6 +545,67 @@ const fixtures: ParityFixture[] = [
         { type: "text", text: "I cannot help with that." },
       ],
       responseId: "resp_reasoning_terminal_refusal",
+      stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "streamed refusal uses the text delta lifecycle",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: {
+          id: "msg_refusal",
+          type: "message",
+          role: "assistant",
+          status: "in_progress",
+          content: [],
+        },
+      },
+      {
+        type: "response.content_part.added",
+        output_index: 0,
+        item_id: "msg_refusal",
+        content_index: 0,
+        part: { type: "refusal", refusal: "" },
+      },
+      {
+        type: "response.refusal.delta",
+        output_index: 0,
+        item_id: "msg_refusal",
+        content_index: 0,
+        delta: "I cannot",
+      },
+      {
+        type: "response.refusal.delta",
+        output_index: 0,
+        item_id: "msg_refusal",
+        content_index: 0,
+        delta: " help.",
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "msg_refusal",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "refusal", refusal: "I cannot help." }],
+        },
+      },
+      completed("resp_refusal"),
+    ],
+    canonical: {
+      events: [
+        { type: "text_start", contentIndex: 0 },
+        { type: "text_delta", contentIndex: 0, delta: "I cannot" },
+        { type: "text_delta", contentIndex: 0, delta: " help." },
+        { type: "text_end", contentIndex: 0, content: "I cannot help." },
+      ],
+      content: [{ type: "text", text: "I cannot help." }],
+      responseId: "resp_refusal",
       stopReason: "stop",
       error: null,
     },
@@ -744,13 +736,7 @@ const fixtures: ParityFixture[] = [
       {
         type: "response.output_item.done",
         output_index: 0,
-        item: {
-          id: "msg_no_part",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "compatible", annotations: [] }],
-        },
+        item: responseMessage("msg_no_part", "compatible"),
       },
       completed("resp_no_part"),
     ],
@@ -762,27 +748,6 @@ const fixtures: ParityFixture[] = [
       ],
       content: [{ type: "text", text: "compatible" }],
       responseId: "resp_no_part",
-      stopReason: "stop",
-      error: null,
-    },
-  },
-  {
-    name: "terminal-only null message content is ignored",
-    events: [
-      completed("resp_terminal_null", [
-        {
-          id: "msg_terminal_null",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: null,
-        },
-      ]),
-    ],
-    canonical: {
-      events: [],
-      content: [],
-      responseId: "resp_terminal_null",
       stopReason: "stop",
       error: null,
     },

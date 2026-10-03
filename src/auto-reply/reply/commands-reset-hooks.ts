@@ -1,4 +1,3 @@
-// Emits reset hooks and cleanup work around session reset commands.
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
@@ -12,10 +11,6 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
-
-function loadRouteReplyRuntime() {
-  return routeReplyRuntimeLoader.load();
-}
 
 export type ResetCommandAction = "new" | "reset";
 
@@ -113,7 +108,7 @@ export async function emitResetCommandHooks(params: {
     const channel = params.ctx.OriginatingChannel || params.command.channel;
     const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
     if (channel && to) {
-      const { routeReply } = await loadRouteReplyRuntime();
+      const { routeReply } = await routeReplyRuntimeLoader.load();
       const result = await routeReply({
         payload: { text: hookEvent.messages.join("\n\n") },
         channel,

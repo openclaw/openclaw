@@ -7,11 +7,13 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCronCli } from "../cli/cron-cli.js";
 import { registerBackupCommand } from "../cli/program/register.backup.js";
+import { summarizeBackupSchedules } from "../cron/backup-command.js";
 import { CronService } from "../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../cron/service.test-harness.js";
 import type { CronListPageOptions } from "../cron/service/list-page-types.js";
-import type { CronJobCreate, CronJobPatch } from "../cron/types.js";
+import type { CronJob, CronJobCreate, CronJobPatch } from "../cron/types.js";
 import { defaultRuntime } from "../runtime.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const gatewayRpc = vi.hoisted(() => ({
@@ -69,6 +71,15 @@ describe("scheduled backups", () => {
     gatewayRpc.isImplicitLocalTarget.mockReset().mockResolvedValue(true);
     configMocks.getRuntimeConfig.mockReset().mockReturnValue({
       agents: { list: [{ id: "main" }, { id: "ops-team" }] },
+      storage: {
+        locations: {
+          archive: {
+            provider: "filesystem",
+            settings: { path: "/mnt/backups" },
+            encryption: "none",
+          },
+        },
+      },
     });
   });
 
@@ -138,39 +149,199 @@ describe("scheduled backups", () => {
     expect(spec.payload.argv).not.toContain("--all");
   });
 
+  it.each([false, true])(
+    "round-trips offsite CLI options with explicit claim=%s through the persisted schedule and status projection",
+    async (claim) => {
+      let persisted: CronJobCreate | undefined;
+      gatewayRpc.call.mockImplementation(
+        async (method: string, _options: unknown, params: CronJobCreate) => {
+          if (method !== "cron.add") {
+            throw new Error(`unexpected method ${method}`);
+          }
+          persisted = params;
+          return { created: true, job: { id: "offsite-job" } };
+        },
+      );
+      vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      await runCli([
+        "backup",
+        "enable",
+        "--to",
+        "archive",
+        "--every",
+        "6h",
+        "--namespace",
+        "host-a",
+        ...(claim ? ["--claim-namespace"] : []),
+        "--no-include-workspace",
+        "--keep-daily",
+        "7",
+        "--keep-weekly",
+        "4",
+        "--keep-monthly",
+        "0",
+      ]);
+      const spec = expectDefined(persisted, "persisted offsite schedule");
+      expect(spec.declarationKey).toBe("openclaw-backup-offsite-scheduled");
+      expect(spec.payload).toEqual({
+        kind: "command",
+        argv: [
+          "openclaw",
+          "backup",
+          "create",
+          "--to",
+          "archive",
+          "--namespace",
+          "host-a",
+          ...(claim ? ["--claim-namespace"] : []),
+          "--no-include-workspace",
+          "--keep-daily",
+          "7",
+          "--keep-weekly",
+          "4",
+          "--keep-monthly",
+          "0",
+        ],
+      });
+      expect(
+        summarizeBackupSchedules([
+          {
+            ...spec,
+            id: "offsite-job",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            state: { nextRunAtMs: 21_600_001 },
+          },
+        ]),
+      ).toEqual([
+        {
+          id: "offsite-job",
+          mode: "offsite",
+          target: "archive",
+          namespace: "host-a",
+          enabled: true,
+          everyMs: 21_600_000,
+          nextRunAtMs: 21_600_001,
+        },
+      ]);
+    },
+  );
+
+  it.each([{ argv: ["--all"] }, { argv: ["--global"] }, { argv: ["--agent", "main"] }])(
+    "reports installed Git schedule argv $argv in status",
+    ({ argv }) => {
+      expect(
+        summarizeBackupSchedules([
+          {
+            id: "git-job",
+            name: "Renamed by operator",
+            enabled: true,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            state: {},
+            declarationKey: "openclaw-backup-scheduled",
+            schedule: { kind: "every", everyMs: 86_400_000 },
+            payload: {
+              kind: "command",
+              argv: [
+                "openclaw",
+                "backup",
+                "git",
+                "create",
+                "--repository",
+                "/backups/git",
+                ...argv,
+                "--push",
+                "--exclude-secrets",
+              ],
+            },
+          },
+        ]),
+      ).toEqual([
+        {
+          id: "git-job",
+          mode: "git",
+          everyMs: 86_400_000,
+          target: "/backups/git",
+          enabled: true,
+        },
+      ]);
+    },
+  );
+
   it.each([
-    [
-      "unknown",
-      "nope-agent",
-      'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
-    ],
-    ["empty", "", "--agent must not be blank"],
-    ["whitespace-only", "   ", "--agent must not be blank"],
-  ])("rejects an %s scheduled backup agent", async (_label, agent, message) => {
-    const runtime = createTestRuntime();
+    { flags: [], removed: ["git-job", "offsite-job"] },
+    { flags: ["--git"], removed: ["git-job"] },
+    { flags: ["--offsite"], removed: ["offsite-job"] },
+  ])("disables only selected backup modes $flags", async ({ flags, removed }) => {
+    const base: CronJob = {
+      id: "git-job",
+      name: "Renamed by operator",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      declarationKey: "openclaw-backup-scheduled",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "command", argv: ["openclaw", "backup", "git", "create"] },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      state: {},
+    };
+    const jobs = [
+      base,
+      { ...base, id: "offsite-job", declarationKey: "openclaw-backup-offsite-scheduled" },
+      { ...base, id: "unmanaged-job", declarationKey: undefined },
+    ];
+    gatewayRpc.call.mockImplementation(async (method: string) => {
+      if (method === "cron.list") {
+        return {
+          jobs,
+          snapshotRevision: "1",
+          total: jobs.length,
+          offset: 0,
+          limit: 200,
+          hasMore: false,
+          nextOffset: null,
+        };
+      }
+      if (method === "cron.remove") {
+        return { removed: true };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    await runCli(["backup", "disable", ...flags]);
+    expect(
+      gatewayRpc.call.mock.calls
+        .filter(([method]) => method === "cron.remove")
+        .map((call) => call[2]),
+    ).toEqual(removed.map((id) => ({ id })));
+  });
 
-    await expect(
-      backupEnableCommand(runtime, {
-        repository: "/tmp/openclaw-backups",
-        agent,
-      }),
-    ).rejects.toThrow(message);
-
+  it.each([
+    { options: { to: "archive", repository: "/backups" }, message: "cannot be combined" },
+    { options: { repository: "/backups", keepDaily: "7" }, message: "require --to" },
+    { options: { to: "missing" }, message: 'Storage location "missing" is not configured' },
+    {
+      options: { repository: "/tmp/openclaw-backups", agent: "nope-agent" },
+      message: 'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+    },
+    {
+      options: { repository: "/tmp/openclaw-backups", agent: "   " },
+      message: "--agent must not be blank",
+    },
+    {
+      options: { repository: "/tmp/openclaw-backups", every: "   " },
+      message: "Invalid duration (empty)",
+    },
+  ])("rejects invalid schedule options $options", async ({ options, message }) => {
+    await expect(backupEnableCommand(createTestRuntime(), options)).rejects.toThrow(message);
     expect(gatewayRpc.call).not.toHaveBeenCalled();
   });
 
-  it.each(["", "   "])("rejects an explicit blank interval %j before scheduling", async (every) => {
-    const runtime = createTestRuntime();
-    gatewayRpc.call.mockResolvedValue({ created: true, job: { id: "backup-job" } });
-
-    await expect(
-      backupEnableCommand(runtime, { repository: "/tmp/openclaw-backups", every }),
-    ).rejects.toThrow("Invalid duration (empty)");
-    expect(gatewayRpc.call).not.toHaveBeenCalled();
-  });
-
   it.each([
-    { scenario: "ordinary", renamed: false, decoys: 1, disabled: false },
     { scenario: "renamed", renamed: true, decoys: 1, disabled: false },
     { scenario: "beyond the first page", renamed: false, decoys: 200, disabled: false },
     { scenario: "already disabled", renamed: false, decoys: 1, disabled: true },
@@ -182,6 +353,8 @@ describe("scheduled backups", () => {
         throw new Error("Scheduled execution is outside this lookup test");
       });
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: false,
         log: createNoopLogger(),
@@ -266,12 +439,12 @@ describe("scheduled backups", () => {
         await runCli(["backup", "disable"]);
 
         expect(await cron.readJob(managed.id)).toBeUndefined();
-        expect(runtime.log).toHaveBeenLastCalledWith("Scheduled Git backups disabled.");
+        expect(runtime.log).toHaveBeenLastCalledWith("Scheduled backups disabled.");
         expect(
           (await cron.list({ includeDisabled: true })).map((job) => job.id).toSorted(),
         ).toEqual(decoyIds.toSorted());
         await runCli(["backup", "disable"]);
-        expect(runtime.log).toHaveBeenLastCalledWith("Scheduled Git backups are already disabled.");
+        expect(runtime.log).toHaveBeenLastCalledWith("Scheduled backups are already disabled.");
         expect(runtime.error).not.toHaveBeenCalled();
         expect(runJob).not.toHaveBeenCalled();
       } finally {

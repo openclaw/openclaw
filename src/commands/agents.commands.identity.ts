@@ -1,4 +1,3 @@
-// Implements identity metadata updates for configured agents.
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -11,21 +10,23 @@ import {
 import {
   type AgentIdentityFile,
   loadAgentIdentityFromFile,
-  loadAgentIdentityFromWorkspace,
+  loadAgentIdentityFromWorkspaceAsync,
 } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { replaceConfigFile } from "../config/config.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
 import { logConfigUpdated } from "../config/logging.js";
-import type { AgentConfig, IdentityConfig } from "../config/types.js";
+import type { IdentityConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
-import { findAgentEntryIndex, listAgentEntries } from "./agents.config.js";
-import { requireValidConfigFileSnapshot } from "./config-validation.js";
+import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
+import { requireValidConfigForWrite } from "./config-validation.js";
 
 type AgentsSetIdentityOptions = {
   agent?: string;
@@ -60,19 +61,17 @@ function resolveAgentIdByWorkspace(
   );
 }
 
-/** Update an agent identity from flags or workspace identity markdown. */
 export async function agentsSetIdentityCommand(
   opts: AgentsSetIdentityOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
-  if (!configSnapshot) {
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
     return;
   }
-  const cfg = migratePersistedImplicitMainRoster(
-    configSnapshot.sourceConfig ?? configSnapshot.config,
-  ).config as OpenClawConfig;
-  const baseHash = configSnapshot.hash;
+  const cfg = applyImplicitAgentRosterDefaults(
+    writeSnapshot.snapshot.sourceConfig,
+  ) as OpenClawConfig;
 
   const nameRaw = normalizeOptionalString(opts.name);
   const emojiRaw = normalizeOptionalString(opts.emoji);
@@ -91,12 +90,14 @@ export async function agentsSetIdentityCommand(
 
   let identityFilePath: string | undefined;
   let workspaceDir: string | undefined;
+  let workspaceLocatorDir: string | undefined;
 
   if (identityFileRaw) {
     identityFilePath = normalizeWorkspacePath(identityFileRaw);
     workspaceDir = path.dirname(identityFilePath);
   } else if (workspaceRaw) {
-    workspaceDir = normalizeWorkspacePath(workspaceRaw);
+    workspaceLocatorDir = normalizeWorkspacePath(workspaceRaw);
+    workspaceDir = workspaceLocatorDir;
   } else if (agentId && wantsIdentityFile) {
     workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   } else if (wantsIdentityFile || !agentId) {
@@ -126,9 +127,6 @@ export async function agentsSetIdentityCommand(
       `Agent "${resolvedAgentId}" not found. Create it with \`openclaw agents add\`.`,
     );
   }
-  const list = listAgentEntries(cfg);
-  const index = findAgentEntryIndex(list, resolvedAgentId);
-
   let identityFromFile: AgentIdentityFile | null = null;
   if (wantsIdentityFile) {
     if (identityFilePath) {
@@ -138,7 +136,7 @@ export async function agentsSetIdentityCommand(
         failAgentIdentity(formatErrorMessage(error));
       }
     } else if (workspaceDir) {
-      identityFromFile = loadAgentIdentityFromWorkspace(workspaceDir);
+      identityFromFile = await loadAgentIdentityFromWorkspaceAsync(workspaceDir);
     }
     if (!identityFromFile) {
       const targetPath =
@@ -159,49 +157,39 @@ export async function agentsSetIdentityCommand(
       : {}),
   };
 
-  const base: AgentConfig =
-    index >= 0 ? expectDefined(list[index], "agent config") : { id: resolvedAgentId };
-  const nextIdentity: IdentityConfig = {
-    ...base.identity,
-    ...incomingIdentity,
-  };
-
-  const nextEntry = {
-    ...base,
-    identity: nextIdentity,
-  };
-
-  const nextList = [...list];
-  if (index >= 0) {
-    nextList[index] = nextEntry;
-  } else {
-    // An empty list still resolves to the implicit default agent; materialize only that known id.
-    nextList.push(nextEntry);
-  }
-
-  const nextConfig = {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      entries: Object.fromEntries(
-        nextList.map((entry) => {
-          const { id, ...config } = entry;
-          return [id, config];
-        }),
-      ),
-    },
-  };
-
-  await replaceConfigFile({
-    nextConfig,
-    ...(baseHash !== undefined ? { baseHash } : {}),
+  const nextConfig = applyAgentConfig(cfg, {
+    agentId: resolvedAgentId,
+    identity: incomingIdentity,
   });
+  const committed = await replaceConfigFile({
+    ...writeSnapshot,
+    sourceConfig: nextConfig,
+    // Replacing an avatar can intentionally shrink the configuration.
+    writeOptions: { ...writeSnapshot.writeOptions, allowConfigSizeDrop: true },
+  });
+
+  const committedEntry = expectDefined(
+    listAgentEntries(committed.nextConfig).find(
+      (entry) => normalizeAgentId(entry.id) === resolvedAgentId,
+    ),
+    "committed agent config",
+  );
+  const committedIdentity = expectDefined(committedEntry.identity, "committed agent identity");
+  const storedWorkspaceDir = resolveAgentWorkspaceDir(committed.nextConfig, resolvedAgentId);
+  const identitySourceDir = identityFromFile ? workspaceDir : undefined;
+  const locatorDiffers =
+    workspaceLocatorDir !== undefined &&
+    normalizeWorkspacePath(workspaceLocatorDir) !== normalizeWorkspacePath(storedWorkspaceDir);
+  const identitySourceDiffers =
+    identitySourceDir !== undefined &&
+    normalizeWorkspacePath(identitySourceDir) !== normalizeWorkspacePath(storedWorkspaceDir);
 
   if (opts.json) {
     writeRuntimeJson(runtime, {
-      agentId,
-      identity: nextIdentity,
+      agentId: resolvedAgentId,
+      identity: committedIdentity,
       workspace: workspaceDir ?? null,
+      storedWorkspace: storedWorkspaceDir,
       identityFile: identityFilePath ?? null,
     });
     return;
@@ -209,19 +197,24 @@ export async function agentsSetIdentityCommand(
 
   logConfigUpdated(runtime);
   runtime.log(`Agent: ${sanitizeTerminalText(resolvedAgentId)}`);
-  if (nextIdentity.name) {
-    runtime.log(`Name: ${sanitizeTerminalText(nextIdentity.name)}`);
+  for (const [field, label] of [
+    ["name", "Name"],
+    ["theme", "Theme"],
+    ["emoji", "Emoji"],
+    ["avatar", "Avatar"],
+  ] as const) {
+    const value = committedIdentity[field];
+    if (value) {
+      runtime.log(`${label}: ${sanitizeTerminalText(value)}`);
+    }
   }
-  if (nextIdentity.theme) {
-    runtime.log(`Theme: ${sanitizeTerminalText(nextIdentity.theme)}`);
-  }
-  if (nextIdentity.emoji) {
-    runtime.log(`Emoji: ${sanitizeTerminalText(nextIdentity.emoji)}`);
-  }
-  if (nextIdentity.avatar) {
-    runtime.log(`Avatar: ${sanitizeTerminalText(nextIdentity.avatar)}`);
-  }
-  if (workspaceDir) {
-    runtime.log(`Workspace: ${sanitizeTerminalText(shortenHomePath(workspaceDir))}`);
+  runtime.log(`Workspace: ${sanitizeTerminalText(shortenHomePath(storedWorkspaceDir))}`);
+  if (locatorDiffers && workspaceLocatorDir) {
+    runtime.log(`Workspace locator: ${sanitizeTerminalText(shortenHomePath(workspaceLocatorDir))}`);
+    runtime.log(
+      `Stored workspace unchanged. Relocate with ${formatCliCommand(`openclaw config set agents.entries.${resolvedAgentId}.workspace ${quoteCliArg(workspaceLocatorDir)}`)}.`,
+    );
+  } else if (identitySourceDiffers && identitySourceDir) {
+    runtime.log(`Identity source: ${sanitizeTerminalText(shortenHomePath(identitySourceDir))}`);
   }
 }

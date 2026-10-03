@@ -1,4 +1,5 @@
 /** Core-private spawned-session ownership lookup; not a published plugin SDK subpath. */
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
@@ -6,13 +7,12 @@ import {
   GatewayCredentialsRequiredError,
   GatewayExplicitAuthRequiredError,
   isGatewayTransportError,
-  callGateway as defaultCallGateway,
+  type callGateway as defaultCallGateway,
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
-import { redactIdentifier } from "../logging/redact-identifier.js";
 import {
   isAcpSessionKey,
   isIncognitoSessionKey,
@@ -223,7 +223,7 @@ export function sessionOwnershipLookupDenied(kind: LookupFailureKind): SessionVi
 }
 
 function actionPrefix(action: SessionVisibilityDecisionPresentationAction): string {
-  return action === "list" ? "Session list" : `Session ${action}`;
+  return `Session ${action}`;
 }
 
 /** Preserve the established public/tool prose without making prose the policy fact. */
@@ -240,7 +240,7 @@ export function renderSessionVisibilityDenial(
     case "target_agent_ownership_unavailable":
       return `${actionPrefix(params.action)} denied because target agent ownership is unavailable.`;
     case "cross_agent_visibility_restricted":
-      return `${actionPrefix(params.action)} visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.`;
+      return `${actionPrefix(params.action)} visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access; use tools.agentToAgent to restrict permitted agent pairs.`;
     case "agent_to_agent_disabled":
       if (params.action === "send") {
         return "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.";
@@ -286,36 +286,30 @@ export function classifyLookupFailure(error: unknown): LookupFailureKind {
   return "unknown";
 }
 
+function lookupFailureGuidance(kind: LookupFailureKind): string {
+  return kind === "transient"
+    ? "retry once, then ask the operator to inspect OpenClaw logs"
+    : kind === "credentials"
+      ? "ask the operator to check gateway configuration and credentials"
+      : "ask the operator to inspect OpenClaw logs";
+}
+
 export function lookupFailedDenialSuffix(kind: LookupFailureKind): string {
-  if (kind === "transient") {
-    return "spawned-session ownership lookup failed (transient); retry once, then ask the operator to inspect OpenClaw logs.";
-  }
-  if (kind === "credentials") {
-    return "spawned-session ownership lookup failed; ask the operator to check gateway configuration and credentials.";
-  }
-  return "spawned-session ownership lookup failed; ask the operator to inspect OpenClaw logs.";
+  return `spawned-session ownership lookup failed${kind === "transient" ? " (transient)" : ""}; ${lookupFailureGuidance(kind)}.`;
 }
 
 export function lookupFailedDenialMessage(
   action: "history" | "send" | "status" | "list" | "search",
   kind: LookupFailureKind,
 ): string {
-  const label = action === "list" ? "Session list" : `Session ${action}`;
-  return `${label} denied because ${lookupFailedDenialSuffix(kind)}`;
+  return `${actionPrefix(action)} denied because ${lookupFailedDenialSuffix(kind)}`;
 }
 
 export function lookupFailedOperationMessage(
   action: "history" | "send" | "status" | "list" | "search",
   kind: LookupFailureKind,
 ): string {
-  const label = action === "list" ? "Session list" : `Session ${action}`;
-  const guidance =
-    kind === "transient"
-      ? "retry once, then ask the operator to inspect OpenClaw logs"
-      : kind === "credentials"
-        ? "ask the operator to check gateway configuration and credentials"
-        : "ask the operator to inspect OpenClaw logs";
-  return `${label} failed because session lookup failed${kind === "transient" ? " (transient)" : ""}; ${guidance}.`;
+  return `${actionPrefix(action)} failed because session lookup failed${kind === "transient" ? " (transient)" : ""}; ${lookupFailureGuidance(kind)}.`;
 }
 
 export type SessionOwnershipLookupFailure = {
@@ -350,7 +344,12 @@ export async function listSpawnedSessionKeysWithResult(params: {
       ? Math.max(1, Math.floor(params.limit))
       : undefined;
   try {
-    const list = await (params.callGateway ?? defaultCallGateway)<{
+    const callGateway =
+      params.callGateway ??
+      (await import("../agents/tools/in-process-gateway.js")).bindAgentToolGatewayRequest({
+        hostedOnly: true,
+      });
+    const list = await callGateway<{
       sessions: Array<{ key?: unknown }>;
     }>({
       method: "sessions.list",
@@ -367,8 +366,7 @@ export async function listSpawnedSessionKeysWithResult(params: {
         diagnostic: "gateway sessions.list returned an invalid response",
       });
     }
-    const sessions = list.sessions;
-    const keys = normalizeTrimmedStringList(sessions.map((entry) => entry?.key));
+    const keys = normalizeTrimmedStringList(list.sessions.map((entry) => entry?.key));
     return ok(new Set(keys));
   } catch (error) {
     return err(sessionOwnershipLookupFailure(error));

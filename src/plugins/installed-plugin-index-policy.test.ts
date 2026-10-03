@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
 import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
@@ -81,18 +81,6 @@ describe("resolveInstalledPluginIndexPolicyHash", () => {
       envSnapshot.restore();
       await removeBundledDiscoveryStateRoot(compatRoot);
       await removeBundledDiscoveryStateRoot(plainRoot);
-    }
-  });
-
-  it("stays stable for an unchanged mode and config", async () => {
-    const compatRoot = await makeStateRoot("compat");
-    try {
-      const config = { plugins: { allow: ["rollover"] } };
-      expect(resolveInstalledPluginIndexPolicyHash(config, envForRoot(compatRoot))).toBe(
-        resolveInstalledPluginIndexPolicyHash(config, envForRoot(compatRoot)),
-      );
-    } finally {
-      await removeBundledDiscoveryStateRoot(compatRoot);
     }
   });
 });

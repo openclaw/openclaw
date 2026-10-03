@@ -1,46 +1,34 @@
-import { createHash } from "node:crypto";
-import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { withClawMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
 import { canonicalizeConfiguredMcpServer } from "../config/mcp-config-normalize.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import {
+  compileSqliteQueryBindings,
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { digestClawValue } from "./digest.js";
+import {
+  CLAW_MCP_REF_SCHEMA_VERSION,
+  refToRow,
+  rowToRef,
+  selectMcpRefs,
+  type McpDatabase,
+  type McpRefRow,
+  type PersistedClawMcpServerRef,
+} from "./mcp-records.js";
 import type { ClawReferencedCleanup } from "./package-remove.js";
+import { reconcileClawMcpServerRefsInWorker } from "./provenance-write.js";
 import type { ClawAddPlan, ClawMcpServer } from "./types.js";
 
-export const CLAW_MCP_REF_SCHEMA_VERSION = "openclaw.clawMcpServerRef.v1" as const;
-
-export type PersistedClawMcpServerRef = {
-  schemaVersion: typeof CLAW_MCP_REF_SCHEMA_VERSION;
-  agentId: string;
-  name: string;
-  configDigest: string;
-  relationship: "managed" | "referenced";
-  origin: "claw-introduced" | "pre-existing";
-  independentOwner: boolean;
-  status: "pending" | "complete" | "failed";
-  error?: string;
-  createdAtMs: number;
-  updatedAtMs: number;
-};
-
-type McpRefRow = {
-  schema_version: string;
-  agent_id: string;
-  name: string;
-  config_digest: string;
-  relationship: PersistedClawMcpServerRef["relationship"];
-  origin: PersistedClawMcpServerRef["origin"];
-  independent_owner: number | bigint;
-  status: PersistedClawMcpServerRef["status"];
-  error: string | null;
-  created_at_ms: number | bigint;
-  updated_at_ms: number | bigint;
-};
+export { CLAW_MCP_REF_SCHEMA_VERSION, type PersistedClawMcpServerRef } from "./mcp-records.js";
 
 export class ClawMcpInstallError extends Error {
   constructor(
@@ -58,25 +46,8 @@ function mcpServerFromActionDetails(details: Record<string, unknown>): ClawMcpSe
   return "command" in server || "url" in server ? (server as ClawMcpServer) : undefined;
 }
 
-function rowToRef(row: McpRefRow): PersistedClawMcpServerRef {
-  return {
-    schemaVersion: CLAW_MCP_REF_SCHEMA_VERSION,
-    agentId: row.agent_id,
-    name: row.name,
-    configDigest: row.config_digest,
-    relationship: row.relationship,
-    origin: row.origin,
-    independentOwner: Number(row.independent_owner) === 1,
-    status: row.status,
-    ...(row.error ? { error: row.error } : {}),
-    createdAtMs: Number(row.created_at_ms),
-    updatedAtMs: Number(row.updated_at_ms),
-  };
-}
-
 export function digestClawMcpServer(server: Record<string, unknown>): string {
-  const canonical = canonicalizeConfiguredMcpServer(server);
-  return `sha256:${createHash("sha256").update(stableStringify(canonical)).digest("hex")}`;
+  return digestClawValue(canonicalizeConfiguredMcpServer(server));
 }
 
 function persistPendingRef(
@@ -85,19 +56,29 @@ function persistPendingRef(
   server: ClawMcpServer,
   ownership: Pick<PersistedClawMcpServerRef, "relationship" | "origin" | "independentOwner">,
   options: OpenClawStateDatabaseOptions & { nowMs?: number },
-): { ref: PersistedClawMcpServerRef; existing: boolean } {
+): PersistedClawMcpServerRef {
   const nowMs = options.nowMs ?? Date.now();
   const configDigest = digestClawMcpServer(server);
   const database = openOpenClawStateDatabase(options);
-  const existing = database.db /* sqlite-allow-raw: read one Claw MCP ownership row. */
-    .prepare(
-      `SELECT schema_version, agent_id, name, config_digest, relationship, origin,
-              independent_owner, status, error,
-              created_at_ms, updated_at_ms
-         FROM claw_mcp_server_refs
-        WHERE agent_id = ? AND name = ?`,
-    )
-    .get(plan.agent.finalId, name) as McpRefRow | undefined;
+  const { compiled, bind } = compileSqliteQueryBindings<{ agentId: string; name: string }>(
+    (parameter) =>
+      selectMcpRefs(database.db)
+        .where(
+          "agent_id",
+          "=",
+          parameter((value) => value.agentId),
+        )
+        .where(
+          "name",
+          "=",
+          parameter((value) => value.name),
+        ),
+  );
+  const existing =
+    database.db /* sqlite-allow-raw: preserve native point-read errors outside the write transaction. */
+      .prepare(compiled.sql)
+      // SAFETY: The canonical table and explicit projection provide this generated row shape.
+      .get(...bind({ agentId: plan.agent.finalId, name })) as McpRefRow | undefined;
   if (existing) {
     const ref = rowToRef(existing);
     if (ref.configDigest !== configDigest || ref.status === "failed") {
@@ -107,7 +88,7 @@ function persistPendingRef(
         [ref],
       );
     }
-    return { ref, existing: true };
+    return ref;
   }
   const ref: PersistedClawMcpServerRef = {
     schemaVersion: CLAW_MCP_REF_SCHEMA_VERSION,
@@ -120,32 +101,12 @@ function persistPendingRef(
     updatedAtMs: nowMs,
   };
   runOpenClawStateWriteTransaction(({ db }) => {
-    db /* sqlite-allow-raw: persist one pending Claw MCP ownership row. */
-      .prepare(
-        `INSERT INTO claw_mcp_server_refs (
-         agent_id, name, schema_version, config_digest, relationship, origin,
-         independent_owner, status, error,
-         created_at_ms, updated_at_ms
-       ) VALUES (
-         @agent_id, @name, @schema_version, @config_digest, @relationship, @origin,
-         @independent_owner, @status, NULL,
-         @created_at_ms, @updated_at_ms
-       )`,
-      )
-      .run({
-        agent_id: ref.agentId,
-        name: ref.name,
-        schema_version: ref.schemaVersion,
-        config_digest: ref.configDigest,
-        relationship: ref.relationship,
-        origin: ref.origin,
-        independent_owner: ref.independentOwner ? 1 : 0,
-        status: ref.status,
-        created_at_ms: nowMs,
-        updated_at_ms: nowMs,
-      });
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<McpDatabase>(db).insertInto("claw_mcp_server_refs").values(refToRow(ref)),
+    );
   }, options);
-  return { ref, existing: false };
+  return ref;
 }
 
 function updateRef(
@@ -155,19 +116,18 @@ function updateRef(
 ): PersistedClawMcpServerRef {
   const updated = { ...ref, ...update, updatedAtMs: options.nowMs ?? Date.now() };
   runOpenClawStateWriteTransaction(({ db }) => {
-    db /* sqlite-allow-raw: update one Claw MCP ownership row after config write. */
-      .prepare(
-        `UPDATE claw_mcp_server_refs
-          SET status = @status, error = @error, updated_at_ms = @updated_at_ms
-        WHERE agent_id = @agent_id AND name = @name`,
-      )
-      .run({
-        agent_id: ref.agentId,
-        name: ref.name,
-        status: update.status,
-        error: update.error ?? null,
-        updated_at_ms: updated.updatedAtMs,
-      });
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<McpDatabase>(db)
+        .updateTable("claw_mcp_server_refs")
+        .set({
+          status: update.status,
+          error: update.error ?? null,
+          updated_at_ms: updated.updatedAtMs,
+        })
+        .where("agent_id", "=", ref.agentId)
+        .where("name", "=", ref.name),
+    );
   }, options);
   return updated;
 }
@@ -227,8 +187,7 @@ export async function installClawMcpServers(
             origin: "claw-introduced" as const,
             independentOwner: false,
           };
-      const pendingResult = persistPendingRef(plan, action.id, server, ownership, options);
-      let pending = pendingResult.ref;
+      let pending = persistPendingRef(plan, action.id, server, ownership, options);
       refs.push(pending);
       if (pending.status === "complete") {
         if (configured) {
@@ -251,17 +210,6 @@ export async function installClawMcpServers(
         }
         pending = updateRef(pending, { status: "pending" }, options);
         refs[refs.length - 1] = pending;
-      }
-      if (pendingResult.existing && configured) {
-        if (digestClawMcpServer(configured) !== pending.configDigest) {
-          throw new ClawMcpInstallError(
-            "mcp_reconcile_conflict",
-            `MCP server ${JSON.stringify(action.id)} changed after an ambiguous write.`,
-            refs,
-          );
-        }
-        refs[refs.length - 1] = updateRef(pending, { status: "complete" }, options);
-        return;
       }
       if (configured) {
         refs[refs.length - 1] = updateRef(pending, { status: "complete" }, options);
@@ -306,25 +254,24 @@ export function readClawMcpServerRefs(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawMcpServerRef[] {
-  const database = openOpenClawStateDatabase(options);
-  if (
-    options.readOnly &&
-    !database.db /* sqlite-allow-raw: read-only Claw MCP table-existence probe. */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_mcp_server_refs'")
-      .get()
-  ) {
+  const { db } = openOpenClawStateDatabase(options);
+  if (options.readOnly && !tableExists(db, "claw_mcp_server_refs")) {
     return [];
   }
-  const rows = database.db /* sqlite-allow-raw: read Claw MCP refs for one agent. */
-    .prepare(
-      `SELECT schema_version, agent_id, name, config_digest, relationship, origin,
-              independent_owner, status, error,
-              created_at_ms, updated_at_ms
-         FROM claw_mcp_server_refs
-        WHERE agent_id = ?
-        ORDER BY name`,
-    )
-    .all(agentId) as McpRefRow[];
+  const { compiled, bind } = compileSqliteQueryBindings<string>((parameter) =>
+    selectMcpRefs(db)
+      .where(
+        "agent_id",
+        "=",
+        parameter((value) => value),
+      )
+      .orderBy("name"),
+  );
+  const rows =
+    db /* sqlite-allow-raw: preserve native full-agent inventory errors without a write transaction. */
+      .prepare(compiled.sql)
+      // SAFETY: The canonical table and explicit projection provide this generated row shape.
+      .all(...bind(agentId)) as McpRefRow[];
   return rows.map(rowToRef);
 }
 
@@ -332,25 +279,24 @@ export function readClawMcpServerRefsByName(
   name: string,
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawMcpServerRef[] {
-  const database = openOpenClawStateDatabase(options);
-  if (
-    options.readOnly &&
-    !database.db /* sqlite-allow-raw: read-only Claw MCP table-existence probe. */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_mcp_server_refs'")
-      .get()
-  ) {
+  const { db } = openOpenClawStateDatabase(options);
+  if (options.readOnly && !tableExists(db, "claw_mcp_server_refs")) {
     return [];
   }
-  const rows = database.db /* sqlite-allow-raw: read sibling Claw MCP refs by server name. */
-    .prepare(
-      `SELECT schema_version, agent_id, name, config_digest, relationship, origin,
-              independent_owner, status, error,
-              created_at_ms, updated_at_ms
-         FROM claw_mcp_server_refs
-        WHERE name = ?
-        ORDER BY agent_id`,
-    )
-    .all(name) as McpRefRow[];
+  const { compiled, bind } = compileSqliteQueryBindings<string>((parameter) =>
+    selectMcpRefs(db)
+      .where(
+        "name",
+        "=",
+        parameter((value) => value),
+      )
+      .orderBy("agent_id"),
+  );
+  const rows =
+    db /* sqlite-allow-raw: preserve native sibling-inventory errors without a write transaction. */
+      .prepare(compiled.sql)
+      // SAFETY: The canonical table and explicit projection provide this generated row shape.
+      .all(...bind(name)) as McpRefRow[];
   return rows.map(rowToRef);
 }
 
@@ -426,16 +372,17 @@ export function reconcileClawMcpServerRefs(
   agentId: string,
   configuredServers: Record<string, Record<string, unknown>>,
   options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
-): PersistedClawMcpServerRef[] {
-  return readClawMcpServerRefs(agentId, options).map((ref) => {
-    if (ref.status !== "pending") {
-      return ref;
-    }
-    const configured = configuredServers[ref.name];
-    return configured && digestClawMcpServer(configured) === ref.configDigest
-      ? updateRef(ref, { status: "complete" }, options)
-      : ref;
-  });
+): Promise<PersistedClawMcpServerRef[]> {
+  return reconcileClawMcpServerRefsInWorker(
+    agentId,
+    Object.fromEntries(
+      Object.entries(configuredServers).map(([name, server]) => [
+        name,
+        digestClawMcpServer(server),
+      ]),
+    ),
+    options,
+  );
 }
 
 export function deleteClawMcpServerRef(
@@ -444,9 +391,13 @@ export function deleteClawMcpServerRef(
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   runOpenClawStateWriteTransaction(({ db }) => {
-    db /* sqlite-allow-raw: delete one released Claw MCP ownership row. */
-      .prepare("DELETE FROM claw_mcp_server_refs WHERE agent_id = ? AND name = ?")
-      .run(agentId, name);
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<McpDatabase>(db)
+        .deleteFrom("claw_mcp_server_refs")
+        .where("agent_id", "=", agentId)
+        .where("name", "=", name),
+    );
   }, options);
 }
 
@@ -455,39 +406,24 @@ export function upsertClawMcpServerRef(
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   runOpenClawStateWriteTransaction(({ db }) => {
-    db /* sqlite-allow-raw: Claw MCP lifecycle provenance write. */
-      .prepare(
-        `INSERT INTO claw_mcp_server_refs (
-         agent_id, name, schema_version, config_digest, relationship, origin,
-         independent_owner, status, error,
-         created_at_ms, updated_at_ms
-       ) VALUES (
-         @agent_id, @name, @schema_version, @config_digest, @relationship, @origin,
-         @independent_owner, @status, @error,
-         @created_at_ms, @updated_at_ms
-       )
-       ON CONFLICT(agent_id, name) DO UPDATE SET
-         schema_version = excluded.schema_version,
-         config_digest = excluded.config_digest,
-         relationship = excluded.relationship,
-         origin = excluded.origin,
-         independent_owner = excluded.independent_owner,
-         status = excluded.status,
-         error = excluded.error,
-         updated_at_ms = excluded.updated_at_ms`,
-      )
-      .run({
-        agent_id: ref.agentId,
-        name: ref.name,
-        schema_version: ref.schemaVersion,
-        config_digest: ref.configDigest,
-        relationship: ref.relationship,
-        origin: ref.origin,
-        independent_owner: ref.independentOwner ? 1 : 0,
-        status: ref.status,
-        error: ref.error ?? null,
-        created_at_ms: ref.createdAtMs,
-        updated_at_ms: ref.updatedAtMs,
-      });
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<McpDatabase>(db)
+        .insertInto("claw_mcp_server_refs")
+        .values(refToRow(ref))
+        .onConflict((conflict) =>
+          conflict.columns(["agent_id", "name"]).doUpdateSet((eb) => ({
+            schema_version: eb.ref("excluded.schema_version"),
+            config_digest: eb.ref("excluded.config_digest"),
+            relationship: eb.ref("excluded.relationship"),
+            origin: eb.ref("excluded.origin"),
+            independent_owner: eb.ref("excluded.independent_owner"),
+            status: eb.ref("excluded.status"),
+            error: eb.ref("excluded.error"),
+            // Existing claims retain their original creation timestamp through updates and undo.
+            updated_at_ms: eb.ref("excluded.updated_at_ms"),
+          })),
+        ),
+    );
   }, options);
 }

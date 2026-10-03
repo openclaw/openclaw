@@ -1,9 +1,10 @@
 import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
+import type { RunEntryCandidateOptions } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { DeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
-import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ThinkLevel } from "../thinking.js";
@@ -12,16 +13,19 @@ import type {
   AgentTurnCompaction,
   AgentTurnInternalResult,
   AgentTurnParams,
+  CompletedAgentAuthSelection,
   EmbeddedAgentRunResult,
   RuntimeFallbackAttempt,
 } from "./agent-runner-execution.types.js";
 import type { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import type { FollowupRun } from "./queue.js";
+import type { DirectBlockDelivery } from "./reply-delivery.js";
 
 /** Inputs prepared once per fallback candidate and consumed by either runtime adapter. */
-export type AgentFallbackCandidateCommonParams = {
+export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions & {
   preparedRunAdmission: PreparedAgentRunAdmission;
+  messageActionTurnCapability?: string;
   turn: AgentTurnParams;
   candidateRun: FollowupRun["run"];
   runtimeConfig: OpenClawConfig;
@@ -32,12 +36,8 @@ export type AgentFallbackCandidateCommonParams = {
   runId: string;
   runAbortSignal?: AbortSignal;
   runLane: RunEmbeddedAgentParams["lane"];
-  isFallbackRetry: boolean;
-  isFinalFallbackAttempt?: boolean;
   suppressQueuedUserPersistenceForCandidate: boolean;
   userTurnTranscriptRecorder: RunEmbeddedAgentParams["userTurnTranscriptRecorder"];
-  contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
-  onContextEngineTurnCandidate: RunEmbeddedAgentParams["onContextEngineTurnCandidate"];
   notifyUserMessagePersisted: () => void;
   fastModeStartedAtMs: number;
   fastModeAutoProgressState: FastModeAutoProgressState;
@@ -56,6 +56,8 @@ export type AgentFallbackCandidateCommonParams = {
 };
 
 export type AgentFallbackCycleState = {
+  maintenanceAuthProfile?: CompletedAgentAuthSelection;
+  compactionRequestBudget?: CompactionRequestBudget;
   deferredLifecycle: DeferredEmbeddedRunLifecycleManager;
   lifecycleGeneration: string;
   /** Turn admission time; terminal backstops must not stamp failure time as the start. */
@@ -99,7 +101,7 @@ export type AgentFallbackCycleParams = {
   runtimeConfig: OpenClawConfig;
   liveModelSwitchRuntimeEntry?: Pick<
     SessionEntry,
-    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
+    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked" | "pluginOwnerId"
   >;
   runId: string;
   runAbortSignal?: AbortSignal;
@@ -108,7 +110,7 @@ export type AgentFallbackCycleParams = {
   >;
   state: AgentFallbackCycleState;
   presentation: ReturnType<typeof createAgentTurnPresentation>;
-  directlySentBlockKeys: Set<string>;
+  directBlockDeliveries: DirectBlockDelivery[];
   notifyAgentRunStart: () => void;
   signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
   notifyUserAboutCompaction: boolean;

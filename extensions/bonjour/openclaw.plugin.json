@@ -1,5 +1,6 @@
 {
   "id": "bonjour",
+  "categories": ["infrastructure"],
   "activation": {
     "onStartup": true
   },

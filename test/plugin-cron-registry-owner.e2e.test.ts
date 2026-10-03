@@ -5,13 +5,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-} from "../src/gateway/test-helpers.e2e.js";
+import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "../src/gateway/test-helpers.listener.js";
 import { upsertSessionEntry } from "../src/plugin-sdk/session-store-runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../src/plugin-sdk/sqlite-runtime-testing.js";
+import type { TestPortClaim } from "../src/test-utils/port-claims.js";
+import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -71,11 +70,13 @@ type CronListPage = {
 };
 
 const instances: OpenClawTestInstance[] = [];
+const portClaims: TestPortClaim[] = [];
 const cleanupDirs: string[] = [];
 const modelServers: MockModelServer[] = [];
 
 afterEach(async () => {
   await Promise.all(instances.splice(0).map((instance) => instance.cleanup()));
+  await Promise.all(portClaims.splice(0).map((claim) => claim.release()));
   await Promise.all(modelServers.splice(0).map((server) => server.stop()));
   await Promise.all(cleanupDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
@@ -131,14 +132,7 @@ function writeModelResponse(res: ServerResponse, sequence: number): void {
       },
     },
   ];
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  res.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
+  writeOpenAiResponsesSse(res, events);
 }
 
 async function startMockModelServer(rejectModel?: string): Promise<MockModelServer> {
@@ -158,8 +152,9 @@ async function startMockModelServer(rejectModel?: string): Promise<MockModelServ
       const body = await readJsonRequest(req);
       requests.push({ body });
       if (rejectModel && body.model === rejectModel) {
-        res.writeHead(503, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: { message: "Model temporarily unavailable" } }));
+        // Missing models advance fallback; transient outages first recover on the same model.
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { code: "model_not_found", message: "Model not found" } }));
         return;
       }
       writeModelResponse(res, requests.length);
@@ -467,7 +462,9 @@ describe("plugin cron registry ownership e2e", () => {
         expect(requestText(server.requests[0]!)).toContain(`PROVIDER_HOOK_${provider}`);
         expect(requestText(server.requests.at(-1)!)).toContain(`PROVIDER_HOOK_${fallbackProvider}`);
       } finally {
-        if (jobId) await client.request("cron.remove", { id: jobId });
+        if (jobId) {
+          await client.request("cron.remove", { id: jobId });
+        }
         await disconnectGatewayClient(client);
       }
     },
@@ -504,27 +501,27 @@ describe("plugin cron registry ownership e2e", () => {
           slots: { memory: "none" },
         },
         agents: {
+          ownership: "explicit",
           defaults: {
             workspace: mainWorkspace,
+            systemAgent: { agentId: "main" },
             model: { primary: modelRef },
+            modelPolicy: { allow: [modelRef] },
             models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
             skills: [],
           },
-          list: [
-            {
-              id: "main",
-              default: true,
+          entries: {
+            main: {
               workspace: mainWorkspace,
               model: { primary: modelRef },
               skills: [],
             },
-            {
-              id: "worker",
+            worker: {
               workspace: workerWorkspace,
               model: { primary: modelRef },
               skills: [],
             },
-          ],
+          },
         },
         tools: { profile: "minimal" },
         models: {
@@ -551,10 +548,11 @@ describe("plugin cron registry ownership e2e", () => {
           },
         },
       } satisfies OpenClawConfig;
-      const customPort = await getGatewayE2ePortBlock();
+      const claim = await acquireGatewayE2ePortBlock();
+      portClaims.push(claim);
       const instance = await createOpenClawTestInstance({
         name: "plugin-cron-registry-owner",
-        port: customPort,
+        port: claim.port,
         config,
         env: {
           OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
@@ -567,7 +565,7 @@ describe("plugin cron registry ownership e2e", () => {
       });
       instances.push(instance);
       await instance.startGateway();
-      expect(instance.port).toBe(customPort);
+      expect(instance.port).toBe(claim.port);
 
       const client = await connectGatewayClient({
         url: instance.url,

@@ -1,6 +1,11 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -8,9 +13,18 @@ import {
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { clearRuntimeConfigSnapshot } from "../../config/io.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { readTranscriptStorageRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { resetAgentEventsForTest } from "../../infra/agent-events.js";
+import type { SpawnResult } from "../../process/exec.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -20,12 +34,23 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { WorkerComputerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
+import type {
+  WorkerSessionPlacementDispatchIdentity,
+  WorkerSessionPlacementRecord,
+  WorkerSessionTurnClaim,
+} from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import {
+  advancePlacementFixtureToActive,
+  seedAttachedPlacementEnvironment,
+} from "./placement-test-fixtures.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerSessionTurnPlacementProvider as createRawWorkerSessionTurnPlacementProvider } from "./worker-turn-launcher.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -44,6 +69,9 @@ const BUNDLE_HASH = "a".repeat(64);
 export const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 
+export const readLaunchToolNames: WorkerTurnTunnelHandle["readLaunchToolNames"] = async () =>
+  WORKER_TOOL_NAMES;
+
 export const measureLaunchTurn: WorkerTurnTunnelHandle["measureLaunchTurn"] = (plan, claim) =>
   measureNodeWorkerLaunchBytes("fixture-node", {
     environmentSession: 1,
@@ -54,8 +82,70 @@ export const measureLaunchTurn: WorkerTurnTunnelHandle["measureLaunchTurn"] = (p
     descriptor: plan,
   });
 
+export function createWorkerTurnTunnel<
+  Overrides extends Pick<WorkerTurnTunnelHandle, "launchTurn" | "reconcileWorkspace"> &
+    Partial<WorkerTurnTunnelHandle>,
+>(overrides: Overrides): WorkerTurnTunnelHandle & Overrides {
+  return {
+    environmentId: ENVIRONMENT_ID,
+    ownerEpoch: OWNER_EPOCH,
+    runWorkspaceCommand: vi.fn(),
+    quiesceWorkspace: vi.fn(async () => ({
+      assertActive: vi.fn(async () => {}),
+      resume: vi.fn(async () => {}),
+    })),
+    measureLaunchTurn,
+    readLaunchToolNames,
+    syncWorkspace: vi.fn(async () => {
+      throw new Error("unexpected workspace sync");
+    }),
+    stop: vi.fn(async () => {}),
+    ...overrides,
+  };
+}
+
+export const reconcileUnchangedLocalWorkspace: WorkerTurnTunnelHandle["reconcileWorkspace"] =
+  async (request) => {
+    if (request.source.kind !== "local") {
+      throw new Error("expected a local workspace source");
+    }
+    await request.source.journal.commit(MANIFEST_REF);
+    return {
+      manifestRef: MANIFEST_REF,
+      changed: false,
+      verifyStable: async () => {},
+      verifyLocalStable: async () => {},
+      publishStagedResult: async () => {},
+      discardPreparedStagedResult: async () => {},
+    };
+  };
+
+export async function acknowledgeCompletedWorkerTurn(
+  claim: WorkerSessionTurnClaim,
+  transcriptLeafId: string | undefined,
+): Promise<SpawnResult> {
+  const leafId = expectDefined(transcriptLeafId, "persisted worker transcript leaf");
+  await createWorkerSessionPlacementGate(placements).updateAckCursors({
+    claim,
+    transcriptSeq: 2,
+    liveSeq: 1,
+  });
+  return {
+    stdout: JSON.stringify({
+      status: "completed",
+      transcriptLeafId: leafId,
+      transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
+    }),
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+  };
+}
+
 let testState: OpenClawTestState;
-let database: OpenClawStateDatabase;
+export let database: OpenClawStateDatabase;
 let cleanupAdmissionSink: (() => void) | undefined;
 
 export let root: string;
@@ -82,18 +172,35 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     sessionKey: SESSION_KEY,
     storePath: path.join(root, "sessions.json"),
   };
-  await upsertSessionEntryCore(sessionTarget, {
+  const entry = {
     sessionId: SESSION_ID,
     updatedAt: Date.now(),
+  };
+  // Placement fixtures do not own the automatic retention scheduler.
+  await patchSessionEntryCore(sessionTarget, () => entry, {
+    fallbackEntry: entry,
+    skipMaintenance: true,
   });
-  SessionManager.open(sessionTarget);
+  await SessionManager.openAsync(sessionTarget);
   sessionFile = SESSION_KEY;
 }
 
-export async function cleanupWorkerTurnLauncherTest(): Promise<void> {
+export function cleanupWorkerTurnLauncherTest(): Promise<void>;
+export function cleanupWorkerTurnLauncherTest(options: {
+  reuseReadWorkers: boolean;
+}): Promise<void>;
+export async function cleanupWorkerTurnLauncherTest(
+  options: { reuseReadWorkers?: boolean } = {},
+): Promise<void> {
   cleanupAdmissionSink?.();
   cleanupAdmissionSink = undefined;
   clearRuntimeConfigSnapshot();
+  if (options.reuseReadWorkers) {
+    // Retain reader execution only; this case's native handles and admission still close.
+    await closeOpenClawStateDatabaseByPathAsync(database.path);
+  } else {
+    await closeOpenClawStateDatabaseAsync();
+  }
   closeOpenClawStateDatabaseForTest();
   resetAgentEventsForTest();
   await testState.cleanup();
@@ -101,6 +208,49 @@ export async function cleanupWorkerTurnLauncherTest(): Promise<void> {
 
 export function setWorkerTurnAdmissionCleanup(cleanup: () => void): void {
   cleanupAdmissionSink = cleanup;
+}
+
+export function abortWorkerTurnClaimWaitOnSignal(signal: AbortSignal) {
+  const waitForClaim = placements.waitForTurnClaimRelease;
+  vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) =>
+    waitForClaim(sessionId, {
+      ...options,
+      signal: options.signal ? AbortSignal.any([options.signal, signal]) : signal,
+    }),
+  );
+}
+
+export function createWorkerTurnSessionRuntimeLoader() {
+  const entry = {
+    sessionId: SESSION_ID,
+    updatedAt: 1,
+    worktree: { id: "workspace", branch: "fixture", repoRoot: root },
+  };
+  return async () => ({
+    managedWorktrees: {
+      findLiveByOwner: () => ({
+        id: "workspace",
+        name: "fixture",
+        repoFingerprint: "fixture",
+        repoRoot: root,
+        path: root,
+        branch: "fixture",
+        baseRef: "main",
+        ownerKind: "session" as const,
+        ownerId: SESSION_KEY,
+        createdAt: 1,
+        lastActiveAt: 1,
+      }),
+    },
+    resolveGatewaySessionStoreTargetWithStore: () => ({
+      storePath: sessionTarget.storePath,
+      canonicalKey: SESSION_KEY,
+      storeKeys: [SESSION_KEY],
+      agentId: "main",
+      store: { [SESSION_KEY]: entry },
+    }),
+    resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+  });
 }
 
 export function setWorkerTurnSessionTarget(target: typeof sessionTarget): typeof sessionTarget {
@@ -111,8 +261,9 @@ export function setWorkerTurnSessionTarget(target: typeof sessionTarget): typeof
 
 type DefaultedWorkerTurnLauncherOption =
   | "reconcileActivePlacement"
-  | "redispatchReclaimed"
-  | "resolveWorkspacePath"
+  | "waitForAdmissionNode"
+  | "redispatchPlacement"
+  | "resolveWorkspace"
   | "workspaceOperations";
 
 export function createWorkerSessionTurnPlacementProvider(
@@ -120,84 +271,113 @@ export function createWorkerSessionTurnPlacementProvider(
     Partial<Pick<WorkerTurnLauncherOptions, DefaultedWorkerTurnLauncherOption>>,
 ) {
   return createRawWorkerSessionTurnPlacementProvider({
+    waitForAdmissionNode: async () => {},
     reconcileActivePlacement: async () => {
       throw new Error("unexpected active placement reconciliation");
     },
-    redispatchReclaimed: async () => {
+    redispatchPlacement: async () => {
       throw new Error("unexpected reclaimed placement redispatch");
     },
-    resolveWorkspacePath: async () => root,
+    resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     ...options,
   });
 }
 
-export function openSessionManager(): SessionManager {
-  return SessionManager.open(sessionTarget);
+export async function openSessionManager(): Promise<SessionManager> {
+  return await SessionManager.openAsync(sessionTarget);
 }
 
-export function seedActivePlacement(
+export function readWorkerTurnTranscriptStorageRows() {
+  const transcriptDatabase = openOpenClawAgentDatabase(
+    toDatabaseOptions(resolveSqliteReadScope(sessionTarget)),
+  );
+  return readTranscriptStorageRows(transcriptDatabase, sessionTarget.sessionId);
+}
+
+export async function dispatchInitialWorkerPlacement(params: {
+  database: OpenClawStateDatabase;
+  placements: WorkerSessionPlacementStore;
+  identity: WorkerSessionPlacementDispatchIdentity;
+  workspace: string;
+  onTransition: (placement: WorkerSessionPlacementRecord) => Promise<void>;
+}) {
+  let placement = await params.placements.startDispatch(params.identity);
+  await params.onTransition(placement);
+  seedAttachedPlacementEnvironment(params.database, {
+    environmentId: ENVIRONMENT_ID,
+    sessionId: params.identity.sessionId,
+    ownerEpoch: OWNER_EPOCH,
+  });
+  for (const step of [
+    { to: "provisioning", patch: { environmentId: ENVIRONMENT_ID } },
+    { to: "syncing", patch: { workerBundleHash: BUNDLE_HASH } },
+    {
+      to: "starting",
+      patch: {
+        remoteWorkspaceDir: params.workspace,
+        workspaceBaseManifestRef: MANIFEST_REF,
+      },
+    },
+    { to: "active", patch: { activeOwnerEpoch: OWNER_EPOCH } },
+  ] as const) {
+    placement = await params.placements.transition({
+      sessionId: params.identity.sessionId,
+      from: placement.state,
+      expectedGeneration: placement.generation,
+      ...step,
+    });
+    await params.onTransition(placement);
+  }
+  if (placement.state !== "active") {
+    throw new Error("setup fixture did not activate");
+  }
+  return placement;
+}
+
+export async function seedActivePlacement(
   executionMode: "worker-turn" | "remote-exec" = "worker-turn",
   remoteWorkspaceDir = "/worker/workspace",
-): void {
-  let placement = placements.startDispatch({
-    sessionId: SESSION_ID,
-    sessionKey: sessionTarget.sessionKey,
-    agentId: sessionTarget.agentId,
-    executionMode,
-  });
-  placement = placements.transition({
-    sessionId: SESSION_ID,
-    from: "requested",
-    to: "provisioning",
-    expectedGeneration: placement.generation,
-    patch: { environmentId: ENVIRONMENT_ID },
-  });
-  placement = placements.transition({
-    sessionId: SESSION_ID,
-    from: "provisioning",
-    to: "syncing",
-    expectedGeneration: placement.generation,
-    patch: { workerBundleHash: BUNDLE_HASH },
-  });
-  placement = placements.transition({
-    sessionId: SESSION_ID,
-    from: "syncing",
-    to: "starting",
-    expectedGeneration: placement.generation,
-    patch: {
-      remoteWorkspaceDir,
-      workspaceBaseManifestRef: MANIFEST_REF,
+  workspaceBaseManifestRef = MANIFEST_REF,
+): Promise<void> {
+  await advancePlacementFixtureToActive(
+    placements,
+    database,
+    {
+      sessionId: SESSION_ID,
+      sessionKey: sessionTarget.sessionKey,
+      agentId: sessionTarget.agentId,
+      executionMode,
     },
-  });
-  placements.transition({
-    sessionId: SESSION_ID,
-    from: "starting",
-    to: "active",
-    expectedGeneration: placement.generation,
-    patch: { activeOwnerEpoch: OWNER_EPOCH },
-  });
+    {
+      environmentId: ENVIRONMENT_ID,
+      ownerEpoch: OWNER_EPOCH,
+      workerBundleHash: BUNDLE_HASH,
+      remoteWorkspaceDir,
+      workspaceBaseManifestRef,
+    },
+  );
 }
 
-export function seedReclaimedPlacement() {
-  seedActivePlacement();
+export async function seedReclaimedPlacement() {
+  await seedActivePlacement();
   const active = placements.get(SESSION_ID);
   if (active?.state !== "active") {
     throw new Error("expected active placement to reclaim");
   }
-  const draining = placements.startDrain({
+  const draining = await placements.startDrain({
     sessionId: SESSION_ID,
     environmentId: active.environmentId,
     ownerEpoch: active.activeOwnerEpoch,
     expectedGeneration: active.generation,
   });
-  const reconciling = placements.startReconcile({
+  const reconciling = await placements.startReconcile({
     sessionId: SESSION_ID,
     environmentId: active.environmentId,
     ownerEpoch: active.activeOwnerEpoch,
     expectedGeneration: draining.generation,
   });
-  const reclaimed = placements.transition({
+  const reclaimed = await placements.transition({
     sessionId: SESSION_ID,
     from: "reconciling",
     to: "reclaimed",
@@ -222,7 +402,11 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
     bootstrapReceipt: {
       bundleHash: BUNDLE_HASH,
       openclawVersion: "2026.7.2",
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+      ],
       installKind: "bundle",
     },
     ownerEpoch: OWNER_EPOCH,
@@ -233,6 +417,8 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
     updatedAtMs: 1,
     stateChangedAtMs: 1,
     idleSinceAtMs: null,
+    lastActivatedAtMs: null,
+    preparation: null,
     destroyRequestedAtMs: null,
     tunnelStatus: "connected",
     state: "attached",
@@ -390,11 +576,12 @@ export async function withWorkerCompactionAdoption<T>(
       admittedRunContext,
       sessionTarget: { ...sessionTarget, ...writerFence },
     };
-    const sessionPromptState = createEmbeddedRunSessionPromptState({
+    await using sessionPromptState = await createEmbeddedRunSessionPromptState({
       runParams,
       sessionAgentId: sessionTarget.agentId,
       resolvedSessionKey: sessionTarget.sessionKey,
       lifecycleGeneration: getAgentRunLifecycleGeneration(),
+      onInterrupt: () => {},
     });
     const unexpected = async (): Promise<never> => {
       throw new Error("unexpected context-engine execution during successor acceptance");

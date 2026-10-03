@@ -1,4 +1,3 @@
-// Minimax plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildMinimaxImageGenerationProvider,
@@ -13,7 +12,7 @@ import {
   buildMinimaxPortalMusicGenerationProvider,
 } from "./music-generation-provider.js";
 import { registerMinimaxProviders } from "./provider-registration.js";
-import { buildMinimaxSpeechProvider } from "./speech-provider.js";
+import { buildMinimaxSpeechProvider } from "./speech-provider-factory.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
 import {
   buildMinimaxVideoGenerationProvider,
@@ -34,7 +33,7 @@ export default definePluginEntry({
     api.registerMusicGenerationProvider(buildMinimaxPortalMusicGenerationProvider());
     api.registerVideoGenerationProvider(buildMinimaxVideoGenerationProvider());
     api.registerVideoGenerationProvider(buildMinimaxPortalVideoGenerationProvider());
-    api.registerSpeechProvider(buildMinimaxSpeechProvider());
+    api.registerSpeechProvider(buildMinimaxSpeechProvider);
     api.registerWebSearchProvider(createMiniMaxWebSearchProvider());
   },
 });

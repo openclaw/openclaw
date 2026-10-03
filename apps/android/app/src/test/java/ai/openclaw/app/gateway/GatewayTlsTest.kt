@@ -11,12 +11,27 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
 import java.security.cert.X509Certificate
+import java.util.concurrent.CountDownLatch
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
 import javax.net.ssl.X509ExtendedTrustManager
 import kotlin.concurrent.thread
 
 class GatewayTlsTest {
+  @Test
+  fun unreachableEndpointDoesNotAskForFingerprintButRetainsAnExistingPin() {
+    val result = GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
+    assertEquals(
+      GatewayTlsTrustDecision.Failed(GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE),
+      decideGatewayTlsTrust(storedFingerprint = null, systemTrustCandidate = true, probeResult = result),
+    )
+    val pin = "ab".repeat(32)
+    assertEquals(
+      GatewayTlsTrustDecision.PinnedTrust(pin),
+      decideGatewayTlsTrust(storedFingerprint = pin, systemTrustCandidate = true, probeResult = result),
+    )
+  }
+
   @Test
   fun splitGatewayTlsFallbackProbeTimeouts_skipsFallbackAfterBudgetExpires() {
     assertNull(
@@ -216,20 +231,22 @@ class GatewayTlsTest {
   @Test
   fun probeGatewayTlsFingerprint_reportsHandshakeTimeoutAfterTcpConnect() =
     runBlocking {
-      TcpTestServer { socket ->
-        socket.soTimeout = 1_000
-        runCatching { socket.getInputStream().read(ByteArray(512)) }
-        Thread.sleep(700)
-      }.use { server ->
-        val result =
-          probeGatewayTlsFingerprint(
-            host = LOOPBACK_HOST,
-            port = server.port,
-            connectTimeoutMs = 250,
-            handshakeTimeoutMs = 250,
-          )
+      // Keep the peer open until the probe finishes so EOF cannot race the timeout.
+      val releaseConnection = CountDownLatch(1)
+      TcpTestServer { releaseConnection.await() }.use { server ->
+        try {
+          val result =
+            probeGatewayTlsFingerprint(
+              host = LOOPBACK_HOST,
+              port = server.port,
+              connectTimeoutMs = 250,
+              handshakeTimeoutMs = 250,
+            )
 
-        assertEquals(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT, result.failure)
+          assertEquals(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT, result.failure)
+        } finally {
+          releaseConnection.countDown()
+        }
       }
     }
 

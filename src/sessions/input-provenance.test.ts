@@ -2,10 +2,36 @@
 import { describe, expect, it } from "vitest";
 import {
   annotateInterSessionPromptText,
+  INTER_SESSION_PROMPT_PREFIX_BASE,
   isAgentMediatedCompletionSourceTool,
+  normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "./input-provenance.js";
+
+describe("normalizeInputProvenance", () => {
+  it("retains cron run identity without changing the model-facing prompt", () => {
+    const provenance = normalizeInputProvenance({
+      kind: "internal_system",
+      sourceTool: "cron",
+      sourcePromptPrefix: "[cron:daily-monitor Daily\nmonitor]",
+      jobId: " daily-monitor ",
+      runId: " run-1 ",
+      sourceSessionKey: "agent:main:cron:daily-monitor:run:run-1",
+    });
+
+    expect(provenance).toEqual({
+      kind: "internal_system",
+      sourceTool: "cron",
+      sourcePromptPrefix: "[cron:daily-monitor Daily\nmonitor]",
+      jobId: "daily-monitor",
+      runId: "run-1",
+      sourceSessionKey: "agent:main:cron:daily-monitor:run:run-1",
+    });
+    const prompt = "[cron:daily-monitor Daily monitor] Read REFRESH.md.\n    Keep indentation.\n";
+    expect(annotateInterSessionPromptText(prompt, provenance)).toBe(prompt);
+  });
+});
 
 describe("annotateInterSessionPromptText", () => {
   it("marks inter-session prompt text as non-user-authored", () => {
@@ -69,15 +95,21 @@ describe("annotateInterSessionPromptText", () => {
   });
 });
 
-describe("stripInterSessionPromptPrefixForDisplay", () => {
-  it("removes generated inter-session envelope text from display content", () => {
-    const marked = annotateInterSessionPromptText("forwarded report", {
+describe("inter-session body whitespace", () => {
+  it("round-trips the body's own blank lines and code indentation", () => {
+    const body = "\n    first line\n      second line\n\n";
+    const marked = annotateInterSessionPromptText(body, {
       kind: "inter_session",
-      sourceSessionKey: "agent:main:discord:source",
       sourceTool: "sessions_send",
     });
+    expect(stripInterSessionPromptPrefixForDisplay(marked)).toBe(body);
+  });
 
-    expect(stripInterSessionPromptPrefixForDisplay(marked)).toBe("forwarded report");
+  it.each([
+    [`${INTER_SESSION_PROMPT_PREFIX_BASE}\n\n    code`, "\n    code"],
+    [`${INTER_SESSION_PROMPT_PREFIX_BASE}    code`, "    code"],
+  ])("preserves body bytes when the generated explanation is absent: %j", (input, body) => {
+    expect(stripInterSessionPromptPrefixForDisplay(input)).toBe(body);
   });
 });
 
@@ -104,6 +136,7 @@ describe("shouldPreserveUserFacingSessionStateForInputProvenance", () => {
     "image_generate",
     "music_generate",
     "subagent_announce",
+    "subagent_settle",
     "subagent_interrupted_resume",
     "video_generate",
   ])("preserves user-facing session state for internal %s handoffs", (sourceTool) => {

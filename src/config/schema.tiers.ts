@@ -1,11 +1,12 @@
-import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
+import type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
+import { isPluginOwnedChannelConfigPath } from "./channel-config-keys.js";
 import { asSchemaObject, type ConfigJsonSchemaObject } from "./schema.shared.js";
 
 const ROOT_TIER_PATHS = `
 accessGroups acp agents approvals attachments auth bindings broadcast browser channels
 cloudWorkers commands cron desktop diagnostics discovery env gateway hooks logging mcp memory messages
-meta models nodeHost plugins proxy secrets security session skills surfaces talk telemetry tools transcripts
-tts ui update wizard worktreeRoot
+meta models nodeHost plugins proxy secrets security session skills storage surfaces talk telemetry tools transcripts
+tts ui update wizard worktreeAcceleration worktreeRoot
 `
   .trim()
   .split(/\s+/);
@@ -98,7 +99,7 @@ channels.irc.groups.*.enabled channels.irc.groups.*.requireMention channels.irc.
 channels.irc.nick channels.irc.nickserv.password channels.irc.password channels.irc.port
 channels.irc.tls channels.irc.accounts.*.nickserv.password channels.irc.accounts.*.port
 channels.msteams.appId channels.msteams.appPassword channels.msteams.requireMention
-channels.msteams.tenantId channels.msteams.webhook.port channels.qqbot.stt.apiKey
+channels.msteams.tenantId channels.msteams.legacyWebhook.port channels.qqbot.stt.apiKey
 channels.qqbot.stt.model channels.signal.account channels.signal.cliPath
 channels.signal.groups.*.requireMention channels.slack.appToken channels.slack.botToken
 channels.slack.channels.*.enabled channels.slack.channels.*.requireMention
@@ -119,6 +120,7 @@ channels.telegram.accounts.*.groups.*.topics.*.groupPolicy
 channels.telegram.direct.*.topics.*.groupPolicy
 channels.whatsapp.groups.*.requireMention channels.whatsapp.selfChatMode
 cron.enabled env.vars gateway.auth.mode gateway.auth.password gateway.auth.token
+gateway.cliAgents.enabled gateway.uploads.enabled
 gateway.auth.trustedProxy.allowUsers gateway.auth.trustedProxy.userHeader gateway.bind
 gateway.controlUi.allowedOrigins gateway.http.endpoints.chatCompletions.images.urlAllowlist
 gateway.http.endpoints.responses.files.urlAllowlist
@@ -130,6 +132,7 @@ gateway.trustedProxies hooks.allowedAgentIds hooks.enabled hooks.gmail.account h
 hooks.gmail.pushToken hooks.gmail.subscription hooks.gmail.topic
 hooks.gmail.model hooks.gmail.serve.port hooks.internal.entries.*.enabled
 hooks.mappings.*.agentId hooks.mappings.*.model hooks.token
+logging.audit.messages
 mcp.apps.enabled mcp.servers.*.args mcp.servers.*.auth mcp.servers.*.command
 mcp.servers.*.cwd mcp.servers.*.enabled mcp.servers.*.env mcp.servers.*.headers
 mcp.servers.*.oauth.authProfileId mcp.servers.*.transport mcp.servers.*.url
@@ -156,6 +159,9 @@ tools.github
 tools.fs tools.media.audio tools.media.image tools.media.video tools.message
 tools.exec.reviewer.model.primary tools.media.models.*.model
 tools.media.models.*.request.auth.token tools.profile tools.sessions
+tools.loopDetection.enabled tools.swarm tools.swarm.enabled
+tools.swarm.maxConcurrent tools.swarm.maxChildrenPerGroup tools.swarm.maxTotalPerGroup
+tools.swarm.waitTimeoutSecondsMax tools.swarm.defaultAgentId
 tools.web transcripts.enabled
 tts.auto tts.persona tts.personas.*.providers.*.apiKey tts.provider
 tts.providers.* tts.providers.*.apiKey
@@ -170,18 +176,9 @@ wizard.accessMode wizard.appRecommendations
 
 const ADVANCED_TUNING_PATHS = new Set([
   "agents.defaults.heartbeat.every",
+  "agents.entries.*.tools.github.allowInSandbox",
   "session.maintenance.preserveRecent",
 ]);
-const CHANNEL_KERNEL_TIER_PREFIXES = ["channels.defaults", "channels.modelByChannel"] as const;
-
-function isPluginOwnedChannelTierPath(path: string): boolean {
-  if (!path.startsWith("channels.") || path === "channels") {
-    return false;
-  }
-  return !CHANNEL_KERNEL_TIER_PREFIXES.some(
-    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
-  );
-}
 
 function splitPath(path: string): string[] {
   return path
@@ -191,25 +188,28 @@ function splitPath(path: string): string[] {
     .filter(Boolean);
 }
 
-function createTierMatcher(hints: ConfigUiHints): (path: string) => boolean | undefined {
-  type TierRule = { parts: string[]; advanced: boolean; wildcardCount: number; order: number };
-  const exact = new Map<string, boolean>();
-  const wildcardsByPrefix = new Map<string, TierRule[]>();
+function createHintMatcher(
+  hints: ConfigUiHints,
+  acceptHint?: (hint: ConfigUiHint) => boolean,
+): (path: string) => ConfigUiHint | undefined {
+  type HintRule = { parts: string[]; hint: ConfigUiHint; wildcardCount: number; order: number };
+  const exact = new Map<string, ConfigUiHint>();
+  const wildcardsByPrefix = new Map<string, HintRule[]>();
   let order = 0;
   for (const [hintPath, hint] of Object.entries(hints)) {
-    if (typeof hint.advanced !== "boolean") {
+    if (acceptHint && !acceptHint(hint)) {
       continue;
     }
     const parts = splitPath(hintPath);
     const wildcardCount = parts.filter((part) => part === "*").length;
     if (wildcardCount === 0) {
-      exact.set(parts.join("."), hint.advanced);
+      exact.set(parts.join("."), hint);
       continue;
     }
     const prefix = parts.slice(0, parts.indexOf("*")).join(".");
     const key = `${parts.length}:${prefix}`;
     const bucket = wildcardsByPrefix.get(key) ?? [];
-    bucket.push({ parts, advanced: hint.advanced, wildcardCount, order: order++ });
+    bucket.push({ parts, hint, wildcardCount, order: order++ });
     wildcardsByPrefix.set(key, bucket);
   }
   for (const bucket of wildcardsByPrefix.values()) {
@@ -225,7 +225,7 @@ function createTierMatcher(hints: ConfigUiHints): (path: string) => boolean | un
     if (direct !== undefined) {
       return direct;
     }
-    let best: TierRule | undefined;
+    let best: HintRule | undefined;
     let prefix = parts.slice(0, -1).join(".");
     // Prefixes narrow the search; specificity and authored order still decide
     // precedence across buckets, including the empty prefix for leading wildcards.
@@ -246,8 +246,13 @@ function createTierMatcher(hints: ConfigUiHints): (path: string) => boolean | un
       }
       prefix = prefix.slice(0, Math.max(0, prefix.lastIndexOf(".")));
     }
-    return best?.advanced;
+    return best?.hint;
   };
+}
+
+function createTierMatcher(hints: ConfigUiHints): (path: string) => boolean | undefined {
+  const match = createHintMatcher(hints, (hint) => typeof hint.advanced === "boolean");
+  return (path) => match(path)?.advanced;
 }
 
 function isNumericSchema(schema: ConfigJsonSchemaObject): boolean {
@@ -255,10 +260,16 @@ function isNumericSchema(schema: ConfigJsonSchemaObject): boolean {
   return types.includes("number") || types.includes("integer");
 }
 
-function mergeTierHint(hints: ConfigUiHints, path: string, advanced: boolean): void {
+function mergeTierHint(
+  hints: ConfigUiHints,
+  path: string,
+  advanced: boolean,
+  inherited?: ConfigUiHint,
+): void {
   const current = hints[path];
   if (current?.advanced !== advanced) {
-    hints[path] = current ? { ...current, advanced } : { advanced };
+    // Generated exact tiers must retain the wildcard metadata they shadow in clients.
+    hints[path] = { ...(current ?? inherited), advanced };
   }
 }
 
@@ -312,7 +323,7 @@ export function applyConfigTierHints(
     mergeTierHint(next, path, true);
   }
   for (const path of COMMON_TIER_PATHS) {
-    if (!options?.includePluginOwnedChannels && isPluginOwnedChannelTierPath(path)) {
+    if (!options?.includePluginOwnedChannels && isPluginOwnedChannelConfigPath(path)) {
       continue;
     }
     mergeTierHint(next, path, false);
@@ -329,6 +340,7 @@ export function applyResolvedConfigTierHints(
   hints: ConfigUiHints,
 ): ConfigUiHints {
   const next = { ...hints };
+  const matchHint = createHintMatcher(hints);
   const authoredTier = createTierMatcher(hints);
   // Discover numeric defaults across every composition branch before resolving
   // inheritance; generated wildcard hints participate in normal tier precedence.
@@ -339,7 +351,7 @@ export function applyResolvedConfigTierHints(
       splitPath(path).at(-1) !== "port" &&
       authoredTier(path) === undefined
     ) {
-      mergeTierHint(next, path, true);
+      mergeTierHint(next, path, true, matchHint(path));
     }
     return undefined;
   });
@@ -348,7 +360,7 @@ export function applyResolvedConfigTierHints(
   visitSchemaNodes(schema, true, (_node, path, inheritedTier) => {
     const advanced = path ? (matchTier(path) ?? inheritedTier) : inheritedTier;
     if (path) {
-      mergeTierHint(next, path, advanced);
+      mergeTierHint(next, path, advanced, matchHint(path));
     }
     return advanced;
   });

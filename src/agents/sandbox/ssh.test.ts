@@ -7,6 +7,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT } from "./remote-shell-command.js";
 import {
   buildExecRemoteCommand,
   buildRemoteWorkdirValidationCommand,
@@ -14,7 +15,6 @@ import {
   createSshSandboxSessionFromConfigText,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
-  ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
   type SshSandboxSession,
   uploadDirectoryToSshTarget,
 } from "./ssh.js";
@@ -37,7 +37,7 @@ afterEach(async () => {
 });
 
 describe("sandbox ssh helpers", () => {
-  it("materializes inline ssh auth data into a temp config", async () => {
+  it("materializes inline SSH auth data into a temp config", async () => {
     // Inline key/cert/known-host material is written to private temp files and
     // referenced from the generated ssh config.
     const session = await createSshSandboxSessionFromSettings({
@@ -210,7 +210,9 @@ describe("sandbox ssh helpers", () => {
     ["echo foo\\", /trailing backslash escape/],
     ["echo `date", /unterminated backtick command substitution/],
     ["echo $(date", /unterminated command substitution/],
+    ['echo "$(date', /unterminated command substitution/],
     ["echo $((1 << 2)", /unterminated arithmetic expansion/],
+    ['echo "$((1 << 2)', /unterminated arithmetic expansion/],
     ["cat <<EOF", /unterminated here-doc EOF/],
     ["cat <<EOF\nstill open", /unterminated here-doc EOF/],
   ])("rejects malformed generated exec commands: %s", (rawCommand, message) => {
@@ -239,10 +241,15 @@ describe("sandbox ssh helpers", () => {
           ": <<EOF $(printf '%s' hi\n)\nbody\nEOF",
           "echo $(cat <<EOF\ninside\nEOF\n)",
           "cat <<EOF\r\nwindows line endings\r\nEOF\r\n",
+          'cat <<E"OF"\nmixed delimiter quotes\nEOF',
+          "cat <<\\EOF\nescaped delimiter\nEOF",
           "echo $(printf '%s' ok)",
+          "echo \"$(printf '%s' ok)\"",
           "echo `date`",
+          'echo "`date`"',
           "diff <(sort left.txt) <(sort right.txt)",
           "echo $((1 << 2))",
+          'echo "$((1 << 2))"',
           'printf "%s\\n" "<name>"',
           "# workflow run <workflow-id>",
         ].join("\n"),

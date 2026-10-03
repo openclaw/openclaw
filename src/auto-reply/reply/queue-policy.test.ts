@@ -3,16 +3,22 @@ import { describe, expect, it } from "vitest";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 
 describe("resolveActiveRunQueueAction", () => {
-  it("runs immediately when there is no active run", () => {
-    expect(
-      resolveActiveRunQueueAction({
-        isActive: false,
-        isHeartbeat: false,
-        shouldFollowup: true,
-        queueMode: "collect",
-      }),
-    ).toBe("run-now");
-  });
+  it.each([
+    { hasQueuedFollowups: false, action: "run-now" },
+    { hasQueuedFollowups: true, action: "enqueue-followup" },
+  ] as const)(
+    "keeps waiting followups ahead of new turns when idle (backlog=$hasQueuedFollowups)",
+    ({ hasQueuedFollowups, action }) => {
+      expect(
+        resolveActiveRunQueueAction({
+          hasQueuedFollowups,
+          isActive: false,
+          isHeartbeat: false,
+          shouldFollowup: true,
+        }),
+      ).toBe(action);
+    },
+  );
 
   it("drops heartbeat runs while another run is active", () => {
     expect(
@@ -20,7 +26,6 @@ describe("resolveActiveRunQueueAction", () => {
         isActive: true,
         isHeartbeat: true,
         shouldFollowup: true,
-        queueMode: "collect",
       }),
     ).toBe("drop");
   });
@@ -31,23 +36,19 @@ describe("resolveActiveRunQueueAction", () => {
         isActive: true,
         isHeartbeat: false,
         shouldFollowup: true,
-        queueMode: "collect",
       }),
     ).toBe("enqueue-followup");
   });
 
   it("runs reset-triggered turns immediately while another run is active", () => {
-    for (const queueMode of ["collect", "followup"] as const) {
-      expect(
-        resolveActiveRunQueueAction({
-          isActive: true,
-          isHeartbeat: false,
-          shouldFollowup: true,
-          queueMode,
-          resetTriggered: true,
-        }),
-      ).toBe("run-now");
-    }
+    expect(
+      resolveActiveRunQueueAction({
+        isActive: true,
+        isHeartbeat: false,
+        shouldFollowup: true,
+        resetTriggered: true,
+      }),
+    ).toBe("run-now");
   });
 
   it("keeps heartbeat drops ahead of reset-triggered turns", () => {
@@ -56,7 +57,6 @@ describe("resolveActiveRunQueueAction", () => {
         isActive: true,
         isHeartbeat: true,
         shouldFollowup: true,
-        queueMode: "followup",
         resetTriggered: true,
       }),
     ).toBe("drop");
@@ -68,7 +68,6 @@ describe("resolveActiveRunQueueAction", () => {
         isActive: false,
         isHeartbeat: false,
         shouldFollowup: true,
-        queueMode: "collect",
         resetTriggered: true,
       }),
     ).toBe("run-now");

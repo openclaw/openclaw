@@ -1,4 +1,3 @@
-// Discord plugin module implements send.reactions behavior.
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   createOwnMessageReaction,
@@ -9,7 +8,6 @@ import {
 import {
   buildReactionIdentifier,
   createDiscordClient,
-  formatReactionEmoji,
   normalizeReactionEmoji,
 } from "./send.shared.js";
 import type { DiscordReactionSummary, DiscordReactOpts } from "./send.types.js";
@@ -17,11 +15,6 @@ import type { DiscordReactionSummary, DiscordReactOpts } from "./send.types.js";
 function resolveDiscordReactionClient(opts: DiscordReactOpts) {
   if (opts.rest && opts.cfg && opts.accountId) {
     return createDiscordClient(opts);
-  }
-  if (!opts.cfg) {
-    throw new Error(
-      "Discord reactions requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-    );
   }
   const cfg = requireRuntimeConfig(opts.cfg, "Discord reactions");
   return createDiscordClient({ ...opts, cfg });
@@ -123,7 +116,7 @@ export async function fetchReactionsDiscord(
       emoji: {
         id: reaction.emoji.id ?? null,
         name: reaction.emoji.name ?? null,
-        raw: formatReactionEmoji(reaction.emoji),
+        raw: identifier,
       },
       count: reaction.count,
       users: users.map((user) => ({

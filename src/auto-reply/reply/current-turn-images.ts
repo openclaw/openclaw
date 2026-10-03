@@ -1,4 +1,3 @@
-// Tracks image attachments that belong to the current reply turn.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -14,6 +13,7 @@ import {
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
 import type { MediaAttachment } from "../../media-understanding/types.js";
+import { normalizeMediaFacts } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import {
@@ -40,7 +40,15 @@ export type CurrentTurnImages = {
 };
 
 function collectCurrentImageAttachments(ctx: MsgContext): CurrentImageAttachment[] {
+  const hydrationSuppressedIndexes = new Set(
+    normalizeMediaFacts(ctx.media).flatMap((fact, index) =>
+      fact.hydrationSuppressed === true ? [index] : [],
+    ),
+  );
   return normalizeAttachments(ctx).flatMap((attachment) => {
+    if (hydrationSuppressedIndexes.has(attachment.index)) {
+      return [];
+    }
     const mediaPath = normalizeOptionalString(attachment.path);
     return mediaPath && isImageAttachment(attachment) ? [{ ...attachment, path: mediaPath }] : [];
   });
@@ -53,20 +61,8 @@ function appendOrderedImages(params: {
   sourceIndex?: number;
 }) {
   const images = params.images ?? [];
-  if (!params.imageOrder || params.imageOrder.length === 0) {
-    for (const image of images) {
-      params.entries.push({
-        image,
-        imageOrder: "inline",
-        sourceIndex: params.sourceIndex,
-        sequence: params.entries.length,
-      });
-    }
-    return;
-  }
-
   let inlineIndex = 0;
-  for (const imageOrder of params.imageOrder) {
+  for (const imageOrder of params.imageOrder ?? []) {
     params.entries.push({
       image: imageOrder === "inline" ? images[inlineIndex++] : undefined,
       imageOrder,
@@ -131,12 +127,8 @@ export async function resolveCurrentTurnImages(params: {
     });
   }
 
-  const currentImageAttachments = collectCurrentImageAttachments(params.ctx);
-  if (currentImageAttachments.length === 0) {
-    return resolveMergedTurnImages(entries);
-  }
   const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
-  const undescribedImageAttachments = currentImageAttachments.filter(
+  const undescribedImageAttachments = collectCurrentImageAttachments(params.ctx).filter(
     (attachment) => !describedImageIndexes.has(attachment.index),
   );
   if (undescribedImageAttachments.length === 0) {
@@ -149,15 +141,12 @@ export async function resolveCurrentTurnImages(params: {
       ctx: params.ctx,
       cfg: params.cfg,
       includeRecentHistoryImages: false,
-      includeAttachmentIndexes: true,
     });
-    const images = resolved.attachments.map(
-      (attachment): ImageContent => ({
-        type: "image",
-        data: attachment.data,
-        mimeType: attachment.mediaType,
-      }),
-    );
+    const images = resolved.attachments.map((attachment): ImageContent => ({
+      type: "image",
+      data: attachment.data,
+      mimeType: attachment.mediaType,
+    }));
     const resolvedIndexes = resolved.attachmentIndexes ?? [];
     if (images.length < undescribedImageAttachments.length) {
       logVerbose(
@@ -188,13 +177,8 @@ export async function resolveCurrentTurnImages(params: {
     logVerbose(
       `agent-runner: media attachment image resolution failed, proceeding without native images: ${formatErrorMessage(error)}`,
     );
-    const merged = resolveMergedTurnImages(entries);
-    return undescribedImageAttachments.length > 0
-      ? Object.assign(merged, {
-          unresolvedSourceIndexes: undescribedImageAttachments.map(
-            (attachment) => attachment.index,
-          ),
-        })
-      : merged;
+    return Object.assign(resolveMergedTurnImages(entries), {
+      unresolvedSourceIndexes: undescribedImageAttachments.map((attachment) => attachment.index),
+    });
   }
 }

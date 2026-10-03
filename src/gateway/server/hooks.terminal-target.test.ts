@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveSystemEventOptionsOwnerAgentId } from "../../infra/system-event-ownership.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatMock = vi.fn();
@@ -90,8 +90,7 @@ function dispatch(value: HookPayload): Promise<unknown> {
 
 function expectOwnedEvent(text: string, agentId: string): void {
   const call = enqueueSystemEventMock.mock.calls.find(([actual]) => actual === text);
-  expect(call?.[1]).toEqual({ sessionKey: "global" });
-  expect(resolveSystemEventOptionsOwnerAgentId(call?.[1] as object)).toBe(agentId);
+  expect(call?.[1]).toEqual({ sessionKey: `agent:${agentId}:global` });
 }
 
 async function startGatedRun(
@@ -118,6 +117,7 @@ describe("global hook terminal target resolution", () => {
     loadConfigMock.mockReturnValue(globalConfig("main"));
     capturedDispatchAgentHook = undefined;
     createGatewayHooksRequestHandler({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       deps: {} as never,
       getHooksConfig: () => null,
       getClientIpConfig: () => ({ trustedProxies: undefined, allowRealIpFallback: false }),

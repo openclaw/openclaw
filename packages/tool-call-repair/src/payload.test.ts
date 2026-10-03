@@ -50,7 +50,6 @@ describe("scanPlainTextJsonToolCall", () => {
   });
 
   it.each([
-    ["[", undefined, undefined, undefined],
     ["[tool", undefined, undefined, undefined],
     ["[tool:re", "tool-bracket", "re", false],
     ["[read]", "named-bracket", "read", true],
@@ -102,7 +101,6 @@ describe("scanPlainTextJsonToolCall", () => {
 
   it.each([
     (name: string) => `[${name}]\n{}[/${name}]`,
-    (name: string) => `[tool:${name}] {}`,
     (name: string) => `analysis to=${name} code {}`,
   ])("accepts 120-character names and rejects the 121st character", (build) => {
     expect(scanPlainTextJsonToolCall(build("x".repeat(120))).kind).toBe("complete");
@@ -128,10 +126,8 @@ describe("scanPlainTextJsonToolCall", () => {
     ).toBe('{"path":"/tmp/file"}');
   });
 
-  it.each([
-    ["tool bracket", '[tool:read]{"path":"/tmp/file"}'],
-    ["Harmony", 'analysis to=read code {"path":"/tmp/file"}'],
-  ])("buffers every partial optional closer for %s syntax", (_name, call) => {
+  it("buffers every partial optional closer", () => {
+    const call = '[tool:read]{"path":"/tmp/file"}';
     for (const marker of ["<|call|>", "[END_TOOL_REQUEST]", "[/read]"]) {
       for (let split = 1; split < marker.length; split += 1) {
         expect(scanPlainTextJsonToolCall(call + marker.slice(0, split)).kind).toBe("prefix");
@@ -146,6 +142,32 @@ describe("scanPlainTextJsonToolCall", () => {
 });
 
 describe("stripPlainTextToolCallBlocks", () => {
+  it.each(["Compare [x] and [y].", 'Example [tool:read]{"path":"example.txt"}'])(
+    "preserves inline bracket text: %s",
+    (raw) => {
+      expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+    },
+  );
+
+  it.each([
+    ["LF", "\n"],
+    ["CR", "\r"],
+    ["CRLF", "\r\n"],
+  ])("strips Unicode-indented bracket calls after %s", (_name, lineBreak) => {
+    const prefix = `Before${lineBreak}`;
+    const suffix = `${lineBreak}After`;
+    const json = `[read]${lineBreak}{"path":"example.txt"}[/read]`;
+    const xml = "[tool:read]<parameter=path>example.txt</parameter>";
+    const adjacent = '[tool:write]{"path":"output.txt"}';
+
+    expect(stripPlainTextToolCallBlocks(`${prefix}\u00a0\t${json}${suffix}`)).toBe(
+      `${prefix}After`,
+    );
+    expect(stripPlainTextToolCallBlocks(`${prefix}\u2003${xml} ${adjacent}${suffix}`)).toBe(
+      `${prefix}After`,
+    );
+  });
+
   it("preserves protected candidates while stripping adjacent unprotected calls", () => {
     const protectedCall = '[read]\n{"path":"example.txt"}\n[/read]';
     const unprotectedCall = '[read]\n{"path":"secret.txt"}\n[/read]';

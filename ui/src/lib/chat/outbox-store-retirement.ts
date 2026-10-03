@@ -5,14 +5,14 @@ import {
   rememberDraftAttempt,
   rememberDraftRevision,
 } from "./outbox-store-draft-state.ts";
+import type { StoredChatOutboxScope } from "./outbox-store-scope.ts";
 import {
-  storageTargetForGateway,
+  storageTargetForComposer,
   storedChatOutboxScopeKey,
   writeStoredOutboxStore,
   readStoredOutboxStore,
   notifyStoredChatOutboxChanges,
   type ChatComposerScope,
-  type StoredChatOutboxScope,
 } from "./outbox-store.ts";
 type StoredComposerRetirementTarget = {
   key: string;
@@ -27,10 +27,10 @@ type StoredComposerRetirement = {
 };
 
 export function retireStoredComposerDrafts(
-  state: Pick<ChatComposerScope, "settings">,
+  state: ChatComposerScope,
   targets: readonly StoredComposerRetirementTarget[],
 ) {
-  const storageTarget = storageTargetForGateway(state.settings?.gatewayUrl);
+  const storageTarget = storageTargetForComposer(state);
   if (targets.length === 0) {
     return { gatewayOwner: storageTarget.gatewayOwner, retirements: [], storageFailed: false };
   }

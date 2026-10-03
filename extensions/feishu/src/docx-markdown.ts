@@ -1,4 +1,9 @@
-import { chunkFeishuMarkdown, parseFeishuMarkdown, type FeishuMarkdownNode } from "./markdown.js";
+import {
+  chunkFeishuMarkdown,
+  parseFeishuMarkdown,
+  visitFeishuMarkdown,
+  type FeishuMarkdownNode,
+} from "./markdown.js";
 
 export type DocxMarkdownImage = { url: string | undefined };
 
@@ -14,26 +19,6 @@ type DocxMarkdownPlan = {
 const MAX_BREAK_PROBES = 32;
 const STABLE_LINE_CONTAINER_TYPES = new Set(["list", "blockquote", "code"]);
 
-function visitMarkdown(root: FeishuMarkdownNode, visitor: (node: FeishuMarkdownNode) => void) {
-  const pending = [root];
-  while (pending.length > 0) {
-    const node = pending.pop();
-    if (!node) {
-      continue;
-    }
-    visitor(node);
-    if (!node.children) {
-      continue;
-    }
-    for (let index = node.children.length - 1; index >= 0; index -= 1) {
-      const child = node.children[index];
-      if (child) {
-        pending.push(child);
-      }
-    }
-  }
-}
-
 function resolveRemoteImageUrl(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
@@ -48,29 +33,27 @@ function resolveRemoteImageUrl(value: string | undefined): string | undefined {
 
 function collectMarkdownImages(root: FeishuMarkdownNode): DocxMarkdownImage[] {
   const definitions = new Map<string, string>();
-  visitMarkdown(root, (node) => {
-    if (node.type !== "definition" || !node.identifier || !node.url) {
-      return;
-    }
-    // CommonMark resolves the first matching definition.
-    if (!definitions.has(node.identifier)) {
-      definitions.set(node.identifier, node.url);
-    }
-  });
-
-  const images: DocxMarkdownImage[] = [];
-  visitMarkdown(root, (node) => {
-    if (node.type === "image") {
-      images.push({ url: resolveRemoteImageUrl(node.url) });
-      return;
-    }
-    if (node.type === "imageReference") {
-      images.push({
-        url: resolveRemoteImageUrl(node.identifier ? definitions.get(node.identifier) : undefined),
-      });
+  const imageNodes: FeishuMarkdownNode[] = [];
+  visitFeishuMarkdown(root, (node) => {
+    if (node.type === "definition" && node.identifier && node.url) {
+      // CommonMark resolves the first matching definition.
+      if (!definitions.has(node.identifier)) {
+        definitions.set(node.identifier, node.url);
+      }
+    } else if (node.type === "image" || node.type === "imageReference") {
+      imageNodes.push(node);
     }
   });
-  return images;
+  // Resolve after collecting every definition so forward image references work.
+  return imageNodes.map((node) => ({
+    url: resolveRemoteImageUrl(
+      node.type === "image"
+        ? node.url
+        : node.identifier
+          ? definitions.get(node.identifier)
+          : undefined,
+    ),
+  }));
 }
 
 function splitSourceAtOffsets(source: string, offsets: number[]): string[] {
@@ -206,17 +189,7 @@ function splitTableAtRow(
 }
 
 function isFencedCodeSource(source: string): boolean {
-  const firstLineEnd = source.indexOf("\n");
-  const firstLine = source.slice(0, firstLineEnd === -1 ? source.length : firstLineEnd);
-  let indent = 0;
-  while (indent < firstLine.length && firstLine[indent] === " ") {
-    indent += 1;
-  }
-  if (indent > 3) {
-    return false;
-  }
-  const marker = firstLine.slice(indent);
-  return marker.startsWith("```") || marker.startsWith("~~~");
+  return /^ {0,3}(?:`{3}|~{3})/.test(source);
 }
 
 export function createDocxMarkdownChunk(markdown: string): DocxMarkdownChunk {
@@ -230,10 +203,12 @@ export function createDocxMarkdownChunk(markdown: string): DocxMarkdownChunk {
 export function createDocxMarkdownPlan(markdown: string): DocxMarkdownPlan {
   const root = parseFeishuMarkdown(markdown);
   return {
-    // Feishu converts each request independently. Parse each exact chunk again
-    // so cross-chunk reference definitions cannot shift later image block mapping.
-    chunks: splitSourceAtOffsets(markdown, headingOffsets(markdown, root)).map(
-      createDocxMarkdownChunk,
+    // Reparse split chunks so references cannot cross independent request boundaries.
+    // The unchanged whole input can reuse its already parsed tree.
+    chunks: splitSourceAtOffsets(markdown, headingOffsets(markdown, root)).map((chunk) =>
+      chunk === markdown
+        ? { markdown, images: collectMarkdownImages(root) }
+        : createDocxMarkdownChunk(chunk),
     ),
   };
 }

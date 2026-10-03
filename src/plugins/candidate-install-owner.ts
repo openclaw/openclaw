@@ -1,5 +1,4 @@
 const PLUGIN_CANDIDATE_INSTALL_OWNER = Symbol.for("openclaw.pluginCandidateInstallOwner");
-const PLUGIN_INSTALL_OWNER_LOOKUP = Symbol.for("openclaw.pluginInstallOwnerLookup");
 
 type PluginCandidateInstallOwner = { installOwner?: string; ambiguous?: true };
 
@@ -33,24 +32,4 @@ export function resolvePluginCandidateInstallOwner(candidate: object): string | 
 
 export function isPluginCandidateInstallOwnerAmbiguous(candidate: object): boolean {
   return readPluginCandidateInstallOwner(candidate)?.ambiguous === true;
-}
-
-export function recordPluginInstallOwnerLookup<T extends object>(
-  params: T,
-  installOwnerByPluginId: ReadonlyMap<string, string>,
-): T {
-  Object.defineProperty(params, PLUGIN_INSTALL_OWNER_LOOKUP, {
-    configurable: false,
-    enumerable: true,
-    value: installOwnerByPluginId,
-  });
-  return params;
-}
-
-export function resolvePluginInstallOwnerLookup(
-  params: object,
-): ReadonlyMap<string, string> | undefined {
-  return (params as { [PLUGIN_INSTALL_OWNER_LOOKUP]?: ReadonlyMap<string, string> })[
-    PLUGIN_INSTALL_OWNER_LOOKUP
-  ];
 }

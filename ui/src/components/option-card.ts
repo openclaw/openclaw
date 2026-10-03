@@ -52,6 +52,14 @@ class OptionCard extends LitElement {
       return;
     }
     this.focusPreselection = false;
+    const activeElement = this.ownerDocument.activeElement;
+    if (
+      activeElement &&
+      activeElement !== this.ownerDocument.body &&
+      !this.contains(activeElement)
+    ) {
+      return;
+    }
     const selected = [...this.querySelectorAll<HTMLButtonElement>(".option-card__choice")].find(
       (button) => button.dataset.optionValue === this.selectedValue,
     );
@@ -110,15 +118,19 @@ class OptionCard extends LitElement {
               >
                 <span class="option-card__choice-copy">
                   <strong>${option.label}</strong>
-                  ${option.description
-                    ? html`<span class="option-card__description">${option.description}</span>`
-                    : nothing}
+                  ${
+                    option.description
+                      ? html`<span class="option-card__description">${option.description}</span>`
+                      : nothing
+                  }
                 </span>
-                ${recommended
-                  ? html`<span class="option-card__recommended">
-                      ${t("optionCard.recommended")}
-                    </span>`
-                  : nothing}
+                ${
+                  recommended
+                    ? html`<span class="option-card__recommended">
+                        ${t("optionCard.recommended")}
+                      </span>`
+                    : nothing
+                }
               </button>
             `;
           })}

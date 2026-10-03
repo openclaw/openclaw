@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 owner = str(Path(sys.argv[1]).resolve())
 mode = sys.argv[2]
+kova = mode in ("kova", "kova-retry", "kova-exhausted")
 git = shutil.which("git")
 assert git, "Git is required for checkout authentication proof"
 
@@ -82,6 +83,9 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
     authorization = f"Basic {encoded}"
     requests = []
     kova_methods = []
+    transient_failures = 0
+    filtered_fetch = False
+    planned_failures = {"kova-retry": 2, "kova-exhausted": 3}.get(mode, 0)
     post_checkout_requests = []
     checkout_complete = root / "checkout-complete"
     redirect = False
@@ -97,6 +101,7 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
             self.serve_git()
 
         def serve_git(self):
+            global transient_failures, filtered_fetch
             parsed = urlsplit(self.path)
             headers = self.headers.get_all("Authorization") or []
             authenticated = len(headers) == 1 and headers[0].lower().startswith("basic ") and headers[0][6:] == encoded
@@ -113,16 +118,23 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            if mode == "kova":
+            if kova:
                 kova_methods.append(self.command)
-            public_fetch = mode == "kova" and kova_methods.count("GET") == 1
-            if not authenticated and not public_fetch:
+            if not authenticated:
                 self.send_response(401)
                 self.send_header("WWW-Authenticate", 'Basic realm="checkout fixture"')
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
+            if kova and self.command == "GET" and transient_failures < planned_failures:
+                transient_failures += 1
+                self.send_response(503)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if kova and b"filter blob:none" in body:
+                filtered_fetch = True
             backend = subprocess.run(
                 [git, "http-backend"], input=body, capture_output=True, timeout=15,
                 env={**env, "GIT_PROJECT_ROOT": str(root), "GIT_HTTP_EXPORT_ALL": "1",
@@ -153,9 +165,9 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
     try:
         remote = f"http://127.0.0.1:{server.server_port}/{bare.name}"
         workspace = root / "workspace"
-        if mode == "kova":
-            # Keep the whole workflow body intact. Only unrelated OCM/npm tools
-            # are stubbed; Git talks to the real server for every object it needs.
+        if kova:
+            # Keep the workflow statements intact. Git talks to the real server;
+            # only unrelated OCM/npm tools and retry waiting are stubbed.
             workspace = root / "kova-src"
             (root / "ocm-install").mkdir()
             (root / "ocm-install/ocm").write_text("#!/bin/sh\nexit 0\n")
@@ -164,22 +176,44 @@ sha256sum() { cat >/dev/null; }
 tar() { :; }
 npm() { test -s "$KOVA_SRC/payload.txt"; }
 node() { :; }
-''' + sys.argv[3]
-            config = home / ".gitconfig"
-            checked(git, "config", "--file", str(config), f"url.{remote}.insteadOf",
-                    "https://github.com/fixture/kova.git")
+''' + sys.argv[3].replace('"https://github.com/${KOVA_REPOSITORY}.git"', json.dumps(remote)).replace(
+                'f"https://github.com/{os.environ[\'KOVA_REPOSITORY\']}.git"', repr(remote))
+            backoffs_path = root / "backoffs.json"
+            policy_start = "<<'PYTHON'\n"
+            assert script.count(policy_start) == 1, "Expected one Kova Python policy boundary"
+            # Observe retry policy on the existing owner, leaving Git deadlines
+            # and process draining real. Lifecycle tests cover elapsed backoff/cancellation.
+            script = script.replace(policy_start, policy_start + f'''import ci_git_owner as fixture_owner
+import json as fixture_json
+from pathlib import Path as FixturePath
+fixture_backoffs = []
+fixture_backoffs_path = FixturePath({str(backoffs_path)!r})
+fixture_backoffs_path.write_text(fixture_json.dumps(fixture_backoffs))
+def fixture_backoff(seconds):
+    fixture_owner.check_cancelled()
+    fixture_backoffs.append(seconds)
+    fixture_backoffs_path.write_text(fixture_json.dumps(fixture_backoffs))
+fixture_owner.backoff = fixture_backoff
+''', 1)
             result = command("bash", "-e", "-o", "pipefail", "-c", script, extra={
-                "GIT_CONFIG_GLOBAL": str(config), "CI_GIT_OWNER": owner,
+                "CI_GIT_OWNER": owner, "GH_TOKEN": token,
                 "RUNNER_TEMP": str(root), "KOVA_HOME": str(home / "kova"),
                 "GITHUB_ENV": str(root / "environment"), "GITHUB_PATH": str(root / "path"),
                 "OCM_VERSION": "fixture", "OCM_LINUX_X64_SHA256": "fixture",
                 "KOVA_REPOSITORY": "fixture/kova", "KOVA_REF": revision})
             complete = result.returncode == 0 and (workspace / "payload.txt").read_text() == (source / "payload.txt").read_text()
             local_config = (workspace / ".git/config").read_text()
-            assert token not in result.stdout + result.stderr + local_config
-            assert encoded not in result.stdout + result.stderr + local_config
+            # Actions consumes mask registration without rendering the secret.
+            # Every other output line and persisted config must remain secretless.
+            visible_stdout = "\n".join(line for line in result.stdout.splitlines()
+                                       if line != f"::add-mask::{encoded}")
+            published = visible_stdout + result.stderr + local_config
+            assert token not in published and encoded not in published
             print(json.dumps({"mode": mode, "exitCode": result.returncode, "stderr": result.stderr,
                               "checkoutComplete": complete, "sessions": kova_methods.count("GET"),
+                              "transientFailures": transient_failures, "filteredFetch": filtered_fetch,
+                              "backoffs": json.loads(backoffs_path.read_text()),
+                              "shallowCheckout": complete and checked(git, "rev-parse", "--is-shallow-repository", cwd=workspace) == "true",
                               "credentialPersisted": "extraheader" in local_config.lower(), "requests": requests}))
             raise SystemExit(0)
         checked(git, "init", str(workspace))
@@ -265,18 +299,15 @@ elif phase == "redirect":
             with subprocess.Popen([sys.executable, "-I", "-S", owner, "--policy", str(selected_policy),
                                    remote, token, phase], cwd=workspace, env=env,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as child:
+                # The managed fixture caller owns the lifetime deadline. Keep the
+                # server/root alive until this owner and its output pipes settle.
                 try:
-                    stdout, stderr = child.communicate(timeout=25)
+                    stdout, stderr = child.communicate()
                 except BaseException:
                     # The Git owner must drain its separately owned Git groups
                     # before this fixture closes the server or removes its root.
                     child.terminate()
-                    try:
-                        child.communicate(timeout=12)
-                    except subprocess.TimeoutExpired:
-                        child.kill()
-                        child.wait()
-                        raise RuntimeError("checkout owner did not finish cancellation cleanup")
+                    child.communicate()
                     raise
                 return subprocess.CompletedProcess(child.args, child.returncode, stdout, stderr)
 

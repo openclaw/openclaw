@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 
 set -euo pipefail
 
 usage() {
-  echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir>"
+  echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir> [--metadata-root <trusted-checkout>]"
   echo "       bash scripts/plugin-clawhub-publish.sh [--validate-packed|--publish-packed] <clawpack.tgz>"
 }
 
@@ -37,6 +41,15 @@ fi
 if [[ -z "${input_path}" ]]; then
   echo "missing package dir or ClawPack path" >&2
   exit 2
+fi
+metadata_root=""
+if [[ "${1:-}" == "--metadata-root" ]]; then
+  if [[ -z "${2:-}" || "${2}" == -* || "${mode}" == "--validate-packed" || "${mode}" == "--publish-packed" ]]; then
+    echo "--metadata-root requires a trusted checkout and an unpacked package mode" >&2
+    exit 2
+  fi
+  metadata_root="$(cd "$2" && pwd)"
+  shift 2
 fi
 if [[ "$#" -gt 0 ]]; then
   echo "unexpected plugin ClawHub publish argument: $1" >&2
@@ -173,9 +186,14 @@ if [[ "${packed_mode}" == "false" ]]; then
   build_package_runtime
 
   pack_json="${pack_dir}/pack.json"
+  metadata_args=()
+  if [[ -n "${metadata_root}" ]]; then
+    metadata_args=(--clawhub-metadata "${metadata_root}/${package_dir}")
+  fi
+  # Bash 3.2 treats an empty array as unset under nounset; metadata is optional.
   CLAWHUB_WORKDIR="${clawhub_workdir}" \
     OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT="${invocation_root}" \
-    node "${repo_root}/scripts/lib/plugin-npm-package-manifest.mjs" --run "${package_dir}" -- \
+    node "${repo_root}/scripts/lib/plugin-npm-package-manifest.mjs" --run "${package_dir}" ${metadata_args[@]+"${metadata_args[@]}"} -- \
     "${pack_cmd[@]}" > "${pack_json}"
   pack_output="$(cat "${pack_json}")"
   printf '%s\n' "${pack_output}"
@@ -362,6 +380,7 @@ if [[ ! "${publish_retry_delay}" =~ ^[1-9][0-9]*$ || "${publish_retry_delay}" -g
 fi
 
 publish_log="${pack_dir}/publish.log"
+publish_sleep_total=0
 verify_release_tag_target() {
   if [[ "${release_binding_count}" == "0" ]]; then
     return 0
@@ -378,6 +397,9 @@ verify_release_tag_target() {
 
 for attempt in $(seq 1 "${publish_attempts}"); do
   verify_release_tag_target
+  if [[ "${packed_mode}" == "true" ]]; then
+    verify_packed_identity
+  fi
   set +e
   CLAWHUB_WORKDIR="${clawhub_workdir}" \
     "${clawhub_timeout[@]}" "${publish_cmd[@]}" 2>&1 | tee "${publish_log}"
@@ -392,13 +414,38 @@ for attempt in $(seq 1 "${publish_attempts}"); do
   if [[ "${publish_status}" == "0" ]]; then
     exit 0
   fi
+  # Timeouts stay retryable: replaying verified identical bytes against an
+  # immutable version can at worst fail as a conflict, never publish different bytes.
   if [[ "${publish_status}" != "124" && "${publish_status}" != "137" ]] &&
     ! grep -Eqi "rate limit|too many requests|\\b(408|425|429|5[0-9]{2})\\b|ECONNRESET|ETIMEDOUT|fetch failed|socket hang up|network error|temporarily unavailable" "${publish_log}"; then
     exit 1
   fi
+  if [[ "${packed_mode}" != "true" ]]; then
+    echo "ClawHub publish has no caller-bound artifact identity; reconcile before retrying with --publish-packed." >&2
+    exit 1
+  fi
   if [[ "${attempt}" -lt "${publish_attempts}" ]]; then
-    echo "ClawHub publish hit a transient failure; retrying (${attempt}/${publish_attempts})." >&2
-    sleep "${publish_retry_delay}"
+    # Both npm 0.23.3 and the source CLI render Retry-After as "retry in Ns".
+    # Old curl transports may lose headers; use exponential backoff in that case.
+    server_delay="$(node --input-type=module - "${publish_log}" <<'NODE'
+import { readFileSync } from "node:fs";
+const output = readFileSync(process.argv[2], "utf8");
+const delays = [...output.matchAll(/\b(?:retry|reset) in (\d+)s\b/giu)];
+console.log(delays.reduce((max, match) => Math.max(max, Math.min(300, Number(match[1]))), 0));
+NODE
+    )"
+    delay="${publish_retry_delay}"
+    if ((server_delay > delay)); then delay="${server_delay}"; fi
+    if ((delay > 300)); then delay=300; fi
+    if ((publish_sleep_total + delay > 900)); then
+      echo "ClawHub publish retry sleep budget exhausted (900s); reconcile before recovery." >&2
+      exit 1
+    fi
+    echo "ClawHub publish retry in ${delay}s (${attempt}/${publish_attempts}; backoff=${publish_retry_delay}s, server delay=${server_delay}s, cap=300s, sleep budget remaining=$((900 - publish_sleep_total))s)." >&2
+    sleep "${delay}"
+    publish_sleep_total=$((publish_sleep_total + delay))
+    publish_retry_delay=$((publish_retry_delay * 2))
+    if ((publish_retry_delay > 300)); then publish_retry_delay=300; fi
   fi
 done
 

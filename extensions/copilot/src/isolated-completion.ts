@@ -1,9 +1,10 @@
-// Copilot plugin module implements fresh, zero-tool inference.
 import { resolve } from "node:path";
 import type { SessionConfig, SessionEvent } from "@github/copilot-sdk";
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tokenFingerprint } from "./auth-bridge.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
+import { createCopilotAbortError } from "./prompt-error.js";
 import { resolveCopilotProvider } from "./provider-bridge.js";
 import type { CopilotClientPool, PooledClient } from "./runtime.js";
 import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
@@ -24,6 +25,7 @@ type IsolatedSession = {
 
 type CompletionBoundary = {
   abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
   deadlineMs: number;
   timeoutMs: number;
 };
@@ -47,15 +49,6 @@ function resolveReasoningEffort(
     : undefined;
 }
 
-function createAbortError(signal: AbortSignal): Error {
-  if (signal.reason instanceof Error) {
-    return signal.reason;
-  }
-  const error = new Error("aborted", signal.reason ? { cause: signal.reason } : undefined);
-  error.name = "AbortError";
-  return error;
-}
-
 function createTimeoutError(timeoutMs: number): Error {
   const error = new Error(`[copilot] isolated completion timed out after ${timeoutMs}ms`);
   error.name = "TimeoutError";
@@ -70,23 +63,21 @@ async function awaitWithinCompletionBoundary<T>(params: {
 }): Promise<T> {
   const signal = params.boundary.abortSignal;
   if (signal?.aborted) {
-    throw createAbortError(signal);
+    throw createCopilotAbortError(signal.reason);
   }
   const remainingMs = params.boundary.deadlineMs - Date.now();
   if (remainingMs <= 0) {
     throw createTimeoutError(params.boundary.timeoutMs);
   }
 
-  let boundaryWon = false;
   let boundaryError: Error | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   const boundary = new Promise<never>((_resolve, reject) => {
     const rejectBoundary = (error: Error) => {
-      if (boundaryWon) {
+      if (boundaryError) {
         return;
       }
-      boundaryWon = true;
       boundaryError = error;
       params.onBoundary?.();
       reject(error);
@@ -96,30 +87,41 @@ async function awaitWithinCompletionBoundary<T>(params: {
       remainingMs,
     );
     if (signal) {
-      onAbort = () => rejectBoundary(createAbortError(signal));
+      onAbort = () => rejectBoundary(createCopilotAbortError(signal.reason));
       signal.addEventListener("abort", onAbort, { once: true });
       if (signal.aborted) {
         onAbort();
       }
     }
   });
+  const assertCurrent = () => {
+    if (boundaryError) {
+      throw boundaryError;
+    }
+    params.boundary.assertCurrent?.();
+  };
   // Start only after the abort listener exists. Pool/session factories may
   // synchronously trip cancellation before returning their promise.
   const operation = Promise.resolve()
     .then(() => {
-      if (boundaryWon) {
-        throw boundaryError ?? createTimeoutError(params.boundary.timeoutMs);
-      }
+      assertCurrent();
       return params.start(remainingMs);
     })
-    .then(async (value) => {
-      if (boundaryWon) {
-        await params.cleanupLate?.(value);
+    .then((value) => {
+      try {
+        assertCurrent();
+        return value;
+      } catch (error) {
+        // Retirement can reject an acquired resource before its caller owns cleanup.
+        startBestEffortCleanup(async () => await params.cleanupLate?.(value));
+        throw error;
       }
-      return value;
     });
   try {
     return await Promise.race([operation, boundary]);
+  } catch (error) {
+    params.boundary.assertCurrent?.();
+    throw error;
   } finally {
     if (timer) {
       clearTimeout(timer);
@@ -128,28 +130,6 @@ async function awaitWithinCompletionBoundary<T>(params: {
       signal.removeEventListener("abort", onAbort);
     }
   }
-}
-
-async function sendPrompt(params: {
-  boundary: CompletionBoundary;
-  prompt: string;
-  requestHeaders?: Record<string, string>;
-  session: IsolatedSession;
-}): Promise<SessionEvent | undefined> {
-  return await awaitWithinCompletionBoundary({
-    boundary: params.boundary,
-    start: async (remainingMs) =>
-      await params.session.sendAndWait(
-        {
-          prompt: params.prompt,
-          ...(params.requestHeaders ? { requestHeaders: params.requestHeaders } : {}),
-        },
-        remainingMs,
-      ),
-    onBoundary: () => {
-      void params.session.abort().catch(() => undefined);
-    },
-  });
 }
 
 export async function runCopilotIsolatedCompletion(
@@ -164,6 +144,7 @@ export async function runCopilotIsolatedCompletion(
   }
   const boundary: CompletionBoundary = {
     abortSignal: params.abortSignal,
+    assertCurrent: params.assertCurrent,
     deadlineMs: Date.now() + params.timeoutMs,
     timeoutMs: params.timeoutMs,
   };
@@ -256,11 +237,17 @@ export async function runCopilotIsolatedCompletion(
       },
     });
     session = createdSession;
-    const event = await sendPrompt({
+    const requestHeaders = sessionProvider.provider?.headers;
+    const event = await awaitWithinCompletionBoundary({
       boundary,
-      prompt: params.prompt,
-      requestHeaders: sessionProvider.provider?.headers,
-      session: createdSession,
+      start: async (remainingMs) =>
+        await createdSession.sendAndWait(
+          { prompt: params.prompt, ...(requestHeaders ? { requestHeaders } : {}) },
+          remainingMs,
+        ),
+      onBoundary: () => {
+        void createdSession.abort().catch(() => undefined);
+      },
     });
     if (event?.type !== "assistant.message" || event.agentId !== undefined) {
       throw new Error("[copilot] isolated completion did not return a root assistant message");
@@ -273,15 +260,11 @@ export async function runCopilotIsolatedCompletion(
       content.push({ type: "text", text: event.data.content });
     }
     for (const toolRequest of event.data.toolRequests ?? []) {
-      const toolArguments = toolRequest.arguments;
       content.push({
         type: "toolCall",
         id: toolRequest.toolCallId,
         name: toolRequest.name,
-        arguments:
-          toolArguments && typeof toolArguments === "object" && !Array.isArray(toolArguments)
-            ? { ...toolArguments }
-            : {},
+        arguments: { ...asNonArrayRecord(toolRequest.arguments) },
       });
     }
     return {

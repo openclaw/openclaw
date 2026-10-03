@@ -1,8 +1,10 @@
 // Models HTTP tests cover OpenAI-compatible /v1/models behavior, read-scope
 // authorization, ordering, and disabled-surface responses.
+import { createServer } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
-import { getGatewayTestPort, installGatewayTestHooks } from "./test-helpers.js";
+import { installGatewayTestHooks } from "./test-helpers.js";
 import { testState } from "./test-helpers.runtime-state.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -15,10 +17,11 @@ let enabledPort: number;
 
 beforeAll(async () => {
   ({ startGatewayServer } = await import("./server.js"));
-  enabledPort = await getGatewayTestPort();
+  const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+  enabledPort = portClaim.port;
   enabledServer = await startOpenAiCompatGatewayServer({
     startGatewayServer,
-    port: enabledPort,
+    port: portClaim,
     auth: { mode: "none" },
     openAiChatCompletionsEnabled: true,
   });
@@ -126,10 +129,15 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     }
   });
 
-  it("rejects operator scopes that lack read access", async () => {
-    const res = await getModels("/v1/models", { "x-openclaw-scopes": "operator.approvals" });
-    await expectMissingReadScope(res);
-  });
+  it.each(["operator.approvals", "operator.sessions.read", "operator.sessions.write"])(
+    "rejects %s for the global agent target inventory",
+    async (scope) => {
+      for (const pathname of ["/v1/models", "/v1/models/openclaw"]) {
+        const res = await getModels(pathname, { "x-openclaw-scopes": scope });
+        await expectMissingReadScope(res);
+      }
+    },
+  );
 
   it("rejects requests with no declared operator scopes", async () => {
     const res = await getModels("/v1/models", { "x-openclaw-scopes": "" });
@@ -145,28 +153,48 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
   });
 
   it("rejects when disabled", async () => {
-    const port = await getGatewayTestPort();
-    const server = await startOpenAiCompatGatewayServer({
-      startGatewayServer,
-      port,
-      auth: { mode: "none" },
-      openAiChatCompletionsEnabled: false,
-    });
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const port = portClaim.port;
+    const competitor = createServer();
+    let server: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>> | undefined;
     try {
+      server = await startOpenAiCompatGatewayServer({
+        startGatewayServer: async (...args) => {
+          // Try to steal the socket before the Gateway can finish its awaited startup work.
+          const collision = await new Promise<NodeJS.ErrnoException | undefined>((resolve) => {
+            competitor.once("error", resolve);
+            competitor.listen(port, "127.0.0.1", () => resolve(undefined));
+          });
+          expect(collision?.code).toBe("EADDRINUSE");
+          return await startGatewayServer(...args);
+        },
+        port: portClaim,
+        auth: { mode: "none" },
+        openAiChatCompletionsEnabled: false,
+      });
       const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
         headers: {},
       });
       expect(res.status).toBe(404);
     } finally {
-      await server.close({ reason: "models disabled test done" });
+      try {
+        await server?.close({ reason: "models disabled test done" });
+      } finally {
+        if (competitor.listening) {
+          await new Promise<void>((resolve, reject) => {
+            competitor.close((error) => (error ? reject(error) : resolve()));
+          });
+        }
+      }
     }
   });
 
   it("treats shared-secret bearer auth as full compat operator access", async () => {
-    const port = await getGatewayTestPort();
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const port = portClaim.port;
     const server = await startOpenAiCompatGatewayServer({
       startGatewayServer,
-      port,
+      port: portClaim,
       auth: { mode: "token", token: "secret" },
       openAiChatCompletionsEnabled: true,
     });

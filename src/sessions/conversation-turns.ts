@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type ConversationTurnReply = {
@@ -24,7 +25,6 @@ type PendingConversationTurn = {
   outboundMessageId?: string;
   correlationReady: Promise<void>;
   markCorrelationReady: () => void;
-  stopTimeout: () => void;
   claimed: boolean;
   settle: (reply: ConversationTurnReply | undefined) => void;
 };
@@ -40,6 +40,7 @@ type PendingConversationTurnHandle = {
 type ConversationTurnReplyClaim = {
   turnId: string;
   sessionId: string;
+  assertCurrent: () => void;
   complete: (params?: { transcriptArtifactId?: string; transcriptMessageId?: string }) => void;
   release: () => void;
 };
@@ -55,8 +56,25 @@ const pendingTurns = resolveGlobalSingleton(
     }
   },
 );
+const pendingTurnsByOutboundId = resolveGlobalSingleton(
+  Symbol.for("openclaw.pendingConversationTurnsByOutboundId"),
+  () => new Map<string, Set<PendingConversationTurn>>(),
+  (turns) => turns.clear(),
+);
 function pendingTurnKey(agentId: string, id: string): string {
   return JSON.stringify([agentId, id]);
+}
+
+function removePendingOutboundMembership(pending: PendingConversationTurn): void {
+  if (!pending.outboundMessageId) {
+    return;
+  }
+  const key = pendingTurnKey(pending.agentId, pending.outboundMessageId);
+  const bucket = pendingTurnsByOutboundId.get(key);
+  bucket?.delete(pending);
+  if (bucket?.size === 0) {
+    pendingTurnsByOutboundId.delete(key);
+  }
 }
 
 /** Registers one process-local waiter; transcript correlation remains durable after completion. */
@@ -81,22 +99,10 @@ export function registerPendingConversationTurn(params: {
   const createdAt = Date.now();
   const timeoutMs = Math.max(0, params.timeoutMs);
   let settled = false;
-  let resolvePromise: (reply: ConversationTurnReply | undefined) => void = () => undefined;
-  const promise = new Promise<ConversationTurnReply | undefined>((resolve) => {
-    resolvePromise = resolve;
-  });
-  let resolveCorrelationReady: () => void = () => undefined;
-  const correlationReady = new Promise<void>((resolve) => {
-    resolveCorrelationReady = resolve;
-  });
-  let correlationReadySettled = false;
-  const markCorrelationReady = () => {
-    if (correlationReadySettled) {
-      return;
-    }
-    correlationReadySettled = true;
-    resolveCorrelationReady();
-  };
+  const { promise, resolve: resolvePromise } = createDeferredCore<
+    ConversationTurnReply | undefined
+  >();
+  const { promise: correlationReady, resolve: markCorrelationReady } = createDeferredCore();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stopTimeout = () => {
     if (timer) {
@@ -110,6 +116,7 @@ export function registerPendingConversationTurn(params: {
     }
     settled = true;
     markCorrelationReady();
+    removePendingOutboundMembership(pending);
     if (pendingTurns.get(key) === pending) {
       pendingTurns.delete(key);
     }
@@ -128,7 +135,6 @@ export function registerPendingConversationTurn(params: {
     createdAt,
     correlationReady,
     markCorrelationReady,
-    stopTimeout,
     claimed: false,
     settle,
   };
@@ -145,10 +151,16 @@ export function registerPendingConversationTurn(params: {
       if (pendingTurns.get(key) !== pending) {
         return;
       }
+      removePendingOutboundMembership(pending);
       pending.outboundMessageId = normalizeOptionalString(messageId);
       if (!pending.outboundMessageId) {
         pending.settle(undefined);
+        return;
       }
+      const outboundKey = pendingTurnKey(pending.agentId, pending.outboundMessageId);
+      const bucket = pendingTurnsByOutboundId.get(outboundKey) ?? new Set();
+      bucket.add(pending);
+      pendingTurnsByOutboundId.set(outboundKey, bucket);
     },
     markReady: () => {
       if (pendingTurns.get(key) !== pending) {
@@ -199,23 +211,29 @@ export async function claimPendingConversationTurnReply(params: {
   if (!agentId) {
     return undefined;
   }
-  const pending = [...pendingTurns.values()]
-    .filter(
-      (candidate) =>
-        !candidate.claimed &&
-        candidate.agentId === agentId &&
-        (candidate.conversationRef === params.conversationRef ||
-          // Some transports promote an unthreaded message into a thread whose
-          // id is that message id. Require the attested parent conversation too;
-          // shared-main sessions can contain unrelated peers.
-          (!candidate.threadId &&
-            threadId === replyToId &&
-            parentConversationRef === candidate.conversationRef)) &&
-        candidate.sessionId === params.sessionId &&
-        (!candidate.threadId || !threadId || candidate.threadId === threadId),
-    )
-    .toSorted((left, right) => left.createdAt - right.createdAt)
-    .find((candidate) => candidate.outboundMessageId === replyToId);
+  let pending: PendingConversationTurn | undefined;
+  const candidates = pendingTurnsByOutboundId.get(pendingTurnKey(agentId, replyToId));
+  for (const candidate of candidates ?? []) {
+    if (
+      candidate.claimed ||
+      candidate.agentId !== agentId ||
+      candidate.outboundMessageId !== replyToId ||
+      (candidate.conversationRef !== params.conversationRef &&
+        // Some transports promote an unthreaded message into a thread whose
+        // id is that message id. Require the attested parent conversation too;
+        // shared-main sessions can contain unrelated peers.
+        (candidate.threadId ||
+          threadId !== replyToId ||
+          parentConversationRef !== candidate.conversationRef)) ||
+      candidate.sessionId !== params.sessionId ||
+      (candidate.threadId && threadId && candidate.threadId !== threadId)
+    ) {
+      continue;
+    }
+    if (!pending || candidate.createdAt < pending.createdAt) {
+      pending = candidate;
+    }
+  }
   if (!pending) {
     return undefined;
   }
@@ -226,12 +244,14 @@ export async function claimPendingConversationTurnReply(params: {
   if (pendingTurns.get(pending.key) !== pending) {
     return undefined;
   }
-  // Keep the timer armed until complete(). The capture owner performs only a
-  // synchronous guarded commit here; any accidental await yields so timeout wins.
+  // Admission may wait while the timer stays armed. Released handles cannot
+  // regain authority when another reply claims the same pending turn.
+  let active = true;
+  const isCurrent = () => active && pendingTurns.get(pending.key) === pending && pending.claimed;
   const reply: ConversationTurnReply = {
     conversationRef: params.conversationRef,
     messageId: params.messageId,
-    ...(replyToId ? { replyToId } : {}),
+    replyToId,
     ...(threadId ? { threadId } : {}),
     text: params.text,
     timestamp: params.timestamp ?? Date.now(),
@@ -239,7 +259,16 @@ export async function claimPendingConversationTurnReply(params: {
   return {
     turnId: pending.id,
     sessionId: pending.sessionId,
+    assertCurrent: () => {
+      if (!isCurrent()) {
+        throw new Error("conversation turn reply claim is no longer active");
+      }
+    },
     complete: (completion = {}) => {
+      if (!isCurrent()) {
+        return;
+      }
+      active = false;
       pending.settle({
         ...reply,
         ...(completion.transcriptArtifactId
@@ -251,11 +280,12 @@ export async function claimPendingConversationTurnReply(params: {
       });
     },
     release: () => {
-      // Persistence can fail after a transport reply was claimed. Keep the
-      // waiter alive so a transport retry can claim it before the deadline.
-      if (pendingTurns.get(pending.key) === pending) {
-        pending.claimed = false;
+      if (!isCurrent()) {
+        return;
       }
+      active = false;
+      // Persistence failure permits retry, but an old release cannot clear its claim.
+      pending.claimed = false;
     },
   };
 }

@@ -1,11 +1,36 @@
-import { spawnSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { setTimeout as delay } from "node:timers/promises";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { startProcessWatchdogFixture } from "../../test/helpers/process-watchdog.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  getGatewaySuspendStatus,
+  prepareGatewaySuspend,
+  resetGatewaySuspendCoordinatorForLifecycleRestart,
+} from "../infra/gateway-suspend-coordinator.js";
+import { inspectors } from "../infra/gateway-suspend-coordinator.test-support.js";
+import * as lifecycleWriteCustody from "../infra/lifecycle-write-custody.js";
+import { readLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
+import type { SpawnResult } from "../process/exec-result.js";
+import * as execSpawn from "../process/exec-spawn.js";
 import * as processExecution from "../process/exec.js";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { isPidAlive } from "../shared/pid-alive.js";
+import { readPidFile } from "../test-utils/process-tree.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { runCronCommandJob } from "./command-runner.js";
 import type { CronJob } from "./types.js";
+
+const SCHEDULED_BACKUP_COMMAND = ["openclaw", "backup", "git", "create"];
+const SCHEDULED_BACKUP_DECLARATION_KEY = "openclaw-backup-scheduled";
 
 function makeCommandJob(payload: Extract<CronJob["payload"], { kind: "command" }>): CronJob {
   const now = Date.now();
@@ -23,24 +48,143 @@ function makeCommandJob(payload: Extract<CronJob["payload"], { kind: "command" }
   };
 }
 
-function isProcessRunning(pid: number): boolean {
-  const result = spawnSync("ps", ["-o", "state=", "-p", String(pid)], { encoding: "utf8" });
-  if (result.error) {
-    throw result.error;
-  }
-  const state = result.stdout.trim();
-  if (result.status === 0) {
-    return !state.startsWith("Z");
-  }
-  if (result.status === 1 && state === "" && result.stderr.trim() === "") {
-    return false;
-  }
-  throw new Error(
-    `ps failed with status ${result.status ?? "unknown"}: ${result.stderr.trim() || "no output"}`,
-  );
-}
-
 describe("runCronCommandJob", () => {
+  let receipts: FixtureReceiptChannel;
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts?.close();
+  });
+
+  it.each(["owned", "offsite", "display-only", "retargeted"])(
+    "records only declared backup command custody through native settlement: %s",
+    async (mode) => {
+      const settled = createDeferred<SpawnResult>();
+      const runCommand = vi
+        .spyOn(processExecution, "runCommandWithTimeout")
+        .mockReturnValue(settled.promise);
+      const job = makeCommandJob({
+        kind: "command",
+        argv:
+          mode === "retargeted"
+            ? ["echo", "backup"]
+            : mode === "offsite"
+              ? ["openclaw", "backup", "create", "--to", "archive"]
+              : [...SCHEDULED_BACKUP_COMMAND],
+      });
+      job.name = SCHEDULED_BACKUP_DECLARATION_KEY;
+      if (mode !== "display-only") {
+        job.declarationKey =
+          mode === "offsite"
+            ? "openclaw-backup-offsite-scheduled"
+            : SCHEDULED_BACKUP_DECLARATION_KEY;
+      }
+      const ownsBackup = mode !== "display-only" && mode !== "retargeted";
+      const running = runCronCommandJob({ job });
+      try {
+        expect(readLifecycleWriteCustody()).toEqual(
+          ownsBackup ? [{ phase: "backup", count: 1 }] : [],
+        );
+        settled.resolve({
+          code: null,
+          signal: "SIGTERM",
+          killed: true,
+          stdout: "",
+          stderr: "",
+          termination: "timeout",
+          cleanup: "forced",
+        });
+        expect((await running).status).toBe("error");
+        expect(readLifecycleWriteCustody()).toEqual([]);
+      } finally {
+        settled.resolve({
+          code: 0,
+          signal: null,
+          killed: false,
+          stdout: "",
+          stderr: "",
+          termination: "exit",
+        });
+        await running;
+        runCommand.mockRestore();
+      }
+    },
+  );
+
+  it.each(["normal", "uncertain"] as const)(
+    "keeps maintenance unready until declared backup cleanup is confirmed: %s",
+    async (outcome) => {
+      const beginCustody = lifecycleWriteCustody.beginLifecycleWriteCustody;
+      let releaseCustody: (() => void) | undefined;
+      const begin = vi
+        .spyOn(lifecycleWriteCustody, "beginLifecycleWriteCustody")
+        .mockImplementation((phase) => {
+          releaseCustody = beginCustody(phase);
+          return releaseCustody;
+        });
+      const cleanup = createDeferred<SpawnResult["cleanup"]>();
+      const response = Promise.resolve<SpawnResult>({
+        code: null,
+        signal: "SIGTERM",
+        killed: true,
+        stdout: "",
+        stderr: "",
+        termination: "signal",
+        cleanup: "uncertain",
+      });
+      const runCommand = vi
+        .spyOn(processExecution, "runCommandWithTimeout")
+        .mockImplementation(() => {
+          execSpawn.retainCommandProcessCleanup(cleanup.promise);
+          return response;
+        });
+      const job = makeCommandJob({ kind: "command", argv: [...SCHEDULED_BACKUP_COMMAND] });
+      job.declarationKey = SCHEDULED_BACKUP_DECLARATION_KEY;
+      const running = runCronCommandJob({ job });
+      try {
+        await response;
+        expect(readLifecycleWriteCustody()).toEqual([{ phase: "backup", count: 1 }]);
+        cleanup.resolve(outcome);
+        expect((await running).status).toBe("error");
+        expect(
+          prepareGatewaySuspend({
+            requestId: "scheduled-backup-cleanup",
+            drain: true,
+            pauseScheduling: () => {},
+            resumeScheduling: () => {},
+            inspect: inspectors(),
+            createSuspensionId: () => "scheduled-backup-cleanup",
+          }),
+        ).toMatchObject(
+          outcome === "uncertain"
+            ? {
+                status: "draining",
+                activeCount: 1,
+                writeCustody: [{ phase: "backup", count: 1 }],
+              }
+            : { status: "ready", writeCustody: [] },
+        );
+        // Only the original owner can release after independent proof of settlement.
+        // This fixture has no live native process; resolving the scope did not prove that.
+        releaseCustody?.();
+        expect(getGatewaySuspendStatus("scheduled-backup-cleanup")).toMatchObject({
+          status: "ready",
+          writeCustody: [],
+        });
+        expect(readLifecycleWriteCustody()).toEqual([]);
+      } finally {
+        cleanup.resolve("normal");
+        await running;
+        releaseCustody?.();
+        resetGatewaySuspendCoordinatorForLifecycleRestart();
+        resetGatewayWorkAdmission();
+        begin.mockRestore();
+        runCommand.mockRestore();
+      }
+    },
+  );
+
   it("runs command argv and returns stdout as the deliverable summary", async () => {
     const result = await runCronCommandJob({
       job: makeCommandJob({
@@ -145,31 +289,196 @@ describe("runCronCommandJob", () => {
     });
   });
 
-  it.skipIf(process.platform === "win32")("kills shell process groups on timeout", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-command-"));
-    const childPidPath = path.join(tempDir, "child.pid");
-    const shellCommand = [
-      "sleep 60 &",
-      "child_pid=$!",
-      `printf '%s' "$child_pid" > ${JSON.stringify(childPidPath)}`,
-      'wait "$child_pid"',
-    ].join("\n");
+  it.skipIf(process.platform === "win32")(
+    "kills shell process groups on timeout",
+    async ({ signal }) =>
+      withTempDir("openclaw-cron-command-", async (tempDir) => {
+        const childPidPath = path.join(tempDir, "child.pid");
+        const childPath = path.join(tempDir, "child.mjs");
+        await fs.writeFile(
+          childPath,
+          [
+            fixtureReceiptClientSource(receipts.endpoint),
+            'import { writeFileSync } from "node:fs";',
+            "setInterval(() => {}, 1000);",
+            `writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+            `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
+          ].join("\n"),
+        );
+        const shellCommand = [
+          `${JSON.stringify(process.execPath)} ${JSON.stringify(childPath)} &`,
+          "child_pid=$!",
+          'wait "$child_pid"',
+        ].join("\n");
 
-    const result = await runCronCommandJob({
-      job: makeCommandJob({
-        kind: "command",
-        argv: ["sh", "-lc", shellCommand],
-        timeoutSeconds: 0.5,
+        const controller = new AbortController();
+        const spawnSpy = vi.spyOn(execSpawn, "spawnCommandWithInvocation");
+        let parent: ChildProcess | undefined;
+        let releaseAndWait: (() => ReturnType<typeof runCronCommandJob>) | undefined;
+        let running: ReturnType<typeof runCronCommandJob> | undefined;
+        try {
+          // Hold only the command deadline until the child is live. Group exit
+          // observation and scoped cleanup must keep real time to observe the OS.
+          releaseAndWait = startProcessWatchdogFixture(() => {
+            running = runCronCommandJob({
+              job: makeCommandJob({
+                kind: "command",
+                argv: ["sh", "-lc", shellCommand],
+                timeoutSeconds: 0.5,
+              }),
+              abortSignal: controller.signal,
+            });
+            return running;
+          });
+          const spawnResult = spawnSpy.mock.results[0];
+          if (!running || spawnResult?.type !== "return") {
+            throw new Error("command did not spawn");
+          }
+          parent = spawnResult.value.child.nodeChildProcess;
+          // The child records readiness before reporting it on the independent socket.
+          const settled = running.then(() => {
+            if (!existsSync(childPidPath)) {
+              throw new Error("command settled before its shell descendant became live");
+            }
+          });
+          await withinTest(
+            Promise.race([receipts.waitFor(childPidPath, "ready"), settled]),
+            signal,
+          );
+          const childPid = await readPidFile(childPidPath);
+          expect(Number.isSafeInteger(childPid)).toBe(true);
+          expect(isPidAlive(childPid)).toBe(true);
+
+          const result = await withinTest(releaseAndWait(), signal);
+          expect(result.status).toBe("error");
+          expect(result.error).toBe("command timed out");
+          // Scope cleanup has settled, but it exposes no exact adopted-child reap event.
+          while (isPidAlive(childPid)) {
+            await delay(25, undefined, { signal }).catch((error: unknown) => {
+              throw new Error(`Cron shell descendant ${childPid} stayed alive`, { cause: error });
+            });
+          }
+          expect(isPidAlive(childPid)).toBe(false);
+        } finally {
+          try {
+            controller.abort();
+            if (parent?.pid) {
+              try {
+                process.kill(-parent.pid, "SIGKILL");
+              } catch {
+                // The command may already have reaped its process group.
+              }
+            }
+          } finally {
+            spawnSpy.mockRestore();
+            await releaseAndWait?.();
+          }
+        }
       }),
+  );
+
+  function mockUncertainCleanupAfter(
+    result: Pick<SpawnResult, "code" | "termination"> &
+      Partial<Pick<SpawnResult, "stdout" | "stderr">>,
+  ) {
+    return vi.spyOn(processExecution, "runCommandWithTimeout").mockImplementation(async () => {
+      execSpawn.retainCommandProcessCleanup(Promise.resolve("uncertain"));
+      return {
+        signal: null,
+        killed: result.termination === "timeout",
+        stdout: "",
+        stderr: "",
+        cleanup: "uncertain",
+        ...result,
+      };
     });
+  }
 
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("command timed out");
+  it("keeps a timeout terminal and records the later uncertain cleanup", async () => {
+    const runCommand = mockUncertainCleanupAfter({ code: 124, termination: "timeout" });
+    try {
+      const result = await runCronCommandJob({
+        job: makeCommandJob({ kind: "command", argv: ["sleep", "60"], timeoutSeconds: 1 }),
+        nowMs: () => 789,
+      });
 
-    const childPid = Number.parseInt(await fs.readFile(childPidPath, "utf8"), 10);
-    expect(Number.isSafeInteger(childPid)).toBe(true);
-    await expect.poll(() => isProcessRunning(childPid)).toBe(false);
-    await fs.rm(tempDir, { recursive: true, force: true });
+      expect(result).toMatchObject({
+        status: "error",
+        error: "command timed out",
+        errorClassification: { kind: "reason", reason: "timeout" },
+        failureNotificationDetail: { kind: "command-timeout", mode: "wall-clock" },
+      });
+      expect(result.diagnostics?.entries).toEqual([
+        expect.objectContaining({ source: "exec", severity: "error", exitCode: 124 }),
+        {
+          ts: 789,
+          source: "exec",
+          severity: "error",
+          message: 'Command cleanup could not confirm that owned work stopped: "sleep" "60"',
+          exitCode: 124,
+        },
+      ]);
+    } finally {
+      runCommand.mockRestore();
+    }
+  });
+
+  it("preserves clean-exit output and backup custody when later cleanup is uncertain", async () => {
+    const beginCustody = lifecycleWriteCustody.beginLifecycleWriteCustody;
+    let releaseCustody: ReturnType<typeof beginCustody> | undefined;
+    const begin = vi
+      .spyOn(lifecycleWriteCustody, "beginLifecycleWriteCustody")
+      .mockImplementation((phase) => {
+        releaseCustody = beginCustody(phase);
+        return releaseCustody;
+      });
+    const runCommand = mockUncertainCleanupAfter({
+      code: 0,
+      termination: "exit",
+      stdout: "Backup created",
+      stderr: "Backup verification completed",
+    });
+    const job = makeCommandJob({ kind: "command", argv: [...SCHEDULED_BACKUP_COMMAND] });
+    job.declarationKey = SCHEDULED_BACKUP_DECLARATION_KEY;
+    try {
+      const result = await runCronCommandJob({
+        job,
+        nowMs: () => 789,
+      });
+
+      expect(result).toMatchObject({
+        status: "error",
+        error: "Command cleanup could not confirm that owned work stopped",
+        errorClassification: { kind: "permanent" },
+        summary: "stdout:\nBackup created\n\nstderr:\nBackup verification completed",
+      });
+      expect(result.failureNotificationDetail).toBeUndefined();
+      expect(result.diagnostics?.summary).toBe(result.summary);
+      const command = SCHEDULED_BACKUP_COMMAND.map((arg) => JSON.stringify(arg)).join(" ");
+      expect(result.diagnostics?.entries).toEqual([
+        {
+          ts: 789,
+          source: "exec",
+          severity: "error",
+          message: `command error: ${command}`,
+          exitCode: 0,
+          truncated: false,
+        },
+        {
+          ts: 789,
+          source: "exec",
+          severity: "error",
+          message: `Command cleanup could not confirm that owned work stopped: ${command}`,
+          exitCode: 0,
+        },
+      ]);
+      expect(readLifecycleWriteCustody()).toEqual([{ phase: "backup", count: 1 }]);
+    } finally {
+      // This synthetic fixture has no native work; release only through its original owner.
+      releaseCustody?.();
+      begin.mockRestore();
+      runCommand.mockRestore();
+    }
   });
 
   it("marks no-output timeouts as cron errors", async () => {

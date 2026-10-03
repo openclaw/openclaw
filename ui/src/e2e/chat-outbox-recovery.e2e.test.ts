@@ -1,5 +1,7 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiBundledGatewayUrl } from "../test-helpers/control-ui-e2e.ts";
 import {
   controlUiSessionUrl,
@@ -12,16 +14,16 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const artifacts = ".artifacts/mock-session-owner/outbox-recovery";
+const artifactRoot = ".artifacts/mock-session-owner/outbox-recovery";
 
 suite.define(() => {
   it.each(["retry", "discard", "exact authoritative history proof"] as const)(
     "parks an ACK-lost send for review until %s",
     async (action) => {
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-      }
+      const proofRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = proofRoot
+        ? createControlUiE2eArtifactDir("chat-outbox-recovery", proofRoot)
+        : undefined;
       await suite.withPage(
         {
           locale: "en-US",
@@ -34,7 +36,12 @@ suite.define(() => {
         async ({ page }) => {
           const captureProof = async (name: string) => {
             if (artifactDir) {
-              await page.screenshot({ path: `${artifactDir}/${name}.png`, fullPage: true });
+              await writeFile(
+                `${artifactDir}/${name}.png`,
+                await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+                  page.locator(".agent-chat__composer-combobox textarea"),
+                ]),
+              );
             }
           };
           const gateway = await installMockGateway(page, {
@@ -62,24 +69,70 @@ suite.define(() => {
           const firstParams = requireRecord(firstRequest.params);
           const runId = requireString(firstParams.idempotencyKey, "first idempotency key");
 
-          await gateway.closeLatest(1006, "lost ack");
+          await gateway.setOnline(false);
+          const userBubble = page.locator(".chat-group.user").getByText(prompt, { exact: true });
+          const reconnectStatus = page.locator(
+            '.chat-send-status[data-send-state="waiting-reconnect"]',
+          );
+          await userBubble.waitFor();
+          expect(await page.locator(".chat-queue__item").count()).toBe(0);
+          await reconnectStatus.getByText("Waiting for reconnect", { exact: true }).waitFor();
+          expect(await userBubble.count()).toBe(1);
+          expect(await reconnectStatus.getByRole("button", { name: /Retry/ }).count()).toBe(0);
+          await reconnectStatus.getByRole("button", { name: "Discard", exact: true }).waitFor();
+          await captureProof("00-waiting-for-reconnect");
+          await gateway.setOnline(true);
 
           const deliveryStatus = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
           await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
           expect(await page.locator(".chat-queue").count()).toBe(0);
-          const userBubble = page.locator(".chat-group.user").getByText(prompt, { exact: true });
           await userBubble.waitFor();
           expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
           if (action === "exact authoritative history proof") {
             await captureProof("01-delivery-uncertain");
+            const historyReads = (await gateway.getRequests("chat.history")).length;
+            await expectRequestCountStable(gateway, "chat.history", historyReads);
+            for (const event of ["session.message", "sessions.changed"]) {
+              await gateway.emitGatewayEvent(event, {
+                sessionKey: "agent:main:unrelated-conversation",
+                hasActiveRun: true,
+                phase: "message",
+              });
+            }
+            await expectRequestCountStable(gateway, "chat.history", historyReads);
+            await deliveryStatus.getByText("Delivery unconfirmed").waitFor();
 
+            const pane = page.locator("openclaw-chat-pane");
+            const waitForHistoryCommit = async (timestamp: number) => {
+              await page.waitForFunction((expectedTimestamp) => {
+                const current = document.querySelector<
+                  HTMLElement & {
+                    state?: { chatLoading: boolean; chatMessages: Array<{ timestamp?: number }> };
+                  }
+                >("openclaw-chat-pane")?.state;
+                return (
+                  current?.chatLoading === false &&
+                  current.chatMessages.some((message) => message.timestamp === expectedTimestamp)
+                );
+              }, timestamp);
+              await pane.evaluate(
+                (element) =>
+                  (element as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete,
+              );
+            };
+            const differentTimestamp = Date.now();
             await gateway.setHistoryMessages([
               {
                 content: "different delivered turn",
                 idempotencyKey: "different-run:user",
                 role: "user",
-                timestamp: Date.now(),
+                timestamp: differentTimestamp,
+                __openclaw: {
+                  id: "different-history-turn",
+                  seq: 1,
+                  idempotencyKey: "different-run:user",
+                },
               },
             ]);
             await gateway.emitGatewayEvent("session.message", {
@@ -89,32 +142,131 @@ suite.define(() => {
               sessionKey: "main",
               status: "done",
             });
+            await waitForHistoryCommit(differentTimestamp);
             await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
             expect(await gateway.getRequests("chat.send")).toHaveLength(1);
             await captureProof("02-different-key-still-uncertain");
 
-            await gateway.setHistoryMessages([
-              {
-                content: prompt,
-                idempotencyKey: `${runId}:user`,
-                role: "user",
-                timestamp: Date.now(),
-              },
-            ]);
-            await gateway.emitGatewayEvent("session.message", {
-              clientRunId: runId,
-              hasActiveRun: true,
-              messageId: "accepted-history-turn",
-              messageSeq: 2,
-              sessionKey: "main",
-              status: "running",
-            });
+            const receiptMatch = { sessionKey: "agent:main:main", limit: 1000 };
+            const displayMatch = { sessionKey: "agent:main:main", limit: 80 };
+            const receiptBefore = (await gateway.getRequests("chat.history", receiptMatch)).length;
+            const displayBefore = (await gateway.getRequests("chat.history", displayMatch)).length;
+            let receiptArmed = false;
+            let receiptReleased = false;
+            let refreshBefore: number | undefined;
+            let refreshArmed = false;
+            let refreshReleased = false;
+            try {
+              await gateway.deferNext("chat.history", receiptMatch);
+              receiptArmed = true;
+              const acceptedTimestamp = Date.now();
+              await gateway.setHistoryMessages([
+                {
+                  content: prompt,
+                  idempotencyKey: `${runId}:user`,
+                  role: "user",
+                  timestamp: acceptedTimestamp,
+                  __openclaw: {
+                    id: "accepted-history-turn",
+                    seq: 2,
+                    idempotencyKey: `${runId}:user`,
+                  },
+                },
+              ]);
+              await gateway.emitGatewayEvent("session.message", {
+                clientRunId: runId,
+                hasActiveRun: true,
+                messageId: "accepted-history-turn",
+                messageSeq: 2,
+                sessionKey: "main",
+                status: "running",
+              });
+              await gateway.waitForRequest("chat.history", {
+                after: receiptBefore,
+                match: receiptMatch,
+              });
+              await gateway.waitForRequest("chat.history", {
+                after: displayBefore,
+                match: displayMatch,
+              });
+              // This exact history row is committed while the recovery receipt is held.
+              await waitForHistoryCommit(acceptedTimestamp);
+              expect(await userBubble.count()).toBe(1);
 
-            await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
-            await userBubble.waitFor({ timeout: 10_000 });
-            expect(await userBubble.count()).toBe(1);
-            expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-            await captureProof("03-delivery-proven");
+              refreshBefore = (await gateway.getRequests("chat.history", displayMatch)).length;
+              await gateway.deferNext("chat.history", displayMatch);
+              refreshArmed = true;
+              // Only the receipt has been admitted to the FIFO of deferred responses.
+              await gateway.resolveDeferred("chat.history");
+              receiptReleased = true;
+              await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
+              // Native history can retire the outbox before the held receipt returns.
+              // Otherwise, join admission of the refresh before checking its held window.
+              await page.waitForFunction(
+                ({ before, match }) => {
+                  const mock = (
+                    window as Window & {
+                      openclawControlUiE2eGateway?: {
+                        findRequests: (
+                          method: string,
+                          params: Record<string, unknown>,
+                        ) => unknown[];
+                      };
+                    }
+                  ).openclawControlUiE2eGateway;
+                  return (
+                    document.querySelector(
+                      '.chat-group.user .chat-bubble[data-entry-id="accepted-history-turn"]',
+                    ) !== null || (mock?.findRequests("chat.history", match).length ?? 0) > before
+                  );
+                },
+                { before: refreshBefore, match: displayMatch },
+              );
+              await pane.evaluate(
+                (element) =>
+                  (element as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete,
+              );
+              await captureProof("03-held-post-receipt");
+              expect(
+                await userBubble.count(),
+                "The committed user row must survive receipt retirement while readback is held",
+              ).toBe(1);
+              const durableBubble = page.locator(
+                '.chat-group.user .chat-bubble[data-entry-id="accepted-history-turn"]',
+              );
+              expect(await durableBubble.count()).toBe(1);
+              expect(await durableBubble.getByText(prompt, { exact: true }).count()).toBe(1);
+              expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+
+              if (
+                (await gateway.getRequests("chat.history", displayMatch)).length > refreshBefore
+              ) {
+                await gateway.resolveDeferred("chat.history");
+                refreshReleased = true;
+                await waitForHistoryCommit(acceptedTimestamp);
+              }
+              expect(await durableBubble.count()).toBe(1);
+              expect(await userBubble.count()).toBe(1);
+              expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+              await captureProof("04-delivery-proven");
+            } finally {
+              // Armed but unused deferrals are not responses. Join only admitted reads.
+              if (
+                receiptArmed &&
+                !receiptReleased &&
+                (await gateway.getRequests("chat.history", receiptMatch)).length > receiptBefore
+              ) {
+                await gateway.resolveDeferred("chat.history");
+              }
+              if (
+                refreshArmed &&
+                !refreshReleased &&
+                refreshBefore !== undefined &&
+                (await gateway.getRequests("chat.history", displayMatch)).length > refreshBefore
+              ) {
+                await gateway.resolveDeferred("chat.history");
+              }
+            }
             return;
           }
 
@@ -158,12 +310,12 @@ suite.define(() => {
   );
 
   it("keeps a legacy uncertain send unsent until destination confirmation and explicit Retry", async () => {
-    await mkdir(artifacts, { recursive: true });
+    const artifacts = createControlUiE2eArtifactDir("legacy-send", artifactRoot);
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { width: 1280, height: 900 },
-      recordVideo: { dir: artifacts },
+      recordVideo: process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? { dir: artifacts } : undefined,
     });
     const page = await context.newPage();
     const sessionKey = "agent:main:main";
@@ -182,7 +334,7 @@ suite.define(() => {
             gatewayOwner: gatewayUrl,
             sessions: {
               "global\u0000agent:main": {
-                updatedAt: 1,
+                updatedAt: 1790955600000,
                 queue: [
                   {
                     id: "old-followup",
@@ -205,21 +357,24 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const notice = page.locator(".chat-outbox-recovery");
-      await notice.locator("summary").click();
-      await notice.getByText("Please check the deployment notes").waitFor();
+      expect(await notice.getAttribute("open")).not.toBeNull();
+      await notice
+        .locator(".chat-outbox-recovery__content")
+        .getByText("Please check the deployment notes")
+        .waitFor();
       await expectRequestCountStable(gateway, "chat.send", 0);
       await page.screenshot({
         animations: "disabled",
         path: `${artifacts}/before-confirmation.png`,
       });
-      await notice.getByRole("button", { name: "Restore here for review" }).click();
+      await notice.getByRole("button", { name: "Review in this chat" }).click();
       const dialog = page.locator("openclaw-modal-dialog");
-      await dialog.getByText("agent:main:main (main)", { exact: true }).waitFor();
+      await dialog.getByText(/Add this saved copy to “Main/).waitFor();
       await page.screenshot({
         animations: "disabled",
         path: `${artifacts}/destination-confirmation.png`,
       });
-      await dialog.getByRole("button", { name: "Restore here for review" }).click();
+      await dialog.getByRole("button", { name: "Review in this chat" }).click();
       await page
         .locator(".chat-group.user")
         .getByText("Please check the deployment notes")
@@ -259,7 +414,7 @@ suite.define(() => {
       const mainKey = sessionKey.endsWith(":workspace") ? "workspace" : "main";
       const gateway = await installMockGateway(page, {
         sessionKey,
-        sessionScope: sessionKey === "global" ? "global" : "agent",
+        sessionScope: sessionKey === "global" ? "global" : "per-sender",
         mainSessionKey: sessionKey === "global" ? "global" : `agent:main:${mainKey}`,
         methodResponses: {
           "agents.list": {
@@ -287,10 +442,16 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.waitFor();
         await gateway.setOnline(false);
-        await page.locator('.agent-chat__composer-underlaps[data-tone="warn"]').waitFor();
+        await page.locator(".agent-chat__input--offline").waitFor();
         await composer.fill(`retain destination ${sessionKey}`);
         await page.getByRole("button", { name: "Send message" }).click();
         await page.locator(".chat-queue").getByText("Waiting for reconnect").waitFor();
+        expect(
+          await page
+            .locator(".chat-group.user")
+            .getByText(`retain destination ${sessionKey}`)
+            .count(),
+        ).toBe(0);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, otherKey));
         await gateway.setOnline(true);
         await page.locator(".agent-chat__composer-combobox textarea").waitFor();
@@ -318,6 +479,7 @@ suite.define(() => {
   );
 
   it("recovers an ambiguous IndexedDB attachment draft through rendered controls without sending", async () => {
+    const artifacts = createControlUiE2eArtifactDir("attachment-draft", artifactRoot);
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -327,8 +489,12 @@ suite.define(() => {
     const gateway = await installMockGateway(page);
     const gatewayAddress = controlUiBundledGatewayUrl(suite.server.baseUrl);
     try {
-      await page.goto(`${suite.server.baseUrl}settings`);
-      await page.evaluate(async (gatewayOwner) => {
+      // Seed the legacy database before app boot can open the current version.
+      await page.route("**/outbox-recovery-seed", (route) =>
+        route.fulfill({ contentType: "text/html", body: "Mock recovery seed" }),
+      );
+      await page.goto(`${suite.server.baseUrl}outbox-recovery-seed`);
+      const seededDatabaseVersion = await page.evaluate(async (gatewayOwner) => {
         const request = indexedDB.open("openclaw-control-ui", 1);
         request.addEventListener(
           "upgradeneeded",
@@ -377,15 +543,20 @@ suite.define(() => {
           );
         });
         db.close();
+        return db.version;
       }, gatewayAddress);
+      expect(seededDatabaseVersion).toBe(1);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const notice = page.locator(".chat-outbox-recovery");
-      await notice.locator("summary").click();
-      await notice.getByText("legacy-note.txt", { exact: true }).waitFor();
-      await notice.getByRole("button", { name: "Restore here for review" }).click();
+      expect(await notice.getAttribute("open")).not.toBeNull();
+      await notice
+        .locator(".chat-outbox-recovery__content")
+        .getByText("Attachments: legacy-note.txt", { exact: true })
+        .waitFor();
+      await notice.getByRole("button", { name: "Review in this chat" }).click();
       await page
         .locator("openclaw-modal-dialog")
-        .getByRole("button", { name: "Restore here for review" })
+        .getByRole("button", { name: "Review in this chat" })
         .click();
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await expect.poll(() => composer.inputValue()).toBe("Review the attached deployment note");
@@ -411,5 +582,106 @@ suite.define(() => {
     } finally {
       await suite.closeBrowserContext(context);
     }
+  });
+
+  it("shows only meaningful saved drafts and deletes a reviewed copy without sending", async () => {
+    const artifacts = createControlUiE2eArtifactDir("saved-draft-notice", artifactRoot);
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page);
+        const gatewayAddress = controlUiBundledGatewayUrl(suite.server.baseUrl);
+        await page.addInitScript(
+          ({ gatewayUrl }) => {
+            if (sessionStorage.getItem("saved-draft-notice-seeded")) {
+              return;
+            }
+            sessionStorage.setItem("saved-draft-notice-seeded", "yes");
+            const sessions: Record<
+              string,
+              { updatedAt: number; draftRevision: number; draft?: string }
+            > = Object.fromEntries(
+              Array.from({ length: 20 }, (_, index) => [
+                "agent:main:old-" + index + "\u0000agent:main",
+                { updatedAt: 1790955600000, draftRevision: 42 },
+              ]),
+            );
+            sessions["global\u0000agent:main"] = {
+              updatedAt: 1790955600000,
+              draftRevision: 43,
+              draft: "Could you summarize the latest test results?",
+            };
+            sessionStorage.setItem(
+              "openclaw.control.chatComposer.v4:" + encodeURIComponent(gatewayUrl),
+              JSON.stringify({
+                version: 4,
+                gatewayOwner: gatewayUrl,
+                sessions,
+                recovery: {},
+              }),
+            );
+          },
+          { gatewayUrl: gatewayAddress },
+        );
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+        const notice = page.locator(".chat-outbox-recovery");
+        expect(await notice.getAttribute("open")).not.toBeNull();
+        await notice
+          .locator(".chat-outbox-recovery__content")
+          .getByText("Could you summarize the latest test results?", { exact: true })
+          .waitFor();
+        await page.screenshot({ animations: "disabled", path: artifacts + "/notification.png" });
+        await notice.screenshot({
+          animations: "disabled",
+          path: artifacts + "/notification-detail.png",
+        });
+        expect(await notice.locator(".chat-outbox-recovery-row").count()).toBe(1);
+        await page.emulateMedia({ colorScheme: "dark" });
+        await page.waitForFunction(() => document.documentElement.dataset.themeMode === "dark");
+        await page.screenshot({
+          animations: "disabled",
+          path: artifacts + "/notification-dark.png",
+        });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.screenshot({
+          animations: "disabled",
+          path: artifacts + "/notification-mobile.png",
+        });
+        await notice.screenshot({
+          animations: "disabled",
+          path: artifacts + "/notification-mobile-detail.png",
+        });
+        expect(await notice.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+          true,
+        );
+        await notice.locator("summary").click();
+        await page.screenshot({
+          animations: "disabled",
+          path: artifacts + "/notification-collapsed.png",
+        });
+        await notice.locator("summary").click();
+        await notice
+          .locator(".chat-outbox-recovery__content")
+          .getByText("Draft · Not sent", { exact: true })
+          .waitFor();
+        expect(
+          await notice
+            .locator(".chat-outbox-recovery__content")
+            .getByText("Queued messages: 0", { exact: true })
+            .count(),
+        ).toBe(0);
+        await notice.getByRole("button", { name: "Delete saved copy", exact: true }).click();
+        const dialog = page.locator("openclaw-modal-dialog");
+        await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+        expect(await notice.locator(".chat-outbox-recovery-row").count()).toBe(1);
+        await notice.getByRole("button", { name: "Delete saved copy", exact: true }).click();
+        await dialog.getByRole("button", { name: "Delete saved copy", exact: true }).click();
+        await notice.waitFor({ state: "detached" });
+        await page.reload();
+        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        expect(await notice.count()).toBe(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      },
+    );
   });
 });

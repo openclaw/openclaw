@@ -1,13 +1,14 @@
 import path from "node:path";
+import { assertNoWindowsNetworkPath, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {
   ModelInputContent,
   ProviderContext,
 } from "../../../../packages/ai/src/provider-types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { Context, ImageContent, TextContent } from "../../../llm/types.js";
 import { redactSensitiveText } from "../../../logging/redact.js";
 import {
@@ -23,6 +24,7 @@ import {
 import { resolveMediaReferenceLocalPath } from "../../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
+import { getMediaDir } from "../../../media/store.js";
 import { loadWebMedia, type WebMediaResult } from "../../../media/web-media.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -34,6 +36,7 @@ import {
 } from "../../sandbox-media-paths.js";
 import type { SandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { sanitizeImageBlocks } from "../../tool-images.js";
+import { getAgentWorkspaceAccess } from "../../workspace-access.js";
 import { log } from "../logger.js";
 import {
   collectMediaImageRefs,
@@ -51,20 +54,7 @@ import {
 
 export { hasHydratableMediaImages } from "./images.media-refs.js";
 
-const IMAGE_EXTENSION_NAMES = [
-  "png",
-  "jpg",
-  "jpeg",
-  "gif",
-  "webp",
-  "bmp",
-  "tiff",
-  "tif",
-  "heic",
-  "heif",
-] as const;
-const IMAGE_EXTENSIONS = new Set<string>(IMAGE_EXTENSION_NAMES.map((ext) => `.${ext}`));
-const IMAGE_EXTENSION_PATTERN = IMAGE_EXTENSION_NAMES.join("|");
+const IMAGE_EXTENSION_PATTERN = "png|jpg|jpeg|gif|webp|bmp|tiff|tif|heic|heif";
 const FILE_URL_REGEX_SOURCE = "file://[^\\s<>\"'`\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + ")";
 const WINDOWS_DRIVE_PATH_REGEX_SOURCE =
   "(?:^|\\s|[\"'`(])([A-Za-z]:[\\\\/][^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
@@ -75,10 +65,6 @@ const WINDOWS_DRIVE_PATH_PATTERN = new RegExp(WINDOWS_DRIVE_PATH_REGEX_SOURCE, "
 const PATH_PATTERN = new RegExp(PATH_REGEX_SOURCE, "gi");
 const LEGACY_ATTACHMENT_MARKER_PATTERN =
   /\[(?:media attached(?:\s+\d+\/\d+)?:|Image:\s*source:)\s*[^\]]+\]/gi;
-
-function isImageExtension(filePath: string): boolean {
-  return IMAGE_EXTENSIONS.has(normalizeLowercaseStringOrEmpty(path.extname(filePath)));
-}
 
 function normalizeRefForDedupe(raw: string): string {
   const projected =
@@ -132,10 +118,8 @@ export function detectImageReferences(prompt: string): MediaFileRef[] {
     if (!trimmed || seen.has(dedupeKey)) {
       return;
     }
-    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-      return;
-    }
-    if (!isImageExtension(trimmed)) {
+    // An extension-only basename is a dotfile even though the regex accepts it.
+    if (!path.extname(trimmed)) {
       return;
     }
     try {
@@ -174,15 +158,11 @@ export function detectImageReferences(prompt: string): MediaFileRef[] {
     }
   }
 
-  while ((match = WINDOWS_DRIVE_PATH_PATTERN.exec(pathPrompt)) !== null) {
-    if (match[1]) {
-      addPathRef(match[1]);
-    }
-  }
-
-  while ((match = PATH_PATTERN.exec(pathPrompt)) !== null) {
-    if (match[1]) {
-      addPathRef(match[1]);
+  for (const pattern of [WINDOWS_DRIVE_PATH_PATTERN, PATH_PATTERN]) {
+    while ((match = pattern.exec(pathPrompt)) !== null) {
+      if (match[1]) {
+        addPathRef(match[1]);
+      }
     }
   }
 
@@ -272,38 +252,17 @@ async function loadMediaFromRef(
   }
 }
 
-async function loadImageFromRef(
-  ref: MediaFileRef,
-  workspaceDir: string,
-  options?: Parameters<typeof loadMediaFromRef>[2],
-): Promise<ImageContent | null> {
-  const media = await loadMediaFromRef(ref, workspaceDir, { ...options, label: "Native image" });
-  if (!media || media.kind !== "image") {
-    return null;
-  }
-  return {
-    type: "image",
-    data: media.buffer.toString("base64"),
-    mimeType: media.contentType ?? "image/jpeg",
-  };
-}
-
-export async function detectAndLoadPromptImages(params: {
-  prompt: string;
-  userTurnTranscriptRecorder?: Pick<UserTurnTranscriptRecorder, "resolveMessage">;
-  media?: readonly MediaFact[];
-  workspaceDir: string;
-  model: { input?: string[] };
-  existingImages?: ImageContent[];
-  existingImageFactIndexes?: readonly ImageFactIndex[];
-  imageOrder?: PromptImageOrderEntry[];
-  mediaImageLayout?: MediaImageLayout;
-  maxBytes?: number;
-  maxDimensionPx?: number;
-  workspaceOnly?: boolean;
-  localRoots?: readonly string[];
-  sandbox?: { root: string; bridge: SandboxFsBridge };
-}): Promise<{
+export async function detectAndLoadPromptImages(
+  params: Omit<PromptMediaOptions, "provider" | "signal" | "onCurrentTurnImageFailure"> & {
+    prompt: string;
+    userTurnTranscriptRecorder?: Pick<UserTurnTranscriptRecorder, "resolveMessage">;
+    media?: readonly MediaFact[];
+    existingImages?: ImageContent[];
+    existingImageFactIndexes?: readonly ImageFactIndex[];
+    imageOrder?: PromptImageOrderEntry[];
+    mediaImageLayout?: MediaImageLayout;
+  },
+): Promise<{
   images: ImageContent[];
   imageFactIndexes: ImageFactIndex[];
   detectedRefs: MediaFileRef[];
@@ -430,19 +389,37 @@ export async function detectAndLoadPromptImages(params: {
   let loadedCount = 0;
   let failedMediaCount = 0;
   let skippedCount = 0;
-  const loadRef = async (ref: MediaFileRef & { workspaceDir?: string }) => {
-    const image = await loadImageFromRef(ref, ref.workspaceDir ?? params.workspaceDir, {
+  const loadRef = async (ref: MediaFileRef & { workspaceDir?: string }, attachment = false) => {
+    // Remote workspaces keep admitted attachment originals on Gateway for hydration.
+    // Prompt-discovered workspace references still use the sandbox boundary.
+    const gatewayAttachment =
+      attachment &&
+      Boolean(
+        getAgentWorkspaceAccess(
+          params.agentWorkspaceDir ?? params.workspaceDir,
+          "prepareTurnAttachments",
+        )?.prepareTurnAttachments,
+      );
+    const loadedMedia = await loadMediaFromRef(ref, ref.workspaceDir ?? params.workspaceDir, {
+      label: "Native image",
       maxBytes: params.maxBytes,
       workspaceOnly: params.workspaceOnly,
-      localRoots: params.localRoots ?? (params.workspaceOnly ? [params.workspaceDir] : undefined),
-      sandbox: params.sandbox,
+      localRoots: gatewayAttachment
+        ? [getMediaDir()]
+        : (params.localRoots ?? (params.workspaceOnly ? [params.workspaceDir] : undefined)),
+      sandbox: gatewayAttachment ? undefined : params.sandbox,
     });
-    if (image) {
-      loadedCount++;
-      log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
-    } else {
+    if (!loadedMedia || loadedMedia.kind !== "image") {
       skippedCount++;
+      return null;
     }
+    const image: ImageContent = {
+      type: "image",
+      data: loadedMedia.buffer.toString("base64"),
+      mimeType: loadedMedia.contentType ?? "image/jpeg",
+    };
+    loadedCount++;
+    log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
     return image;
   };
   const promptImages: PromptImageEntry[] = [];
@@ -455,7 +432,7 @@ export async function detectAndLoadPromptImages(params: {
     // Gateway-owned transcripts retain managed facts, not necessarily inline bytes.
     // A missing inline block must hydrate its exact fact on replay, just like an offloaded slot.
     const ref = slot.factIndex === undefined ? undefined : refsByFact.get(slot.factIndex);
-    const image = ref?.hydrate ? await loadRef(ref) : null;
+    const image = ref?.hydrate ? await loadRef(ref, true) : null;
     if ((ref?.hydrate || slot.kind === "inline") && !image) {
       failedMediaCount++;
     }
@@ -487,6 +464,8 @@ export async function detectAndLoadPromptImages(params: {
 
 type PromptMediaOptions = {
   workspaceDir: string;
+  /** Registered agent workspace, when sandbox execution uses a different directory. */
+  agentWorkspaceDir?: string;
   model: { input?: string[] };
   maxBytes?: number;
   maxDimensionPx?: number;
@@ -518,15 +497,22 @@ async function materializeVideoFact(
     return { type: "text", text: VIDEO_OMISSION.limit };
   }
   const ref = resolveMediaFactLocalRef(fact);
+  const gatewayAttachment = Boolean(
+    getAgentWorkspaceAccess(
+      options.agentWorkspaceDir ?? options.workspaceDir,
+      "prepareTurnAttachments",
+    )?.prepareTurnAttachments,
+  );
   const loaded = ref
     ? await loadMediaFromRef(ref, fact.workspaceDir ?? options.workspaceDir, {
         label: "Native video",
         maxBytes: budget.remaining,
         signal: options.signal,
         workspaceOnly: options.workspaceOnly,
-        localRoots:
-          options.localRoots ?? (options.workspaceOnly ? [options.workspaceDir] : undefined),
-        sandbox: options.sandbox,
+        localRoots: gatewayAttachment
+          ? [getMediaDir()]
+          : (options.localRoots ?? (options.workspaceOnly ? [options.workspaceDir] : undefined)),
+        sandbox: gatewayAttachment ? undefined : options.sandbox,
       })
     : null;
   if (!loaded) {
@@ -609,18 +595,12 @@ async function materializePromptMediaMessages(
       : [{ type: "text" as const, text: message.content }];
     const existingImages = content.filter((block): block is ImageContent => block.type === "image");
     const result = await detectAndLoadPromptImages({
+      ...options,
       prompt: "",
       media: resolvedMedia,
-      workspaceDir: options.workspaceDir,
-      model: options.model,
       existingImages,
       existingImageFactIndexes: readPersistedImageBlockFactIndexes(message),
       mediaImageLayout,
-      maxBytes: options.maxBytes,
-      maxDimensionPx: options.maxDimensionPx,
-      workspaceOnly: options.workspaceOnly,
-      localRoots: options.localRoots,
-      sandbox: options.sandbox,
     });
     const projectedContent = await projectOrderedPromptMedia({
       content,
@@ -648,13 +628,13 @@ async function materializePromptMediaMessages(
         content: projectedContent,
         timestamp: message.timestamp,
         ...(message.runtimeContextCarrier ? { runtimeContextCarrier: true } : {}),
+        ...(message.runtimeContextCarrierRetained !== undefined
+          ? { runtimeContextCarrierRetained: message.runtimeContextCarrierRetained }
+          : {}),
       } as ProviderContext["messages"][number] as AgentMessage;
       continue;
     }
-    const nextMeta =
-      meta && typeof meta === "object" && !Array.isArray(meta)
-        ? { ...(meta as Record<string, unknown>) }
-        : {};
+    const nextMeta = { ...asNonArrayRecord(meta) };
     if (result.images.length > 0) {
       nextMeta.mediaImageBlockFactIndexes = result.imageFactIndexes;
     } else {
@@ -686,24 +666,15 @@ export async function hydratePromptMediaMessages(
 }
 
 /** Materializes one transient provider context from exact-message media facts. */
-export async function materializeProviderContext(params: {
-  context: Context;
-  signal?: AbortSignal;
-  workspaceDir: string;
-  workspaceOnly?: boolean;
-  localRoots?: readonly string[];
-  sandbox?: { root: string; bridge: SandboxFsBridge };
-  onCurrentTurnImageFailure?: (count: number) => void;
-}): Promise<ProviderContext> {
+export async function materializeProviderContext(
+  params: Omit<PromptMediaOptions, "provider" | "model" | "maxBytes" | "maxDimensionPx"> & {
+    context: Context;
+  },
+): Promise<ProviderContext> {
   const messages = await materializePromptMediaMessages(params.context.messages as AgentMessage[], {
-    workspaceDir: params.workspaceDir,
+    ...params,
     model: { input: ["text", "image"] },
-    workspaceOnly: params.workspaceOnly,
-    localRoots: params.localRoots,
-    sandbox: params.sandbox,
     provider: true,
-    signal: params.signal,
-    onCurrentTurnImageFailure: params.onCurrentTurnImageFailure,
   });
   params.signal?.throwIfAborted();
   return messages === params.context.messages

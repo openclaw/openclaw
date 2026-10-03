@@ -1,22 +1,30 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { createChatRunState } from "../server-chat-state.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import type { AgentTurnContext } from "./types.js";
 
 let state: OpenClawTestState | undefined;
 afterEach(async () => {
+  vi.restoreAllMocks();
   await state?.cleanup();
 });
 
-it.each(["main", "work"])(
-  "admits images using the explicit %s global session owner",
-  async (agentId) => {
+it.each([
+  { name: "main", agentId: "main", replaceDuringRead: false },
+  { name: "work", agentId: "work", replaceDuringRead: false },
+  { name: "replacement work", agentId: "work", replaceDuringRead: true },
+])(
+  "admits images using the explicit $name global session owner",
+  async ({ agentId, replaceDuringRead }) => {
     state = await createOpenClawTestState({ label: "agent-content-owner" });
     const { stateDir, workspaceDir } = state;
     const cfg: OpenClawConfig = {
@@ -32,6 +40,29 @@ it.each(["main", "work"])(
       session: { scope: "global" },
     };
     await state.writeConfig(cfg);
+    if (replaceDuringRead) {
+      const scope = { agentId, sessionKey: "global", env: state.env };
+      await replaceSessionEntry(scope, {
+        sessionId: "previous-text-session",
+        lifecycleRevision: "previous-lifecycle",
+        updatedAt: 1,
+        providerOverride: "mock-openai",
+        modelOverride: "text-only",
+      });
+      const read = sessionEntryReads.withSessionEntryReadOnlyInWorker;
+      vi.spyOn(sessionEntryReads, "withSessionEntryReadOnlyInWorker").mockImplementationOnce(
+        async (...args) => {
+          await replaceSessionEntry(scope, {
+            sessionId: "replacement-vision-session",
+            lifecycleRevision: "replacement-lifecycle",
+            updatedAt: 2,
+            providerOverride: "mock-openai",
+            modelOverride: `${agentId}-vision`,
+          });
+          return await read(...args);
+        },
+      );
+    }
     const loadGatewayModelCatalogSnapshot = vi.fn<
       AgentTurnContext["loadGatewayModelCatalogSnapshot"]
     >(async (params) => ({
@@ -41,6 +72,12 @@ it.each(["main", "work"])(
       catalogComplete: true,
       config: cfg,
       entries: [
+        {
+          id: "text-only",
+          name: "Synthetic text model",
+          provider: "mock-openai",
+          input: ["text"],
+        } satisfies ModelCatalogEntry,
         {
           id: `${params?.agentId}-vision`,
           name: "Synthetic vision model",
@@ -52,16 +89,22 @@ it.each(["main", "work"])(
     }));
     const context: AgentTurnContext = {
       addChatRun: vi.fn(),
+      agentRunSeq: new Map(),
+      broadcast: vi.fn(),
       broadcastToConnIds: vi.fn(),
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
+      chatRunState: createChatRunState(),
       dedupe: new Map(),
       deps: {},
       getRuntimeConfig: () => cfg,
+      trackExecution: async (work) => await work(),
       getSessionEventSubscriberConnIds: () => new Set(),
       loadGatewayModelCatalog: vi.fn(async () => []),
       loadGatewayModelCatalogSnapshot,
       logGateway: createSubsystemLogger("test/agent-content"),
+      nodeSendToSession: vi.fn(),
+      removeChatRun: vi.fn(() => undefined),
     };
     const respond = vi.fn();
     const result = await prepareAgentContentPhase({

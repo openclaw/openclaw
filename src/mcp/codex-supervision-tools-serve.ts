@@ -6,15 +6,18 @@
  */
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
-import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
-import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
+import type { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import {
+  acquireStandalonePluginToolRegistry,
+  type PluginToolRegistryAcquisition,
+} from "../plugins/tools.js";
+import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-stdio-server.js";
 
 const LEGACY_TOOL_NAMES = [
   "codex_endpoint_probe",
@@ -55,7 +58,9 @@ function withCodexSupervisionEnabled(config: OpenClawConfig): OpenClawConfig {
   return next;
 }
 
-function resolveCodexSupervisionTools(config: OpenClawConfig): AnyAgentTool[] {
+async function acquireCodexSupervisionTools(
+  config: OpenClawConfig,
+): Promise<PluginToolRegistryAcquisition> {
   const context = {
     config,
     runtimeConfig: config,
@@ -65,18 +70,17 @@ function resolveCodexSupervisionTools(config: OpenClawConfig): AnyAgentTool[] {
     ...TRUSTED_STANDALONE_MCP_OWNER_CONTEXT,
   };
   const toolAllowlist = [...LEGACY_TOOL_NAMES];
-  const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
-    context,
-    toolAllowlist,
-    env: process.env,
-  });
-  return resolvePluginTools({
+  const acquisition = await acquireStandalonePluginToolRegistry({
     context,
     toolAllowlist,
     suppressNameConflicts: true,
-    runtimeRegistry,
     env: process.env,
-  }).filter((tool) => LEGACY_TOOL_NAME_SET.has(tool.name));
+  });
+  return {
+    ...acquisition,
+    resolveTools: () =>
+      acquisition.resolveTools().filter((tool) => LEGACY_TOOL_NAME_SET.has(tool.name)),
+  };
 }
 
 function requireCompleteCodexSupervisionToolSet(tools: readonly AnyAgentTool[]): void {
@@ -94,21 +98,21 @@ function requireCompleteCodexSupervisionToolSet(tools: readonly AnyAgentTool[]):
   );
 }
 
-export function createCodexSupervisionToolsMcpServer(
-  params: { config?: OpenClawConfig; tools?: AnyAgentTool[] } = {},
-): Server {
-  const config = withCodexSupervisionEnabled(params.config ?? getRuntimeConfig());
-  const tools = params.tools ?? resolveCodexSupervisionTools(config);
-  requireCompleteCodexSupervisionToolSet(tools);
-  return createToolsMcpServer({ name: "openclaw-codex-supervisor", tools });
+export function createCodexSupervisionToolsMcpServer(params: {
+  tools: AnyAgentTool[];
+  sdkResourceHost?: LegacyPluginSdkResourceHost;
+}): Server {
+  requireCompleteCodexSupervisionToolSet(params.tools);
+  return createToolsMcpServer({ name: "openclaw-codex-supervisor", ...params });
 }
 
 export async function serveCodexSupervisionToolsMcp(): Promise<void> {
   routeLogsToStderr();
-  const config = withCodexSupervisionEnabled(getRuntimeConfig());
-  const tools = resolveCodexSupervisionTools(config);
-  await connectToolsMcpServerToStdio(createCodexSupervisionToolsMcpServer({ config, tools }), {
-    onShutdown: disposeRegisteredAgentHarnesses,
+  await serveRegisteredToolsMcpServer({
+    acquireRegistry: () =>
+      acquireCodexSupervisionTools(withCodexSupervisionEnabled(getRuntimeConfig())),
+    createServer: (tools, sdkResourceHost) =>
+      createCodexSupervisionToolsMcpServer({ tools, sdkResourceHost }),
   });
 }
 

@@ -1,4 +1,3 @@
-// Copilot plugin module implements sdk loader behavior.
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -82,7 +81,7 @@ function createMissingSdkError(
     "[copilot] @github/copilot-sdk is not installed.",
     "",
     "The external @openclaw/copilot plugin depends on @github/copilot-sdk",
-    "(~260 MB after pulling its platform-specific @github/copilot CLI binary).",
+    "including its platform-specific Copilot runtime package.",
     "Reinstall the plugin once with:",
     "",
     "  openclaw plugins install @openclaw/copilot",

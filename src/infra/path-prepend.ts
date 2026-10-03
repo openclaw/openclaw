@@ -57,11 +57,7 @@ export function removePathPrepend(
 }
 
 /** Applies configured PATH prepends in-place, preserving Windows PATH key casing. */
-export function applyPathPrepend(
-  env: Record<string, string>,
-  prepend: string[] | undefined,
-  options?: { requireExisting?: boolean },
-) {
+export function applyPathPrepend(env: Record<string, string>, prepend: string[] | undefined) {
   if (!Array.isArray(prepend) || prepend.length === 0) {
     return;
   }
@@ -69,9 +65,6 @@ export function applyPathPrepend(
   // After coercing to a plain object the original casing is preserved, so we must
   // look up the actual key to read the existing value and write the merged result back.
   const pathKey = findPathKey(env);
-  if (options?.requireExisting && !env[pathKey]) {
-    return;
-  }
   const merged = mergePathPrepend(env[pathKey], prepend);
   if (merged) {
     env[pathKey] = merged;

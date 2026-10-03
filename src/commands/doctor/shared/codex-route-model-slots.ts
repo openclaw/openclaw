@@ -1,19 +1,61 @@
+import {
+  listModelRefsFromConfigValue,
+  visitModelSelectorRefs,
+} from "@openclaw/model-catalog-core/configured-model-refs";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   isBlockedLegacyCodexModelRef,
-  isOpenAICodexModelRef,
-  normalizeRuntimeString,
   toCanonicalOpenAIModelRef,
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
 import type { CodexRouteHit, MutableRecord } from "./codex-route-types.js";
 
+export function visitChannelModelSlots(
+  cfg: OpenClawConfig,
+  visit: (slot: { container: MutableRecord; key: string; path: string }) => void,
+): void {
+  const modelByChannel = asMutableRecord(cfg.channels?.modelByChannel);
+  for (const [channelId, channelMap] of Object.entries(modelByChannel ?? {})) {
+    const container = asMutableRecord(channelMap);
+    if (!container) {
+      continue;
+    }
+    for (const key of Object.keys(container)) {
+      visit({ container, key, path: `channels.modelByChannel.${channelId}.${key}` });
+    }
+  }
+}
+
+export function visitNonAgentModelSlots(
+  cfg: OpenClawConfig,
+  visit: (slot: { container: MutableRecord; key: string; path: string }) => void,
+): void {
+  visitChannelModelSlots(cfg, visit);
+  for (const [index, mapping] of (cfg.hooks?.mappings ?? []).entries()) {
+    visit({ container: mapping, key: "model", path: `hooks.mappings.${index}.model` });
+  }
+  for (const [container, key, path] of [
+    [asMutableRecord(cfg.hooks?.gmail), "model", "hooks.gmail.model"],
+    [asMutableRecord(cfg.tts), "summaryModel", "tts.summaryModel"],
+    [
+      asMutableRecord(asMutableRecord(cfg.channels?.discord)?.voice),
+      "model",
+      "channels.discord.voice.model",
+    ],
+  ] as const) {
+    if (container) {
+      visit({ container, key, path });
+    }
+  }
+}
+
 export function recordCodexModelHit(params: {
   hits: CodexRouteHit[];
   path: string;
   model: string;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): string | undefined {
   if (
@@ -32,7 +74,6 @@ export function recordCodexModelHit(params: {
     path: params.path,
     model: params.model,
     canonicalModel,
-    ...(params.runtime ? { runtime: params.runtime } : {}),
   });
   return canonicalModel;
 }
@@ -41,76 +82,36 @@ export function collectStringModelSlot(params: {
   hits: CodexRouteHit[];
   path: string;
   value: unknown;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
-}): boolean {
+}): void {
   if (typeof params.value !== "string") {
-    return false;
+    return;
   }
-  const model = params.value.trim();
-  if (!model || !isOpenAICodexModelRef(model)) {
-    return false;
-  }
-  return Boolean(
-    recordCodexModelHit({
-      hits: params.hits,
-      path: params.path,
-      model,
-      runtime: params.runtime,
-      blockedModelIdentities: params.blockedModelIdentities,
-    }),
-  );
+  recordCodexModelHit({
+    hits: params.hits,
+    path: params.path,
+    model: params.value.trim(),
+    blockedModelIdentities: params.blockedModelIdentities,
+  });
 }
 
 export function collectModelConfigSlot(params: {
   hits: CodexRouteHit[];
   path: string;
   value: unknown;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
-}): boolean {
-  if (typeof params.value === "string") {
-    return collectStringModelSlot(params);
-  }
-  const record = asMutableRecord(params.value);
-  if (!record) {
-    return false;
-  }
-  const rewrotePrimary = collectStringModelSlot({
-    hits: params.hits,
-    path: `${params.path}.primary`,
-    value: record.primary,
-    runtime: params.runtime,
-    blockedModelIdentities: params.blockedModelIdentities,
+}): void {
+  visitModelSelectorRefs(params.value, params.path, (path, value) => {
+    collectStringModelSlot({
+      ...params,
+      path,
+      value,
+    });
   });
-  if (Array.isArray(record.fallbacks)) {
-    for (const [index, entry] of record.fallbacks.entries()) {
-      collectStringModelSlot({
-        hits: params.hits,
-        path: `${params.path}.fallbacks.${index}`,
-        value: entry,
-        blockedModelIdentities: params.blockedModelIdentities,
-      });
-    }
-  }
-  return rewrotePrimary;
 }
 
 export function modelConfigContainsRef(value: unknown, modelRef: string): boolean {
-  if (typeof value === "string") {
-    return value.trim() === modelRef;
-  }
-  const record = asMutableRecord(value);
-  if (!record) {
-    return false;
-  }
-  if (typeof record.primary === "string" && record.primary.trim() === modelRef) {
-    return true;
-  }
-  return (
-    Array.isArray(record.fallbacks) &&
-    record.fallbacks.some((entry) => typeof entry === "string" && entry.trim() === modelRef)
-  );
+  return listModelRefsFromConfigValue(value).some((ref) => ref.trim() === modelRef);
 }
 
 export function collectModelConfigRefs(params: {
@@ -118,24 +119,9 @@ export function collectModelConfigRefs(params: {
   path: string;
   value: unknown;
 }): void {
-  if (typeof params.value === "string") {
-    collectStringModelConfigRef(params);
-    return;
-  }
-  const record = asMutableRecord(params.value);
-  if (!record) {
-    return;
-  }
-  if (typeof record.primary === "string" && record.primary.trim()) {
-    params.refs.push({ path: `${params.path}.primary`, modelRef: record.primary.trim() });
-  }
-  if (Array.isArray(record.fallbacks)) {
-    for (const [index, entry] of record.fallbacks.entries()) {
-      if (typeof entry === "string" && entry.trim()) {
-        params.refs.push({ path: `${params.path}.fallbacks.${index}`, modelRef: entry.trim() });
-      }
-    }
-  }
+  visitModelSelectorRefs(params.value, params.path, (path, value) =>
+    collectStringModelConfigRef({ ...params, path, value }),
+  );
 }
 
 export function collectStringModelConfigRef(params: {
@@ -166,7 +152,7 @@ export function collectCodexRuntimeModelPolicyRefs(params: {
     if (!trimmed) {
       continue;
     }
-    const runtime = normalizeRuntimeString(
+    const runtime = normalizeOptionalAgentRuntimeId(
       asMutableRecord(asMutableRecord(entry)?.agentRuntime)?.id,
     );
     if (runtime === "codex") {
@@ -180,29 +166,61 @@ export function rewriteStringModelSlot(params: {
   container: MutableRecord | undefined;
   key: string;
   path: string;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): boolean {
-  if (!params.container) {
+  if (typeof params.container?.[params.key] !== "string") {
     return false;
   }
-  const value = params.container[params.key];
-  const model = typeof value === "string" ? value.trim() : "";
-  if (!model || !isOpenAICodexModelRef(model)) {
-    return false;
-  }
-  const canonicalModel = recordCodexModelHit({
-    hits: params.hits,
-    path: params.path,
-    model,
-    runtime: params.runtime,
-    blockedModelIdentities: params.blockedModelIdentities,
+  return rewriteModelReferenceSlot({
+    ...params,
+    resolve: (model, path) => recordCodexModelHit({ ...params, model, path }),
   });
-  if (!canonicalModel) {
+}
+
+/** Mutates model selectors; the return value reports only primary changes for runtime-policy callers. */
+export function rewriteModelReferenceSlot(params: {
+  container: MutableRecord | undefined;
+  key: string;
+  path: string;
+  resolve: (model: string, path: string, role: "primary" | "fallback") => string | null | undefined;
+}): boolean {
+  const { container, key, path, resolve } = params;
+  if (!container) {
     return false;
   }
-  params.container[params.key] = canonicalModel;
-  return true;
+  const value = container[key];
+  if (typeof value === "string") {
+    const replacement = resolve(value.trim(), path, "primary");
+    if (replacement === undefined || replacement === value) {
+      return false;
+    }
+    if (replacement === null) {
+      delete container[key];
+    } else {
+      container[key] = replacement;
+    }
+    return true;
+  }
+  const record = asMutableRecord(value);
+  if (!record) {
+    return false;
+  }
+  const primaryChanged = rewriteModelReferenceSlot({
+    container: record,
+    key: "primary",
+    path: `${path}.primary`,
+    resolve,
+  });
+  if (Array.isArray(record.fallbacks)) {
+    record.fallbacks = record.fallbacks.flatMap((entry, index) => {
+      if (typeof entry !== "string") {
+        return [entry];
+      }
+      const replacement = resolve(entry.trim(), `${path}.fallbacks.${index}`, "fallback");
+      return replacement === null ? [] : [replacement ?? entry];
+    });
+  }
+  return primaryChanged;
 }
 
 export function rewriteModelConfigSlot(params: {
@@ -210,44 +228,17 @@ export function rewriteModelConfigSlot(params: {
   container: MutableRecord | undefined;
   key: string;
   path: string;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): boolean {
-  if (!params.container) {
-    return false;
-  }
-  const value = params.container[params.key];
-  if (typeof value === "string") {
-    return rewriteStringModelSlot(params);
-  }
-  const record = asMutableRecord(value);
-  if (!record) {
-    return false;
-  }
-  const rewrotePrimary = rewriteStringModelSlot({
-    hits: params.hits,
-    container: record,
-    key: "primary",
-    path: `${params.path}.primary`,
-    runtime: params.runtime,
-    blockedModelIdentities: params.blockedModelIdentities,
-  });
-  if (Array.isArray(record.fallbacks)) {
-    record.fallbacks = record.fallbacks.map((entry, index) => {
-      if (typeof entry !== "string") {
-        return entry;
-      }
-      const model = entry.trim();
-      const canonicalModel = recordCodexModelHit({
-        hits: params.hits,
-        path: `${params.path}.fallbacks.${index}`,
+  return rewriteModelReferenceSlot({
+    ...params,
+    resolve: (model, path) =>
+      recordCodexModelHit({
+        ...params,
         model,
-        blockedModelIdentities: params.blockedModelIdentities,
-      });
-      return canonicalModel ?? entry;
-    });
-  }
-  return rewrotePrimary;
+        path,
+      }),
+  });
 }
 
 export function rewriteModelsMap(params: {
@@ -260,17 +251,13 @@ export function rewriteModelsMap(params: {
     return;
   }
   for (const legacyRef of Object.keys(params.models)) {
-    const canonicalModel = toCanonicalOpenAIModelRef(legacyRef);
-    if (!canonicalModel) {
-      continue;
-    }
-    const recorded = recordCodexModelHit({
+    const canonicalModel = recordCodexModelHit({
       hits: params.hits,
       path: `${params.path}.${legacyRef}`,
       model: legacyRef,
       blockedModelIdentities: params.blockedModelIdentities,
     });
-    if (!recorded) {
+    if (!canonicalModel) {
       continue;
     }
     const legacyEntry = params.models[legacyRef] ?? {};

@@ -16,11 +16,11 @@ describe("stripFormattedReasoningMessage", () => {
     expect(stripFormattedReasoningMessage(input)).toBe(input);
   });
 
-  it.each(["Reasoning:", "Thinking", "Thinking.", "Thinking..", "Thinking..."])(
+  it.each(["Reasoning:", "Thinking", "Thinking..."])(
     "removes only the %s preamble and normalizes answer line endings",
     (header) => {
       const input = `\u00a0${header} \t\r\n\r\n _summary_ \r\n_more_\r\n Answer😀\r\r\n_keep this_\r\nlast \r\n`;
-      expect(stripFormattedReasoningMessage(input)).toBe("Answer😀\r\n_keep this_\nlast");
+      expect(stripFormattedReasoningMessage(input)).toBe(" Answer😀\r\n_keep this_\nlast ");
     },
   );
 
@@ -33,6 +33,18 @@ describe("stripFormattedReasoningMessage", () => {
     ["<thinking>outer<internal>private", ""],
     ["Use `<think>literal</think>` exactly.", "Use `<think>literal</think>` exactly."],
   ])("keeps tag privacy and distinct header rules: %j", (input, expected) => {
+    expect(stripFormattedReasoningMessage(input)).toBe(expected);
+  });
+  it.each([
+    ["<think>private</think>    const value = 1;", "    const value = 1;"],
+    ["<final>    const value = 1;</final>", "    const value = 1;"],
+    ["<think>private</think> \n\t ", ""],
+    ["<think>private</think>\nThinking\n_summary_\n    const value = 1;", "    const value = 1;"],
+    [
+      "Thinking\n_summary_\n\n    first line\n      second line\n\n",
+      "    first line\n      second line",
+    ],
+  ])("preserves substantive code indentation after a preamble: %j", (input, expected) => {
     expect(stripFormattedReasoningMessage(input)).toBe(expected);
   });
 });

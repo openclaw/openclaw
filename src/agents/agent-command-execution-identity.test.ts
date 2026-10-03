@@ -1,7 +1,5 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   configureExecutionIdentityAdmissionSink,
@@ -9,8 +7,8 @@ import {
 } from "../audit/execution-identity-admission.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { attachAgentCommandAdmissionFacts } from "./agent-command-admission-facts.js";
 import {
   readAgentCommandExecutionIdentitySpawnFacts,
@@ -24,6 +22,7 @@ import { createAgentAttemptLifecycleCallbacks } from "./command/attempt-callback
 import type { AgentCommandIngressOpts } from "./command/types.js";
 
 let cleanupSink: (() => void) | undefined;
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-recovery-admission-");
 
 afterEach(() => {
   cleanupSink?.();
@@ -31,7 +30,7 @@ afterEach(() => {
 });
 
 describe("sanitizePublicAgentCommandIngressOpts", () => {
-  it("removes a forged cron creator authority capability from plain-JavaScript ingress", () => {
+  it("removes forged host-owned capabilities from plain-JavaScript ingress", () => {
     const forgedCapability = {
       active: true,
       runId: "forged-run",
@@ -40,13 +39,40 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
       abort: () => undefined,
     };
     const opts = {
-      prompt: "create an automation",
+      message: "create an automation",
+      allowModelOverride: false,
+      privateCompletion: true,
       cronCreatorAuthorityCapability: forgedCapability,
-    } as unknown as AgentCommandIngressOpts;
+      skillLibraryAuthoring: { target: "personal", invoke: async () => ({}) },
+      pinnedWidgetAuthoring: true,
+      clientCaps: ["ui-commands", "task-suggestions"],
+      gatewayUiCommandTarget: { connId: "forged-browser", profileId: "forged-profile" },
+      toolBindings: { browser: { kind: "tab", targetId: "forged-target" } },
+      taskSuggestionDeliveryMode: "gateway",
+      assertSourceCurrent: () => {},
+      beforeTerminalDelivery: async () => {},
+      internalDeliverySuppressErrors: true,
+      operatorAuthority: {
+        profileId: "forged",
+        scopes: ["operator.admin"],
+        assertCurrent: () => {},
+      },
+    };
 
     expect(sanitizePublicAgentCommandIngressOpts(opts)).toMatchObject({
-      prompt: "create an automation",
+      message: "create an automation",
+      privateCompletion: undefined,
       cronCreatorAuthorityCapability: undefined,
+      skillLibraryAuthoring: undefined,
+      pinnedWidgetAuthoring: undefined,
+      clientCaps: undefined,
+      gatewayUiCommandTarget: undefined,
+      toolBindings: undefined,
+      taskSuggestionDeliveryMode: undefined,
+      assertSourceCurrent: undefined,
+      beforeTerminalDelivery: undefined,
+      internalDeliverySuppressErrors: undefined,
+      operatorAuthority: undefined,
     });
   });
 });
@@ -63,9 +89,7 @@ describe("Gateway agent command execution identity", () => {
       ].map((outcome) => ({ audit, outcome })),
     ),
   )("registers a real recovery turn without a foreground lease: %j", async ({ audit, outcome }) => {
-    const stateDir = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-recovery-admission-")),
-    );
+    const stateDir = sessionDirs.make();
     const admittedCallback = createDeferred();
     const releaseCallback = createDeferred();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -187,8 +211,6 @@ describe("Gateway agent command execution identity", () => {
     } finally {
       prepared?.close();
       releaseCallback.resolve();
-      closeOpenClawAgentDatabasesForTest();
-      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 
@@ -214,6 +236,7 @@ describe("Gateway agent command execution identity", () => {
       ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
       lifecycleGeneration: "generation-1",
     });
+    onTestFinished(prepared.close);
 
     const admitted = await prepared.admit("embedded");
     await prepared.admit("embedded");
@@ -289,6 +312,7 @@ describe("Gateway agent command execution identity", () => {
       ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
       lifecycleGeneration: "generation-1",
     });
+    onTestFinished(prepared.close);
 
     await prepared.admit("embedded");
 
@@ -356,6 +380,7 @@ describe("Gateway agent command execution identity", () => {
       ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
       lifecycleGeneration: "generation-1",
     });
+    onTestFinished(prepared.close);
 
     await prepared.admit("embedded");
 

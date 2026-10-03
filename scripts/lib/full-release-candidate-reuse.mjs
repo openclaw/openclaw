@@ -4,6 +4,7 @@ import {
   fullReleaseCandidateArtifactName,
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
+  validateRecordedFullReleaseCandidateRequest,
 } from "../full-release-candidate-contract.mjs";
 import {
   downloadExactActionsArtifactArchive,
@@ -53,8 +54,8 @@ function timestamp(value) {
 
 function exactRequest(left, right) {
   return (
-    JSON.stringify(validateFullReleaseCandidateRequest(left)) ===
-    JSON.stringify(validateFullReleaseCandidateRequest(right))
+    JSON.stringify(validateRecordedFullReleaseCandidateRequest(left)) ===
+    JSON.stringify(validateRecordedFullReleaseCandidateRequest(right))
   );
 }
 
@@ -309,7 +310,11 @@ export function validateCandidateBinding(
 
 export function candidateArtifactJsonFromBinding(value) {
   const binding = validateFullReleaseCandidateBinding(value);
+  if (binding.request.packagePublished === undefined) {
+    fail("retained v1 candidate evidence cannot supply package provenance");
+  }
   return JSON.stringify({
+    packagePublished: binding.request.packagePublished,
     packageArtifactName: binding.package.artifact.name,
     packageArtifactId: binding.package.artifact.id,
     packageArtifactDigest: binding.package.artifact.digest,
@@ -557,7 +562,7 @@ export function resolveCandidateBinding({
   return validateCandidateBinding(hasReused ? reusedBinding : freshBinding, {
     minimumRemainingMs: MIN_CANDIDATE_REMAINING_MS,
     now,
-    request,
+    request: validateFullReleaseCandidateRequest(request),
   });
 }
 

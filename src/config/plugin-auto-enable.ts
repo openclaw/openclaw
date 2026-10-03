@@ -8,4 +8,3 @@ export type {
   PluginAutoEnableCandidate,
   PluginAutoEnableResult,
 } from "./plugin-auto-enable.types.js";
-export { resolvePluginAutoEnableCandidateReason } from "./plugin-auto-enable.shared.js";

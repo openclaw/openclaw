@@ -2,6 +2,10 @@ import { isUtf8 } from "node:buffer";
 import process from "node:process";
 import { StringDecoder } from "node:string_decoder";
 import { expectDefined } from "@openclaw/normalization-core";
+import {
+  asPositiveFiniteNumber,
+  resolveIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 
 export type CommandOutputCaptureMode = "head" | "tail" | "discard";
@@ -38,18 +42,15 @@ export function createCapturedOutputBuffers(): CapturedOutputBuffers {
   };
 }
 
-function normalizeMaxOutputBytes(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return DEFAULT_COMMAND_OUTPUT_MAX_BYTES;
-  }
-  return Math.max(1, Math.floor(value));
-}
-
 export function resolveMaxOutputBytes(
   value: number | { stdout?: number; stderr?: number } | undefined,
   stream: CommandOutputStream,
 ): number {
-  return normalizeMaxOutputBytes(typeof value === "number" ? value : value?.[stream]);
+  return resolveIntegerOption(
+    asPositiveFiniteNumber(typeof value === "number" ? value : value?.[stream]),
+    DEFAULT_COMMAND_OUTPUT_MAX_BYTES,
+    { min: 1 },
+  );
 }
 
 export function resolveOutputCapture(
@@ -59,18 +60,11 @@ export function resolveOutputCapture(
   return (typeof value === "string" ? value : value?.[stream]) ?? "tail";
 }
 
-export function shouldTerminateOnOutputLimit(
+export function shouldTerminateOnOutput(
   value: CommandOutputLimitOption | undefined,
   limit: CommandOutputStream | "combined",
 ): boolean {
   return typeof value === "boolean" ? value : value?.[limit] === true;
-}
-
-export function shouldTerminateOnOutputError(
-  value: CommandOutputErrorOption | undefined,
-  stream: CommandOutputStream,
-): boolean {
-  return typeof value === "boolean" ? value : value?.[stream] === true;
 }
 
 export function appendCapturedOutput(
@@ -88,7 +82,8 @@ export function appendCapturedOutput(
     const remaining = Math.max(0, maxBytes - capture.bytes);
     if (remaining > 0) {
       const kept = buffer.subarray(0, remaining);
-      capture.chunks.push(kept);
+      // A clipped prefix must not retain the discarded backing bytes.
+      capture.chunks.push(kept.byteLength < buffer.byteLength ? Buffer.from(kept) : kept);
       capture.bytes += kept.byteLength;
     }
     capture.truncatedBytes += Math.max(0, buffer.byteLength - remaining);

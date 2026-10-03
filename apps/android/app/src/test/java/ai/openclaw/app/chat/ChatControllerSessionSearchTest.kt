@@ -1,5 +1,8 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.ui.SessionFilter
+import ai.openclaw.app.ui.resolveSessionBrowserEntries
+import ai.openclaw.app.ui.sidebarSessionPresentation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -19,22 +22,27 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerSessionSearchTest {
   private val json = Json { ignoreUnknownKeys = true }
 
-  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, json = json, requestGateway = gateway::request)
+  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, commandOutbox = this.createChatCommandOutbox(), cacheScope = { ChatCacheScope("gateway-test", 1L) }, json = json, requestGateway = gateway::request)
 
   private fun sessionRowJson(
     key: String,
     updatedAt: Long,
     displayName: String? = null,
+    autoLabel: String? = null,
     archived: Boolean = false,
   ) = buildJsonObject {
     put("key", JsonPrimitive(key))
     put("updatedAt", JsonPrimitive(updatedAt))
     if (displayName != null) put("displayName", JsonPrimitive(displayName))
+    if (autoLabel != null) put("autoLabel", JsonPrimitive(autoLabel))
     if (archived) put("archived", JsonPrimitive(true))
   }
 
@@ -50,20 +58,102 @@ class ChatControllerSessionSearchTest {
       ?.content
 
   @Test
-  fun filterSessionEntriesMatchesDisplayNameLabelCategoryAndKey() {
+  fun filterSessionEntriesMatchesDisplayNameLabelCategoryKeyAndLocalTitle() {
     val sessions =
       listOf(
         ChatSessionEntry(key = "agent:main:topic-a", updatedAtMs = 2, displayName = "Trip planning"),
         ChatSessionEntry(key = "agent:main:topic-b", updatedAtMs = 1, displayName = "Groceries", category = "Team Planning"),
         ChatSessionEntry(key = "agent:main:trip-notes", updatedAtMs = 3, displayName = "Notes"),
+        ChatSessionEntry(key = "agent:main:topic-c", updatedAtMs = 4, localFallbackTitle = "Device A"),
       )
     assertEquals(
       listOf("agent:main:topic-a", "agent:main:trip-notes"),
       filterSessionEntries(sessions, "TRIP").map { it.key },
     )
     assertEquals(listOf("agent:main:topic-b"), filterSessionEntries(sessions, "TEAM PLANNING").map { it.key })
+    assertEquals(listOf("agent:main:topic-c"), filterSessionEntries(sessions, "  DEVICE A  ").map { it.key })
     assertEquals(sessions, filterSessionEntries(sessions, "  "))
   }
+
+  @Test
+  fun localDeviceTitleFollowsBindingAcrossSearchReconnectAndGatewayChanges() =
+    runTest {
+      val key = "agent:main:node-device"
+      var cacheScope = ChatCacheScope("gateway-a", 1)
+      var offline = false
+      val gateway = ScriptedGateway(json)
+      gateway.respond("sessions.list") { params ->
+        if (offline) error("offline")
+        val query = paramField(params, "search")
+        if (query == null || key.contains(query, ignoreCase = true)) {
+          sessionsListJson(sessionRowJson(key, updatedAt = 1))
+        } else {
+          sessionsListJson()
+        }
+      }
+      gateway.respondWith("chat.history", """{"sessionId":"device-session","messages":[]}""")
+      val controller =
+        backgroundScope.createChatController(
+          requestGateway = gateway::request,
+          requestGatewayForGateway = { _, method, params -> gateway.request(method, params) },
+          cacheScope = { cacheScope },
+        )
+      controller.prepareMainSessionKey(key)
+      controller.onGatewayConnected(MainSessionBinding(key, "Device A"))
+      runCurrent()
+      controller.refreshSessions()
+      runCurrent()
+      assertEquals(
+        "Device A",
+        controller.sessions.value
+          .single()
+          .localFallbackTitle,
+      )
+      val searched = controller.fetchSessionList(search = "node-device", archived = false).single()
+      assertEquals("Device A", searched.localFallbackTitle)
+      assertNull(searched.autoLabel)
+      assertNull(searched.displayName)
+
+      offline = true
+      val offlineMatches = controller.fetchSessionList(search = "  dEvIcE a  ", archived = false)
+      assertEquals(listOf(key), offlineMatches.map { it.key })
+      assertEquals("Device A", offlineMatches.single().localFallbackTitle)
+      assertNull(offlineMatches.single().autoLabel)
+      assertNull(offlineMatches.single().displayName)
+      assertTrue(controller.fetchSessionList(search = "Device A", archived = true).isEmpty())
+      assertTrue(controller.fetchSessionList(search = "Device B", archived = false).isEmpty())
+      assertEquals("Device A", controller.fetchSessionList(search = "node-device", archived = false).single().localFallbackTitle)
+      controller.onGatewayConnected(MainSessionBinding(key, "Renamed device A"))
+      assertEquals(
+        "Renamed device A",
+        controller.sessions.value
+          .single()
+          .localFallbackTitle,
+      )
+      runCurrent()
+      assertEquals(listOf(key), controller.fetchSessionList(search = "Renamed device A", archived = false).map { it.key })
+
+      controller.onGatewayScopeChanging()
+      cacheScope = ChatCacheScope("gateway-b", 2)
+      assertTrue(controller.sessions.value.isEmpty())
+      offline = false
+      assertNull(controller.fetchSessionList(search = null, archived = false).single().localFallbackTitle)
+      controller.prepareMainSessionKey(key)
+      controller.onGatewayConnected(MainSessionBinding(key, "Device B"))
+      runCurrent()
+      controller.refreshSessions()
+      runCurrent()
+      assertEquals(
+        "Device B",
+        controller.sessions.value
+          .single()
+          .localFallbackTitle,
+      )
+      assertEquals("Device B", controller.fetchSessionList(search = null, archived = false).single().localFallbackTitle)
+      offline = true
+      assertTrue(controller.fetchSessionList(search = "Device A", archived = false).isEmpty())
+      assertEquals(listOf(key), controller.fetchSessionList(search = "Device B", archived = false).map { it.key })
+    }
 
   @Test
   fun fetchSessionListSendsSearchAndArchivedParams() =
@@ -87,6 +177,109 @@ class ChatControllerSessionSearchTest {
       val searchCall = gateway.calls.last { it.method == "sessions.list" }
       assertEquals("trip", paramField(searchCall.paramsJson, "search"))
       assertEquals("200", paramField(searchCall.paramsJson, "limit"))
+    }
+
+  @Test
+  fun sessionNavigationUsesGatewayProvenanceWithoutChangingPins() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith(
+        "sessions.list",
+        """{"sessions":[
+          {"key":"agent:main:dashboard:work","pinned":true,"isBackground":true,"createdActor":{"type":"human"},"createdVia":"run","label":"Cron maintenance"},
+          {"key":"agent:main:dashboard:spawned","pinned":true,"spawnedBy":"agent:main:main","createdVia":"spawn"},
+          {"key":"agent:main:cron:daily","pinned":true,"createdActor":{"type":"human"},"label":"Daily planning"},
+          {"key":"cron:legacy","pinned":true},
+          {"key":"agent:main:system-probe","pinned":true,"createdActor":{"type":"system"},"label":"Named probe"},
+          {"key":"agent:main:unnamed-run","pinned":true,"createdVia":"run","derivedTitle":"Generated title","autoLabel":"Device name"},
+          {"key":"agent:main:unnamed-internal","pinned":true,"createdVia":"internal","label":"  "},
+          {"key":"agent:main:human-run","pinned":true,"createdVia":"run","createdActor":{"type":"human"}},
+          {"key":"agent:main:named-run","pinned":true,"createdVia":"run","label":"Batch work"},
+          {"key":"agent:main:display-name","pinned":true,"createdVia":"internal","displayName":"Investigation"},
+          {"key":"agent:main:subject","pinned":true,"createdVia":"internal","subject":"Incident"},
+          {"key":"agent:main:legacy","pinned":true},
+          {"key":"agent:main:hook:work","pinned":true,"classification":"hook","isBackground":true},
+          {"key":"agent:main:dashboard:archived","pinned":true,"archived":true},
+          {"key":"agent:main:dashboard:current","pinned":false}
+        ]}""",
+      )
+      val controller = newController(gateway)
+      val rows = controller.fetchSessionList(search = null, archived = false)
+      val expectedPinned =
+        setOf(
+          "agent:main:dashboard:work",
+          "agent:main:dashboard:spawned",
+          "agent:main:human-run",
+          "agent:main:named-run",
+          "agent:main:display-name",
+          "agent:main:subject",
+          "agent:main:legacy",
+          "agent:main:hook:work",
+        )
+
+      assertEquals(
+        expectedPinned,
+        sidebarSessionPresentation(rows, knownGroups = emptyList(), expanded = true).pinned.map { it.key }.toSet(),
+      )
+      assertEquals(
+        expectedPinned + "agent:main:dashboard:current",
+        resolveSessionBrowserEntries(rows, "agent:main:dashboard:current", SessionFilter.Recent, recentFirst = true).map { it.key }.toSet(),
+      )
+      val automationKeys =
+        setOf("agent:main:cron:daily", "cron:legacy", "agent:main:system-probe", "agent:main:unnamed-run", "agent:main:unnamed-internal")
+      assertEquals(
+        automationKeys,
+        resolveSessionBrowserEntries(rows, "agent:main:dashboard:current", SessionFilter.Automations, recentFirst = true).map { it.key }.toSet(),
+      )
+      assertEquals(
+        automationKeys - "agent:main:system-probe",
+        resolveSessionBrowserEntries(
+          rows.map { if (it.key == "agent:main:system-probe") it.copy(archived = true) else it },
+          "agent:main:system-probe",
+          SessionFilter.Automations,
+          recentFirst = true,
+        ).map { it.key }.toSet(),
+      )
+      for (selectedKey in listOf("agent:main:cron:daily", "agent:main:system-probe", "agent:main:dashboard:archived")) {
+        assertEquals(
+          expectedPinned + selectedKey,
+          sidebarSessionPresentation(rows, knownGroups = emptyList(), expanded = true, currentSessionKey = selectedKey).pinned.map { it.key }.toSet(),
+        )
+        assertEquals(
+          expectedPinned + selectedKey + "agent:main:dashboard:current",
+          resolveSessionBrowserEntries(rows, selectedKey, SessionFilter.Recent, recentFirst = true).map { it.key }.toSet(),
+        )
+        assertEquals(
+          listOf(selectedKey),
+          resolveSessionBrowserEntries(rows, selectedKey, SessionFilter.Current, recentFirst = true).map { it.key },
+        )
+        assertEquals(
+          automationKeys,
+          resolveSessionBrowserEntries(rows, selectedKey, SessionFilter.Automations, recentFirst = true).map { it.key }.toSet(),
+        )
+      }
+      assertEquals(
+        listOf("agent:main:dashboard:archived"),
+        resolveSessionBrowserEntries(rows, "agent:main:cron:daily", SessionFilter.Archived, recentFirst = true).map { it.key },
+      )
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"session":{"key":"agent:main:system-probe","updatedAt":200}}""",
+      )
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"session":{"key":"agent:main:subject","subject":null}}""",
+      )
+      assertEquals(
+        expectedPinned - "agent:main:subject",
+        sidebarSessionPresentation(controller.sessions.value, knownGroups = emptyList(), expanded = true).pinned.map { it.key }.toSet(),
+      )
+      assertEquals(14, rows.count { it.pinned == true })
+      assertEquals(14, controller.sessions.value.count { it.pinned == true })
+      assertTrue(gateway.calls.all { it.method == "sessions.list" })
     }
 
   @Test
@@ -178,6 +371,7 @@ class ChatControllerSessionSearchTest {
         sessionsListJson(
           sessionRowJson(key = "agent:main:topic-a", updatedAt = 2, displayName = "Trip planning"),
           sessionRowJson(key = "agent:main:topic-b", updatedAt = 1, displayName = "Groceries"),
+          sessionRowJson(key = "agent:main:topic-c", updatedAt = 3, autoLabel = "Remote device"),
         )
       }
       val controller = newController(gateway)
@@ -186,6 +380,9 @@ class ChatControllerSessionSearchTest {
 
       val filtered = controller.fetchSessionList(search = "trip", archived = false)
       assertEquals(listOf("agent:main:topic-a"), filtered.map { it.key })
+      val automaticallyNamed = controller.fetchSessionList(search = "REMOTE DEVICE", archived = false)
+      assertEquals(listOf("agent:main:topic-c"), automaticallyNamed.map { it.key })
+      assertNull(automaticallyNamed.single().displayName)
       // Archived rows exist only server-side, so offline archived search is empty.
       assertTrue(controller.fetchSessionList(search = null, archived = true).isEmpty())
     }
@@ -197,6 +394,8 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
           json = json,
           requestGateway = gateway::request,
           currentDefaultAgentId = { null },
@@ -238,6 +437,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { cacheScope },
@@ -267,6 +467,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { cacheScope },
@@ -294,6 +495,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { cacheScope },
@@ -322,6 +524,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { ChatCacheScope("gateway-a", 1) },
@@ -382,6 +585,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { scope },
@@ -426,6 +630,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emptyMetadataSnapshot,
@@ -8,6 +9,12 @@ import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fix
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { WizardSession } from "../wizard/session.js";
+import {
+  ensureCodexRuntimePluginForModelSelection,
+  ensureCodexRuntimePluginForSupervision,
+  repairCodexRuntimePluginInstallForModelSelection,
+} from "./codex-runtime-plugin-install.js";
+import { ensureModelSelectionRuntimePlugins } from "./runtime-plugin-install.js";
 
 const mocks = vi.hoisted(() => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(),
@@ -109,8 +116,6 @@ describe("Codex runtime plugin install repair", () => {
           }
           return accepted;
         });
-        const { ensureCodexRuntimePluginForModelSelection } =
-          await import("./codex-runtime-plugin-install.js");
 
         const pending = ensureCodexRuntimePluginForModelSelection({
           cfg,
@@ -175,8 +180,6 @@ describe("Codex runtime plugin install repair", () => {
         status: accepted ? "installed" : "skipped",
       };
     });
-    const { ensureCodexRuntimePluginForModelSelection } =
-      await import("./codex-runtime-plugin-install.js");
     const session = new WizardSession(async (prompter) => {
       const result = await ensureCodexRuntimePluginForModelSelection({
         cfg: {},
@@ -210,8 +213,6 @@ describe("Codex runtime plugin install repair", () => {
       notices: [reviewNotice],
     });
 
-    const { repairCodexRuntimePluginInstallForModelSelection } =
-      await import("./codex-runtime-plugin-install.js");
     const result = await repairCodexRuntimePluginInstallForModelSelection({
       cfg: {},
       model: "openai/gpt-5.5",
@@ -228,16 +229,11 @@ describe("Codex runtime plugin install repair", () => {
     });
   });
 
-  it.each([
-    ["plugins disabled", { plugins: { enabled: false } }],
-    ["denylisted", { plugins: { deny: ["codex"] } }],
-    ["not allowlisted", { plugins: { allow: ["other"] } }],
-  ])("does not report an existing Codex install as usable when %s", async (_label, cfg) => {
+  it("does not report an existing Codex install as usable when plugins are disabled", async () => {
+    const cfg = { plugins: { enabled: false } };
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
       codex: { source: "npm", installPath: process.cwd() },
     });
-    const { ensureCodexRuntimePluginForModelSelection } =
-      await import("./codex-runtime-plugin-install.js");
 
     const result = await ensureCodexRuntimePluginForModelSelection({
       cfg,
@@ -264,8 +260,6 @@ describe("Codex runtime plugin install repair", () => {
         entries: { codex: { enabled: false } },
       },
     };
-    const { ensureCodexRuntimePluginForModelSelection } =
-      await import("./codex-runtime-plugin-install.js");
 
     const result = await ensureCodexRuntimePluginForModelSelection({
       cfg,
@@ -278,33 +272,6 @@ describe("Codex runtime plugin install repair", () => {
       ok: true,
       required: true,
       cfg: { plugins: { entries: { codex: { enabled: true } } } },
-    });
-  });
-
-  it("preserves the actionable installer error for setup callers", async () => {
-    mocks.ensureOnboardingPluginInstalled.mockResolvedValueOnce({
-      cfg: {},
-      installed: false,
-      pluginId: "codex",
-      status: "failed",
-      error: "npm registry returned EAI_AGAIN while fetching @openclaw/codex",
-    });
-    const { ensureCodexRuntimePluginForModelSelection } =
-      await import("./codex-runtime-plugin-install.js");
-
-    const result = await ensureCodexRuntimePluginForModelSelection({
-      cfg: {},
-      model: "openai/gpt-5.5",
-      prompter: {} as never,
-      runtime: {} as never,
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      status: "failed",
-      message: expect.stringContaining(
-        "npm registry returned EAI_AGAIN while fetching @openclaw/codex",
-      ),
     });
   });
 
@@ -326,8 +293,6 @@ describe("Codex runtime plugin install repair", () => {
       status: failure.status,
       ...(failure.error ? { error: failure.error } : {}),
     });
-    const { ensureCodexRuntimePluginForModelSelection } =
-      await import("./codex-runtime-plugin-install.js");
 
     const result = await ensureCodexRuntimePluginForModelSelection({
       cfg: {},
@@ -345,15 +310,15 @@ describe("Codex runtime plugin install repair", () => {
     expect(result.message).toContain("Retry setup");
     expect(result.message).toContain("npm");
     expect(result.message).toContain("registry");
+    if (failure.error) {
+      expect(result.message).toContain("Install failed:");
+    }
     expect(result.message).not.toContain(sensitiveFixture);
     expect(result.message).not.toContain("\u001b");
     expect(result).not.toHaveProperty("cfg");
   });
 
   it("keeps an optional Codex runtime selection as a successful no-op", async () => {
-    const { ensureCodexRuntimePluginForModelSelection } =
-      await import("./codex-runtime-plugin-install.js");
-
     const result = await ensureCodexRuntimePluginForModelSelection({
       cfg: {},
       model: "anthropic/claude-sonnet-4-6",
@@ -370,9 +335,6 @@ describe("Codex runtime plugin install repair", () => {
   });
 
   it("allows source checkouts to use the matching bundled Codex plugin", async () => {
-    const { ensureCodexRuntimePluginForModelSelection } =
-      await import("./codex-runtime-plugin-install.js");
-
     await ensureCodexRuntimePluginForModelSelection({
       cfg: {},
       model: "openai/gpt-5.5",
@@ -414,8 +376,6 @@ describe("Codex runtime plugin install repair", () => {
         },
       },
     };
-    const { ensureCodexRuntimePluginForModelSelection } =
-      await import("./codex-runtime-plugin-install.js");
 
     const result = await ensureCodexRuntimePluginForModelSelection({
       cfg,
@@ -439,7 +399,6 @@ describe("Codex runtime plugin install repair", () => {
       status: "failed",
       error: "registry unavailable",
     });
-    const { ensureModelSelectionRuntimePlugins } = await import("./runtime-plugin-install.js");
 
     const result = await ensureModelSelectionRuntimePlugins({
       cfg: {},
@@ -464,7 +423,6 @@ describe("Codex runtime plugin install repair", () => {
       pluginId: "copilot",
       status: "installed",
     });
-    const { ensureModelSelectionRuntimePlugins } = await import("./runtime-plugin-install.js");
 
     const result = await ensureModelSelectionRuntimePlugins({
       cfg: {
@@ -490,6 +448,37 @@ describe("Codex runtime plugin install repair", () => {
     );
   });
 
+  it.each(["ordinary selection", "silent supervision"] as const)(
+    "keeps runtime installation prompt-free for %s",
+    async (caller) => {
+      const prompter = createWizardPrompter();
+      mocks.ensureOnboardingPluginInstalled.mockImplementationOnce(async (params) => {
+        if (caller === "silent supervision") {
+          expect(await params.onCapabilityConsent({})).toBeUndefined();
+        }
+        return { cfg: params.cfg, installed: true, pluginId: "codex", status: "installed" };
+      });
+      const ensure =
+        caller === "silent supervision"
+          ? ensureCodexRuntimePluginForSupervision
+          : ensureCodexRuntimePluginForModelSelection;
+      const result = await ensure({
+        cfg: {
+          agents: {
+            defaults: { models: { "openai/fixture-model": { agentRuntime: { id: "codex" } } } },
+          },
+        },
+        model: "openai/fixture-model",
+        prompter,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        ...(caller === "silent supervision" ? { output: "silent" } : {}),
+      });
+      expect(result).toMatchObject({ ok: true, required: true });
+      expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
+      expect(prompter.confirm).not.toHaveBeenCalled();
+    },
+  );
+
   it("silences installer output and rejects prompts in non-interactive mode", async () => {
     const note = vi.fn(async () => {});
     const log = vi.fn();
@@ -509,7 +498,6 @@ describe("Codex runtime plugin install repair", () => {
         status: "timed_out",
       };
     });
-    const { ensureModelSelectionRuntimePlugins } = await import("./runtime-plugin-install.js");
 
     await ensureModelSelectionRuntimePlugins({
       cfg: {},
@@ -537,8 +525,6 @@ describe("Codex runtime plugin install repair", () => {
         status: "failed",
       };
     });
-    const { ensureCodexRuntimePluginForModelSelection } =
-      await import("./codex-runtime-plugin-install.js");
 
     await ensureCodexRuntimePluginForModelSelection({
       cfg: {},

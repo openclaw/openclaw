@@ -1,5 +1,6 @@
 import { request as httpRequest } from "node:http";
-import { toErrorObject } from "../../infra/errors.js";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { readNativeHookRelayClientBridgeRecord } from "./native-hook-relay-client-store.js";
 import { DEFAULT_RELAY_TIMEOUT_MS } from "./native-hook-relay-constants.js";
@@ -35,7 +36,7 @@ export async function invokeNativeHookRelayBridge(
   let lastError: unknown = new Error("native hook relay bridge not found");
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const record = readNativeHookRelayClientBridgeRecord({
+      const record = await readNativeHookRelayClientBridgeRecord({
         relayId,
         stateDbPath: params.stateDbPath,
       });
@@ -50,9 +51,13 @@ export async function invokeNativeHookRelayBridge(
       if (Date.now() > record.expiresAtMs) {
         throw new Error("native hook relay bridge expired");
       }
+      const remainingMs = timeoutMs - (Date.now() - startedAt);
+      if (remainingMs <= 0) {
+        throw new Error("native hook relay bridge timed out");
+      }
       return await postNativeHookRelayBridgeRecord({
         record,
-        timeoutMs: Math.max(1, timeoutMs - (Date.now() - startedAt)),
+        timeoutMs: remainingMs,
         payload: {
           provider,
           relayId,
@@ -165,6 +170,7 @@ function isRetryableNativeHookRelayBridgeError(error: unknown): boolean {
     code === "ENOENT" ||
     code === "ECONNREFUSED" ||
     code === "EAGAIN" ||
+    isSqliteLockError(error) ||
     (error instanceof Error && error.message === "native hook relay bridge not found")
   );
 }

@@ -1,10 +1,10 @@
-// Discord provider module implements model/runtime integration.
 import { inspect } from "node:util";
 import { formatDurationSeconds } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   parseFiniteNumber as readFiniteNumber,
   parseStrictNonNegativeInteger as readNonNegativeInteger,
+  readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { RateLimitError } from "../internal/discord.js";
@@ -64,9 +64,6 @@ export function attachDiscordDeployRestContext(
 }
 
 function stringifyDiscordDeployField(value: unknown): string {
-  if (typeof value === "string") {
-    return JSON.stringify(value);
-  }
   try {
     return JSON.stringify(value);
   } catch {
@@ -92,8 +89,7 @@ function resolveDiscordRejectedDeployEntriesSource(
   }
   const payload = rawBody as { errors?: unknown };
   const errors = payload.errors && typeof payload.errors === "object" ? payload.errors : undefined;
-  const source = errors ?? rawBody;
-  return source && typeof source === "object" ? (source as Record<string, unknown>) : null;
+  return (errors ?? rawBody) as Record<string, unknown>;
 }
 
 function readDiscordDeployObjectField(value: unknown, field: string): unknown {
@@ -117,24 +113,12 @@ function isAbortLikeError(err: unknown): boolean {
 }
 
 function formatDiscordDeployRestOperation(err: DiscordDeployErrorLike): string {
-  const method =
-    typeof err.deployRestMethod === "string" && err.deployRestMethod.trim().length > 0
-      ? err.deployRestMethod.toUpperCase()
-      : undefined;
-  const path =
-    typeof err.deployRestPath === "string" && err.deployRestPath.trim().length > 0
-      ? err.deployRestPath
-      : undefined;
+  const method = readNonBlankString(err.deployRestMethod)?.toUpperCase();
+  const path = readNonBlankString(err.deployRestPath);
   if (method && path) {
     return `${method} ${path}`;
   }
-  if (method) {
-    return method;
-  }
-  if (path) {
-    return path;
-  }
-  return "request";
+  return method ?? path ?? "request";
 }
 
 export function formatDiscordDeployErrorMessage(err: unknown): string {
@@ -193,13 +177,8 @@ function resolveDiscordDeployRateLimitDetails(
   }
   const rawGlobal = readDiscordDeployObjectField(deployErr.rawBody, "global");
   const scope =
-    typeof deployErr.scope === "string" && deployErr.scope.trim().length > 0
-      ? deployErr.scope
-      : rawGlobal === true
-        ? "global"
-        : rawGlobal === false
-          ? "route"
-          : undefined;
+    readNonBlankString(deployErr.scope) ??
+    (rawGlobal === true ? "global" : rawGlobal === false ? "route" : undefined);
   const discordCode =
     typeof deployErr.discordCode === "number" || typeof deployErr.discordCode === "string"
       ? deployErr.discordCode
@@ -219,10 +198,10 @@ export function formatDiscordDeployRateLimitDetails(err: unknown): string {
     return "";
   }
   const details: string[] = [];
-  if (typeof rateLimit.status === "number") {
+  if (rateLimit.status !== undefined) {
     details.push(`status=${rateLimit.status}`);
   }
-  if (typeof rateLimit.retryAfterMs === "number") {
+  if (rateLimit.retryAfterMs !== undefined) {
     details.push(
       `retryAfter=${formatDurationSeconds(rateLimit.retryAfterMs, {
         decimals: 1,
@@ -232,7 +211,7 @@ export function formatDiscordDeployRateLimitDetails(err: unknown): string {
   if (rateLimit.scope) {
     details.push(`scope=${rateLimit.scope}`);
   }
-  if (typeof rateLimit.discordCode === "number" || typeof rateLimit.discordCode === "string") {
+  if (rateLimit.discordCode !== undefined) {
     details.push(`code=${rateLimit.discordCode}`);
   }
   return details.length > 0 ? ` (${details.join(", ")})` : "";
@@ -247,7 +226,7 @@ export function formatDiscordDeployRateLimitWarning(
     return undefined;
   }
   const parts = [`[${accountId}] slash command deploy rate limited`];
-  if (typeof rateLimit.retryAfterMs === "number") {
+  if (rateLimit.retryAfterMs !== undefined) {
     parts.push(
       `retry after ${formatDurationSeconds(rateLimit.retryAfterMs, {
         decimals: 1,
@@ -257,7 +236,7 @@ export function formatDiscordDeployRateLimitWarning(
   if (rateLimit.scope) {
     parts.push(`scope=${rateLimit.scope}`);
   }
-  if (typeof rateLimit.discordCode === "number" || typeof rateLimit.discordCode === "string") {
+  if (rateLimit.discordCode !== undefined) {
     parts.push(`code=${rateLimit.discordCode}`);
   }
   return `${parts.join("; ")}. Existing slash commands stay active. Message send/receive is unaffected.`;
@@ -323,10 +302,12 @@ export function formatDiscordDeployErrorDetails(err: unknown): string {
   if (rateLimitDetails) {
     return rateLimitDetails;
   }
-  const status = (err as DiscordDeployErrorLike).status;
-  const discordCode = (err as DiscordDeployErrorLike).discordCode;
-  const rawBody = (err as DiscordDeployErrorLike).rawBody;
-  const requestBody = (err as DiscordDeployErrorLike).deployRequestBody;
+  const {
+    status,
+    discordCode,
+    rawBody,
+    deployRequestBody: requestBody,
+  } = err as DiscordDeployErrorLike;
   const details: string[] = [];
   if (typeof status === "number") {
     details.push(`status=${status}`);

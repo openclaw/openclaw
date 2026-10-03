@@ -122,17 +122,12 @@ export function formatTelemetryExporterSummary(snapshot: unknown): TelemetryExpo
       latest.set(key, record);
     }
   }
-  const records = [...latest.values()].toSorted((left, right) => {
-    const sourceOrder = left.source.localeCompare(right.source);
-    if (sourceOrder !== 0) {
-      return sourceOrder;
-    }
-    const signalOrder = SIGNALS.indexOf(left.signal) - SIGNALS.indexOf(right.signal);
-    if (signalOrder !== 0) {
-      return signalOrder;
-    }
-    return (left.transport ?? "").localeCompare(right.transport ?? "");
-  });
+  const records = [...latest.values()].toSorted(
+    (left, right) =>
+      left.source.localeCompare(right.source) ||
+      SIGNALS.indexOf(left.signal) - SIGNALS.indexOf(right.signal) ||
+      (left.transport ?? "").localeCompare(right.transport ?? ""),
+  );
   if (records.length === 0) {
     return null;
   }
@@ -141,16 +136,11 @@ export function formatTelemetryExporterSummary(snapshot: unknown): TelemetryExpo
     status: records.some((record) => record.status === "failure" || record.status === "dropped")
       ? "warn"
       : "ok",
-    lines: records.map((record) =>
-      [
-        record.source,
-        record.signal,
-        record.status === "failure" ? "failed" : record.status,
-        formatTransport(record),
-        formatReason(record),
-      ]
-        .filter((part): part is string => Boolean(part))
-        .join(" · "),
-    ),
+    lines: records.map((record) => {
+      const status = record.status === "failure" ? "failed" : record.status;
+      const line = `${record.source} · ${record.signal} · ${status} · ${formatTransport(record)}`;
+      const reason = formatReason(record);
+      return reason ? `${line} · ${reason}` : line;
+    }),
   };
 }

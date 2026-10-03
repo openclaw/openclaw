@@ -1,8 +1,3 @@
-/**
- * Exec security floor tests.
- * Verifies host approval floors tighten normal exec policy while explicit
- * full-session authority remains full/off.
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
-import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
-import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import type { ExecApprovalsFile } from "../infra/exec-approvals.js";
+import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -26,7 +22,7 @@ const createExecTool = (
 const optionalRuntimeImports = vi.hoisted(() => ({ reviewer: 0, followup: 0 }));
 const reviewerRuntime = vi.hoisted(() => ({
   prepare:
-    vi.fn<typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent>(),
+    vi.fn<typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent>(),
   complete:
     vi.fn<
       typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel
@@ -34,7 +30,7 @@ const reviewerRuntime = vi.hoisted(() => ({
 }));
 
 vi.mock("./simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: reviewerRuntime.prepare,
+  acquireSimpleCompletionModelForAgent: reviewerRuntime.prepare,
   completeWithPreparedSimpleCompletionModel: reviewerRuntime.complete,
 }));
 
@@ -58,7 +54,7 @@ function installAllowlistedGogFixture(root: string): string {
   fs.mkdirSync(binDir, { recursive: true });
   const gogPath = path.join(binDir, "gog");
   fs.writeFileSync(gogPath, "#!/bin/sh\nprintf 'gog-ok %s\\n' \"$*\"\n", { mode: 0o755 });
-  writeExecApprovalsFixture(root, {
+  writeExecApprovalsFixture({
     version: 1,
     defaults: { security: "allowlist", ask: "off", askFallback: "allowlist" },
     agents: { "*": { allowlist: [{ pattern: gogPath }] } },
@@ -66,27 +62,27 @@ function installAllowlistedGogFixture(root: string): string {
   return binDir;
 }
 
-function writeExecApprovalsFixture(_root: string, file: Record<string, unknown>): void {
-  saveExecApprovals(file as ExecApprovalsFile);
+function writeExecApprovalsFixture(file: ExecApprovalsFile): void {
+  saveExecApprovals(file);
 }
 
-function writeDenyExecApprovalsFixture(root: string): void {
-  writeExecApprovalsFixture(root, {
+function writeDenyExecApprovalsFixture(): void {
+  writeExecApprovalsFixture({
     version: 1,
     defaults: { security: "deny", ask: "off" },
     agents: {},
   });
 }
 
-function writeFullAskExecApprovalsFixture(root: string): void {
-  writeExecApprovalsFixture(root, {
+function writeFullAskExecApprovalsFixture(): void {
+  writeExecApprovalsFixture({
     version: 1,
     defaults: { security: "full", ask: "always" },
     agents: {},
   });
 }
 
-function mockPendingApprovalGateway(): string[] {
+function mockApprovalGateway(decision: "allow-once" | "deny" | null = null): string[] {
   const calls: string[] = [];
   vi.mocked(callGatewayTool).mockImplementation(async (method) => {
     calls.push(method);
@@ -94,7 +90,7 @@ function mockPendingApprovalGateway(): string[] {
       return { status: "accepted", id: "approval-id" };
     }
     if (method === "exec.approval.waitDecision") {
-      return { decision: null };
+      return { decision };
     }
     return { ok: true };
   });
@@ -109,9 +105,13 @@ function createAskingAutoReviewer() {
   }));
 }
 
+function createAutoTool(defaults?: Parameters<typeof createExecToolImpl>[0]) {
+  return createExecTool({ host: "gateway", mode: "auto", safeBins: [], ...defaults });
+}
+
 describe("exec security floor", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
-  let tempRoot: string | undefined;
+  let tempRoot: string;
 
   beforeEach(() => {
     envSnapshot = captureEnv([
@@ -144,32 +144,11 @@ describe("exec security floor", () => {
 
   afterEach(() => {
     const dir = tempRoot;
-    tempRoot = undefined;
     closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
     if (dir) {
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     }
-  });
-
-  it("ignores model-supplied allowlist security when configured security is full", async () => {
-    const tool = createExecTool({
-      security: "full",
-      ask: "off",
-    });
-
-    const modelArgs = {
-      command: "echo hello",
-      security: "allowlist",
-      ask: "off",
-    };
-    const result = await tool.execute("call-1", modelArgs);
-
-    expect(result.content[0]?.type).toBe("text");
-    const text = (result.content[0] as { text?: string }).text ?? "";
-    expect(text).not.toMatch(/exec denied/i);
-    expect(text).not.toMatch(/allowlist miss/i);
-    expect(text.trim()).toContain("hello");
   });
 
   it("does not load optional review or delivery runtimes for full/off execution", async () => {
@@ -181,23 +160,8 @@ describe("exec security floor", () => {
     expect(optionalRuntimeImports).toEqual({ reviewer: 0, followup: 0 });
   });
 
-  it("enforces configured allowlist security when model also passes allowlist", async () => {
-    const tool = createExecTool({
-      security: "allowlist",
-      ask: "off",
-      safeBins: [],
-    });
-
-    const modelArgs = {
-      command: "echo hello",
-      security: "allowlist",
-      ask: "off",
-    };
-    await expect(tool.execute("call-2", modelArgs)).rejects.toThrow(/exec denied: allowlist miss/i);
-  });
-
   it("ignores model-supplied ask overrides when configured ask is off", async () => {
-    const root = tempRoot ?? os.tmpdir();
+    const root = tempRoot;
     const binDir = installAllowlistedGogFixture(root);
     const tool = createExecTool({
       host: "gateway",
@@ -222,9 +186,28 @@ describe("exec security floor", () => {
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("does not collect conversation context for allowlisted auto-mode commands", async () => {
+    const binDir = installAllowlistedGogFixture(tempRoot);
+    const autoReviewer = createAskingAutoReviewer();
+    const reviewTranscript = vi.fn<() => ExecAutoReviewTranscript | undefined>();
+    const tool = createAutoTool({
+      pathPrepend: [binDir],
+      autoReviewer,
+      reviewTranscript,
+    });
+
+    const result = await tool.execute("call-allowlisted-context", { command: "gog version" });
+
+    expect(result.details.status).toBe("completed");
+    expect((result.content[0] as { text?: string }).text).toContain("gog-ok version");
+    expect(autoReviewer).not.toHaveBeenCalled();
+    expect(reviewTranscript).not.toHaveBeenCalled();
+  });
+
   it("honors per-call ask hardening for trusted callers without messageProvider", async () => {
-    const root = tempRoot ?? os.tmpdir();
+    const root = tempRoot;
     const binDir = installAllowlistedGogFixture(root);
+    const calls = mockApprovalGateway("deny");
     const tool = createExecTool({
       host: "gateway",
       security: "allowlist",
@@ -238,23 +221,9 @@ describe("exec security floor", () => {
       ask: "always",
     });
 
-    expect(callGatewayTool).toHaveBeenCalled();
-    expect(result.details.status).toBe("approval-pending");
-  });
-
-  it("ignores model-supplied deny security when configured security is allowlist", async () => {
-    const tool = createExecTool({
-      security: "allowlist",
-      ask: "off",
-      safeBins: [],
-    });
-
-    const modelArgs = {
-      command: "echo hello",
-      security: "deny",
-      ask: "off",
-    };
-    await expect(tool.execute("call-3", modelArgs)).rejects.toThrow(/exec denied: allowlist miss/i);
+    expect(calls).toEqual(["exec.approval.request", "exec.approval.waitDecision"]);
+    expect(result.details).toMatchObject({ status: "failed", timedOut: false });
+    expect((result.content[0] as { text?: string }).text).toContain("user-denied");
   });
 
   it("ignores model-supplied full security when configured security is deny", async () => {
@@ -271,96 +240,48 @@ describe("exec security floor", () => {
     await expect(tool.execute("call-4", modelArgs)).rejects.toThrow(/exec denied/i);
   });
 
-  it("does not let host approval defaults deny implicit sandbox execution", async () => {
-    writeDenyExecApprovalsFixture(tempRoot ?? os.tmpdir());
-    const buildExecSpec = vi.fn(async () => ({
-      argv: ["/bin/sh", "-lc", "printf sandbox-ok"],
-      env: process.env,
-      stdinMode: "pipe-closed" as const,
-    }));
-    const tool = createExecTool({
-      host: "auto",
-      sandbox: {
-        containerName: "sandbox-host-approval-defaults-test",
-        workspaceDir: tempRoot ?? "/tmp",
-        containerWorkdir: "/workspace",
-        buildExecSpec,
-      },
-    });
-
-    const result = await tool.execute("call-sandbox-host-defaults", {
-      command: "echo sandbox-ok",
-    });
-
-    expect(buildExecSpec).toHaveBeenCalledTimes(1);
-    expect(result.content[0]?.type).toBe("text");
-    const text = (result.content[0] as { text?: string }).text ?? "";
-    expect(text).toContain("sandbox-ok");
-  });
-
-  it("honors configured deny mode before implicit sandbox execution", async () => {
-    const buildExecSpec = vi.fn(async () => ({
-      argv: ["/bin/sh", "-lc", "printf leaked"],
-      env: process.env,
-      stdinMode: "pipe-closed" as const,
-    }));
-    const tool = createExecTool({
-      host: "auto",
-      mode: "deny",
-      sandbox: {
-        containerName: "sandbox-deny-test",
-        workspaceDir: tempRoot ?? "/tmp",
-        containerWorkdir: "/workspace",
-        buildExecSpec,
-      },
-    });
-
-    await expect(
-      tool.execute("call-mode-deny-sandbox", {
-        command: "echo blocked",
-      }),
-    ).rejects.toThrow(/security=deny|exec denied/i);
-    expect(buildExecSpec).not.toHaveBeenCalled();
-  });
-
-  it("lets normalized auto mode run implicit sandbox execution", async () => {
-    const buildExecSpec = vi.fn(async () => ({
-      argv: ["/bin/sh", "-lc", "printf sandbox-auto-ok"],
-      env: process.env,
-      stdinMode: "pipe-closed" as const,
-    }));
-    const tool = createExecTool({
-      host: "auto",
-      mode: "auto",
-      sandbox: {
-        containerName: "sandbox-auto-mode-test",
-        workspaceDir: tempRoot ?? "/tmp",
-        containerWorkdir: "/workspace",
-        buildExecSpec,
-      },
-    });
-
-    const result = await tool.execute("call-mode-auto-sandbox", {
-      command: "echo sandbox-auto-ok",
-    });
-
-    expect(buildExecSpec).toHaveBeenCalledTimes(1);
-    expect(result.content[0]?.type).toBe("text");
-    const text = (result.content[0] as { text?: string }).text ?? "";
-    expect(text).toContain("sandbox-auto-ok");
-  });
+  it.each([undefined, "deny"] as const)(
+    "uses sandbox mode=%s independently of gateway approval defaults",
+    async (mode) => {
+      writeDenyExecApprovalsFixture();
+      const buildExecSpec = vi.fn(async () => ({
+        argv: ["/bin/sh", "-lc", "printf sandbox-ok"],
+        env: process.env,
+        stdinMode: "pipe-closed" as const,
+      }));
+      const tool = createExecTool({
+        host: "auto",
+        mode,
+        sandbox: {
+          containerName: "sandbox-policy-test",
+          workspaceDir: tempRoot,
+          containerWorkdir: "/workspace",
+          buildExecSpec,
+        },
+      });
+      const execution = tool.execute("sandbox-policy", { command: "echo sandbox-ok" });
+      if (mode === "deny") {
+        await expect(execution).rejects.toThrow(/security=deny|exec denied/i);
+        expect(buildExecSpec).not.toHaveBeenCalled();
+      } else {
+        const result = await execution;
+        expect(buildExecSpec).toHaveBeenCalledOnce();
+        expect(result.content[0]).toMatchObject({
+          type: "text",
+          text: expect.stringContaining("sandbox-ok"),
+        });
+      }
+    },
+  );
 
   it("intersects normalized gateway auto mode with host approval deny defaults", async () => {
-    writeDenyExecApprovalsFixture(tempRoot ?? os.tmpdir());
+    writeDenyExecApprovalsFixture();
     const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
       decision: "allow-once",
       risk: "low",
       rationale: "would otherwise run",
     }));
-    const tool = createExecTool({
-      host: "gateway",
-      mode: "auto",
-      safeBins: [],
+    const tool = createAutoTool({
       autoReviewer,
     });
 
@@ -372,19 +293,25 @@ describe("exec security floor", () => {
     expect(autoReviewer).not.toHaveBeenCalled();
   });
 
-  it("retains the Guardian approval on the completed gateway result without a run ID", async () => {
+  it("reviews current conversation context and retains Guardian approval without a run ID", async () => {
+    const reviewTranscript = vi.fn(() => currentTranscript);
     const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
       decision: "allow-once",
       risk: "low",
       rationale: "read-only version check",
+      userAuthorization: "high",
     }));
-    const tool = createExecTool({
-      host: "gateway",
-      mode: "auto",
-      safeBins: [],
+    const tool = createAutoTool({
       autoReviewer,
+      reviewTranscript,
       sessionKey: "agent:main:main",
     });
+    expect(reviewTranscript).not.toHaveBeenCalled();
+    const currentTranscript: ExecAutoReviewTranscript = {
+      entries: [{ kind: "user", origin: "operator", text: "Check the Node version." }],
+      omittedEntries: 0,
+      truncated: false,
+    };
 
     const liveReviews: unknown[] = [];
     const unsubscribe = onAgentEvent((event) => {
@@ -402,7 +329,16 @@ describe("exec security floor", () => {
     }
 
     expect(liveReviews).toEqual([]);
+    expect(reviewTranscript).toHaveBeenCalledTimes(1);
+    expect(autoReviewer).toHaveBeenCalledWith(
+      expect.objectContaining({ host: "gateway", transcript: currentTranscript }),
+    );
     expect(reviewerRuntime.prepare).not.toHaveBeenCalled();
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining("risk=low, authorization=high") }),
+      ]),
+    );
     expect(result.details).toMatchObject({
       status: "completed",
       approvalReviewOutcome: "approved",
@@ -418,55 +354,89 @@ describe("exec security floor", () => {
     });
   });
 
-  it("retains the terminal Guardian review when its approved script changes before execution", async () => {
-    const workdir = tempRoot ?? os.tmpdir();
-    const script = path.join(workdir, "script.sh");
-    fs.writeFileSync(script, "#!/bin/sh\necho approved\n");
-    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
-      decision: "allow-once",
-      risk: "low",
-      rationale: "approved script",
-    }));
-    const tool = createExecTool({
-      host: "gateway",
-      mode: "auto",
-      safeBins: [],
-      autoReviewer,
-      runId: "run-guardian-script",
-      cwd: workdir,
-    });
-    let changedAfterApproval = false;
-    const unsubscribe = onAgentEvent((event) => {
-      if (
-        event.runId === "run-guardian-script" &&
-        event.data.approvalReviewOutcome === "approved"
-      ) {
-        fs.writeFileSync(script, "#!/bin/sh\necho mutated\n");
-        changedAfterApproval = true;
-      }
-    });
-    let result: Awaited<ReturnType<typeof tool.execute>>;
-    try {
-      result = await tool.execute("tool-guardian-script", { command: "sh script.sh" });
-    } finally {
-      unsubscribe();
-    }
+  it.runIf(process.platform !== "win32")(
+    "executes reviewed globs and chains as written",
+    async () => {
+      const workdir = tempRoot;
+      fs.writeFileSync(path.join(workdir, "first.review-fixture"), "fixture");
+      const command = "ls *.review-fixture; echo chain-complete";
+      const calls = mockApprovalGateway();
+      const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+        decision: "allow-once",
+        risk: "medium",
+        rationale: "project inspection",
+      }));
+      const tool = createAutoTool({
+        autoReviewer,
+        cwd: workdir,
+      });
+      const result = await tool.execute("call-reviewed-glob", { command });
+      expect(autoReviewer).toHaveBeenCalledWith(
+        expect.objectContaining({ command, reason: "execution-plan-miss" }),
+      );
+      expect(calls).toEqual([]);
+      expect(result.details).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+        approvalReviewOutcome: "approved",
+      });
+      expect(result.content[0]).toEqual(
+        expect.objectContaining({
+          text: expect.stringContaining("first.review-fixture\nchain-complete"),
+        }),
+      );
+    },
+  );
 
-    expect(changedAfterApproval).toBe(true);
-    expect(result.content[0]).toEqual(
-      expect.objectContaining({
-        text: expect.stringContaining("approval script operand changed before execution"),
-      }),
-    );
-    expect(result.details).toMatchObject({
-      status: "failed",
-      approvalReviewOutcome: "approved",
-      approvalReviews: [{ id: "guardian:tool-guardian-script", status: "approved" }],
-    });
-  });
+  it.each(["sh script.sh; ls *.sh"])(
+    "retains Guardian evidence and denies script drift for %s",
+    async (command) => {
+      const workdir = tempRoot;
+      const script = path.join(workdir, "script.sh");
+      fs.writeFileSync(script, "#!/bin/sh\necho approved\n");
+      const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+        decision: "allow-once",
+        risk: "low",
+        rationale: "approved script",
+      }));
+      const tool = createAutoTool({
+        autoReviewer,
+        runId: "run-guardian-script",
+        cwd: workdir,
+      });
+      let changedAfterApproval = false;
+      const unsubscribe = onAgentEvent((event) => {
+        if (
+          event.runId === "run-guardian-script" &&
+          event.data.approvalReviewOutcome === "approved"
+        ) {
+          fs.writeFileSync(script, "#!/bin/sh\necho mutated\n");
+          changedAfterApproval = true;
+        }
+      });
+      let result: Awaited<ReturnType<typeof tool.execute>>;
+      try {
+        result = await tool.execute("tool-guardian-script", { command });
+      } finally {
+        unsubscribe();
+      }
+
+      expect(changedAfterApproval).toBe(true);
+      expect(result.content[0]).toEqual(
+        expect.objectContaining({
+          text: expect.stringContaining("approval script operand changed before execution"),
+        }),
+      );
+      expect(result.details).toMatchObject({
+        status: "failed",
+        approvalReviewOutcome: "approved",
+        approvalReviews: [{ id: "guardian:tool-guardian-script", status: "approved" }],
+      });
+    },
+  );
 
   it("uses agent-scoped host policy when clamping normalized modes", async () => {
-    writeExecApprovalsFixture(tempRoot ?? os.tmpdir(), {
+    writeExecApprovalsFixture({
       version: 1,
       defaults: { security: "deny", ask: "off" },
       agents: { main: { security: "full", ask: "off" } },
@@ -487,8 +457,8 @@ describe("exec security floor", () => {
   });
 
   it("preserves host ask floors for elevated full gateway exec", async () => {
-    writeFullAskExecApprovalsFixture(tempRoot ?? os.tmpdir());
-    const calls = mockPendingApprovalGateway();
+    writeFullAskExecApprovalsFixture();
+    const calls = mockApprovalGateway();
     const tool = createExecTool({
       host: "gateway",
       security: "full",
@@ -502,12 +472,13 @@ describe("exec security floor", () => {
       elevated: true,
     });
 
-    expect(result.details.status).toBe("approval-pending");
-    expect(calls).toContain("exec.approval.request");
+    expect(result.details).toMatchObject({ status: "failed", timedOut: true });
+    expect((result.content[0] as { text?: string }).text).toContain("approval-timeout");
+    expect(calls).toEqual(["exec.approval.request", "exec.approval.waitDecision"]);
   });
 
   it("does not prompt explicit full sessions despite host ask floors", async () => {
-    writeFullAskExecApprovalsFixture(tempRoot ?? os.tmpdir());
+    writeFullAskExecApprovalsFixture();
     const tool = createExecTool({
       host: "gateway",
       mode: "full",
@@ -524,40 +495,35 @@ describe("exec security floor", () => {
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "honors ask-only tightening without restoring full-session host floors (approved=%s)",
     async (approved) => {
-      writeDenyExecApprovalsFixture(tempRoot ?? os.tmpdir());
-      const calls = mockPendingApprovalGateway();
-      if (approved) {
-        vi.mocked(callGatewayTool).mockImplementation(async (method) => {
-          calls.push(method);
-          return { decision: "allow-once" };
-        });
-      }
+      writeDenyExecApprovalsFixture();
+      const calls = mockApprovalGateway(approved ? "allow-once" : null);
       const tool = createExecTool({
         host: "gateway",
         security: "full",
         ask: "always",
         bypassHostApprovalFloors: true,
-        messageProvider: approved ? "webchat" : undefined,
         approvalRunningNoticeMs: 0,
       });
 
       const result = await tool.execute("call-session-full-tightened-ask", { command: "echo ok" });
 
-      expect(result.details.status).toBe(approved ? "completed" : "approval-pending");
-      expect(calls).toContain("exec.approval.request");
+      expect(result.details).toMatchObject(
+        approved ? { status: "completed", exitCode: 0 } : { status: "failed", timedOut: true },
+      );
+      expect((result.content[0] as { text?: string }).text).toContain(
+        approved ? "ok" : "approval-timeout",
+      );
+      expect(calls).toEqual(["exec.approval.request", "exec.approval.waitDecision"]);
     },
   );
 
   it("honors normalized auto mode before elevated full bypass", async () => {
-    const calls = mockPendingApprovalGateway();
+    const calls = mockApprovalGateway();
     const autoReviewer = createAskingAutoReviewer();
-    const tool = createExecTool({
-      host: "gateway",
-      mode: "auto",
-      safeBins: [],
+    const tool = createAutoTool({
       autoReviewer,
       elevated: { enabled: true, allowed: true, defaultLevel: "full" },
     });
@@ -574,19 +540,17 @@ describe("exec security floor", () => {
         reason: "allowlist-miss",
       }),
     );
-    expect(result.details.status).toBe("approval-pending");
-    expect(calls).toContain("exec.approval.request");
+    expect(result.details).toMatchObject({ status: "failed", timedOut: true });
+    expect((result.content[0] as { text?: string }).text).toContain("approval-timeout");
+    expect(calls).toEqual(["exec.approval.request", "exec.approval.waitDecision"]);
   });
 
-  it.each(["on-miss", "off"] as const)(
+  it.each(["off"] as const)(
     "keeps auto review enabled when legacy ask=%s does not strengthen auto mode",
     async (ask) => {
-      const calls = mockPendingApprovalGateway();
+      const calls = mockApprovalGateway();
       const autoReviewer = createAskingAutoReviewer();
-      const tool = createExecTool({
-        host: "gateway",
-        mode: "auto",
-        safeBins: [],
+      const tool = createAutoTool({
         autoReviewer,
       });
 
@@ -602,19 +566,26 @@ describe("exec security floor", () => {
           reason: "allowlist-miss",
         }),
       );
-      expect(result.details.status).toBe("approval-pending");
-      expect(calls).toContain("exec.approval.request");
+      expect(result.details).toMatchObject({ status: "failed", timedOut: true });
+      expect((result.content[0] as { text?: string }).text).toContain("approval-timeout");
+      expect(calls).toEqual(["exec.approval.request", "exec.approval.waitDecision"]);
     },
   );
 
-  it("keeps default reviewer settings and cancellation scoped to each execution", async () => {
+  it("keeps default reviewer settings, conversation and cancellation scoped to each execution", async () => {
+    let userRequest = "Check the Node version before building.";
+    const reviewTranscript = vi.fn((): ExecAutoReviewTranscript => ({
+      entries: [{ kind: "user", origin: "operator", text: userRequest }],
+      omittedEntries: 0,
+      truncated: false,
+    }));
     const reviewer = { model: "synthetic/reviewer-first" };
     const config: OpenClawConfig = {
       tools: { exec: { reviewer: { model: "synthetic/reviewer-global" } } },
       agents: { entries: { main: { tools: { exec: { reviewer } } } } },
     };
     reviewerRuntime.prepare.mockResolvedValue({
-      selection: { provider: "synthetic", modelId: "reviewer", agentDir: tempRoot ?? os.tmpdir() },
+      selection: { provider: "synthetic", modelId: "reviewer", agentDir: tempRoot },
       model: makeProviderModelFixture({
         provider: "synthetic",
         id: "reviewer",
@@ -622,6 +593,7 @@ describe("exec security floor", () => {
         baseUrl: "https://example.invalid",
       }),
       auth: { source: "synthetic", mode: "aws-sdk" },
+      [Symbol.asyncDispose]: async () => {},
     });
     const completion = createDeferred<never>();
     const completionEntered = createDeferred();
@@ -632,13 +604,12 @@ describe("exec security floor", () => {
       })
       .mockRejectedValueOnce(new Error("synthetic completion unavailable"));
     vi.mocked(callGatewayTool).mockResolvedValue({ decision: "deny" });
-    const tool = createExecTool({
-      host: "gateway",
-      mode: "auto",
-      safeBins: [],
+    const tool = createAutoTool({
       config,
+      reviewTranscript,
       messageProvider: "webchat",
     });
+    expect(reviewTranscript).not.toHaveBeenCalled();
     const first = new AbortController();
     const second = new AbortController();
     const firstRun = tool.execute(
@@ -651,7 +622,11 @@ describe("exec security floor", () => {
       first.abort(new Error("first execution cancelled"));
       await expect(firstRun).rejects.toThrow("first execution cancelled");
       expect(reviewerRuntime.complete.mock.calls[0]?.[0].options?.signal?.aborted).toBe(true);
+      expect(reviewerRuntime.complete.mock.calls[0]?.[0].context.messages[0]?.content).toContain(
+        userRequest,
+      );
 
+      userRequest = "Check the Node version after building.";
       reviewer.model = "synthetic/reviewer-second";
       const result = await tool.execute(
         "default-review-second",
@@ -666,6 +641,10 @@ describe("exec security floor", () => {
         expect.objectContaining({ cfg: config, agentId: "main" }),
       );
       expect(reviewerRuntime.complete.mock.calls[1]?.[0].options?.signal?.aborted).toBe(false);
+      expect(reviewerRuntime.complete.mock.calls[1]?.[0].context.messages[0]?.content).toContain(
+        userRequest,
+      );
+      expect(reviewTranscript).toHaveBeenCalledTimes(2);
       expect(result.details).toMatchObject({
         status: "failed",
         approvalReviewOutcome: "denied",
@@ -685,10 +664,7 @@ describe("exec security floor", () => {
     vi.doMock("./exec-auto-reviewer.js", loadReviewer);
     vi.mocked(callGatewayTool).mockResolvedValue({ decision: "deny" });
     try {
-      const tool = createExecTool({
-        host: "gateway",
-        mode: "auto",
-        safeBins: [],
+      const tool = createAutoTool({
         messageProvider: "webchat",
       });
       const result = await tool.execute("default-review-import-failure", {

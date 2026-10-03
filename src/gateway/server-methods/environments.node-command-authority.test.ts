@@ -1,114 +1,216 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listNodePairing } from "../../infra/device-pairing-node.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EnvironmentsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { NodeRegistry } from "../node-registry.js";
 import { environmentsHandlers } from "./environments.js";
+import { pairedNodeDevice } from "./environments.test-support.js";
 
-vi.mock("../../infra/device-pairing.js", () => ({
+const registries: NodeRegistry[] = [];
+
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+  for (const registry of registries.splice(0)) {
+    for (const node of registry.listConnected()) {
+      registry.unregister(node.connId);
+    }
+  }
+  vi.restoreAllMocks();
+});
+
+vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
   listDevicePairing: vi.fn(),
-  resolveNodePairingState: vi.fn(),
 }));
 
-vi.mock("../../infra/device-pairing-node.js", () => ({
-  listNodePairing: vi.fn(),
-}));
-
-vi.mock("../node-registry-private.js", () => ({
-  collectNodeCatalogRuntimeState: vi.fn(() => ({
-    sessionHostNodeIds: new Set(),
-    issuesByNodeId: new Map(),
-    workerSlotsByNodeId: new Map(),
-    workerBundleByNodeId: new Map(),
-  })),
+vi.mock("../worker-environments/placement-capabilities.js", () => ({
+  resolveWorkerPlacementCapabilities: vi.fn((runtimeId: string) =>
+    runtimeId === "codex"
+      ? {
+          executionMode: "remote-exec",
+          devicePlacement: {
+            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+            consumesWorkerSlot: false,
+          },
+        }
+      : {},
+  ),
 }));
 
 beforeEach(() => {
-  vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
-  vi.mocked(listNodePairing).mockResolvedValue({ paired: [] } as never);
+  vi.mocked(listDevicePairing).mockResolvedValue({ pending: [], paired: [] });
+  const plugins = createEmptyPluginRegistry();
+  plugins.nodeHostCommands.push({
+    pluginId: "codex",
+    source: "test/codex",
+    command: {
+      command: "codex.exec-server.stdio.v1",
+      cap: "codex.exec-server",
+      dangerous: true,
+      handle: async () => "{}",
+    },
+  });
+  setActivePluginRegistry(plugins);
 });
 
 describe("node environment command authority", () => {
+  const command = "codex.exec-server.stdio.v1";
   it.each([
-    {
-      name: "projects sorted approved commands while preserving denied declarations",
-      declared: ["system.which", "codex.exec-server.stdio.v1", "system.run", "system.run"],
-      allow: ["codex.exec-server.stdio.v1"],
-      deny: ["system.run"],
-      expected: ["codex.exec-server.stdio.v1", "system.which"],
+    [
+      "invocable",
+      ["system.which", command, "system.run", "system.run"],
+      ["system.which", command, "system.run"],
+      [command],
+      ["system.run"],
+      [command, "system.which"],
+      false,
+    ],
+    ["pending-approval", [command], [], [command], [], [], false],
+    ["unauthorized", [command, "fixture.unrelated"], [command], [], [], [], false],
+    ["unauthorized", [command], [command], [command], [command], [], true],
+    ["unauthorized", [command], [command], [], [], [], true],
+    ["undeclared", [], [], [command], [], [], false],
+  ] as const)(
+    "projects %s for declarations %j approved %j with allow %j deny %j",
+    async (state, declared, approved, allow, deny, expected, reload) => {
+      vi.mocked(listDevicePairing).mockResolvedValue({
+        pending: [],
+        paired: [
+          pairedNodeDevice(
+            "node-exec",
+            {
+              displayName: "Execution Node",
+              caps: ["session.host"],
+              commands: [...approved],
+            },
+            {
+              platform: "linux",
+              deviceFamily: "Linux",
+              clientId: "node-host",
+              clientMode: "node",
+            },
+          ),
+        ],
+      });
+      const commandPolicy = { allow: [...allow], deny: [...deny] };
+      const initialPolicy = reload ? { allow: [command], deny: [] } : undefined;
+      let config = { gateway: { nodes: { commands: initialPolicy ?? commandPolicy } } };
+      const registry = new NodeRegistry({ getConfig: () => config });
+      registries.push(registry);
+      const node = registry.register(
+        {
+          connId: "conn-exec",
+          socket: { readyState: 1, bufferedAmount: 0, send: vi.fn() },
+          connect: {
+            client: {
+              id: "node-host",
+              mode: "node",
+              displayName: "Execution Node",
+              platform: "linux",
+              deviceFamily: "Linux",
+            },
+            device: { id: "node-exec" },
+            caps: ["session.host"],
+            declaredCommands: [...declared],
+            commands: [...approved],
+          },
+        } as never,
+        { pairingIdentity: "node-exec" },
+      );
+      if (initialPolicy) {
+        // Reload the registered connection so withholding comes from its real policy owner.
+        expect(node.commands).toEqual(approved);
+        config = { gateway: { nodes: { commands: commandPolicy } } };
+        registry.refreshRuntimePolicy(config);
+      }
+      vi.spyOn(registry, "listConnectedForPairingStates").mockReturnValue([node]);
+      const context = {
+        logGateway: { warn: vi.fn() },
+        getRuntimeConfig: () => config,
+        nodeRegistry: registry,
+      };
+
+      const listRespond = vi.fn();
+      await environmentsHandlers["environments.list"]?.({
+        params: { runtimeId: "codex" },
+        respond: listRespond,
+        client: { connect: { scopes: ["operator.write"] } },
+        context,
+      } as never);
+      const payload: EnvironmentsListResult = listRespond.mock.calls[0]![1];
+      const listed = payload.environments.find(
+        (environment) => environment.id === "node:node-exec",
+      );
+      expect(listed?.invocableCommands ?? []).toEqual(expected);
+      expect(listed?.requiredNodeCommand).toMatchObject({
+        command: "codex.exec-server.stdio.v1",
+        state,
+      });
+      if (state === "invocable") {
+        expect(listed?.requiredNodeCommand).not.toHaveProperty("message");
+      } else {
+        const remediation =
+          state === "pending-approval"
+            ? "openclaw nodes approve <requestId>"
+            : state === "unauthorized"
+              ? "gateway.nodes.commands.deny"
+              : "openclaw plugins enable codex";
+        expect(listed?.requiredNodeCommand?.message).toContain(remediation);
+        if (state === "undeclared") {
+          expect(listed?.requiredNodeCommand?.message).toContain(
+            "openclaw plugins install @openclaw/codex",
+          );
+          expect(listed?.requiredNodeCommand?.message).toContain("on that node");
+          expect(listed?.requiredNodeCommand?.message).not.toContain(
+            "gateway.nodes.commands.allow",
+          );
+        }
+      }
+      for (const effectiveCommand of node.commands) {
+        expect(listed?.capabilities).toContain(effectiveCommand);
+      }
+
+      const statusRespond = vi.fn();
+      await environmentsHandlers["environments.status"]?.({
+        params: { environmentId: "node:node-exec" },
+        respond: statusRespond,
+        context,
+      } as never);
+      const statusPayload = statusRespond.mock.calls.at(0)?.[1] as
+        | { invocableCommands?: string[] }
+        | undefined;
+      expect(statusPayload?.invocableCommands ?? []).toEqual(expected);
     },
-    {
-      name: "withholds declared commands without explicit Gateway approval",
-      declared: ["codex.exec-server.stdio.v1"],
-      allow: [],
-      deny: [],
-      expected: [],
-    },
-    {
-      name: "honors Gateway denial even when the command was explicitly allowed",
-      declared: ["codex.exec-server.stdio.v1"],
-      allow: ["codex.exec-server.stdio.v1"],
-      deny: ["codex.exec-server.stdio.v1"],
-      expected: [],
-    },
-    {
-      name: "does not project approved commands the node did not declare",
-      declared: ["system.which"],
-      allow: ["codex.exec-server.stdio.v1"],
-      deny: [],
-      expected: ["system.which"],
-    },
-  ])("$name", async ({ declared, allow, deny, expected }) => {
+  );
+
+  it("requires write scope for runtime-aware profile discovery", async () => {
+    const params = { projection: "profiles" };
     const context = {
       logGateway: { warn: vi.fn() },
-      getRuntimeConfig: () => ({ gateway: { nodes: { commands: { allow, deny } } } }),
-      nodeRegistry: {
-        listConnectedForPairingStates: () => [
-          {
-            nodeId: "node-exec",
-            connId: "conn-exec",
-            displayName: "Execution Node",
-            platform: "linux",
-            deviceFamily: "Linux",
-            caps: ["session.host"],
-            commands: declared,
-            connectedAtMs: 123,
-          },
-        ],
-      },
+      getRuntimeConfig: () => ({}),
+      nodeRegistry: { listConnectedForPairingStates: () => [] },
     };
-
-    const listRespond = vi.fn();
+    const readOnlyRespond = vi.fn();
     await environmentsHandlers["environments.list"]?.({
-      params: {},
-      respond: listRespond,
+      params: { ...params, runtimeId: "codex" },
+      respond: readOnlyRespond,
+      client: { connect: { scopes: ["operator.read"] } },
       context,
     } as never);
-    const listPayload = listRespond.mock.calls.at(0)?.[1] as
-      | {
-          environments: Array<{
-            id: string;
-            capabilities?: string[];
-            invocableCommands?: string[];
-          }>;
-        }
-      | undefined;
-    const listed = listPayload?.environments.find(
-      (environment) => environment.id === "node:node-exec",
+    expect(readOnlyRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "FORBIDDEN", message: "missing scope: operator.write" }),
     );
 
-    expect(listed?.invocableCommands ?? []).toEqual(expected);
-    for (const command of declared) {
-      expect(listed?.capabilities).toContain(command);
-    }
-
-    const statusRespond = vi.fn();
-    await environmentsHandlers["environments.status"]?.({
-      params: { environmentId: "node:node-exec" },
-      respond: statusRespond,
+    const inventoryRespond = vi.fn();
+    await environmentsHandlers["environments.list"]?.({
+      params,
+      respond: inventoryRespond,
+      client: { connect: { scopes: ["operator.read"] } },
       context,
     } as never);
-    const statusPayload = statusRespond.mock.calls.at(0)?.[1] as
-      | { invocableCommands?: string[] }
-      | undefined;
-    expect(statusPayload?.invocableCommands ?? []).toEqual(expected);
+    expect(inventoryRespond.mock.calls.at(0)?.[0]).toBe(true);
   });
 });

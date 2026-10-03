@@ -2,31 +2,26 @@ import type { LogRecord, SeverityNumber } from "@opentelemetry/api-logs";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
 import type { Resource } from "@opentelemetry/resources";
 import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs";
-import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
+import type {
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   assignOtelLogAttribute,
   assignOtelLogEventAttributes,
   assignOtelSecurityAttributes,
   redactOtelAttributes,
   securitySeverityText,
-  shouldCaptureOtelLogBody,
   writeStdoutDiagnosticLogRecord,
 } from "./service-attributes.js";
 import {
   LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS,
   MAX_OTEL_LOG_BODY_CHARS,
 } from "./service-constants.js";
-import {
-  normalizeOtelLogString,
-  type OtelContentCapturePolicy,
-} from "./service-content-normalization.js";
+import { normalizeOtelLogString } from "./service-content-normalization.js";
 import { observeOtlpExporterHealth, type ExporterHealthUpdate } from "./service-exporter-health.js";
 import { errorCategory, formatError } from "./service-exporter.js";
-import {
-  addTraceAttributes,
-  contextForTrustedTraceContext,
-  normalizedTrustedTraceContext,
-} from "./service-trace-context.js";
+import { contextForTraceContext, normalizedTrustedTraceContext } from "./service-trace-context.js";
 import type {
   BuiltOtelLogRecord,
   OtelHttpAgentFactory,
@@ -44,7 +39,7 @@ const LOG_SEVERITY_MAP: Record<string, SeverityNumber> = {
 };
 
 export function createDiagnosticsLogExporter(params: {
-  contentCapturePolicy: OtelContentCapturePolicy;
+  captureContent: boolean;
   emitExporterEvent: (event: ExporterHealthUpdate) => void;
   flushIntervalMs?: number;
   headers?: Record<string, string>;
@@ -58,7 +53,7 @@ export function createDiagnosticsLogExporter(params: {
   serviceName: string;
 }) {
   const {
-    contentCapturePolicy,
+    captureContent,
     emitExporterEvent,
     flushIntervalMs,
     headers,
@@ -72,7 +67,6 @@ export function createDiagnosticsLogExporter(params: {
     serviceName,
   } = params;
   let logProvider: LoggerProvider | null = null;
-  const logSeverityMap = LOG_SEVERITY_MAP;
   let recordLogRecord:
     | ((
         evt: Extract<DiagnosticEventPayload, { type: "log.record" }>,
@@ -182,8 +176,8 @@ export function createDiagnosticsLogExporter(params: {
       metadata: DiagnosticEventMetadata,
     ): BuiltOtelLogRecord => {
       const logLevelName = evt.level || "INFO";
-      const severityNumber = logSeverityMap[logLevelName] ?? (9 as SeverityNumber);
-      const body = shouldCaptureOtelLogBody(contentCapturePolicy)
+      const severityNumber = LOG_SEVERITY_MAP[logLevelName] ?? (9 as SeverityNumber);
+      const body = captureContent
         ? normalizeOtelLogString(evt.message || "log", MAX_OTEL_LOG_BODY_CHARS)
         : "log";
       const attributes = Object.create(null) as Record<string, string | number | boolean>;
@@ -202,7 +196,9 @@ export function createDiagnosticsLogExporter(params: {
         assignOtelLogAttribute(attributes, "code.function", evt.code.functionName);
       }
       const traceContext = normalizedTrustedTraceContext(evt, metadata);
-      addTraceAttributes(attributes, traceContext);
+      if (traceContext?.traceFlags) {
+        attributes["openclaw.traceFlags"] = traceContext.traceFlags;
+      }
 
       const logRecord: LogRecord = {
         body,
@@ -211,7 +207,7 @@ export function createDiagnosticsLogExporter(params: {
         attributes: redactOtelAttributes(attributes),
         timestamp: evt.ts,
       };
-      const logContext = contextForTrustedTraceContext(evt, metadata);
+      const logContext = contextForTraceContext(traceContext);
       if (logContext) {
         logRecord.context = logContext;
       }
@@ -230,11 +226,11 @@ export function createDiagnosticsLogExporter(params: {
       const logRecord: LogRecord = {
         body: "openclaw.security.event",
         severityText,
-        severityNumber: logSeverityMap[severityText] ?? (9 as SeverityNumber),
+        severityNumber: LOG_SEVERITY_MAP[severityText] ?? (9 as SeverityNumber),
         attributes: redactOtelAttributes(attributes),
         timestamp: evt.ts,
       };
-      const logContext = contextForTrustedTraceContext(evt, metadata);
+      const logContext = contextForTraceContext(traceContext);
       if (logContext) {
         logRecord.context = logContext;
       }

@@ -1,6 +1,6 @@
 // Gateway CLI session history importer.
 // Augments local chat history with bound external Claude CLI transcripts.
-import { normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { SessionEntry } from "../config/sessions.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import { readClaudeCliSessionMessagesAsync } from "./cli-session-history.claude-snapshot.js";
@@ -8,7 +8,6 @@ import {
   type ClaudeCliFallbackSeed,
   CLAUDE_CLI_PROVIDER,
   readClaudeCliFallbackSeed,
-  readClaudeCliSessionMessages,
   resolveClaudeCliBindingSessionId,
 } from "./cli-session-history.claude.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js";
@@ -23,7 +22,6 @@ type CliSessionHistoryParams = {
   provider?: string;
   localMessages: unknown[];
   homeDir?: string;
-  preparedImportedMessages?: unknown[];
 };
 
 function resolveEligibleCliSessionBinding(params: CliSessionHistoryParams) {
@@ -38,32 +36,30 @@ function resolveEligibleCliSessionBinding(params: CliSessionHistoryParams) {
 }
 
 /** Resolves chat history plus whether a bound external transcript was actually incorporated. */
-export function resolveChatHistoryWithCliSessionImports(params: CliSessionHistoryParams): {
+export function resolveChatHistoryWithCliSessionImports(
+  params: CliSessionHistoryParams & { preparedImportedMessages: unknown[] },
+): {
   messages: unknown[];
   imported: boolean;
+  expanded: boolean;
 } {
   const binding = resolveEligibleCliSessionBinding(params);
   if (!binding) {
-    return { messages: params.localMessages, imported: false };
+    return { messages: params.localMessages, imported: false, expanded: false };
   }
-  const importedMessages =
-    params.preparedImportedMessages ??
-    readClaudeCliSessionMessages({
-      cliSessionId: binding.sessionId,
-      homeDir: params.homeDir,
-      localSessionId: params.entry?.sessionId,
-      reseedReceipt: binding.reseedReceipt,
-    });
+  const importedMessages = params.preparedImportedMessages;
   if (importedMessages.length === 0) {
-    return { messages: params.localMessages, imported: false };
+    return { messages: params.localMessages, imported: false, expanded: false };
   }
   const messages = mergeImportedChatHistoryMessages({
     localMessages: params.localMessages,
     importedMessages,
   });
-  return messages.length > params.localMessages.length
-    ? { messages, imported: true }
-    : { messages: params.localMessages, imported: false };
+  return {
+    messages,
+    imported: messages !== params.localMessages,
+    expanded: messages.length > params.localMessages.length,
+  };
 }
 
 /** Acquires one request-local redacted view of the process-owned external snapshot. */

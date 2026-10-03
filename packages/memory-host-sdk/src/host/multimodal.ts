@@ -1,4 +1,4 @@
-// Memory Host SDK module implements multimodal behavior.
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Multimodal memory settings and file classification helpers.
@@ -40,13 +40,7 @@ function normalizeMemoryMultimodalModalities(
   if (raw === undefined || raw.includes("all")) {
     return [...MEMORY_MULTIMODAL_MODALITIES];
   }
-  const normalized = new Set<MemoryMultimodalModality>();
-  for (const value of raw) {
-    if (value === "image" || value === "audio") {
-      normalized.add(value);
-    }
-  }
-  return Array.from(normalized);
+  return [...new Set(raw.filter((value) => value === "image" || value === "audio"))];
 }
 
 /** Normalize user multimodal settings, including disabled-state empty modality list. */
@@ -56,10 +50,13 @@ export function normalizeMemoryMultimodalSettings(raw: {
   maxFileBytes?: number;
 }): MemoryMultimodalSettings {
   const enabled = raw.enabled === true;
-  const maxFileBytes =
-    typeof raw.maxFileBytes === "number" && Number.isFinite(raw.maxFileBytes)
-      ? Math.max(1, Math.floor(raw.maxFileBytes))
-      : DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES;
+  const maxFileBytes = resolveIntegerOption(
+    raw.maxFileBytes,
+    DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES,
+    {
+      min: 1,
+    },
+  );
   return {
     enabled,
     modalities: enabled ? normalizeMemoryMultimodalModalities(raw.modalities) : [],
@@ -106,12 +103,9 @@ export function classifyMemoryMultimodalPath(
     return null;
   }
   const lower = normalizeLowercaseStringOrEmpty(filePath);
-  for (const modality of settings.modalities) {
-    for (const extension of getMemoryMultimodalExtensions(modality)) {
-      if (lower.endsWith(extension)) {
-        return modality;
-      }
-    }
-  }
-  return null;
+  return (
+    settings.modalities.find((modality) =>
+      getMemoryMultimodalExtensions(modality).some((extension) => lower.endsWith(extension)),
+    ) ?? null
+  );
 }

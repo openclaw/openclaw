@@ -3,12 +3,14 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 
 const CHANNEL_SOURCE_TURN_ID_PREFIX = "channel-user:v1:";
-const CHANNEL_SOURCE_TURN_ID = Symbol("openclaw.channelSourceTurnId");
-const CHANNEL_SOURCE_TURN_SAME_THREAD_REQUIRED = Symbol(
+// Host and SDK bundles exchange these non-JSON context facts within one process.
+const CHANNEL_SOURCE_TURN_ID = Symbol.for("openclaw.channelSourceTurnId");
+const CHANNEL_SOURCE_TURN_SAME_THREAD_REQUIRED = Symbol.for(
   "openclaw.channelSourceTurnSameThreadRequired",
 );
 
@@ -25,6 +27,26 @@ type ChannelSourceTurnContext = object & {
  */
 export function shouldMintChannelSourceTurnId(ingressProvider: string | undefined): boolean {
   return !isInternalMessageChannel(ingressProvider);
+}
+
+/** Preserve the admitted input identity when a queued or recovered turn gets a new run ID. */
+export function resolveReplySourceTurnId(params: {
+  sourceTurnId?: string;
+  admissionRunId?: string;
+  ingressProvider?: string;
+  entry?: Pick<SessionEntry, "restartRecoveryDeliveryRunId" | "restartRecoveryDeliverySourceRunId">;
+}): string | undefined {
+  const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
+  if (sourceTurnId) {
+    return sourceTurnId;
+  }
+  const admissionRunId = normalizeOptionalString(params.admissionRunId);
+  if (!admissionRunId || !isInternalMessageChannel(params.ingressProvider)) {
+    return undefined;
+  }
+  return params.entry?.restartRecoveryDeliveryRunId === admissionRunId
+    ? (normalizeOptionalString(params.entry.restartRecoveryDeliverySourceRunId) ?? admissionRunId)
+    : admissionRunId;
 }
 
 /**

@@ -105,81 +105,40 @@ export function normalizeSecretInputModeInput(
   return undefined;
 }
 
-/** Applies a CLI-provided API key when its provider selector matches this auth method. */
-async function maybeApplyApiKeyFromOption(params: {
-  token: string | undefined;
-  tokenProvider: string | undefined;
-  secretInputMode?: SecretInputMode;
-  expectedProviders: string[];
-  normalize: (value: string) => string;
-  validate?: (value: string) => string | undefined;
-  setCredential: (apiKey: SecretInput, mode?: SecretInputMode) => Promise<void>;
-}): Promise<string | undefined> {
-  const tokenProvider = normalizeTokenProviderInput(params.tokenProvider);
-  const expectedProviders = params.expectedProviders
-    .map((provider) => normalizeTokenProviderInput(provider))
-    .filter((provider): provider is string => Boolean(provider));
-  if (!params.token || !tokenProvider || !expectedProviders.includes(tokenProvider)) {
-    return undefined;
-  }
-  const apiKey = params.normalize(params.token);
-  const validationError = params.validate?.(apiKey);
-  if (validationError) {
-    throw new Error(validationError);
-  }
-  await params.setCredential(apiKey, params.secretInputMode);
-  return apiKey;
-}
-
 /** Resolves an API key from CLI options first, then environment or prompt fallback. */
-export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
-  token: string | undefined;
-  tokenProvider: string | undefined;
-  secretInputMode?: SecretInputMode;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-  expectedProviders: string[];
-  provider: string;
-  envLabel: string;
-  promptMessage: string;
-  normalize: (value: string) => string;
-  validate: (value: string) => string | undefined;
-  prompter: WizardPrompter;
-  setCredential: (apiKey: SecretInput, mode?: SecretInputMode) => Promise<void>;
-  noteMessage?: string;
-  noteTitle?: string;
-}): Promise<string> {
-  const optionApiKey = await maybeApplyApiKeyFromOption({
-    token: params.token,
-    tokenProvider: params.tokenProvider,
-    secretInputMode: params.secretInputMode,
-    expectedProviders: params.expectedProviders,
-    normalize: params.normalize,
-    validate: params.validate,
-    setCredential: params.setCredential,
-  });
-  if (optionApiKey) {
-    return optionApiKey;
+export async function ensureApiKeyFromOptionEnvOrPrompt(
+  params: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0] & {
+    token: string | undefined;
+    tokenProvider: string | undefined;
+    expectedProviders: string[];
+    noteMessage?: string;
+    noteTitle?: string;
+  },
+): Promise<string> {
+  const tokenProvider = normalizeTokenProviderInput(params.tokenProvider);
+  if (
+    params.token &&
+    tokenProvider &&
+    params.expectedProviders.some(
+      (provider) => normalizeTokenProviderInput(provider) === tokenProvider,
+    )
+  ) {
+    const apiKey = params.normalize(params.token);
+    const validationError = params.validate(apiKey);
+    if (validationError) {
+      throw new Error(validationError);
+    }
+    await params.setCredential(apiKey, params.secretInputMode);
+    if (apiKey) {
+      return apiKey;
+    }
   }
 
   if (params.noteMessage) {
     await params.prompter.note(params.noteMessage, params.noteTitle);
   }
 
-  return await ensureApiKeyFromEnvOrPrompt({
-    config: params.config,
-    env: params.env,
-    workspaceDir: params.workspaceDir,
-    provider: params.provider,
-    envLabel: params.envLabel,
-    promptMessage: params.promptMessage,
-    normalize: params.normalize,
-    validate: params.validate,
-    prompter: params.prompter,
-    secretInputMode: params.secretInputMode,
-    setCredential: params.setCredential,
-  });
+  return await ensureApiKeyFromEnvOrPrompt(params);
 }
 
 /** Resolves an API key from environment or interactive prompt and records the chosen secret mode. */
@@ -219,23 +178,16 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
   });
 
   if (selectedMode === "ref") {
-    if (typeof params.prompter.select !== "function") {
-      const fallback = resolveRefFallbackInput({
-        config: params.config,
-        provider: params.provider,
-        preferredEnvVar: envKey?.source ? extractEnvVarFromSourceLabel(envKey.source) : undefined,
-        env,
-      });
-      await params.setCredential(fallback.ref, selectedMode);
-      return fallback.resolvedValue;
-    }
-    const resolved = await promptSecretRef({
+    const refParams = {
       provider: params.provider,
       config: params.config,
-      prompter: params.prompter,
       preferredEnvVar: envKey?.source ? extractEnvVarFromSourceLabel(envKey.source) : undefined,
       env,
-    });
+    };
+    const resolved =
+      typeof params.prompter.select !== "function"
+        ? resolveRefFallbackInput(refParams)
+        : await promptSecretRef({ ...refParams, prompter: params.prompter });
     await params.setCredential(resolved.ref, selectedMode);
     return resolved.resolvedValue;
   }

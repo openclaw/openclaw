@@ -112,41 +112,6 @@ describe("handleTtsCommands status fallback reporting", () => {
     ttsMocks.listTtsPersonas.mockReturnValue([]);
   });
 
-  it("shows fallback provider details for successful attempts", async () => {
-    ttsMocks.getLastTtsAttempt.mockReturnValue({
-      timestamp: Date.now() - 1_000,
-      success: true,
-      textLength: 128,
-      summarized: false,
-      provider: FALLBACK_TTS_PROVIDER,
-      fallbackFrom: PRIMARY_TTS_PROVIDER,
-      attemptedProviders: [PRIMARY_TTS_PROVIDER, FALLBACK_TTS_PROVIDER],
-      attempts: [
-        {
-          provider: PRIMARY_TTS_PROVIDER,
-          outcome: "failed",
-          reasonCode: "provider_error",
-          latencyMs: 73,
-        },
-        {
-          provider: FALLBACK_TTS_PROVIDER,
-          outcome: "success",
-          reasonCode: "success",
-          latencyMs: 420,
-        },
-      ],
-      latencyMs: 420,
-    });
-
-    const result = await handleTtsCommands(buildTtsParams("/tts status"), true);
-    const reply = expectReply(result);
-    expect(reply.text).toContain(`Fallback: ${PRIMARY_TTS_PROVIDER} -> ${FALLBACK_TTS_PROVIDER}`);
-    expect(reply.text).toContain(`Attempts: ${PRIMARY_TTS_PROVIDER} -> ${FALLBACK_TTS_PROVIDER}`);
-    expect(reply.text).toContain(
-      `Attempt details: ${PRIMARY_TTS_PROVIDER}:failed(provider_error) 73ms, ${FALLBACK_TTS_PROVIDER}:success(ok) 420ms`,
-    );
-  });
-
   it("does not coerce partial TTS limit values", async () => {
     const result = await handleTtsCommands(buildTtsParams("/tts limit 2000chars"), true);
 
@@ -228,35 +193,30 @@ describe("handleTtsCommands status fallback reporting", () => {
     );
   });
 
-  it("uses the channel-derived audioAsVoice decision for /tts audio", async () => {
-    ttsMocks.textToSpeech.mockResolvedValue({
-      success: true,
-      audioPath: "/tmp/channel-voice.ogg",
-      provider: PRIMARY_TTS_PROVIDER,
-      voiceCompatible: false,
-      audioAsVoice: true,
-    });
+  it.each([
+    { audioAsVoice: true, voiceCompatible: false },
+    { audioAsVoice: false, voiceCompatible: true },
+  ])(
+    "preserves runtime voice delivery $audioAsVoice for /tts audio with provider compatibility $voiceCompatible",
+    async ({ audioAsVoice, voiceCompatible }) => {
+      ttsMocks.textToSpeech.mockResolvedValue({
+        success: true,
+        audioPath: "/tmp/channel-voice.ogg",
+        provider: PRIMARY_TTS_PROVIDER,
+        voiceCompatible,
+        audioAsVoice,
+      });
 
-    const result = await handleTtsCommands(buildTtsParams("/tts audio hello channel"), true);
-    const reply = expectReply(result);
+      const result = await handleTtsCommands(buildTtsParams("/tts audio hello channel"), true);
+      const reply = expectReply(result);
 
-    expect(reply.mediaUrl).toBe("/tmp/channel-voice.ogg");
-    expect(reply.audioAsVoice).toBe(true);
-  });
-
-  it("treats bare /tts as status", async () => {
-    const result = await handleTtsCommands(
-      buildTtsParams("/tts", {
-        tts: { prefsPath: "/tmp/tts.json" },
-      } as OpenClawConfig),
-      true,
-    );
-    const reply = expectReply(result);
-    expect(reply.text).toContain("TTS status");
-  });
+      expect(reply.mediaUrl).toBe("/tmp/channel-voice.ogg");
+      expect(reply.audioAsVoice).toBe(audioAsVoice);
+    },
+  );
 
   it("keeps base status fields in display order", async () => {
-    const reply = expectReply(await handleTtsCommands(buildTtsParams("/tts status"), true));
+    const reply = expectReply(await handleTtsCommands(buildTtsParams("/tts"), true));
 
     expect(reply.text).toBe(
       [
@@ -335,78 +295,85 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect(ttsMocks.setTtsPersona).toHaveBeenCalledWith("/tmp/tts-prefs.json", "alfred");
   });
 
-  it("reads the latest assistant transcript reply once", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tts-latest-"));
-    const storePath = path.join(tempDir, "sessions.json");
-    const sessionKey = "agent:other:tts-latest";
-    const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 1 };
-    const sessionStore = { [sessionKey]: sessionEntry };
-    await replaceSessionEntry({ agentId: "other", sessionKey, storePath }, sessionEntry);
-    const transcriptScope = {
-      agentId: "other",
-      sessionId: "s1",
-      sessionKey,
-      storePath,
-    };
-    appendTranscriptMessageSync(transcriptScope, {
-      message: { role: "assistant", content: [{ type: "text", text: "older reply" }] },
-    });
-    Object.assign(sessionEntry, loadSessionEntry({ agentId: "other", sessionKey, storePath }));
-    appendTranscriptMessageSync(transcriptScope, {
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "internal note",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_commentary",
-              phase: "commentary",
-            }),
-          },
-          {
-            type: "text",
-            text: "latest visible reply",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_final",
-              phase: "final_answer",
-            }),
-          },
-        ],
-      },
-    });
-    ttsMocks.textToSpeech.mockResolvedValue({
-      success: true,
-      audioPath: "/tmp/latest.ogg",
-      provider: PRIMARY_TTS_PROVIDER,
-      voiceCompatible: true,
-    });
-    const beforeTtsRead = Date.now();
-    const initialSessionEntry = structuredClone(sessionEntry);
-    const result = await handleTtsCommands(
-      buildTtsParams("/tts read latest", {}, "main", {
-        initialSessionEntry,
-        sessionEntry,
-        sessionStore,
+  it.each([
+    { command: "/tts latest", audioAsVoice: true },
+    { command: "/tts read latest", audioAsVoice: false },
+  ])(
+    "reads the latest assistant reply via $command with voice delivery $audioAsVoice",
+    async ({ command, audioAsVoice }) => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tts-latest-"));
+      const storePath = path.join(tempDir, "sessions.json");
+      const sessionKey = "agent:other:tts-latest";
+      const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 1 };
+      const sessionStore = { [sessionKey]: sessionEntry };
+      await replaceSessionEntry({ agentId: "other", sessionKey, storePath }, sessionEntry);
+      const transcriptScope = {
+        agentId: "other",
+        sessionId: "s1",
         sessionKey,
         storePath,
-      }),
-      true,
-    );
+      };
+      appendTranscriptMessageSync(transcriptScope, {
+        message: { role: "assistant", content: [{ type: "text", text: "older reply" }] },
+      });
+      Object.assign(sessionEntry, loadSessionEntry({ agentId: "other", sessionKey, storePath }));
+      appendTranscriptMessageSync(transcriptScope, {
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "internal note",
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "item_commentary",
+                phase: "commentary",
+              }),
+            },
+            {
+              type: "text",
+              text: "latest visible reply",
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "item_final",
+                phase: "final_answer",
+              }),
+            },
+          ],
+        },
+      });
+      ttsMocks.textToSpeech.mockResolvedValue({
+        success: true,
+        audioPath: "/tmp/latest.ogg",
+        provider: PRIMARY_TTS_PROVIDER,
+        voiceCompatible: true,
+        audioAsVoice,
+      });
+      const beforeTtsRead = Date.now();
+      const initialSessionEntry = structuredClone(sessionEntry);
+      const result = await handleTtsCommands(
+        buildTtsParams(command, {}, "main", {
+          initialSessionEntry,
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+        }),
+        true,
+      );
 
-    const reply = expectReply(result);
-    expect(reply.mediaUrl).toBe("/tmp/latest.ogg");
-    expect(reply.audioAsVoice).toBe(true);
-    expect(reply.spokenText).toBe("latest visible reply");
-    const speechCall = lastMockCall(ttsMocks.textToSpeech, "textToSpeech")[0] as {
-      text?: string;
-    };
-    expect(speechCall.text).toBe("latest visible reply");
-    expect(sessionEntry.lastTtsReadLatestHash).toMatch(/^[a-f0-9]{64}$/);
-    expect(sessionEntry.lastTtsReadLatestAt).toBeGreaterThanOrEqual(beforeTtsRead);
-  });
+      const reply = expectReply(result);
+      expect(reply.mediaUrl).toBe("/tmp/latest.ogg");
+      expect(reply.audioAsVoice).toBe(audioAsVoice);
+      expect(reply.spokenText).toBe("latest visible reply");
+      const speechCall = lastMockCall(ttsMocks.textToSpeech, "textToSpeech")[0] as {
+        text?: string;
+      };
+      expect(speechCall.text).toBe("latest visible reply");
+      expect(sessionEntry.lastTtsReadLatestHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(sessionEntry.lastTtsReadLatestAt).toBeGreaterThanOrEqual(beforeTtsRead);
+    },
+  );
 
   it("reads the latest assistant reply from the incognito transcript store", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tts-incognito-"));

@@ -1,14 +1,19 @@
 // Control UI plugin-tab cookie auth lets an authenticated UI open gateway-auth plugin iframes.
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { TLSSocket } from "node:tls";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS,
   CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE,
   CONTROL_UI_PLUGIN_AUTH_PROBE_ORIGIN_QUERY,
   CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY,
 } from "./control-ui-contract.js";
+import { controlUiPluginAssetPrefix } from "./control-ui-plugin-assets-contract.js";
 import type { ControlUiPluginTabAuthGrant } from "./control-ui-plugin-tabs.js";
+import { isLocalDirectRequest, isLoopbackHost, resolveHostName } from "./net.js";
 import { isOperatorScope, type OperatorScope } from "./operator-scopes.js";
 import { resolvePluginRoutePathContext } from "./server/plugins-http/path-context.js";
 
@@ -30,16 +35,18 @@ type PluginAuthCookiePayload = {
   profileId?: string;
 };
 
+type PluginAuthCookieOptions = {
+  generation: string | undefined;
+  profileId?: string;
+  nowMs?: number;
+  basePath?: string;
+  request?: IncomingMessage;
+};
+
 function signPayload(encodedPayload: string): string {
   return createHmac("sha256", controlUiPluginAuthCookieSecret)
     .update(encodedPayload)
     .digest("base64url");
-}
-
-function safeEqual(a: string, b: string): boolean {
-  const left = createHash("sha256").update(a).digest();
-  const right = createHash("sha256").update(b).digest();
-  return timingSafeEqual(left, right);
 }
 
 function readCookieHeaderValues(
@@ -67,35 +74,21 @@ function cookieNameForPlugin(pluginId: string): string {
   return `${CONTROL_UI_PLUGIN_AUTH_COOKIE_PREFIX}_${pluginKey}`;
 }
 
-function hasInvalidCookiePathCharacter(path: string): boolean {
-  for (const character of path) {
-    const code = character.charCodeAt(0);
-    if (character === ";" || code <= 0x1f || code === 0x7f) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function normalizeCookiePath(path: string): string | undefined {
-  if (!path.startsWith("/") || path.startsWith("//") || hasInvalidCookiePathCharacter(path)) {
+  if (
+    !path.startsWith("/") ||
+    path.startsWith("//") ||
+    path.includes(";") ||
+    containsAsciiControlCharacter(path)
+  ) {
     return undefined;
   }
-  try {
-    const normalized = new URL(path, "http://localhost").pathname;
-    return normalized === path ? normalized : undefined;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(path, "http://localhost")?.pathname === path ? path : undefined;
 }
 
 function createControlUiPluginAuthCookie(
   grant: ControlUiPluginTabAuthGrant,
-  params: {
-    generation: string | undefined;
-    profileId?: string;
-    nowMs?: number;
-  },
+  params: PluginAuthCookieOptions,
 ) {
   const path = normalizeCookiePath(grant.path);
   if (!path || !grant.pluginId || !params.generation) {
@@ -121,29 +114,33 @@ function createControlUiPluginAuthCookie(
   };
   const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   const sig = signPayload(encodedPayload);
+  const isNativeAsset =
+    grant.match === "prefix" &&
+    path === controlUiPluginAssetPrefix(grant.pluginId, params.basePath);
+  // Native assets load in the UI's own origin. Only a verified direct HTTP
+  // loopback request may omit Secure so WebKit can retain and send the cookie.
+  const req = params.request;
+  const allowInsecureNativeAssets =
+    req &&
+    !(req.socket instanceof TLSSocket) &&
+    isLocalDirectRequest(req) &&
+    isLoopbackHost(resolveHostName(req.headers.host));
+  const secure = !isNativeAsset || !allowInsecureNativeAssets;
   // The sandboxed frame has an opaque origin, so descendant requests are
   // cross-site for cookie purposes even when the panel URL is same-host.
   // CHIPS cannot be used here: its cross-site-ancestor key prevents nested
   // opaque frames from receiving the grant. HTTP auth limits it to safe reads.
-  return `${cookieNameForPlugin(grant.pluginId)}=v1.${encodedPayload}.${sig}; Path=${path}; HttpOnly; Secure; SameSite=None; Max-Age=${Math.ceil(CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS / 1000)}`;
+  return `${cookieNameForPlugin(grant.pluginId)}=v1.${encodedPayload}.${sig}; Path=${path}; HttpOnly;${secure ? " Secure;" : ""} SameSite=${isNativeAsset ? "Strict" : "None"}; Max-Age=${Math.ceil(CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS / 1000)}`;
 }
 
 export function setControlUiPluginAuthCookie(
   res: ServerResponse,
   grants: readonly ControlUiPluginTabAuthGrant[],
-  params: {
-    generation: string | undefined;
-    profileId?: string;
-    nowMs?: number;
-  },
+  params: PluginAuthCookieOptions,
 ) {
   const issuedGrants: ControlUiPluginTabAuthGrant[] = [];
   const cookiesToAdd = grants.flatMap((grant) => {
-    const cookie = createControlUiPluginAuthCookie(grant, {
-      generation: params.generation,
-      profileId: params.profileId,
-      nowMs: params.nowMs,
-    });
+    const cookie = createControlUiPluginAuthCookie(grant, params);
     if (!cookie) {
       return [];
     }
@@ -208,7 +205,7 @@ export function resolveControlUiPluginAuthCookieGrants(
       continue;
     }
     const [, encodedPayload, sig] = parts;
-    if (!encodedPayload || !sig || !safeEqual(sig, signPayload(encodedPayload))) {
+    if (!encodedPayload || !sig || !safeEqualSecret(sig, signPayload(encodedPayload))) {
       continue;
     }
     try {
@@ -272,17 +269,10 @@ export function respondControlUiPluginAuthCookieProbe(
     return false;
   }
   const targetOrigin = url.searchParams.get(CONTROL_UI_PLUGIN_AUTH_PROBE_ORIGIN_QUERY);
-  let validTargetOrigin = false;
-  if (targetOrigin) {
-    try {
-      const parsedOrigin = new URL(targetOrigin);
-      validTargetOrigin =
-        parsedOrigin.origin === targetOrigin &&
-        (parsedOrigin.protocol === "https:" || parsedOrigin.protocol === "http:");
-    } catch {
-      validTargetOrigin = false;
-    }
-  }
+  const parsedOrigin = targetOrigin ? URL.parse(targetOrigin) : null;
+  const validTargetOrigin =
+    parsedOrigin?.origin === targetOrigin &&
+    (parsedOrigin?.protocol === "https:" || parsedOrigin?.protocol === "http:");
   if (!/^[a-zA-Z0-9_-]{16,128}$/.test(nonce) || !validTargetOrigin) {
     res.statusCode = 400;
     res.setHeader("Cache-Control", "no-store");

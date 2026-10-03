@@ -1,10 +1,12 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
+# Helper imports must not write bytecode caches outside the signing roots.
+export PYTHONDONTWRITEBYTECODE=1
+
 APP_BUNDLE="dist/OpenClaw.app"
-IDENTITY="${SIGN_IDENTITY:-}"
 SIGNING_VARIANT="${OPENCLAW_MAC_SIGNING_VARIANT:-standard}"
-ELEVATION_IDENTITY="Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/mac-signing-identity.sh"
 ELEVATION_TEAM_ID="FWJYW4S8P8"
 TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
 CODESIGN_TIMESTAMP_RETRY_ATTEMPTS="${CODESIGN_TIMESTAMP_RETRY_ATTEMPTS:-8}"
@@ -44,9 +46,6 @@ case "$SIGNING_VARIANT" in
     ;;
 esac
 
-if [[ "$SIGNING_VARIANT" == "elevation-host" && -z "$IDENTITY" ]]; then
-  IDENTITY="$ELEVATION_IDENTITY"
-fi
 if [[ "$SIGNING_VARIANT" == "elevation-host" && "$DISABLE_LIBRARY_VALIDATION" == "1" ]]; then
   echo "ERROR: Elevation host signing forbids DISABLE_LIBRARY_VALIDATION=1." >&2
   exit 1
@@ -87,61 +86,7 @@ fi
 # Freeze the physical policy root now; resolving it after a swap could authorize the replacement.
 APP_MUTATION_ROOT="$(cd -P -- "$APP_BUNDLE" && pwd -P)"
 
-select_identity() {
-  local preferred available first
-
-  # Prefer a Developer ID Application cert.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Developer ID Application/ { print $2; exit }')"
-
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Next, try Apple Distribution.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Distribution/ { print $2; exit }')"
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Then, try Apple Development.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Development/ { print $2; exit }')"
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Fallback to the first valid signing identity.
-  available="$(security find-identity -p codesigning -v 2>/dev/null \
-    | sed -n 's/.*\"\\(.*\\)\"/\\1/p')"
-
-  if [ -n "$available" ]; then
-    first="$(printf '%s\n' "$available" | head -n1)"
-    echo "$first"
-    return
-  fi
-
-  return 1
-}
-
-if [ -z "$IDENTITY" ]; then
-  if ! IDENTITY="$(select_identity)"; then
-    if [[ "${ALLOW_ADHOC_SIGNING:-}" == "1" ]]; then
-      echo "WARN: No signing identity found. Falling back to ad-hoc signing (-)." >&2
-      echo "      !!! WARNING: Ad-hoc signed apps do NOT persist TCC permissions (Accessibility, etc) !!!" >&2
-      echo "      !!! You will need to re-grant permissions every time you restart the app.         !!!" >&2
-      IDENTITY="-"
-    else
-      echo "ERROR: No signing identity found. Set SIGN_IDENTITY to a valid codesigning certificate." >&2
-      echo "       Alternatively, set ALLOW_ADHOC_SIGNING=1 to fallback to ad-hoc signing (limitations apply)." >&2
-      exit 1
-    fi
-  fi
-fi
+IDENTITY="$(resolve_mac_signing_identity)"
 
 echo "Using signing identity: $IDENTITY"
 if [[ "$IDENTITY" == "-" ]]; then
@@ -206,7 +151,8 @@ ENT_TMP_DIR=$(mktemp -d -t openclaw-entitlements.XXXXXX)
 trap cleanup EXIT
 ENT_TMP_DIR="$(cd -P -- "$ENT_TMP_DIR" && pwd -P)"
 ENT_TMP_APP="$ENT_TMP_DIR/app.plist"
-ENT_TMP_NODE="$ENT_TMP_DIR/node.plist"
+ENT_TMP_JIT="$ENT_TMP_DIR/jit.plist"
+ENT_TMP_BUN="$ENT_TMP_DIR/bun.plist"
 CODESIGN_OUTPUT="$ENT_TMP_DIR/codesign-output"
 NATIVE_INVENTORY="$ENT_TMP_DIR/native-inventory"
 INVENTORY_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/mac-native-inventory.py"
@@ -253,14 +199,25 @@ fi
 
 APP_ENTITLEMENTS="$ENT_TMP_APP"
 
-# V8 and bundled standalone JS executables need JIT memory under hardened
-# runtime. All native libraries are re-signed below; library validation stays on.
-cat > "$ENT_TMP_NODE" <<'PLIST'
+# The Claude SDK's standalone CLI needs JIT memory but retains library validation.
+cat > "$ENT_TMP_JIT" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>com.apple.security.cs.allow-jit</key><true/>
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+</dict></plist>
+PLIST
+
+# Bun executes arbitrary plugin JS and must load its non-Team-signed native addons.
+# Keep this exception on the private runtime; bundled natives are still Team-signed.
+cat > "$ENT_TMP_BUN" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>com.apple.security.cs.allow-jit</key><true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
 </dict></plist>
 PLIST
 
@@ -431,6 +388,11 @@ fi
 run_bundle_mutation xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 
 # Sign bundled helper binaries before signing the app bundle.
+MAC_CONTROL_CLI="$APP_BUNDLE/Contents/MacOS/openclaw-mac"
+if [ -f "$MAC_CONTROL_CLI" ]; then
+  echo "Signing macOS control CLI"; sign_plain_item "$MAC_CONTROL_CLI"
+fi
+
 MLX_TTS_HELPER="$APP_BUNDLE/Contents/MacOS/openclaw-mlx-tts"
 if [ -f "$MLX_TTS_HELPER" ]; then
   echo "Signing MLX TTS helper"; sign_plain_item "$MLX_TTS_HELPER"
@@ -441,25 +403,32 @@ if [ -f "$CUA_DRIVER" ]; then
   echo "Signing embedded CUA driver"; sign_plain_item "$CUA_DRIVER"
 fi
 
+while IFS= read -r -d '' helper_kind && IFS= read -r -d '' helper_file; do
+  [[ "$helper_kind" == "executable" ]] || continue
+  [[ "$helper_file" == "$APP_BUNDLE/Contents/Resources/cloudflared/"* ]] || continue
+  sign_plain_item "$helper_file"
+  codesign --verify --strict "$helper_file"
+done < "$NATIVE_INVENTORY"
+
 # Seal all native payloads before the enclosing app; npm packages can carry
 # standalone executables and addons below arbitrarily nested dependency roots.
-WORKER_ROOT="$APP_BUNDLE/Contents/Resources/node-worker"
-while IFS= read -r -d '' worker_kind && IFS= read -r -d '' worker_file; do
-  [[ "$worker_kind" == "executable" || "$worker_kind" == "library" ]] || continue
-  [[ "$worker_file" == "$WORKER_ROOT/"* ]] || continue
-  worker_relative="${worker_file#"$WORKER_ROOT"/}"
-  # Node and the SDK's standalone Bun CLI own JS execution. Other native
-  # helpers must not inherit JIT permissions merely because they execute.
-  if [[ "$worker_kind" == "executable" && (
-    "$worker_relative" == arm64/bin/node || "$worker_relative" == x86_64/bin/node ||
-    "$worker_relative" == */node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude ||
-    "$worker_relative" == */node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/claude
+RUNTIME_ROOT="$APP_BUNDLE/Contents/Resources/runtime"
+while IFS= read -r -d '' runtime_kind && IFS= read -r -d '' runtime_file; do
+  [[ "$runtime_kind" == "executable" || "$runtime_kind" == "library" ]] || continue
+  [[ "$runtime_file" == "$RUNTIME_ROOT/"* ]] || continue
+  runtime_relative="${runtime_file#"$RUNTIME_ROOT"/}"
+  # Only the private Bun runtime hosts arbitrary installed plugin native addons.
+  if [[ "$runtime_kind" == "executable" && "$runtime_relative" == bin/bun ]]; then
+    sign_item "$runtime_file" "$ENT_TMP_BUN"
+  elif [[ "$runtime_kind" == "executable" && (
+    "$runtime_relative" == */node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude ||
+    "$runtime_relative" == */node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/claude
   ) ]]; then
-    sign_item "$worker_file" "$ENT_TMP_NODE"
+    sign_item "$runtime_file" "$ENT_TMP_JIT"
   else
-    sign_plain_item "$worker_file"
+    sign_plain_item "$runtime_file"
   fi
-  codesign --verify --strict "$worker_file"
+  codesign --verify --strict "$runtime_file"
 done < "$NATIVE_INVENTORY"
 
 # Sign Sparkle deeply if present

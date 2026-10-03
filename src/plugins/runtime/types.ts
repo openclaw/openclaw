@@ -6,6 +6,7 @@ import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
+import type { RuntimeSessionFactsResult } from "./types-session-facts.js";
 
 export type { RuntimeLogger };
 
@@ -14,6 +15,8 @@ type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 // ── Subagent runtime types ──────────────────────────────────────────
 
 type SubagentRunParams = {
+  /** Revalidate command authority at the host's run admission boundary. */
+  assertCurrent?: () => void;
   sessionKey: string;
   message: string;
   /** Run with an exact empty tool surface. */
@@ -32,6 +35,15 @@ type SubagentRunParams = {
   completionDelivery?: "current-requester";
   idempotencyKey?: string;
   cwd?: string;
+};
+
+type SubagentCompleteParams = {
+  agentId: string;
+  message: string;
+  extraSystemPrompt?: string;
+  model?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 type PluginManagedWorktree = {
@@ -132,8 +144,32 @@ export type PluginRuntime = PluginRuntimeCore & {
       params?: Record<string, unknown>,
       options?: RuntimeGatewayRequestOptions,
     ) => Promise<T>;
+    /** Open this plugin's native panel in the requesting Control UI, preserving caller authority. */
+    openPluginPanel: (params: {
+      panelId: string;
+      sessionKey: string;
+      agentId?: string;
+    }) => Promise<{ ok: true }>;
+    /** Bounded redacted facts for up to 40 sessions; excludes incognito and rechecks the bound caller/lifecycle. */
+    readSessionFacts: (params: {
+      sessionKeys: readonly string[];
+    }) => Promise<RuntimeSessionFactsResult>;
+    /** Keyed fact invalidations; callers own unsubscribe. Broad store changes are excluded. */
+    subscribeSessionChanges: (
+      listener: (event: { agentId: string; sessionKey: string; factsInvalidated?: string }) => void,
+    ) => () => void;
+    withUserProfileIdentity?: <T>(
+      params: {
+        profileId: string;
+        emails: readonly string[];
+        githubAccountIds?: readonly number[];
+      },
+      run: (assertCurrent: () => void) => Promise<T>,
+    ) => Promise<T>;
   };
   subagent: {
+    /** Fresh, tool-free background inference under the existing subagent model policy. */
+    complete: (params: SubagentCompleteParams) => Promise<{ text: string }>;
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<AgentWaitResult>;
     getSessionMessages: (
@@ -190,6 +226,7 @@ export type PluginRuntime = PluginRuntimeCore & {
       baseRef?: string;
       ownerKind: "workboard";
       ownerId: string;
+      commitGuard?: () => void;
     }) => Promise<PluginManagedWorktree>;
     release: (params: { path: string }) => Promise<void>;
     removeIfLossless: (params: {
@@ -207,6 +244,9 @@ export type CreatePluginRuntimeOptions = {
   hooks?: PluginRuntime["hooks"];
   subagent?: PluginRuntime["subagent"];
   nodes?: PluginRuntime["nodes"];
+  /** Native policy facades avoid re-evaluating SDK dependencies during registration. */
+  modelAuth?: PluginRuntime["modelAuth"];
+  modelConfig?: PluginRuntime["modelConfig"];
   allowGatewaySubagentBinding?: boolean;
 };
 

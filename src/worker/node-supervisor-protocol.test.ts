@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import { testWorkerDescriptor } from "../node-host/node-worker-supervisor.test-support.js";
 import {
   NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
+  nodeWorkerPlanHash,
   parseNodeWorkerConnectionFailureMessage,
   parseNodeWorkerEnvironmentStopInput,
   parseNodeWorkerLaunchInput,
+  parseNodeWorkerLookupInput,
+  NODE_WORKER_STATUS_WAIT_MAX_MS,
   parseNodeWorkerSupervisorReceipt,
   type NodeWorkerSupervisorIdentity,
 } from "./node-supervisor-protocol.js";
@@ -22,7 +25,82 @@ const identity: NodeWorkerSupervisorIdentity = {
   runId: "run-1",
 };
 
+describe("node worker status wait request", () => {
+  it.each([undefined, 1, NODE_WORKER_STATUS_WAIT_MAX_MS])(
+    "accepts bounded optional wait %s",
+    (waitMs) => {
+      const input = { launchId: identity.launchId, ...(waitMs === undefined ? {} : { waitMs }) };
+      expect(parseNodeWorkerLookupInput(JSON.stringify(input))).toEqual(input);
+    },
+  );
+
+  it.each([0, -1, 1.5, "100", null, NODE_WORKER_STATUS_WAIT_MAX_MS + 1])(
+    "rejects invalid wait %s",
+    (waitMs) => {
+      expect(() =>
+        parseNodeWorkerLookupInput(JSON.stringify({ launchId: identity.launchId, waitMs })),
+      ).toThrow("INVALID_REQUEST");
+    },
+  );
+});
+
 describe("node worker supervisor launch request", () => {
+  it.each([undefined, false, true])(
+    "preserves published authoring %s and negotiated idle retention",
+    (multipleProfiles) => {
+      const base = testWorkerDescriptor("/tmp/worker", "success", "turn-1");
+      const descriptor = {
+        ...base,
+        assignment: {
+          ...base.assignment,
+          ...(multipleProfiles === undefined ? {} : { skillAuthoring: { multipleProfiles } }),
+        },
+      };
+      const input = {
+        environmentSession: 1,
+        launchId: "turn-1",
+        gatewayNamespace: "gateway-1",
+        expectedBundleHash: descriptor.admission.handshake.bundleHash,
+        placementGeneration: 4,
+        descriptor,
+      };
+      const legacy = parseNodeWorkerLaunchInput(JSON.stringify(input));
+      expect(legacy).toEqual(input);
+      if (multipleProfiles !== undefined) {
+        expect(nodeWorkerPlanHash(legacy)).not.toBe(
+          nodeWorkerPlanHash({ ...input, descriptor: base }),
+        );
+      }
+      const retained = parseNodeWorkerLaunchInput(
+        JSON.stringify({ ...input, idleRetention: true }),
+      );
+      expect(retained).toEqual({ ...input, idleRetention: true });
+      expect(nodeWorkerPlanHash(retained)).not.toBe(nodeWorkerPlanHash(legacy));
+      expect(() =>
+        parseNodeWorkerLaunchInput(JSON.stringify({ ...input, idleRetention: false })),
+      ).toThrow("INVALID_REQUEST");
+    },
+  );
+
+  it.each([null, {}, { multipleProfiles: "false" }, { multipleProfiles: false, extra: true }])(
+    "rejects malformed published authoring %j",
+    (skillAuthoring) => {
+      const descriptor = testWorkerDescriptor("/tmp/worker", "success", "turn-1");
+      expect(() =>
+        parseNodeWorkerLaunchInput(
+          JSON.stringify({
+            environmentSession: 1,
+            launchId: "turn-1",
+            gatewayNamespace: "gateway-1",
+            expectedBundleHash: descriptor.admission.handshake.bundleHash,
+            placementGeneration: 4,
+            descriptor: { ...descriptor, assignment: { ...descriptor.assignment, skillAuthoring } },
+          }),
+        ),
+      ).toThrow("INVALID_REQUEST");
+    },
+  );
+
   it.each([undefined, 2])(
     "rejects a Gateway without the negotiated environment lifetime marker %s",
     (environmentSession) => {

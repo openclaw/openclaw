@@ -6,6 +6,12 @@ import { parseBuzzQaCredentialPayload, readBuzzQaCredentialFile } from "./creden
 
 const DRIVER_PRIVATE_KEY = "01".repeat(32);
 const SUT_PRIVATE_KEY = "02".repeat(32);
+const credentialPayload = {
+  relayUrl: "wss://relay.qa.example",
+  roomId: "123e4567-e89b-42d3-a456-426614174000",
+  driverPrivateKey: DRIVER_PRIVATE_KEY,
+  sutPrivateKey: SUT_PRIVATE_KEY,
+};
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -17,10 +23,7 @@ afterEach(async () => {
 describe("Buzz QA credentials", () => {
   it("accepts a strict two-identity room payload", () => {
     const credentials = parseBuzzQaCredentialPayload({
-      relayUrl: "wss://relay.qa.example",
-      roomId: "123e4567-e89b-42d3-a456-426614174000",
-      driverPrivateKey: DRIVER_PRIVATE_KEY,
-      sutPrivateKey: SUT_PRIVATE_KEY,
+      ...credentialPayload,
       driverAuthTag: '["auth","driver","conditions","signature"]',
       sutAuthTag: '["auth","sut","conditions","signature"]',
     });
@@ -39,24 +42,17 @@ describe("Buzz QA credentials", () => {
   it.each(["ws://localhost:8080", "ws://127.0.0.1:8080", "ws://[::1]:8080"])(
     "allows plaintext loopback relay URL %s",
     (relayUrl) => {
-      expect(
-        parseBuzzQaCredentialPayload({
-          relayUrl,
-          roomId: "123e4567-e89b-42d3-a456-426614174000",
-          driverPrivateKey: DRIVER_PRIVATE_KEY,
-          sutPrivateKey: SUT_PRIVATE_KEY,
-        }).relayUrl,
-      ).toBe(relayUrl);
+      expect(parseBuzzQaCredentialPayload({ ...credentialPayload, relayUrl }).relayUrl).toBe(
+        relayUrl,
+      );
     },
   );
 
   it("rejects plaintext remote relay URLs", () => {
     expect(() =>
       parseBuzzQaCredentialPayload({
+        ...credentialPayload,
         relayUrl: "ws://relay.qa.example",
-        roomId: "123e4567-e89b-42d3-a456-426614174000",
-        driverPrivateKey: DRIVER_PRIVATE_KEY,
-        sutPrivateKey: SUT_PRIVATE_KEY,
       }),
     ).toThrow("Buzz QA credentials are missing or malformed.");
   });
@@ -64,24 +60,17 @@ describe("Buzz QA credentials", () => {
   it("never includes credential values in validation errors", () => {
     const privateKey = "not-a-private-key-value";
     const authTag = "not-an-auth-tag-value";
+    const malformed = {
+      ...credentialPayload,
+      driverPrivateKey: privateKey,
+      driverAuthTag: authTag,
+    };
 
-    expect(() =>
-      parseBuzzQaCredentialPayload({
-        relayUrl: "wss://relay.qa.example",
-        roomId: "123e4567-e89b-42d3-a456-426614174000",
-        driverPrivateKey: privateKey,
-        sutPrivateKey: SUT_PRIVATE_KEY,
-        driverAuthTag: authTag,
-      }),
-    ).toThrow("Buzz QA credentials are missing or malformed.");
+    expect(() => parseBuzzQaCredentialPayload(malformed)).toThrow(
+      "Buzz QA credentials are missing or malformed.",
+    );
     try {
-      parseBuzzQaCredentialPayload({
-        relayUrl: "wss://relay.qa.example",
-        roomId: "123e4567-e89b-42d3-a456-426614174000",
-        driverPrivateKey: privateKey,
-        sutPrivateKey: SUT_PRIVATE_KEY,
-        driverAuthTag: authTag,
-      });
+      parseBuzzQaCredentialPayload(malformed);
     } catch (error) {
       expect(String(error)).not.toContain(privateKey);
       expect(String(error)).not.toContain(authTag);
@@ -93,16 +82,9 @@ describe("Buzz QA credentials", () => {
     tempDirs.push(repoRoot);
     const filePath = path.join("private", "buzz.json");
     await fs.mkdir(path.join(repoRoot, "private"));
-    await fs.writeFile(
-      path.join(repoRoot, filePath),
-      JSON.stringify({
-        relayUrl: "wss://relay.qa.example",
-        roomId: "123e4567-e89b-42d3-a456-426614174000",
-        driverPrivateKey: DRIVER_PRIVATE_KEY,
-        sutPrivateKey: SUT_PRIVATE_KEY,
-      }),
-      { mode: 0o600 },
-    );
+    await fs.writeFile(path.join(repoRoot, filePath), JSON.stringify(credentialPayload), {
+      mode: 0o600,
+    });
 
     await expect(readBuzzQaCredentialFile({ filePath, repoRoot })).resolves.toMatchObject({
       relayUrl: "wss://relay.qa.example",

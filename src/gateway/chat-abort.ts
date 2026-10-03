@@ -1,15 +1,14 @@
-// Gateway chat/agent abort tracking.
-// Registers active run abort controllers and projects in-flight chat state.
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
-import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -21,10 +20,13 @@ import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import { notifyChatAbortControllerRemoved } from "./chat-abort-lifecycle-internal.js";
+import type { ChatAbortDiagnosticReason } from "./chat-abort-diagnostics.js";
+import { removeChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
+import { appendChatCanvasBlocksToMessage } from "./chat-display-projection.canvas.js";
 import { resolveChatRunOwnerAgentId } from "./chat-run-owner.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
+import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import {
   createChatAbortMarker,
   type ChatRunPlanSnapshot,
@@ -36,64 +38,10 @@ import {
   resolveSessionSubscriptionKeys,
 } from "./session-subscription-keys.js";
 
-const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
+export type { ChatAbortControllerEntry } from "./chat-abort.types.js";
+export { removeChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.js";
 
-export type ChatAbortControllerEntry = {
-  controller: AbortController;
-  sessionId: string;
-  sessionKey: string;
-  lifecycleGeneration?: string;
-  /** Exact operational instance created by this controller registration. */
-  operationalRunInstance?: OperationalRunInstanceRef;
-  /** Exact approval lease captured when this controller's execution was admitted. */
-  agentRunDelegatedAuthority?: AgentRunDelegatedAuthority;
-  agentId?: string;
-  startedAtMs: number;
-  /** False until lane admission reaches the execution boundary. */
-  executionStarted?: boolean;
-  expiresAtMs: number;
-  ownerConnId?: string;
-  ownerDeviceId?: string;
-  providerId?: string;
-  authProviderId?: string;
-  abortStopReason?: string;
-  /** Latest argument-free validation diagnostic for operator-initiated aborts. */
-  toolErrorSummary?: string;
-  /**
-   * False for backend/internal agent runs that may share a session key but must
-   * not be projected into operator chat surfaces.
-   */
-  controlUiVisible?: boolean;
-  /**
-   * Controls only the sessions.list active-run projection. Terminal lifecycle
-   * clears this before chat.send settles, while the entry stays as the retry
-   * idempotency guard until normal cleanup removes it.
-   */
-  projectSessionActive?: boolean;
-  /** True after the terminal session-store update has completed. */
-  projectSessionTerminalPersisted?: boolean;
-  /** A terminal lifecycle event was observed and is awaiting persistence. */
-  projectSessionTerminalPending?: boolean;
-  /** Store timestamp expected from the observed terminal lifecycle event. */
-  projectSessionTerminalObservedAt?: number;
-  /** In-flight terminal session-store update used by restart shutdown. */
-  projectSessionTerminalPersistence?: Promise<void>;
-  /** Caller completion requested cleanup before terminal lifecycle persistence settled. */
-  registrationCleanupRequested?: boolean;
-  /** False after the owning reply run commits a terminal outcome. */
-  isAbortable?: (entry: ChatAbortControllerEntry) => boolean;
-  /** Runs once when this registration is actually removed. */
-  onRemoved?: () => void;
-  /**
-   * Which RPC owns this registration. Absent (undefined) is treated as
-   * `"chat-send"` so pre-existing callers that constructed entries without
-   * a kind keep their behavior. Consumers that need "chat.send specifically
-   * is active" must check `kind !== "agent"`, not just `.has(runId)`.
-   */
-  kind?: "chat-send" | "agent";
-  /** Side questions stay independent from main-turn TUI session stops. */
-  turnKind?: "main" | "btw";
-};
+const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
 export type RestartRecoveryCandidate = {
   runId: string;
@@ -144,16 +92,13 @@ export function projectInFlightRunSnapshot(params: {
 type RegisteredChatAbortController = {
   controller: AbortController;
   markExecutionStarted: () => boolean;
+  deferTimeoutCompletion: (settle: () => void) => boolean;
   bindAgentRunDelegatedAuthority: (authority: AgentRunDelegatedAuthority) => void;
   cleanup: () => void;
 } & (
   | { registered: true; entry: ChatAbortControllerEntry }
   | { registered: false; entry?: undefined }
 );
-
-export function isChatStopCommandText(text: string): boolean {
-  return isAbortRequestText(text);
-}
 
 function createChatAbortSignalReason(stopReason: string | undefined): Error | undefined {
   if (stopReason === "restart") {
@@ -223,7 +168,11 @@ export function registerChatAbortController(params: {
   providerId?: string;
   authProviderId?: string;
   controlUiVisible?: boolean;
+  projectSessionActive?: boolean;
   isAbortable?: (entry: ChatAbortControllerEntry) => boolean;
+  resolveTerminalProducer?: (
+    entry: ChatAbortControllerEntry,
+  ) => ReturnType<NonNullable<ChatAbortControllerEntry["resolveTerminalProducer"]>>;
   onRemoved?: () => void;
   kind?: ChatAbortControllerEntry["kind"];
   turnKind?: ChatAbortControllerEntry["turnKind"];
@@ -237,6 +186,7 @@ export function registerChatAbortController(params: {
     const entry = params.chatAbortControllers.get(params.runId);
     if (
       entry?.controller !== controller ||
+      entry.registrationCleanupRequested ||
       !entry.operationalRunInstance ||
       authority.operationalRunInstance !== entry.operationalRunInstance
     ) {
@@ -253,7 +203,11 @@ export function registerChatAbortController(params: {
       return false;
     }
     const entry = params.chatAbortControllers.get(params.runId);
-    if (entry?.controller !== controller || controller.signal.aborted) {
+    if (
+      entry?.controller !== controller ||
+      entry.registrationCleanupRequested ||
+      controller.signal.aborted
+    ) {
       return false;
     }
     executionStarted = true;
@@ -280,6 +234,8 @@ export function registerChatAbortController(params: {
         releaseAgentRunDelegatedAuthority(entry.agentRunDelegatedAuthority);
       }
       entry.registrationCleanupRequested = true;
+      entry.projectSessionActive = false;
+      entry.pendingTimeoutCompletion = undefined;
       // Terminal event handling owns final removal once the event has been
       // observed. Runs that never emitted a terminal event still clean up here.
       if (entry.projectSessionTerminalPending === true) {
@@ -317,6 +273,7 @@ export function registerChatAbortController(params: {
     return {
       controller,
       registered: false,
+      deferTimeoutCompletion: () => false,
       markExecutionStarted,
       bindAgentRunDelegatedAuthority,
       cleanup,
@@ -333,7 +290,7 @@ export function registerChatAbortController(params: {
     sessionKey: params.sessionKey,
     lifecycleGeneration: params.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
     operationalRunInstance: params.operationalRunInstance,
-    agentId: normalizeActiveAgentId(params.agentId),
+    agentId: normalizeOptionalLowercaseString(params.agentId),
     startedAtMs: now,
     executionStarted: false,
     expiresAtMs:
@@ -341,12 +298,15 @@ export function registerChatAbortController(params: {
       resolveChatRunExpiresAtMs({ now: rawNow, timeoutMs: params.timeoutMs }),
     ownerConnId: params.ownerConnId,
     ownerDeviceId: params.ownerDeviceId,
-    providerId: normalizeProviderIdForActiveRun(params.providerId),
-    authProviderId: normalizeProviderIdForActiveRun(params.authProviderId),
+    providerId: normalizeOptionalLowercaseString(params.providerId),
+    authProviderId: normalizeOptionalLowercaseString(params.authProviderId),
     controlUiVisible: params.controlUiVisible,
     isAbortable: params.isAbortable,
+    resolveTerminalProducer: params.resolveTerminalProducer
+      ? () => params.resolveTerminalProducer?.(entry)
+      : undefined,
     onRemoved: params.onRemoved,
-    projectSessionActive: true,
+    projectSessionActive: params.projectSessionActive ?? true,
     kind: params.kind,
     turnKind: params.turnKind,
   };
@@ -355,37 +315,25 @@ export function registerChatAbortController(params: {
     controller,
     registered: true,
     entry,
+    deferTimeoutCompletion: (settle) => {
+      // Abort requests cleanup before notifying the still-owned producer.
+      if (params.chatAbortControllers.get(params.runId) !== entry) {
+        return false;
+      }
+      entry.pendingTimeoutCompletion = {
+        expiresAtMs: Date.now() + AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
+        settle,
+      };
+      return true;
+    },
     markExecutionStarted,
     bindAgentRunDelegatedAuthority,
     cleanup,
   };
 }
 
-function normalizeProviderIdForActiveRun(providerId: string | undefined): string | undefined {
-  const trimmed = providerId?.trim().toLowerCase();
-  return trimmed || undefined;
-}
-
-function normalizeActiveAgentId(agentId: string | undefined): string | undefined {
-  const trimmed = agentId?.trim().toLowerCase();
-  return trimmed || undefined;
-}
-
-/**
- * Snapshot the live assistant text of any in-flight run for a session+agent. Used
- * by chat.history so a run that kept streaming while the client was switched away
- * — whose deltas the gateway delivered to a delivery key this client is no longer
- * subscribed to — is restored on switch-back.
- *
- * Matches a run the same way sessions.list's active-run projection does: an abort
- * entry can hold the requested key while chat run state holds the canonical store
- * key, so accept a match on EITHER `requestedSessionKey` or `canonicalSessionKey`,
- * scoping the shared "global" session by agent. Only runs still projected active
- * (`projectSessionActive !== false`, matching sessions.list; the terminal lifecycle
- * flips it to false), not aborted, and visible chat-send runs are returned, so a
- * finalized run — already in persisted history — is not duplicated and hidden
- * agent runs cannot be adopted by chat clients that will not receive their final
- * events.
+/** Restore the newest visible run when chat.history switches back to its session.
+ * Match requested and canonical keys, with agent scoping for the shared global row.
  */
 export function resolveInFlightRunSnapshot(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
@@ -403,12 +351,14 @@ export function resolveInFlightRunSnapshot(params: {
       return true;
     }
     const requestedAgentId =
-      normalizeActiveAgentId(params.agentId) ?? normalizeActiveAgentId(params.defaultAgentId);
+      normalizeOptionalLowercaseString(params.agentId) ??
+      normalizeOptionalLowercaseString(params.defaultAgentId);
     if (!requestedAgentId) {
       return false;
     }
     const runAgentId =
-      normalizeActiveAgentId(entry.agentId) ?? normalizeActiveAgentId(params.defaultAgentId);
+      normalizeOptionalLowercaseString(entry.agentId) ??
+      normalizeOptionalLowercaseString(params.defaultAgentId);
     return runAgentId === requestedAgentId;
   };
   // Some callers/tests run without populated run state; guard like
@@ -416,16 +366,9 @@ export function resolveInFlightRunSnapshot(params: {
   if (!(params.chatAbortControllers instanceof Map)) {
     return undefined;
   }
-  // Pick the newest matching run rather than the first iterated. If a fast
-  // restart/retry/stale-controller race leaves two active entries for the same
-  // (sessionKey, agentId), Map insertion order is not a meaningful selector;
-  // the latest `startedAtMs` is the run a switching-back client wants, and the
-  // runId tie-break keeps the choice deterministic when timestamps collide.
+  // Timestamp wins over insertion order; runId breaks ties deterministically.
   let best: { runId: string; startedAtMs: number } | undefined;
   for (const [runId, entry] of params.chatAbortControllers) {
-    // Active unless explicitly projected inactive — mirrors sessions.list's
-    // collectTrackedActiveSessionRuns (`projectSessionActive !== false`), so a run
-    // that indicator shows active is never silently dropped here.
     if (
       entry.projectSessionActive === false ||
       entry.controlUiVisible === false ||
@@ -449,75 +392,13 @@ export function resolveInFlightRunSnapshot(params: {
   if (best === undefined) {
     return undefined;
   }
-  // Adopt the run even when no assistant text is buffered yet. Some runtimes
-  // (e.g. Codex) do not stream incremental assistant text — the result exists
-  // only at completion — so there is nothing to show mid-run, but the client
-  // should still adopt the run and show a `streaming` status (not idle) and
-  // render the result cleanly when it lands.
+  // A run can be active before its first text arrives. Adopt it now so the UI
+  // stays streaming and can reconcile the eventual reply.
   return projectInFlightRunSnapshot({
     chatRunState: params.chatRunState,
     runId: best.runId,
     startedAtMs: best.startedAtMs,
   });
-}
-
-export function boundInFlightRunSnapshotForChatHistory(params: {
-  snapshot: InFlightRunSnapshot | undefined;
-  messages: unknown[];
-  maxBytes: number;
-}): InFlightRunSnapshot | undefined {
-  if (!params.snapshot) {
-    return undefined;
-  }
-  const messagesBytes = jsonUtf8Bytes(params.messages);
-  const snapshotBytes = jsonUtf8Bytes(params.snapshot);
-  if (messagesBytes + snapshotBytes <= params.maxBytes) {
-    return params.snapshot;
-  }
-  // Recovery priority is run adoption, authoritative timing, active progress,
-  // plan replay, and opportunistic text. Explicit empty projections
-  // authoritatively clear stale client state when a richer snapshot cannot fit.
-  let bounded: InFlightRunSnapshot = {
-    runId: params.snapshot.runId,
-    text: "",
-    ...(params.snapshot.sessionAbortable ? { sessionAbortable: true } : {}),
-    ...(params.snapshot.events ? { events: [] } : {}),
-    ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
-  };
-
-  if (params.snapshot.startedAt !== undefined) {
-    const candidate = { ...bounded, startedAt: params.snapshot.startedAt };
-    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-      bounded = candidate;
-    }
-  }
-
-  if (params.snapshot.events) {
-    const events = [...params.snapshot.events];
-    while (events.length > 0) {
-      const candidate = { ...bounded, events };
-      if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-        bounded = candidate;
-        break;
-      }
-      events.shift();
-    }
-  }
-
-  if (params.snapshot.plan) {
-    const candidate = { ...bounded, plan: params.snapshot.plan };
-    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-      bounded = candidate;
-    }
-  }
-
-  if (params.snapshot.text) {
-    const candidate = { ...bounded, text: params.snapshot.text };
-    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-      bounded = candidate;
-    }
-  }
-  return bounded;
 }
 
 export type ChatAbortOps = {
@@ -530,11 +411,7 @@ export type ChatAbortOps = {
   ) => { sessionKey: string; agentId?: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
   getRuntimeConfig?: () => OpenClawConfig;
-  broadcast: (
-    event: string,
-    payload: unknown,
-    opts?: { dropIfSlow?: boolean; sessionKeys?: readonly string[] },
-  ) => void;
+  broadcast: GatewayBroadcastFn;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   onRunAborted?: (runId: string) => void;
 };
@@ -544,7 +421,7 @@ function resolveChatAbortDeliverySessionKeys(
   sessionKey: string,
   agentId: string | undefined,
 ): string[] {
-  const scopedAgentId = normalizeActiveAgentId(agentId);
+  const scopedAgentId = normalizeOptionalLowercaseString(agentId);
   if (!scopedAgentId) {
     return [sessionKey];
   }
@@ -566,16 +443,17 @@ function broadcastChatAborted(
     sessionKey: string;
     agentId?: string;
     stopReason?: string;
-    partialText?: string;
+    message?: Record<string, unknown>;
     errorMessage?: string;
+    liveTextGroup?: AbortSignal;
   },
 ) {
-  const { runId, sessionKey, stopReason, partialText } = params;
+  const { runId, sessionKey, stopReason } = params;
   const errorMessage = readToolValidationErrorSummary(params.errorMessage);
-  const explicitAgentId = normalizeActiveAgentId(params.agentId);
+  const explicitAgentId = normalizeOptionalLowercaseString(params.agentId);
   const defaultGlobalAgentId =
     sessionKey === "global" && !explicitAgentId
-      ? normalizeActiveAgentId(resolveDefaultGlobalAgentId(ops))
+      ? normalizeOptionalLowercaseString(resolveDefaultGlobalAgentId(ops))
       : undefined;
   const payloadAgentId =
     sessionKey === "global" ? (explicitAgentId ?? defaultGlobalAgentId) : explicitAgentId;
@@ -587,16 +465,13 @@ function broadcastChatAborted(
     state: "aborted" as const,
     stopReason,
     ...(errorMessage ? { errorMessage } : {}),
-    message: partialText
-      ? {
-          role: "assistant",
-          content: [{ type: "text", text: partialText }],
-          timestamp: Date.now(),
-        }
-      : undefined,
+    message: params.message ? { ...params.message, timestamp: Date.now() } : undefined,
   };
   const deliverySessionKeys = resolveChatAbortDeliverySessionKeys(ops, sessionKey, payloadAgentId);
-  ops.broadcast("chat", payload, { sessionKeys: deliverySessionKeys });
+  ops.broadcast("chat", payload, {
+    sessionKeys: deliverySessionKeys,
+    ...(params.liveTextGroup ? { liveText: { group: params.liveTextGroup } } : {}),
+  });
   for (const deliverySessionKey of deliverySessionKeys) {
     ops.nodeSendToSession(deliverySessionKey, "chat", payload);
   }
@@ -622,32 +497,14 @@ export function isChatAbortControllerEntryAbortable(entry: ChatAbortControllerEn
   }
 }
 
-export function removeChatAbortControllerEntry(
-  entries: Map<string, ChatAbortControllerEntry>,
-  runId: string,
-  expectedEntry?: ChatAbortControllerEntry,
-): boolean {
-  const entry = entries.get(runId);
-  if (!entry || (expectedEntry && entry !== expectedEntry)) {
-    return false;
-  }
-  entries.delete(runId);
-  try {
-    entry.onRemoved?.();
-  } catch {
-    // Removal owns state cleanup even if a caller-provided release hook fails.
-  } finally {
-    notifyChatAbortControllerRemoved(entry);
-  }
-  return true;
-}
-
 export function abortChatRunById(
   ops: ChatAbortOps,
   params: {
     runId: string;
     sessionKey: string;
     stopReason?: string;
+    diagnosticReason?: ChatAbortDiagnosticReason;
+    onAbortCommitted?: () => void;
   },
 ): { aborted: boolean } {
   const { runId, sessionKey, stopReason } = params;
@@ -658,15 +515,36 @@ export function abortChatRunById(
   if (active.sessionKey !== sessionKey) {
     return { aborted: false };
   }
-  if (!isChatAbortControllerEntryAbortable(active)) {
+  if (active.registrationCleanupRequested || !isChatAbortControllerEntryAbortable(active)) {
     return { aborted: false };
   }
 
   const bufferedText = ops.chatRunState.resolveBuffer(runId, { final: true }).text;
+  const run = ops.chatRunState.runs.get(runId);
+  const liveTextGroup = run?.liveTextGroup?.signal;
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
+  const canvasBlocks =
+    run?.bufferIsCurrent?.() !== false &&
+    (partialText || !(run?.rawBuffer ?? run?.buffer ?? "").trim())
+      ? (run?.canvasBlocks ?? [])
+      : [];
+  // Abort listeners can clear buffers and revoke their owner synchronously.
+  const message = appendChatCanvasBlocksToMessage(
+    partialText || canvasBlocks.length
+      ? { role: "assistant", content: partialText ? [{ type: "text", text: partialText }] : [] }
+      : undefined,
+    canvasBlocks,
+  );
   ops.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
   if (stopReason) {
     active.abortStopReason = stopReason;
+  }
+  active.abortDiagnosticReason = params.diagnosticReason;
+  // Reserve transcript settlement while this exact producer still has authority.
+  try {
+    params.onAbortCommitted?.();
+  } catch {
+    // Transcript handoff failure cannot prevent an already accepted cancellation.
   }
   active.projectSessionActive = false;
   // Reserve terminal ownership before abort listeners run; synchronous caller
@@ -693,8 +571,9 @@ export function abortChatRunById(
       sessionKey,
       agentId: active.agentId,
       stopReason,
-      partialText,
+      message,
       errorMessage: active.toolErrorSummary,
+      liveTextGroup,
     });
   }
   emitAgentEvent({
@@ -712,6 +591,13 @@ export function abortChatRunById(
       ...(active.toolErrorSummary ? { toolErrorSummary: active.toolErrorSummary } : {}),
       // Pre-execution admission time is not an execution start.
       startedAt: active.executionStarted === false ? undefined : active.startedAtMs,
+      ...(active.executionStarted === false
+        ? {
+            executionStarted: false,
+            providerStarted: false,
+            ...(stopReason === "timeout" ? { timeoutPhase: "queue" } : {}),
+          }
+        : {}),
       endedAt: Date.now(),
     },
   });
@@ -744,8 +630,8 @@ export function updateChatRunProvider(
   if (!entry) {
     return false;
   }
-  entry.providerId = normalizeProviderIdForActiveRun(params.providerId);
-  entry.authProviderId = normalizeProviderIdForActiveRun(params.authProviderId);
+  entry.providerId = normalizeOptionalLowercaseString(params.providerId);
+  entry.authProviderId = normalizeOptionalLowercaseString(params.authProviderId);
   return true;
 }
 
@@ -758,16 +644,16 @@ export function abortChatRunsForProvider(
     stopReason?: string;
   },
 ): { runIds: string[] } {
-  const providerId = normalizeProviderIdForActiveRun(params.providerId);
-  const agentId = normalizeActiveAgentId(params.agentId);
+  const providerId = normalizeOptionalLowercaseString(params.providerId);
+  const agentId = normalizeOptionalLowercaseString(params.agentId);
   if (!providerId) {
     return { runIds: [] };
   }
   const compatibilityOwnerAgentId = agentId && tryResolveLegacyCompatibilityAgentId(params.cfg);
   const matches = [...ops.chatAbortControllers.entries()].filter(([, entry]) => {
     if (
-      normalizeProviderIdForActiveRun(entry.authProviderId) !== providerId &&
-      normalizeProviderIdForActiveRun(entry.providerId) !== providerId
+      normalizeOptionalLowercaseString(entry.authProviderId) !== providerId &&
+      normalizeOptionalLowercaseString(entry.providerId) !== providerId
     ) {
       return false;
     }

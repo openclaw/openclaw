@@ -6,12 +6,19 @@
  * runs before synchronous prompt assembly, mirroring prepareAgentMemoryPrompt.
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { withSessionStoreReaderInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { deriveSessionTitle } from "../gateway/session-utils.js";
+import { deriveSessionTitle } from "../gateway/session-utils-core.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { resolveSandboxSessionToolsVisibility } from "../plugin-sdk/session-visibility.js";
 import { buildAgentMainSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { prepareAmbientGroupWatchTargetsRead } from "../sessions/session-state-events.ambient-read.js";
 import { listAmbientGroupWatchTargets } from "../sessions/session-state-events.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 /** Watched-session facts resolved before synchronous prompt assembly. */
@@ -32,15 +39,16 @@ const WATCHED_SESSION_TITLE_MAX_CHARS = 80;
 
 const WATCHED_SESSION_READ_TOOLS = ["sessions_history", "sessions_search"];
 
-/** Resolve watched same-agent group sessions for the current session's prompt. */
-export function prepareWatchedSessionsPrompt(params: {
+type WatchedSessionsPromptParams = {
   enabled: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
   sandboxed?: boolean;
   toolNames: Iterable<string>;
   capabilityToolNames?: Iterable<string>;
-}): PreparedWatchedSessionsPrompt | undefined {
+};
+
+function resolveWatchedSessionsPromptAccess(params: WatchedSessionsPromptParams) {
   const sessionKey = params.sessionKey?.trim();
   if (!params.enabled || !sessionKey) {
     return undefined;
@@ -66,29 +74,136 @@ export function prepareWatchedSessionsPrompt(params: {
   if (readToolNames.length === 0) {
     return undefined;
   }
+  return {
+    sessionKey,
+    agentId: parsedKey.agentId,
+    readToolNames,
+    listToolAvailable: availableTools.has("sessions_list"),
+  };
+}
+
+function watchedSessionRow(key: string, entry?: SessionEntry) {
+  const row: { key: string; title?: string } = { key };
+  const title = deriveSessionTitle(entry);
+  if (title) {
+    row.title = truncateUtf16Safe(title, WATCHED_SESSION_TITLE_MAX_CHARS);
+  }
+  return row;
+}
+
+/** Released synchronous SDK compatibility; bundled runtimes use the async preparer. */
+export function prepareWatchedSessionsPrompt(
+  params: WatchedSessionsPromptParams,
+): PreparedWatchedSessionsPrompt | undefined {
+  const access = resolveWatchedSessionsPromptAccess(params);
+  if (!access) {
+    return undefined;
+  }
   // Sorted by key, not recency: recency-ordered rows would reshuffle prompt
   // bytes on every group message and defeat provider prompt caching.
-  const targets = [...listAmbientGroupWatchTargets(sessionKey)].toSorted();
+  const targets = [...listAmbientGroupWatchTargets(access.sessionKey)].toSorted();
   if (targets.length === 0) {
     return undefined;
   }
   const sessions = targets.slice(0, WATCHED_SESSIONS_PROMPT_LIMIT).map((key) => {
-    const row: { key: string; title?: string } = { key };
     // Exact persisted-key probe: watch cursors store canonical keys, so the
     // alias-resolving loader's full-snapshot scan is wasted work here.
     const entry = loadExactSessionEntryReadOnly({ sessionKey: key, clone: false })?.entry;
-    const title = deriveSessionTitle(entry);
-    if (title) {
-      row.title = truncateUtf16Safe(title, WATCHED_SESSION_TITLE_MAX_CHARS);
-    }
-    return row;
+    return watchedSessionRow(key, entry);
   });
   return {
     sessions,
     hiddenCount: targets.length - sessions.length,
-    readToolNames,
-    listToolAvailable: availableTools.has("sessions_list"),
+    readToolNames: access.readToolNames,
+    listToolAvailable: access.listToolAvailable,
   };
+}
+
+/** Resolve durable watched-session facts without executing SQL on the caller thread. */
+export async function prepareWatchedSessionsPromptAsync(
+  params: WatchedSessionsPromptParams & { assertCurrent: () => void },
+): Promise<PreparedWatchedSessionsPrompt | undefined> {
+  const input = {
+    ...params,
+    toolNames: [...params.toolNames],
+    capabilityToolNames: [...(params.capabilityToolNames ?? [])],
+  };
+  const access = resolveWatchedSessionsPromptAccess(input);
+  if (!access) {
+    return undefined;
+  }
+  const assertCallerCurrent = params.assertCurrent;
+  assertCallerCurrent();
+  const env = cloneEnvWithPlatformSemantics(process.env);
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const storePath = resolveOpenClawAgentSqlitePath({ agentId: access.agentId, env });
+  const identity = readDatabasePathIdentitySync(storePath);
+  const assertCurrent = () => {
+    assertCallerCurrent();
+    const current = readDatabasePathIdentitySync(storePath);
+    if (
+      current.key !== identity.key ||
+      current.birthtime !== identity.birthtime ||
+      current.canonicalPath !== identity.canonicalPath
+    ) {
+      throw new Error("Watched-session title store changed during preparation");
+    }
+  };
+  const watches = prepareAmbientGroupWatchTargetsRead(access.sessionKey, { env });
+  try {
+    // The exact reader captures the physical store before its first yield. Keep
+    // that owner through both the title read and the final disclosure check.
+    const prepared = await withSessionStoreReaderInWorker(
+      {
+        agentId: access.agentId,
+        storePath,
+        env,
+      },
+      async ({ reader, database, continuation, assertCurrent: assertStoreCurrent }) => {
+        const targets = [...new Set(await watches.read())].toSorted();
+        assertCurrent();
+        if (targets.length === 0) {
+          return undefined;
+        }
+        const keys = targets.slice(0, WATCHED_SESSIONS_PROMPT_LIMIT);
+        const result = await reader.readExactEntries({
+          sessionKeys: keys,
+          projection: "list",
+          env: database.env,
+          continuation,
+        });
+        assertStoreCurrent();
+        assertCurrent();
+        // Watch cursors grant disclosure. A removed/replaced watch while titles
+        // were loading must not escape as stale prompt facts.
+        const currentTargets = [...new Set(await watches.read())].toSorted();
+        assertStoreCurrent();
+        watches.assertCurrent();
+        assertCurrent();
+        if (
+          currentTargets.length !== targets.length ||
+          currentTargets.some((key, index) => key !== targets[index]) ||
+          !watches.isCurrent() ||
+          !resolveWatchedSessionsPromptAccess(input)
+        ) {
+          return undefined;
+        }
+        const entries = new Map(result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
+        return {
+          sessions: keys.map((key) => watchedSessionRow(key, entries.get(key))),
+          hiddenCount: targets.length - keys.length,
+          readToolNames: access.readToolNames,
+          listToolAvailable: access.listToolAvailable,
+        };
+      },
+      { backing: true, dataOnly: true },
+    );
+    watches.assertCurrent();
+    assertCurrent();
+    return watches.isCurrent() && resolveWatchedSessionsPromptAccess(input) ? prepared : undefined;
+  } finally {
+    watches.release();
+  }
 }
 
 /** Renders the shared Watched Sessions block used by every prompt-assembly surface. */

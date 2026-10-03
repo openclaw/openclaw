@@ -1,5 +1,7 @@
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-// Perplexity provider module implements model/runtime integration.
+import {
+  readProviderJsonResponse,
+  resolveProviderRequestHeaders,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
@@ -85,14 +87,28 @@ function resolvePerplexityRequestModel(baseUrl: string, model: string): string {
   return model.startsWith("perplexity/") ? model.slice("perplexity/".length) : model;
 }
 
-function buildPerplexityRequestHeaders(apiKey: string, acceptJson = false): Record<string, string> {
-  return {
+function buildPerplexityRequestHeaders(params: {
+  apiKey: string;
+  baseUrl?: string;
+  acceptJson?: boolean;
+}): Record<string, string> {
+  const defaultHeaders = {
     "Content-Type": "application/json",
-    ...(acceptJson ? { Accept: "application/json" } : {}),
-    Authorization: `Bearer ${apiKey}`,
-    "HTTP-Referer": "https://openclaw.ai",
-    "X-Title": "OpenClaw Web Search",
+    ...(params.acceptJson ? { Accept: "application/json" } : {}),
+    Authorization: `Bearer ${params.apiKey}`,
   };
+  return (
+    resolveProviderRequestHeaders({
+      provider: "perplexity",
+      // The direct Perplexity API is this provider's default endpoint. Other hosts such as
+      // OpenRouter keep their own endpoint so the policy attributes them as that vendor.
+      baseUrl:
+        params.baseUrl && !isDirectPerplexityBaseUrl(params.baseUrl) ? params.baseUrl : undefined,
+      capability: "other",
+      transport: "http",
+      defaultHeaders,
+    }) ?? defaultHeaders
+  );
 }
 
 function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
@@ -111,9 +127,7 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
       const url =
         typeof annotation.url_citation?.url === "string"
           ? annotation.url_citation.url
-          : typeof annotation.url === "string"
-            ? annotation.url
-            : undefined;
+          : annotation.url;
       const normalizedUrl = normalizeOptionalString(url);
       if (normalizedUrl) {
         citations.push(normalizedUrl);
@@ -167,7 +181,7 @@ async function runPerplexitySearchApi(params: {
     body.max_tokens_per_page = params.maxTokensPerPage;
   }
 
-  const headers = buildPerplexityRequestHeaders(params.apiKey, true);
+  const headers = buildPerplexityRequestHeaders({ apiKey: params.apiKey, acceptJson: true });
   return withTrustedWebSearchEndpoint(
     {
       url: PERPLEXITY_SEARCH_ENDPOINT,
@@ -190,7 +204,7 @@ async function runPerplexitySearchApi(params: {
         res,
         "Perplexity Search",
       );
-      return (data.results ?? []).map((entry) => ({
+      return (data.results ?? []).slice(0, params.count).map((entry) => ({
         title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
         url: entry.url ?? "",
         description: entry.snippet ? wrapWebContent(entry.snippet, "web_search") : "",
@@ -219,7 +233,10 @@ async function runPerplexitySearch(params: {
     body.search_recency_filter = params.freshness;
   }
 
-  const headers = buildPerplexityRequestHeaders(params.apiKey);
+  const headers = buildPerplexityRequestHeaders({
+    apiKey: params.apiKey,
+    baseUrl: params.baseUrl,
+  });
   return withTrustedWebSearchEndpoint(
     {
       url: endpoint,
@@ -390,76 +407,53 @@ export async function executePerplexitySearch(
 
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
-  const payload =
+  const result =
     runtime.transport === "chat_completions"
-      ? {
+      ? await runPerplexitySearch({
           query,
-          provider: "perplexity",
+          apiKey: runtime.apiKey,
+          baseUrl: runtime.baseUrl,
           model: runtime.model,
-          tookMs: Date.now() - start,
-          externalContent: {
-            untrusted: true,
-            source: "web_search",
-            provider: "perplexity",
-            wrapped: true,
-          },
-          ...(await (async () => {
-            const result = await runPerplexitySearch({
-              query,
-              apiKey: runtime.apiKey!,
-              baseUrl: runtime.baseUrl,
-              model: runtime.model,
-              timeoutSeconds,
-              signal,
-              freshness,
-            });
-            return {
-              content: wrapWebContent(result.content, "web_search"),
-              citations: result.citations,
-            };
-          })()),
-        }
-      : {
+          timeoutSeconds,
+          signal,
+          freshness,
+        })
+      : await runPerplexitySearchApi({
           query,
-          provider: "perplexity",
-          count: 0,
-          tookMs: Date.now() - start,
-          externalContent: {
-            untrusted: true,
-            source: "web_search",
-            provider: "perplexity",
-            wrapped: true,
-          },
-          results: await runPerplexitySearchApi({
-            query,
-            apiKey: runtime.apiKey,
-            count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-            timeoutSeconds,
-            signal,
-            country: country ?? undefined,
-            searchDomainFilter: domainFilter,
-            searchRecencyFilter: freshness,
-            searchLanguageFilter: language ? [language] : undefined,
-            searchAfterDate: dateAfter ? isoToPerplexityDate(dateAfter) : undefined,
-            searchBeforeDate: dateBefore ? isoToPerplexityDate(dateBefore) : undefined,
-            maxTokens: maxTokens ?? undefined,
-            maxTokensPerPage: maxTokensPerPage ?? undefined,
-          }),
-        };
-
-  if (Array.isArray((payload as { results?: unknown[] }).results)) {
-    (payload as { count: number }).count = (payload as { results: unknown[] }).results.length;
-    (payload as { tookMs: number }).tookMs = Date.now() - start;
-  } else {
-    (payload as { tookMs: number }).tookMs = Date.now() - start;
-  }
+          apiKey: runtime.apiKey,
+          count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+          timeoutSeconds,
+          signal,
+          country: country ?? undefined,
+          searchDomainFilter: domainFilter,
+          searchRecencyFilter: freshness,
+          searchLanguageFilter: language ? [language] : undefined,
+          searchAfterDate: dateAfter ? isoToPerplexityDate(dateAfter) : undefined,
+          searchBeforeDate: dateBefore ? isoToPerplexityDate(dateBefore) : undefined,
+          maxTokens: maxTokens ?? undefined,
+          maxTokensPerPage: maxTokensPerPage ?? undefined,
+        });
+  const resultFields = Array.isArray(result)
+    ? { results: result }
+    : {
+        content: wrapWebContent(result.content, "web_search"),
+        citations: result.citations,
+      };
+  const payload = {
+    query,
+    provider: "perplexity",
+    ...(Array.isArray(result) ? { count: result.length } : { model: runtime.model }),
+    tookMs: Date.now() - start,
+    externalContent: {
+      untrusted: true,
+      source: "web_search",
+      provider: "perplexity",
+      wrapped: true,
+    },
+    ...resultFields,
+  };
 
   signal?.throwIfAborted();
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const testing = {
-  resolvePerplexityRequestModel,
-  resolvePerplexityApiKey,
-} as const;

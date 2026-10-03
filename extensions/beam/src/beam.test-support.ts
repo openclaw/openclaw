@@ -1,14 +1,22 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type {
   SessionCatalogHost,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import type { ActiveSessionCatalog } from "openclaw/plugin-sdk/session-catalog-runtime";
+import { vi } from "vitest";
 import { createBeamMirrorRunner } from "./mirror.js";
 
 export const beamTestNow = Date.parse("2026-07-27T12:00:00.000Z");
-export const beamTestLogger = { warn: () => {}, info: () => {} };
-export type BeamTestSession = { threadId: string; name?: string; recencyAt: number };
+export const beamTestLogger = { warn: () => {}, info: () => {}, error: () => {} };
+export type BeamTestSession = {
+  threadId: string;
+  name?: string;
+  modelProvider?: string;
+  recencyAt: number;
+};
 
 export function beamTestMirrorConfig(overrides: Record<string, unknown> = {}) {
   return {
@@ -38,7 +46,6 @@ export function createBeamTestCatalog(
     id?: string;
     sessions?: BeamTestSession[] | (() => BeamTestSession[]);
     items?: SessionCatalogTranscriptItem[] | ((threadId: string) => SessionCatalogTranscriptItem[]);
-    nextCursor?: string;
     hostCursor?: string;
     hostKind?: SessionCatalogHost["kind"];
     onList?: () => unknown;
@@ -65,6 +72,7 @@ export function createBeamTestCatalog(
           sessions: (sessions ?? [{ threadId: "t1", recencyAt: beamTestNow }]).map((session) => ({
             threadId: session.threadId,
             name: session.name,
+            modelProvider: session.modelProvider,
             recencyAt: session.recencyAt,
             status: "stored",
             createdAt: beamTestNow - 60_000,
@@ -87,7 +95,6 @@ export function createBeamTestCatalog(
           { type: "agentMessage", text: "Done." },
           { type: "userMessage", text: "Fix the flow." },
         ],
-        ...(params.nextCursor ? { nextCursor: params.nextCursor } : {}),
       };
     },
   };
@@ -102,6 +109,30 @@ export function createBeamTestRunner({
     runtime: createBeamTestRuntime(beamTestMirrorConfig(endpoint ? { endpoint } : {})),
     logger: beamTestLogger,
     now: () => beamTestNow,
+    signal: new AbortController().signal,
     ...options,
   });
+}
+
+export function createScheduledBeamTestRunner(options: Parameters<typeof createBeamTestRunner>[0]) {
+  const scheduler = createTestPluginServiceScheduler();
+  const runner = createBeamTestRunner({ ...options, signal: scheduler.signal });
+  const settled = createDeferred<void>();
+  scheduler.schedule({
+    id: "mirror",
+    delayMs: 0,
+    everyMs: 30_000,
+    run: async () => {
+      try {
+        await runner.tick();
+      } finally {
+        settled.resolve();
+      }
+    },
+  });
+  return {
+    tick: () => vi.advanceTimersByTimeAsync(0),
+    stop: scheduler.stop,
+    settled: settled.promise,
+  };
 }

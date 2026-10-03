@@ -1,4 +1,3 @@
-// Discord plugin module implements status issues behavior.
 import type {
   ChannelAccountSnapshot,
   ChannelStatusIssue,
@@ -9,15 +8,10 @@ import {
   readAccountStatusSnapshot,
   resolveEnabledConfiguredAccountId,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-type DiscordIntentSummary = {
-  messageContent?: "enabled" | "limited" | "disabled";
-};
-
-type DiscordApplicationSummary = {
-  intents?: DiscordIntentSummary;
-};
+import {
+  normalizeOptionalString,
+  normalizeOptionalTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type DiscordPermissionsAuditSummary = {
   unresolvedChannels?: number;
@@ -31,24 +25,8 @@ type DiscordPermissionsAuditSummary = {
   }>;
 };
 
-function readDiscordApplicationSummary(value: unknown): DiscordApplicationSummary {
-  if (!isRecord(value)) {
-    return {};
-  }
-  const intentsRaw = value.intents;
-  if (!isRecord(intentsRaw)) {
-    return {};
-  }
-  return {
-    intents: {
-      messageContent:
-        intentsRaw.messageContent === "enabled" ||
-        intentsRaw.messageContent === "limited" ||
-        intentsRaw.messageContent === "disabled"
-          ? intentsRaw.messageContent
-          : undefined,
-    },
-  };
+function isDiscordMessageContentIntentDisabled(value: unknown): boolean {
+  return isRecord(value) && isRecord(value.intents) && value.intents.messageContent === "disabled";
 }
 
 function readDiscordPermissionsAuditSummary(value: unknown): DiscordPermissionsAuditSummary {
@@ -61,7 +39,7 @@ function readDiscordPermissionsAuditSummary(value: unknown): DiscordPermissionsA
       : undefined;
   const channelsRaw = value.channels;
   const channels = Array.isArray(channelsRaw)
-    ? (channelsRaw
+    ? channelsRaw
         .map((entry) => {
           if (!isRecord(entry)) {
             return null;
@@ -70,23 +48,16 @@ function readDiscordPermissionsAuditSummary(value: unknown): DiscordPermissionsA
           if (!channelId) {
             return null;
           }
-          const ok = typeof entry.ok === "boolean" ? entry.ok : undefined;
-          const missing = Array.isArray(entry.missing)
-            ? entry.missing.map((v) => normalizeOptionalString(v)).filter(Boolean)
-            : undefined;
-          const error = normalizeOptionalString(entry.error) ?? null;
-          const matchKey = normalizeOptionalString(entry.matchKey);
-          const matchSource = normalizeOptionalString(entry.matchSource);
           return {
             channelId,
-            ok,
-            missing: missing?.length ? missing : undefined,
-            error,
-            matchKey,
-            matchSource,
+            ok: typeof entry.ok === "boolean" ? entry.ok : undefined,
+            missing: normalizeOptionalTrimmedStringList(entry.missing),
+            error: normalizeOptionalString(entry.error) ?? null,
+            matchKey: normalizeOptionalString(entry.matchKey),
+            matchSource: normalizeOptionalString(entry.matchSource),
           };
         })
-        .filter(Boolean) as DiscordPermissionsAuditSummary["channels"])
+        .filter((entry) => entry !== null)
     : undefined;
   return { unresolvedChannels, channels };
 }
@@ -96,7 +67,12 @@ export function collectDiscordStatusIssues(
 ): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];
   for (const entry of accounts) {
-    const account = readAccountStatusSnapshot(entry, ["application", "audit"]);
+    const account = readAccountStatusSnapshot(entry, [
+      "application",
+      "audit",
+      "groupPolicy",
+      "guildsConfigured",
+    ]);
     if (!account) {
       continue;
     }
@@ -105,9 +81,22 @@ export function collectDiscordStatusIssues(
       continue;
     }
 
-    const app = readDiscordApplicationSummary(account.application);
-    const messageContent = app.intents?.messageContent;
-    if (messageContent === "disabled") {
+    if (account.groupPolicy === "allowlist" && account.guildsConfigured === 0) {
+      const guildGuidance =
+        accountId === "default"
+          ? "Add your server under channels.discord.guilds. If channels.discord.accounts.default.guilds is set, add it there instead."
+          : `Add your server under channels.discord.accounts.${accountId}.guilds.`;
+      issues.push({
+        channel: "discord",
+        accountId,
+        kind: "config",
+        message:
+          'Discord guild messages are blocked: effective groupPolicy is "allowlist", but no guilds are configured.',
+        fix: `${guildGuidance} Refresh channel status after the configuration reload applies.`,
+      });
+    }
+
+    if (isDiscordMessageContentIntentDisabled(account.application)) {
       issues.push({
         channel: "discord",
         accountId,

@@ -1,17 +1,17 @@
 // Core doctor compatibility migration pipeline for current config objects.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAgentRosterProperty } from "../../../agents/agent-scope-config.js";
-import { migrateLegacyContextBudgetConfig } from "../../../config/legacy.context-budget.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { HeartbeatSchema } from "../../../config/zod-schema.agent-runtime.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
-import { migrateLegacySecretRefEnvMarkers } from "../../../secrets/legacy-secretref-env-marker.js";
+import { migrateLegacyCommandOwners } from "../../doctor-command-owner.js";
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
 import type { LegacyCodexModelIdentity } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
 import { normalizeBaseCompatibilityConfigValues } from "./legacy-config-compatibility-base.js";
 import { normalizeLegacyOpenAICodexModelsAddMetadata } from "./legacy-config-core-normalizers.js";
 import { stripRetiredTuningKnobs } from "./legacy-config-migrations.runtime.retired-media.js";
+import { migrateLegacySecretInputs } from "./legacy-secret-inputs.js";
 import { migrateReservedMcpServerNames } from "./reserved-mcp-server-name-migrate.js";
 
 function repairAgentRoster(
@@ -116,7 +116,6 @@ export function normalizeCompatibilityConfigValues(
   options: {
     blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
     sourceRaw?: unknown;
-    sourceConfigBeforeMigrations?: unknown;
   } = {},
 ): {
   config: OpenClawConfig;
@@ -124,22 +123,8 @@ export function normalizeCompatibilityConfigValues(
   warnings?: string[];
 } {
   const changes: string[] = [];
-  let contextBudgetConfig = cfg;
-  let contextBudgetWarnings: string[];
-  if (options.sourceConfigBeforeMigrations === undefined) {
-    const migration = migrateLegacyContextBudgetConfig(cfg);
-    contextBudgetConfig = migration.config;
-    changes.push(...migration.changes.map(({ message }) => message));
-    contextBudgetWarnings = migration.warnings.map(({ message }) => message);
-  } else {
-    const migration = migrateLegacyContextBudgetConfig(options.sourceConfigBeforeMigrations);
-    changes.push(...migration.changes.map(({ message }) => message));
-    contextBudgetWarnings = migration.warnings.map(({ message }) => message);
-  }
-  const reservedMcpServerNames = migrateReservedMcpServerNames(
-    contextBudgetConfig,
-    options.sourceRaw,
-  );
+  const warnings: string[] = [];
+  const reservedMcpServerNames = migrateReservedMcpServerNames(cfg, options.sourceRaw);
   changes.push(...reservedMcpServerNames.changes);
   let next = normalizeBaseCompatibilityConfigValues(
     reservedMcpServerNames.config,
@@ -148,25 +133,25 @@ export function normalizeCompatibilityConfigValues(
       const setupMigration = runPluginSetupConfigMigrations({
         config,
       });
-      if (setupMigration.changes.length === 0) {
-        return config;
-      }
+      warnings.push(...(setupMigration.warnings ?? []));
       changes.push(...setupMigration.changes);
       return setupMigration.config;
     },
     options.blockedModelIdentities,
   );
   const tuningCandidate = structuredClone(next);
-  if (stripRetiredTuningKnobs(tuningCandidate)) {
+  if (stripRetiredTuningKnobs(tuningCandidate, changes)) {
     next = tuningCandidate;
-    changes.push("Removed retired runtime tuning knobs; built-in defaults now apply.");
   }
-  const channelMigrations = applyChannelDoctorCompatibilityMigrations(next);
+  const channelMigrations = applyChannelDoctorCompatibilityMigrations(next, {
+    historicalWebhookListeners: true,
+  });
+  warnings.push(...(channelMigrations.warnings ?? []));
   if (channelMigrations.changes.length > 0) {
     next = channelMigrations.next;
     changes.push(...channelMigrations.changes);
   }
-  const secretRefMarkers = migrateLegacySecretRefEnvMarkers(next);
+  const secretRefMarkers = migrateLegacySecretInputs(next);
   if (secretRefMarkers.changes.length > 0) {
     next = secretRefMarkers.config;
     changes.push(...secretRefMarkers.changes);
@@ -174,11 +159,12 @@ export function normalizeCompatibilityConfigValues(
   next = normalizeLegacyOpenAICodexModelsAddMetadata(next, changes);
   next = repairInvalidHeartbeatActiveHours(next, changes);
   next = repairNullAgentWorkspaces(next, changes);
+  next = migrateLegacyCommandOwners(next, changes);
   next = pruneBindingsForMissingAgents(next, changes);
 
   return {
     config: next,
     changes,
-    ...(contextBudgetWarnings.length > 0 ? { warnings: contextBudgetWarnings } : {}),
+    ...(warnings.length ? { warnings } : {}),
   };
 }

@@ -1,6 +1,3 @@
-/**
- * Resolves command session ids, keys, stores, and persisted thinking state.
- */
 import crypto from "node:crypto";
 import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -34,10 +31,12 @@ import {
   type SessionEntrySummary,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import {
   resolvePersistedSessionStoreOwner,
   resolvePersistedSessionStoreOwnerForKey,
 } from "../../config/sessions/session-store-owner.js";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -49,7 +48,7 @@ import {
 } from "../../routing/session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   AgentSelectionRequiredError,
   listAgentIds,
@@ -59,8 +58,8 @@ import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
 import { transitionMainSessionRecovery } from "../main-session-recovery/main-session-recovery-state.js";
 
-/** Resolved command session identity plus backing store metadata. */
 type SessionResolution = {
+  sessionAgentId: string;
   sessionId: string;
   sessionKey?: string;
   sessionEntry?: InternalSessionEntry;
@@ -76,6 +75,14 @@ type SessionKeyResolution = {
   sessionKey?: string;
   sessionEntry?: InternalSessionEntry;
   storePath: string;
+};
+
+type SessionRequest = {
+  cfg: OpenClawConfig;
+  to?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
 };
 
 export function clearRotatedSessionMetadata(entry: InternalSessionEntry): InternalSessionEntry {
@@ -166,7 +173,6 @@ function loadCommandSessionEntries(params: {
   });
 }
 
-/** Builds the synthetic session key used for explicit session-id runs. */
 export function buildExplicitSessionIdSessionKey(params: {
   sessionId: string;
   agentId?: string;
@@ -203,6 +209,9 @@ function collectSessionIdMatchesForRequest(opts: {
     candidateAgentId: string | undefined,
     options?: { primary?: boolean },
   ): void => {
+    // The successful listing already validated a partition's scoped owner; do not inspect it again.
+    const candidateStoreTarget =
+      resolveUnsuffixedSqliteTargetFromSessionStorePath(candidateStorePath);
     for (const { sessionKey: candidateKey, entry: candidateEntry } of candidateEntries) {
       if (candidateEntry?.sessionId !== opts.sessionId) {
         continue;
@@ -230,7 +239,8 @@ function collectSessionIdMatchesForRequest(opts: {
           ? persistedStoreOwner.agentId
           : persistedStoreOwner.kind === "retired"
             ? undefined
-            : (pathOwnedAgentId ??
+            : ((!candidateStoreTarget.shared ? scopedCandidateAgentId : undefined) ??
+              pathOwnedAgentId ??
               (opts.searchOtherAgentStores ? undefined : scopedCandidateAgentId) ??
               compatibilityAgentId)
         : undefined;
@@ -380,14 +390,9 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   };
 }
 
-function resolveSessionKeyForRequestInternal(opts: {
-  cfg: OpenClawConfig;
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  createMissingSessionId: boolean;
-}): SessionKeyResolution {
+function resolveSessionKeyForRequestInternal(
+  opts: SessionRequest & { createMissingSessionId: boolean },
+): SessionKeyResolution {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
@@ -485,9 +490,15 @@ function resolveSessionKeyForRequestInternal(opts: {
 
   // Command preparation needs one owned entry. Exact reads preserve the SQLite target and
   // Doctor guards without enumerating the agent store or exposing hidden run-owned rows.
+  // Exclusion and lookup share the persisted locator; routing keeps the request key.
+  const storeSessionKey = sessionKey ? normalizeStoreSessionKey(sessionKey) : undefined;
   const sessionEntry =
-    sessionKey && !isInternalSessionEffectsKey(sessionKey)
-      ? loadExactSessionEntryReadOnly({ agentId: storeAgentId, storePath, sessionKey })?.entry
+    storeSessionKey && !isInternalSessionEffectsKey(storeSessionKey)
+      ? loadExactSessionEntryReadOnly({
+          agentId: storeAgentId,
+          storePath,
+          sessionKey: storeSessionKey,
+        })?.entry
       : undefined;
 
   // If a session id was provided, prefer to re-use its existing entry (by id) even when no key was
@@ -558,45 +569,18 @@ export function resolveExistingSessionKeyForRequest(opts: {
   return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: false });
 }
 
-/** Resolves the session key/store targeted by one command request. */
-function resolveSessionKeyForRequest(opts: {
-  cfg: OpenClawConfig;
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-}): SessionKeyResolution {
+export function resolveSessionKeyForRequestCore(opts: SessionRequest): SessionKeyResolution {
   return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: true });
 }
 
-/** Core alias retained for runtime owners that bypass the public library facade. */
-export function resolveSessionKeyForRequestCore(
-  opts: Parameters<typeof resolveSessionKeyForRequest>[0],
-): SessionKeyResolution {
-  return resolveSessionKeyForRequest(opts);
-}
-
-/** Resolves or creates the session used by one agent command request. */
-export function resolveSession(opts: {
-  cfg: OpenClawConfig;
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-}): SessionResolution {
+export function resolveSession(opts: SessionRequest): SessionResolution {
   const sessionCfg = opts.cfg.session;
   const {
     agentId: resolvedAgentId,
     sessionKey,
     sessionEntry,
     storePath,
-  } = resolveSessionKeyForRequestCore({
-    cfg: opts.cfg,
-    to: opts.to,
-    sessionId: opts.sessionId,
-    sessionKey: opts.sessionKey,
-    agentId: opts.agentId,
-  });
+  } = resolveSessionKeyForRequestCore(opts);
   const now = Date.now();
 
   const sessionAgentId =
@@ -671,6 +655,7 @@ export function resolveSession(opts: {
     : undefined;
 
   return {
+    sessionAgentId,
     sessionId,
     sessionKey,
     sessionEntry: resolvedSessionEntry,

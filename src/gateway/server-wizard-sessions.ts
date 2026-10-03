@@ -1,6 +1,22 @@
 // Gateway wizard session tracker.
 // Tracks active setup/onboarding wizard sessions and purges completed ones.
 import type { WizardSession } from "../wizard/session.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
+
+const loginOwners = new WeakMap<WizardSession, GatewayClient>();
+
+/** Only credential-login sessions are connection-bound; setup keeps its recovery contract. */
+export function bindWizardLoginOwner(session: WizardSession, client: GatewayClient): void {
+  loginOwners.set(session, client);
+}
+
+export function canAccessWizardSession(
+  session: WizardSession,
+  client: GatewayClient | null,
+): boolean {
+  const owner = loginOwners.get(session);
+  return !owner || (owner === client && !owner.invalidated && !owner.connectionSignal?.aborted);
+}
 
 const UNCOLLECTED_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
 

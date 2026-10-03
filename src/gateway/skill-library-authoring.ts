@@ -8,7 +8,6 @@ import {
   mergeSkillLibrarySupportFiles,
   type SkillLibraryAuthoringCapability,
 } from "../skills/library/authoring.js";
-import { SkillLibraryError } from "../skills/library/errors.js";
 import {
   listSkillLibrary,
   resolveSkillLibraryPresentation,
@@ -17,8 +16,9 @@ import {
   mutateSkillLibrary,
 } from "../skills/library/service.js";
 import { resolveSkillLibraryActor } from "../skills/library/store.js";
+import { SkillLibraryError } from "../skills/skill-library-error.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { selectResolvedUserProfileById } from "../state/user-profiles-internal.js";
+import { selectResolvedUserProfileMetadataById } from "../state/user-profiles-internal.js";
 import {
   activateLibrarySelection,
   libraryAuthority,
@@ -37,8 +37,8 @@ export function invalidateSkillAuthoringForOtherRequester(
       const db = openOpenClawStateDatabase().db;
       if (
         !profileId ||
-        selectResolvedUserProfileById(db, grant.profileId)?.id !==
-          selectResolvedUserProfileById(db, profileId)?.id
+        selectResolvedUserProfileMetadataById(db, grant.profileId)?.id !==
+          selectResolvedUserProfileMetadataById(db, profileId)?.id
       ) {
         grant.revoke();
       }
@@ -47,11 +47,11 @@ export function invalidateSkillAuthoringForOtherRequester(
 }
 
 /** Only ordinary attributed human ingress may mint a namespace; actions remain normal tool policy. */
-export function prepareGatewaySkillAuthoring(
+export async function prepareGatewaySkillAuthoring(
   options: SkillLibraryRequestOwner,
   sessionKey: string,
   isHumanTurn: boolean,
-): SkillLibraryAuthoringCapability | undefined {
+): Promise<SkillLibraryAuthoringCapability | undefined> {
   const client = options.client;
   if (
     !isHumanTurn ||
@@ -67,7 +67,7 @@ export function prepareGatewaySkillAuthoring(
     return undefined;
   }
   const authority = libraryAuthority(options);
-  const library = resolveSkillLibraryPresentation(authority);
+  const library = await resolveSkillLibraryPresentation(authority);
   if (!library.profileId || library.defaultTarget === "unavailable") {
     return undefined;
   }
@@ -152,15 +152,12 @@ export function prepareGatewaySkillAuthoring(
       if (input.action === "list") {
         return listSkillLibrary(currentAuthority);
       }
-      if (input.action === "read") {
+      if (input.action === "read" || input.action === "activate") {
         if (!input.skillId) {
           throw new SkillLibraryError("INVALID_BUNDLE", "Choose skill_id from list.");
         }
-        return readSkillLibrary(currentAuthority, input.skillId, input.revision);
-      }
-      if (input.action === "activate") {
-        if (!input.skillId) {
-          throw new SkillLibraryError("INVALID_BUNDLE", "Choose skill_id from list.");
+        if (input.action === "read") {
+          return readSkillLibrary(currentAuthority, input.skillId, input.revision);
         }
         return activateLibrarySelection(
           { ...options, sessionMutationCommitGuard: assertCurrent },

@@ -1,0 +1,181 @@
+import { once } from "node:events";
+import { createServer } from "node:http";
+import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
+import type { Browser, ConnectOverCDPTransport } from "playwright-core";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { closePlaywrightBrowserConnection } from "./pw-session.js";
+import { clickViaPlaywright } from "./pw-tools-core.interactions.js";
+import { snapshotRoleViaPlaywright } from "./pw-tools-core.snapshot.js";
+
+const { connectOverCdpMock } = vi.hoisted(() => ({
+  connectOverCdpMock: vi.fn<(transport: ConnectOverCDPTransport) => Promise<Browser>>(),
+}));
+
+vi.mock("./playwright-core.runtime.js", () => ({
+  getPlaywrightUserAgent: () => "Playwright/test",
+  getPlaywrightCore: () => ({
+    chromium: { connectOverCDP: connectOverCdpMock },
+    devices: {},
+  }),
+}));
+
+let cdpUrl: string;
+const discoveryRequests = vi.fn();
+const server = createServer((request, response) => {
+  discoveryRequests(request.url);
+  if (request.url !== "/json/version") {
+    response.writeHead(404).end();
+    return;
+  }
+  response.writeHead(200, { "Content-Type": "application/json" });
+  response.end(
+    JSON.stringify({
+      webSocketDebuggerUrl: `${cdpUrl.replace("http:", "ws:")}/devtools/browser/test`,
+    }),
+  );
+});
+const socketServer = new WebSocketServer({ server, path: "/devtools/browser/test" });
+const socketConnections = vi.fn();
+socketServer.on("connection", socketConnections);
+
+type FakeSession = {
+  send: ReturnType<typeof vi.fn>;
+  detach: ReturnType<typeof vi.fn>;
+};
+
+function createPage(opts: { targetId: string; snapshotFull?: string }) {
+  const session: FakeSession = {
+    send: vi.fn().mockResolvedValue({
+      targetInfo: { targetId: opts.targetId },
+    }),
+    detach: vi.fn().mockResolvedValue(undefined),
+  };
+
+  const context = {
+    newCDPSession: vi.fn().mockResolvedValue(session),
+  };
+
+  const click = vi.fn().mockResolvedValue(undefined);
+  const locator = vi.fn().mockReturnValue({ click });
+
+  const page = {
+    context: () => context,
+    locator,
+    on: vi.fn(),
+    off: vi.fn(),
+    url: vi.fn(() => `https://example.test/${opts.targetId}`),
+    ariaSnapshot: vi.fn().mockResolvedValue(opts.snapshotFull ?? "SNAP"),
+  };
+
+  return { page, session, locator, click };
+}
+
+function createBrowser(pages: unknown[]) {
+  const ctx = {
+    pages: () => pages,
+    on: vi.fn(),
+  };
+  const close = vi.fn<Browser["close"]>();
+  const browser = {
+    contexts: () => [ctx],
+    on: vi.fn(),
+    close,
+  } as unknown as Browser;
+  connectOverCdpMock.mockImplementation(async (transport) => {
+    const closed = new Promise<void>((resolve) => {
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Playwright's transport owns this callback.
+      transport.onclose = () => resolve();
+    });
+    close.mockImplementation(async () => {
+      transport.close();
+      await closed;
+    });
+    return browser;
+  });
+}
+
+beforeAll(async () => {
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  cdpUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+});
+
+afterEach(async () => {
+  const socketClosures = [...socketServer.clients].map((socket) => once(socket, "close"));
+  await closePlaywrightBrowserConnection();
+  await Promise.all(socketClosures);
+  expect(socketServer.clients.size).toBe(0);
+  vi.clearAllMocks();
+});
+
+afterAll(async () => {
+  await new Promise<void>((resolve, reject) => {
+    socketServer.close((error) => (error ? reject(error) : resolve()));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+});
+
+describe("pw-ai", () => {
+  it.each([
+    ["e1", "e2"],
+    ["1", "2"],
+  ])(
+    "acts on the selected target's snapshot ref %s over one connection",
+    async (buttonRef, linkRef) => {
+      const snapshot = `- button "OK" [ref=${buttonRef}]\n- link "Docs" [ref=${linkRef}]`;
+      const p1 = createPage({ targetId: "T1", snapshotFull: "OTHER PAGE" });
+      const p2 = createPage({ targetId: "T2", snapshotFull: snapshot });
+      createBrowser([p1.page, p2.page]);
+
+      const res = await snapshotRoleViaPlaywright({
+        refsMode: "aria",
+        cdpUrl,
+        targetId: "T2",
+      });
+
+      expect(res.snapshot).toBe(snapshot);
+      expect(res.refs).toEqual({
+        [buttonRef]: { role: "button", name: "OK" },
+        [linkRef]: { role: "link", name: "Docs" },
+      });
+      expect(p1.session.detach).toHaveBeenCalled();
+      expect(p2.session.detach).toHaveBeenCalled();
+      expect(p2.page.off).toHaveBeenCalledWith("framenavigated", expect.any(Function));
+      expect(p2.page.off).toHaveBeenCalledWith("framedetached", expect.any(Function));
+
+      await clickViaPlaywright({
+        cdpUrl,
+        targetId: "T2",
+        ref: buttonRef,
+      });
+
+      expect(p2.locator).toHaveBeenCalledWith(`aria-ref=${buttonRef}`);
+      expect(p2.click).toHaveBeenCalledTimes(1);
+      expect(p1.click).not.toHaveBeenCalled();
+      expect(connectOverCdpMock).toHaveBeenCalledTimes(1);
+      expect(discoveryRequests).toHaveBeenCalledExactlyOnceWith("/json/version");
+      expect(socketConnections).toHaveBeenCalledTimes(1);
+      expect(socketServer.clients.size).toBe(1);
+    },
+  );
+
+  it("truncates oversized snapshots", async () => {
+    const firstLine = "VISIBLE";
+    const marker = "[...TRUNCATED - page too large]";
+    const longSnapshot = `${firstLine}\n${"A".repeat(50)}`;
+    const p1 = createPage({ targetId: "T1", snapshotFull: longSnapshot });
+    createBrowser([p1.page]);
+
+    const res = await snapshotRoleViaPlaywright({
+      refsMode: "aria",
+      cdpUrl,
+      targetId: "T1",
+      maxChars: firstLine.length + 2 + marker.length,
+    });
+
+    expect(res.truncated).toBe(true);
+    expect(res.snapshot).toBe(`${firstLine}\n\n${marker}`);
+  });
+});

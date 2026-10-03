@@ -1,4 +1,6 @@
 // Coordinates paired-node reapproval requests before they enter pairing storage.
+import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { GatewayAuthRateLimitConfig } from "../config/types.gateway.js";
 import {
   finalizeNodePairingCleanupClaim,
   requestNodePairing,
@@ -8,12 +10,13 @@ import {
   type NodePairingSupersededRequest,
   type RequestNodePairingResult,
 } from "../infra/device-pairing-node.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL,
   buildRateLimitIdentityKey,
-  createAuthRateLimiter,
+  createGatewayAuthRateLimiter,
   type RateLimitConfig,
 } from "./auth-rate-limit.js";
 
@@ -35,7 +38,6 @@ type QueuedRequest = {
 };
 
 type NodeRequestState = {
-  activeFingerprint: string;
   queued?: QueuedRequest;
 };
 
@@ -44,14 +46,6 @@ export type NodeReapprovalCoordinator = {
   finalizeCleanup: (claim: NodePairingCleanupClaim) => Promise<NodePairingSupersededRequest[]>;
   dispose: () => void;
 };
-
-function normalizeFingerprintList(value: string[] | undefined): string[] | undefined {
-  return value
-    ? [
-        ...new Set(value.map((entry) => entry.trim()).filter((entry) => entry.length > 0)),
-      ].toSorted()
-    : undefined;
-}
 
 function buildRequestFingerprint(input: NodePairingRequestInput): string {
   const permissions = input.permissions
@@ -70,8 +64,8 @@ function buildRequestFingerprint(input: NodePairingRequestInput): string {
     uiVersion: input.uiVersion,
     deviceFamily: input.deviceFamily,
     modelIdentifier: input.modelIdentifier,
-    caps: normalizeFingerprintList(input.caps),
-    commands: normalizeFingerprintList(input.commands),
+    caps: input.caps && normalizeSortedUniqueTrimmedStringList(input.caps),
+    commands: input.commands && normalizeSortedUniqueTrimmedStringList(input.commands),
     permissions,
     remoteIp: input.remoteIp,
     silent: Boolean(input.silent),
@@ -80,12 +74,15 @@ function buildRequestFingerprint(input: NodePairingRequestInput): string {
 
 /** Creates the gateway-lifetime owner for paired-node reapproval write limits. */
 export function createNodeReapprovalCoordinator(
-  config?: RateLimitConfig,
-): NodeReapprovalCoordinator {
-  const limiter = createAuthRateLimiter({
-    ...config,
-    exemptLoopback: false,
-  });
+  config: RateLimitConfig | undefined,
+  { scheduler }: { scheduler: GatewayScheduler },
+): NodeReapprovalCoordinator & {
+  updateConfig: (config?: GatewayAuthRateLimitConfig) => void;
+} {
+  const limiter = createGatewayAuthRateLimiter(
+    { ...config, exemptLoopback: false },
+    { scheduler, id: "auth/node-reapproval" },
+  );
   const requestStates = new Map<string, NodeRequestState>();
   let disposed = false;
 
@@ -113,39 +110,19 @@ export function createNodeReapprovalCoordinator(
     return result;
   };
 
-  const finishActiveRequest = (nodeId: string, state: NodeRequestState, fingerprint: string) => {
-    if (requestStates.get(nodeId) !== state || state.activeFingerprint !== fingerprint) {
-      return;
-    }
-    if (!state.queued) {
-      requestStates.delete(nodeId);
-    }
-  };
-
-  const startFirstRequest = (
+  const enqueueRequest = (
     nodeId: string,
     state: NodeRequestState,
-    request: QueuedRequest,
+    initial?: QueuedRequest,
   ): void => {
     void pendingNodeReapprovalAttempts.enqueue(`node-reapproval:${nodeId}`, async () => {
-      try {
-        request.deferred.resolve(await executeRequest(request.params));
-      } catch (error) {
-        request.deferred.reject(error);
-      } finally {
-        finishActiveRequest(nodeId, state, request.fingerprint);
+      const queued = initial ?? state.queued;
+      if (!initial) {
+        state.queued = undefined;
       }
-    });
-  };
-
-  const startQueuedRequest = (nodeId: string, state: NodeRequestState): void => {
-    void pendingNodeReapprovalAttempts.enqueue(`node-reapproval:${nodeId}`, async () => {
-      const queued = state.queued;
       if (!queued) {
         return;
       }
-      state.queued = undefined;
-      state.activeFingerprint = queued.fingerprint;
       try {
         queued.deferred.resolve(await executeRequest(queued.params));
         for (const follower of queued.followers) {
@@ -157,12 +134,15 @@ export function createNodeReapprovalCoordinator(
           follower.reject(error);
         }
       } finally {
-        finishActiveRequest(nodeId, state, queued.fingerprint);
+        if (requestStates.get(nodeId) === state && !state.queued) {
+          requestStates.delete(nodeId);
+        }
       }
     });
   };
 
   return {
+    updateConfig: (next) => limiter.updateConfig({ ...next, exemptLoopback: false }),
     request(params) {
       if (disposed) {
         return Promise.resolve(null);
@@ -172,9 +152,9 @@ export function createNodeReapprovalCoordinator(
       const state = requestStates.get(nodeId);
       if (!state) {
         const deferred = createDeferredCore<RequestNodePairingResult | null>();
-        const nextState: NodeRequestState = { activeFingerprint: fingerprint };
+        const nextState: NodeRequestState = {};
         requestStates.set(nodeId, nextState);
-        startFirstRequest(nodeId, nextState, {
+        enqueueRequest(nodeId, nextState, {
           fingerprint,
           params,
           deferred,
@@ -198,7 +178,7 @@ export function createNodeReapprovalCoordinator(
         state.queued = { fingerprint, params, deferred, followers: [] };
       } else {
         state.queued = { fingerprint, params, deferred, followers: [] };
-        startQueuedRequest(nodeId, state);
+        enqueueRequest(nodeId, state);
       }
       return deferred.promise;
     },

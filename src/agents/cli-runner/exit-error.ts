@@ -13,8 +13,6 @@ type CliExitFailoverErrorParams = {
   // Spawn supplies stderr/stdout windows; live stdout is already structured, so it supplies stderr.
   candidates: readonly string[];
   fallbackMessage: string;
-  // Only a clean premature live exit is protocol-level empty_response; other empty exits are unknown.
-  emptyReason?: FailoverError["reason"];
   retryEmptyFailure: boolean;
   resumeAtArg?: string;
 };
@@ -23,7 +21,7 @@ export function createCliFailoverError(
   message: string,
   reason: FailoverError["reason"],
   context: Pick<FailoverError, "provider" | "model" | "sessionId" | "lane">,
-  options?: { cause?: unknown; cliTimeout?: FailoverError["cliTimeout"]; code?: string },
+  options?: Pick<FailoverError, "cause" | "cliTimeout" | "code" | "timeout">,
 ): FailoverError {
   return new FailoverError(message, {
     reason,
@@ -74,8 +72,7 @@ export function createCliExitFailoverError(params: CliExitFailoverErrorParams): 
     .flatMap((candidate) => (candidate ? [coerceToFailoverError(candidate, params.context)] : []))
     .find((error) => error !== null);
   const message = structuredError || classified?.message || candidates[0] || params.fallbackMessage;
-  const reason =
-    classified?.reason ?? (candidates.length === 0 ? params.emptyReason : undefined) ?? "unknown";
+  const reason = classified?.reason ?? "unknown";
   const code =
     reason === "context_overflow"
       ? "cli_context_overflow"

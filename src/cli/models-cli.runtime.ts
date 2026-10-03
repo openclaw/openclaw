@@ -1,4 +1,3 @@
-// Runtime helpers for model CLI commands and shared agent option handling.
 import type { Command } from "commander";
 import { defaultRuntime } from "../runtime.js";
 import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js";
@@ -28,7 +27,8 @@ export type GlobalOnlyModelCommandName =
   | "aliases list"
   | "aliases add"
   | "aliases remove"
-  | "refresh";
+  | "refresh"
+  | `${"fallbacks" | "image-fallbacks"} ${"add" | "remove" | "clear"}`;
 
 export function rejectAgentScopedModelCommand(
   command: Command,

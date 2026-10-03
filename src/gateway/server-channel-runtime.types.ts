@@ -2,8 +2,16 @@
 // Exposes read-only channel/account state to status and server-method surfaces.
 import type { ChannelId, ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 
+export type ChannelRuntimeSnapshotOptions = {
+  channelId?: ChannelId;
+  /** Controls read recorded state without invoking fallible diagnostic inspectors. */
+  inspectAccounts?: boolean;
+};
+
 /** Snapshot of channel runtime state keyed by channel and account id. */
 export type ChannelRuntimeSnapshot = {
+  /** Host admission is paused; status must use captured facts without invoking plugin callbacks. */
+  reloadingChannels?: ReadonlyMap<ChannelId, string | undefined>;
   channels: Partial<Record<ChannelId, ChannelAccountSnapshot>>;
   channelAccounts: Partial<Record<ChannelId, Record<string, ChannelAccountSnapshot>>>;
 };
@@ -11,7 +19,7 @@ export type ChannelRuntimeSnapshot = {
 /** The lifecycle owner's decision for one requested account start, separate from connectivity. */
 export type ChannelAccountStartOutcome =
   | { status: "handed-off" }
-  | { status: "retry"; reason: "stop-in-flight" | "task-owned" | "start-in-flight" }
+  | { status: "retry"; reason: "stop-in-flight" | "task-owned" }
   | {
       status: "skipped";
       reason:

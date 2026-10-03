@@ -5,12 +5,12 @@ import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionEditorAttachment
 import ai.openclaw.app.chat.VOICE_NOTE_MIME_TYPE
 import ai.openclaw.app.chat.VoiceNoteRecording
+import androidx.compose.runtime.mutableStateMapOf
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.Base64
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicLong
 
 /** Attachment staged in a composer until the next chat.send call. */
 data class PendingAttachment(
@@ -38,8 +38,8 @@ internal class ChatComposerAttachmentStore(
   }
 
   private val lock = Any()
-  private val importSequence = AtomicLong()
-  private val importOwners = mutableMapOf<Long, ChatComposerOwner>()
+  private var importSequence = 0L
+  private val importOwners = mutableStateMapOf<Long, ChatComposerOwner>()
   private val _attachments = MutableStateFlow<Map<ChatComposerOwner, List<PendingAttachment>>>(emptyMap())
   val attachments: StateFlow<Map<ChatComposerOwner, List<PendingAttachment>>> = _attachments.asStateFlow()
 
@@ -63,16 +63,21 @@ internal class ChatComposerAttachmentStore(
 
   fun beginImport(owner: ChatComposerOwner): Long =
     synchronized(lock) {
-      importSequence.incrementAndGet().also { importOwners[it] = owner }
+      (++importSequence).also { importOwners[it] = owner }
     }
+
+  fun hasPendingImport(owner: ChatComposerOwner): Boolean = synchronized(lock) { importOwners.containsValue(owner) }
 
   fun completeImport(
     id: Long,
     candidates: List<PendingAttachment>,
   ): Pair<ChatComposerOwner, Int>? =
     synchronized(lock) {
-      val owner = importOwners.remove(id) ?: return@synchronized null
-      owner to addLocked(owner, candidates)
+      val owner = importOwners[id] ?: return@synchronized null
+      val result = owner to addLocked(owner, candidates)
+      // Publish the payload before releasing the observable Send gate.
+      importOwners.remove(id)
+      result
     }
 
   fun cancelImport(id: Long) {
@@ -96,14 +101,6 @@ internal class ChatComposerAttachmentStore(
       importOwners.entries.removeAll { matches(it.value) }
       _attachments.value = _attachments.value.filterKeys { !matches(it) }
     }
-  }
-
-  fun migrate(
-    from: ChatComposerOwner,
-    to: ChatComposerOwner,
-  ): Int {
-    if (from == to) return 0
-    return synchronized(lock) { migrateLocked(from = from, to = to) }
   }
 
   /** Resolves every parked alias and in-flight import, not only the visible composer. */

@@ -1,113 +1,193 @@
-// Verifies realtime voice bootstrap context only injects approved profile files.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveRealtimeBootstrapContextInstructions } from "./realtime-bootstrap-context.js";
+import * as bootstrapFiles from "./bootstrap-files.js";
+import * as identity from "./identity.js";
+import {
+  resolveRealtimeBootstrapContextInstructions,
+  resolveRealtimeVoiceAgentContextInstructions,
+} from "./realtime-bootstrap-context.js";
+import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS as framing } from "./realtime-bootstrap-context.test-support.js";
 
-const tempDirs: string[] = [];
-
-async function makeWorkspace(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-realtime-bootstrap-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
-function makeConfig(workspaceDir: string): OpenClawConfig {
-  // Bootstrap context resolves files through the configured default agent workspace.
-  return {
-    agents: {
-      defaults: { workspace: workspaceDir },
-      list: [{ id: "main", default: true }],
-    },
-  } as OpenClawConfig;
-}
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let workspaceDir: string;
+let config: OpenClawConfig;
+let params: { config: OpenClawConfig; agentId: string };
+beforeEach(() => {
+  workspaceDir = tempDirs.make("openclaw-realtime-bootstrap-");
+  config = {
+    agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main", default: true }] },
+  };
+  params = { config, agentId: "main" };
 });
+afterEach(() => vi.restoreAllMocks());
+
+async function writeFiles(files: Record<string, string>) {
+  await Promise.all(
+    Object.entries(files).map(([name, content]) =>
+      fs.writeFile(path.join(workspaceDir, name), content),
+    ),
+  );
+}
 
 describe("resolveRealtimeBootstrapContextInstructions", () => {
-  it("formats the default profile bootstrap files without exposing local paths", async () => {
-    const workspaceDir = await makeWorkspace();
-    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "Name: Wilfred\n", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "USER.md"), "User likes concise answers.\n", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Warm and dry.\n", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Do not load me here.\n", "utf8");
+  it.each([1, 1_000])(
+    "formats and bounds profile files with %i identity lines without exposing paths",
+    async (lines) => {
+      await writeFiles({
+        "IDENTITY.md": "Name: Wilfred\n".repeat(lines),
+        "USER.md": "User likes concise answers.\n",
+        "SOUL.md": "Warm and dry.\n",
+        "AGENTS.md": "Do not load me here.\n",
+      });
+      const instructions = await resolveRealtimeBootstrapContextInstructions({
+        ...params,
+        sessionKey: "agent:main:discord:channel:1001",
+        files: lines === 1 ? undefined : ["IDENTITY.md", "USER.md", "SOUL.md"],
+      });
+      for (const text of [
+        "OpenClaw realtime voice profile context",
+        "### IDENTITY.md",
+        "Name: Wilfred",
+        "### USER.md",
+        "User likes concise answers.",
+        "### SOUL.md",
+        "Warm and dry.",
+      ]) {
+        expect(instructions).toContain(text);
+      }
+      for (const text of [
+        "AGENTS.md",
+        "Do not load me here.",
+        "openclaw_agent_consult",
+        workspaceDir,
+      ]) {
+        expect(instructions).not.toContain(text);
+      }
+      expect(instructions?.length).toBeLessThanOrEqual(12_000);
+    },
+  );
 
-    const instructions = await resolveRealtimeBootstrapContextInstructions({
-      config: makeConfig(workspaceDir),
-      agentId: "main",
-      sessionKey: "agent:main:discord:channel:1001",
-    });
-
-    expect(instructions).toContain("OpenClaw realtime voice profile context");
-    expect(instructions).toContain("### IDENTITY.md");
-    expect(instructions).toContain("Name: Wilfred");
-    expect(instructions).toContain("### USER.md");
-    expect(instructions).toContain("User likes concise answers.");
-    expect(instructions).toContain("### SOUL.md");
-    expect(instructions).toContain("Warm and dry.");
-    expect(instructions).not.toContain("AGENTS.md");
-    expect(instructions).not.toContain("Do not load me here.");
-    expect(instructions).not.toContain("openclaw_agent_consult");
-    expect(instructions).not.toContain(workspaceDir);
-  });
-
-  it("ignores unsupported file requests from unchecked callers", async () => {
-    // Runtime callers may pass unchecked file arrays; unsupported files must be filtered.
-    const workspaceDir = await makeWorkspace();
+  it("includes safe extra files in requested order and skips missing or escaping paths", async () => {
+    const parentDir = workspaceDir;
+    workspaceDir = path.join(parentDir, "workspace");
+    config.agents!.defaults!.workspace = workspaceDir;
+    await fs.mkdir(path.join(workspaceDir, "context"), { recursive: true });
+    await fs.writeFile(path.join(parentDir, "x"), "Outside context must stay private.");
+    await writeFiles({ "IDENTITY.md": "Name: Wilfred", "context/brief.md": "Project briefing." });
     const warnings: string[] = [];
-    const uncheckedFiles = ["IDENTITY.md", "AGENTS.md"] as unknown as NonNullable<
-      Parameters<typeof resolveRealtimeBootstrapContextInstructions>[0]["files"]
-    >;
-    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "Name: Wilfred\n", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Do not load me here.\n", "utf8");
-
     const instructions = await resolveRealtimeBootstrapContextInstructions({
-      config: makeConfig(workspaceDir),
-      agentId: "main",
-      files: uncheckedFiles,
+      ...params,
+      files: ["context/brief.md", "../x", "missing.md", "IDENTITY.md"],
       warn: (message) => warnings.push(message),
     });
-
-    expect(instructions).toContain("### IDENTITY.md");
-    expect(instructions).toContain("Name: Wilfred");
-    expect(instructions).not.toContain("AGENTS.md");
-    expect(instructions).not.toContain("Do not load me here.");
-    expect(warnings).toContain('skipping unsupported realtime bootstrap context file "AGENTS.md"');
-  });
-
-  it("keeps the complete injected instruction text within the default budget", async () => {
-    const workspaceDir = await makeWorkspace();
-    await fs.writeFile(
-      path.join(workspaceDir, "IDENTITY.md"),
-      "Name: Wilfred\n".repeat(1_000),
-      "utf8",
+    expect(instructions).toContain("### brief.md\nProject briefing.");
+    expect(instructions).toContain("### IDENTITY.md\nName: Wilfred");
+    expect(instructions!.indexOf("Project briefing.")).toBeLessThan(
+      instructions!.indexOf("Name: Wilfred"),
     );
-    await fs.writeFile(path.join(workspaceDir, "USER.md"), "User likes concise answers.\n", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Warm and dry.\n", "utf8");
-
-    const instructions = await resolveRealtimeBootstrapContextInstructions({
-      config: makeConfig(workspaceDir),
-      agentId: "main",
-      files: ["IDENTITY.md", "USER.md", "SOUL.md"],
-    });
-
-    expect(instructions).toContain("### IDENTITY.md");
-    expect(instructions?.length).toBeLessThanOrEqual(12_000);
+    expect(instructions).not.toContain("Outside context");
+    expect(instructions).not.toContain("missing.md");
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining('skipping realtime context file "../x"')]),
+    );
   });
 
   it("returns undefined when no requested profile files exist", async () => {
-    const workspaceDir = await makeWorkspace();
-
     await expect(
-      resolveRealtimeBootstrapContextInstructions({
-        config: makeConfig(workspaceDir),
-        agentId: "main",
-        files: ["IDENTITY.md", "USER.md"],
-      }),
+      resolveRealtimeBootstrapContextInstructions({ ...params, files: ["IDENTITY.md", "USER.md"] }),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("resolveRealtimeVoiceAgentContextInstructions", () => {
+  it.each([false, true])(
+    "preserves framing and profile with identity failure=%s",
+    async (failIdentity) => {
+      await writeFiles({ "SOUL.md": "Warm and dry." });
+      vi.spyOn(identity, "resolveAgentIdentity").mockImplementation(() => {
+        if (failIdentity) {
+          throw new Error("identity unavailable");
+        }
+        return {
+          name: " Wilfred ",
+          emoji: "🦞",
+          vibe: " dry ",
+          theme: "friendly",
+          creature: "lobster",
+        };
+      });
+      const warn = vi.fn();
+      const instructions = await resolveRealtimeVoiceAgentContextInstructions({
+        ...params,
+        includeIdentity: true,
+        warn,
+      });
+      expect(instructions.startsWith(framing)).toBe(true);
+      expect(instructions.split(framing)).toHaveLength(2);
+      expect(instructions).toContain("### SOUL.md\nWarm and dry.");
+      if (failIdentity) {
+        expect(instructions).not.toContain("Configured identity:");
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("identity unavailable"));
+      } else {
+        expect(
+          instructions.startsWith(
+            `${framing}\n\nConfigured identity:\n- Name: Wilfred\n- Emoji: 🦞\n- Vibe: dry\n- Theme: friendly\n- Creature/persona: lobster\n\nOpenClaw realtime voice profile context:`,
+          ),
+        ).toBe(true);
+      }
+    },
+  );
+
+  it.each(["disabled", "unavailable"] as const)(
+    "preserves framing and optional identity when profile is %s",
+    async (profile) => {
+      const warn = vi.fn();
+      const files = profile === "disabled" ? [] : undefined;
+      if (profile === "unavailable") {
+        vi.spyOn(bootstrapFiles, "resolveBootstrapFilesForRun").mockRejectedValue(
+          new Error("profile unavailable"),
+        );
+      }
+      config.agents!.list![0]!.identity = { name: "Wilfred" };
+      expect(await resolveRealtimeVoiceAgentContextInstructions({ ...params, files, warn })).toBe(
+        framing,
+      );
+      if (profile === "unavailable") {
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("profile unavailable"));
+      } else {
+        config.agents!.list![0]!.identity = { name: " ", emoji: "" };
+        await expect(
+          resolveRealtimeBootstrapContextInstructions({ ...params, files }),
+        ).resolves.toBeUndefined();
+      }
+      expect(
+        await resolveRealtimeVoiceAgentContextInstructions({
+          ...params,
+          files,
+          includeIdentity: true,
+          warn,
+        }),
+      ).toBe(
+        profile === "disabled" ? framing : `${framing}\n\nConfigured identity:\n- Name: Wilfred`,
+      );
+    },
+  );
+
+  it("bounds the complete profile block without cutting the paragraph or UTF-16 pairs", async () => {
+    await writeFiles({ "brief.md": "🚀".repeat(1_000) });
+    const instructions = await resolveRealtimeVoiceAgentContextInstructions({
+      ...params,
+      files: ["brief.md"],
+      maxChars: 400,
+    });
+    expect(instructions.startsWith(`${framing}\n\n`)).toBe(true);
+    const profile = instructions.slice(framing.length + 2);
+    expect(profile).toContain("### brief.md");
+    expect(profile.length).toBeLessThanOrEqual(400);
+    expect(profile.isWellFormed()).toBe(true);
+    expect(profile).toContain("truncated");
   });
 });

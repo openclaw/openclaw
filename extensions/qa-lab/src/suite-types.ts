@@ -1,6 +1,10 @@
-import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { QaEvidenceTiming, QaEvidenceSummaryJson } from "./evidence-summary.js";
+import type {
+  QaEvidenceOccurrence,
+  QaEvidenceRttMeasurement,
+  QaEvidenceTiming,
+  QaEvidenceSummaryV3Json,
+} from "./evidence-summary.js";
 import type { QaCliBackendAuthMode, QaGatewayChildCommand } from "./gateway-child.js";
 import type { QaLabServerHandle, QaLabServerStartParams } from "./lab-server.types.js";
 import type { QaProviderMode } from "./model-selection.js";
@@ -11,17 +15,34 @@ import type {
   QaTransportId,
 } from "./qa-transport-registry.js";
 import type { QaReportCheck } from "./report.js";
-import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
+import type { QaRuntimeSelection, RuntimeId } from "./runtime-id.js";
+import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
+import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import type { QaSuiteRoundTripProbe } from "./suite-round-trip.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
+export type QaSuiteStepOutcome = {
+  details?: string;
+  timing?: QaEvidenceTiming;
+  rttMeasurement?: QaEvidenceRttMeasurement;
+};
+
+export type QaSuiteStep = {
+  name: string;
+  run: () => Promise<QaSuiteStepOutcome | void>;
+};
+
 export type QaSuiteScenarioResult = {
   name: string;
   status: "pass" | "fail" | "skip";
+  // The lifecycle owner carries this through retries and post-run checks.
+  evidenceOccurrenceId?: string;
   steps: QaReportCheck[];
   details?: string;
   timing?: QaEvidenceTiming;
+  rttMeasurement?: QaEvidenceRttMeasurement;
+  modelSwitchEvidence?: Record<string, unknown>;
   runtimeParity?: RuntimeParityResult;
 };
 
@@ -33,11 +54,28 @@ export type QaSuiteEnvironment = {
 
 export type QaSuiteStartLabFn = (params?: QaLabServerStartParams) => Promise<QaLabServerHandle>;
 
+export function rejectRemovedQaChannelDriverSelection(value: unknown): void {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    Object.hasOwn(value, "channelDriverSelection")
+  ) {
+    throw new TypeError(
+      "channelDriverSelection was removed; pass channelDriver with channelId for suite runs or channel for summaries",
+    );
+  }
+}
+
 export type QaSuiteRunParams = {
   adapterOptions?: QaTransportFactoryContext["adapterOptions"];
   adapterFactories?: readonly QaTransportAdapterFactory[];
   channelId?: string;
   evidenceMode?: QaScorecardEvidenceMode;
+  evidenceAnchors?: readonly QaEvidenceOccurrence[];
+  // Only the current parent invocation supplies captured retry/child evidence.
+  evidenceContinuation?: QaEvidenceSummaryV3Json;
+  // Parents retain child observations even when result publication later throws.
+  onEvidence?: (summary: QaEvidenceSummaryV3Json) => void;
   repoRoot?: string;
   sutOpenClawCommand?: QaGatewayChildCommand;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
@@ -45,7 +83,6 @@ export type QaSuiteRunParams = {
   providerMode?: QaProviderMode;
   transportId?: QaTransportId;
   channelDriver?: QaScorecardChannelDriver;
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
@@ -53,6 +90,7 @@ export type QaSuiteRunParams = {
   thinkingDefault?: QaThinkingLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   scenarioIds?: string[];
+  scenarioDefinitions?: QaSeedScenarioWithSource[];
   lab?: QaLabServerHandle;
   startLab?: QaSuiteStartLabFn;
   concurrency?: number;
@@ -61,6 +99,7 @@ export type QaSuiteRunParams = {
   transportReadyTimeoutMs?: number;
   workerStartStaggerMs?: number;
   forcedRuntime?: RuntimeId;
+  runtimeSelection?: QaRuntimeSelection;
   runtimePair?: [RuntimeId, RuntimeId];
   captureRuntimeParityCell?: boolean;
   roundTripProbe?: QaSuiteRoundTripProbe;
@@ -70,7 +109,7 @@ export type QaSuiteRunParams = {
 };
 
 export type QaSuiteResult = {
-  evidence?: QaEvidenceSummaryJson;
+  evidence: QaEvidenceSummaryV3Json;
   outputDir: string;
   evidencePath: string;
   reportPath: string;
@@ -85,9 +124,7 @@ export type QaSuiteResult = {
 export type QaSuiteRunner = (params?: QaSuiteRunParams) => Promise<QaSuiteResult>;
 export type QaSuiteScenarioRunner = (
   env: QaSuiteEnvironment,
-  scenario: ReturnType<
-    typeof import("./scenario-catalog.js").readQaBootstrapScenarioCatalog
-  >["scenarios"][number],
+  scenario: QaSeedScenarioWithSource,
 ) => Promise<QaSuiteScenarioResult>;
 
 export type QaSuiteResolvedRunContext = {
@@ -95,9 +132,7 @@ export type QaSuiteResolvedRunContext = {
   repoRoot: string;
   outputDir: string;
   transportId: QaTransportId;
-  selectedScenarios: ReturnType<
-    typeof import("./scenario-catalog.js").readQaBootstrapScenarioCatalog
-  >["scenarios"];
+  selectedScenarios: QaSeedScenarioWithSource[];
   providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;

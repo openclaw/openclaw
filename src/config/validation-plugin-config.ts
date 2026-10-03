@@ -1,4 +1,5 @@
 import path from "node:path";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
   normalizePluginsConfig,
@@ -9,96 +10,54 @@ import {
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
+import { findUninspectedPluginDiagnostic } from "../plugins/discovery-availability.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  isNativeSessionCatalogOptOutOnly,
+  shippedNativeSessionCatalogs,
+} from "../plugins/native-session-catalog-config.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstallSources,
 } from "../plugins/official-external-plugin-catalog.js";
-import { validatePluginSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
 import { isRecord, resolveUserPath } from "../utils.js";
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
+import {
+  validatePreparedPluginSchemaValue,
+  type PreparedPluginSchemaValidations,
+} from "./validation-prepared.js";
 
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
 
-type ExplicitPluginReferences = {
-  entries: Set<string>;
-  allow: Set<string>;
-  deny: Set<string>;
-  slots: Map<string, string>;
-};
-
-export function collectExplicitPluginReferences(raw: unknown): ExplicitPluginReferences {
-  const references: ExplicitPluginReferences = {
-    entries: new Set(),
-    allow: new Set(),
-    deny: new Set(),
-    slots: new Map(),
-  };
-  if (!isRecord(raw) || !isRecord(raw.plugins)) {
-    return references;
-  }
-  const { plugins } = raw;
-  if (isRecord(plugins.entries)) {
-    for (const pluginId of Object.keys(plugins.entries)) {
-      const normalized = normalizePluginId(pluginId);
-      if (normalized) {
-        references.entries.add(normalized);
-      }
-    }
-  }
-  for (const [key, target] of [
-    ["allow", references.allow],
-    ["deny", references.deny],
-  ] as const) {
-    const value = plugins[key];
-    if (!Array.isArray(value)) {
-      continue;
-    }
-    for (const entry of value) {
-      if (typeof entry === "string") {
-        const normalized = normalizePluginId(entry);
-        if (normalized) {
-          target.add(normalized);
-        }
-      }
-    }
-  }
-  if (isRecord(plugins.slots)) {
-    for (const [slotId, pluginId] of Object.entries(plugins.slots)) {
-      if (typeof pluginId !== "string") {
-        continue;
-      }
-      const normalized = normalizePluginId(pluginId);
-      if (normalized && normalized !== "none") {
-        references.slots.set(normalized, slotId);
-      }
-    }
-  }
-  return references;
+export function formatChannelConfigIssueMessage(message: string, pluginId?: string): string {
+  const safePluginId = pluginId ? sanitizeForLog(pluginId).trim() : "";
+  return safePluginId
+    ? `invalid config for plugin ${safePluginId}: ${message}`
+    : `invalid config: ${message}`;
 }
 
-export function resolveExplicitPluginReferencePath(
-  references: ExplicitPluginReferences,
-  pluginId: string,
-): string | undefined {
-  const normalized = normalizePluginId(pluginId);
-  if (!normalized) {
-    return undefined;
-  }
-  if (references.entries.has(normalized)) {
-    return `plugins.entries.${normalized}`;
-  }
-  if (references.allow.has(normalized)) {
-    return "plugins.allow";
-  }
-  if (references.deny.has(normalized)) {
-    return "plugins.deny";
-  }
-  const slotId = references.slots.get(normalized);
-  return slotId ? `plugins.slots.${slotId}` : undefined;
+/** Deferred channel settings remain authored inputs until their owning plugin can validate them. */
+export function resolveDeferredChannelConfigWarning(params: {
+  channelId: string;
+  schemaPluginId: string | undefined;
+  deferredPluginIds: ReadonlySet<string>;
+  registry: PluginManifestRegistry;
+}): ConfigValidationIssue | undefined {
+  const pluginId =
+    params.schemaPluginId ??
+    GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find((entry) => entry.channelId === params.channelId)
+      ?.pluginId ??
+    params.registry.plugins.find((record) => record.channels.includes(params.channelId))?.id;
+  return pluginId && params.deferredPluginIds.has(normalizePluginId(pluginId))
+    ? {
+        path: `channels.${params.channelId}`,
+        message: `Plugin "${pluginId}" channel settings cannot be checked until its data/settings upgrade finishes. Your existing settings have been kept. Run "openclaw update status" for repair details.`,
+      }
+    : undefined;
 }
 
 function formatRemovedPluginConfigWarning(pluginId: string): string {
@@ -131,9 +90,11 @@ export function validateExplicitPluginConfig(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   applyDefaults: boolean;
+  schemaValidations?: PreparedPluginSchemaValidations;
   registry: PluginManifestRegistry;
   knownIds: Set<string>;
   normalizedPlugins: ReturnType<typeof normalizePluginsConfig>;
+  deferredPluginIds?: ReadonlySet<string>;
   ensureCompatPluginIds: () => ReadonlySet<string>;
   ensureOverriddenPluginIds: () => Set<string>;
   replacePluginEntryConfig: (pluginId: string, nextValue: Record<string, unknown>) => void;
@@ -153,6 +114,10 @@ export function validateExplicitPluginConfig(params: {
     issues,
     warnings,
   } = params;
+  // An unavailable configured path may override any discovered plugin's schema.
+  if (findUninspectedPluginDiagnostic(registry.diagnostics)) {
+    return;
+  }
   const blockedPluginDiagnostics = new Map<string, { message: string; source?: string }>();
   const blockedPluginDiagnosticsWithSource: Array<{ message: string; source: string }> = [];
   const normalizeBlockedDiagnosticPath = (value: string | undefined): string => {
@@ -215,9 +180,7 @@ export function validateExplicitPluginConfig(params: {
       if (
         resolvedLoadPath &&
         normalizePluginId(path.basename(resolvedLoadPath)) === normalizedPluginId &&
-        (sourcePath === resolvedLoadPath ||
-          isPathInside(resolvedLoadPath, sourcePath) ||
-          isPathInside(sourcePath, resolvedLoadPath))
+        (isPathInside(resolvedLoadPath, sourcePath) || isPathInside(sourcePath, resolvedLoadPath))
       ) {
         return true;
       }
@@ -231,6 +194,21 @@ export function validateExplicitPluginConfig(params: {
       blockedDiagnosticSourceMatchesPluginId(diagnostic, pluginId),
     );
   const missingOfficialPluginWarningIds = new Set<string>();
+  const deferredPluginWarningIds = new Set<string>();
+  const noteDeferredPlugin = (pluginId: string, issuePath: string): boolean => {
+    const normalized = normalizePluginId(pluginId);
+    if (!params.deferredPluginIds?.has(normalized)) {
+      return false;
+    }
+    if (!deferredPluginWarningIds.has(normalized)) {
+      deferredPluginWarningIds.add(normalized);
+      warnings.push({
+        path: issuePath,
+        message: `Plugin "${pluginId}" settings cannot be checked until its data/settings upgrade finishes. Your existing settings have been kept. Run "openclaw update status" for repair details.`,
+      });
+    }
+    return true;
+  };
   const pushMissingPluginIssue = (
     issuePath: string,
     pluginId: string,
@@ -240,6 +218,9 @@ export function validateExplicitPluginConfig(params: {
       missingMessage?: string | null;
     },
   ) => {
+    if (noteDeferredPlugin(pluginId, issuePath)) {
+      return;
+    }
     if (isRetiredPluginId(pluginId)) {
       warnings.push({ path: issuePath, message: formatRemovedPluginConfigWarning(pluginId) });
       return;
@@ -285,11 +266,16 @@ export function validateExplicitPluginConfig(params: {
 
   const pluginsConfig = config.plugins;
   const entries = pluginsConfig?.entries;
+  // Normalized entries gain optional keys, so inspect the original disable marker shape.
+  const hasIntentionalDisableMarker = (pluginId: string) =>
+    isExplicitPluginDisableMarker(entries?.[pluginId]) && !isRetiredPluginId(pluginId);
   if (entries && isRecord(entries)) {
-    for (const [pluginId, entry] of Object.entries(entries)) {
-      const intentionalDisableMarker =
-        isExplicitPluginDisableMarker(entry) && !isRetiredPluginId(pluginId);
-      if (!knownIds.has(pluginId) && !intentionalDisableMarker) {
+    for (const pluginId of Object.keys(entries)) {
+      if (
+        !knownIds.has(pluginId) &&
+        !hasIntentionalDisableMarker(pluginId) &&
+        !isNativeSessionCatalogOptOutOnly(pluginId, entries[pluginId])
+      ) {
         // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
         pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
       }
@@ -310,7 +296,7 @@ export function validateExplicitPluginConfig(params: {
           `"${pluginId}" is not a plugin — it is a command provided by the "${commandAlias.pluginId}" plugin. ` +
           `Use "${commandAlias.pluginId}" in plugins.allow instead.`,
       });
-    } else {
+    } else if (!hasIntentionalDisableMarker(pluginId)) {
       pushMissingPluginIssue("plugins.allow", pluginId, { warnOnly: true });
     }
   }
@@ -352,6 +338,9 @@ export function validateExplicitPluginConfig(params: {
       continue;
     }
     seenPlugins.add(pluginId);
+    if (noteDeferredPlugin(pluginId, `plugins.entries.${pluginId}`)) {
+      continue;
+    }
     const entry = normalizedPlugins.entries[pluginId];
     const entryHasConfig = Boolean(entry?.config);
     const activationState = resolveEffectivePluginActivationState({
@@ -379,18 +368,19 @@ export function validateExplicitPluginConfig(params: {
         selectedMemoryPluginId = pluginId;
       }
     }
-    const shouldReplacePluginConfig = entryHasConfig || (applyDefaults && enabled);
-    const shouldValidate = enabled || entryHasConfig;
-    if (shouldValidate) {
+    if (enabled || entryHasConfig) {
       if (record.configSchema) {
-        const result = validatePluginSchemaValue({
-          origin: record.origin,
-          schema: record.configSchema,
-          cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
-          value: entry?.config ?? {},
-          applyDefaults: true, // Always apply defaults for AJV schema validation;
-          // writeConfigFile persists persistCandidate, not validated.config (#61841)
-        });
+        const result = validatePreparedPluginSchemaValue(
+          {
+            origin: record.origin,
+            schema: record.configSchema,
+            cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
+            value: entry?.config ?? {},
+            applyDefaults: true, // Always apply defaults for AJV schema validation;
+            // writeConfigFile persists persistCandidate, not validated.config (#61841)
+          },
+          params.schemaValidations,
+        );
         if (!result.ok) {
           for (const error of result.errors) {
             const base = `plugins.entries.${pluginId}.config`;
@@ -401,13 +391,30 @@ export function validateExplicitPluginConfig(params: {
               allowedValuesHiddenCount: error.allowedValuesHiddenCount,
             });
           }
-        } else if (shouldReplacePluginConfig) {
-          params.replacePluginEntryConfig(pluginId, result.value as Record<string, unknown>);
+        } else if (entryHasConfig || (applyDefaults && enabled)) {
+          let nextValue = result.value as Record<string, unknown>;
+          const nativeCatalog =
+            record.setup?.nativeSessionCatalog ??
+            shippedNativeSessionCatalogs.find((catalog) => catalog.pluginId === pluginId);
+          const authoredCatalog =
+            isRecord(entry?.config) && isRecord(entry.config.sessionCatalog)
+              ? entry.config.sessionCatalog
+              : undefined;
+          if (
+            nativeCatalog &&
+            isRecord(nextValue.sessionCatalog) &&
+            Object.hasOwn(nextValue.sessionCatalog, "enabled") &&
+            !Object.hasOwn(authoredCatalog ?? {}, "enabled")
+          ) {
+            // Plugin-local defaults remain intact. Root runtime config must not
+            // mistake a schema default for an authored discovery preference.
+            const sessionCatalog = { ...nextValue.sessionCatalog };
+            delete sessionCatalog.enabled;
+            nextValue = { ...nextValue, sessionCatalog };
+          }
+          params.replacePluginEntryConfig(pluginId, nextValue);
         }
-      } else if (record.format === "bundle") {
-        // Compatible bundles currently expose no native OpenClaw config schema.
-        // Treat them as schema-less capability packs rather than failing validation.
-      } else {
+      } else if (record.format !== "bundle") {
         issues.push({
           path: `plugins.entries.${pluginId}`,
           message: `plugin schema missing for ${pluginId}`,
@@ -415,7 +422,8 @@ export function validateExplicitPluginConfig(params: {
       }
     }
     const suppressDisabledConfigWarning =
-      ensureCompatPluginIds().has(pluginId) && !ensureOverriddenPluginIds().has(pluginId);
+      isNativeSessionCatalogOptOutOnly(pluginId, entries?.[pluginId]) ||
+      (ensureCompatPluginIds().has(pluginId) && !ensureOverriddenPluginIds().has(pluginId));
     if (!enabled && entryHasConfig && !suppressDisabledConfigWarning) {
       warnings.push({
         path: `plugins.entries.${pluginId}`,

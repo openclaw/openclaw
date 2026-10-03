@@ -1,5 +1,3 @@
-// Mattermost plugin module implements directory behavior.
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectMattermostAccount, listMattermostAccountIds } from "./accounts.js";
 import {
@@ -20,21 +18,6 @@ type MattermostDirectoryParams = {
   runtime: RuntimeEnv;
 };
 
-function buildClient(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): MattermostClient | null {
-  const account = inspectMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
-  if (!account.enabled || !account.botToken || !account.baseUrl) {
-    return null;
-  }
-  return createMattermostClient({
-    baseUrl: account.baseUrl,
-    botToken: account.botToken,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
-  });
-}
-
 /** Build the requested account client, or aggregate accounts for an explicitly unscoped lookup. */
 function buildClients(params: MattermostDirectoryParams): MattermostClient[] {
   const requestedAccountId = params.accountId?.trim();
@@ -44,8 +27,16 @@ function buildClients(params: MattermostDirectoryParams): MattermostClient[] {
   const seen = new Set<string>();
   const clients: MattermostClient[] = [];
   for (const id of accountIds) {
-    const client = buildClient({ cfg: params.cfg, accountId: id });
-    if (client && !seen.has(client.token)) {
+    const account = inspectMattermostAccount({ cfg: params.cfg, accountId: id });
+    if (!account.enabled || !account.botToken || !account.baseUrl) {
+      continue;
+    }
+    const client = createMattermostClient({
+      baseUrl: account.baseUrl,
+      botToken: account.botToken,
+      allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
+    });
+    if (!seen.has(client.token)) {
       seen.add(client.token);
       clients.push(client);
     }
@@ -131,22 +122,15 @@ export async function listMattermostDirectoryGroups(
 export async function listMattermostDirectoryPeers(
   params: MattermostDirectoryParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const clients = buildClients(params);
-  if (!clients.length) {
-    return [];
-  }
   // All bots see the same user list, so one client suffices (unlike channels
   // where private channel membership varies per bot).
-  const client = clients[0];
+  const client = buildClients(params)[0];
   if (!client) {
     return [];
   }
   try {
     const me = await fetchMattermostMe(client);
     const teams = await client.request<{ id: string }[]>("/users/me/teams");
-    if (!teams.length) {
-      return [];
-    }
     // Uses first team — multi-team setups may need iteration in the future
     const team = teams[0];
     if (!team) {

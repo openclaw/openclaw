@@ -1,12 +1,13 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { PolicyToolEvidence } from "../policy-state-types.js";
 import type { PolicyEvidence, PolicyToolPostureEvidence } from "../policy-state.js";
 import { expandPolicyToolRequirement, toolListCoversTool } from "../tool-policy-conformance.js";
-import { toolPosturePolicyShapeFinding } from "./agent-tool-shapes.js";
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 import { KNOWN_RISK_LEVELS, KNOWN_SENSITIVITY_LEVELS } from "./policy-constants.js";
 import { policyEvidenceFinding as toolPostureFinding } from "./policy-evidence-finding.js";
 import { agentScopedPolicyTargets, scopedToolAgentMatches } from "./policy-scope.js";
+import { posturePolicyShapeFinding } from "./posture-shapes.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
 
@@ -20,7 +21,7 @@ export function toolPostureFindings(
   if (
     isRecord(policy) &&
     isRecord(policy.tools) &&
-    toolPosturePolicyShapeFinding(policy.tools, { policyDocName, policyPath }) === undefined
+    posturePolicyShapeFinding("tools", policy.tools, { policyDocName, policyPath }) === undefined
   ) {
     findings.push(
       ...toolPostureFindingsForRule(policy.tools, policyDocName, "tools", evidence, () => true),
@@ -34,16 +35,6 @@ export function toolPostureFindings(
       continue;
     }
     const requirementBase = `scopes/${ocPathSegment(target.scopeName)}/tools`;
-    if (
-      toolPosturePolicyShapeFinding(target.overlay.tools, {
-        policyDocName,
-        policyPath,
-        targetPrefix: requirementBase,
-        propertyPrefix: `scopes.${target.scopeName}.tools`,
-      }) !== undefined
-    ) {
-      continue;
-    }
     findings.push(
       ...toolPostureFindingsForRule(
         target.overlay.tools,
@@ -64,182 +55,106 @@ function toolPostureFindingsForRule(
   evidence: PolicyEvidence,
   evidenceFilter: (entry: PolicyToolPostureEvidence) => boolean,
 ): readonly HealthFinding[] {
+  const entries = (evidence.toolPosture ?? []).filter(evidenceFilter);
   return [
-    ...toolProfileFindings(toolsPolicy, policyDocName, requirementBase, evidence, evidenceFilter),
-    ...toolFsWorkspaceOnlyFindings(
-      toolsPolicy,
-      policyDocName,
-      requirementBase,
-      evidence,
-      evidenceFilter,
-    ),
-    ...toolExecPostureFindings(
-      toolsPolicy,
-      policyDocName,
-      requirementBase,
-      evidence,
-      evidenceFilter,
-    ),
-    ...toolElevatedFindings(toolsPolicy, policyDocName, requirementBase, evidence, evidenceFilter),
-    ...toolAlsoAllowExpectedFindings(
-      toolsPolicy,
-      policyDocName,
-      requirementBase,
-      evidence,
-      evidenceFilter,
-    ),
-    ...toolRequiredDenyFindings(
-      toolsPolicy,
-      policyDocName,
-      requirementBase,
-      evidence,
-      evidenceFilter,
-    ),
+    ...toolValuePostureFindings(toolsPolicy, policyDocName, requirementBase, entries),
+    ...toolAlsoAllowExpectedFindings(toolsPolicy, policyDocName, requirementBase, entries),
+    ...toolRequiredDenyFindings(toolsPolicy, policyDocName, requirementBase, entries),
   ];
 }
 
-function toolProfileFindings(
+function toolValuePostureFindings(
   toolsPolicy: Record<string, unknown>,
   policyDocName: string,
   requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicyToolPostureEvidence) => boolean,
+  entries: readonly PolicyToolPostureEvidence[],
 ): readonly HealthFinding[] {
-  const allowed = new Set(readStringList(toolsPolicy, ["profiles", "allow"]));
-  if (allowed.size === 0) {
-    return [];
-  }
-  return toolPostureEntries(evidence, "profile")
-    .filter(evidenceFilter)
-    .filter((entry) => typeof entry.value === "string" && !allowed.has(entry.value.toLowerCase()))
-    .map((entry): HealthFinding => {
-      return toolPostureFinding(entry, {
-        checkId: CHECK_IDS.policyToolsProfileUnapproved,
-        message: `${toolPostureLabel(entry)} uses unapproved tool profile '${entry.value ?? ""}'.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/profiles/allow`,
-        fixHint: "Use an approved tools.profile value or update policy after review.",
-      });
-    });
-}
-
-function toolFsWorkspaceOnlyFindings(
-  toolsPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicyToolPostureEvidence) => boolean,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(toolsPolicy, ["fs", "requireWorkspaceOnly"]) !== true) {
-    return [];
-  }
-  return toolPostureEntries(evidence, "fsWorkspaceOnly")
-    .filter(evidenceFilter)
-    .filter((entry) => entry.value !== true)
-    .map((entry): HealthFinding => {
-      return toolPostureFinding(entry, {
-        checkId: CHECK_IDS.policyToolsFsWorkspaceOnlyRequired,
-        message: `${toolPostureLabel(entry)} does not require workspace-only filesystem tools.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/fs/requireWorkspaceOnly`,
-        fixHint: "Set tools.fs.workspaceOnly=true or update policy after review.",
-      });
-    });
-}
-
-function toolExecPostureFindings(
-  toolsPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicyToolPostureEvidence) => boolean,
-): readonly HealthFinding[] {
-  return [
-    ...toolStringPostureAllowFindings(toolsPolicy, policyDocName, requirementBase, evidence, {
-      checkId: CHECK_IDS.policyToolsExecSecurityUnapproved,
-      kind: "execSecurity",
-      policyPath: ["exec", "allowSecurity"],
-      requirementPath: "exec/allowSecurity",
-      settingLabel: "exec security",
-      evidenceFilter,
-    }),
-    ...toolStringPostureAllowFindings(toolsPolicy, policyDocName, requirementBase, evidence, {
-      checkId: CHECK_IDS.policyToolsExecAskUnapproved,
-      kind: "execAsk",
-      policyPath: ["exec", "requireAsk"],
-      requirementPath: "exec/requireAsk",
-      settingLabel: "exec ask",
-      evidenceFilter,
-    }),
-    ...toolStringPostureAllowFindings(toolsPolicy, policyDocName, requirementBase, evidence, {
-      checkId: CHECK_IDS.policyToolsExecHostUnapproved,
-      kind: "execHost",
-      policyPath: ["exec", "allowHosts"],
-      requirementPath: "exec/allowHosts",
-      settingLabel: "exec host",
-      evidenceFilter,
-    }),
+  // Keep rule order stable: findings participate in the policy attestation.
+  const rules: readonly {
+    path: readonly string[];
+    kind: PolicyToolPostureEvidence["kind"];
+    required?: boolean;
+    checkId: (typeof POLICY_CHECK_IDS)[number];
+    message: (entry: PolicyToolPostureEvidence) => string;
+    fixHint: string;
+  }[] = [
+    {
+      path: ["profiles", "allow"],
+      kind: "profile",
+      checkId: CHECK_IDS.policyToolsProfileUnapproved,
+      message: (entry) =>
+        `${toolPostureLabel(entry)} uses unapproved tool profile '${entry.value ?? ""}'.`,
+      fixHint: "Use an approved tools.profile value or update policy after review.",
+    },
+    {
+      path: ["fs", "requireWorkspaceOnly"],
+      kind: "fsWorkspaceOnly",
+      required: true,
+      checkId: CHECK_IDS.policyToolsFsWorkspaceOnlyRequired,
+      message: (entry) =>
+        `${toolPostureLabel(entry)} does not require workspace-only filesystem tools.`,
+      fixHint: "Set tools.fs.workspaceOnly=true or update policy after review.",
+    },
+    ...(
+      [
+        [
+          "allowSecurity",
+          "execSecurity",
+          "exec security",
+          CHECK_IDS.policyToolsExecSecurityUnapproved,
+        ],
+        ["requireAsk", "execAsk", "exec ask", CHECK_IDS.policyToolsExecAskUnapproved],
+        ["allowHosts", "execHost", "exec host", CHECK_IDS.policyToolsExecHostUnapproved],
+      ] as const
+    ).map(([key, kind, label, checkId]) => ({
+      path: ["exec", key],
+      kind,
+      checkId,
+      message: (entry: PolicyToolPostureEvidence) =>
+        `${toolPostureLabel(entry)} uses unapproved ${label} '${entry.value ?? ""}'.`,
+      fixHint: "Adjust the configured tool posture or update policy after review.",
+    })),
+    {
+      path: ["elevated", "allow"],
+      kind: "elevatedEnabled",
+      required: false,
+      checkId: CHECK_IDS.policyToolsElevatedEnabled,
+      message: (entry) => `${toolPostureLabel(entry)} permits elevated tool mode.`,
+      fixHint: "Set tools.elevated.enabled=false or update policy after review.",
+    },
   ];
-}
-
-function toolStringPostureAllowFindings(
-  toolsPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  evidence: PolicyEvidence,
-  params: {
-    readonly checkId: (typeof POLICY_CHECK_IDS)[number];
-    readonly kind: PolicyToolPostureEvidence["kind"];
-    readonly policyPath: readonly string[];
-    readonly requirementPath: string;
-    readonly settingLabel: string;
-    readonly evidenceFilter: (entry: PolicyToolPostureEvidence) => boolean;
-  },
-): readonly HealthFinding[] {
-  const allowed = new Set(readStringList(toolsPolicy, params.policyPath));
-  if (allowed.size === 0) {
-    return [];
-  }
-  return toolPostureEntries(evidence, params.kind)
-    .filter(params.evidenceFilter)
-    .filter((entry) => typeof entry.value === "string" && !allowed.has(entry.value.toLowerCase()))
-    .map((entry): HealthFinding => {
-      return toolPostureFinding(entry, {
-        checkId: params.checkId,
-        message: `${toolPostureLabel(entry)} uses unapproved ${params.settingLabel} '${entry.value ?? ""}'.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/${params.requirementPath}`,
-        fixHint: "Adjust the configured tool posture or update policy after review.",
-      });
-    });
-}
-
-function toolElevatedFindings(
-  toolsPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicyToolPostureEvidence) => boolean,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(toolsPolicy, ["elevated", "allow"]) !== false) {
-    return [];
-  }
-  return toolPostureEntries(evidence, "elevatedEnabled")
-    .filter(evidenceFilter)
-    .filter((entry) => entry.value !== false)
-    .map((entry): HealthFinding => {
-      return toolPostureFinding(entry, {
-        checkId: CHECK_IDS.policyToolsElevatedEnabled,
-        message: `${toolPostureLabel(entry)} permits elevated tool mode.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/elevated/allow`,
-        fixHint: "Set tools.elevated.enabled=false or update policy after review.",
-      });
-    });
+  return rules.flatMap((rule) => {
+    const allowed = new Set(readStringList(toolsPolicy, rule.path));
+    if (
+      rule.required === undefined
+        ? allowed.size === 0
+        : readPolicyBoolean(toolsPolicy, rule.path) !== rule.required
+    ) {
+      return [];
+    }
+    return entries
+      .filter((entry) => entry.kind === rule.kind)
+      .filter((entry) =>
+        rule.required === undefined
+          ? typeof entry.value === "string" && !allowed.has(entry.value.toLowerCase())
+          : entry.value !== rule.required,
+      )
+      .map((entry) =>
+        toolPostureFinding(entry, {
+          checkId: rule.checkId,
+          message: rule.message(entry),
+          requirement: `oc://${policyDocName}/${requirementBase}/${rule.path.join("/")}`,
+          fixHint: rule.fixHint,
+        }),
+      );
+  });
 }
 
 function toolAlsoAllowExpectedFindings(
   toolsPolicy: Record<string, unknown>,
   policyDocName: string,
   requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicyToolPostureEvidence) => boolean,
+  entries: readonly PolicyToolPostureEvidence[],
 ): readonly HealthFinding[] {
   const alsoAllowPolicy = isRecord(toolsPolicy.alsoAllow) ? toolsPolicy.alsoAllow : {};
   if (alsoAllowPolicy.expected === undefined) {
@@ -247,7 +162,7 @@ function toolAlsoAllowExpectedFindings(
   }
   const expected = normalizedStringSet(readStringList(toolsPolicy, ["alsoAllow", "expected"]));
   const findings: HealthFinding[] = [];
-  for (const entry of toolPostureEntries(evidence, "alsoAllow").filter(evidenceFilter)) {
+  for (const entry of entries.filter((candidate) => candidate.kind === "alsoAllow")) {
     const actual = normalizedStringSet(entry.entries ?? []);
     for (const expectedTool of expected) {
       if (actual.has(expectedTool)) {
@@ -292,8 +207,7 @@ function toolRequiredDenyFindings(
   toolsPolicy: Record<string, unknown>,
   policyDocName: string,
   requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicyToolPostureEvidence) => boolean,
+  entries: readonly PolicyToolPostureEvidence[],
 ): readonly HealthFinding[] {
   const required = readStringList(toolsPolicy, ["denyTools"]);
   if (required.length === 0) {
@@ -301,7 +215,7 @@ function toolRequiredDenyFindings(
   }
   const requiredTools = uniqueStrings(required.flatMap(expandPolicyToolRequirement));
   const findings: HealthFinding[] = [];
-  for (const entry of toolPostureEntries(evidence, "deny").filter(evidenceFilter)) {
+  for (const entry of entries.filter((candidate) => candidate.kind === "deny")) {
     for (const tool of requiredTools) {
       if (toolListCoversTool(entry.entries ?? [], tool)) {
         continue;
@@ -320,15 +234,29 @@ function toolRequiredDenyFindings(
   return findings;
 }
 
-function toolPostureEntries(
-  evidence: PolicyEvidence,
-  kind: PolicyToolPostureEvidence["kind"],
-): readonly PolicyToolPostureEvidence[] {
-  return (evidence.toolPosture ?? []).filter((entry) => entry.kind === kind);
-}
-
 function toolPostureLabel(entry: PolicyToolPostureEvidence): string {
   return entry.agentId === undefined ? "global tools config" : `agent '${entry.agentId}'`;
+}
+
+function toolMetadataFinding(
+  tool: PolicyToolEvidence,
+  policyDocName: string,
+  checkId: (typeof POLICY_CHECK_IDS)[number],
+  message: string,
+  fixHint: string,
+): HealthFinding {
+  return {
+    checkId,
+    severity: "error",
+    message,
+    source: "policy",
+    path: "AGENTS.md",
+    line: tool.line,
+    ocPath: tool.source,
+    target: tool.source,
+    requirement: `oc://${policyDocName}/tools/requireMetadata`,
+    fixHint,
+  };
 }
 
 export function toolRiskFindings(
@@ -337,21 +265,15 @@ export function toolRiskFindings(
 ): readonly HealthFinding[] {
   return (evidence.tools ?? [])
     .filter((tool) => tool.risk === undefined)
-    .map((tool): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policyMissingToolRisk,
-        severity: "error",
-        message: `AGENTS.md tool '${tool.id}' has no explicit risk classification.`,
-        source: "policy",
-        path: "AGENTS.md",
-        line: tool.line,
-        ocPath: tool.source,
-        target: tool.source,
-        requirement: `oc://${policyDocName}/tools/requireMetadata`,
-        fixHint:
-          "Declare risk:low, risk:medium, risk:high, risk:critical, or an R0-R5 review alias.",
-      };
-    });
+    .map((tool) =>
+      toolMetadataFinding(
+        tool,
+        policyDocName,
+        CHECK_IDS.policyMissingToolRisk,
+        `AGENTS.md tool '${tool.id}' has no explicit risk classification.`,
+        "Declare risk:low, risk:medium, risk:high, risk:critical, or an R0-R5 review alias.",
+      ),
+    );
 }
 
 export function toolUnknownRiskFindings(
@@ -364,20 +286,15 @@ export function toolUnknownRiskFindings(
         tool.risk !== undefined &&
         !KNOWN_RISK_LEVELS.includes(tool.risk as (typeof KNOWN_RISK_LEVELS)[number]),
     )
-    .map((tool): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policyUnknownToolRisk,
-        severity: "error",
-        message: `AGENTS.md tool '${tool.id}' declares unknown risk '${tool.risk}'.`,
-        source: "policy",
-        path: "AGENTS.md",
-        line: tool.line,
-        ocPath: tool.source,
-        target: tool.source,
-        requirement: `oc://${policyDocName}/tools/requireMetadata`,
-        fixHint: `Use one of: ${KNOWN_RISK_LEVELS.join(", ")}.`,
-      };
-    });
+    .map((tool) =>
+      toolMetadataFinding(
+        tool,
+        policyDocName,
+        CHECK_IDS.policyUnknownToolRisk,
+        `AGENTS.md tool '${tool.id}' declares unknown risk '${tool.risk}'.`,
+        `Use one of: ${KNOWN_RISK_LEVELS.join(", ")}.`,
+      ),
+    );
 }
 
 export function toolSensitivityFindings(
@@ -387,18 +304,13 @@ export function toolSensitivityFindings(
   return (evidence.tools ?? []).flatMap((tool): HealthFinding[] => {
     if (tool.sensitivity === undefined) {
       return [
-        {
-          checkId: CHECK_IDS.policyMissingToolSensitivity,
-          severity: "error",
-          message: `AGENTS.md tool '${tool.id}' has no declared artifact sensitivity.`,
-          source: "policy",
-          path: "AGENTS.md",
-          line: tool.line,
-          ocPath: tool.source,
-          target: tool.source,
-          requirement: `oc://${policyDocName}/tools/requireMetadata`,
-          fixHint: `Declare sensitivity as one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
-        },
+        toolMetadataFinding(
+          tool,
+          policyDocName,
+          CHECK_IDS.policyMissingToolSensitivity,
+          `AGENTS.md tool '${tool.id}' has no declared artifact sensitivity.`,
+          `Declare sensitivity as one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
+        ),
       ];
     }
     if (
@@ -409,18 +321,13 @@ export function toolSensitivityFindings(
       return [];
     }
     return [
-      {
-        checkId: CHECK_IDS.policyUnknownToolSensitivity,
-        severity: "error",
-        message: `AGENTS.md tool '${tool.id}' declares unknown sensitivity '${tool.sensitivity}'.`,
-        source: "policy",
-        path: "AGENTS.md",
-        line: tool.line,
-        ocPath: tool.source,
-        target: tool.source,
-        requirement: `oc://${policyDocName}/tools/requireMetadata`,
-        fixHint: `Use one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
-      },
+      toolMetadataFinding(
+        tool,
+        policyDocName,
+        CHECK_IDS.policyUnknownToolSensitivity,
+        `AGENTS.md tool '${tool.id}' declares unknown sensitivity '${tool.sensitivity}'.`,
+        `Use one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
+      ),
     ];
   });
 }
@@ -431,18 +338,13 @@ export function toolOwnerFindings(
 ): readonly HealthFinding[] {
   return (evidence.tools ?? [])
     .filter((tool) => tool.owner === undefined)
-    .map((tool): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policyMissingToolOwner,
-        severity: "error",
-        message: `AGENTS.md tool '${tool.id}' has no declared owner.`,
-        source: "policy",
-        path: "AGENTS.md",
-        line: tool.line,
-        ocPath: tool.source,
-        target: tool.source,
-        requirement: `oc://${policyDocName}/tools/requireMetadata`,
-        fixHint: "Declare owner:<team-or-person> for this tool.",
-      };
-    });
+    .map((tool) =>
+      toolMetadataFinding(
+        tool,
+        policyDocName,
+        CHECK_IDS.policyMissingToolOwner,
+        `AGENTS.md tool '${tool.id}' has no declared owner.`,
+        "Declare owner:<team-or-person> for this tool.",
+      ),
+    );
 }

@@ -32,6 +32,10 @@ type StateRuntime = {
   loadSessionEntry: typeof import("../../../../src/config/sessions/session-accessor.js").loadSessionEntry;
   resolveSessionTranscriptDatabasePath: typeof import("../../../../src/config/sessions/session-accessor.js").resolveSessionTranscriptDatabasePath;
 };
+type HeartbeatRuntime = Pick<
+  typeof import("openclaw/plugin-sdk/string-coerce-runtime"),
+  "isRecord"
+>;
 type GatewayState = Pick<QaGatewayChild, "cfg" | "runtimeEnv" | "workspaceDir" | "tempRoot">;
 type CompactionProofMessage = AgentMessage & { timestamp: number };
 
@@ -74,6 +78,26 @@ export function readCompactionEntry(
   return structuredClone(entry);
 }
 
+export function adoptCompactionSessionIdentity(
+  runtime: StateRuntime,
+  gateway: GatewayState,
+  proof: ProofCase,
+) {
+  const entry = runtime.loadSessionEntry({
+    agentId: "qa",
+    sessionKey: proof.sessionKey,
+    env: gateway.runtimeEnv,
+    storePath: runtime.store.resolveStorePath(undefined, {
+      agentId: "qa",
+      env: gateway.runtimeEnv,
+    }),
+    readConsistency: "latest",
+  });
+  assert.ok(entry?.sessionId, "Setup turn did not create a canonical session row");
+  proof.sessionId = entry.sessionId;
+  return structuredClone(entry);
+}
+
 export async function waitForCompactionRunSettlement(
   runtime: StateRuntime,
   gateway: GatewayState,
@@ -87,6 +111,66 @@ export async function waitForCompactionRunSettlement(
       return entry;
     }
     assert.ok(Date.now() < deadline, "Original run's terminal lifecycle did not persist");
+    await pollDelay(50);
+  }
+}
+
+export async function waitForHeartbeatTerminal(
+  runtime: HeartbeatRuntime,
+  gateway: QaGatewayChild,
+  monitorId: string,
+  runId: string,
+  timeoutMs = CHECKPOINT_TIMEOUT_MS,
+) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const history = await gateway.call("cron.runs", { id: monitorId, runId, limit: 1 });
+    assert.ok(
+      runtime.isRecord(history) && Array.isArray(history.entries),
+      "cron.runs omitted entries",
+    );
+    const entry = history.entries.find(
+      (candidate) => runtime.isRecord(candidate) && candidate.runId === runId,
+    );
+    if (
+      runtime.isRecord(entry) &&
+      (entry.status === "ok" || entry.status === "error" || entry.status === "skipped")
+    ) {
+      return entry;
+    }
+    assert.ok(Date.now() < deadline, "forced heartbeat did not reach terminal history");
+    await pollDelay(50);
+  }
+}
+
+export async function waitForInterruptedHeartbeatRecovery(
+  runtime: HeartbeatRuntime,
+  gateway: QaGatewayChild,
+  monitorId: string,
+  runningAtMs: number,
+) {
+  const deadline = Date.now() + CHECKPOINT_TIMEOUT_MS;
+  for (;;) {
+    const job = await gateway.call("cron.get", { id: monitorId });
+    assert.ok(
+      runtime.isRecord(job) && runtime.isRecord(job.state),
+      "cron.get omitted heartbeat recovery state",
+    );
+    assert.equal(job.id, monitorId, "Restart recovery changed the heartbeat monitor");
+    if (job.state.runningAtMs === undefined && job.state.lastRunAtMs === runningAtMs) {
+      assert.equal(job.state.lastRunStatus, "error", "Interrupted heartbeat was not settled");
+      assert.equal(
+        job.state.lastError,
+        "cron: job interrupted by gateway restart",
+        "Heartbeat settled for an unexpected reason",
+      );
+      return job.state;
+    }
+    assert.ok(
+      job.state.runningAtMs === undefined || job.state.runningAtMs === runningAtMs,
+      "Another heartbeat started before the interrupted occurrence was recovered",
+    );
+    assert.ok(Date.now() < deadline, "Interrupted heartbeat did not reach recovered idle state");
     await pollDelay(50);
   }
 }
@@ -223,6 +307,7 @@ export async function seedCompactionTranscript(
   runtime: StateRuntime,
   gateway: GatewayState,
   proof: ProofCase,
+  options: { preserveSessionEntry?: boolean } = {},
 ) {
   const target = targetFor(runtime, gateway, proof);
   const now = Date.now();
@@ -289,9 +374,17 @@ export async function seedCompactionTranscript(
       timestamp: now - 1_000,
     },
   );
+  const current = options.preserveSessionEntry
+    ? runtime.loadSessionEntry({ ...target, readConsistency: "latest" })
+    : undefined;
   await runtime.store.upsertSessionEntry({
     ...target,
-    entry: { sessionId: proof.sessionId, updatedAt: now, compactionCount: 0 },
+    entry: {
+      ...current,
+      sessionId: proof.sessionId,
+      updatedAt: now,
+      compactionCount: current?.compactionCount ?? 0,
+    },
   });
   for (const message of messages) {
     const result = await runtime.transcript.appendSessionTranscriptMessageByIdentity({
@@ -303,6 +396,23 @@ export async function seedCompactionTranscript(
   }
 }
 
+export async function patchCompactionSessionOwnership(
+  runtime: StateRuntime,
+  gateway: GatewayState,
+  proof: ProofCase,
+  patch: { agentRuntimeOverride: string; agentHarnessId: string },
+) {
+  const current = readCompactionEntry(runtime, gateway, proof);
+  await runtime.store.upsertSessionEntry({
+    ...targetFor(runtime, gateway, proof),
+    entry: { ...current, ...patch, updatedAt: Date.now() },
+  });
+  const updated = readCompactionEntry(runtime, gateway, proof);
+  assert.equal(updated.agentRuntimeOverride, patch.agentRuntimeOverride);
+  assert.equal(updated.agentHarnessId, patch.agentHarnessId);
+  return updated;
+}
+
 export function snapshotCompactionSession(
   runtime: StateRuntime,
   gateway: GatewayState,
@@ -312,6 +422,7 @@ export function snapshotCompactionSession(
   const entry = readCompactionEntry(runtime, gateway, proof);
   const manager = runtime.sessions.SessionManager.open(target, gateway.workspaceDir);
   const branch = manager.getBranch();
+  const compactions = manager.getEntries().filter((event) => event.type === "compaction");
   const toolEntries = branch.filter(
     (event) =>
       event.type === "message" &&
@@ -320,6 +431,7 @@ export function snapshotCompactionSession(
   );
   return {
     events: runtime.store.loadTranscriptEventsSync(target),
+    sessionId: entry.sessionId,
     leafId: manager.getLeafId(),
     activeEntryIds: branch.map((event) => event.id),
     activeTool: toolEntries,
@@ -334,12 +446,14 @@ export function snapshotCompactionSession(
           : 0),
       0,
     ),
-    compactionIds: manager
-      .getEntries()
-      .filter((event) => event.type === "compaction")
-      .map((event) => event.id),
+    compactionIds: compactions.map((event) => event.id),
+    compactionSummaries: compactions.map((event) => event.summary),
     compactionCount: entry.compactionCount ?? 0,
-    compactionCheckpoints: entry.compactionCheckpoints,
+    transcriptByteCompactionLatch: entry.transcriptByteCompactionLatch,
+    agentRuntimeOverride: entry.agentRuntimeOverride,
+    agentHarnessId: entry.agentHarnessId,
+    activeWriterRunId: entry.activeWriterRunId,
+    lifecycleRevision: entry.lifecycleRevision,
   };
 }
 
@@ -383,9 +497,60 @@ export function assertUncommittedCompactionHistory(
     "Interrupted recovery changed compaction accounting",
   );
   assert.deepEqual(
-    after.compactionCheckpoints,
-    before.compactionCheckpoints,
-    "Interrupted recovery changed compaction checkpoints",
+    after.transcriptByteCompactionLatch,
+    before.transcriptByteCompactionLatch,
+    "Interrupted recovery changed the transcript byte latch",
+  );
+}
+
+export function assertResetWithoutCompaction(
+  before: CompactionProofSnapshot,
+  after: CompactionProofSnapshot,
+  options: { allowSuccessorEvents?: boolean } = {},
+) {
+  assertOriginalCompactionRows(before, after);
+  const appended = after.events.slice(before.events.length);
+  const resetEvents = appended.filter(
+    (event) =>
+      event !== null &&
+      typeof event === "object" &&
+      !Array.isArray(event) &&
+      (event as { type?: unknown }).type === "reset",
+  );
+  assert.equal(resetEvents.length, 1, "Reset did not append exactly one transcript boundary");
+  assert.equal(
+    (resetEvents[0] as { reason?: unknown }).reason,
+    "reset",
+    "Reset transcript boundary reason changed",
+  );
+  assert.equal(
+    appended.some(
+      (event) =>
+        event !== null &&
+        typeof event === "object" &&
+        !Array.isArray(event) &&
+        (event as { type?: unknown }).type === "compaction",
+    ),
+    false,
+    "Revoked heartbeat appended a compaction event",
+  );
+  if (!options.allowSuccessorEvents) {
+    assert.equal(appended.length, 1, "Reset terminal transcript contains unexpected writes");
+  }
+  assert.deepEqual(
+    after.compactionIds,
+    before.compactionIds,
+    "Revoked heartbeat committed a compaction",
+  );
+  assert.equal(
+    after.compactionCount,
+    before.compactionCount,
+    "Revoked heartbeat changed compaction accounting",
+  );
+  assert.deepEqual(
+    after.transcriptByteCompactionLatch,
+    before.transcriptByteCompactionLatch,
+    "Revoked heartbeat changed the transcript byte latch",
   );
 }
 
@@ -400,11 +565,6 @@ export function assertCommittedCompactionHistory(
     "Late stop lost or repeated compaction",
   );
   assert.equal(after.compactionCount, 1, "Late stop lost completed compaction accounting");
-  assert.deepEqual(
-    after.compactionCheckpoints,
-    committed.compactionCheckpoints,
-    "Late stop changed the committed compaction checkpoints",
-  );
   for (const id of committed.compactionIds) {
     assert.ok(
       after.activeEntryIds.includes(id),

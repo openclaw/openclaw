@@ -84,6 +84,23 @@ describe("migrateScheduledToolPolicy", () => {
     expect(result.legacyScheduledToolPolicyJobs).toEqual(["Legacy"]);
   });
 
+  it("recovers a capless creator account without changing execution permissions", () => {
+    const raw = job({
+      owner: { agentId: "main", sessionKey: "agent:main:discord:work:direct:user-1" },
+      payload: { kind: "agentTurn", message: "run" },
+    });
+    const result = normalizeStoredCronJobs([raw]);
+    expect(raw.owner).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:discord:work:direct:user-1",
+      accountId: "work",
+    });
+    expect(raw.payload).toEqual({ kind: "agentTurn", message: "run" });
+    expect(raw.scheduledToolPolicy).toBeUndefined();
+    expect(result.issues).toMatchObject({ reconciledOwnerAccount: 1 });
+    expect(normalizeStoredCronJobs([raw]).issues).not.toHaveProperty("reconciledOwnerAccount");
+  });
+
   it("rejects malformed and owner-inconsistent provenance", () => {
     const malformed = job({ scheduledToolPolicy: { version: 2, mode: "trusted" } });
     expect(normalizeStoredCronJobs([malformed]).invalidScheduledToolPolicyJobs).toEqual(["Legacy"]);

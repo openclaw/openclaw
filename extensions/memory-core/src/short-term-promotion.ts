@@ -1,11 +1,13 @@
-// Stable public surface for short-term promotion behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
 import { readPhaseSignalStore, readStore } from "./short-term-promotion-store.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
   DEFAULT_PROMOTION_MIN_SCORE,
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
   type PromotionCandidate,
+  type PromotionWeights,
   type RankShortTermPromotionOptions,
   type ShortTermPhaseSignalEntry,
 } from "./short-term-promotion-types.js";
@@ -15,7 +17,6 @@ import {
   isContaminatedDreamingSnippet,
   isShortTermMemoryPath,
   isShortTermSessionCorpusPath,
-  normalizeWeights,
   toFiniteNonNegativeInt,
   toFinitePositive,
   toFiniteScore,
@@ -28,6 +29,14 @@ const DEFAULT_RECENCY_HALF_LIFE_DAYS = 14;
 const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.06;
 const PHASE_SIGNAL_REM_BOOST_MAX = 0.09;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
+const PROMOTION_WEIGHTS: PromotionWeights = {
+  frequency: 0.24,
+  relevance: 0.3,
+  diversity: 0.15,
+  recency: 0.15,
+  consolidation: 0.1,
+  conceptual: 0.06,
+};
 
 function calculateConsolidationComponent(recallDays: string[]): number {
   if (recallDays.length === 0) {
@@ -51,20 +60,6 @@ function calculateConsolidationComponent(recallDays: string[]): number {
   return clampScore(0.55 * spacing + 0.45 * span);
 }
 
-function calculateConceptualComponent(conceptTags: string[]): number {
-  return clampScore(conceptTags.length / 6);
-}
-function calculatePhaseSignalAgeDays(lastSeenAt: string | undefined, nowMs: number): number | null {
-  if (!lastSeenAt) {
-    return null;
-  }
-  const parsed = Date.parse(lastSeenAt);
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-  return Math.max(0, (nowMs - parsed) / DAY_MS);
-}
-
 function calculatePhaseSignalBoost(
   entry: ShortTermPhaseSignalEntry | undefined,
   nowMs: number,
@@ -72,21 +67,22 @@ function calculatePhaseSignalBoost(
   if (!entry) {
     return 0;
   }
-  const lightStrength = clampScore(Math.log1p(Math.max(0, entry.lightHits)) / Math.log1p(6));
-  const remStrength = clampScore(Math.log1p(Math.max(0, entry.remHits)) / Math.log1p(6));
-  const lightAgeDays = calculatePhaseSignalAgeDays(entry.lastLightAt, nowMs);
-  const remAgeDays = calculatePhaseSignalAgeDays(entry.lastRemAt, nowMs);
-  const lightRecency =
-    lightAgeDays === null
-      ? 0
-      : clampScore(calculateRecencyComponent(lightAgeDays, PHASE_SIGNAL_HALF_LIFE_DAYS));
-  const remRecency =
-    remAgeDays === null
-      ? 0
-      : clampScore(calculateRecencyComponent(remAgeDays, PHASE_SIGNAL_HALF_LIFE_DAYS));
+  const contribution = (hits: number, lastSeenAt: string | undefined, maximum: number) => {
+    const strength = clampScore(Math.log1p(Math.max(0, hits)) / Math.log1p(6));
+    const parsed = lastSeenAt ? Date.parse(lastSeenAt) : Number.NaN;
+    const recency = Number.isFinite(parsed)
+      ? clampScore(
+          calculateRecencyComponent(
+            Math.max(0, (nowMs - parsed) / DAY_MS),
+            PHASE_SIGNAL_HALF_LIFE_DAYS,
+          ),
+        )
+      : 0;
+    return maximum * strength * recency;
+  };
   return clampScore(
-    PHASE_SIGNAL_LIGHT_BOOST_MAX * lightStrength * lightRecency +
-      PHASE_SIGNAL_REM_BOOST_MAX * remStrength * remRecency,
+    contribution(entry.lightHits, entry.lastLightAt, PHASE_SIGNAL_LIGHT_BOOST_MAX) +
+      contribution(entry.remHits, entry.lastRemAt, PHASE_SIGNAL_REM_BOOST_MAX),
   );
 }
 export async function rankShortTermPromotionCandidates(
@@ -114,8 +110,6 @@ export async function rankShortTermPromotionCandidates(
     options.recencyHalfLifeDays,
     DEFAULT_RECENCY_HALF_LIFE_DAYS,
   );
-  const weights = normalizeWeights(options.weights);
-
   const [store, phaseSignals] = await Promise.all([
     readStore(workspaceDir, nowIso),
     readPhaseSignalStore(workspaceDir, nowIso),
@@ -123,7 +117,11 @@ export async function rankShortTermPromotionCandidates(
   const candidates: PromotionCandidate[] = [];
 
   for (const entry of Object.values(store.entries)) {
-    if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
+    if (!isShortTermMemoryPath(entry.path)) {
+      continue;
+    }
+    // Apply rejects these origins too; exclude them before scoring and candidate limits.
+    if (isPromotionOriginBlocked(entry)) {
       continue;
     }
     if (
@@ -136,25 +134,21 @@ export async function rankShortTermPromotionCandidates(
     if (!includePromoted && entry.promotedAt) {
       continue;
     }
-    const recallCount = Math.max(0, Math.floor(entry.recallCount ?? 0));
-    const dailyCount = Math.max(0, Math.floor(entry.dailyCount ?? 0));
-    const groundedCount = Math.max(0, Math.floor(entry.groundedCount ?? 0));
+    const { recallCount, dailyCount, groundedCount, recallDays, conceptTags } = entry;
     const signalCount = totalSignalCountForEntry(entry);
-    if (signalCount <= 0) {
-      continue;
-    }
-    if (signalCount < minRecallCount) {
+    if (signalCount <= 0 || signalCount < minRecallCount) {
       continue;
     }
 
-    const avgScore = clampScore(entry.totalScore / Math.max(1, signalCount));
+    const avgScore = clampScore(entry.totalScore / signalCount);
     const frequency = clampScore(Math.log1p(signalCount) / Math.log1p(10));
-    const uniqueQueries = entry.queryHashes?.length ?? 0;
-    const contextDiversity = Math.max(uniqueQueries, entry.recallDays?.length ?? 0);
-    if (contextDiversity < minUniqueQueries) {
+    // Scheduler and grounded-backfill keys are synthetic. Only provenance-
+    // qualified interactive recalls can satisfy user-query diversity.
+    const uniqueQueries = entry.userQueryHashes?.length ?? 0;
+    if (uniqueQueries < minUniqueQueries) {
       continue;
     }
-    const diversity = clampScore(contextDiversity / 5);
+    const diversity = clampScore(uniqueQueries / 5);
     const lastRecalledAtMs = Date.parse(entry.lastRecalledAt);
     const ageDays = Number.isFinite(lastRecalledAtMs)
       ? Math.max(0, (nowMs - lastRecalledAtMs) / DAY_MS)
@@ -163,22 +157,20 @@ export async function rankShortTermPromotionCandidates(
       continue;
     }
     const recency = clampScore(calculateRecencyComponent(ageDays, halfLifeDays));
-    const recallDays = entry.recallDays ?? [];
-    const conceptTags = entry.conceptTags ?? [];
     const consolidation = Math.max(
       calculateConsolidationComponent(recallDays),
       clampScore(groundedCount / 3),
     );
-    const conceptual = calculateConceptualComponent(conceptTags);
+    const conceptual = clampScore(conceptTags.length / 6);
 
     const phaseBoost = calculatePhaseSignalBoost(phaseSignals.entries[entry.key], nowMs);
     const score =
-      weights.frequency * frequency +
-      weights.relevance * avgScore +
-      weights.diversity * diversity +
-      weights.recency * recency +
-      weights.consolidation * consolidation +
-      weights.conceptual * conceptual +
+      PROMOTION_WEIGHTS.frequency * frequency +
+      PROMOTION_WEIGHTS.relevance * avgScore +
+      PROMOTION_WEIGHTS.diversity * diversity +
+      PROMOTION_WEIGHTS.recency * recency +
+      PROMOTION_WEIGHTS.consolidation * consolidation +
+      PROMOTION_WEIGHTS.conceptual * conceptual +
       phaseBoost;
 
     if (score < minScore) {
@@ -230,16 +222,11 @@ export async function rankShortTermPromotionCandidates(
     return a.path.localeCompare(b.path);
   });
 
-  const limit = Number.isFinite(options.limit)
-    ? Math.max(0, Math.floor(options.limit as number))
-    : sorted.length;
+  const limit = resolveNonNegativeIntegerOption(options.limit, sorted.length);
   return sorted.slice(0, limit);
 }
 
 export {
-  DEFAULT_PROMOTION_MIN_RECALL_COUNT,
-  DEFAULT_PROMOTION_MIN_SCORE,
-  DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
   type PromotionCandidate,
   type RepairShortTermPromotionArtifactsResult,
   type ShortTermAuditSummary,

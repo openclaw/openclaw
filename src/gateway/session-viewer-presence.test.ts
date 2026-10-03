@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { listSystemPresence } from "../infra/system-presence.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createPresenceRecipientProjection } from "./presence-projection.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
@@ -20,16 +24,13 @@ function createDeclarations() {
     personPresence: { onlineSince: Date.now() - 1_000 },
   };
   const clients = new GatewayClientRegistry([client]);
-  const broadcast = vi.fn();
-  const incrementPresenceVersion = vi.fn(() => 2);
+  const publishPresence = vi.fn();
   const declarations = createSessionViewerPresenceDeclarations({
     clients,
-    broadcast,
-    incrementPresenceVersion,
-    getHealthVersion: () => 1,
+    publishPresence,
   });
   const row = () => listSystemPresence().find((entry) => entry.user?.id === "viewer@timing.test");
-  return { declarations, client, clients, broadcast, incrementPresenceVersion, row };
+  return { declarations, client, clients, publishPresence, row };
 }
 
 describe("session viewer presence declarations", () => {
@@ -44,18 +45,18 @@ describe("session viewer presence declarations", () => {
   });
 
   it("replaces rather than accumulates connection session keys", () => {
-    const { declarations, broadcast, row } = createDeclarations();
+    const { declarations, publishPresence, row } = createDeclarations();
 
     expect(declarations.replace("conn-a", [" beta ", "alpha", "beta"])).toEqual(["alpha", "beta"]);
     expect(row()?.watchedSessions).toEqual(["alpha", "beta"]);
     vi.setSystemTime(Date.now() + 1_000);
     expect(declarations.replace("conn-a", ["gamma"])).toEqual(["gamma"]);
     expect(row()).toMatchObject({ watchedSessions: ["gamma"], lastActivityAt: Date.now() });
-    expect(broadcast).toHaveBeenCalledTimes(2);
+    expect(publishPresence).toHaveBeenCalledTimes(2);
   });
 
   it("publishes an empty declaration and forgets state on disconnect", () => {
-    const { declarations, broadcast, row } = createDeclarations();
+    const { declarations, publishPresence, row } = createDeclarations();
 
     declarations.replace("conn-a", ["alpha"]);
     const activity = row()?.lastActivityAt;
@@ -70,11 +71,11 @@ describe("session viewer presence declarations", () => {
     expect(row()?.lastActivityAt).toBe(nextActivity);
     declarations.replace("conn-a", ["beta"]);
     expect(row()?.lastActivityAt).toBe(Date.now());
-    expect(broadcast).toHaveBeenCalledTimes(4);
+    expect(publishPresence).toHaveBeenCalledTimes(4);
   });
 
   it("does not republish an unchanged set", () => {
-    const { declarations, broadcast, incrementPresenceVersion, row } = createDeclarations();
+    const { declarations, publishPresence, row } = createDeclarations();
 
     declarations.replace("conn-a", ["beta", "alpha"]);
     const activity = row()?.lastActivityAt;
@@ -82,12 +83,11 @@ describe("session viewer presence declarations", () => {
     declarations.replace("conn-a", ["alpha", "beta"]);
 
     expect(row()?.lastActivityAt).toBe(activity);
-    expect(broadcast).toHaveBeenCalledOnce();
-    expect(incrementPresenceVersion).toHaveBeenCalledOnce();
+    expect(publishPresence).toHaveBeenCalledOnce();
   });
 
   it("rejects declarations from inactive connections and after stop", () => {
-    const { declarations, client, clients, broadcast } = createDeclarations();
+    const { declarations, client, clients, publishPresence } = createDeclarations();
     client.invalidated = true;
     expect(declarations.replace("conn-a", ["alpha"])).toEqual([]);
     client.invalidated = false;
@@ -96,6 +96,47 @@ describe("session viewer presence declarations", () => {
     clients.add(client);
     declarations.stop();
     expect(declarations.replace("conn-a", ["alpha"])).toEqual([]);
-    expect(broadcast).not.toHaveBeenCalled();
+    expect(publishPresence).not.toHaveBeenCalled();
+  });
+});
+
+function recipient(scopes = ["operator.admin"]): GatewayClient {
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      role: "operator",
+      scopes,
+      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+    },
+  };
+}
+
+describe("presence projection without resident session facts", () => {
+  it("omits durable watches without reading stores and preserves roster scope enforcement", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const person = { text: "watcher", ts: 1 };
+      const presence = [{ ...person, watchedSessions: ["agent:main:presence-cold"] }];
+      const pending = recipient(["operator.read"]);
+      pending.authenticatedGitHubIdentitySync = async () => ({
+        profileId: "pending",
+        updatedAt: 1,
+      });
+      const node = recipient();
+      node.connect.role = "node";
+      const sql = observeHostDataSql();
+      try {
+        const project = createPresenceRecipientProjection({ cfg: {}, presence });
+        for (const allowed of [recipient(), pending]) {
+          expect(project(allowed)).toEqual([person]);
+        }
+        for (const denied of [recipient([]), node, null]) {
+          expect(project(denied)).toEqual([]);
+        }
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+    });
   });
 });

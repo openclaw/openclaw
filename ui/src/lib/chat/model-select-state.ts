@@ -1,11 +1,13 @@
-// Chat model select state derivation.
 import type {
   FastMode,
   GatewaySessionRow,
   ModelCatalogEntry,
+  ModelCatalogResult,
   SessionsListResult,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
+import { resolveModelRuntimeEntry, type ModelRuntimeEntry } from "../model-runtime-choice.ts";
 import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
@@ -16,6 +18,8 @@ import {
   resolvePreferredServerChatModelValue,
 } from "./model-ref.ts";
 
+registerModelControlsEnglish();
+
 type ChatModelSelectStateInput = {
   activeSession?: GatewaySessionRow;
   agentDefaultModel?: string;
@@ -23,6 +27,9 @@ type ChatModelSelectStateInput = {
   modelOverrides: Readonly<Record<string, string | null | undefined>>;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
+  modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
+  catalogRetired?: boolean;
+  catalogInitialized?: boolean;
 };
 
 type ChatModelSelectOption = {
@@ -40,23 +47,25 @@ type ChatModelSelectState = {
   options: ChatModelSelectOption[];
 };
 
-export type ChatFastModeSelectValue = "" | "on" | "off" | "auto";
+export type ChatFastModeSelectValue = "" | "on" | "off" | "auto" | "ultrafast";
 
 export type ChatFastModeSelectState = {
   /** Fast output is effectively enabled (explicitly or via auto/inherited default). */
   active: boolean;
   currentOverride: ChatFastModeSelectValue;
   disabled: boolean;
-  /** Short state word shown inside the speed toggle. */
+  /** Resolved speed label, separate from the saved preference. */
   label: string;
   /** Value the toggle commits when clicked. */
   nextValue: ChatFastModeSelectValue;
   supported: boolean;
+  /** Only the selected account and runtime may advertise this optional tier. */
+  ultrafastSupported?: boolean;
 };
 
 export type ChatFastModeTarget = Pick<
   GatewaySessionRow,
-  "effectiveFastMode" | "fastMode" | "model" | "modelProvider"
+  "effectiveFastMode" | "fastMode" | "model" | "modelProvider" | "agentRuntime"
 >;
 
 type ChatFastModeSelectStateInput = {
@@ -72,14 +81,11 @@ type ChatFastModeSelectStateInput = {
   stream: string | null;
 };
 
-// Providers with a runtime fast-mode mapping: Anthropic sets speed (or legacy
-// service_tier), OpenAI sets service_tier priority, MiniMax/xAI select fast variants.
-// Providers without a wire mapping must not offer the toggle.
+// Preserve existing controls only when the selected request's applicability is unknown.
 const FAST_MODE_PROVIDER_IDS = new Set(["anthropic", "minimax", "minimax-portal", "openai", "xai"]);
 
 export function isChatFastModeProviderSupported(provider: string | null | undefined): boolean {
-  const providerId = normalizeChatModelProviderId(provider ?? "");
-  return Boolean(providerId && FAST_MODE_PROVIDER_IDS.has(providerId));
+  return FAST_MODE_PROVIDER_IDS.has(normalizeChatModelProviderId(provider ?? ""));
 }
 
 function resolveModelOverrideSource(state: ChatModelSelectStateInput) {
@@ -104,6 +110,12 @@ export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput):
 }
 
 function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
+  if (state.catalogRetired || state.catalogInitialized === false) {
+    return "";
+  }
+  if (state.modelSelectionPolicy?.restricted) {
+    return state.modelSelectionPolicy.defaultModel ?? "";
+  }
   const agentDefault = resolvePreferredServerChatModelValue(
     state.agentDefaultModel,
     undefined,
@@ -128,6 +140,10 @@ function normalizeChatModelAvailabilityKey(value: string): string {
   return `${normalizeChatModelProviderId(normalized.slice(0, separator))}/${normalized.slice(
     separator + 1,
   )}`;
+}
+
+function catalogModelAvailabilityKey(entry: ModelCatalogEntry): string {
+  return normalizeChatModelAvailabilityKey(buildQualifiedChatModelValue(entry.id, entry.provider));
 }
 
 function resolveCatalogChatModelValue(value: string, options: ChatModelSelectOption[]): string {
@@ -165,6 +181,9 @@ function buildChatModelOptions(
           right.provider.trim().toLowerCase() !== normalizeChatModelProviderId(right.provider),
         ),
   )) {
+    if (entry.manualSelectionAllowed === false) {
+      continue;
+    }
     const option = buildChatModelOptionFromLookup(entry, displayLookup);
     const value = option.value.trim();
     const key = value.toLowerCase();
@@ -189,11 +208,7 @@ export function resolveChatModelUnavailableReason(
 ): ModelCatalogEntry["unavailableReason"] {
   const value = resolvePreferredServerChatModelValue(model, provider, catalog);
   const key = normalizeChatModelAvailabilityKey(value);
-  const matches = catalog.filter(
-    (entry) =>
-      normalizeChatModelAvailabilityKey(buildQualifiedChatModelValue(entry.id, entry.provider)) ===
-      key,
-  );
+  const matches = catalog.filter((entry) => catalogModelAvailabilityKey(entry) === key);
   if (
     !matches.length ||
     matches.some((entry) => entry.available !== false || !entry.unavailableReason)
@@ -210,11 +225,27 @@ export function resolveChatModelUnavailableReason(
     : "missing-auth";
 }
 
+export function hasChatModelCatalogSelection(
+  model: string | null | undefined,
+  provider: string | null | undefined,
+  catalog: ModelCatalogEntry[],
+): boolean {
+  const key = normalizeChatModelAvailabilityKey(
+    resolvePreferredServerChatModelValue(model, provider, catalog),
+  );
+  return catalog.some(
+    (entry) => entry.manualSelectionAllowed !== false && catalogModelAvailabilityKey(entry) === key,
+  );
+}
+
 export function chatModelUnavailableMessage(
-  reason: ModelCatalogEntry["unavailableReason"],
+  reason: ModelRuntimeEntry["unavailableReason"],
 ): string | undefined {
   if (reason === "missing-auth") {
     return t("modelSetup.missingAuth");
+  }
+  if (reason === "unsupported-runtime") {
+    return t("chat.modelControls.runtimeUnavailable");
   }
   return reason === "auth-failed"
     ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
@@ -226,20 +257,12 @@ export function resolveChatModelSelectState(
 ): ChatModelSelectState {
   const catalog = state.chatModelCatalog ?? [];
   const availableKeys = new Set(
-    catalog
-      .filter((entry) => entry.available !== false)
-      .map((entry) =>
-        normalizeChatModelAvailabilityKey(buildQualifiedChatModelValue(entry.id, entry.provider)),
-      ),
+    catalog.filter((entry) => entry.available !== false).map(catalogModelAvailabilityKey),
   );
   // Catalog members already have a qualified identity. Prepare one retained inventory
   // so unavailable aliases cannot disambiguate labels for their selectable sibling.
   const pickerCatalog = catalog.filter(
-    (entry) =>
-      entry.available !== false ||
-      !availableKeys.has(
-        normalizeChatModelAvailabilityKey(buildQualifiedChatModelValue(entry.id, entry.provider)),
-      ),
+    (entry) => entry.available !== false || !availableKeys.has(catalogModelAvailabilityKey(entry)),
   );
   const displayLookup = buildCatalogDisplayLookup(pickerCatalog);
   const options = buildChatModelOptions(pickerCatalog, displayLookup);
@@ -260,8 +283,8 @@ export function resolveChatModelSelectState(
 }
 
 export function normalizeChatFastModeInput(raw: string): FastMode | undefined {
-  if (raw === "auto") {
-    return "auto";
+  if (raw === "auto" || raw === "ultrafast") {
+    return raw;
   }
   if (raw === "on") {
     return true;
@@ -279,7 +302,9 @@ export function resolveChatFastModeStatus(session: GatewaySessionRow | undefined
       ? t("chat.commandResults.fast.autoValue", {
           seconds: String(session?.fastAutoOnSeconds ?? 60),
         })
-      : t(mode === true ? "chat.commandResults.fast.on" : "chat.commandResults.fast.off");
+      : mode === "ultrafast"
+        ? t("chat.modelControls.ultrafast")
+        : t(mode === true ? "chat.commandResults.fast.on" : "chat.commandResults.fast.off");
   const source = session?.effectiveFastModeSource;
   const sourceSuffix =
     source === "session"
@@ -357,8 +382,8 @@ export function resolveChatFastModeSelectState(
     defaultProvider,
   );
   const configuredOverride =
-    activeRow?.fastMode === "auto"
-      ? "auto"
+    activeRow?.fastMode === "auto" || activeRow?.fastMode === "ultrafast"
+      ? activeRow.fastMode
       : activeRow?.fastMode === true
         ? "on"
         : activeRow?.fastMode === false
@@ -366,30 +391,53 @@ export function resolveChatFastModeSelectState(
           : "";
   const isOpenAI = effectiveProvider === "openai";
   const effectiveMode = activeRow?.effectiveFastMode ?? activeRow?.fastMode;
-  // OpenAI exposes one optional priority tier. Keep legacy auto unselected so
-  // either binary choice replaces it instead of implying the wrong tier.
+  // Keep legacy auto unselected: choosing a tier replaces the timed policy.
   const currentOverride = isOpenAI
     ? effectiveMode === true
       ? "on"
-      : effectiveMode === "auto"
-        ? "auto"
+      : effectiveMode === "auto" || effectiveMode === "ultrafast"
+        ? effectiveMode
         : "off"
     : configuredOverride;
-  const providerSupported = isChatFastModeProviderSupported(effectiveProvider);
-  const supported = providerSupported || Boolean(configuredOverride);
-  // The picker exposes speed as a two-state toggle: fast on, or back to the
-  // provider baseline (explicit off for OpenAI's priority tier, inherited
-  // default elsewhere). Auto and explicit standard overrides remain reachable
-  // through /fast and still render truthfully here.
-  const active = effectiveMode === true || effectiveMode === "auto";
+  const selectedValue = normalizeChatModelAvailabilityKey(
+    normalizeChatModelOverrideValue(
+      input.currentModelOverride ||
+        buildQualifiedChatModelValue(
+          activeRow?.model ?? input.sessionsResult?.defaults?.model ?? "",
+          effectiveProvider,
+        ),
+      input.catalog,
+    ),
+  );
+  const selectedEntries = input.catalog
+    .filter((entry) => catalogModelAvailabilityKey(entry) === selectedValue)
+    .map((entry) => ({
+      entry,
+      runtime: resolveModelRuntimeEntry(entry, activeRow?.agentRuntime?.id),
+    }));
+  const applicability = new Set(
+    selectedEntries.map(({ entry, runtime }) => (runtime ?? entry).supportsFastMode),
+  );
+  const selectedSupport = applicability.size === 1 ? [...applicability][0] : undefined;
+  const requestSupported = selectedSupport ?? isChatFastModeProviderSupported(effectiveProvider);
+  const ultrafastSupported =
+    requestSupported &&
+    selectedEntries.length > 0 &&
+    selectedEntries.every(
+      ({ runtime }) => runtime?.available === true && runtime.serviceTiers?.includes("ultrafast"),
+    );
+  const supported = requestSupported || Boolean(configuredOverride);
+  // An unavailable Ultrafast preference falls back to Fast, never advertises access.
+  const active =
+    effectiveMode === true || effectiveMode === "auto" || effectiveMode === "ultrafast";
   const label =
     effectiveMode === "auto"
       ? "Auto"
-      : active
-        ? "Fast"
-        : isOpenAI
-          ? "Standard"
-          : currentOverride === "off"
+      : effectiveMode === "ultrafast" && ultrafastSupported
+        ? "Ultrafast"
+        : active
+          ? "Fast"
+          : isOpenAI || currentOverride === "off"
             ? "Standard"
             : "Default";
   // A legacy override on a provider without a wire mapping stays visible so it
@@ -398,7 +446,7 @@ export function resolveChatFastModeSelectState(
   // inherited baseline is unknowable while an override exists, and clearing
   // could land on a fast default, turning the click into a visible no-op.
   // /fast default remains the way back to the inherited setting.
-  const nextValue: ChatFastModeSelectValue = !providerSupported ? "" : active ? "off" : "on";
+  const nextValue: ChatFastModeSelectValue = !requestSupported ? "" : active ? "off" : "on";
   return {
     active,
     currentOverride,
@@ -413,5 +461,6 @@ export function resolveChatFastModeSelectState(
     label,
     nextValue,
     supported,
+    ultrafastSupported,
   };
 }

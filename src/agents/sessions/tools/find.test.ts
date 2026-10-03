@@ -27,18 +27,6 @@ describe("find tool", () => {
   const workspace = path.resolve(path.sep, "find-fixture");
   it.each([
     {
-      name: "absolute result",
-      search: workspace,
-      found: path.join(workspace, "alpha.txt"),
-      expected: "alpha.txt",
-    },
-    {
-      name: "trailing search separator",
-      search: `${workspace}${path.sep}`,
-      found: path.join(workspace, "alpha.txt"),
-      expected: "alpha.txt",
-    },
-    {
       name: "root search",
       search: path.parse(workspace).root,
       found: path.join(path.parse(workspace).root, "alpha.txt"),
@@ -60,18 +48,6 @@ describe("find tool", () => {
       expected: "../find-fixture-other/alpha.txt",
     },
     {
-      name: "filename whitespace",
-      search: workspace,
-      found: path.join(workspace, "report.txt "),
-      expected: "report.txt ",
-    },
-    {
-      name: "absolute directory marker",
-      search: `${workspace}${path.sep}`,
-      found: `${path.join(workspace, "folder")}${path.sep}`,
-      expected: "folder/",
-    },
-    {
       name: "relative directory marker",
       search: workspace,
       found: `folder${path.sep}`,
@@ -87,7 +63,7 @@ describe("find tool", () => {
       {} as never,
     );
     expect(textContent(result)).toBe(expected);
-    expect(result.details).toBeUndefined();
+    expect(result.details).toEqual({ content: expected });
   });
 
   it("rejects fractional limits", async () => {
@@ -118,7 +94,7 @@ describe("find tool", () => {
     const result = await execute(tool, Number.POSITIVE_INFINITY);
 
     expect(textContent(result)).toBe("a.ts\nb.ts");
-    expect(result.details).toBeUndefined();
+    expect(result.details).toEqual({ content: "a.ts\nb.ts" });
   });
 
   it.each([

@@ -1,4 +1,3 @@
-// Normalization Core module implements string normalization behavior.
 import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
 
 /** Detects C0 and DEL without rejecting C1 or other Unicode text. */
@@ -39,11 +38,10 @@ export function uniqueStrings(values: Iterable<string>): string[] {
   return uniqueValues(values);
 }
 
-/** Returns unique strings sorted with stable ASCII comparison. */
+/** Returns a fresh array of unique strings in UTF-16 code-unit order. */
 export function sortUniqueStrings(values: Iterable<string>): string[] {
-  return uniqueStrings(values).toSorted((left, right) =>
-    left < right ? -1 : left > right ? 1 : 0,
-  );
+  // oxlint-disable-next-line unicorn/no-array-sort -- uniqueStrings creates a private array.
+  return uniqueStrings(values).sort();
 }
 
 /** Normalizes entries, removes duplicates, and preserves first-seen order. */
@@ -116,10 +114,7 @@ export function normalizeCsvOrLooseStringList(value: unknown): string[] {
     return normalizeStringEntries(value);
   }
   if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(value.split(","));
   }
   return [];
 }

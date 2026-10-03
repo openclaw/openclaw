@@ -1,12 +1,11 @@
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
-// Zalouser plugin module implements tool behavior.
 import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { jsonResult as json, type AgentToolResult } from "openclaw/plugin-sdk/tool-results";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { resolveZalouserAccountSync } from "./accounts.js";
-import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
+import { sendImageZalouser, sendMessageZalouser } from "./send.js";
 import { parseZalouserOutboundTarget } from "./session-route.js";
 import { normalizeZalouserCredentialProfile } from "./session-state.js";
 import type { ZalouserConfig } from "./types.js";
@@ -15,6 +14,7 @@ import {
   getZaloUserInfo,
   listZaloFriendsMatching,
   listZaloGroupsMatching,
+  sendZaloLink,
 } from "./zalo-js.js";
 
 const ACTIONS = ["send", "image", "link", "friends", "groups", "me", "status"] as const;
@@ -32,15 +32,7 @@ const ZalouserToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type ToolParams = {
-  action: (typeof ACTIONS)[number];
-  threadId?: string;
-  message?: string;
-  isGroup?: boolean;
-  profile?: string;
-  query?: string;
-  url?: string;
-};
+type ToolParams = Static<typeof ZalouserToolSchema>;
 
 type ZalouserToolContext = Pick<
   OpenClawPluginToolContext,
@@ -107,10 +99,8 @@ function resolveZalouserSendTarget(params: ToolParams, context?: ZalouserToolCon
 }
 
 async function executeZalouserTool(
-  _toolCallId: string,
   params: ToolParams,
-  _signal?: AbortSignal,
-  _onUpdate?: unknown,
+  signal?: AbortSignal,
   context?: ZalouserToolContext,
 ): Promise<AgentToolResult<unknown>> {
   try {
@@ -121,6 +111,7 @@ async function executeZalouserTool(
           throw new Error("threadId and message required for send action");
         }
         const result = await sendMessageZalouser(target.threadId, params.message, {
+          signal,
           profile: params.profile,
           isGroup: target.isGroup,
         });
@@ -139,6 +130,7 @@ async function executeZalouserTool(
           throw new Error("url required for image action");
         }
         const result = await sendImageZalouser(target.threadId, params.url, {
+          signal,
           profile: params.profile,
           mediaMaxBytes: resolveToolMediaMaxBytes(params.profile, context),
           caption: params.message,
@@ -155,7 +147,8 @@ async function executeZalouserTool(
         if (!target.threadId || !params.url) {
           throw new Error("threadId and url required for link action");
         }
-        const result = await sendLinkZalouser(target.threadId, params.url, {
+        const result = await sendZaloLink(target.threadId, params.url, {
+          signal,
           profile: params.profile,
           caption: params.message,
           isGroup: target.isGroup,
@@ -212,7 +205,7 @@ export function createZalouserTool(context?: ZalouserToolContext): AnyAgentTool 
       "Actions: send (text message), image (send image URL), link (send link), " +
       "friends (list/search friends), groups (list groups), me (profile info), status (auth check).",
     parameters: ZalouserToolSchema,
-    execute: async (toolCallId, params, signal, onUpdate) =>
-      await executeZalouserTool(toolCallId, params as ToolParams, signal, onUpdate, context),
+    execute: async (_toolCallId, params, signal) =>
+      await executeZalouserTool(params as ToolParams, signal, context),
   } satisfies AnyAgentTool;
 }

@@ -1,10 +1,3 @@
-/**
- * Detects whether a ClickClack group message contains a direct mention of the
- * current account.
- *
- * Pure helper – no side effects, no runtime imports.
- */
-
 import {
   buildMentionRegexes,
   normalizeMentionText,
@@ -28,7 +21,7 @@ function buildLocalMentionRegexes(params: {
     return [];
   }
   const cfg = params.cfg;
-  const syntheticCfg = {
+  const syntheticCfg: OpenClawConfig = {
     ...cfg,
     messages: {
       ...cfg?.messages,
@@ -37,7 +30,7 @@ function buildLocalMentionRegexes(params: {
         mentionPatterns: params.mentionPatterns,
       },
     },
-  } as OpenClawConfig;
+  };
   return buildMentionRegexes(syntheticCfg, undefined, {
     provider: "clickclack",
     conversationId: params.channelId,
@@ -50,18 +43,6 @@ function resolveMentionHandles(body: string): string[] {
     .filter((handle): handle is string => Boolean(handle));
 }
 
-/**
- * Builds mention facts for a ClickClack message.
- *
- * Rules:
- * - DMs always have canDetectMention: false, wasMentioned: false
- *   (DMs bypass mention gating).
- * - Group messages: canDetectMention: true when body text is available.
- * - Checks the message body against shared and account-local mention patterns.
- * - If botHandle is provided and the message body contains its ClickClack
- *   `@handle`, treat it as a mention.
- * - Plain display names do not count unless explicitly configured as a pattern.
- */
 export function resolveClickClackMentionFacts(params: {
   isDirect: boolean;
   body?: string;

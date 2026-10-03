@@ -6,8 +6,11 @@ import {
   type AgentRunAttemptTerminal,
 } from "../agents/agent-run-terminal-outcome.js";
 import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js";
+import { hasModelFallbackStop } from "../agents/failover-error.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveAssistantMessagePhase,
   type AssistantPhase,
@@ -26,7 +29,10 @@ function liveEventBytes(event: WorkerLiveEvent): number {
 }
 
 function truncateLiveText(value: string): string {
-  if (Buffer.byteLength(value, "utf8") <= MAX_LIVE_PREVIEW_BYTES) {
+  if (
+    value.length <= MAX_LIVE_PREVIEW_BYTES &&
+    Buffer.byteLength(value, "utf8") <= MAX_LIVE_PREVIEW_BYTES
+  ) {
     return value;
   }
   const suffix = "…";
@@ -57,7 +63,10 @@ function redactLiveText(value: string): string {
 }
 
 function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
-  if (liveEventBytes(event) <= MAX_LIVE_EVENT_BYTES) {
+  const textExceedsLimit =
+    (event.kind === "assistant" || event.kind === "thinking") &&
+    event.payload.text.length > MAX_LIVE_EVENT_BYTES;
+  if (!textExceedsLimit && liveEventBytes(event) <= MAX_LIVE_EVENT_BYTES) {
     return event;
   }
   let bounded: WorkerLiveEvent;
@@ -100,11 +109,6 @@ function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
         payload: { ...event.payload, result: boundLiveValue(event.payload.result) },
       };
     }
-  } else if (event.kind === "lifecycle" && event.payload.phase === "error") {
-    bounded = {
-      kind: "lifecycle",
-      payload: { ...event.payload, error: truncateLiveText(event.payload.error) },
-    };
   } else {
     throw new Error(`worker live ${event.kind} event exceeds the protocol payload limit`);
   }
@@ -145,7 +149,7 @@ function readAssistantThinking(message: AgentMessage): string {
     .join("");
 }
 
-type WorkerLiveClient = {
+export type WorkerLiveClient = {
   enqueuePreview: (event: WorkerLiveEvent) => boolean;
   emitTerminal: (event: WorkerLiveEvent) => Promise<void>;
 };
@@ -168,6 +172,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
   // gateway never sees an end/error before the authoritative transcript commit.
   let terminalLiveEvent: WorkerLiveEvent | undefined;
   let terminalOutcome: AgentRunAttemptTerminal = { kind: "ok" };
+  let replayInvalid = false;
   const enqueueTerminal = (input: { aborted?: boolean; error?: string; stopReason?: string }) => {
     // Cleanup can fail after agent_end. Merge through the attempt owner so it
     // promotes success to failure without replacing an earlier cancellation.
@@ -185,6 +190,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
         endedAt: Date.now(),
         ...(stopReason ? { stopReason } : {}),
         ...(terminal.aborted ? { aborted: true } : {}),
+        ...(replayInvalid ? { replayInvalid: true } : {}),
         ...(!terminal.aborted && typeof terminal.promptError === "string"
           ? { error: redactLiveText(terminal.promptError) }
           : {}),
@@ -195,9 +201,10 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
   let streamedPhase: AssistantPhase | undefined;
   let assistantMessageIndex = 0;
   let streamedThinking = "";
-  const emitAssistantSnapshot = (message: AgentMessage) => {
+  const emitAssistantSnapshot = (message: AgentMessage, complete = false) => {
     const { text, phase } = readAssistantSnapshot(message);
-    if (text === streamedText && phase === streamedPhase) {
+    const mediaUrls = complete ? parseReplyDirectives(text).mediaUrls : undefined;
+    if (text === streamedText && phase === streamedPhase && !mediaUrls?.length) {
       return;
     }
     // Commentary never contributed to the answer, even if a final repeats its prefix.
@@ -209,6 +216,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       payload: {
         text,
         delta: replace ? text : text.slice(previousText.length),
+        ...(mediaUrls?.length ? { mediaUrls } : {}),
         ...(replace ? { replace: true as const } : {}),
         ...(phase ? { phase } : {}),
         // Provider signatures can arrive only at text_end. Message lifecycle,
@@ -220,6 +228,11 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
     streamedPhase = phase;
   };
   const handleSessionEvent = (event: AgentSessionEvent) => {
+    // Disabled previews no longer need snapshots or diagnostics, but agent_end
+    // still owns the terminal result deferred until the transcript is durable.
+    if (!previewEnabled && event.type !== "agent_end") {
+      return;
+    }
     if (event.type === "agent_start") {
       enqueueLive({ kind: "lifecycle", payload: { phase: "start", startedAt } });
       return;
@@ -247,7 +260,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       return;
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
-      emitAssistantSnapshot(event.message);
+      emitAssistantSnapshot(event.message, true);
       const finalThinking = readAssistantThinking(event.message);
       if (finalThinking !== streamedThinking) {
         enqueueLive({
@@ -257,41 +270,29 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       }
       return;
     }
-    if (event.type === "tool_execution_start") {
+    if (
+      event.type === "tool_execution_start" ||
+      event.type === "tool_execution_update" ||
+      event.type === "tool_execution_end"
+    ) {
+      const tool = { name: event.toolName, toolCallId: event.toolCallId };
       enqueueLive({
         kind: "tool",
         payload: {
-          phase: "start",
-          name: event.toolName,
-          toolCallId: event.toolCallId,
-          args: redactAgentDiagnosticPayload(event.args),
-          ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-        },
-      });
-      return;
-    }
-    if (event.type === "tool_execution_update") {
-      enqueueLive({
-        kind: "tool",
-        payload: {
-          phase: "update",
-          name: event.toolName,
-          toolCallId: event.toolCallId,
-          partialResult: redactAgentDiagnosticPayload(event.partialResult),
-          ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-        },
-      });
-      return;
-    }
-    if (event.type === "tool_execution_end") {
-      enqueueLive({
-        kind: "tool",
-        payload: {
-          phase: "result",
-          name: event.toolName,
-          toolCallId: event.toolCallId,
-          isError: event.isError,
-          result: redactAgentDiagnosticPayload(event.result),
+          ...(event.type === "tool_execution_start"
+            ? { phase: "start" as const, ...tool, args: redactAgentDiagnosticPayload(event.args) }
+            : event.type === "tool_execution_update"
+              ? {
+                  phase: "update" as const,
+                  ...tool,
+                  partialResult: redactAgentDiagnosticPayload(event.partialResult),
+                }
+              : {
+                  phase: "result" as const,
+                  ...tool,
+                  isError: event.isError,
+                  result: redactAgentDiagnosticPayload(event.result),
+                }),
           ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
         },
       });
@@ -309,7 +310,9 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
     }
   };
   const enqueueRunFailure = (failure: { aborted: boolean; error: Error }) => {
-    enqueueTerminal({ aborted: failure.aborted, error: failure.error.message });
+    // Later terminal merges cannot reopen replay after an owned cleanup failure.
+    replayInvalid ||= hasModelFallbackStop(failure.error);
+    enqueueTerminal({ aborted: failure.aborted, error: formatErrorMessage(failure.error) });
   };
   // Emits directly (not via the degradable preview queue): finishing is the durable
   // result fence that must reach the Gateway before post-worker reconciliation.

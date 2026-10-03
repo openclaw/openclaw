@@ -1,12 +1,13 @@
 /** Private JSONL worker exposing the CLI node-host runtime to the macOS app. */
 import { createInterface } from "node:readline";
 import { requestExitAfterOneShotOutput } from "../cli/one-shot-exit.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
 import type { NodeHostClient } from "./client.js";
 import { loadNodeHostConfig } from "./config.js";
 import { startNodeHostConnection } from "./connection.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
-import { runStartupMigrations } from "./startup-state-migrations.js";
+import { ensureNodeHostStateReady } from "./startup-state-readiness.js";
 import {
   NodeHostWorkerBridgeClient,
   parseNodeHostWorkerInput,
@@ -21,22 +22,24 @@ function writeStderrLine(message: string): void {
   process.stderr.write(`${message}\n`);
 }
 
-export async function runNodeHostWorker(): Promise<void> {
-  // Operator-approved startup is a second authorized entry point for Doctor-owned
-  // state migrators. Runtime invokes those owners here and never migrates inline.
-  await runStartupMigrations({ log: { info: writeStderrLine, warn: writeStderrLine } });
+export async function runNodeHostWorker(
+  options: { desktopSharingEnabled?: boolean } = {},
+): Promise<void> {
+  const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
+  await initializeSqliteRuntimeCapabilities();
+  ensureNodeHostStateReady();
   const nodeConfig = await loadNodeHostConfig();
+  // The private app worker is a capability superset; persisted headless
+  // command allowlists never apply here.
   const prepared = await prepareNodeHostRuntime({
     enableDuplexPluginCommands: true,
     enableWorkerRuns: true,
     installedAppsSharingEnabled: nodeConfig?.installedAppsSharing === true,
+    desktopSharingEnabled: options.desktopSharingEnabled,
   });
   const client = new NodeHostWorkerBridgeClient(writeMessage);
   let stopping = false;
-  let resolveStopped: (() => void) | undefined;
-  const stopped = new Promise<void>((resolve) => {
-    resolveStopped = resolve;
-  });
+  const { promise: stopped, resolve: resolveStopped } = createDeferredCore();
 
   const stop = async (exitCode: number) => {
     if (stopping) {
@@ -48,18 +51,25 @@ export async function runNodeHostWorker(): Promise<void> {
       await runtime.close();
       process.exitCode = exitCode;
     } finally {
-      resolveStopped?.();
+      resolveStopped();
     }
   };
 
   let generation = 0;
   let connected = false;
   let readySent = false;
+  let workerHostingEnabled = false;
   let currentManifest = prepared.manifest;
   const runtime = startNodeHostConnection({
     prepared,
     client,
     writeStderrLine,
+    onWorkerHostingChanged: (enabled) => {
+      workerHostingEnabled = enabled;
+      if (readySent) {
+        writeMessage({ type: "worker-hosting", enabled });
+      }
+    },
     onManifestChanged: (manifest) => {
       currentManifest = manifest;
       if (readySent) {
@@ -74,6 +84,7 @@ export async function runNodeHostWorker(): Promise<void> {
     type: "ready",
     version: VERSION,
     manifest: currentManifest,
+    workerHostingEnabled,
   });
 
   readySent = true;
@@ -114,6 +125,10 @@ export async function runNodeHostWorker(): Promise<void> {
       return;
     }
     if (!connected || message.generation !== generation) {
+      return;
+    }
+    if (message.type === "runner-inventory-refresh") {
+      runtime.refreshRunnerInventory();
       return;
     }
     if (message.type === "invoke-input") {

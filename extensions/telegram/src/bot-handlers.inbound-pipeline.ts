@@ -1,11 +1,16 @@
 import type { Context } from "grammy";
 import type { Message } from "grammy/types";
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
 import { createTelegramInboundProcessing } from "./bot-handlers.inbound-processing.js";
-import type { TelegramInboundProcessing } from "./bot-handlers.inbound-processing.js";
+import {
+  buildSyntheticContext,
+  promptContextBoundaryOptions,
+} from "./bot-handlers.message-context.js";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type {
   RegisterTelegramHandlerParams,
@@ -25,56 +30,29 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
 import { emitTelegramLiveLocationMessageHook } from "./location-message-hook.js";
-import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
-type TelegramMessageHandlerParams = Pick<
-  RegisterTelegramHandlerParams,
-  "accountId" | "bot" | "shouldSkipUpdate"
-> & {
-  opts: Pick<RegisterTelegramHandlerParams["opts"], "botInfo">;
-  runtime: Pick<RegisterTelegramHandlerParams["runtime"], "error">;
-};
-
-type TelegramMessageHandlerRuntime = Pick<
-  TelegramMessagePipeline,
-  | "normalizePromptContextMinTimestampMs"
-  | "promptContextBoundaryOptions"
-  | "releaseDispatchDedupeClaims"
-  | "claimMessageDispatchDedupe"
-  | "buildSyntheticContext"
-  | "resolveTelegramSessionState"
-  | "resolvePromptContextAmbientWatermark"
-> & {
-  recordMessageForReplyChain: (
-    ...args: Parameters<TelegramMessagePipeline["recordMessageForReplyChain"]>
-  ) => Promise<unknown>;
-};
-
-interface TelegramInboundHandlers {
-  handleMessage: (ctx: Context) => Promise<TelegramInboundDisposition>;
-  handleEditedMessage: (ctx: Context) => Promise<TelegramInboundDisposition>;
-  handleChannelPost: (ctx: Context) => Promise<TelegramInboundDisposition>;
-  handleEditedChannelPost: (ctx: Context) => Promise<TelegramInboundDisposition>;
-}
-
-function createTelegramInboundHandlers(
-  { accountId, bot, opts, runtime, shouldSkipUpdate }: TelegramMessageHandlerParams,
-  messageRuntime: TelegramMessageHandlerRuntime,
-  authorizationRuntime: Pick<TelegramHandlerAuthorization, "authorizeInboundMessage">,
-  inboundRuntime: Pick<TelegramInboundProcessing, "processInboundMessage">,
-): TelegramInboundHandlers {
+export function createTelegramInboundPipeline({
+  params: handlerParams,
+  message: messageRuntime,
+  authorization: authorizationRuntime,
+}: {
+  params: RegisterTelegramHandlerParams;
+  message: TelegramMessagePipeline;
+  authorization: TelegramHandlerAuthorization;
+}): TelegramInboundPipeline {
+  const { accountId, bot, opts, runtime, shouldSkipUpdate } = handlerParams;
   const {
-    normalizePromptContextMinTimestampMs,
-    promptContextBoundaryOptions,
     releaseDispatchDedupeClaims,
     claimMessageDispatchDedupe,
-    buildSyntheticContext,
     resolveTelegramSessionState,
     resolvePromptContextAmbientWatermark,
     recordMessageForReplyChain,
   } = messageRuntime;
   const { authorizeInboundMessage } = authorizationRuntime;
-  const { processInboundMessage } = inboundRuntime;
+  const { processInboundMessage } = createTelegramInboundProcessing({
+    params: handlerParams,
+    message: messageRuntime,
+  });
   const getChat: TelegramGetChat = bot.api.getChat.bind(bot.api);
   const resolveBotUserId = (ctx: { me?: { id?: number } }): number => {
     const botUserId = ctx.me?.id ?? opts.botInfo?.id;
@@ -91,7 +69,6 @@ function createTelegramInboundHandlers(
     chatId: number;
     isGroup: boolean;
     isForum: boolean;
-    messageThreadId?: number;
     senderId: string;
     senderUsername: string;
     requireConfiguredGroup: boolean;
@@ -101,20 +78,13 @@ function createTelegramInboundHandlers(
   };
 
   const normalizeChannelPostMessage = (post: Message): Message => {
-    const chatId = post.chat.id;
-    const syntheticFrom = post.sender_chat
-      ? {
-          id: post.sender_chat.id,
-          is_bot: true as const,
-          first_name: post.sender_chat.title || "Channel",
-          username: post.sender_chat.username,
-        }
-      : {
-          id: chatId,
-          is_bot: true as const,
-          first_name: post.chat.title || "Channel",
-          username: post.chat.username,
-        };
+    const senderChat = post.sender_chat ?? post.chat;
+    const syntheticFrom = {
+      id: senderChat.id,
+      is_bot: true as const,
+      first_name: senderChat.title || "Channel",
+      ...(senderChat.username !== undefined ? { username: senderChat.username } : {}),
+    };
     return {
       ...post,
       from: post.from ?? syntheticFrom,
@@ -173,7 +143,7 @@ function createTelegramInboundHandlers(
   const handleInboundMessageLike = async (
     event: InboundTelegramEvent,
   ): Promise<TelegramInboundDisposition> => {
-    let dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[] = [];
+    let dispatchDedupeClaims: ChannelReplayClaimHandle[] = [];
     try {
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return { kind: "ignored" };
@@ -202,7 +172,7 @@ function createTelegramInboundHandlers(
         threadSpec,
       } = gate.context;
 
-      const sessionState = resolveTelegramSessionState({
+      const sessionState = await resolveTelegramSessionState({
         chatId: event.chatId,
         isGroup: event.isGroup,
         threadSpec,
@@ -210,7 +180,7 @@ function createTelegramInboundHandlers(
         senderId: event.senderId,
         runtimeCfg: gate.context.cfg,
       });
-      const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(
+      const promptContextMinTimestampMs = asFiniteNumber(
         sessionState.sessionEntry?.sessionStartedAt,
       );
       const promptContextAmbientWatermark = resolvePromptContextAmbientWatermark({
@@ -233,7 +203,6 @@ function createTelegramInboundHandlers(
         msg: event.msg,
         chatId: event.chatId,
         isGroup: event.isGroup,
-        isForum: event.isForum,
         threadSpec,
         dmPolicy,
         storeAllowFrom,
@@ -308,7 +277,6 @@ function createTelegramInboundHandlers(
       chatId: normalizedMsg.chat.id,
       isGroup,
       isForum,
-      messageThreadId: normalizedMsg.message_thread_id,
       senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
       senderUsername: normalizedMsg.from?.username ?? "",
       requireConfiguredGroup: false,
@@ -318,20 +286,22 @@ function createTelegramInboundHandlers(
     });
   };
 
-  const handleEditedMessage = async (ctx: Context): Promise<TelegramInboundDisposition> => {
-    const msg = ctx.editedMessage;
+  const handleEditedMessage = async (
+    ctx: Context,
+    kind: "edited_message" | "edited_channel_post",
+  ): Promise<TelegramInboundDisposition> => {
+    const isChannelPost = kind === "edited_channel_post";
+    const msg = isChannelPost ? ctx.editedChannelPost : ctx.editedMessage;
     if (!msg) {
       return { kind: "ignored" };
     }
     await recordEditedMessageForReplyChain({
       ctxForDedupe: ctx,
-      msg,
-      requireConfiguredGroup: false,
+      msg: isChannelPost ? normalizeChannelPostMessage(msg) : msg,
+      requireConfiguredGroup: isChannelPost,
       botUserId: resolveBotUserId(ctx),
       providerUpdate:
-        typeof ctx.update?.update_id === "number"
-          ? { id: ctx.update.update_id, kind: "edited_message" }
-          : undefined,
+        typeof ctx.update?.update_id === "number" ? { id: ctx.update.update_id, kind } : undefined,
     });
     return { kind: "recorded" };
   };
@@ -367,55 +337,19 @@ function createTelegramInboundHandlers(
     });
   };
 
-  const handleEditedChannelPost = async (ctx: Context): Promise<TelegramInboundDisposition> => {
-    const post = ctx.editedChannelPost;
-    if (!post) {
-      return { kind: "ignored" };
-    }
-    await recordEditedMessageForReplyChain({
-      ctxForDedupe: ctx,
-      msg: normalizeChannelPostMessage(post),
-      requireConfiguredGroup: true,
-      botUserId: resolveBotUserId(ctx),
-      providerUpdate:
-        typeof ctx.update?.update_id === "number"
-          ? { id: ctx.update.update_id, kind: "edited_channel_post" }
-          : undefined,
-    });
-    return { kind: "recorded" };
-  };
-
-  return { handleMessage, handleEditedMessage, handleChannelPost, handleEditedChannelPost };
-}
-
-export function createTelegramInboundPipeline({
-  params,
-  message,
-  authorization,
-}: {
-  params: RegisterTelegramHandlerParams;
-  message: TelegramMessagePipeline;
-  authorization: TelegramHandlerAuthorization;
-}): TelegramInboundPipeline {
-  const handlers = createTelegramInboundHandlers(
-    params,
-    message,
-    authorization,
-    createTelegramInboundProcessing({ params, message }),
-  );
   return {
     handle: async (ctx) => {
       if (ctx.message) {
-        return await handlers.handleMessage(ctx);
+        return await handleMessage(ctx);
       }
       if (ctx.editedMessage) {
-        return await handlers.handleEditedMessage(ctx);
+        return await handleEditedMessage(ctx, "edited_message");
       }
       if (ctx.channelPost) {
-        return await handlers.handleChannelPost(ctx);
+        return await handleChannelPost(ctx);
       }
       if (ctx.editedChannelPost) {
-        return await handlers.handleEditedChannelPost(ctx);
+        return await handleEditedMessage(ctx, "edited_channel_post");
       }
       return { kind: "ignored" };
     },
@@ -427,7 +361,7 @@ export function registerTelegramInboundHandlers({
   pipeline,
 }: {
   bot: RegisterTelegramHandlerParams["bot"];
-  pipeline: TelegramInboundPipeline;
+  pipeline: Pick<TelegramInboundPipeline, "handle">;
 }): void {
   bot.on("message", pipeline.handle);
   bot.on("edited_message", pipeline.handle);

@@ -1,0 +1,210 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
+import {
+  captureUpdateCommandExecutorAuthority,
+  withUpdateCommandExecutor,
+} from "../cli/update-cli/update-command-executor.js";
+import { resolveExecutablePath } from "./executable-path.js";
+import {
+  openPackageActivationJournal,
+  assertPackageActivationOperation,
+  assertPackageActivationLayout,
+  resolvePackageActivationControl,
+  resolvePackageActivationJournalPath,
+  isPackageActivationComplete,
+  resolvePackageActivationAnchor,
+} from "./package-update-activation-journal.js";
+import {
+  preparePackageActivationJournal,
+  resolvePackageActivationRecoveryCommand as recoveryCommand,
+  type PackageActivationPreparation,
+} from "./package-update-activation-prepare.js";
+import {
+  readReleasedPackageActivationReceipt,
+  readPackageActivationRecordStatus as status,
+  type PackageActivationStatus,
+} from "./package-update-activation-status.js";
+import { createPublicationOwner } from "./package-update-publication-owner.js";
+import type { ResolvedGlobalInstallTarget } from "./update-global.js";
+import { assertManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
+import { supportsPostCoreExecutor } from "./update-post-core-capability.js";
+import type { UpdateRecoveryFence } from "./update-run-recovery.js";
+
+export type { PackageActivationStatus } from "./package-update-activation-status.js";
+
+/** Read-only correlation; callers still need a privately registered live fence. */
+function readPackageActivationContinuation(installKey: string) {
+  const anchor = resolvePackageActivationAnchor(installKey);
+  const released = readReleasedPackageActivationReceipt(installKey);
+  if (released) {
+    throw new Error(
+      `Package publication recovery is pending. With the recorded external runtime, run ${released.recoveryCommand}, then use that original helper to repair or retire; keep other package managers stopped.`,
+    );
+  }
+  assertPackageActivationLayout(anchor);
+  const journalPath = resolvePackageActivationJournalPath(anchor);
+  if (!fs.lstatSync(journalPath, { throwIfNoEntry: false })) {
+    if (
+      fs.lstatSync(anchor, { throwIfNoEntry: false }) ||
+      fs.lstatSync(resolvePackageActivationControl(anchor), { throwIfNoEntry: false })
+    ) {
+      throw new Error(
+        `Incomplete or legacy recovery artifacts require their original owner: ${anchor}. The next mutable update is blocked.`,
+      );
+    }
+    return undefined;
+  }
+  const record = openPackageActivationJournal(anchor).read();
+  if (isPackageActivationComplete(anchor, record)) {
+    return undefined;
+  }
+  if (record.descriptor.authority.installKey !== installKey) {
+    throw new Error("Package publication is incomplete; its original continuation cannot run.");
+  }
+  assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
+  if (record.phase !== "publication-complete") {
+    throw new Error(
+      `Package publication is incomplete; its original continuation cannot run. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
+    );
+  }
+  return record.descriptor.authority;
+}
+
+export function assertNoPendingPackageActivation(
+  installKey: string,
+  options?: { continuation?: UpdateRecoveryFence },
+): void {
+  const authority = readPackageActivationContinuation(installKey);
+  if (!authority) {
+    return;
+  }
+  if (
+    options?.continuation &&
+    isDeepStrictEqual(authority, captureUpdateCommandExecutorAuthority(options.continuation))
+  ) {
+    return;
+  }
+  const anchor = resolvePackageActivationAnchor(installKey);
+  const record = openPackageActivationJournal(anchor).read();
+  throw new Error(
+    `Package publication recovery is pending. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
+  );
+}
+
+export async function preparePackageActivation(
+  params: PackageActivationPreparation & { installTarget: ResolvedGlobalInstallTarget },
+) {
+  const fence = params.options.fence;
+  const assertOriginal = fence.assertCurrent.bind(fence);
+  const options = { ...params.options, fence };
+  if (
+    process.platform === "win32" ||
+    params.installTarget.manager !== "npm" ||
+    params.installTarget.directNodeModulesRoot ||
+    !(await fsp.lstat(params.stageRoot)).isDirectory()
+  ) {
+    return undefined;
+  }
+  const nodeRunner = resolveExecutablePath(options.runtime.path, { useCache: false });
+  assertOriginal();
+  if (!nodeRunner) {
+    options.onUnavailable?.(
+      "Standalone package publication repair is unavailable: the selected runtime executable could not be resolved.",
+    );
+    return undefined;
+  }
+  const capable = await supportsPostCoreExecutor(params.stageRoot, nodeRunner);
+  assertOriginal();
+  if (!capable) {
+    // Older targets keep their shipped update path, without a
+    // journal whose post-core receiver cannot prove original ownership.
+    options.onUnavailable?.(
+      "Standalone package publication repair is unavailable for this target: its update worker does not support delegated post-core execution.",
+    );
+    return undefined;
+  }
+  const prepared = await preparePackageActivationJournal({ ...params, options }, assertOriginal);
+  const owner = createPublicationOwner(
+    prepared.anchor,
+    prepared.journal,
+    assertOriginal,
+    prepared.initial,
+  );
+  return { ...prepared, ...owner };
+}
+
+export function readPackageActivationReceipt(installKey: string):
+  | (Omit<PackageActivationStatus, "phase"> & {
+      phase: PackageActivationStatus["phase"] | "retired";
+      recoveryCommand?: string;
+    })
+  | undefined {
+  const released = readReleasedPackageActivationReceipt(installKey);
+  if (released) {
+    return released;
+  }
+  const anchor = resolvePackageActivationAnchor(installKey);
+  if (!fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+    readPackageActivationContinuation(installKey);
+    return undefined;
+  }
+  const record = openPackageActivationJournal(anchor).read();
+  assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
+  const receipt = status(record);
+  return receipt.phase === "complete"
+    ? receipt
+    : { ...receipt, recoveryCommand: `${recoveryCommand(record)} status` };
+}
+export async function readPackageActivationStatus(
+  anchor: string,
+  operationId: string,
+): Promise<PackageActivationStatus> {
+  const record = openPackageActivationJournal(anchor).read();
+  assertPackageActivationOperation(record, operationId);
+  assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
+  return status(record);
+}
+
+export async function runPackageActivationRecovery(
+  anchor: string,
+  action: "repair" | "retire",
+  operationId: string,
+): Promise<PackageActivationStatus> {
+  const journal = openPackageActivationJournal(anchor);
+  const admission = await journal.readForRecovery();
+  const initial = admission.record;
+  assertPackageActivationOperation(initial, operationId);
+  const complete = isPackageActivationComplete(anchor, initial);
+  if (complete) {
+    assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
+  } else {
+    // Reject malformed/foreign/disarmed recovery before acquiring a new writer.
+    // Admission is still followed by the same observations under the fresh fence.
+    await createPublicationOwner(
+      anchor,
+      journal,
+      () => {
+        assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
+      },
+      initial,
+      admission.assertUnchanged,
+    ).preflight(action);
+  }
+  return withUpdateCommandExecutor(
+    randomUUID(),
+    async (executor) => {
+      const fence = await executor.enter(initial.descriptor.authority.installKey);
+      assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
+      admission.admit(fence.assertCurrent);
+      journal.assertCurrent(initial);
+      const owner = createPublicationOwner(anchor, journal, fence.assertCurrent, initial);
+      if (complete) {
+        return owner.persistRetirement();
+      }
+      return action === "repair" ? owner.publish(true) : owner.retire();
+    },
+    { existingAuthority: initial.descriptor.authority },
+  );
+}

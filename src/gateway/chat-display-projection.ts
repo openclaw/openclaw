@@ -2,6 +2,7 @@
 export { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
 export {
   createCurrentUserProfileMessageProjector,
+  isPendingAssistantError,
   projectChatDisplayMessage,
   projectChatDisplayMessages,
   projectChatDisplayMessagesWithState,
@@ -12,6 +13,5 @@ export {
 } from "./chat-display-projection.helpers.js";
 export {
   dropPreSessionStartAnnouncePairs,
-  isHeartbeatHistoryTurnBoundaryMessage,
+  isAssistantTtsSupplementMessage,
 } from "./chat-display-projection.history.js";
-export { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";

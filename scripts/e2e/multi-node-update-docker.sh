@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Guards the multi-node-install update fix.
 #
 # Sets up two independent Node installations inside a Docker container, installs
@@ -17,7 +21,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-multi-node-update-e2e" OPENCLAW_MULTI_NODE_UPDATE_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_MULTI_NODE_UPDATE_E2E_SKIP_BUILD:-0}"
@@ -27,10 +30,7 @@ ARTIFACT_DIR="${OPENCLAW_MULTI_NODE_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/multi-nod
 
 mkdir -p "$ARTIFACT_DIR"
 chmod -R a+rwX "$ARTIFACT_DIR" || true
-cleanup() {
-  docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"' EXIT
 
 # Build the bare e2e image and prepare the package tarball.
 docker_e2e_build_or_reuse "$IMAGE_NAME" multi-node-update "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
@@ -107,9 +107,8 @@ export npm_config_fund=false
 export npm_config_audit=false
 export PATH="$NPM_PREFIX_A/bin:$NODE_A_DIR:$PATH"
 
-echo "Installing OpenClaw package under node-A prefix: $NPM_PREFIX_A"
 openclaw_e2e_install_package "$ARTIFACTS/install-a.log" "OpenClaw package under node-A prefix" "$NPM_PREFIX_A"
-echo "Installed. Checking openclaw location..."
+echo "Checking openclaw location..."
 
 OPENCLAW_A="$(command -v openclaw)"
 echo "openclaw binary: $OPENCLAW_A"

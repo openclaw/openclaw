@@ -10,6 +10,8 @@ import {
   WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
   WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES,
 } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { ComputerTakeControlParamsSchema } from "../../agents/tools/computer-tool-control.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
   ComputerActParamsSchema,
@@ -68,7 +70,10 @@ export function createWorkerComputerRpc(params: {
       const closing =
         request.command === "computer.act" &&
         Value.Check(NodeWorkerComputerCloseParamsSchema, commandParams);
-      if (!closing && !Value.Check(schema, commandParams)) {
+      const takingControl =
+        request.command === "computer.act" &&
+        Value.Check(ComputerTakeControlParamsSchema, commandParams);
+      if (!closing && !takingControl && !Value.Check(schema, commandParams)) {
         return { ok: false, closeReason: "invalid-frame" };
       }
       assertCurrent();
@@ -97,7 +102,8 @@ export function createWorkerComputerRpc(params: {
       if (!current.ok) {
         return current;
       }
-      const message = error instanceof Error ? error.message : "Worker computer operation failed";
+      const message =
+        error instanceof Error ? formatErrorMessage(error) : "Worker computer operation failed";
       return {
         ok: false,
         reason: "gateway-unavailable",

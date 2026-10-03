@@ -1,6 +1,7 @@
-// Control UI chat module implements user message content behavior.
 import type { MediaKind } from "@openclaw/media-core/constants";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
+import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { hasVideoMediaFileExtension } from "../../lib/media-file-extension.ts";
 import {
@@ -12,12 +13,14 @@ type UserChatMessageContentBlock = {
   type: string;
   text?: string;
   url?: string;
+  fileName?: string;
   source?: unknown;
   attachment?: {
     url: string;
     kind: Extract<MediaKind, "audio" | "video" | "document">;
     label: string;
     mimeType?: string;
+    origin?: "paste" | "file";
   };
 };
 
@@ -46,6 +49,7 @@ function buildUserChatMessageContentBlocks(
       blocks.push({
         type: "image",
         url: previewUrl,
+        ...(attachment.fileName ? { fileName: attachment.fileName } : {}),
         source: { type: "url", url: previewUrl },
       });
       continue;
@@ -62,6 +66,7 @@ function buildUserChatMessageContentBlocks(
         kind: attachment.mimeType.startsWith("audio/") ? "audio" : isVideo ? "video" : "document",
         label: attachment.fileName?.trim() || "Attached file",
         mimeType: attachment.mimeType,
+        ...(attachment.origin ? { origin: attachment.origin } : {}),
       },
     });
   }
@@ -69,7 +74,9 @@ function buildUserChatMessageContentBlocks(
 }
 
 type LocalUserMessageInput = {
+  workContext?: ChatWorkContext;
   attachments?: readonly ChatAttachment[];
+  mentions?: readonly HumanMention[];
   createdAt: number;
   pending?: {
     error?: string;
@@ -94,7 +101,7 @@ type LocalUserMessage = {
 /** Bind initial display bytes to their explicit submission, before releasing the draft. */
 export function buildInitialChatSubmission(
   sessionKey: string,
-  input: Pick<LocalUserMessageInput, "text" | "attachments" | "createdAt" | "sender">,
+  input: Pick<LocalUserMessageInput, "text" | "mentions" | "attachments" | "createdAt" | "sender">,
   owner: object,
   runId?: string,
 ) {
@@ -116,11 +123,15 @@ export function buildLocalUserMessage(
   if (!content?.length) {
     return null;
   }
+  const { mentions } = trimHumanMentions(input.text, input.mentions);
   return {
     role: "user",
     content,
     timestamp: input.createdAt,
     __openclaw: {
+      ...(input.workContext
+        ? { workContext: { snapshot: input.workContext, text: input.text } }
+        : {}),
       ...(input.runId ? { idempotencyKey: `${input.runId}:user` } : {}),
       ...(input.pending
         ? {
@@ -131,6 +142,7 @@ export function buildLocalUserMessage(
           }
         : {}),
       ...(input.replyToId ? { replyToId: input.replyToId } : {}),
+      ...(mentions ? { humanMentions: mentions } : {}),
       ...(input.sender?.id ? { senderId: input.sender.id } : {}),
       ...(input.sender?.identity ? { senderIdentity: input.sender.identity } : {}),
       ...(input.sender?.name ? { senderName: input.sender.name } : {}),

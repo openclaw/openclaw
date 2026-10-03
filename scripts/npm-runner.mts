@@ -5,7 +5,7 @@ import {
   buildCmdExeCommandLine,
   resolvePathEnvKey,
   resolveWindowsCmdExePath,
-} from "./lib/windows-cmd-helpers-runtime.mts";
+} from "./windows-cmd-helpers.mjs";
 
 export type NpmRunnerParams = {
   comSpec?: string;
@@ -20,6 +20,7 @@ type NpmRunner = {
   args: string[];
   command: string;
   env?: NodeJS.ProcessEnv;
+  packageJsonPath?: string;
   shell: boolean;
   windowsVerbatimArguments?: boolean;
 };
@@ -39,6 +40,7 @@ function resolveToolchainNpmRunner(params: ToolchainNpmRunnerParams): NpmRunner 
     return {
       command: params.execPath,
       args: [npmCliPath, ...params.npmArgs],
+      packageJsonPath: params.pathImpl.resolve(npmCliPath, "../../package.json"),
       shell: false,
     };
   }

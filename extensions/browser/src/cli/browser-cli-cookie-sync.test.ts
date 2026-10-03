@@ -1,12 +1,25 @@
+import { EventEmitter } from "node:events";
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as cliRuntime from "openclaw/plugin-sdk/cli-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
-import * as cliCoreApiModule from "./core-api.js";
 
 const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(async () => ({ ok: true, targetId: "tab-1", added: 1 })),
+}));
+
+const watchMocks = vi.hoisted(() => ({ watch: vi.fn(), readSecret: vi.fn() }));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, default: { ...actual, watch: watchMocks.watch } };
+});
+vi.mock("../browser/system-chrome-cookies.js", () => ({
+  cacheKeychainSecret: vi.fn(async () => watchMocks.readSecret),
 }));
 
 const systemProfileMocks = vi.hoisted(() => ({
@@ -28,17 +41,18 @@ const systemProfileMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.spyOn(cliCoreApiModule, "callGatewayFromCli").mockImplementation(
-  gatewayMocks.callGatewayFromCli,
-);
+vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(gatewayMocks.callGatewayFromCli);
 
 vi.mock("../system-profile-api.js", () => ({
   assertSystemCookiePlatform: vi.fn(),
   readSystemProfileCookies: systemProfileMocks.readSystemProfileCookies,
-  resolveSystemCookieSource: vi.fn(),
+  resolveSystemCookieSource: vi.fn(() => ({
+    browser: "chrome",
+    cookiesFile: "/synthetic/Cookies",
+  })),
 }));
 
-vi.spyOn(cliCoreApiModule, "runCommandWithRuntime").mockImplementation(
+vi.spyOn(cliRuntime, "runCommandWithRuntime").mockImplementation(
   async (_runtime, action, onError) => {
     try {
       await action();
@@ -47,9 +61,9 @@ vi.spyOn(cliCoreApiModule, "runCommandWithRuntime").mockImplementation(
     }
   },
 );
-vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(runtime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(runtime.exit);
+vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
+vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
 
 let registerBrowserCookieSyncCommand: typeof import("./browser-cli-cookie-sync.js").registerBrowserCookieSyncCommand;
 
@@ -73,6 +87,48 @@ describe("browser cookie-sync CLI", () => {
     resetRuntimeCapture();
     gatewayMocks.callGatewayFromCli.mockClear();
     systemProfileMocks.readSystemProfileCookies.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("resyncs changes received during a pending push and settles on stop", async () => {
+    vi.useFakeTimers();
+    const firstPush = createDeferred<{ ok: boolean; targetId: string; added: number }>();
+    const secondPush = createDeferred<{ ok: boolean; targetId: string; added: number }>();
+    gatewayMocks.callGatewayFromCli.mockImplementationOnce(async () => firstPush.promise);
+    gatewayMocks.callGatewayFromCli.mockImplementationOnce(async () => secondPush.promise);
+    const watcher = Object.assign(new EventEmitter(), { close: vi.fn() });
+    let changed: (event: string, filename: string) => void = () => {};
+    watchMocks.watch.mockImplementation((_path, listener) => {
+      changed = listener;
+      return watcher;
+    });
+    const running = createProgram().parseAsync(
+      ["browser", "cookie-sync", "--domains", "example.com", "--watch"],
+      { from: "user" },
+    );
+    try {
+      await vi.waitFor(() => expect(gatewayMocks.callGatewayFromCli).toHaveBeenCalledTimes(1));
+      changed("change", "Cookies-wal");
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(gatewayMocks.callGatewayFromCli).toHaveBeenCalledTimes(1);
+      firstPush.resolve({ ok: true, targetId: "tab-1", added: 1 });
+      await vi.waitFor(() => expect(gatewayMocks.callGatewayFromCli).toHaveBeenCalledTimes(2));
+      changed("change", "Cookies");
+      await vi.advanceTimersByTimeAsync(1_500);
+      process.emit("SIGINT");
+      secondPush.resolve({ ok: true, targetId: "tab-1", added: 1 });
+      await running;
+      expect(systemProfileMocks.readSystemProfileCookies).toHaveBeenCalledTimes(2);
+      expect(watcher.close).toHaveBeenCalledOnce();
+    } finally {
+      process.emit("SIGINT");
+      firstPush.resolve({ ok: true, targetId: "tab-1", added: 1 });
+      secondPush.resolve({ ok: true, targetId: "tab-1", added: 1 });
+      await running;
+    }
   });
 
   it("requires a non-empty domain allowlist before any read or gateway call", async () => {

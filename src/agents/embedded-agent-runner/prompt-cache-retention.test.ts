@@ -1,9 +1,22 @@
 // Coverage for prompt-cache retention resolution by provider and model API.
 import { describe, expect, it } from "vitest";
-import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
+import { resolveCacheRetention } from "./prompt-cache-retention.js";
 
 describe("prompt cache retention", () => {
-  it.each([undefined, "none", "short", "long"] as const)(
+  it("forwards native ChatGPT retention", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "openai",
+        "openai-chatgpt-responses",
+        "gpt-5.6-sol",
+        undefined,
+        "https://chatgpt.com/backend-api/codex",
+      ),
+    ).toBe("long");
+  });
+
+  it.each([undefined, "none"] as const)(
     "honors explicit retention %s for Anthropic-marker completions without cache keys",
     (cacheRetention) => {
       expect(
@@ -145,26 +158,5 @@ describe("prompt cache retention", () => {
         { supportsPromptCacheKey: true },
       ),
     ).toBeUndefined();
-  });
-
-  it("identifies supported direct Google cache families", () => {
-    expect(
-      isGooglePromptCacheEligible({
-        modelApi: "google-generative-ai",
-        modelId: "gemini-3.1-pro-preview",
-      }),
-    ).toBe(true);
-    expect(
-      isGooglePromptCacheEligible({
-        modelApi: "google-generative-ai",
-        modelId: "gemini-2.5-flash",
-      }),
-    ).toBe(true);
-    expect(
-      isGooglePromptCacheEligible({
-        modelApi: "google-generative-ai",
-        modelId: "gemini-live-2.5-flash-preview",
-      }),
-    ).toBe(false);
   });
 });

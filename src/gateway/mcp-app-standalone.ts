@@ -36,10 +36,14 @@ type StandaloneTicketBinding = {
   sessionKey: string;
   sessionId: string;
   viewId: string;
+  toolOperationsAuthorized: boolean;
   expiresAtMs: number;
 };
 
 type StandaloneTicket = { ticket: string; url: string; expiresAtMs: number };
+type StandaloneTicketActiveView = McpAppActiveView & {
+  toolOperationsAuthorized: boolean;
+};
 
 const ticketBindings = new Map<string, StandaloneTicketBinding>();
 
@@ -61,16 +65,22 @@ function signTicket(nonce: string, expiresAtMs: number, secret: Buffer): string 
     .digest("base64url");
 }
 
-function formatTicket(binding: StandaloneTicketBinding, secret: Buffer): string {
-  return `v1.${binding.nonce}.${binding.expiresAtMs}.${signTicket(binding.nonce, binding.expiresAtMs, secret)}`;
+function formatTicket(binding: StandaloneTicketBinding, secret: Buffer): StandaloneTicket {
+  const ticket = `v1.${binding.nonce}.${binding.expiresAtMs}.${signTicket(binding.nonce, binding.expiresAtMs, secret)}`;
+  return { ticket, url: `${MCP_APP_STANDALONE_PATH}#${ticket}`, expiresAtMs: binding.expiresAtMs };
 }
 
 export function createMcpAppStandaloneTicket(params: {
   sessionKey: string;
-  view: Pick<McpAppViewLease, "viewId" | "sessionId" | "expiresAtMs">;
+  view: Pick<McpAppViewLease, "viewId" | "sessionId" | "expiresAtMs" | "requesterId">;
+  toolOperationsAuthorized: boolean;
   nowMs?: number;
   secret?: Buffer;
 }): StandaloneTicket | undefined {
+  // A bearer-only window cannot establish a named requester’s live authority.
+  if (params.view.requesterId) {
+    return undefined;
+  }
   const nowMs = params.nowMs ?? Date.now();
   if (!Number.isSafeInteger(nowMs) || params.view.expiresAtMs <= nowMs) {
     return undefined;
@@ -82,7 +92,8 @@ export function createMcpAppStandaloneTicket(params: {
     if (
       binding.sessionKey === params.sessionKey &&
       binding.sessionId === params.view.sessionId &&
-      binding.viewId === params.view.viewId
+      binding.viewId === params.view.viewId &&
+      binding.toolOperationsAuthorized === params.toolOperationsAuthorized
     ) {
       if (binding.expiresAtMs > params.view.expiresAtMs) {
         ticketBindings.delete(binding.nonce);
@@ -98,12 +109,7 @@ export function createMcpAppStandaloneTicket(params: {
     (reusable.expiresAtMs >= expiresAtMs ||
       reusable.expiresAtMs - nowMs >= MCP_APP_STANDALONE_TICKET_MIN_REMAINING_MS)
   ) {
-    const ticket = formatTicket(reusable, params.secret ?? ticketSecret);
-    return {
-      ticket,
-      url: `${MCP_APP_STANDALONE_PATH}#${ticket}`,
-      expiresAtMs: reusable.expiresAtMs,
-    };
+    return formatTicket(reusable, params.secret ?? ticketSecret);
   }
   // Standalone issuance is additive to the existing authenticated view API.
   // At capacity, omit the link rather than failing that pre-existing path.
@@ -116,15 +122,11 @@ export function createMcpAppStandaloneTicket(params: {
     sessionKey: params.sessionKey,
     sessionId: params.view.sessionId,
     viewId: params.view.viewId,
+    toolOperationsAuthorized: params.toolOperationsAuthorized,
     expiresAtMs,
   };
   ticketBindings.set(nonce, binding);
-  const ticket = formatTicket(binding, params.secret ?? ticketSecret);
-  return {
-    ticket,
-    url: `${MCP_APP_STANDALONE_PATH}#${ticket}`,
-    expiresAtMs,
-  };
+  return formatTicket(binding, params.secret ?? ticketSecret);
 }
 
 export function verifyMcpAppStandaloneTicket(
@@ -174,7 +176,7 @@ function resolveTicketActiveView(
   value: string,
   nowMs: number,
   secret: Buffer,
-): McpAppActiveView | undefined {
+): StandaloneTicketActiveView | undefined {
   const binding = verifyMcpAppStandaloneTicket(value, { nowMs, secret });
   if (!binding) {
     return undefined;
@@ -186,6 +188,7 @@ function resolveTicketActiveView(
   const view = getMcpAppViewLease(binding.viewId, runtime);
   if (
     !view ||
+    view.requesterId !== undefined ||
     view.viewId !== binding.viewId ||
     view.sessionId !== binding.sessionId ||
     view.expiresAtMs <= nowMs ||
@@ -193,7 +196,7 @@ function resolveTicketActiveView(
   ) {
     return undefined;
   }
-  return { runtime, view };
+  return { runtime, view, toolOperationsAuthorized: binding.toolOperationsAuthorized };
 }
 
 function ticketFromRequest(req: IncomingMessage): string | undefined {
@@ -206,11 +209,15 @@ function ticketFromRequest(req: IncomingMessage): string | undefined {
 }
 
 function supportsStandaloneToolOperations(
-  view: Pick<McpAppViewLease, "allowedAppToolNames" | "readOnly">,
+  active: Pick<StandaloneTicketActiveView, "toolOperationsAuthorized" | "view">,
 ): boolean {
-  // The ticket is the short-lived grant. Tool authority still requires the
-  // originating run's explicit allowlist and is revalidated on every request.
-  return view.allowedAppToolNames !== undefined && view.readOnly !== true;
+  // Tool authority is the intersection of the ticket issuer's Gateway scope and
+  // the originating run's live App-tool grant, revalidated on every request.
+  return (
+    active.toolOperationsAuthorized &&
+    active.view.allowedAppToolNames !== undefined &&
+    active.view.readOnly !== true
+  );
 }
 
 async function supportsStandaloneResourceOperations(view: McpAppViewLease): Promise<boolean> {
@@ -282,10 +289,8 @@ export async function handleMcpAppStandaloneHttpRequest(
     ticketSecret?: Buffer;
   } = {},
 ): Promise<boolean> {
-  let url: URL;
-  try {
-    url = new URL(req.url ?? "/", "http://localhost");
-  } catch {
+  const url = URL.parse(req.url ?? "/", "http://localhost");
+  if (!url) {
     return false;
   }
   const route = classifyMcpAppStandalonePath(url.pathname);
@@ -373,7 +378,7 @@ export async function handleMcpAppStandaloneHttpRequest(
         }
         if (
           (operation.method === "tools/call" || operation.method === "tools/list") &&
-          !supportsStandaloneToolOperations(current.view)
+          !supportsStandaloneToolOperations(current)
         ) {
           sendJson(res, 403, { ok: false, error: "MCP App tool bridge is unavailable" });
           return;
@@ -405,7 +410,9 @@ export async function handleMcpAppStandaloneHttpRequest(
         ...(view.csp ? { csp: view.csp } : {}),
         toolInput: view.toolInput,
         toolResult: view.toolResult,
-        serverTools: supportsStandaloneToolOperations(view),
+        ...(view.displayModes ? { displayModes: view.displayModes } : {}),
+        ...(view.deepLink ? { hostContext: { "openai/deepLink": view.deepLink } } : {}),
+        serverTools: supportsStandaloneToolOperations(active),
         serverResources,
       });
       return true;

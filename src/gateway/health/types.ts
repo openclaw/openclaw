@@ -1,4 +1,3 @@
-// Shared summary types returned by gateway health and rendered by the CLI.
 import type { Snapshot } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 
@@ -34,6 +33,7 @@ export type PluginHealthSummary = Omit<ProtocolPlugin, "unavailable"> & {
 
 /** Full gateway health payload consumed by `openclaw health`. */
 export type HealthSummary = ProtocolHealth & {
+  modelRuntime?: import("../../agents/prepared-model-runtime.startup-status.js").PreparedModelRuntimeStartupStatus;
   ok: true;
   ts: number;
   durationMs: number;

@@ -78,22 +78,34 @@ enum ChatTranscriptRow: Hashable, Identifiable {
     case message(OpenClawChatMessage)
     case systemNotice(SystemNotice)
     case historyDivider(HistoryDivider)
+    case completedWork(CompletedWork)
 
     var id: UUID {
         switch self {
         case let .message(message): message.id
         case let .systemNotice(notice): notice.id
         case let .historyDivider(divider): divider.id
+        case let .completedWork(work): work.id
+        }
+    }
+
+    var timestamp: Double? {
+        switch self {
+        case let .message(message): message.timestamp
+        case let .systemNotice(notice): notice.timestamp
+        case let .historyDivider(divider): divider.timestamp
+        case .completedWork: nil
         }
     }
 
     var startsTurn: Bool {
         switch self {
         case let .message(message):
-            message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
+            message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" ||
+                message.turnBoundary == true || message.isForwardedTurnBoundary
         case .systemNotice:
             true
-        case .historyDivider:
+        case .historyDivider, .completedWork:
             false
         }
     }
@@ -170,5 +182,57 @@ enum ChatTranscriptRow: Hashable, Identifiable {
     private static func strippingSystemPrefix(from text: String) -> String {
         let prefix = "[System] "
         return text.hasPrefix(prefix) ? String(text.dropFirst(prefix.count)) : text
+    }
+}
+
+extension ChatTranscriptRow {
+    static func mergeToolResults(in messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
+        var result: [OpenClawChatMessage] = []
+        result.reserveCapacity(messages.count)
+        var callIndexes: [String: Int] = [:]
+
+        for message in messages {
+            // Narration can separate calls from results, but an input or history
+            // boundary ends their lookup scope even when a run ID is reused.
+            if Self(message)?.startsTurn == true || message.historyMarker != nil {
+                callIndexes.removeAll(keepingCapacity: true)
+            }
+            guard message.isToolResult,
+                  let toolCallId = message.toolCallId,
+                  let index = callIndexes[toolCallId],
+                  (message.workRunID != nil && message.workRunID == result[index].workRunID) ||
+                  (index == result.count - 1 &&
+                      (message.workRunID == nil || result[index].workRunID == nil))
+            else {
+                if !message.isForwardedTurnBoundary {
+                    for block in message.content where block.isToolCall {
+                        if let id = block.id { callIndexes[id] = result.count }
+                    }
+                    if let id = message.toolCallId { callIndexes[id] = result.count }
+                }
+                result.append(message)
+                continue
+            }
+
+            var merged = result[index]
+            let toolText = ChatMessageVisibleText.displayText(in: message, includeThinking: false)
+            // Preserve empty results too: receiving a result owns the outcome,
+            // independently of whether it contains display text.
+            merged.content.append(
+                OpenClawChatMessageContent(
+                    type: "tool_result",
+                    text: toolText,
+                    id: toolCallId,
+                    name: message.toolName,
+                    details: message.details,
+                    isError: message.isError))
+
+            if let terminal = message.activity {
+                merged.activity = (merged.activity ?? []).filter { $0.toolCallId != toolCallId } + terminal
+            }
+            result[index] = merged
+        }
+
+        return result
     }
 }

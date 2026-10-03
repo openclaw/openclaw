@@ -5,27 +5,19 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretRef } from "../../config/types.secrets.js";
+import type { OAuthCredentialMetadata } from "./credential-schema.js";
 import type { LegacyOAuthRef } from "./legacy-oauth-ref.js";
 
 /** Provider identifier recorded on auth profile credentials. */
 export type OAuthProvider = string;
 
 /** Refreshable OAuth credential fields persisted for provider auth profiles. */
-export type OAuthCredentials = {
+export type OAuthCredentials = OAuthCredentialMetadata & {
   access: string;
   refresh: string;
   expires: number;
   provider?: OAuthProvider;
   email?: string;
-  enterpriseUrl?: string;
-  projectId?: string;
-  accountId?: string;
-  chatgptPlanType?: string;
-  /** Non-secret subscription plan captured from external CLI logins (e.g. "max"). */
-  subscriptionType?: string;
-  /** Non-secret rate-limit tier captured from external CLI logins (e.g. "default_max_20x"). */
-  rateLimitTier?: string;
-  idToken?: string;
 };
 
 /** API-key credential with optional secret reference indirection. */
@@ -43,7 +35,7 @@ export type ApiKeyCredential = {
 };
 
 /** Static token credential that OpenClaw does not refresh. */
-export type TokenCredential = {
+type TokenCredential = {
   /**
    * Static bearer-style token (often OAuth access token / PAT).
    * Not refreshable by OpenClaw (unlike `type: "oauth"`).
@@ -65,7 +57,6 @@ export type OAuthCredential = OAuthCredentials & {
   type: "oauth";
   provider: string;
   oauthRef?: LegacyOAuthRef;
-  clientId?: string;
   /**
    * OAuth refresh tokens are not portable by default. Provider-owned flows may
    * set this only when copying refresh material across agents is known safe.
@@ -75,8 +66,22 @@ export type OAuthCredential = OAuthCredentials & {
   displayName?: string;
 };
 
+export type SavedSetupCredential = {
+  apiKeyHeader?: true;
+  agentRuntimeId?: string;
+  replacement: boolean;
+  modelRef: string;
+  /** Setup validates the connection config when retrying, outside auth hot paths. */
+  configJson: string;
+  authChoice?: string;
+  pluginId?: string;
+};
+
 /** Credential variants supported by auth profiles. */
-export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;
+export type AuthProfileCredential = (ApiKeyCredential | TokenCredential | OAuthCredential) & {
+  /** Replacement credentials stay unavailable until their verified connection is activated. */
+  setup?: SavedSetupCredential;
+};
 
 /** Closed reasons that drive cooldown, disable, and failure counters. */
 export type AuthProfileFailureReason =
@@ -119,7 +124,13 @@ export type ProfileUsageStats = {
   errorCount?: number;
   failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
   lastFailureAt?: number;
+  /** Most recent quota probe or successful provider use. */
   lastProbeAt?: number;
+};
+
+export type UserModelAuthProfile = {
+  credential: AuthProfileCredential;
+  usageStats?: ProfileUsageStats;
 };
 
 /** Durable, non-secret auth profile selection state. */
@@ -133,6 +144,17 @@ export type AuthProfileState = {
   lastGood?: Record<string, string>;
   /** Usage statistics per profile for round-robin rotation */
   usageStats?: Record<string, ProfileUsageStats>;
+};
+
+export type PersistedAuthProfileStoreInspection =
+  | { status: "missing"; reason: "database" | "table" | "row" }
+  | { status: "readable"; raw: unknown }
+  | { status: "unreadable" };
+
+export type AuthProfileRowRead = {
+  store: PersistedAuthProfileStoreInspection;
+  state: PersistedAuthProfileStoreInspection;
+  cacheable: boolean;
 };
 
 /** Persisted credential payload without runtime-only selection state. */
@@ -157,11 +179,21 @@ export type AuthProfileStore = AuthProfileSecretsStore &
     runtimeExternalProfileIdsAuthoritative?: boolean;
   };
 
+/** Physical origin of a canonical credential selected into a session read view. */
+export type AuthProfileCredentialSource = {
+  readonly databasePath: string;
+  readonly provider: string;
+};
+
 /** Internal effective-store ownership metadata; never exposed through the plugin SDK. */
 export type RuntimeAuthProfileStore = AuthProfileStore & {
+  /** Physical sources of the selected rows; retained only in session read views. */
+  runtimeCredentialSources?: Record<string, AuthProfileCredentialSource>;
   /** Runtime-only built-in CLI winners; internal provenance, never exposed or persisted. */
   runtimeExternalCliProfileIds?: string[];
   runtimeLocalProfileIds?: string[];
+  /** Provider orders stored by this owner; [] means no local override, even with inherited priority. */
+  runtimeLocalOrderProviderIds?: string[];
   runtimeInheritsMainState?: boolean;
 };
 

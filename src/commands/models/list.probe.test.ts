@@ -1,5 +1,5 @@
 // Model list probe tests cover runtime probing while listing configured models.
-import fsSync from "node:fs";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -25,31 +25,6 @@ function createGatewayLockOptions(stateDir: string): GatewayLockOptions {
   };
 }
 
-function createSignalProcess() {
-  type SignalName = "SIGINT" | "SIGTERM";
-  const listeners = new Map<SignalName, Set<() => void>>();
-  const processLike = {
-    on(signal: SignalName, handler: () => void) {
-      const current = listeners.get(signal) ?? new Set<() => void>();
-      current.add(handler);
-      listeners.set(signal, current);
-      return processLike;
-    },
-    off(signal: SignalName, handler: () => void) {
-      listeners.get(signal)?.delete(handler);
-      return processLike;
-    },
-  };
-  return {
-    processLike,
-    emit(signal: SignalName) {
-      for (const handler of listeners.get(signal) ?? []) {
-        handler();
-      }
-    },
-  };
-}
-
 async function withTempState<T>(run: (stateDir: string) => Promise<T>): Promise<T> {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-probe-lock-"));
   try {
@@ -57,6 +32,119 @@ async function withTempState<T>(run: (stateDir: string) => Promise<T>): Promise<
   } finally {
     await fs.rm(stateDir, { recursive: true, force: true });
   }
+}
+
+type RunnerParams = {
+  agentDir?: string;
+  agentHarnessRuntimeOverride?: string;
+  authProfileId?: string;
+  authProfileIdSource?: string;
+  config?: OpenClawConfig;
+  preparedModelRuntimeMode?: string;
+};
+type ProbeParams = Parameters<typeof probeModule.runAuthProbes>[0];
+function probeInput(
+  overrides: Omit<Partial<ProbeParams>, "options"> & { options?: Partial<ProbeParams["options"]> },
+): ProbeParams {
+  return {
+    cfg: {},
+    agentId: "probe-agent",
+    agentDir: "/tmp/openclaw-probe-agent",
+    workspaceDir: "/tmp/openclaw-probe-workspace",
+    providers: ["openai"],
+    modelCandidates: ["openai/gpt-5.5"],
+    ...overrides,
+    options: {
+      provider: "openai",
+      timeoutMs: 5_000,
+      concurrency: 1,
+      maxTokens: 8,
+      ...overrides.options,
+    },
+  };
+}
+
+async function withProbeRuntime(
+  credential: "profile" | "literal" | "marker",
+  run: (fixture: {
+    probe: typeof probeModule;
+    runner: ReturnType<typeof createRunner>;
+    upsert: ReturnType<typeof createUpsert>;
+    clearSnapshot: ReturnType<typeof vi.fn<() => boolean>>;
+  }) => Promise<void>,
+) {
+  const runner = createRunner();
+  const upsert = createUpsert();
+  const clearSnapshot = vi.fn(() => credential === "literal");
+  const profileIds = credential === "marker" ? [] : ["openai:profile"];
+  vi.doMock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: runner }));
+  vi.doMock("../../agents/auth-profiles.js", () => ({
+    clearRuntimeAuthProfileStoreSnapshot: clearSnapshot,
+    externalCliDiscoveryScoped: () => undefined,
+    ensureAuthProfileStore: () => ({
+      version: 1,
+      order: {},
+      profiles:
+        credential === "marker"
+          ? {}
+          : {
+              "openai:profile": {
+                type: "oauth",
+                provider: "openai",
+                access: "access-token",
+                refresh: "refresh-token",
+                expires: Date.now() + 60_000,
+              },
+            },
+    }),
+    listProfilesForProvider: () => profileIds,
+    resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
+    resolveAuthProfileEligibility: () => ({ eligible: true }),
+    resolveAuthProfileOrder: () => profileIds,
+    upsertAuthProfileWithLock: upsert,
+  }));
+  vi.doMock("../../agents/model-auth.js", () => ({
+    hasUsableCustomProviderApiKey: () => credential !== "profile",
+    resolveEnvApiKey: () =>
+      credential === "marker" ? { apiKey: "envkey", source: "OPENAI_API_KEY" } : null,
+    resolveProviderEntryApiKeyBinding: vi.fn(),
+    resolveProviderEntryApiKeyProfileReference: () =>
+      credential === "literal"
+        ? { kind: "literal", apiKey: "test", source: "models.json" }
+        : { kind: credential === "marker" ? "marker" : "none" },
+    ...(credential === "marker"
+      ? {
+          resolveUsableCustomProviderApiKey: () => ({ apiKey: "envkey", source: "OPENAI_API_KEY" }),
+        }
+      : {}),
+  }));
+  vi.doMock("../../agents/prepared-model-catalog.js", () => ({
+    readPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
+  }));
+  try {
+    const probe = await importFreshModule<typeof probeModule>(
+      import.meta.url,
+      `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
+    );
+    await run({ probe, runner, upsert, clearSnapshot });
+  } finally {
+    vi.doUnmock("../../agents/embedded-agent.js");
+    vi.doUnmock("../../agents/auth-profiles.js");
+    vi.doUnmock("../../agents/model-auth.js");
+    vi.doUnmock("../../agents/prepared-model-catalog.js");
+  }
+}
+
+function createRunner() {
+  return vi.fn(async (_params: RunnerParams): Promise<AgentRunResultView> => ({
+    payloads: [{ text: "OK" }],
+  }));
+}
+function createUpsert() {
+  return vi.fn(async (params: { profileId: string; credential: unknown }) => ({
+    version: 1,
+    profiles: { [params.profileId]: params.credential },
+  }));
 }
 
 describe("mapFailoverReasonToProbeStatus", () => {
@@ -72,10 +160,6 @@ describe("mapFailoverReasonToProbeStatus", () => {
     } finally {
       vi.doUnmock("../../agents/embedded-agent.js");
     }
-  });
-
-  it("does not import the embedded runner on module load", () => {
-    expect(probeModule.mapFailoverReasonToProbeStatus).toBeTypeOf("function");
   });
 
   it("maps failover reasons to probe statuses", () => {
@@ -123,40 +207,23 @@ describe("runAuthProbes", () => {
     });
   });
 
-  it("holds and releases canonical state ownership around direct CLI probes", async () => {
-    await withTempState(async (stateDir) => {
-      const lockOptions = createGatewayLockOptions(stateDir);
-      const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-      let observedPayload: { pid?: number; role?: string } | undefined;
-
-      await probeModule.withAuthProbeStateOwnership(
-        { mode: "exclusive", gatewayLockOptions: lockOptions },
-        async () => {
-          observedPayload = JSON.parse(fsSync.readFileSync(stateLockPath, "utf8")) as {
-            pid?: number;
-            role?: string;
-          };
-        },
-      );
-
-      expect(observedPayload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
-      await expect(fs.stat(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
-
   it("releases canonical state ownership when a direct CLI probe receives SIGTERM", async () => {
     await withTempState(async (stateDir) => {
       const lockOptions = createGatewayLockOptions(stateDir);
       const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-      const signals = createSignalProcess();
+      const signals = new EventEmitter();
 
       await probeModule.withAuthProbeStateOwnership(
         {
           mode: "exclusive",
           gatewayLockOptions: lockOptions,
-          process: signals.processLike,
+          process: signals,
         },
         async (signal) => {
+          expect(JSON.parse(await fs.readFile(stateLockPath, "utf8"))).toMatchObject({
+            pid: process.pid,
+            role: "agent-embedded",
+          });
           let markInterrupted!: () => void;
           const interrupted = new Promise<void>((resolve) => {
             markInterrupted = resolve;
@@ -172,61 +239,14 @@ describe("runAuthProbes", () => {
   });
 
   it("runs Codex-pinned auth probes through raw OpenClaw model-run mode", async () => {
-    const runEmbeddedAgent = vi.fn(
-      async (params: {
-        agentDir?: string;
-        agentHarnessRuntimeOverride?: string;
-        authProfileId?: string;
-        authProfileIdSource?: string;
-        config?: OpenClawConfig;
-        preparedModelRuntimeMode?: string;
-      }): Promise<AgentRunResultView> => {
+    await withProbeRuntime("profile", async ({ probe, runner }) => {
+      runner.mockImplementation(async (params) => {
         if (params.agentHarnessRuntimeOverride !== "openclaw") {
-          throw new Error(
-            'Requested agent harness "codex" does not support openai/gpt-5.5 (Codex cannot reproduce authored request transport overrides).',
-          );
+          throw new Error("Codex cannot reproduce authored request transport overrides");
         }
         return { payloads: [{ text: "OK" }] };
-      },
-    );
-    vi.doMock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
-    vi.doMock("../../agents/auth-profiles.js", () => ({
-      clearRuntimeAuthProfileStoreSnapshot: () => false,
-      externalCliDiscoveryScoped: () => undefined,
-      ensureAuthProfileStore: () => ({
-        version: 1,
-        profiles: {
-          "openai:profile": {
-            type: "oauth",
-            provider: "openai",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-          },
-        },
-        order: {},
-      }),
-      listProfilesForProvider: () => ["openai:profile"],
-      resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
-      resolveAuthProfileEligibility: () => ({ eligible: true }),
-      resolveAuthProfileOrder: () => ["openai:profile"],
-      upsertAuthProfileWithLock: vi.fn(),
-    }));
-    vi.doMock("../../agents/model-auth.js", () => ({
-      hasUsableCustomProviderApiKey: () => false,
-      resolveEnvApiKey: () => null,
-      resolveProviderEntryApiKeyBinding: vi.fn(),
-      resolveProviderEntryApiKeyProfileReference: () => ({ kind: "none" }),
-    }));
-    vi.doMock("../../agents/prepared-model-catalog.js", () => ({
-      loadPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
-    }));
-    try {
-      const module = await importFreshModule<typeof import("./list.probe.js")>(
-        import.meta.url,
-        `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
-      );
-      const result = await module.runAuthProbes({
+      });
+      const input = probeInput({
         cfg: {
           models: {
             providers: {
@@ -237,23 +257,11 @@ describe("runAuthProbes", () => {
               },
             },
           },
-        } satisfies OpenClawConfig,
-        agentId: "probe-agent",
-        agentDir: "/tmp/openclaw-probe-agent",
-        workspaceDir: "/tmp/openclaw-probe-workspace",
-        providers: ["openai"],
-        modelCandidates: ["openai/gpt-5.5"],
-        options: {
-          provider: "openai",
-          profileIds: ["openai:profile"],
-          timeoutMs: 5_000,
-          concurrency: 1,
-          maxTokens: 8,
         },
+        options: { profileIds: ["openai:profile"] },
       });
-
-      expect(result.results[0]?.status).toBe("ok");
-      expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect((await probe.runAuthProbes(input)).results[0]?.status).toBe("ok");
+      expect(runner).toHaveBeenCalledWith(
         expect.objectContaining({
           agentHarnessRuntimeOverride: "openclaw",
           modelRun: true,
@@ -263,242 +271,65 @@ describe("runAuthProbes", () => {
           authProfileIdSource: "user",
         }),
       );
-      // Profile targets reuse the committed configured generation: no isolated
-      // runtime mode is requested.
-      expect(runEmbeddedAgent.mock.calls[0]?.[0].preparedModelRuntimeMode).toBeUndefined();
-
-      runEmbeddedAgent.mockResolvedValueOnce({
+      expect(runner.mock.calls[0]?.[0].preparedModelRuntimeMode).toBeUndefined();
+      runner.mockResolvedValueOnce({
         payloads: [{ text: "LLM request timed out.", isError: true }],
         meta: { livenessState: "abandoned" },
       });
-      const failed = await module.runAuthProbes({
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                agentRuntime: { id: "codex" },
-                models: [],
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
-        agentId: "probe-agent",
-        agentDir: "/tmp/openclaw-probe-agent",
-        workspaceDir: "/tmp/openclaw-probe-workspace",
-        providers: ["openai"],
-        modelCandidates: ["openai/gpt-5.5"],
-        options: {
-          provider: "openai",
-          profileIds: ["openai:profile"],
-          timeoutMs: 5_000,
-          concurrency: 1,
-          maxTokens: 8,
-        },
-      });
-      expect(failed.results[0]).toMatchObject({ status: "timeout" });
-    } finally {
-      vi.doUnmock("../../agents/embedded-agent.js");
-      vi.doUnmock("../../agents/auth-profiles.js");
-      vi.doUnmock("../../agents/model-auth.js");
-      vi.doUnmock("../../agents/prepared-model-catalog.js");
-    }
+      expect((await probe.runAuthProbes(input)).results[0]).toMatchObject({ status: "timeout" });
+    });
   });
 
   it("preserves provider config while suppressing profiles for a config-key target", async () => {
-    const runEmbeddedAgent = vi.fn(
-      async (_params: {
-        agentDir?: string;
-        authProfileId?: string;
-        authProfileIdSource?: string;
-        config?: OpenClawConfig;
-        preparedModelRuntimeMode?: string;
-      }) => ({ payloads: [{ text: "OK" }] }),
-    );
-    vi.doMock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
-    const upsertAuthProfileWithLock = vi.fn(
-      async (params: { profileId: string; credential: unknown }) => ({
-        version: 1,
-        profiles: { [params.profileId]: params.credential },
-      }),
-    );
-    const clearRuntimeAuthProfileStoreSnapshot = vi.fn(() => true);
-    vi.doMock("../../agents/auth-profiles.js", () => ({
-      clearRuntimeAuthProfileStoreSnapshot,
-      externalCliDiscoveryScoped: () => undefined,
-      ensureAuthProfileStore: () => ({
-        version: 1,
-        profiles: {
-          "openai:profile": {
-            type: "oauth",
-            provider: "openai",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-          },
-        },
-        order: {},
-      }),
-      listProfilesForProvider: () => ["openai:profile"],
-      resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
-      resolveAuthProfileEligibility: () => ({ eligible: true }),
-      resolveAuthProfileOrder: () => ["openai:profile"],
-      upsertAuthProfileWithLock,
-    }));
-    vi.doMock("../../agents/model-auth.js", () => ({
-      hasUsableCustomProviderApiKey: () => true,
-      resolveEnvApiKey: () => null,
-      resolveProviderEntryApiKeyBinding: vi.fn(),
-      resolveProviderEntryApiKeyProfileReference: () => ({
-        kind: "literal",
+    await withProbeRuntime("literal", async ({ probe, runner, upsert, clearSnapshot }) => {
+      const providerConfig = {
+        baseUrl: "https://api.openai.com/v1",
+        api: "openai-responses" as const,
         apiKey: "test",
-        source: "models.json",
-      }),
-    }));
-    vi.doMock("../../agents/prepared-model-catalog.js", () => ({
-      loadPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
-    }));
-    const providerConfig = {
-      baseUrl: "https://api.openai.com/v1",
-      api: "openai-responses" as const,
-      apiKey: "test",
-      auth: "oauth" as const,
-      models: [],
-    };
-    try {
-      const module = await importFreshModule<typeof import("./list.probe.js")>(
-        import.meta.url,
-        `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
+        auth: "oauth" as const,
+        models: [],
+      };
+      await probe.runAuthProbes(
+        probeInput({
+          cfg: { models: { providers: { openai: providerConfig } } },
+          options: { includeDirectKeys: true },
+        }),
       );
-      await module.runAuthProbes({
-        cfg: { models: { providers: { openai: providerConfig } } },
-        agentId: "probe-agent",
-        agentDir: "/tmp/openclaw-probe-agent",
-        workspaceDir: "/tmp/openclaw-probe-workspace",
-        providers: ["openai"],
-        modelCandidates: ["openai/gpt-5.5"],
-        options: {
-          provider: "openai",
-          includeDirectKeys: true,
-          timeoutMs: 5_000,
-          concurrency: 1,
-          maxTokens: 8,
-        },
-      });
-
-      const configKeyCall = runEmbeddedAgent.mock.calls.find(([params]) =>
+      const call = runner.mock.calls.find(([params]) =>
         params.authProfileId?.startsWith("openai:probe-"),
-      );
-      expect(configKeyCall?.[0].agentDir).not.toBe("/tmp/openclaw-probe-agent");
-      expect(configKeyCall?.[0].authProfileIdSource).toBe("user");
-      expect(configKeyCall?.[0].preparedModelRuntimeMode).toBe("isolated-read-only");
-      expect(configKeyCall?.[0].config).toMatchObject({
-        models: {
-          providers: {
-            openai: {
-              ...providerConfig,
-              apiKey: "test",
-              auth: "oauth",
-            },
-          },
-        },
+      )?.[0];
+      expect(call?.agentDir).not.toBe("/tmp/openclaw-probe-agent");
+      expect(call?.authProfileIdSource).toBe("user");
+      expect(call?.preparedModelRuntimeMode).toBe("isolated-read-only");
+      expect(call?.config).toMatchObject({
+        models: { providers: { openai: providerConfig } },
         auth: { order: { openai: [] } },
       });
-      const expected = expect.objectContaining({
-        type: "oauth",
-        provider: "openai",
-        access: "test",
+      expect(upsert).toHaveBeenCalledWith({
+        profileId: call?.authProfileId,
+        agentDir: call?.agentDir,
+        credential: expect.objectContaining({ type: "oauth", provider: "openai", access: "test" }),
       });
-      expect(upsertAuthProfileWithLock).toHaveBeenCalledWith({
-        profileId: configKeyCall?.[0].authProfileId,
-        credential: expected,
-        agentDir: configKeyCall?.[0].agentDir,
-      });
-      expect(clearRuntimeAuthProfileStoreSnapshot).toHaveBeenCalledWith(
-        configKeyCall?.[0].agentDir,
-      );
-    } finally {
-      vi.doUnmock("../../agents/embedded-agent.js");
-      vi.doUnmock("../../agents/auth-profiles.js");
-      vi.doUnmock("../../agents/model-auth.js");
-      vi.doUnmock("../../agents/prepared-model-catalog.js");
-    }
+      expect(clearSnapshot).toHaveBeenCalledWith(call?.agentDir);
+    });
   });
 
   it("isolates marker credentials from stored profiles without pinning a synthetic one", async () => {
-    const runEmbeddedAgent = vi.fn(
-      async (_params: {
-        agentDir?: string;
-        authProfileId?: string;
-        config?: OpenClawConfig;
-        preparedModelRuntimeMode?: string;
-      }) => ({
-        payloads: [{ text: "OK" }],
-      }),
-    );
-    const upsertAuthProfileWithLock = vi.fn();
-    vi.doMock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
-    vi.doMock("../../agents/auth-profiles.js", () => ({
-      clearRuntimeAuthProfileStoreSnapshot: () => false,
-      externalCliDiscoveryScoped: () => undefined,
-      ensureAuthProfileStore: () => ({ version: 1, profiles: {}, order: {} }),
-      listProfilesForProvider: () => [],
-      resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
-      resolveAuthProfileEligibility: () => ({ eligible: true }),
-      resolveAuthProfileOrder: () => [],
-      upsertAuthProfileWithLock,
-    }));
-    vi.doMock("../../agents/model-auth.js", () => ({
-      hasUsableCustomProviderApiKey: () => true,
-      resolveEnvApiKey: () => ({ apiKey: "envkey", source: "OPENAI_API_KEY" }),
-      resolveProviderEntryApiKeyBinding: vi.fn(),
-      resolveProviderEntryApiKeyProfileReference: () => ({ kind: "marker" }),
-      resolveUsableCustomProviderApiKey: () => ({
-        apiKey: "envkey",
-        source: "OPENAI_API_KEY",
-      }),
-    }));
-    vi.doMock("../../agents/prepared-model-catalog.js", () => ({
-      loadPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
-    }));
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            api: "openai-responses" as const,
-            // Marker value assembled to satisfy review-bundle secret scanning.
-            apiKey: ["OPENAI", "API", "KEY"].join("_"),
-            models: [],
+    await withProbeRuntime("marker", async ({ probe, runner, upsert }) => {
+      const cfg = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-responses" as const,
+              apiKey: ["OPENAI", "API", "KEY"].join("_"),
+              models: [],
+            },
           },
         },
-      },
-    };
-    try {
-      const module = await importFreshModule<typeof import("./list.probe.js")>(
-        import.meta.url,
-        `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
-      );
-      await module.runAuthProbes({
-        cfg,
-        agentId: "probe-agent",
-        agentDir: "/tmp/openclaw-probe-agent",
-        workspaceDir: "/tmp/openclaw-probe-workspace",
-        providers: ["openai"],
-        modelCandidates: ["openai/gpt-5.5"],
-        options: {
-          provider: "openai",
-          includeDirectKeys: true,
-          timeoutMs: 5_000,
-          concurrency: 1,
-          maxTokens: 8,
-        },
-      });
-
-      // Runs in an isolated agent dir (no stored profiles) with the provider's
-      // auth order cleared, so only the marker credential is exercised — and no
-      // synthetic profile is pinned, letting the runtime resolve the marker.
-      const call = runEmbeddedAgent.mock.calls[0]?.[0];
+      };
+      await probe.runAuthProbes(probeInput({ cfg, options: { includeDirectKeys: true } }));
+      const call = runner.mock.calls[0]?.[0];
       expect(call?.agentDir).not.toBe("/tmp/openclaw-probe-agent");
       expect(call?.agentDir).toContain("openclaw-auth-probe-");
       expect(call?.preparedModelRuntimeMode).toBe("isolated-read-only");
@@ -507,12 +338,7 @@ describe("runAuthProbes", () => {
         cfg.models.providers.openai.apiKey,
       );
       expect(call?.authProfileId).toBeUndefined();
-      expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
-    } finally {
-      vi.doUnmock("../../agents/embedded-agent.js");
-      vi.doUnmock("../../agents/auth-profiles.js");
-      vi.doUnmock("../../agents/model-auth.js");
-      vi.doUnmock("../../agents/prepared-model-catalog.js");
-    }
+      expect(upsert).not.toHaveBeenCalled();
+    });
   });
 });

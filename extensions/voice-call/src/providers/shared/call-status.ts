@@ -1,4 +1,3 @@
-// Voice Call plugin module implements call status behavior.
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EndReason } from "../../types.js";
 
@@ -14,14 +13,17 @@ const TERMINAL_PROVIDER_STATUS_TO_END_REASON: Record<string, EndReason> = {
 
 /** Normalize provider status text, falling back to "unknown". */
 export function normalizeProviderStatus(status: string | null | undefined): string {
-  const normalized = normalizeOptionalLowercaseString(status);
-  return normalized && normalized.length > 0 ? normalized : "unknown";
+  return normalizeOptionalLowercaseString(status) ?? "unknown";
 }
 
 /** Map terminal provider status strings to OpenClaw end reasons. */
 export function mapProviderStatusToEndReason(status: string | null | undefined): EndReason | null {
   const normalized = normalizeProviderStatus(status);
-  return TERMINAL_PROVIDER_STATUS_TO_END_REASON[normalized] ?? null;
+  // Provider status is remote-controlled, so an inherited key such as
+  // "constructor" or "__proto__" must not read through to Object.prototype.
+  return Object.hasOwn(TERMINAL_PROVIDER_STATUS_TO_END_REASON, normalized)
+    ? (TERMINAL_PROVIDER_STATUS_TO_END_REASON[normalized] ?? null)
+    : null;
 }
 
 /** Return true when a provider status is terminal. */

@@ -1,7 +1,10 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import { type Static, Type } from "typebox";
+import { NODE_PRESENCE_ALIVE_REASONS } from "../node-presence.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+
+export { NODE_PRESENCE_ALIVE_REASONS } from "../node-presence.js";
 
 const NodePluginToolNameSchema = Type.String({
   minLength: 1,
@@ -26,15 +29,8 @@ const NodePendingWorkPrioritySchema = Type.String({
 });
 
 /** Reasons a node can report itself alive without implying an operator action. */
-export const NodePresenceAliveReasonSchema = Type.String({
-  enum: [
-    "background",
-    "silent_push",
-    "bg_app_refresh",
-    "significant_location",
-    "manual",
-    "connect",
-  ],
+export const NodePresenceAliveReasonSchema = Type.Enum(NODE_PRESENCE_ALIVE_REASONS, {
+  type: "string",
 });
 
 /** Presence heartbeat payload sent by remote nodes to refresh gateway state. */
@@ -53,12 +49,34 @@ export const NodePresenceAlivePayloadSchema = closedObject({
 export const NodePresenceActivityPayloadSchema = Type.Union([
   closedObject({
     idleSeconds: Type.Integer({ minimum: 0, maximum: 2_592_000 }),
+    source: Type.Optional(Type.Union([Type.Literal("app"), Type.Literal("system")])),
     saturated: Type.Optional(Type.Boolean()),
   }),
   closedObject({
     action: Type.Literal("clear"),
   }),
 ]);
+
+const NodeLoadAverageSchema = Type.Number({ minimum: 0, maximum: 100_000 });
+
+export const NodeHostStatsPayloadSchema = Type.Refine(
+  closedObject({
+    cpuCount: Type.Integer({ minimum: 1, maximum: 4_096 }),
+    loadAverage: Type.Optional(
+      Type.Tuple([NodeLoadAverageSchema, NodeLoadAverageSchema, NodeLoadAverageSchema]),
+    ),
+    memoryTotalBytes: Type.Integer({ minimum: 0 }),
+    memoryFreeBytes: Type.Integer({ minimum: 0 }),
+    diskTotalBytes: Type.Optional(Type.Integer({ minimum: 0 })),
+    diskAvailableBytes: Type.Optional(Type.Integer({ minimum: 0 })),
+  }),
+  (stats) =>
+    stats.memoryFreeBytes <= stats.memoryTotalBytes &&
+    (stats.diskTotalBytes === undefined
+      ? stats.diskAvailableBytes === undefined
+      : stats.diskAvailableBytes !== undefined && stats.diskAvailableBytes <= stats.diskTotalBytes),
+  () => "free resources must not exceed totals and disk values must be paired",
+);
 
 /** Normalized result for node-originated events after gateway dispatch. */
 export const NodeEventResultSchema = closedObject({
@@ -242,6 +260,12 @@ export const NodeInvokeInputEventSchema = closedObject({
   payloadJSON: Type.String({ maxLength: 16 * 1024 }),
 });
 
+/** Event payload used by the gateway to cancel one active node invoke. */
+export const NodeInvokeCancelEventSchema = closedObject({
+  invokeId: NonEmptyString,
+  nodeId: NonEmptyString,
+});
+
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type NodePairListParams = Static<typeof NodePairListParamsSchema>;
@@ -256,11 +280,13 @@ export type NodeInvokeParams = Static<typeof NodeInvokeParamsSchema>;
 export type NodeInvokeResultParams = Static<typeof NodeInvokeResultParamsSchema>;
 export type NodeInvokeProgressParams = Static<typeof NodeInvokeProgressParamsSchema>;
 export type NodeInvokeInputEvent = Static<typeof NodeInvokeInputEventSchema>;
+export type NodeInvokeCancelEvent = Static<typeof NodeInvokeCancelEventSchema>;
 export type NodeEventParams = Static<typeof NodeEventParamsSchema>;
 export type NodeEventResult = Static<typeof NodeEventResultSchema>;
 export type NodePresenceAlivePayload = Static<typeof NodePresenceAlivePayloadSchema>;
 export type NodePresenceAliveReason = Static<typeof NodePresenceAliveReasonSchema>;
 export type NodePresenceActivityPayload = Static<typeof NodePresenceActivityPayloadSchema>;
+export type NodeHostStatsPayload = Static<typeof NodeHostStatsPayloadSchema>;
 export type NodePendingDrainParams = Static<typeof NodePendingDrainParamsSchema>;
 export type NodePendingDrainResult = Static<typeof NodePendingDrainResultSchema>;
 export type NodePendingEnqueueParams = Static<typeof NodePendingEnqueueParamsSchema>;

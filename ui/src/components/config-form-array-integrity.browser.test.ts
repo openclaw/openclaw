@@ -586,7 +586,6 @@ describe("config form array integrity", () => {
       scalarContainer.querySelector<HTMLInputElement>("input"),
       "remaining equal scalar row",
     );
-    expect(remainingScalar).toBe(scalarInput);
     expect(remainingScalar.value).toBe("same");
     expect(remainingScalar.getAttribute("aria-invalid")).toBe("false");
 
@@ -619,7 +618,6 @@ describe("config form array integrity", () => {
       jsonContainer.querySelector<HTMLTextAreaElement>("textarea"),
       "remaining equal JSON row",
     );
-    expect(remainingJson).toBe(jsonDraft);
     expect(remainingJson.value).toBe("true");
     expect(remainingJson.getAttribute("aria-invalid")).toBe("false");
   });

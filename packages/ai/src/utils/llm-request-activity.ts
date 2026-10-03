@@ -15,8 +15,7 @@ export function onLlmRequestActivity(signal: AbortSignal, listener: () => void):
   requestActivityListeners.set(signal, listeners);
 
   return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) {
+    if (listeners.delete(listener) && listeners.size === 0) {
       requestActivityListeners.delete(signal);
     }
   };

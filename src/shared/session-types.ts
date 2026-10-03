@@ -3,6 +3,7 @@ import type {
   ModelChoice,
   SessionCreatedActor,
   SessionPerson,
+  SessionOwnerSessionCount,
   SessionsAssignOwnerParams,
 } from "../../packages/gateway-protocol/src/index.js";
 
@@ -27,18 +28,34 @@ export type SessionBoardFace = "chat" | "dashboard";
 export type GatewayAgentRow = Pick<
   AgentSummary,
   | "id"
+  | "status"
+  | "admissionRefusal"
   | "kind"
   | "name"
   | "identity"
   | "workspace"
   | "workspaceGit"
   | "model"
+  | "utilityModel"
   | "agentRuntime"
   | "thinkingLevels"
   | "thinkingOptions"
   | "thinkingDefault"
   | "defaultPermissionMode"
 >;
+
+export type SessionActivityPulse = {
+  since: number;
+  until: number;
+  /** Counts between consecutive caller-supplied boundaries. */
+  buckets: number[];
+  sessions: number;
+  /** Sessions created within `activeMinutes`; omitted for an unbounded time filter. */
+  started?: number;
+  /** Sessions with an active run anywhere in the filtered set. */
+  running: number;
+  people?: number;
+};
 
 /** Generic base for paged session-list responses. */
 export type SessionsListResultBase<TDefaults, TRow> = {
@@ -52,9 +69,13 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   hasMore?: boolean;
   /** Complete owner facet for the filtered result, independent of pagination. */
   owners?: SessionOwnerFacetIdentity[];
+  /** Complete visible open/running ownership summary, before pagination. */
+  ownerSessionCounts?: SessionOwnerSessionCount[];
   people?: SessionPerson[];
   peopleIncomplete?: boolean;
   peopleSessionCount?: number;
+  /** Window-wide statistics and caller-defined activity buckets, before pagination. */
+  activityPulse?: SessionActivityPulse;
   /** Canonical profile selected by the person-association filter. */
   involvingProfileId?: string;
   defaults: TDefaults;

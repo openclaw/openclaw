@@ -1,23 +1,20 @@
 #!/usr/bin/env -S node --import tsx
-// Openclaw Npm Release Check script supports OpenClaw repository automation.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
-import { resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase } from "./lib/npm-publish-plan.mjs";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
-  LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "./lib/package-dist-inventory.ts";
+import { collectForbiddenPackedPathErrors } from "./lib/packed-cargo-policy.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
-  compareReleaseVersions as compareReleaseVersionsBase,
   collectReleaseVersionFloorErrors as collectReleaseVersionFloorErrorsBase,
-  parseReleaseVersion as parseReleaseVersionBase,
+  parseReleaseVersion,
 } from "./lib/release-version.mjs";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
@@ -35,36 +32,6 @@ type PackageJson = {
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 };
 
-type ParsedReleaseTag = {
-  version: string;
-  packageVersion: string;
-  baseVersion: string;
-  channel: "stable" | "alpha" | "beta";
-  correctionNumber?: number;
-};
-
-type ParsedReleaseVersion = {
-  alphaNumber?: number;
-  baseVersion: string;
-  betaNumber?: number;
-  channel: "stable" | "alpha" | "beta";
-  correctionNumber?: number;
-  month: number;
-  patch: number;
-  version: string;
-  year: number;
-};
-
-type NpmPublishPlan = {
-  channel: "stable" | "alpha" | "beta";
-  publishTag: "latest" | "alpha" | "beta";
-  mirrorDistTags: ("latest" | "alpha" | "beta")[];
-};
-
-type NpmDistTagMirrorAuth = {
-  hasAuth: boolean;
-  source: "node-auth-token" | "npm-token" | "none";
-};
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const FS_SAFE_PACKAGE = "@openclaw/fs-safe";
 const REQUIRED_PACKED_PATHS = [
@@ -73,63 +40,6 @@ const REQUIRED_PACKED_PATHS = [
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
-const FORBIDDEN_PACKED_PATH_RULES = [
-  ...LOCAL_BUILD_METADATA_DIST_PATHS.map((prefix) => ({
-    prefix,
-    describe: (packedPath: string) =>
-      `npm package must not include local build metadata "${packedPath}".`,
-  })),
-  {
-    prefix: "docs/.generated/",
-    describe: (packedPath: string) =>
-      `npm package must not include generated docs artifact "${packedPath}".`,
-  },
-  {
-    prefix: "docs/channels/qa-channel.md",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel docs "${packedPath}".`,
-  },
-  {
-    prefix: "dist/extensions/qa-channel/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel artifact "${packedPath}".`,
-  },
-  {
-    prefix: "dist/extensions/qa-lab/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA lab artifact "${packedPath}".`,
-  },
-  {
-    prefix: "dist/plugin-sdk/extensions/qa-channel/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel type artifact "${packedPath}".`,
-  },
-  {
-    prefix: "dist/plugin-sdk/extensions/qa-lab/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA lab type artifact "${packedPath}".`,
-  },
-  {
-    prefix: "dist/plugin-sdk/qa-channel.",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel SDK artifact "${packedPath}".`,
-  },
-  {
-    prefix: "dist/plugin-sdk/qa-channel-protocol.",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel SDK artifact "${packedPath}".`,
-  },
-  {
-    prefix: "dist/qa-runtime-",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA runtime chunk "${packedPath}".`,
-  },
-  {
-    prefix: "qa/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA suite artifact "${packedPath}".`,
-  },
-] as const;
 const FORBIDDEN_PRIVATE_QA_CONTENT_MARKERS = [
   "//#region extensions/qa-lab/",
   "qa-channel/runtime-api.js",
@@ -169,6 +79,11 @@ function isNodeModulesPackageRoot(segments: string[], index: number): boolean {
 
 function pathContainsPackedTestCargo(packedPath: string): boolean {
   const normalizedPath = normalizePackedPath(packedPath);
+  // Root docs ship Markdown reference material; topic directories such as
+  // "test" are not runtime test cargo. Dependency fixtures remain disallowed.
+  if (normalizedPath.startsWith("docs/") && normalizedPath.endsWith(".md")) {
+    return false;
+  }
   if (PACKED_TEST_CARGO_FILE_RE.test(normalizedPath)) {
     return true;
   }
@@ -197,99 +112,12 @@ function isLocalDependencySpec(value: string | undefined): boolean {
   return /^(?:file|link|workspace):/u.test(value ?? "");
 }
 
-export function parseReleaseVersion(version: string): ParsedReleaseVersion | null {
-  return parseReleaseVersionBase(version);
-}
-
-export function compareReleaseVersions(left: string, right: string): number | null {
-  return compareReleaseVersionsBase(left, right);
-}
-
-export function resolveNpmPublishPlan(
-  version: string,
-  _currentBetaVersion?: string | null,
-  requestedPublishTag?: "latest" | "alpha" | "beta" | null,
-): NpmPublishPlan {
-  const parsedVersion = parseReleaseVersion(version);
-  if (parsedVersion === null) {
-    throw new Error(`Unsupported release version "${version}".`);
-  }
-
-  const publishTag =
-    requestedPublishTag?.trim() === "latest"
-      ? "latest"
-      : requestedPublishTag?.trim() === "alpha"
-        ? "alpha"
-        : "beta";
-
-  if (parsedVersion.channel === "alpha") {
-    if (publishTag !== "alpha") {
-      throw new Error("Alpha prereleases must publish to the alpha dist-tag.");
-    }
-    return {
-      channel: "alpha",
-      publishTag: "alpha",
-      mirrorDistTags: [],
-    };
-  }
-
-  if (parsedVersion.channel === "beta") {
-    if (publishTag !== "beta") {
-      throw new Error("Beta prereleases must publish to the beta dist-tag.");
-    }
-    return {
-      channel: "beta",
-      publishTag: "beta",
-      mirrorDistTags: [],
-    };
-  }
-
-  return {
-    channel: "stable",
-    publishTag,
-    mirrorDistTags: [],
-  };
-}
-
-export function resolveNpmDistTagMirrorAuth(params?: {
-  nodeAuthToken?: string | null;
-  npmToken?: string | null;
-}): NpmDistTagMirrorAuth {
-  const nodeAuthToken =
-    params && "nodeAuthToken" in params ? params.nodeAuthToken : process.env.NODE_AUTH_TOKEN;
-  const npmToken = params && "npmToken" in params ? params.npmToken : process.env.NPM_TOKEN;
-  return resolveNpmDistTagMirrorAuthBase({
-    nodeAuthToken,
-    npmToken,
-  }) as NpmDistTagMirrorAuth;
-}
-
-export function shouldSkipPackedTarballValidation(env = process.env): boolean {
+function shouldSkipPackedTarballValidation(env = process.env): boolean {
   const raw = env[skipPackValidationEnv];
   if (!raw) {
     return false;
   }
   return !/^(0|false)$/i.test(raw);
-}
-
-export function parseReleaseTagVersion(version: string): ParsedReleaseTag | null {
-  const trimmed = version.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const parsedVersion = parseReleaseVersion(trimmed);
-  if (parsedVersion !== null) {
-    return {
-      version: trimmed,
-      packageVersion: parsedVersion.version,
-      baseVersion: parsedVersion.baseVersion,
-      channel: parsedVersion.channel,
-      correctionNumber: parsedVersion.correctionNumber,
-    };
-  }
-
-  return null;
 }
 
 export function resolveNpmReleaseCheckCommandTimeoutMs(
@@ -383,7 +211,7 @@ export function collectReleaseTagErrors(params: {
   const parsedVersion = parseReleaseVersion(packageVersion);
   if (parsedVersion === null) {
     errors.push(
-      `package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "${packageVersion || "<missing>"}".`,
+      `package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, or YYYY.M.PATCH-beta.N; found "${packageVersion || "<missing>"}".`,
     );
   } else {
     errors.push(...collectReleaseVersionFloorErrorsBase(parsedVersion));
@@ -394,11 +222,15 @@ export function collectReleaseTagErrors(params: {
   }
 
   const tagVersion = releaseTag.startsWith("v") ? releaseTag.slice(1) : releaseTag;
-  const parsedTag = parseReleaseTagVersion(tagVersion);
+  const parsedTag = parseReleaseVersion(tagVersion);
   if (parsedTag === null) {
     errors.push(
-      `Release tag must match vYYYY.M.PATCH, vYYYY.M.PATCH-alpha.N, vYYYY.M.PATCH-beta.N, or fallback correction tag vYYYY.M.PATCH-N; found "${releaseTag || "<missing>"}".`,
+      `Release tag must match vYYYY.M.PATCH, vYYYY.M.PATCH-beta.N, or fallback correction tag vYYYY.M.PATCH-N; found "${releaseTag || "<missing>"}".`,
     );
+  }
+
+  if (parsedVersion?.channel === "alpha" || parsedTag?.channel === "alpha") {
+    errors.push("Alpha releases are retired; use a beta prerelease instead.");
   }
 
   const expectedTag = packageVersion ? `v${packageVersion}` : "<missing>";
@@ -406,7 +238,7 @@ export function collectReleaseTagErrors(params: {
     parsedTag !== null &&
     parsedVersion !== null &&
     parsedTag.channel === parsedVersion.channel &&
-    (parsedTag.packageVersion === parsedVersion.version ||
+    (parsedTag.version === parsedVersion.version ||
       (parsedVersion.channel === "stable" &&
         parsedVersion.correctionNumber === undefined &&
         parsedTag.correctionNumber !== undefined &&
@@ -454,12 +286,6 @@ function portableBasename(value: string): string {
   return value.split(/[/\\]/u).at(-1) ?? value;
 }
 
-type NpmCommandInvocation = {
-  command: string;
-  args: string[];
-  windowsVerbatimArguments?: boolean;
-};
-
 export function resolveNpmCommandInvocation(
   params: {
     comSpec?: string;
@@ -468,7 +294,7 @@ export function resolveNpmCommandInvocation(
     nodeExecPath?: string;
     platform?: NodeJS.Platform;
   } = {},
-): NpmCommandInvocation {
+): ReleaseCheckCommandInvocation {
   const npmArgs = params.npmArgs ?? [];
   const npmExecPath = params.npmExecPath ?? process.env.npm_execpath;
   const nodeExecPath = params.nodeExecPath ?? process.execPath;
@@ -673,19 +499,7 @@ function collectNpmLockErrors(): string[] {
   }
 }
 
-export function collectForbiddenPackedPathErrors(paths: Iterable<string>): string[] {
-  const errors: string[] = [];
-  for (const packedPath of paths) {
-    const matchedRule = FORBIDDEN_PACKED_PATH_RULES.find((rule) =>
-      packedPath.startsWith(rule.prefix),
-    );
-    if (!matchedRule) {
-      continue;
-    }
-    errors.push(matchedRule.describe(packedPath));
-  }
-  return errors.toSorted((left, right) => left.localeCompare(right));
-}
+export { collectForbiddenPackedPathErrors } from "./lib/packed-cargo-policy.mts";
 
 export function collectForbiddenPackedContentErrors(
   paths: Iterable<string>,

@@ -36,14 +36,14 @@ Map of OpenClaw features that can call paid provider APIs, where each reads its 
 **CLI usage windows** (provider quotas, not per-message cost)
 
 - `openclaw status --usage` and `openclaw channels list` show provider **usage windows** as `X% left`.
-- Current usage-window providers: Anthropic, ClawRouter, DeepSeek, GitHub Copilot, MiniMax, OpenAI (covers ChatGPT/Codex OAuth/token auth), Xiaomi, and z.ai. See [Models CLI](/cli/models) and [Channels CLI](/cli/channels) for the full provider/flag list.
+- Usage-window providers, checked against 2026.9.3: Anthropic, ClawRouter, DeepSeek, GitHub Copilot, MiniMax, OpenAI (covers ChatGPT/Codex OAuth/token auth), OpenRouter, Venice, xAI, Xiaomi, Xiaomi Token Plan, and z.ai. Provider plugins supply these snapshots, so an installed plugin can add one. See [Models CLI](/cli/models) and [Channels CLI](/cli/channels) for the full provider/flag list.
 - MiniMax's raw `usage_percent` / `usagePercent` fields report remaining quota, so OpenClaw inverts them; count-based fields win when present. If the response includes a `model_remains` array, OpenClaw picks the chat-model entry, derives the window label from timestamps when needed, and includes the model name in the plan label.
 - Usage auth comes from provider-specific hooks when available, otherwise OpenClaw falls back to matching OAuth/API-key credentials from auth profiles, env, or config.
 
 See [Token use and costs](/reference/token-use) for detailed examples.
 
 <Note>
-Anthropic has confirmed that Claude CLI reuse (including `claude -p`) is a sanctioned integration pattern unless it publishes a new policy. Anthropic does not expose a per-message dollar estimate, so `/usage full` cannot show cost for Claude CLI usage.
+As of 2026-07-05, Anthropic has confirmed that Claude CLI reuse (including `claude -p`) is a sanctioned integration pattern unless it publishes a new policy; recheck Anthropic's current terms before relying on it. Anthropic does not expose a per-message dollar estimate, so `/usage full` cannot show cost for Claude CLI usage.
 </Note>
 
 ## How keys are discovered

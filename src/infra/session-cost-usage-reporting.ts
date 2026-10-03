@@ -2,34 +2,30 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
+import { isToolCallContentType } from "../chat/tool-content.js";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
+import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import {
-  isUsageCostRollupFresh,
-  readUsageCostRollups,
-  refreshCostUsageCacheForAgent,
-  resolveUsageCostAgentDir,
-  resolveUsageCostCacheDatabasePath,
-  resolveUsageCostPricingFingerprint,
-} from "./session-cost-usage-aggregation.js";
-import {
-  listUsageCountedTranscriptStats,
   readTranscriptRecords,
   readTranscriptRecordsBestEffort,
-  resolveExistingUsageSessionFile,
-  resolveUsageCostTranscriptFile,
+  resolveUsageSessionSource,
 } from "./session-cost-usage-collection.js";
 import {
-  computeUsageTokenTotals,
   createUsageCostResolver,
-  parseUsageCostTranscriptEntry,
-} from "./session-cost-usage-pricing.js";
-import { createUsageDayKeyFormatter } from "./session-cost-usage-projection.js";
-import { buildSessionCostSummaryFromRollup } from "./session-cost-usage-rollup.js";
+  parseUsageCostTranscriptEntryAsync,
+  resolveUsageCostPricingFingerprint,
+} from "./session-cost-usage-pricing-context.js";
+import { computeUsageTokenTotals } from "./session-cost-usage-pricing.js";
+import {
+  prepareUsageCostWorker,
+  resolveUsageCostWorkerDayBucket,
+  runUsageCostWorker,
+} from "./session-cost-usage-worker-runtime.js";
 import type {
   DiscoveredSession,
   SessionCostSummary,
@@ -41,67 +37,29 @@ import type {
 
 const USAGE_COST_DIRECT_REFRESH_RETRY_MS = 25;
 
-/**
- * Scan all transcript files to discover sessions not in the session store.
- * Returns basic metadata for each discovered session.
- */
 export async function discoverAllSessions(params: {
   agentId: string;
   startMs?: number;
   endMs?: number;
-  includeFirstUserMessage?: boolean;
 }): Promise<DiscoveredSession[]> {
-  const files = await listUsageCountedTranscriptStats(params.agentId, {
+  const result = await runUsageCostWorker(prepareUsageCostWorker(params), {
+    kind: "inventory",
     minMtimeMs: params.startMs,
   });
+  if (result.kind !== "inventory") {
+    throw new Error("Usage worker returned an invalid session inventory");
+  }
 
   const discovered = new Map<string, DiscoveredSession>();
 
-  for (const file of files) {
+  for (const file of result.files) {
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
-    const { filePath, sourcePath: sessionFile, sessionId } = file;
+    const { sourcePath: sessionFile, sessionId } = file;
     if (!sessionId) {
       continue;
     }
     const isPrimaryTranscript =
       file.kind === "sqlite" || isPrimarySessionTranscriptFileName(path.basename(sessionFile));
-
-    // Try to read first user message for label extraction
-    let firstUserMessage: string | undefined;
-    if (params.includeFirstUserMessage !== false) {
-      try {
-        for await (const parsed of readTranscriptRecords(filePath)) {
-          try {
-            const message = parsed.message as Record<string, unknown> | undefined;
-            if (message?.role === "user") {
-              const content = message.content;
-              if (typeof content === "string") {
-                firstUserMessage = truncateUtf16Safe(content, 100);
-              } else if (Array.isArray(content)) {
-                for (const block of content) {
-                  if (
-                    typeof block === "object" &&
-                    block &&
-                    (block as Record<string, unknown>).type === "text"
-                  ) {
-                    const text = (block as Record<string, unknown>).text;
-                    if (typeof text === "string") {
-                      firstUserMessage = truncateUtf16Safe(text, 100);
-                    }
-                    break;
-                  }
-                }
-              }
-              break; // Found first user message
-            }
-          } catch {
-            // Skip malformed lines
-          }
-        }
-      } catch {
-        // Ignore read errors
-      }
-    }
 
     const existing = discovered.get(sessionId);
     const existingIsPrimary = existing
@@ -117,24 +75,15 @@ export async function discoverAllSessions(params: {
         sessionId,
         sessionFile,
         mtime: file.mtimeMs,
-        firstUserMessage: firstUserMessage ?? existing?.firstUserMessage,
       });
-      continue;
-    }
-
-    if (!existing.firstUserMessage && firstUserMessage) {
-      existing.firstUserMessage = firstUserMessage;
-      discovered.set(sessionId, existing);
     }
   }
 
-  // Sort by mtime descending (most recent first)
   return Array.from(discovered.values()).toSorted((a, b) => b.mtime - a.mtime);
 }
 
 export async function loadSessionCostSummary(params: {
   sessionId?: string;
-  sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
   agentId: string;
@@ -149,22 +98,28 @@ export async function loadSessionCostSummary(params: {
   includeUntimestamped?: boolean;
   dayBucket?: UsageDailyBucket;
 }): Promise<SessionCostSummary | null> {
-  const sessionFile = resolveExistingUsageSessionFile(params);
-  if (!sessionFile) {
+  const source = await resolveUsageSessionSource(params);
+  if (!source) {
     return null;
   }
-  const file = await resolveUsageCostTranscriptFile(sessionFile);
-  if (!file) {
+  const { sessionFile } = source;
+  const prepared = prepareUsageCostWorker({ ...params, sessionFiles: [sessionFile] });
+  const inventory = await runUsageCostWorker(prepared, {
+    kind: "inventory",
+    sessionFiles: [sessionFile],
+  });
+  if (inventory.kind !== "inventory") {
+    throw new Error("Usage worker returned an invalid session inventory");
+  }
+  if (inventory.files.length === 0) {
     return null;
   }
-  const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
-  const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
   while (
     (await refreshCostUsageCacheForAgent({
       config: params.config,
       agentId: params.agentId,
-      agentDir,
-      databasePath,
+      agentDir: prepared.agentDir,
+      databasePath: prepared.location.databasePath,
       sessionFiles: [sessionFile],
     })) === "busy"
   ) {
@@ -174,41 +129,37 @@ export async function loadSessionCostSummary(params: {
       setTimeout(resolve, USAGE_COST_DIRECT_REFRESH_RETRY_MS);
     });
   }
-  const currentFile = await resolveUsageCostTranscriptFile(sessionFile);
-  if (!currentFile) {
-    return null;
-  }
-  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
-  const stored = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, {
-    filePaths: [currentFile.filePath],
-  }).get(currentFile.filePath);
-  if (!stored || !isUsageCostRollupFresh({ stored, file: currentFile })) {
-    return null;
-  }
-  const hasExplicitRange = params.startMs !== undefined || params.endMs !== undefined;
-  return buildSessionCostSummaryFromRollup({
-    rollup: stored.entry.rollup,
-    sessionId: params.sessionId,
-    sessionFile,
-    startMs: params.startMs ?? Number.NEGATIVE_INFINITY,
-    endMs: params.endMs ?? Number.POSITIVE_INFINITY,
-    includeUntimestamped: params.includeUntimestamped === true || !hasExplicitRange,
-    formatDay: createUsageDayKeyFormatter(params.dayBucket),
+  const pricingFingerprint = await resolveUsageCostPricingFingerprint(
+    prepared.config,
+    prepared.agentDir,
+  );
+  const result = await runUsageCostWorker(prepared, {
+    kind: "sessions",
+    pricingFingerprint,
+    sessions: [{ sessionId: params.sessionId, sessionFile }],
+    startMs: params.startMs,
+    endMs: params.endMs,
+    includeUntimestamped: params.includeUntimestamped,
+    dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
   });
+  if (result.kind !== "sessions") {
+    throw new Error("Usage worker returned an invalid session summary");
+  }
+  return result.summaries[0] ?? null;
 }
 
 export async function loadSessionUsageTimeSeries(params: {
   sessionId?: string;
-  sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
   agentId: string;
   maxPoints?: number;
 }): Promise<SessionUsageTimeSeries | null> {
-  const sessionFile = resolveExistingUsageSessionFile(params);
-  if (!sessionFile) {
+  const source = await resolveUsageSessionSource(params);
+  if (!source) {
     return null;
   }
+  const { sessionFile } = source;
   if (!parseSqliteSessionFileMarker(sessionFile) && !fs.existsSync(sessionFile)) {
     return null;
   }
@@ -219,12 +170,12 @@ export async function loadSessionUsageTimeSeries(params: {
     }
   }
 
-  const points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
-  const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
+  let points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
+  const agentDir = resolveAgentDir(params.config ?? {}, params.agentId);
   const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
 
   for await (const record of readTranscriptRecords(sessionFile)) {
-    const entry = parseUsageCostTranscriptEntry(record, resolveCost);
+    const entry = await parseUsageCostTranscriptEntryAsync(record, resolveCost, params.config);
     const timestamp = entry?.timestamp?.getTime();
     if (!entry?.usage || !timestamp) {
       continue;
@@ -243,79 +194,65 @@ export async function loadSessionUsageTimeSeries(params: {
     });
   }
 
-  // Sort by timestamp
+  points.sort((a, b) => a.timestamp - b.timestamp);
+
+  const maxPoints = params.maxPoints ?? 100;
+  if (points.length > maxPoints) {
+    const step = Math.ceil(points.length / maxPoints);
+    const downsampled: typeof points = [];
+    let bucket: (typeof points)[number] | undefined;
+    let bucketSize = 0;
+    for (const point of points) {
+      if (!bucket || bucketSize === step) {
+        bucket = {
+          timestamp: point.timestamp,
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: 0,
+        };
+        downsampled.push(bucket);
+        bucketSize = 0;
+      }
+      bucket.timestamp = point.timestamp;
+      bucket.input += point.input;
+      bucket.output += point.output;
+      bucket.cacheRead += point.cacheRead;
+      bucket.cacheWrite += point.cacheWrite;
+      bucket.totalTokens += point.totalTokens;
+      bucket.cost += point.cost;
+      bucketSize += 1;
+    }
+    points = downsampled;
+  }
+
+  // Accumulate after sampling to preserve the bucket-based floating-point sums.
   let cumulativeTokens = 0;
   let cumulativeCost = 0;
-  const sortedPoints: SessionUsageTimePoint[] = points
-    .toSorted((a, b) => a.timestamp - b.timestamp)
-    .map((point) => {
+  return {
+    sessionId: params.sessionId,
+    points: points.map((point) => {
       cumulativeTokens += point.totalTokens;
       cumulativeCost += point.cost;
       return Object.assign(point, { cumulativeTokens, cumulativeCost });
-    });
-
-  // Optionally downsample if too many points
-  const maxPoints = params.maxPoints ?? 100;
-  if (sortedPoints.length > maxPoints) {
-    const step = Math.ceil(sortedPoints.length / maxPoints);
-    const downsampled: SessionUsageTimePoint[] = [];
-    let downsampledCumulativeTokens = 0;
-    let downsampledCumulativeCost = 0;
-    for (let i = 0; i < sortedPoints.length; i += step) {
-      const bucket = sortedPoints.slice(i, i + step);
-      const bucketLast = bucket[bucket.length - 1];
-      if (!bucketLast) {
-        continue;
-      }
-
-      let bucketInput = 0;
-      let bucketOutput = 0;
-      let bucketCacheRead = 0;
-      let bucketCacheWrite = 0;
-      let bucketTotalTokens = 0;
-      let bucketCost = 0;
-      for (const point of bucket) {
-        bucketInput += point.input;
-        bucketOutput += point.output;
-        bucketCacheRead += point.cacheRead;
-        bucketCacheWrite += point.cacheWrite;
-        bucketTotalTokens += point.totalTokens;
-        bucketCost += point.cost;
-      }
-
-      downsampledCumulativeTokens += bucketTotalTokens;
-      downsampledCumulativeCost += bucketCost;
-
-      downsampled.push({
-        timestamp: bucketLast.timestamp,
-        input: bucketInput,
-        output: bucketOutput,
-        cacheRead: bucketCacheRead,
-        cacheWrite: bucketCacheWrite,
-        totalTokens: bucketTotalTokens,
-        cost: bucketCost,
-        cumulativeTokens: downsampledCumulativeTokens,
-        cumulativeCost: downsampledCumulativeCost,
-      });
-    }
-    return { sessionId: params.sessionId, points: downsampled };
-  }
-
-  return { sessionId: params.sessionId, points: sortedPoints };
+    }),
+  };
 }
 
 export async function loadSessionLogs(params: {
   sessionId?: string;
-  sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
   agentId: string;
   limit?: number;
 }): Promise<SessionLogEntry[] | null> {
-  const sessionFile = resolveExistingUsageSessionFile(params);
-  if (!sessionFile) {
+  const source = await resolveUsageSessionSource(params);
+  if (!source) {
     return null;
   }
+  const { sessionFile } = source;
   if (!parseSqliteSessionFileMarker(sessionFile) && !fs.existsSync(sessionFile)) {
     return null;
   }
@@ -329,20 +266,28 @@ export async function loadSessionLogs(params: {
   const limit = params.limit ?? 50;
   const boundedLimit = Number.isInteger(limit);
   const retentionLimit = limit * 2;
-  const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
+  const agentDir = resolveAgentDir(params.config ?? {}, params.agentId);
   const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
 
   for await (const parsed of readTranscriptRecordsBestEffort(sessionFile)) {
+    let role: SessionLogEntry["role"];
+    let content: string;
     try {
       const message = parsed.message as Record<string, unknown> | undefined;
       if (!message) {
         continue;
       }
 
-      const role = message.role as string | undefined;
-      if (role !== "user" && role !== "assistant" && role !== "tool" && role !== "toolResult") {
+      const recordRole = message.role as string | undefined;
+      if (
+        recordRole !== "user" &&
+        recordRole !== "assistant" &&
+        recordRole !== "tool" &&
+        recordRole !== "toolResult"
+      ) {
         continue;
       }
+      role = recordRole;
 
       const contentParts: string[] = [];
       const rawToolName = message.toolName ?? message.tool_name ?? message.name ?? message.tool;
@@ -352,12 +297,10 @@ export async function loadSessionLogs(params: {
         contentParts.push("[Tool Result]");
       }
 
-      // Extract content
       const rawContent = message.content;
       if (typeof rawContent === "string") {
         contentParts.push(rawContent);
       } else if (Array.isArray(rawContent)) {
-        // Handle content blocks (text, tool_use, etc.)
         const contentText = rawContent
           .map((block: unknown) => {
             if (typeof block === "string") {
@@ -367,7 +310,7 @@ export async function loadSessionLogs(params: {
             if (b.type === "text" && typeof b.text === "string") {
               return b.text;
             }
-            if (b.type === "tool_use") {
+            if (isToolCallContentType(normalizeOptionalString(b.type))) {
               const name = typeof b.name === "string" ? b.name : "unknown";
               return `[Tool: ${name}]`;
             }
@@ -391,69 +334,53 @@ export async function loadSessionLogs(params: {
         : rawToolCalls
           ? [rawToolCalls]
           : [];
-      if (toolCalls.length > 0) {
-        for (const call of toolCalls) {
-          const callObj = call as Record<string, unknown>;
-          const directName = typeof callObj.name === "string" ? callObj.name : undefined;
-          const fn = callObj.function as Record<string, unknown> | undefined;
-          const fnName = typeof fn?.name === "string" ? fn.name : undefined;
-          const name = directName ?? fnName ?? "unknown";
-          contentParts.push(`[Tool: ${name}]`);
-        }
+      for (const call of toolCalls) {
+        const callObj = call as Record<string, unknown>;
+        const directName = typeof callObj.name === "string" ? callObj.name : undefined;
+        const fn = callObj.function as Record<string, unknown> | undefined;
+        const fnName = typeof fn?.name === "string" ? fn.name : undefined;
+        const name = directName ?? fnName ?? "unknown";
+        contentParts.push(`[Tool: ${name}]`);
       }
 
-      let content = contentParts.join("\n").trim();
-      if (!content) {
-        continue;
-      }
-      content = stripInboundMetadata(content);
-      if (role === "user") {
-        content = stripMessageIdHints(stripEnvelope(content)).trim();
-      }
+      const rawText = contentParts.join("\n");
+      content =
+        role === "user"
+          ? stripUserEnvelopeForDisplay(rawText).trim()
+          : stripInboundMetadata(rawText.trim());
       if (!content) {
         continue;
       }
 
-      // Truncate very long content.
       const maxLen = 2000;
       if (content.length > maxLen) {
         content = truncateUtf16Safe(content, maxLen) + "…";
       }
-
-      // Logs share pricing and timestamp interpretation with summaries and charts.
-      // Recomputing here can turn unknown prices into zero or ignore tiered rates.
-      const entry = parseUsageCostTranscriptEntry(parsed, resolveCost);
-      const usage = role === "assistant" ? entry?.usage : undefined;
-
-      logs.push({
-        timestamp: entry?.timestamp?.getTime() ?? 0,
-        role,
-        content,
-        tokens: usage ? computeUsageTokenTotals(usage).totalTokens : undefined,
-        cost: usage ? entry?.costTotal : undefined,
-      });
-      // Timestamps can arrive out of order, so keep a bounded sorted window instead
-      // of relying on transcript append order or retaining the whole file.
-      if (boundedLimit && logs.length > retentionLimit) {
-        logs.sort((a, b) => a.timestamp - b.timestamp);
-        logs.splice(0, logs.length - limit);
-      }
     } catch {
-      // Ignore malformed lines
+      // Ignore malformed records.
+      continue;
+    }
+
+    // Logs share pricing and timestamp interpretation with summaries and charts.
+    // Recomputing here can turn unknown prices into zero or ignore tiered rates.
+    const entry = await parseUsageCostTranscriptEntryAsync(parsed, resolveCost, params.config);
+    const usage = role === "assistant" ? entry?.usage : undefined;
+
+    logs.push({
+      timestamp: entry?.timestamp?.getTime() ?? 0,
+      role,
+      content,
+      tokens: usage ? computeUsageTokenTotals(usage).totalTokens : undefined,
+      cost: usage ? entry?.costTotal : undefined,
+    });
+    // Timestamps can arrive out of order, so keep a bounded sorted window instead
+    // of relying on transcript append order or retaining the whole file.
+    if (boundedLimit && logs.length > retentionLimit) {
+      logs.sort((a, b) => a.timestamp - b.timestamp);
+      logs.splice(0, logs.length - limit);
     }
   }
 
-  // Sort by timestamp and limit
-  if (boundedLimit) {
-    logs.sort((a, b) => a.timestamp - b.timestamp);
-    return logs.length > limit ? logs.slice(-limit) : logs;
-  }
-
-  // Return most recent logs
-  const sortedLogs = logs.toSorted((a, b) => a.timestamp - b.timestamp);
-  if (sortedLogs.length > limit) {
-    return sortedLogs.slice(-limit);
-  }
-
-  return sortedLogs;
+  logs.sort((a, b) => a.timestamp - b.timestamp);
+  return logs.length > limit ? logs.slice(-limit) : logs;
 }

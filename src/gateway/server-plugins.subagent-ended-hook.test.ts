@@ -1,10 +1,12 @@
-/**
- * Tests plugin hook delivery when subagent sessions end.
- */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
+/**
+ * Tests plugin hook delivery when subagent sessions end.
+ */
+import * as serverPluginsModule from "./server-plugins.js";
 
 type HandleGatewayRequestOptions = GatewayRequestOptions & {
   extraHandlers?: Record<string, unknown>;
@@ -42,6 +44,7 @@ function createTestCfg(): OpenClawConfig {
 function createTestContext(label: string, cfg: OpenClawConfig): GatewayRequestContext {
   return {
     label,
+    trackExecution: trackAsyncWork,
     getRuntimeConfig: () => cfg,
     createAgentTurnFacade: (options: InternalAgentTurnFacadeOptions) => {
       internalAgentTurnFacade.create(options);
@@ -54,9 +57,8 @@ function createTestContext(label: string, cfg: OpenClawConfig): GatewayRequestCo
 }
 
 async function loadServerPlugins(): Promise<ServerPluginsModule> {
-  const actual = await import("./server-plugins.js");
   return {
-    ...actual,
+    ...serverPluginsModule,
     clearFallbackGatewayContext: () => {
       testGatewayContext = undefined;
     },

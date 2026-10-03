@@ -7,6 +7,7 @@ import {
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
   MAX_WORKSPACE_MANIFEST_BYTES,
 } from "./workspace-inventory-limits.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 export type WorkerWorkspaceManifestEntry =
@@ -38,15 +39,18 @@ export type WorkerWorkspaceReconciliationJournal = {
 type WorkerWorkspaceReconciliationPlan = Omit<WorkerWorkspaceReconciliationJournal, "basePack">;
 
 export type WorkerWorkspaceReconciliationJournalAdapter = {
-  load(): WorkerWorkspaceReconciliationJournal | undefined;
-  begin(journal: WorkerWorkspaceReconciliationJournal): void;
-  commit(manifestRef: string): void;
-  abort(): void;
+  load(): Promise<WorkerWorkspaceReconciliationJournal | undefined>;
+  begin(journal: WorkerWorkspaceReconciliationJournal): Promise<void>;
+  commit(manifestRef: string): Promise<void>;
+  abort(): Promise<void>;
 };
 
-export const MAX_RECONCILIATION_ENTRIES = 25_000;
+// A complete rebase can replace every entry in both valid inventories.
+export const MAX_RECONCILIATION_ENTRIES = MAX_WORKSPACE_INVENTORY_ENTRIES * 2;
 export const MAX_RECONCILIATION_FILE_BYTES = 64 * 1024 * 1024;
-export const MAX_RECONCILIATION_TOTAL_BYTES = 256 * 1024 * 1024;
+export const MAX_RECONCILIATION_TOTAL_BYTES = 768 * 1024 * 1024;
+// Keep the durable SQLite rollback blob bounded independently of raw file bytes.
+export const MAX_RECONCILIATION_PACK_BYTES = 256 * 1024 * 1024;
 const MANIFEST_REF_PATTERN = /^sha256:([a-f0-9]{64})$/u;
 const GIT_COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 
@@ -152,9 +156,8 @@ function validateAndProjectEntries(values: unknown[]): {
     if (byPath.has(entry.path) || (previous && previous >= entry.path)) {
       throw new Error("Worker workspace manifest paths are not unique and sorted");
     }
-    const segments = entry.path.split("/");
-    for (let index = 1; index < segments.length; index += 1) {
-      if (byPath.get(segments.slice(0, index).join("/"))?.type !== "directory") {
+    for (const ancestor of workspacePathAncestors(entry.path)) {
+      if (byPath.get(ancestor)?.type !== "directory") {
         throw new Error("Worker workspace manifest entry has a non-directory parent");
       }
     }
@@ -174,19 +177,12 @@ function validateAndProjectEntries(values: unknown[]): {
     byPath.set(entry.path, entry);
     previous = entry.path;
   }
+  const eligible = rawEntries.filter(
+    (entry) => !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
+  );
   return {
-    entries: rawEntries.filter(
-      (entry): entry is WorkerWorkspaceManifestEntry =>
-        entry.type !== "directory" &&
-        !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
-    ),
-    directories: rawEntries
-      .filter(
-        (entry) =>
-          entry.type === "directory" &&
-          !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
-      )
-      .map((entry) => entry.path),
+    entries: eligible.filter((entry) => entry.type !== "directory"),
+    directories: eligible.filter((entry) => entry.type === "directory").map((entry) => entry.path),
   };
 }
 

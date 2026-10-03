@@ -2,7 +2,6 @@ package ai.openclaw.wear.shared
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -71,10 +70,12 @@ object WearProtocol {
 enum class WearProxyCapability(
   val wireValue: String,
 ) {
+  ReplyText(wireValue = "reply-text"),
   AgentControls(wireValue = "agent-controls"),
   GatewayControls(wireValue = "gateway-controls"),
   ModelControls(wireValue = "model-controls"),
   ModelCatalogSearch(wireValue = "model-catalog-search"),
+  SessionScopedModelCatalog(wireValue = "session-scoped-model-catalog"),
   SessionSelectionLookup(wireValue = "session-selection-lookup"),
   SessionSearchPagination(wireValue = "session-search-pagination"),
   AgentPulse(wireValue = "agent-pulse"),
@@ -126,6 +127,9 @@ enum class WearRpcMethod {
 
   @SerialName("gateway.disconnect")
   GatewayDisconnect,
+
+  @SerialName("reply.text")
+  ReplyText,
 
   @SerialName("chat.history")
   ChatHistory,
@@ -294,8 +298,6 @@ object WearProtocolCodec {
     val root =
       try {
         json.parseToJsonElement(text).jsonObject
-      } catch (_: SerializationException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
       } catch (_: IllegalArgumentException) {
         return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
       }
@@ -308,8 +310,6 @@ object WearProtocolCodec {
     val message =
       try {
         json.decodeFromJsonElement(WearMessage.serializer(), root)
-      } catch (_: SerializationException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
       } catch (_: IllegalArgumentException) {
         return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
       }

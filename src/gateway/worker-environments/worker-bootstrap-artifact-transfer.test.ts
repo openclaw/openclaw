@@ -4,12 +4,11 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAuthRateLimiter, type AuthRateLimiter } from "../auth-rate-limit.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "../auth-rate-limit.js";
+import { createArtifactTransferHttpCallback } from "./artifact-transfer-http.js";
 import type { TransferArtifact } from "./artifact-transfer-service.js";
-import {
-  createWorkerBootstrapArtifactTransferHttpCallback,
-  handleWorkerBootstrapArtifactTransferHttpRequest,
-} from "./worker-bootstrap-artifact-transfer-http.js";
+import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-bootstrap-artifact-transfer-http.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 describe("worker bootstrap artifact transfer", () => {
@@ -26,7 +25,7 @@ describe("worker bootstrap artifact transfer", () => {
     authorized = true;
     now = 1_000;
     service = createWorkerBootstrapArtifactTransferService({ now: () => now });
-    const callback = createWorkerBootstrapArtifactTransferHttpCallback(service);
+    const callback = createArtifactTransferHttpCallback(service);
     server = http.createServer((req, res) => {
       void handleWorkerBootstrapArtifactTransferHttpRequest({
         req,
@@ -80,7 +79,11 @@ describe("worker bootstrap artifact transfer", () => {
     };
   }
 
-  it("delivers exactly one artifact, only on its digest route with a header bearer", async () => {
+  it("rejects an empty archive before granting download authority", async () => {
+    await expect(prepare("")).rejects.toThrow("Worker artifact archive is invalid");
+  });
+
+  it("delivers an artifact only on its digest route with a header bearer", async () => {
     const { artifact, url, headers } = await prepare();
     for (const rejectedUrl of [
       url.replace(artifact.tarballSha256, "a".repeat(64)),
@@ -98,7 +101,6 @@ describe("worker bootstrap artifact transfer", () => {
     expect(response.headers.get("x-openclaw-content-sha256")).toBe(artifact.tarballSha256);
     expect(response.headers.get("content-length")).toBe(String(artifact.tarballBytes));
     await expect(response.text()).resolves.toBe("source-runtime");
-    expect((await fetch(url, { headers })).status).toBe(404);
     expect((await fetch(`${origin}/__openclaw__/worker-bootstrap-other`)).status).toBe(418);
   });
 
@@ -180,7 +182,7 @@ describe("worker bootstrap artifact transfer", () => {
       const { receipt, url, headers } = await prepare(Buffer.alloc(8 * 1024 * 1024), owner.signal);
       const response = await fetch(url, { headers });
       expect(response.status).toBe(200);
-      expect((await fetch(url, { headers })).status).toBe(404);
+      expect((await fetch(url, { headers })).status).toBe(503);
       if (closure === "owner") {
         authorized = false;
       }
@@ -202,7 +204,10 @@ describe("worker bootstrap artifact transfer", () => {
 
   it("shares the transfer authentication rate limit without exposing artifact presence", async () => {
     const { url } = await prepare();
-    rateLimiter = createAuthRateLimiter({ maxAttempts: 1, exemptLoopback: false });
+    rateLimiter = createGatewayAuthRateLimiter(
+      { maxAttempts: 1, exemptLoopback: false },
+      { scheduler: createTestGatewayScheduler() },
+    );
     expect((await fetch(url)).status).toBe(404);
     const limited = await fetch(url);
     expect(limited.status).toBe(429);

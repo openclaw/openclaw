@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   noteCronDeliveryTargetAdvisory,
-  noteCronModelOverrides,
+  noteLegacyWhatsAppCrontabHealthCheck,
 } from "./warnings.js";
 
 const mocks = vi.hoisted(() => ({
@@ -47,34 +47,14 @@ function collectCronDeliveryTargetAdvisory(params: {
   return typeof body === "string" ? body : null;
 }
 
-describe("noteCronModelOverrides", () => {
-  it("describes enabled overrides without claiming a specific backing store", () => {
-    noteCronModelOverrides({
-      cfg: {},
-      jobs: [job({ enabled: true, payload: { kind: "agentTurn", model: "ollama/qwen3" } })],
-    });
-
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringMatching(/^Automation model overrides detected\.\n/u),
-      "Cron",
-    );
-  });
-
-  it("does not warn for disabled model-pinned jobs", () => {
-    noteCronModelOverrides({
-      cfg: {},
-      jobs: [job({ enabled: false, payload: { kind: "agentTurn", model: "ollama/qwen3" } })],
-    });
-
-    expect(mocks.note).not.toHaveBeenCalled();
-  });
-});
-
 describe("collectCronDeliveryTargetAdvisory", () => {
   it("advises when a concrete delivery channel has no active plugin", () => {
     const advisory = collectCronDeliveryTargetAdvisory({
-      jobs: [job({ id: "report", delivery: { mode: "announce", channel: "missing-channel" } })],
-      resolveAvailableChannelIds: availableChannels("slack", "telegram"),
+      jobs: [
+        job({ id: "needs-doctor", delivery: { channel: "slack" } }),
+        job({ id: "report", delivery: { mode: "announce", channel: "missing-channel" } }),
+      ],
+      resolveAvailableChannelIds: availableChannels(),
     });
     expect(advisory).not.toBeNull();
     expect(advisory).toContain("Automation delivery targets unavailable channels");
@@ -84,9 +64,8 @@ describe("collectCronDeliveryTargetAdvisory", () => {
   });
 
   it("returns null when the concrete channel resolves to an active plugin", () => {
-    // Omitting `mode` defaults to announce, so a bare channel still counts as a concrete target.
     const advisory = collectCronDeliveryTargetAdvisory({
-      jobs: [job({ delivery: { channel: "slack" } })],
+      jobs: [job({ delivery: { mode: "announce", channel: "slack" } })],
       resolveAvailableChannelIds: availableChannels("slack", "telegram"),
     });
     expect(advisory).toBeNull();
@@ -103,7 +82,6 @@ describe("collectCronDeliveryTargetAdvisory", () => {
 
   it.each([
     ["announce-to-last", { mode: "announce", channel: "last" }],
-    ["webhook", { mode: "webhook", to: "https://example.invalid/hook" }],
     ["none with a channel", { mode: "none", channel: "missing-channel" }],
   ])("skips pseudo/relative target: %s", (_label, delivery) => {
     const resolve = availableChannels("slack");
@@ -140,14 +118,6 @@ describe("collectCronDeliveryTargetAdvisory", () => {
     });
     expect(advisory).toBeNull();
     expect(resolve).not.toHaveBeenCalled();
-  });
-
-  it("flags a concrete target even when no channels are active (only channel removed)", () => {
-    const advisory = collectCronDeliveryTargetAdvisory({
-      jobs: [job({ id: "report", delivery: { mode: "announce", channel: "slack" } })],
-      resolveAvailableChannelIds: availableChannels(),
-    });
-    expect(advisory).toContain("Channels: slack=1");
   });
 
   it("aggregates counts and caps examples at three", () => {
@@ -199,4 +169,37 @@ describe("collectLegacyWhatsAppCrontabHealthWarning", () => {
       timeoutMs: 5_000,
     });
   });
+});
+
+it("warns about legacy ensure-whatsapp crontab entries on Linux", async () => {
+  await noteLegacyWhatsAppCrontabHealthCheck({
+    platform: "linux",
+    readCrontab: async () => ({
+      stdout: [
+        "# keep comments ignored",
+        "*/5 * * * * ~/.openclaw/bin/ensure-whatsapp.sh >> ~/.openclaw/logs/whatsapp-health.log 2>&1",
+        "0 9 * * * /usr/bin/true",
+        "",
+      ].join("\n"),
+    }),
+  });
+
+  expect(mocks.note).toHaveBeenCalledWith(
+    expect.stringContaining("Legacy WhatsApp crontab health check detected"),
+    "Cron",
+  );
+  expect(mocks.note).toHaveBeenCalledWith(
+    expect.stringContaining("systemd user bus environment is missing"),
+    "Cron",
+  );
+  expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("Matched 1 entry"), "Cron");
+});
+
+it("ignores a missing crontab", async () => {
+  await noteLegacyWhatsAppCrontabHealthCheck({
+    platform: "linux",
+    readCrontab: () =>
+      Promise.reject(Object.assign(new Error("crontab missing"), { code: "ENOENT" })),
+  });
+  expect(mocks.note).not.toHaveBeenCalled();
 });

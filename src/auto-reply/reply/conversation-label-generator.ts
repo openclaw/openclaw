@@ -1,6 +1,9 @@
-// Generates short labels for sessions from conversation context.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createReasoningTagTextPartitioner } from "../../../packages/markdown-core/src/reasoning-tags.js";
+import {
+  assertOperatorModelAllowed,
+  type AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { runIsolatedCompletion } from "../../agents/isolated-completion.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
@@ -32,6 +35,9 @@ export type ConversationLabelParams = {
   modelRef?: string;
   timeoutMs?: number;
   maxLength?: number;
+  abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 };
 
 type ConversationLabelFallbackParams = ConversationLabelParams & {
@@ -41,12 +47,6 @@ type ConversationLabelFallbackParams = ConversationLabelParams & {
   normalizeLabel?: (label: string) => string | null;
   /** Speculative callers: one utility attempt at most, never the regular model. */
   utilityOnly?: boolean;
-};
-
-type ResolvedLabelParams = ConversationLabelParams & {
-  agentId: string;
-  timeoutMs: number;
-  maxLength: number;
 };
 
 function resolvePositiveInteger(value: number | undefined, fallback: number): number {
@@ -93,16 +93,25 @@ function resolveAttemptKey(
 }
 
 async function runLabelAttempts(
-  params: ResolvedLabelParams & {
+  params: ConversationLabelParams & {
+    agentId: string;
     attempts: readonly ConversationLabelAttempt[];
     /** Selections that must not run even when an attempt resolves onto them. */
     skipAttempts?: readonly ConversationLabelAttempt[];
     normalizeLabel?: (label: string) => string | null;
   },
 ): Promise<string | null> {
+  const timeoutMs = resolvePositiveInteger(params.timeoutMs, TIMEOUT_MS);
+  const maxLength = resolvePositiveInteger(params.maxLength, DEFAULT_MAX_LABEL_LENGTH);
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    params.operatorAuthority?.assertCurrent();
+    params.abortSignal?.throwIfAborted();
+  };
   const seen = new Set(params.skipAttempts?.map((attempt) => resolveAttemptKey(params, attempt)));
   const failures: LabelModelPhase[] = [];
   for (const attempt of params.attempts) {
+    assertCurrent();
     const key = resolveAttemptKey(params, attempt);
     if (seen.has(key)) {
       continue;
@@ -113,6 +122,11 @@ async function runLabelAttempts(
       if (!selection) {
         throw new Error("conversation label model selection unavailable");
       }
+      const model = { provider: selection.provider, model: selection.modelId };
+      if (params.operatorAuthority?.modelPolicy?.allows(model) === false) {
+        continue;
+      }
+      assertOperatorModelAllowed(params.operatorAuthority, model);
       // The session's runtime override was resolved for its primary provider; a
       // utility model on another provider cannot run through that harness.
       const agentHarnessRuntimeOverride = resolveCompatibleAgentRuntimeForProvider({
@@ -135,22 +149,27 @@ async function runLabelAttempts(
           "Do not describe your own capabilities or limitations.",
         ].join(" "),
         prompt: params.userMessage,
-        timeoutMs: params.timeoutMs,
+        timeoutMs,
+        abortSignal: params.abortSignal,
+        assertCurrent: params.assertCurrent,
+        ...(params.operatorAuthority ? { operatorAuthority: params.operatorAuthority } : {}),
         outputTextPolicy: "strict-visible",
         streamParams: { maxTokens: CONVERSATION_LABEL_MAX_TOKENS },
       });
+      assertCurrent();
       const partitioner = createReasoningTagTextPartitioner();
       partitioner.markStrict();
       const visibleText = [...partitioner.push(completion.text), ...partitioner.flush()]
         .flatMap((delta) => (delta.kind === "text" ? [delta.text] : []))
         .join("")
         .trim();
-      const label = truncateUtf16Safe(visibleText, params.maxLength) || null;
+      const label = truncateUtf16Safe(visibleText, maxLength) || null;
       const normalized = label && params.normalizeLabel ? params.normalizeLabel(label) : label;
       if (normalized) {
         return normalized;
       }
     } catch {
+      assertCurrent();
       failures.push(attempt.phase);
     }
   }
@@ -173,13 +192,7 @@ export async function generateConversationLabel(
         { useUtilityModel: true, phase: "utility" },
         { useUtilityModel: false, phase: "primary fallback" },
       ];
-  return await runLabelAttempts({
-    ...params,
-    agentId,
-    attempts,
-    timeoutMs: resolvePositiveInteger(params.timeoutMs, TIMEOUT_MS),
-    maxLength: resolvePositiveInteger(params.maxLength, DEFAULT_MAX_LABEL_LENGTH),
-  });
+  return await runLabelAttempts({ ...params, agentId, attempts });
 }
 
 /** Tries an explicit utility model once, then the regular model once when needed. */
@@ -221,7 +234,5 @@ export async function generateConversationLabelWithFallback(
     // resolves onto the primary model is skipped instead of spending on it.
     attempts: params.utilityOnly ? utilityAttempts : [...utilityAttempts, regularAttempt],
     ...(params.utilityOnly ? { skipAttempts: [regularAttempt] } : {}),
-    timeoutMs: resolvePositiveInteger(params.timeoutMs, TIMEOUT_MS),
-    maxLength: resolvePositiveInteger(params.maxLength, DEFAULT_MAX_LABEL_LENGTH),
   });
 }

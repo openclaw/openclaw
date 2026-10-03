@@ -1,4 +1,3 @@
-// Shared parser for root options that may be passed as `--flag=value` or `--flag value`.
 import { isValueToken } from "../infra/cli-root-options.js";
 import { parseInlineOptionToken } from "../infra/inline-option-token.js";
 

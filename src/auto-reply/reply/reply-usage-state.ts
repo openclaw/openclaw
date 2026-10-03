@@ -3,12 +3,20 @@ import { deriveContextPromptTokens, type NormalizedUsage } from "../../agents/us
 import type { OpenClawConfig } from "../../config/config.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
-import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 
 const TTL_MS = 5 * 60_000;
 const MAX_REPLY_USAGE_STATE_ENTRIES = 1_024;
 
 const store = new Map<string, { snapshot: PluginHookReplyUsageState; expiresAt: number }>();
+
+function projectHookUsage(usage?: NormalizedUsage): PluginHookReplyUsageState["usage"] {
+  if (!usage) {
+    return undefined;
+  }
+  const { input, output, cacheRead, cacheWrite, total } = usage;
+  return { input, output, cacheRead, cacheWrite, total };
+}
 
 export function buildReplyUsageState(params: {
   config: OpenClawConfig;
@@ -57,12 +65,10 @@ export function buildReplyUsageState(params: {
         : undefined,
     turnUsd: estimateAggregateUsageCost({
       usage: params.usage,
-      cost: resolveModelCostConfig({
-        provider: params.provider,
-        model: params.model,
-        config: params.config,
-        agentDir: params.agentDir,
-      }),
+      provider: params.provider,
+      model: params.model,
+      config: params.config,
+      agentDir: params.agentDir,
     }),
     durationMs: params.durationMs,
     identity: resolveAgentIdentity(params.config, params.agentId),
@@ -79,24 +85,8 @@ export function buildReplyUsageState(params: {
             promptTokens: params.promptTokens,
             usage: params.usage,
           }),
-    usage: params.usage
-      ? {
-          input: params.usage.input,
-          output: params.usage.output,
-          cacheRead: params.usage.cacheRead,
-          cacheWrite: params.usage.cacheWrite,
-          total: params.usage.total,
-        }
-      : undefined,
-    lastUsage: params.lastCallUsage
-      ? {
-          input: params.lastCallUsage.input,
-          output: params.lastCallUsage.output,
-          cacheRead: params.lastCallUsage.cacheRead,
-          cacheWrite: params.lastCallUsage.cacheWrite,
-          total: params.lastCallUsage.total,
-        }
-      : undefined,
+    usage: projectHookUsage(params.usage),
+    lastUsage: projectHookUsage(params.lastCallUsage),
   };
 }
 

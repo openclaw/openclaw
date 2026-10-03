@@ -60,14 +60,18 @@ vi.mock("playwright-core", () => ({
 
 import {
   closeQaWebSessions,
+  createQaWebPageOpener,
   qaWebEvaluate,
-  qaWebOpenPage,
   qaWebSnapshot,
   qaWebType,
   qaWebWait,
 } from "./web-runtime.js";
 
+let openPage: ReturnType<typeof createQaWebPageOpener>;
+
 beforeEach(async () => {
+  openPage = createQaWebPageOpener(new Set());
+  vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", undefined);
   const page = {
     on: pageOn,
     goto,
@@ -122,7 +126,7 @@ function requireLaunchOptions() {
 
 describe("qa web runtime", () => {
   it("opens, interacts with, snapshots, and closes a page", async () => {
-    const opened = await qaWebOpenPage({ url: "http://127.0.0.1:3000/chat" });
+    const opened = await openPage({ url: "http://127.0.0.1:3000/chat" });
 
     await qaWebWait({ pageId: opened.pageId, selector: "textarea" });
     await qaWebWait({ pageId: opened.pageId, text: "bridge armed" });
@@ -161,7 +165,7 @@ describe("qa web runtime", () => {
 
   it("keeps bounded web text on UTF-16 boundaries", async () => {
     bodyLocator.textContent.mockResolvedValueOnce(`${"a".repeat(1999)}😀tail`);
-    const opened = await qaWebOpenPage({ url: "http://127.0.0.1:3000/chat" });
+    const opened = await openPage({ url: "http://127.0.0.1:3000/chat" });
     const consoleHandler = pageOn.mock.calls.find(([event]) => event === "console")?.[1] as
       | ((message: { type: () => string; text: () => string }) => void)
       | undefined;
@@ -184,7 +188,7 @@ describe("qa web runtime", () => {
     vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "/custom/chromium");
     existsSync.mockImplementation((candidate) => candidate === "/custom/chromium");
 
-    await qaWebOpenPage({ url: "http://127.0.0.1:3000/chat" });
+    await openPage({ url: "http://127.0.0.1:3000/chat" });
 
     const launchOptions = requireLaunchOptions();
     expect(spawnSync).toHaveBeenCalledWith("/custom/chromium", ["--version"], {
@@ -198,7 +202,7 @@ describe("qa web runtime", () => {
   it("launches detected system Chromium without requiring branded Chrome", async () => {
     existsSync.mockImplementation((candidate) => candidate === "/usr/bin/chromium");
 
-    await qaWebOpenPage({ url: "http://127.0.0.1:3000/chat" });
+    await openPage({ url: "http://127.0.0.1:3000/chat" });
 
     const launchOptions = requireLaunchOptions();
     expect(spawnSync).toHaveBeenCalledWith("/usr/bin/chromium", ["--version"], {
@@ -210,7 +214,7 @@ describe("qa web runtime", () => {
   });
 
   it("keeps an explicit browser channel request explicit", async () => {
-    await qaWebOpenPage({ url: "http://127.0.0.1:3000/chat", channel: "chrome" });
+    await openPage({ url: "http://127.0.0.1:3000/chat", channel: "chrome" });
 
     const launchOptions = requireLaunchOptions();
     expect(spawnSync).not.toHaveBeenCalled();
@@ -220,8 +224,8 @@ describe("qa web runtime", () => {
   });
 
   it("can close only selected page sessions", async () => {
-    const first = await qaWebOpenPage({ url: "http://127.0.0.1:3000/one" });
-    const second = await qaWebOpenPage({ url: "http://127.0.0.1:3000/two" });
+    const first = await openPage({ url: "http://127.0.0.1:3000/one" });
+    const second = await openPage({ url: "http://127.0.0.1:3000/two" });
 
     await closeQaWebSessions([first.pageId]);
 
@@ -237,7 +241,7 @@ describe("qa web runtime", () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     try {
-      const opened = await qaWebOpenPage({
+      const opened = await openPage({
         url: "http://127.0.0.1:3000/chat",
         timeoutMs: Number.MAX_SAFE_INTEGER,
       });

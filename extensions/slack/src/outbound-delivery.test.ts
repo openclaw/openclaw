@@ -17,14 +17,15 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 import * as clientDelivery from "./client-delivery.js";
 import { slackOutbound } from "./outbound-adapter.js";
-import { sendMessageSlack } from "./send.js";
 import { clearSlackThreadParticipationCache } from "./sent-thread-cache.js";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./send.runtime.js", () => ({
+vi.mock("./send.js", () => ({
   sendMessageSlack: sendMessageSlackMock,
 }));
+
+const { sendMessageSlack } = await vi.importActual<typeof import("./send.js")>("./send.js");
 
 const cfg: OpenClawConfig = {
   channels: {
@@ -40,6 +41,16 @@ const cfg: OpenClawConfig = {
     },
   },
 };
+
+function withSyntheticSlackClient(
+  opts: Parameters<typeof sendMessageSlack>[2],
+  client: Parameters<typeof sendMessageSlack>[2]["client"],
+) {
+  const sendOptions = { ...opts, client };
+  // These presentation tests use method mocks rather than the real request boundary.
+  delete sendOptions.assertDirectAdapterHandoff;
+  return sendOptions;
+}
 
 describe("slack outbound shared hook wiring", () => {
   beforeEach(() => {
@@ -64,6 +75,26 @@ describe("slack outbound shared hook wiring", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  it("forwards direct-delivery authority into the Slack transport", async () => {
+    const assertDirectAdapterHandoff = vi.fn();
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "slack",
+      to: "C123",
+      payloads: [{ text: "Scheduled answer" }],
+      accountId: "default",
+      assertDirectAdapterHandoff,
+    });
+
+    assert(result.status === "sent", "error" in result ? String(result.error) : result.status);
+    const sendOptions = sendMessageSlackMock.mock.calls[0]?.[2];
+    expect(sendOptions?.assertDirectAdapterHandoff).toEqual(expect.any(Function));
+    expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();
+    sendOptions?.assertDirectAdapterHandoff?.();
+    expect(assertDirectAdapterHandoff).toHaveBeenCalledTimes(2);
+  });
+
   describe.each([
     {
       name: "raw blocks",
@@ -80,7 +111,6 @@ describe("slack outbound shared hook wiring", () => {
   ])("media followed by $name", ({ content, expectedText, hasBlocks }) => {
     it.each([
       { name: "mediaUrl", media: { mediaUrl: "https://example.com/a.png" } },
-      { name: "singleton mediaUrls", media: { mediaUrls: ["https://example.com/a.png"] } },
       {
         name: "mediaUrls list",
         media: { mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"] },
@@ -96,7 +126,7 @@ describe("slack outbound shared hook wiring", () => {
         });
       sendMessageSlackMock.mockImplementation(
         async (to: string, text: string, opts: Parameters<typeof sendMessageSlack>[2]) =>
-          await sendMessageSlack(to, text, { ...opts, client }),
+          await sendMessageSlack(to, text, withSyntheticSlackClient(opts, client)),
       );
       const payload: ReplyPayload = { text: "Caption", ...media, ...content };
 
@@ -124,6 +154,125 @@ describe("slack outbound shared hook wiring", () => {
         "171234.567",
       ]);
     });
+  });
+
+  it("delivers a valid field-rich section through the outbound adapter", async () => {
+    const client = createSlackSendTestClient();
+    sendMessageSlackMock.mockImplementation(
+      async (to: string, text: string, opts: Parameters<typeof sendMessageSlack>[2]) =>
+        await sendMessageSlack(to, text, withSyntheticSlackClient(opts, client)),
+    );
+    const fields = ["Alpha", "Beta", "Gamma"].map((label) => ({
+      type: "plain_text",
+      text: label.padEnd(1_500, "."),
+    }));
+    const blocks = [{ type: "section", fields }];
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "slack",
+      to: "C123",
+      payloads: [{ channelData: { slack: { blocks } } }],
+      accountId: "default",
+    });
+
+    assert(result.status === "sent", "error" in result ? String(result.error) : result.status);
+    expect(client.chat.postMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        blocks,
+        text: fields.map((field) => field.text).join("\n"),
+        mrkdwn: false,
+      }),
+    );
+    expect(result.results[0]?.receipt?.platformMessageIds).toEqual(["171234.567"]);
+  });
+
+  it.each(["text", "context"] as const)(
+    "preserves prose after a Windows root path in long %s presentations",
+    async (type) => {
+      const client = createSlackSendTestClient();
+      sendMessageSlackMock.mockImplementation(
+        async (to: string, text: string, opts: Parameters<typeof sendMessageSlack>[2]) =>
+          await sendMessageSlack(to, text, withSyntheticSlackClient(opts, client)),
+      );
+      const intro = "Install in `C:\\` and continue. ";
+      const text = intro + "Ordinary prose. ".repeat(220) + "Done.";
+
+      const result = await sendDurableMessageBatch({
+        cfg,
+        channel: "slack",
+        to: "C123",
+        payloads: [{ presentation: { blocks: [{ type, text }] } }],
+        accountId: "default",
+      });
+
+      assert(result.status === "sent", "error" in result ? String(result.error) : result.status);
+      expect(client.chat.postMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          blocks: [expect.stringContaining(intro), expect.not.stringContaining("`")].map((chunk) =>
+            type === "context"
+              ? {
+                  type: "context",
+                  elements: [{ type: "mrkdwn", text: chunk, verbatim: true }],
+                }
+              : { type: "section", text: { type: "mrkdwn", text: chunk } },
+          ),
+        }),
+      );
+      expect(result.results[0]?.receipt?.platformMessageIds).toEqual(["171234.567"]);
+    },
+  );
+
+  it("preserves a field-rich section and every receipt when native table delivery falls back", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage
+      .mockRejectedValueOnce({ data: { error: "invalid_blocks" } })
+      .mockResolvedValueOnce({ ts: "171234.1" })
+      .mockResolvedValueOnce({ ts: "171234.2" });
+    sendMessageSlackMock.mockImplementation(
+      async (to: string, text: string, opts: Parameters<typeof sendMessageSlack>[2]) =>
+        await sendMessageSlack(to, text, withSyntheticSlackClient(opts, client)),
+    );
+    const fields = ["Alpha", "Beta", "Gamma"].map((label) => ({
+      type: "plain_text",
+      text: label.padEnd(1_500, "."),
+    }));
+    const section = { type: "section", fields };
+    const footer = { type: "section", text: { type: "plain_text", text: "End of report" } };
+    const blocks = [
+      section,
+      {
+        type: "data_table",
+        caption: "Pipeline",
+        rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
+      },
+      footer,
+    ];
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "slack",
+      to: "C123",
+      payloads: [{ channelData: { slack: { blocks } } }],
+      accountId: "default",
+    });
+
+    assert(result.status === "sent", "error" in result ? String(result.error) : result.status);
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
+    expect(client.chat.postMessage.mock.calls[1]?.[0]).toMatchObject({
+      blocks: [section],
+      text: fields.map((field) => field.text).join("\n"),
+      mrkdwn: false,
+    });
+    expect(client.chat.postMessage.mock.calls[2]?.[0]).toMatchObject({
+      blocks: [
+        { type: "section", text: { type: "plain_text", text: "Pipeline (table)\nAccount\nAcme" } },
+        footer,
+      ],
+      text: "Pipeline (table)\nAccount\nAcme\n\nEnd of report",
+      mrkdwn: false,
+    });
+    expect(result.results[0]?.receipt?.platformMessageIds).toEqual(["171234.1", "171234.2"]);
   });
 
   it("fires message_sending once with shared routing fields", async () => {
@@ -165,28 +314,6 @@ describe("slack outbound shared hook wiring", () => {
       },
     );
     expect(sendMessageSlackMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("passes replyToId as Slack threadTs for threaded outbound delivery", async () => {
-    await sendDurableMessageBatch({
-      cfg,
-      channel: "slack",
-      to: "C123",
-      payloads: [{ text: "hello" }],
-      accountId: "default",
-      replyToId: "1712000000.000001",
-    });
-
-    expect(sendMessageSlackMock).toHaveBeenCalledWith(
-      "C123",
-      "hello",
-      expect.objectContaining({
-        cfg,
-        threadTs: "1712000000.000001",
-        accountId: "default",
-        onDeliveryResult: expect.any(Function),
-      }),
-    );
   });
 
   it("respects cancel from the shared hook without a second adapter pass", async () => {

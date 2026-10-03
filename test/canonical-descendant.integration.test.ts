@@ -1,23 +1,27 @@
 import http from "node:http";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createPluginRuntimeMock,
   createPluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import codexPlugin from "../extensions/codex/index.js";
 import { createCanonicalForkFixtureForTest } from "../extensions/codex/test-api.js";
-import openaiPlugin from "../extensions/openai/index.js";
 import {
   prepareAgentRunAdmission,
   createOperationalRunInstanceRef,
 } from "../src/agents/admitted-run-context.js";
-import { retireSessionMcpRuntime } from "../src/agents/agent-bundle-mcp-manager-api.js";
+import {
+  disposeAllSessionMcpRuntimes,
+  retireSessionMcpRuntime,
+  setSessionMcpRuntimeScheduler,
+} from "../src/agents/agent-bundle-mcp-manager-api.js";
 import {
   setRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
 } from "../src/agents/auth-profiles/runtime-snapshots.js";
+import { log as embeddedAgentLog } from "../src/agents/embedded-agent-runner/logger.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../src/agents/harness/hook-helpers.js";
 import { createAgentHarnessHostCapabilities } from "../src/agents/harness/host-capability.js";
 import { listRegisteredAgentHarnesses } from "../src/agents/harness/registry.js";
@@ -26,21 +30,34 @@ import {
   listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
-  readClosedTranscriptTurn,
   replaceTranscriptEvents,
 } from "../src/config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
+import { readClosedTranscriptTurnInDatabase } from "../src/config/sessions/session-accessor.transcript-range.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
-import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "../src/gateway/server-methods/types.js";
 import { createWorkerSessionPlacementStore } from "../src/gateway/worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "../src/gateway/worker-environments/placement-test-fixtures.js";
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../src/plugin-sdk/codex-session-transcript-runtime.js";
 import { appendSessionTranscriptMessagesByIdentity } from "../src/plugin-sdk/session-transcript-runtime.js";
 import {
+  createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
+  type OpenAsyncKeyedStoreOptions,
   type OpenKeyedStoreOptions,
 } from "../src/plugin-state/plugin-state-store.js";
+import { createRuntimePluginManifestLookup } from "../src/plugins/active-runtime-registry.js";
+import { resolvePluginCapabilityCatalogContext } from "../src/plugins/loader-runtime-load.js";
 import { resolvePluginMetadataSnapshot } from "../src/plugins/plugin-metadata-snapshot.js";
+import { bindPluginRuntimeArtifactSelection } from "../src/plugins/plugin-runtime-artifact-binding.js";
+import {
+  resolvePluginRuntimeArtifactSelection,
+  resolvePluginRuntimeExecutionArtifact,
+} from "../src/plugins/plugin-runtime-artifact-selection.js";
 import {
   markPluginRegistryActive,
   markPluginRegistryRetired,
@@ -50,7 +67,10 @@ import { setPluginRuntimeLoadContext } from "../src/plugins/runtime/load-context
 import { resolvePluginRuntimeLoadContext } from "../src/plugins/runtime/load-context.resolve.js";
 import { createRuntimeAgent } from "../src/plugins/runtime/runtime-agent.js";
 import { createPluginRecord } from "../src/plugins/status.test-helpers.js";
-import type { OpenClawPluginMcpServerConnectionResolver } from "../src/plugins/types.js";
+import type {
+  OpenClawPluginDefinition,
+  OpenClawPluginMcpServerConnectionResolver,
+} from "../src/plugins/types.js";
 import {
   listSessionStateEventsSince,
   registerSessionStateWatch,
@@ -62,8 +82,18 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../src/sessions/user-turn-transcript.js";
-import { runOpenClawAgentWriteTransaction } from "../src/state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../src/state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../src/test-utils/gateway-scheduler-clock.js";
+import { useCanonicalDescendantState } from "./helpers/canonical-descendant-state.js";
+
+// Native transport mocks own the source graph, so discovery must use that graph.
+const withState = useCanonicalDescendantState({
+  OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../extensions", import.meta.url)),
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -99,6 +129,37 @@ function expectPolicyHandoff(
   });
 }
 
+async function withRetainedNativeForkAttempt<T>(
+  fixture: CanonicalForkFixture,
+  run: () => Promise<T>,
+): Promise<T> {
+  return await fixture.withClient(async (client) => {
+    const requests = vi.spyOn(client, "request");
+    try {
+      const result = await run();
+      const assertCurrent = expectDefined(
+        requests.mock.calls.findLast(([method]) => method === "thread/fork")?.[2]?.assertCurrent,
+        "production native-write authority",
+      );
+      const before = fixture.native.calls.filter((call) => call.method === "thread/fork").length;
+      expect(before).toBeGreaterThan(0);
+      await expect(
+        client.request(
+          "thread/fork",
+          { threadId: "original", excludeTurns: true },
+          { timeoutMs: 5_000, assertCurrent },
+        ),
+      ).rejects.toThrow("Session initialization source is closed");
+      expect(fixture.native.calls.filter((call) => call.method === "thread/fork")).toHaveLength(
+        before,
+      );
+      return result;
+    } finally {
+      requests.mockRestore();
+    }
+  });
+}
+
 async function withFixture(
   run: (
     fixture: CanonicalForkFixture,
@@ -108,16 +169,20 @@ async function withFixture(
     ) => Promise<{ ok: boolean; key?: string; message?: string }>,
     revoke: (target: "source" | "child" | "registry", sourceKey: string) => void,
     admissions: Array<{ recorder: UserTurnTranscriptRecorder; before: unknown[] }>,
+    runtime: ReturnType<typeof createPluginRuntimeMock>,
   ) => Promise<void>,
   options: {
     loading?: "searchable" | "direct";
     codexPlugins?: Parameters<typeof createCanonicalForkFixtureForTest>[0]["codexPlugins"];
     desktopGenerationFingerprint?: string;
     senderIsOwner?: boolean;
+    sessionMutationAuthorization?: GatewayRequestHandlerOptions["sessionMutationAuthorization"];
+    transcript?: { display?: false; excludeFromContext?: true };
     mcpResolver?: OpenClawPluginMcpServerConnectionResolver;
+    isolatedState?: boolean;
   } = {},
 ) {
-  await withOpenClawTestState({ label: "canonical-descendant" }, async (state) => {
+  await withState(async (state) => {
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
@@ -138,8 +203,10 @@ async function withFixture(
       agent: createRuntimeAgent(),
       config: { current: () => config },
       state: {
-        openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-          createPluginStateSyncKeyedStore<T>("codex", options),
+        openKeyedStore: <T>(storeOptions: OpenAsyncKeyedStoreOptions) =>
+          createPluginStateKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
+        openSyncKeyedStore: <T>(storeOptions: OpenKeyedStoreOptions) =>
+          createPluginStateSyncKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
       },
     });
     const admissions: Array<{ recorder: UserTurnTranscriptRecorder; before: unknown[] }> = [];
@@ -164,6 +231,7 @@ async function withFixture(
         const target = { agentId: "main", sessionId, sessionKey, storePath };
         const recorder = createUserTurnTranscriptRecorder({
           input: {
+            ...options.transcript,
             text: prompt,
             timestamp: 123,
             idempotencyKey: buildRunUserTurnIdempotencyKey(runId),
@@ -187,24 +255,31 @@ async function withFixture(
         });
         const admittedRunContext = await admission.admit("plugin-harness", runId);
         const placements = workerOwned ? createWorkerSessionPlacementStore() : undefined;
-        let workerClaim: ReturnType<NonNullable<typeof placements>["claimTurn"]> | undefined;
+        let workerClaim:
+          | Awaited<ReturnType<NonNullable<typeof placements>["claimTurn"]>>
+          | undefined;
         if (placements) {
-          let placement = placements.startDispatch(target);
-          placement = placements.transition({
+          seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
+            environmentId: "policy-worker",
+            sessionId,
+            ownerEpoch: 7,
+          });
+          let placement = await placements.startDispatch(target);
+          placement = await placements.transition({
             sessionId,
             from: "requested",
             to: "provisioning",
             expectedGeneration: placement.generation,
             patch: { environmentId: "policy-worker" },
           });
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId,
             from: "provisioning",
             to: "syncing",
             expectedGeneration: placement.generation,
             patch: { workerBundleHash: "a".repeat(64) },
           });
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId,
             from: "syncing",
             to: "starting",
@@ -214,14 +289,14 @@ async function withFixture(
               remoteWorkspaceDir: "/workspace/policy",
             },
           });
-          placements.transition({
+          await placements.transition({
             sessionId,
             from: "starting",
             to: "active",
             expectedGeneration: placement.generation,
             patch: { activeOwnerEpoch: 7 },
           });
-          workerClaim = placements.claimTurn({
+          workerClaim = await placements.claimTurn({
             ...target,
             runId,
             claimId: "policy-claim",
@@ -265,7 +340,9 @@ async function withFixture(
           abortController,
           invalidate: async (reason) => {
             if (reason === "claim") {
-              if (capturedWorkerClaim) placements?.releaseTurn(capturedWorkerClaim);
+              if (capturedWorkerClaim) {
+                await placements?.releaseTurn(capturedWorkerClaim);
+              }
               workerClaim = undefined;
             } else if (reason === "aborted") {
               abortController.abort();
@@ -289,151 +366,201 @@ async function withFixture(
             }
           },
           userTurnTranscriptRecorder: recorder,
-          close: () => {
+          close: async () => {
             host.close();
-            if (workerClaim) placements?.releaseTurn(workerClaim);
+            if (workerClaim) {
+              await placements?.releaseTurn(workerClaim);
+            }
             admission.close();
             successor?.close();
           },
         };
       },
     });
-    config.plugins = {
-      allow: ["codex", "openai"],
-      entries: {
-        codex: { enabled: true, config: fixture.pluginConfig },
-        openai: { enabled: true },
-      },
-    };
-    const { registry, createApi } = createPluginRegistry({
-      runtime,
-      logger: { info() {}, warn() {}, error() {} },
-      activateGlobalSideEffects: false,
-    });
-    const metadataSnapshot = resolvePluginMetadataSnapshot({
-      config,
-      workspaceDir: state.workspaceDir,
-      preferPersisted: false,
-    });
-    for (const plugin of [codexPlugin, openaiPlugin]) {
-      const rootDir = fileURLToPath(new URL(`../extensions/${plugin.id}/`, import.meta.url));
-      const record = createPluginRecord({
-        id: plugin.id,
-        contracts: expectDefined(metadataSnapshot.byPluginId.get(plugin.id), "plugin manifest")
-          .contracts,
-        origin: "bundled",
-        rootDir,
-        source: `${rootDir}index.ts`,
-      });
-      registry.plugins.push(record);
-      await plugin.register(
-        createApi(record, {
-          config,
-          pluginConfig: config.plugins.entries?.[plugin.id]?.config,
-        }),
-      );
-    }
-    if (options.mcpResolver) {
-      const record = createPluginRecord({ id: "canonical-requester-mcp" });
-      registry.plugins.push(record);
-      createApi(record, { config }).registerMcpServerConnectionResolver(options.mcpResolver);
-    }
-    expect(registry.diagnostics.filter((entry) => entry.level === "error")).toEqual([]);
-    markPluginRegistryActive(registry);
-    setPluginRuntimeLoadContext(
-      registry,
-      resolvePluginRuntimeLoadContext({
-        config,
-        workspaceDir: state.workspaceDir,
-        metadataSnapshot,
-      }),
-    );
-    const fork = async (sessionKey: string, entryId: string) => {
-      expect(
-        listRegisteredAgentHarnesses().map((entry) => entry.harness.sessionFork?.upstreamKinds),
-      ).toEqual([["codex-app-server"]]);
-      let result: { ok: boolean; key?: string; message?: string } | undefined;
-      const request = { sessionKey, entryId };
-      await expectDefined(
-        sessionRewindHandlers["sessions.fork"],
-        "fork handler",
-      )({
-        req: { type: "req", id: "canonical-descendant", method: "sessions.fork", params: request },
-        params: request,
-        client: null,
-        isWebchatConnect: () => false,
-        // SAFETY: these are the complete Gateway collaborators used by the real fork handler.
-        context: {
-          getRuntimeConfig: () => config,
-          chatAbortControllers: new Map(),
-          getSessionEventSubscriberConnIds: () => new Set(),
-          broadcastToConnIds: () => {},
-        } as unknown as GatewayRequestContext,
-        respond: (ok, payload, error) => {
-          const key =
-            payload &&
-            typeof payload === "object" &&
-            "sessionKey" in payload &&
-            typeof payload.sessionKey === "string"
-              ? payload.sessionKey
-              : undefined;
-          result = { ok, key, ...(error ? { message: error.message } : {}) };
-        },
-      });
-      return expectDefined(result, "fork response");
-    };
+    const scheduler = createTestGatewayScheduler();
     try {
-      await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry: registry }, () =>
-        run(
-          fixture,
-          fork,
-          (target, sourceKey) => {
-            if (target === "registry") {
-              markPluginRegistryRetired(registry);
-              return;
-            }
-            const key =
-              target === "source"
-                ? sourceKey
-                : expectDefined(
-                    listSessionEntriesCore({
-                      agentId: "main",
-                      storePath: fixture.storePath,
-                    }).find(({ entry }) => entry.initializationPending === true)?.sessionKey,
-                    "pending child",
-                  );
-            const entry = expectDefined(
-              loadSessionEntry({ sessionKey: key, storePath: fixture.storePath }),
-              "revoked owner",
-            );
-            runOpenClawAgentWriteTransaction(
-              (database) =>
-                writeSessionEntry(database, key, {
-                  ...entry,
-                  lifecycleRevision: "successor-generation",
-                }),
-              { agentId: "main" },
-            );
-          },
-          admissions,
-        ),
-      );
-    } finally {
-      if (options.mcpResolver) {
-        for (const { entry } of listSessionEntriesCore({
-          agentId: "main",
-          storePath: fixture.storePath,
-        })) {
-          await retireSessionMcpRuntime({
-            sessionId: entry.sessionId,
-            reason: "canonical requester fixture complete",
+      await setSessionMcpRuntimeScheduler(scheduler);
+      config.plugins = {
+        allow: ["codex", "openai"],
+        entries: {
+          codex: { enabled: true, config: fixture.pluginConfig },
+          openai: { enabled: true },
+        },
+      };
+      const { registry, createApi } = createPluginRegistry({
+        runtime,
+        logger: { info() {}, warn() {}, error() {} },
+        resolveCapabilityCatalogContext: resolvePluginCapabilityCatalogContext,
+        activateGlobalSideEffects: false,
+      });
+      try {
+        const metadataSnapshot = resolvePluginMetadataSnapshot({
+          config,
+          workspaceDir: state.workspaceDir,
+          preferPersisted: false,
+        });
+        for (const pluginId of ["codex", "openai"]) {
+          const manifest = expectDefined(
+            metadataSnapshot.byPluginId.get(pluginId),
+            "plugin manifest",
+          );
+          const artifact = resolvePluginRuntimeExecutionArtifact(
+            resolvePluginRuntimeArtifactSelection({
+              ...manifest,
+              entryKind: "runtime",
+              preferBuiltPluginArtifacts: false,
+            }),
+          );
+          const plugin: OpenClawPluginDefinition = (
+            await import(pathToFileURL(artifact.source).href)
+          ).default;
+          expect(plugin.id).toBe(pluginId);
+          const record = createPluginRecord({
+            id: manifest.id,
+            contracts: manifest.contracts,
+            origin: manifest.origin,
+            ...artifact,
           });
+          // Register the selected artifact itself so retained tool ownership agrees
+          // with both source-only and built metadata discovery.
+          bindPluginRuntimeArtifactSelection(record, {
+            ...manifest,
+            preferBuiltPluginArtifacts: false,
+            runtimeEntry: artifact,
+          });
+          registry.plugins.push(record);
+          expectDefined(
+            plugin.register,
+            "fixture plugin registration",
+          )(
+            createApi(record, {
+              config,
+              pluginConfig: config.plugins.entries?.[pluginId]?.config,
+            }),
+          );
         }
+        if (options.mcpResolver) {
+          const record = createPluginRecord({ id: "canonical-requester-mcp" });
+          registry.plugins.push(record);
+          createApi(record, { config }).registerMcpServerConnectionResolver(options.mcpResolver);
+        }
+        expect(registry.diagnostics.filter((entry) => entry.level === "error")).toEqual([]);
+        const fixtureOwners = createRuntimePluginManifestLookup(registry, metadataSnapshot.plugins);
+        expect(
+          registry.plugins
+            .filter((record) => record.id === "codex" || record.id === "openai")
+            .map((record) => fixtureOwners(record.id) === record),
+        ).toEqual([true, true]);
+        markPluginRegistryActive(registry);
+        setPluginRuntimeLoadContext(
+          registry,
+          resolvePluginRuntimeLoadContext({
+            config,
+            workspaceDir: state.workspaceDir,
+            metadataSnapshot,
+          }),
+        );
+        const fork = async (sessionKey: string, entryId: string) => {
+          expect(
+            listRegisteredAgentHarnesses().map(
+              (entry) => entry.harness.sessionForkV2?.upstreamKinds,
+            ),
+          ).toEqual([["codex-app-server"]]);
+          let result: { ok: boolean; key?: string; message?: string } | undefined;
+          const request = { sessionKey, entryId };
+          await expectDefined(
+            sessionRewindHandlers["sessions.fork"],
+            "fork handler",
+          )({
+            req: {
+              type: "req",
+              id: "canonical-descendant",
+              method: "sessions.fork",
+              params: request,
+            },
+            params: request,
+            client: null,
+            isWebchatConnect: () => false,
+            sessionMutationAuthorization: options.sessionMutationAuthorization,
+            // SAFETY: these are the complete Gateway collaborators used by the real fork handler.
+            context: {
+              getRuntimeConfig: () => config,
+              chatAbortControllers: new Map(),
+              getSessionEventSubscriberConnIds: () => new Set(),
+              broadcastToConnIds: () => {},
+            } as unknown as GatewayRequestContext,
+            respond: (ok, payload, error) => {
+              const key =
+                payload &&
+                typeof payload === "object" &&
+                "sessionKey" in payload &&
+                typeof payload.sessionKey === "string"
+                  ? payload.sessionKey
+                  : undefined;
+              result = { ok, key, ...(error ? { message: error.message } : {}) };
+            },
+          });
+          return expectDefined(result, "fork response");
+        };
+        await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry: registry }, () =>
+          run(
+            fixture,
+            fork,
+            (target, sourceKey) => {
+              if (target === "registry") {
+                markPluginRegistryRetired(registry);
+                return;
+              }
+              const key =
+                target === "source"
+                  ? sourceKey
+                  : expectDefined(
+                      listSessionEntriesCore({
+                        agentId: "main",
+                        storePath: fixture.storePath,
+                      }).find(({ entry }) => entry.initializationPending === true)?.sessionKey,
+                      "pending child",
+                    );
+              const entry = expectDefined(
+                loadSessionEntry({ sessionKey: key, storePath: fixture.storePath }),
+                "revoked owner",
+              );
+              runOpenClawAgentWriteTransaction(
+                (database) =>
+                  writeSessionEntry(database, key, {
+                    ...entry,
+                    lifecycleRevision: "successor-generation",
+                  }),
+                { agentId: "main" },
+              );
+            },
+            admissions,
+            runtime,
+          ),
+        );
+      } finally {
+        if (options.mcpResolver) {
+          for (const { entry } of listSessionEntriesCore({
+            agentId: "main",
+            storePath: fixture.storePath,
+          })) {
+            await retireSessionMcpRuntime({
+              sessionId: entry.sessionId,
+              reason: "canonical requester fixture complete",
+            });
+          }
+        }
+        markPluginRegistryRetired(registry);
       }
-      markPluginRegistryRetired(registry);
-      await fixture.dispose();
+    } finally {
+      try {
+        await disposeAllSessionMcpRuntimes();
+      } finally {
+        await scheduler.stop();
+        await fixture.dispose();
+      }
     }
-  });
+  }, options.isolatedState);
 }
 
 describe("canonical descendant lifecycle through real owners", () => {
@@ -467,7 +594,7 @@ describe("canonical descendant lifecycle through real owners", () => {
           calls.findIndex((call) => call.method === "turn/start"),
         );
         expect(
-          admissions.at(-1)?.recorder.getPersistedMessage?.()?.__openclaw?.mirrorIdentity,
+          admissions.at(-1)?.recorder.getPersistedMessage?.()?.["__openclaw"]?.mirrorIdentity,
         ).toMatch(/:prompt$/);
       }
       expect(
@@ -483,7 +610,7 @@ describe("canonical descendant lifecycle through real owners", () => {
       await withFixture(async (fixture, _fork, _revoke, admissions) => {
         const source = await fixture.adopt();
         const binding = await fixture.turn(source.sessionKey, "accepted");
-        const before = await fixture.bindingStore.read(fixture.identity(source.sessionKey));
+        const before = fixture.bindingStore.read(fixture.identity(source.sessionKey));
         const offset = fixture.native.calls.length;
         const history = structuredClone(fixture.native.threads.get(binding.threadId)?.thread.turns);
         fixture.native.setPolicyFault(fault);
@@ -500,13 +627,11 @@ describe("canonical descendant lifecycle through real owners", () => {
             ["thread/start", "thread/fork", "thread/archive", "turn/start"].includes(call.method),
           ),
         ).toBe(false);
-        expect(await fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(
-          before,
-        );
+        expect(fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(before);
         expect(fixture.native.threads.get(binding.threadId)?.thread.turns).toEqual(history);
-        expect(admissions.at(-1)?.recorder.getPersistedMessage?.()?.__openclaw).not.toHaveProperty(
-          "mirrorIdentity",
-        );
+        expect(
+          admissions.at(-1)?.recorder.getPersistedMessage?.()?.["__openclaw"],
+        ).not.toHaveProperty("mirrorIdentity");
         const lastClient = calls.find((call) => call.method === "thread/inject_items")?.client;
         // A separately admitted cold run may reassert once on a new physical client.
         await fixture.turn(source.sessionKey, "independent retry");
@@ -526,7 +651,7 @@ describe("canonical descendant lifecycle through real owners", () => {
         const source = await fixture.adopt();
         const binding = await fixture.turn(source.sessionKey, "accepted");
         const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
-        const before = await fixture.bindingStore.read(fixture.identity(source.sessionKey));
+        const before = fixture.bindingStore.read(fixture.identity(source.sessionKey));
         const offset = fixture.native.calls.length;
         const threads = new Set(fixture.native.threads.keys());
         fixture.native.setPolicyFault(fault);
@@ -544,9 +669,7 @@ describe("canonical descendant lifecycle through real owners", () => {
             ({ entry }) => entry.initializationPending === true,
           ),
         ).toBe(true);
-        expect(await fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(
-          before,
-        );
+        expect(fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(before);
         expect(fixture.native.threads.has(binding.threadId)).toBe(true);
         expect(fixture.native.threads.has("original")).toBe(true);
       });
@@ -578,7 +701,9 @@ describe("canonical descendant lifecycle through real owners", () => {
           await fixture.withClient(async (client) => {
             const request = client.request.bind(client);
             const spy = vi.spyOn(client, "request").mockImplementation((method, input, options) => {
-              if (method === "thread/inject_items") revoke(target, source.sessionKey);
+              if (method === "thread/inject_items") {
+                revoke(target, source.sessionKey);
+              }
               return request(method, input, options);
             });
             restore = () => spy.mockRestore();
@@ -605,7 +730,7 @@ describe("canonical descendant lifecycle through real owners", () => {
       await withFixture(async (fixture, fork) => {
         const source = await fixture.adopt();
         const binding = await fixture.turn(source.sessionKey, "accepted");
-        const before = await fixture.bindingStore.read(fixture.identity(source.sessionKey));
+        const before = fixture.bindingStore.read(fixture.identity(source.sessionKey));
         const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
         const mutate = fixture.bindingStore.mutate.bind(fixture.bindingStore);
         const spy = vi
@@ -660,11 +785,9 @@ describe("canonical descendant lifecycle through real owners", () => {
                 call.params.threadId !== binding.threadId && call.params.threadId !== "original",
             ),
         ).toBe(true);
-        expect(await fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(
-          before,
-        );
+        expect(fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(before);
         if (successorKey) {
-          expect(await fixture.bindingStore.read(fixture.identity(successorKey))).toMatchObject({
+          expect(fixture.bindingStore.read(fixture.identity(successorKey))).toMatchObject({
             threadId: "successor-thread",
           });
         }
@@ -680,52 +803,55 @@ describe("canonical descendant lifecycle through real owners", () => {
   )(
     "fences a supervised policy handoff after run authority is $reason at $phase",
     async ({ reason, phase }) => {
-      await withFixture(async (fixture) => {
-        const source = await fixture.adopt();
-        await fixture.turn(source.sessionKey, "accepted");
-        const before = await fixture.bindingStore.read(fixture.identity(source.sessionKey));
-        const offset = fixture.native.calls.length;
-        let restore: (() => void) | undefined;
-        try {
-          await expect(
-            fixture.turn(source.sessionKey, "revoked", {
-              workerOwned: reason === "claim",
-              beforeStartup: async (invalidate) => {
-                if (phase === "overload") {
-                  fixture.native.rejectNext("thread/inject_items", () => invalidate(reason));
-                } else if (phase === "acknowledged") {
-                  fixture.native.setAfterPolicyWrite(() => invalidate(reason));
-                } else {
-                  await fixture.withClient(async (client) => {
-                    const request = client.request.bind(client);
-                    const spy = vi
-                      .spyOn(client, "request")
-                      .mockImplementation(async (method, input, options) => {
-                        if (method === "thread/inject_items") await invalidate(reason);
-                        return request(method, input, options);
-                      });
-                    restore = () => spy.mockRestore();
-                  });
-                }
-              },
-            }),
-          ).rejects.toThrow(
-            reason === "aborted" ? "codex app-server startup aborted" : /policy handoff/,
+      await withFixture(
+        async (fixture) => {
+          const source = await fixture.adopt();
+          await fixture.turn(source.sessionKey, "accepted");
+          const before = fixture.bindingStore.read(fixture.identity(source.sessionKey));
+          const offset = fixture.native.calls.length;
+          let restore: (() => void) | undefined;
+          try {
+            await expect(
+              fixture.turn(source.sessionKey, "revoked", {
+                workerOwned: reason === "claim",
+                beforeStartup: async (invalidate) => {
+                  if (phase === "overload") {
+                    fixture.native.rejectNext("thread/inject_items", () => invalidate(reason));
+                  } else if (phase === "acknowledged") {
+                    fixture.native.setAfterPolicyWrite(() => invalidate(reason));
+                  } else {
+                    await fixture.withClient(async (client) => {
+                      const request = client.request.bind(client);
+                      const spy = vi
+                        .spyOn(client, "request")
+                        .mockImplementation(async (method, input, options) => {
+                          if (method === "thread/inject_items") {
+                            await invalidate(reason);
+                          }
+                          return request(method, input, options);
+                        });
+                      restore = () => spy.mockRestore();
+                    });
+                  }
+                },
+              }),
+            ).rejects.toThrow(
+              reason === "aborted" ? "codex app-server startup aborted" : /policy handoff/,
+            );
+          } finally {
+            restore?.();
+          }
+          const calls = fixture.native.calls.slice(offset);
+          expect(calls.filter((call) => call.method === "thread/inject_items")).toHaveLength(
+            phase === "prewrite" ? 0 : 1,
           );
-        } finally {
-          restore?.();
-        }
-        const calls = fixture.native.calls.slice(offset);
-        expect(calls.filter((call) => call.method === "thread/inject_items")).toHaveLength(
-          phase === "prewrite" ? 0 : 1,
-        );
-        expect(
-          calls.some((call) => call.method === "turn/start" || call.method === "thread/start"),
-        ).toBe(false);
-        expect(await fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(
-          before,
-        );
-      });
+          expect(
+            calls.some((call) => call.method === "turn/start" || call.method === "thread/start"),
+          ).toBe(false);
+          expect(fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(before);
+        },
+        { isolatedState: reason === "claim" },
+      );
     },
     180_000,
   );
@@ -786,6 +912,33 @@ describe("canonical descendant lifecycle through real owners", () => {
     });
   }, 180_000);
 
+  it("preserves hidden admitted consult prompts without requesting visible-row annotation", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    await withFixture(
+      async (fixture, _fork, _revoke, admissions) => {
+        const source = await fixture.adopt();
+        await fixture.turn(source.sessionKey, "Hidden voice consultation");
+        const { recorder, before } = admissions.at(-1)!;
+        expect(recorder.getAdmissionReceipt()).toBeDefined();
+        expect(recorder.getPersistedMessage?.()).toMatchObject({
+          display: false,
+          excludeFromContext: true,
+        });
+        const target = {
+          ...fixture.identity(source.sessionKey),
+          sessionKey: source.sessionKey,
+          storePath: fixture.storePath,
+        };
+        expect(await loadTranscriptEvents(target)).toEqual(before);
+        expect(warn).not.toHaveBeenCalledWith(
+          "failed to mirror codex app-server prompt at turn start",
+          expect.anything(),
+        );
+      },
+      { transcript: { display: false, excludeFromContext: true } },
+    );
+  }, 180_000);
+
   it("annotates the pre-admitted Gateway user without replacing its event or read fence", async () => {
     await withFixture(async (fixture, fork, _revoke, admissions) => {
       const source = await fixture.adopt();
@@ -828,11 +981,14 @@ describe("canonical descendant lifecycle through real owners", () => {
           before.slice(0, -1),
         );
         expect(
-          readClosedTranscriptTurn({
-            boundary: { admission, terminal: admission },
-            maxEvents: 100,
-            maxBytes: 100_000,
-          }),
+          readClosedTranscriptTurnInDatabase(
+            openOpenClawAgentDatabase({ agentId: admission.agentId, path: admission.storePath }).db,
+            {
+              boundary: { admission, terminal: admission },
+              maxEvents: 100,
+              maxBytes: 100_000,
+            },
+          ),
         ).toMatchObject({ kind: "ok", messages: [added.message] });
         expect(await fork(source.sessionKey, admission.entryId)).toMatchObject({ ok: true });
       }
@@ -906,9 +1062,12 @@ describe("canonical descendant lifecycle through real owners", () => {
     180_000,
   );
 
-  it.each(["source", "registry"] as const)(
-    "fences native archive retries after %s rollback authority is revoked",
-    async (target) => {
+  it.each([
+    ["source", 2, 0],
+    ["registry", 1, 1],
+  ] as const)(
+    "keeps native archive overload retry within captured rollback after %s revocation",
+    async (target, attempts, retained) => {
       await withFixture(async (fixture, fork, revoke) => {
         const source = await fixture.adopt();
         const binding = await fixture.turn(source.sessionKey, "canonical");
@@ -922,8 +1081,10 @@ describe("canonical descendant lifecycle through real owners", () => {
         expect((await fork(source.sessionKey, selected.entryId)).ok).toBe(false);
         expect(
           fixture.native.calls.filter((call) => call.method === "thread/archive"),
-        ).toHaveLength(archiveCount + 1);
-        expect([...fixture.native.threads.keys()].filter((id) => !before.has(id))).toHaveLength(1);
+        ).toHaveLength(archiveCount + attempts);
+        expect([...fixture.native.threads.keys()].filter((id) => !before.has(id))).toHaveLength(
+          retained,
+        );
         expect(fixture.native.threads.has(binding.threadId)).toBe(true);
         expect(fixture.native.threads.has("original")).toBe(true);
       });
@@ -931,9 +1092,13 @@ describe("canonical descendant lifecycle through real owners", () => {
     180_000,
   );
 
-  it.each(["source", "child", "registry"] as const)(
-    "retires the exact subscription after %s revocation following native fork without killing sibling leases",
-    async (target) => {
+  it.each([
+    ["source", true],
+    ["child", false],
+    ["registry", false],
+  ] as const)(
+    "uses captured rollback ownership after %s revocation following native fork",
+    async (target, rollbackAllowed) => {
       await withFixture(async (fixture, fork, revoke) => {
         const source = await fixture.adopt();
         const binding = await fixture.turn(source.sessionKey, "canonical");
@@ -951,14 +1116,18 @@ describe("canonical descendant lifecycle through real owners", () => {
           expect(fresh).toBeTruthy();
           expect(
             fixture.native.calls.filter((call) => call.method === "thread/archive"),
-          ).toHaveLength(archiveCount);
+          ).toHaveLength(archiveCount + (rollbackAllowed ? 1 : 0));
           await expect(client.request("config/read", {})).resolves.toMatchObject({ config: {} });
           await fixture.withClient(async (next) => {
-            expect(next).not.toBe(client);
+            if (rollbackAllowed) {
+              expect(next).toBe(client);
+            } else {
+              expect(next).not.toBe(client);
+            }
           });
           expect(fixture.native.threads.has(binding.threadId)).toBe(true);
           expect(fixture.native.threads.has("original")).toBe(true);
-          expect(fixture.native.threads.has(fresh!)).toBe(true);
+          expect(fixture.native.threads.has(fresh!)).toBe(!rollbackAllowed);
         });
         await vi.waitFor(() =>
           expect([...fixture.native.subscriptions].some((key) => key.endsWith(`:${fresh}`))).toBe(
@@ -1003,16 +1172,19 @@ describe("canonical descendant lifecycle through real owners", () => {
       expect(result, result.message).toMatchObject({ ok: true });
       const key = expectDefined(result.key, "child");
       const binding = expectDefined(
-        await fixture.bindingStore.read(fixture.identity(key)),
+        fixture.bindingStore.read(fixture.identity(key)),
         "child binding",
       );
       const child = expectDefined(fixture.native.threads.get(binding.threadId), "native child");
       expect(child.thread.turns).toHaveLength(12);
-      registerSessionStateWatch({ watcherSessionKey: "agent:main:main", targetSessionKey: key });
-      const events = () => listSessionStateEventsSince(key, "main", 0).events;
-      const before = events();
+      await registerSessionStateWatch({
+        watcherSessionKey: "agent:main:main",
+        targetSessionKey: key,
+      });
+      const events = async () => (await listSessionStateEventsSince(key, "main", 0)).events;
+      const before = await events();
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
-      expect(events()).toEqual(before);
+      expect(await events()).toEqual(before);
       const link = expectDefined(readSessionUpstreamLink(key, "main"), "child link");
       const root = expectDefined(readSessionUpstreamLink(source.sessionKey, "main"), "root link");
       expect(link).toMatchObject({
@@ -1028,11 +1200,31 @@ describe("canonical descendant lifecycle through real owners", () => {
         });
       });
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
-      expect(events().slice(before.length)).toEqual([
+      expect((await events()).slice(before.length)).toEqual([
         expect.objectContaining({ kind: "human_direct_message" }),
       ]);
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
-      expect(events()).toHaveLength(before.length + 1);
+      expect(await events()).toHaveLength(before.length + 1);
+    });
+  }, 180_000);
+
+  it("forks with the current native model instead of the stale persisted model", async () => {
+    await withFixture(async (fixture, fork) => {
+      const source = await fixture.adopt();
+      const binding = await fixture.turn(source.sessionKey, "canonical");
+      const current = expectDefined(fixture.native.threads.get(binding.threadId), "canonical");
+      current.thread.model = "gpt-5.5";
+      const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
+      const result = await withRetainedNativeForkAttempt(fixture, () =>
+        fork(source.sessionKey, selected.entryId),
+      );
+      expect(result, result.message).toMatchObject({ ok: true });
+      const childKey = expectDefined(result.key, "child key");
+      expect(fixture.bindingStore.read(fixture.identity(childKey))).toMatchObject({
+        model: "gpt-5.5",
+        modelProvider: current.thread.modelProvider,
+      });
+      expect(current.model).toBe("gpt-5.6-luna");
     });
   }, 180_000);
 
@@ -1059,6 +1251,20 @@ describe("canonical descendant lifecycle through real owners", () => {
             "canonical native thread",
           );
           const currentBefore = structuredClone(current);
+          if (!Array.isArray(current.dynamicTools)) {
+            throw new Error("Expected the canonical native dynamic tool catalog");
+          }
+          expect(
+            current.dynamicTools.flatMap((spec) =>
+              isRecord(spec) && spec.type === "namespace" && Array.isArray(spec.tools)
+                ? spec.tools
+                : [spec],
+            ),
+          ).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ type: "function", name: "codex_threads" }),
+            ]),
+          );
           const entries = await fixture.readEntries(source.sessionKey);
           const users = entries.filter((entry) => entry.role === "user");
           expect(users).toHaveLength(4);
@@ -1081,7 +1287,7 @@ describe("canonical descendant lifecycle through real owners", () => {
           );
           const firstKey = expectDefined(first.key, "first descendant key");
           const firstBinding = expectDefined(
-            await fixture.bindingStore.read(fixture.identity(firstKey)),
+            fixture.bindingStore.read(fixture.identity(firstKey)),
             "first descendant binding",
           );
           const firstForkCalls = fixture.native.calls.slice(firstForkOffset);
@@ -1176,7 +1382,6 @@ describe("canonical descendant lifecycle through real owners", () => {
                           enabled: true,
                           destructive_enabled: false,
                           open_world_enabled: true,
-                          default_tools_approval_mode: "auto",
                         },
                       }
                     : {}),
@@ -1245,7 +1450,7 @@ describe("canonical descendant lifecycle through real owners", () => {
           expect(later, later.message).toMatchObject({ ok: true });
           const laterKey = expectDefined(later.key, "later descendant key");
           const laterBinding = expectDefined(
-            await fixture.bindingStore.read(fixture.identity(laterKey)),
+            fixture.bindingStore.read(fixture.identity(laterKey)),
             "later binding",
           );
           expect(fixture.native.threads.get(laterBinding.threadId)?.thread.turns).toEqual(
@@ -1318,7 +1523,7 @@ describe("canonical descendant lifecycle through real owners", () => {
     const calls: string[] = [];
     const resolutions: string[] = [];
     let initializations = 0;
-    const server = http.createServer(async (request, response) => {
+    const handleRequest = async (request: http.IncomingMessage, response: http.ServerResponse) => {
       const sessionId = request.headers["mcp-session-id"];
       if (request.method === "DELETE") {
         if (typeof sessionId === "string") {
@@ -1381,8 +1586,15 @@ describe("canonical descendant lifecycle through real owners", () => {
       }
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+    };
+    const server = http.createServer((request, response) => {
+      void handleRequest(request, response).catch((error: unknown) => {
+        response.destroy(error instanceof Error ? error : new Error(String(error)));
+      });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("requester MCP server did not bind a TCP port");
@@ -1401,7 +1613,7 @@ describe("canonical descendant lifecycle through real owners", () => {
                 }
                 expect(bridge.availableTools.some((tool) => tool.name === toolName)).toBe(true);
                 const binding = expectDefined(
-                  await fixture.bindingStore.read(fixture.identity(key)),
+                  fixture.bindingStore.read(fixture.identity(key)),
                   "requester turn binding",
                 );
                 const before = calls.length;
@@ -1443,7 +1655,7 @@ describe("canonical descendant lifecycle through real owners", () => {
           );
           const childKey = expectDefined(result.key, "requester child key");
           const childBinding = expectDefined(
-            await fixture.bindingStore.read(fixture.identity(childKey)),
+            fixture.bindingStore.read(fixture.identity(childKey)),
             "requester child binding",
           );
           expect(fixture.native.threads.get(childBinding.threadId)?.dynamicTools).toEqual(
@@ -1508,9 +1720,9 @@ describe("canonical descendant lifecycle through real owners", () => {
         },
       );
     } finally {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     }
   }, 180_000);
 
@@ -1526,7 +1738,7 @@ describe("canonical descendant lifecycle through real owners", () => {
       expect(
         fixture.native.calls.filter((call) => call.method === "thread/inject_items"),
       ).toHaveLength(2);
-      const before = await fixture.bindingStore.read(fixture.identity(childKey));
+      const before = fixture.bindingStore.read(fixture.identity(childKey));
       fixture.native.setCompetingSubscriber(true);
       const turnsBefore = fixture.native.calls.filter(
         (call) => call.method === "turn/start",
@@ -1534,7 +1746,7 @@ describe("canonical descendant lifecycle through real owners", () => {
       await expect(fixture.turn(childKey, "configuration must apply")).rejects.toThrow(
         /confirm unloading/,
       );
-      expect(await fixture.bindingStore.read(fixture.identity(childKey))).toEqual(before);
+      expect(fixture.bindingStore.read(fixture.identity(childKey))).toEqual(before);
       expect(fixture.native.calls.filter((call) => call.method === "turn/start")).toHaveLength(
         turnsBefore,
       );
@@ -1597,38 +1809,25 @@ describe("canonical descendant lifecycle through real owners", () => {
     180_000,
   );
 
-  it("refuses a creator-required environment before native fork", async () => {
-    await withFixture(async (fixture) => {
+  it("refuses a stored required environment through the registered fork before native I/O", async () => {
+    await withFixture(async (fixture, fork) => {
       const source = await fixture.adopt();
       await fixture.turn(source.sessionKey, "canonical");
+      const sourceEntry = expectDefined(
+        loadSessionEntry({ sessionKey: source.sessionKey, storePath: fixture.storePath }),
+        "source entry",
+      );
+      runOpenClawAgentWriteTransaction(
+        (database) =>
+          writeSessionEntry(database, source.sessionKey, { ...sourceEntry, sandbox: "required" }),
+        { agentId: "main" },
+      );
       const entries = await fixture.readEntries(source.sessionKey);
       const before = fixture.native.calls.filter((call) => call.method === "thread/fork").length;
-      const link = expectDefined(readSessionUpstreamLink(source.sessionKey, "main"), "root link");
-      const harness = expectDefined(
-        listRegisteredAgentHarnesses()[0]?.harness,
-        "registered harness",
-      );
-      const result = await expectDefined(harness.sessionFork, "registered fork capability").fork({
-        targetKey: "agent:main:dashboard:required-environment",
-        sandbox: "required",
-        source: {
-          agentId: "main",
-          sessionId: fixture.identity(source.sessionKey).sessionId,
-          sessionKey: source.sessionKey,
-          storePath: fixture.storePath,
-          entryId: entries.at(-1)!.entryId,
-        },
-        upstream: {
-          catalogId: link.catalogId,
-          hostId: link.hostId,
-          threadId: link.threadId,
-          kind: link.upstreamKind,
-          ref: link.upstreamRef,
-        },
-      });
+      const result = await fork(source.sessionKey, entries.at(-1)!.entryId);
       expect(result).toMatchObject({
-        status: "failed",
-        message: expect.stringMatching(/execution environment/),
+        ok: false,
+        message: expect.stringMatching(/requires a sandbox/),
       });
       expect(fixture.native.calls.filter((call) => call.method === "thread/fork")).toHaveLength(
         before,
@@ -1638,22 +1837,32 @@ describe("canonical descendant lifecycle through real owners", () => {
 
   it.each([
     ["ignored cut", /did not apply the exact beforeTurnId cut/],
+    ["missing model", /model/i],
+    ["null model", /model/i],
+    ["model changed during preparation", /canonical Codex source changed/],
+    ["provider changed during preparation", /canonical Codex source changed/],
+    ["request authorization changed after native fork", /request authorization changed/],
+    ["sandbox policy changed during initialization", /requires a sandbox/],
     ["catalog mismatch", /native tool catalog is missing, corrupt, or changed/],
     ["child catalog", /did not preserve the actual native tool catalog/],
     ["child model", /did not preserve the exact canonical source and selected native model/],
+    ["child thread model", /did not preserve the exact canonical source and selected native model/],
+    [
+      "null child thread model",
+      /did not preserve the exact canonical source and selected native model/,
+    ],
     ["child lineage", /unsafe native thread identity/],
     ["unsubscribe failure", /unsubscribe|subscription|guarded rollback/i],
   ])(
     "refuses %s without publishing an unsafe child",
     async (failure, expectedError) => {
+      let requestAuthorized = true;
       await withFixture(
-        async (fixture, fork) => {
+        async (fixture, fork, _revoke, _admissions, runtime) => {
           const source = await fixture.adopt();
           const binding = await fixture.turn(source.sessionKey, "first canonical");
           const sourceBefore = structuredClone(fixture.native.source);
-          const bindingBefore = await fixture.bindingStore.read(
-            fixture.identity(source.sessionKey),
-          );
+          const bindingBefore = fixture.bindingStore.read(fixture.identity(source.sessionKey));
           const existingSessions = new Set(
             listSessionEntriesCore({ agentId: "main", storePath: fixture.storePath }).map(
               ({ entry }) => entry.sessionId,
@@ -1663,6 +1872,40 @@ describe("canonical descendant lifecycle through real owners", () => {
           const countBefore = fixture.native.calls.filter(
             (call) => call.method === "thread/fork",
           ).length;
+          const archivesBefore = fixture.native.calls.filter(
+            (call) => call.method === "thread/archive",
+          ).length;
+          const current = expectDefined(fixture.native.threads.get(binding.threadId), "canonical");
+          const create = runtime.agent.session.createSessionEntry;
+          const createSession = vi.spyOn(runtime.agent.session, "createSessionEntry");
+          if (failure === "missing model") {
+            delete current.thread.model;
+          }
+          if (failure === "null model") {
+            current.thread.model = null;
+          }
+          if (
+            failure === "model changed during preparation" ||
+            failure === "provider changed during preparation"
+          ) {
+            createSession.mockImplementation((params) =>
+              create({
+                ...params,
+                afterCreate: async (created) => {
+                  if (failure === "model changed during preparation") {
+                    current.thread.model = "gpt-5.5";
+                  } else {
+                    current.thread.modelProvider = "changed-provider";
+                  }
+                  const patch = await params.afterCreate?.(created);
+                  if (!patch) {
+                    throw new Error("Expected the canonical fork initialization patch");
+                  }
+                  return patch;
+                },
+              }),
+            );
+          }
           if (failure === "ignored cut") {
             fixture.native.setIgnoreCut(true);
           }
@@ -1677,32 +1920,103 @@ describe("canonical descendant lifecycle through real owners", () => {
           if (failure === "child model") {
             fixture.native.setForkFault("model");
           }
+          if (failure === "child thread model") {
+            fixture.native.setForkFault("thread-model");
+          }
+          if (failure === "null child thread model") {
+            fixture.native.setForkFault("null-thread-model");
+          }
           if (failure === "child lineage") {
             fixture.native.setForkFault("lineage");
+          }
+          if (failure === "request authorization changed after native fork") {
+            fixture.native.setAfterFork(() => {
+              requestAuthorized = false;
+            });
+          }
+          if (failure === "sandbox policy changed during initialization") {
+            fixture.native.setAfterFork(() => {
+              const sourceEntry = expectDefined(
+                loadSessionEntry({
+                  sessionKey: source.sessionKey,
+                  storePath: fixture.storePath,
+                }),
+                "source policy entry",
+              );
+              runOpenClawAgentWriteTransaction(
+                (database) =>
+                  writeSessionEntry(database, source.sessionKey, {
+                    ...sourceEntry,
+                    sandbox: "required",
+                  }),
+                { agentId: "main" },
+              );
+            });
           }
           if (failure === "unsubscribe failure") {
             fixture.native.setFailUnsubscribe(true);
           }
-          const result = await fork(source.sessionKey, messages.at(-1)!.entryId);
+          const result =
+            failure === "sandbox policy changed during initialization"
+              ? await withRetainedNativeForkAttempt(fixture, () =>
+                  fork(source.sessionKey, messages.at(-1)!.entryId),
+                )
+              : await fork(source.sessionKey, messages.at(-1)!.entryId);
           expect(result.ok, result.message).toBe(false);
           expect(result.message).toMatch(expectedError);
+          if (failure === "missing model" || failure === "null model") {
+            expect(createSession).not.toHaveBeenCalled();
+          }
           expect(
             listSessionEntriesCore({ agentId: "main", storePath: fixture.storePath })
               .filter(({ entry }) => !existingSessions.has(entry.sessionId))
               .every(({ entry }) => entry.initializationPending === true),
             "failed forks must not publish a ready child",
           ).toBe(true);
-          if (failure === "catalog mismatch") {
+          if (
+            failure === "catalog mismatch" ||
+            failure === "missing model" ||
+            failure === "null model" ||
+            failure === "model changed during preparation" ||
+            failure === "provider changed during preparation"
+          ) {
             expect(
               fixture.native.calls.filter((call) => call.method === "thread/fork"),
             ).toHaveLength(countBefore);
           }
+          if (
+            failure === "request authorization changed after native fork" ||
+            failure === "sandbox policy changed during initialization"
+          ) {
+            expect(
+              listSessionEntriesCore({ agentId: "main", storePath: fixture.storePath }).filter(
+                ({ entry }) => !existingSessions.has(entry.sessionId),
+              ),
+            ).toEqual([]);
+            expect(
+              fixture.native.calls.filter((call) => call.method === "thread/archive"),
+            ).toHaveLength(archivesBefore + 1);
+          }
           expect(fixture.native.source).toEqual(sourceBefore);
-          expect(await fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(
+          expect(fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(
             bindingBefore,
           );
         },
-        { senderIsOwner: true },
+        {
+          senderIsOwner: true,
+          ...(failure === "request authorization changed after native fork"
+            ? {
+                sessionMutationAuthorization: {
+                  assertCurrent: () => {
+                    if (!requestAuthorized) {
+                      throw new Error("request authorization changed");
+                    }
+                  },
+                  assertTargetCurrent: vi.fn(),
+                },
+              }
+            : {}),
+        },
       );
     },
     180_000,

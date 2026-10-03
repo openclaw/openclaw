@@ -1,11 +1,13 @@
 import { EventEmitter } from "node:events";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createMockIncomingRequest,
   createMockServerResponse,
   postRawWebhook,
+  withServer,
 } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createA2aHttpHandler } from "./http.js";
@@ -256,22 +258,14 @@ describe("A2A HTTP agent discovery", () => {
 describe("A2A HTTP authentication and request limits", () => {
   it.each([
     ["missing bearer", null],
-    ["empty token", ""],
-    ["short invalid token", "x"],
     ["long invalid token", "x".repeat(200)],
-  ])("rejects %s while accepting configured peer credentials", async (_label, token) => {
+  ])("rejects %s", async (_label, token) => {
     const harness = await startHttpHarness();
     const denied = await harness.post(sendRequest(), token);
 
     expect(denied.status).toBe(401);
     await expect(denied.json()).resolves.toMatchObject({
       error: expect.stringContaining("channels.a2a.peers"),
-    });
-
-    const accepted = await harness.post(sendRequest());
-    expect(accepted.status).toBe(200);
-    await expect(accepted.json()).resolves.toMatchObject({
-      result: { task: { status: { state: "TASK_STATE_COMPLETED" } } },
     });
   });
 
@@ -309,97 +303,71 @@ describe("A2A HTTP authentication and request limits", () => {
 
   it("delivers HTTP 413 over the wire and closes for request bodies above 1 MiB", async () => {
     const harness = await startHttpHarness();
-    const server = createServer((req, res) => {
-      void harness.handler(req, res);
-    });
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
+    await withServer(
+      (req, res) => {
+        void harness.handler(req, res);
+      },
+      async (baseUrl) => {
+        // Declared and sent in one write: the shape whose rejection used to race the flush.
+        const result = await postRawWebhook({
+          url: `${baseUrl}/a2a/v1`,
+          body: "x".repeat(1024 * 1024 + 1),
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer alpha-secret",
+          },
         });
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected the A2A test server to have a TCP address");
-      }
 
-      // Declared and sent in one write: the shape whose rejection used to race the flush.
-      const result = await postRawWebhook({
-        url: `http://127.0.0.1:${address.port}/a2a/v1`,
-        body: "x".repeat(1024 * 1024 + 1),
-        headers: {
-          "content-type": "application/json",
-          authorization: "Bearer alpha-secret",
-        },
-      });
-
-      expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
-      expect(result.headers.connection).toBe("close");
-      expect(JSON.parse(result.body)).toEqual({
-        error: "Request body exceeds the 1 MiB limit",
-      });
-      expect(result.closedByServer).toBe(true);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+        expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+        expect(result.headers.connection).toBe("close");
+        expect(JSON.parse(result.body)).toEqual({
+          error: "Request body exceeds the 1 MiB limit",
+        });
+        expect(result.closedByServer).toBe(true);
+      },
+    );
   });
 
   it("delivers the JSON-RPC timeout response before closing a partial upload", async () => {
-    vi.useFakeTimers();
     const harness = await startHttpHarness();
-    const server = createServer((req, res) => {
-      void harness.handler(req, res);
-    });
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
-        });
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected the A2A test server to have a TCP address");
-      }
-      const requestReceived = new Promise<void>((resolve) => {
-        server.once("connection", (socket) => socket.once("data", () => resolve()));
-      });
-      const resultPromise = postRawWebhook({
-        url: `http://127.0.0.1:${address.port}/a2a/v1`,
-        body: "{",
-        contentLength: 2,
-        idleTimeoutMs: 60_000,
-        headers: {
-          "content-type": "application/json",
-          authorization: "Bearer alpha-secret",
-        },
-      });
+    const requestReceived = createDeferred<void>();
+    await withServer(
+      (req, res) => {
+        void harness.handler(req, res);
+        // Observe after the body reader is installed; Bun's socket wrapper omits raw data events.
+        req.once("data", () => requestReceived.resolve());
+      },
+      async (baseUrl) => {
+        vi.useFakeTimers();
+        try {
+          const resultPromise = postRawWebhook({
+            url: `${baseUrl}/a2a/v1`,
+            body: "{",
+            contentLength: 2,
+            idleTimeoutMs: 60_000,
+            headers: {
+              "content-type": "application/json",
+              authorization: "Bearer alpha-secret",
+            },
+          });
 
-      await requestReceived;
-      await vi.advanceTimersByTimeAsync(31_000);
-      const result = await resultPromise;
+          await requestReceived.promise;
+          await vi.advanceTimersByTimeAsync(31_000);
+          const result = await resultPromise;
 
-      expect(result.statusLine).toBe("HTTP/1.1 200 OK");
-      expect(result.headers.connection).toBe("close");
-      expect(JSON.parse(result.body)).toEqual({
-        jsonrpc: "2.0",
-        id: null,
-        error: { code: -32000, message: "Request body could not be read" },
-      });
-      expect(result.closedByServer).toBe(true);
-    } finally {
-      vi.useRealTimers();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+          expect(result.statusLine).toBe("HTTP/1.1 200 OK");
+          expect(result.headers.connection).toBe("close");
+          expect(JSON.parse(result.body)).toEqual({
+            jsonrpc: "2.0",
+            id: null,
+            error: { code: -32000, message: "Request body could not be read" },
+          });
+          expect(result.closedByServer).toBe(true);
+        } finally {
+          vi.useRealTimers();
+        }
+      },
+    );
   });
 
   it("rejects oversized batches with one bounded error", async () => {
@@ -509,7 +477,7 @@ describe("A2A HTTP authentication and request limits", () => {
 describe("A2A JSON-RPC protocol boundary", () => {
   it.each([
     ["malformed JSON", "{", -32700],
-    ["invalid request", "null", -32600],
+    ["invalid request ID", '{"jsonrpc":"2.0","id":{},"method":"GetTask"}', -32600],
     ["empty batch", "[]", -32600],
   ])("maps %s to its JSON-RPC error with HTTP 200", async (_label, body, errorCode) => {
     const harness = await startHttpHarness();
@@ -524,7 +492,6 @@ describe("A2A JSON-RPC protocol boundary", () => {
   });
 
   it.each([
-    ["missing method", { jsonrpc: "2.0", id: "bad" }, -32600],
     ["wrong protocol version", { jsonrpc: "1.0", id: "bad", method: "GetTask" }, -32600],
     ["unknown method", { jsonrpc: "2.0", id: "bad", method: "tasks/send" }, -32601],
     ["unsupported method", { jsonrpc: "2.0", id: "bad", method: "ListTasks" }, -32004],

@@ -38,32 +38,6 @@ function isAgentToolResult(value: unknown): value is AgentToolResult<unknown> {
   return isRecord(value) && Array.isArray(value.content);
 }
 
-function readNodeInvokePayload(value: unknown): unknown {
-  return isRecord(value) && "payload" in value ? value.payload : value;
-}
-
-function mapMcpPayloadToAgentToolResult(
-  payload: unknown,
-  mcp: { server: string; tool: string },
-): AgentToolResult<unknown> {
-  if (!isRecord(payload)) {
-    return jsonResult(payload);
-  }
-  const textContent =
-    payload.structuredContent === undefined && Array.isArray(payload.content)
-      ? payload.content.flatMap((block) =>
-          isRecord(block) && block.type === "text" && typeof block.text === "string"
-            ? [{ type: "text" as const, text: block.text }]
-            : [],
-        )
-      : [];
-  return projectMcpCallToolResult(payload, {
-    mcpServer: mcp.server,
-    mcpTool: mcp.tool,
-    ...(textContent.length > 0 ? { content: textContent } : {}),
-  });
-}
-
 function toolPolicyAllows(params: {
   pluginId: string;
   toolName: string;
@@ -97,19 +71,6 @@ function toolPolicyAllows(params: {
   );
 }
 
-function describeNodeToolLocation(params: {
-  description: string;
-  displayName?: string;
-  nodeId: string;
-}): string {
-  const label = params.displayName?.trim() || params.nodeId;
-  return `${params.description} (node: ${label})`;
-}
-
-function isProviderSafeToolName(value: string): boolean {
-  return NODE_PLUGIN_TOOL_NAME_RE.test(value);
-}
-
 function prependToolNameFragment(baseName: string, fragment: string, suffix: string): string {
   const prefix = `${fragment}_`;
   const maxBaseLength = Math.max(
@@ -135,7 +96,7 @@ function resolveUniqueToolName(params: {
     const candidate = prependToolNameFragment(params.baseName, nodeFragment, suffix);
     const normalized = normalizeToolPolicyName(candidate);
     if (
-      isProviderSafeToolName(candidate) &&
+      NODE_PLUGIN_TOOL_NAME_RE.test(candidate) &&
       normalized &&
       !params.existingNormalized.has(normalized)
     ) {
@@ -202,11 +163,7 @@ export function createNodePluginTools(params: {
     const tool: AnyAgentTool = {
       name: toolName,
       label: toolName,
-      description: describeNodeToolLocation({
-        description: descriptor.description,
-        displayName: entry.displayName,
-        nodeId: entry.nodeId,
-      }),
+      description: `${descriptor.description} (node: ${entry.displayName?.trim() || entry.nodeId})`,
       parameters: descriptor.parameters as never,
       ...(mcpTool
         ? { executionMode: "sequential" as const, resultContentSource: "network" as const }
@@ -235,9 +192,14 @@ export function createNodePluginTools(params: {
           },
           { scopes: ["operator.write"], ...(signal ? { signal } : {}) },
         );
-        const payload = readNodeInvokePayload(raw);
+        const payload = isRecord(raw) && "payload" in raw ? raw.payload : raw;
         if (mcpTool) {
-          return mapMcpPayloadToAgentToolResult(payload, mcpTool);
+          return isRecord(payload)
+            ? projectMcpCallToolResult(payload, {
+                mcpServer: mcpTool.server,
+                mcpTool: mcpTool.tool,
+              })
+            : jsonResult(payload);
         }
         const result = isAgentToolResult(payload) ? payload : jsonResult(payload);
         return descriptor.mcp ? setMcpCodeModeGuestResultFromAgentResult(result) : result;

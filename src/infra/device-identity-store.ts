@@ -10,7 +10,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  resolveOpenClawStateDirForDatabasePath,
+  resolveOpenClawStateSqlitePath,
+} from "../state/openclaw-state-db.paths.js";
 import {
   deriveCanonicalEd25519PrivateKeyRaw,
   deriveCanonicalEd25519PublicKeyRaw,
@@ -21,8 +24,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { pathMayExistSync } from "./path-existence.js";
+import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
-export const PRIMARY_DEVICE_IDENTITY_KEY = "primary";
+const PRIMARY_DEVICE_IDENTITY_KEY = "primary";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -245,7 +250,12 @@ function readStoredIdentityFromDatabase(
   identityKey: string,
 ): StoredDeviceIdentity | null {
   const row = readStoredIdentityRowFromDatabase(database, identityKey);
-  return row ? rowToStoredIdentity(row, identityKey) : null;
+  if (!row) {
+    return null;
+  }
+  const stored = rowToStoredIdentity(row, identityKey);
+  validateStoredDeviceIdentity(stored, identityKey);
+  return stored;
 }
 
 function isEmptyBootstrapIdentityTableMiss(
@@ -279,6 +289,29 @@ export function resolveDeviceIdentityStore(options: DeviceIdentityStoreOptions =
   };
 }
 
+export function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOptions): void {
+  const { databasePath, identityKey } = resolveDeviceIdentityStore(options);
+  if (identityKey !== PRIMARY_DEVICE_IDENTITY_KEY) {
+    return;
+  }
+  const legacyPath = path.join(
+    resolveOpenClawStateDirForDatabasePath(databasePath),
+    "identity",
+    "device.json",
+  );
+  if (
+    // Claims first, source last: both migration owners restore claim -> source atomically.
+    pathMayExistSync(`${legacyPath}.doctor-importing`) ||
+    pathMayExistSync(`${legacyPath}.native-importing`) ||
+    pathMayExistSync(legacyPath)
+  ) {
+    throw new StartupMaintenanceRequiredError(
+      "state-migrations",
+      `Legacy device identity exists at ${legacyPath}. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
+    );
+  }
+}
+
 /** Read through the writable shared-state lifecycle, validating any existing row. */
 export function readStoredDeviceIdentity(
   options: DeviceIdentityStoreOptions = {},
@@ -288,11 +321,7 @@ export function readStoredDeviceIdentity(
     env: options.env,
     path: resolved.databasePath,
   });
-  const stored = readStoredIdentityFromDatabase(database, resolved.identityKey);
-  if (stored) {
-    validateStoredDeviceIdentity(stored, resolved.identityKey);
-  }
-  return stored;
+  return readStoredIdentityFromDatabase(database, resolved.identityKey);
 }
 
 /** Read without creating, repairing, chmodding, or joining the writer lifecycle. */
@@ -303,9 +332,8 @@ export function readStoredDeviceIdentityReadOnly(
   return (
     withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
       (database) => {
-        let stored: StoredDeviceIdentity | null;
         try {
-          stored = readStoredIdentityFromDatabase(database, resolved.identityKey);
+          return readStoredIdentityFromDatabase(database, resolved.identityKey);
         } catch (error) {
           // A creator publishes the SQLite file before its schema transaction commits.
           // Only that empty bootstrap snapshot is a read miss; partial schemas still fail closed.
@@ -314,10 +342,6 @@ export function readStoredDeviceIdentityReadOnly(
           }
           throw error;
         }
-        if (stored) {
-          validateStoredDeviceIdentity(stored, resolved.identityKey);
-        }
-        return stored;
       },
       { env: options.env, path: resolved.databasePath },
     ) ?? null
@@ -334,9 +358,13 @@ export function insertStoredDeviceIdentityIfAbsent(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const existing = readStoredIdentityFromDatabase({ db }, resolved.identityKey);
-      if (existing) {
-        validateStoredDeviceIdentity(existing, resolved.identityKey);
-      } else {
+      if (!existing) {
+        // A native importer can claim retired key material while generation runs.
+        assertNoPendingLegacyIdentity({
+          ...options,
+          path: resolved.databasePath,
+          identityKey: resolved.identityKey,
+        });
         const kysely = getNodeSqliteKysely<DeviceIdentityDatabase>(db);
         executeSqliteQuerySync(
           db,
@@ -352,7 +380,6 @@ export function insertStoredDeviceIdentityIfAbsent(
           `SQLite device identity "${resolved.identityKey}" was not durable after insert.`,
         );
       }
-      validateStoredDeviceIdentity(authoritative, resolved.identityKey);
       return authoritative;
     },
     { env: options.env, path: resolved.databasePath },
@@ -369,8 +396,6 @@ export function repairInvalidStoredDeviceIdentity(
   validateStoredDeviceIdentity(candidate, resolved.identityKey);
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      let repaired = false;
-      let rotated = false;
       let existingRow: DeviceIdentityRow | null = null;
       try {
         existingRow = readStoredIdentityRowFromDatabase({ db }, resolved.identityKey);
@@ -379,70 +404,55 @@ export function repairInvalidStoredDeviceIdentity(
           : null;
         if (existing) {
           validateStoredDeviceIdentity(existing, resolved.identityKey);
-          return { identity: existing, repaired, rotated };
+          return { identity: existing, repaired: false, rotated: false };
         }
       } catch (error) {
         if (!(error instanceof DeviceIdentityStorageError)) {
           throw error;
         }
       }
-      if (existingRow) {
-        const salvaged = salvageStoredIdentityRow(
-          existingRow,
-          resolved.identityKey,
-          candidate.createdAtMs,
-        );
-        if (salvaged) {
-          executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<DeviceIdentityDatabase>(db)
-              .updateTable("device_identities")
-              .set({
-                device_id: salvaged.deviceId,
-                public_key_pem: salvaged.publicKeyPem,
-                private_key_pem: salvaged.privateKeyPem,
-                created_at_ms: salvaged.createdAtMs,
-                updated_at_ms: candidate.createdAtMs,
-              })
-              .where("identity_key", "=", resolved.identityKey),
-          );
-          const authoritative = readStoredIdentityFromDatabase({ db }, resolved.identityKey);
-          if (!authoritative) {
-            throw new DeviceIdentityStorageError(
-              `SQLite device identity "${resolved.identityKey}" was not durable after repair.`,
-            );
-          }
-          validateStoredDeviceIdentity(authoritative, resolved.identityKey);
-          return { identity: authoritative, repaired: true, rotated };
-        }
+      const salvaged = existingRow
+        ? salvageStoredIdentityRow(existingRow, resolved.identityKey, candidate.createdAtMs)
+        : null;
+      const kysely = getNodeSqliteKysely<DeviceIdentityDatabase>(db);
+      if (salvaged) {
         executeSqliteQuerySync(
           db,
-          getNodeSqliteKysely<DeviceIdentityDatabase>(db)
-            .deleteFrom("device_identities")
+          kysely
+            .updateTable("device_identities")
+            .set({
+              device_id: salvaged.deviceId,
+              public_key_pem: salvaged.publicKeyPem,
+              private_key_pem: salvaged.privateKeyPem,
+              created_at_ms: salvaged.createdAtMs,
+              updated_at_ms: candidate.createdAtMs,
+            })
             .where("identity_key", "=", resolved.identityKey),
         );
+      } else {
+        if (existingRow) {
+          executeSqliteQuerySync(
+            db,
+            kysely.deleteFrom("device_identities").where("identity_key", "=", resolved.identityKey),
+          );
+        }
+
+        // Missing or unsalvageable rows lose continuity; Doctor must report re-approval.
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .insertInto("device_identities")
+            .values(storedIdentityToRow(resolved.identityKey, candidate))
+            .onConflict((conflict) => conflict.column("identity_key").doNothing()),
+        );
       }
-
-      // An absent row after an invalid-row detection still means identity continuity was lost.
-      // Report the generated winner so Doctor always surfaces the required re-approval.
-      repaired = true;
-      rotated = true;
-
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<DeviceIdentityDatabase>(db)
-          .insertInto("device_identities")
-          .values(storedIdentityToRow(resolved.identityKey, candidate))
-          .onConflict((conflict) => conflict.column("identity_key").doNothing()),
-      );
       const authoritative = readStoredIdentityFromDatabase({ db }, resolved.identityKey);
       if (!authoritative) {
         throw new DeviceIdentityStorageError(
           `SQLite device identity "${resolved.identityKey}" was not durable after repair.`,
         );
       }
-      validateStoredDeviceIdentity(authoritative, resolved.identityKey);
-      return { identity: authoritative, repaired, rotated };
+      return { identity: authoritative, repaired: true, rotated: salvaged === null };
     },
     { env: options.env, path: resolved.databasePath },
     { operationLabel: "device-identity.doctor-repair" },

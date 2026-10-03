@@ -1,30 +1,20 @@
 import path from "node:path";
-import type { Locator } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  captureSessionOwnerPageProof,
   captureSessionOwnerProof,
   captureUiProofEnabled,
   openSidebarSortMenu,
   routeAvatarFixtures,
 } from "./session-ownership-visuals.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI person-grouped session presence",
 });
-
-async function selectMenuValue(menu: Locator, value: string) {
-  await menu.evaluate((element, selectedValue) => {
-    element.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: selectedValue } },
-      }),
-    );
-  }, value);
-}
 
 function sessionsList() {
   const ada = {
@@ -98,7 +88,8 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       await page.getByText("Ada research", { exact: true }).first().waitFor();
       const menu = await openSidebarSortMenu(page);
-      await selectMenuValue(menu, "grouping:person");
+      await chooseSidebarMenuOption(menu.page(), "Group by", "Person");
+      await closeSidebarMenu(page);
       const adaSection = page.locator('[data-session-section="person:profile:profile-ada"]');
       const bobSection = page.locator('[data-session-section="person:profile:profile-bob"]');
       await expectBrowser(adaSection).toContainText("Ada research");
@@ -140,6 +131,44 @@ suite.define(() => {
       await expectBrowser(bobSection.locator('[data-viewer-id="profile-morgan"]')).toHaveCount(1);
       await captureSessionOwnerProof(suite, page, "person-grouping-live-presence.png");
       await expectBrowser(bobSection.locator("openclaw-session-owner-chip")).toHaveCount(0);
+      const adaHeader = adaSection.locator(".sidebar-recent-sessions__head");
+      await adaHeader.hover();
+      await captureSessionOwnerProof(suite, page, "person-grouping-header-hover.png");
+      await page.mouse.move(0, 0);
+      await captureSessionOwnerProof(suite, page, "person-grouping-owner-online.png");
+
+      const textColor = await page.locator(".sidebar-sessions").evaluate((sidebar) => {
+        const probe = document.createElement("span");
+        probe.style.color = getComputedStyle(sidebar).getPropertyValue("--text");
+        sidebar.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      });
+      await adaHeader.hover();
+      await expectBrowser
+        .poll(() =>
+          adaHeader
+            .locator(".sidebar-recent-sessions__label-text")
+            .evaluate((label) => getComputedStyle(label).color),
+        )
+        .toBe(textColor);
+      await expectBrowser(adaSection.locator(".sidebar-session-group-presence")).toHaveCount(1);
+      await expectBrowser(bobSection.locator(".sidebar-session-group-presence")).toHaveCount(0);
+
+      await adaSection.locator("[data-person-card]").hover();
+      const adaCard = page.getByRole("dialog", { name: "Activity for Ada" });
+      await expectBrowser(adaCard).toBeVisible();
+      await captureSessionOwnerPageProof(suite, adaCard, "person-grouping-header-card.png", [
+        adaCard.getByRole("link", { name: "View activity", exact: true }),
+      ]);
+      await page.mouse.move(0, 0);
+      await adaCard.waitFor({ state: "detached" });
+      await bobSection.locator("[data-person-card]").hover();
+      const bobCard = page.getByRole("dialog", { name: "Activity for Bob" });
+      await expectBrowser(bobCard).toBeVisible();
+      await expectBrowser(bobCard).toContainText("Offline");
+      await expectBrowser(bobCard.locator("dl")).toHaveCount(0);
     } finally {
       await context.close();
     }

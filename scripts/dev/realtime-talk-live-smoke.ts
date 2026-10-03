@@ -1,4 +1,3 @@
-// Realtime Talk Live Smoke script supports OpenClaw repository automation.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,7 +8,8 @@ import {
   previewForDevToolLog,
   redactJsonValueForDevToolLog,
 } from "../lib/dev-tooling-safety.ts";
-import { toErrorObject as toLintErrorObject } from "../lib/error-format.mts";
+import { CliArgumentError } from "../lib/error-format.mts";
+import { sleep as delay } from "../lib/sleep.mjs";
 
 const OPENAI_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2.1";
@@ -68,10 +68,6 @@ type OpenAIRealtimeBrowserResponseReader = (
 type OpenAIWebRtcSmokeGlobal = typeof globalThis & {
   openclawReadBoundedRealtimeResponseText?: OpenAIRealtimeBrowserResponseReader;
 };
-
-class CliArgumentError extends Error {
-  override name = "CliArgumentError";
-}
 
 function usage(): string {
   return [
@@ -138,19 +134,7 @@ async function readBoundedText(
   maxBytes = OPENAI_HTTP_RESPONSE_MAX_BYTES,
   signal?: AbortSignal,
 ): Promise<string> {
-  return await readBoundedResponseText(response, label, maxBytes, {
-    createTooLargeError: (message: string) => new Error(message),
-    signal,
-  });
-}
-
-async function readBoundedJsonResponse(
-  response: Response,
-  label: string,
-  signal?: AbortSignal,
-): Promise<Record<string, unknown>> {
-  const text = await readBoundedText(response, label, OPENAI_HTTP_RESPONSE_MAX_BYTES, signal);
-  return JSON.parse(text) as Record<string, unknown>;
+  return await readBoundedResponseText(response, label, maxBytes, { signal });
 }
 
 function resolveOpenAIHttpTimeoutMs(
@@ -194,12 +178,6 @@ function compareStrings(left: string | undefined, right: string | undefined): nu
   return (left ?? "").localeCompare(right ?? "");
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function appendBounded<T>(items: T[], item: T, maxItems: number): void {
   if (items.length < maxItems) {
     items.push(item);
@@ -218,7 +196,7 @@ function transcriptIncludesMarker(transcripts: string[], marker: string): boolea
 }
 
 function resolveGatewayRelayModulePath(repoRoot = process.cwd()): string {
-  return `/@fs/${repoRoot.replaceAll("\\", "/")}/ui/src/pages/chat/realtime-talk-gateway-relay.ts`;
+  return `/@fs/${repoRoot.replaceAll("\\", "/")}/ui/src/pages/chat/talk/gateway-relay.ts`;
 }
 
 async function sendPcmAudioInChunks(
@@ -344,7 +322,14 @@ async function createOpenAIClientSecret(
           )}`,
         );
       }
-      return await readBoundedJsonResponse(response, "OpenAI Realtime client secret", signal);
+      return JSON.parse(
+        await readBoundedText(
+          response,
+          "OpenAI Realtime client secret",
+          OPENAI_HTTP_RESPONSE_MAX_BYTES,
+          signal,
+        ),
+      ) as Record<string, unknown>;
     },
   });
   const nested =
@@ -397,7 +382,7 @@ async function smokeOpenAIBackendBridge(apiKey: string): Promise<SmokeResult> {
       details: { model: OPENAI_REALTIME_MODEL, error: shortError(error) },
     };
   } finally {
-    bridge.close();
+    await bridge.close();
   }
 }
 
@@ -416,7 +401,7 @@ async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Pr
     const speechProvider = buildOpenAISpeechProvider();
     const synthesized = await speechProvider.synthesizeTelephony?.({
       text: "Please reply with the single word glacier.",
-      cfg: { plugins: { enabled: true } } as never,
+      cfg: { plugins: { enabled: true } },
       providerConfig: {
         apiKey,
         baseUrl: "https://api.openai.com/v1",
@@ -531,8 +516,7 @@ async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Pr
         throw error;
       } finally {
         closed = true;
-        bridge.close();
-        bridge.close();
+        await Promise.all([bridge.close(), bridge.close()]);
         bridgeRef.current = undefined;
         await delay(100);
       }
@@ -807,16 +791,7 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
         details: {
           model: OPENAI_REALTIME_MODEL,
           protocol: "ga-realtime",
-          answerHasAudio: result.answerHasAudio,
-          remoteDescriptionApplied: result.remoteDescriptionApplied,
-          connectionState: result.connectionState,
-          transcriptMarker: result.transcriptMarker,
-          responseDone: result.responseDone,
-          outputAudioBytes: result.outputAudioBytes,
-          outputAudioEnergy: result.outputAudioEnergy,
-          outputAudioSamplesDuration: result.outputAudioSamplesDuration,
-          outputAudioSpeechDuration: result.outputAudioSpeechDuration,
-          outputAudioPeakRms: result.outputAudioPeakRms,
+          ...result,
         },
       };
     } finally {
@@ -972,7 +947,18 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
               }
             })().catch((error: unknown) => {
               window.clearTimeout(timeout);
-              reject(toLintErrorObject(error, "Non-Error rejection"));
+              // This callback is serialized into the browser without module imports.
+              if (error instanceof Error) {
+                reject(error);
+              } else if (typeof error === "string") {
+                reject(new Error(error));
+              } else {
+                const failure = new Error("Non-Error rejection", { cause: error });
+                if ((typeof error === "object" && error !== null) || typeof error === "function") {
+                  Object.assign(failure, error);
+                }
+                reject(failure);
+              }
             });
           });
           ws.addEventListener("error", () => {

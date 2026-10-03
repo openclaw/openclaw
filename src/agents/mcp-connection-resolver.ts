@@ -3,9 +3,9 @@
  * Resolved url/headers are credentials — never log, fingerprint, or persist them.
  */
 import crypto from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
+import { resolveConfiguredMcpTransport } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -28,57 +28,13 @@ const MCP_CONNECTION_RESOLVER_TIMEOUT_MS = 10_000;
  * How long a full-set requester runtime may skip re-resolve while active.
  * Revocation/rotation takes effect within this window even for continuously active requesters.
  */
-const MCP_CONNECTION_REVALIDATE_MS = 5 * 60 * 1000;
-
-const MCP_CONNECTION_RESOLVER_TEST_STATE_KEY = Symbol.for(
-  "openclaw.mcpServerConnectionResolverTestState",
-);
-
-type McpConnectionResolverTestState = {
-  resolversByServerName?: Map<string, McpServerConnectionResolverEntry>;
-  resolveTimeoutMs?: number;
-  revalidateMs?: number;
-};
-
-function getTestState(): McpConnectionResolverTestState {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[MCP_CONNECTION_RESOLVER_TEST_STATE_KEY] as
-    | McpConnectionResolverTestState
-    | undefined;
-  if (existing) {
-    return existing;
-  }
-  const state: McpConnectionResolverTestState = {};
-  globalStore[MCP_CONNECTION_RESOLVER_TEST_STATE_KEY] = state;
-  return state;
-}
-
-function resolveConnectionResolverTimeoutMs(): number {
-  const override = getTestState().resolveTimeoutMs;
-  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
-    return Math.floor(override);
-  }
-  return MCP_CONNECTION_RESOLVER_TIMEOUT_MS;
-}
-
-export function resolveMcpConnectionRevalidateMs(): number {
-  const override = getTestState().revalidateMs;
-  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
-    return Math.floor(override);
-  }
-  return MCP_CONNECTION_REVALIDATE_MS;
-}
+export const MCP_CONNECTION_REVALIDATE_MS = 5 * 60 * 1000;
 
 /**
  * Ephemeral per-process HMAC key for connection digests. Never exported, logged,
  * or persisted — dies with the process so digests are not offline-guessable.
  */
 let connectionDigestKey: Buffer | undefined;
-
-function getConnectionDigestKey(): Buffer {
-  connectionDigestKey ??= crypto.randomBytes(32);
-  return connectionDigestKey;
-}
 
 /**
  * Ephemeral keyed digest of resolved connection material for rotation detection.
@@ -97,7 +53,7 @@ export function hashMcpResolvedConnections(
       return [serverName, connection.url, headers] as const;
     });
   return crypto
-    .createHmac("sha256", getConnectionDigestKey())
+    .createHmac("sha256", (connectionDigestKey ??= crypto.randomBytes(32)))
     .update(JSON.stringify(tuples))
     .digest("hex");
 }
@@ -133,10 +89,6 @@ function listMcpServerConnectionResolversByServerName(): Map<
   string,
   McpServerConnectionResolverEntry
 > {
-  const testOverrides = getTestState().resolversByServerName;
-  if (testOverrides) {
-    return new Map([...testOverrides.entries()].toSorted(([a], [b]) => a.localeCompare(b)));
-  }
   const byName = new Map<string, McpServerConnectionResolverEntry>();
   const registry =
     getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
@@ -245,16 +197,14 @@ export async function resolveRequesterScopedMcpConnections(params: {
     return resolved;
   }
   const resolvers = listMcpServerConnectionResolversByServerName();
+  const agentAccountId = normalizeOptionalString(params.agentAccountId);
+  const messageChannel = normalizeOptionalString(params.messageChannel);
   const ctx: McpServerConnectionResolveContext = {
     requesterSenderId,
-    ...(normalizeOptionalString(params.agentAccountId)
-      ? { agentAccountId: normalizeOptionalString(params.agentAccountId) }
-      : {}),
-    ...(normalizeOptionalString(params.messageChannel)
-      ? { messageChannel: normalizeOptionalString(params.messageChannel) }
-      : {}),
+    ...(agentAccountId ? { agentAccountId } : {}),
+    ...(messageChannel ? { messageChannel } : {}),
   };
-  const timeoutMs = resolveConnectionResolverTimeoutMs();
+  const timeoutMs = MCP_CONNECTION_RESOLVER_TIMEOUT_MS;
   const sortedNames = [...params.serverNames].toSorted((a, b) => a.localeCompare(b));
   const settled = await Promise.all(
     sortedNames.map(async (serverName) => {
@@ -267,20 +217,15 @@ export async function resolveRequesterScopedMcpConnections(params: {
         if (!result || typeof result.url !== "string" || result.url.trim().length === 0) {
           return null;
         }
-        const headers =
-          result.headers && isRecord(result.headers)
-            ? Object.fromEntries(
-                Object.entries(result.headers)
-                  .filter(
-                    (headerEntry): headerEntry is [string, string] =>
-                      typeof headerEntry[1] === "string",
-                  )
-                  .toSorted(([a], [b]) => a.localeCompare(b)),
-              )
-            : undefined;
+        const filteredHeaders = filterStringRecord(result.headers);
+        const headers = filteredHeaders
+          ? Object.fromEntries(
+              Object.entries(filteredHeaders).toSorted(([a], [b]) => a.localeCompare(b)),
+            )
+          : undefined;
         const connection = {
           url: result.url.trim(),
-          ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
+          ...(headers ? { headers } : {}),
         } satisfies McpServerConnectionResolved;
         registerResolvedConnectionSecrets(connection);
         return { serverName, connection };
@@ -320,14 +265,8 @@ export function applyMcpConnectionOverride(
   } else {
     delete base.headers;
   }
-  // Resolve effective transport with the same alias mapping as config canonicalize
-  // BEFORE stripping `type`, so SSE-only servers keep sse (including case variants).
-  const fromTransport =
-    typeof base.transport === "string"
-      ? resolveOpenClawMcpTransportAlias(base.transport)
-      : undefined;
-  const fromType = resolveOpenClawMcpTransportAlias(base.type);
-  base.transport = fromTransport ?? fromType ?? "streamable-http";
+  const transport = resolveConfiguredMcpTransport(base);
+  base.transport = !transport || transport === "stdio" ? "streamable-http" : transport;
   // Resolver-supplied headers are the auth surface; strip static OAuth so the
   // transport layer does not drop Authorization from overrides.
   delete base.auth;
@@ -388,39 +327,3 @@ export function buildMcpRequesterRuntimeCacheKey(params: {
     requesterSenderId: params.requesterSenderId,
   });
 }
-
-export const testing = {
-  setMcpServerConnectionResolversForTest(
-    resolvers?: Iterable<OpenClawPluginMcpServerConnectionResolver & { pluginId?: string }> | null,
-  ): void {
-    if (!resolvers) {
-      getTestState().resolversByServerName = undefined;
-      return;
-    }
-    const map = new Map<string, McpServerConnectionResolverEntry>();
-    for (const resolver of resolvers) {
-      const serverName = normalizeOptionalString(resolver.serverName);
-      if (!serverName || typeof resolver.resolve !== "function") {
-        continue;
-      }
-      map.set(serverName, {
-        pluginId: normalizeOptionalString(resolver.pluginId) ?? "test-plugin",
-        serverName,
-        resolve: resolver.resolve,
-      });
-    }
-    getTestState().resolversByServerName = map;
-  },
-  setMcpConnectionResolverTimeoutMsForTest(timeoutMs?: number): void {
-    getTestState().resolveTimeoutMs =
-      typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-        ? Math.floor(timeoutMs)
-        : undefined;
-  },
-  setMcpConnectionRevalidateMsForTest(revalidateMs?: number): void {
-    getTestState().revalidateMs =
-      typeof revalidateMs === "number" && Number.isFinite(revalidateMs) && revalidateMs > 0
-        ? Math.floor(revalidateMs)
-        : undefined;
-  },
-};

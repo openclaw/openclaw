@@ -44,6 +44,20 @@ import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadat
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
 
 describe("buildAgentRuntimeAuthPlan", () => {
+  it.each([
+    { provider: undefined, forwarded: "arcee:default" },
+    { provider: "", forwarded: undefined },
+  ])("distinguishes an omitted credential provider from '$provider'", ({ provider, forwarded }) => {
+    const plan = buildAgentRuntimeAuthPlan({
+      provider: "arcee",
+      authProfileProvider: provider,
+      sessionAuthProfileId: "arcee:default",
+      sessionAuthProfileSource: "user",
+      providerAuthAliasesEnabled: false,
+    });
+    expect(plan.forwardedAuthProfileId).toBe(forwarded);
+  });
+
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
@@ -53,9 +67,10 @@ describe("buildAgentRuntimeAuthPlan", () => {
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
   });
 
-  it("does not load provider auth aliases when plugins are disabled", () => {
-    // Disabling alias support should avoid metadata loading entirely, not just
-    // ignore aliases after doing plugin work.
+  it.each([
+    { label: "explicit flag", config: {}, providerAuthAliasesEnabled: false },
+    { label: "plugin config", config: { plugins: { enabled: false } } },
+  ])("does not load provider aliases disabled by $label", (params) => {
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [
         {
@@ -70,31 +85,8 @@ describe("buildAgentRuntimeAuthPlan", () => {
     const plan = buildAgentRuntimeAuthPlan({
       provider: "fixture",
       authProfileProvider: "fixture",
-      config: {},
-      providerAuthAliasesEnabled: false,
-    });
-
-    expect(plan.providerForAuth).toBe("fixture");
-    expect(plan.authProfileProviderForAuth).toBe("fixture");
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-  });
-
-  it("derives disabled provider auth aliases from plugin config", () => {
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alias-owner",
-          origin: "global",
-          providerAuthAliases: { fixture: "provider-two" },
-        },
-      ],
-      diagnostics: [],
-    });
-
-    const plan = buildAgentRuntimeAuthPlan({
-      provider: "fixture",
-      authProfileProvider: "fixture",
-      config: { plugins: { enabled: false } },
+      config: params.config,
+      providerAuthAliasesEnabled: params.providerAuthAliasesEnabled,
     });
 
     expect(plan.providerForAuth).toBe("fixture");

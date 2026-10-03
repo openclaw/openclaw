@@ -1,49 +1,101 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSafeStreamWriter } from "./stream-writer.js";
 
 describe("createSafeStreamWriter", () => {
-  it("signals broken pipes and closes the writer", () => {
-    let brokenPipeCount = 0;
-    const writer = createSafeStreamWriter({
-      onBrokenPipe: () => {
-        brokenPipeCount += 1;
-      },
+  it.each([
+    { code: "EPIPE", method: "writeLine", beforeWriteFails: false },
+    { code: "EIO", method: "write", beforeWriteFails: true },
+  ] as const)("keeps the writer closed after $code", ({ code, method, beforeWriteFails }) => {
+    const failure = Object.assign(new Error(code), { code });
+    const beforeWrite = vi.fn(() => {
+      if (beforeWriteFails) {
+        throw failure;
+      }
     });
-    const stream = {
-      write: () => {
-        const err = new Error("EPIPE") as NodeJS.ErrnoException;
-        err.code = "EPIPE";
-        throw err;
-      },
-    } as unknown as NodeJS.WriteStream;
+    const onBrokenPipe = vi.fn();
+    const writer = createSafeStreamWriter({ beforeWrite, onBrokenPipe });
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => {
+      if (!beforeWriteFails) {
+        throw failure;
+      }
+      return true;
+    });
+    try {
+      expect(writer[method](process.stdout, "hello")).toBe(false);
+      expect(onBrokenPipe).toHaveBeenCalledTimes(1);
+      expect(onBrokenPipe.mock.calls[0]?.[0]).toBe(failure);
+      expect(onBrokenPipe.mock.calls[0]?.[1]).toBe(
+        beforeWriteFails ? process.stderr : process.stdout,
+      );
 
-    expect(writer.writeLine(stream, "hello")).toBe(false);
-    expect(writer.isClosed()).toBe(true);
-    expect(brokenPipeCount).toBe(1);
-
-    brokenPipeCount = 0;
-    expect(writer.writeLine(stream, "again")).toBe(false);
-    expect(brokenPipeCount).toBe(0);
+      beforeWrite.mockReturnValue(undefined);
+      write.mockReturnValue(true);
+      expect(writer[method](process.stdout, "again")).toBe(false);
+      expect(beforeWrite).toHaveBeenCalledTimes(1);
+      expect(write).toHaveBeenCalledTimes(beforeWriteFails ? 0 : 1);
+      expect(onBrokenPipe).toHaveBeenCalledTimes(1);
+    } finally {
+      write.mockRestore();
+    }
   });
 
-  it("treats broken pipes from beforeWrite as closed", () => {
-    let brokenPipeCount = 0;
+  it("notifies once when a reentrant write closes before the outer write", () => {
+    const failure = Object.assign(new Error("closed pipe"), { code: "EPIPE" });
+    let entered = false;
+    let nestedResult: boolean | undefined;
+    let callbackResult: boolean | undefined;
+    let notifications = 0;
     const writer = createSafeStreamWriter({
-      onBrokenPipe: () => {
-        brokenPipeCount += 1;
-      },
       beforeWrite: () => {
-        const err = new Error("EIO") as NodeJS.ErrnoException;
-        err.code = "EIO";
-        throw err;
+        if (!entered) {
+          entered = true;
+          nestedResult = writer.write(process.stdout, "nested");
+        }
+      },
+      onBrokenPipe: () => {
+        notifications += 1;
+        callbackResult = writer.write(process.stdout, "callback");
       },
     });
-    const stream = {
-      write: () => true,
-    } as unknown as NodeJS.WriteStream;
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => {
+      throw failure;
+    });
+    try {
+      expect(writer.write(process.stdout, "outer")).toBe(false);
+      expect(nestedResult).toBe(false);
+      expect(callbackResult).toBe(false);
+      write.mockReturnValue(true);
+      expect(writer.write(process.stdout, "ignored")).toBe(false);
+      expect(notifications).toBe(1);
+      expect(write.mock.calls.map(([text]) => text)).toEqual(["nested", "outer"]);
+    } finally {
+      write.mockRestore();
+    }
+  });
 
-    expect(writer.write(stream, "hi")).toBe(false);
-    expect(writer.isClosed()).toBe(true);
-    expect(brokenPipeCount).toBe(1);
+  it("keeps the output closed when the notification callback throws", () => {
+    const failure = Object.assign(new Error("closed pipe"), { code: "EPIPE" });
+    const callbackError = new Error("notification failed");
+    const writer = createSafeStreamWriter({
+      onBrokenPipe: () => {
+        throw callbackError;
+      },
+    });
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => {
+      throw failure;
+    });
+    try {
+      let thrown: unknown;
+      try {
+        writer.write(process.stdout, "first");
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBe(callbackError);
+      expect(writer.write(process.stdout, "ignored")).toBe(false);
+      expect(write).toHaveBeenCalledTimes(1);
+    } finally {
+      write.mockRestore();
+    }
   });
 });

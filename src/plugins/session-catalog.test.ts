@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import { importSessionCatalogHistory } from "./session-catalog-history-import.js";
+import {
+  importSessionCatalogHistory,
+  readBoundedSessionCatalogHistory,
+  SESSION_CATALOG_TRANSCRIPT_IMPORT_LIMITS,
+} from "./session-catalog-history-import.js";
 import { listSessionCatalogEntries } from "./session-catalog.js";
 
 const transcript = vi.hoisted(() => ({
@@ -17,12 +21,14 @@ vi.mock("../plugin-sdk/session-transcript-runtime.js", () => ({
       appendMessage: (params: {
         message: Record<string, unknown>;
         idempotencyLookup?: string;
+        beforeCommitInTransaction?: () => void;
       }) => Promise<void>;
     }) => Promise<void>,
   ) => {
     transcript.lockCalls += 1;
     await run({
-      appendMessage: async ({ message, idempotencyLookup }) => {
+      appendMessage: async ({ message, idempotencyLookup, beforeCommitInTransaction }) => {
+        beforeCommitInTransaction?.();
         const key = message.idempotencyKey;
         if (
           idempotencyLookup === "scan" &&
@@ -61,7 +67,12 @@ function catalogReader(items: TranscriptItem[], maxPageSize = Number.POSITIVE_IN
 
 function importHistory(
   items: TranscriptItem[],
-  options: { maxPageSize?: number; read?: ReturnType<typeof catalogReader> } = {},
+  options: {
+    continuationNotice?: string;
+    commitGuard?: () => void;
+    maxPageSize?: number;
+    read?: ReturnType<typeof catalogReader>;
+  } = {},
 ) {
   const read = options.read ?? catalogReader(items, options.maxPageSize);
   return {
@@ -74,6 +85,8 @@ function importHistory(
       sessionKey: "agent:main:catalog-adopt",
       agentId: "main",
       config: {} as OpenClawConfig,
+      continuationNotice: options.continuationNotice,
+      commitGuard: options.commitGuard,
     }),
   };
 }
@@ -89,10 +102,10 @@ function messageText(message: Record<string, unknown>): string | undefined {
 }
 
 describe("listSessionCatalogEntries", () => {
-  it("scans the retained compatibility owner first", () => {
+  it("does not select a runtime catalog owner from retained migration metadata", () => {
     const config = retainLegacyDefaultAgentId(
       {
-        agents: { list: [{ id: "alpha" }, { id: "beta" }] },
+        agents: { entries: { alpha: {}, beta: {} } },
       } as OpenClawConfig,
       "beta",
     );
@@ -101,18 +114,17 @@ describe("listSessionCatalogEntries", () => {
       agent: { session: { listSessionEntries } },
     } as unknown as PluginRuntime;
 
-    expect(listSessionCatalogEntries({ config, runtime })).toEqual([]);
-    expect(listSessionEntries.mock.calls.map(([params]) => params.agentId)).toEqual([
-      "beta",
-      "alpha",
-    ]);
+    expect(() => listSessionCatalogEntries({ config, runtime })).toThrow(
+      "session agent resolution has no explicit owner",
+    );
+    expect(listSessionEntries).not.toHaveBeenCalled();
   });
 
   it("requires and scopes an owner under explicit multi-agent ownership", () => {
     const config = {
       agents: {
         ownership: "explicit",
-        list: [{ id: "alpha" }, { id: "beta" }],
+        entries: { alpha: {}, beta: {} },
       },
     } as OpenClawConfig;
     const listSessionEntries = vi.fn(() => []);
@@ -213,7 +225,7 @@ describe("importSessionCatalogHistory", () => {
     const { read, result } = importHistory(items);
     await result;
 
-    expect(read).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(4);
     expect(transcript.messages).toHaveLength(200);
     expect(messageText(transcript.messages[0]!)).toBe("message-5");
     expect(messageText(transcript.messages.at(-1)!)).toBe("message-204");
@@ -270,5 +282,81 @@ describe("importSessionCatalogHistory", () => {
     await expect(importHistory([], { read }).result).rejects.toThrow("catalog read failed");
     expect(transcript.lockCalls).toBe(0);
     expect(transcript.messages).toEqual([]);
+  });
+
+  it("appends one idempotent continuation notice under the caller authority guard", async () => {
+    const commitGuard = vi.fn();
+    const options = {
+      continuationNotice: "Copied snapshot; using openai/gpt-5.6-sol.",
+      commitGuard,
+    };
+
+    await importHistory([{ id: "u-1", type: "userMessage", text: "Continue" }], options).result;
+    await importHistory([{ id: "u-1", type: "userMessage", text: "Continue" }], options).result;
+
+    expect(transcript.messages.map(messageText)).toEqual([
+      "Continue",
+      "Copied snapshot; using openai/gpt-5.6-sol.",
+    ]);
+    expect(transcript.messages[1]).toMatchObject({
+      provider: "openclaw",
+      model: "session-catalog",
+      idempotencyKey: "pi-catalog:thread-1:continuation-notice",
+    });
+    expect(commitGuard).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("readBoundedSessionCatalogHistory", () => {
+  it("retains the import ceiling independently from the continuation seed and reports older history", async () => {
+    const items: TranscriptItem[] = Array.from({ length: 50_001 }, (_, index) => ({
+      type: "agentMessage",
+      text: String(index),
+    }));
+    const history = await readBoundedSessionCatalogHistory({
+      read: catalogReader(items),
+      limits: SESSION_CATALOG_TRANSCRIPT_IMPORT_LIMITS,
+    });
+
+    expect(history.items).toHaveLength(50_000);
+    expect(history.items[0]?.text).toBe("1");
+    expect(history.items.at(-1)?.text).toBe("50000");
+    expect(history.totalItems).toBe(50_000);
+    expect(history.complete).toBe(false);
+  });
+
+  it("counts fetched items past a byte cutoff and distinguishes an exactly complete page", async () => {
+    const items: TranscriptItem[] = [
+      { type: "userMessage", text: "older" },
+      { type: "userMessage", text: "newer" },
+    ];
+    const itemBytes = Buffer.byteLength(JSON.stringify(items[0]), "utf8");
+    const read = catalogReader(items);
+
+    expect(
+      await readBoundedSessionCatalogHistory({
+        read,
+        limits: { maxItems: 2, maxBytes: 2 * itemBytes - 1 },
+      }),
+    ).toEqual({ items: [items[1]], totalItems: 2, complete: false });
+    expect(
+      await readBoundedSessionCatalogHistory({
+        read,
+        limits: { maxItems: 2, maxBytes: 2 * itemBytes },
+      }),
+    ).toEqual({ items, totalItems: 2, complete: true });
+  });
+
+  it("reports when the newest item itself must be truncated to fit", async () => {
+    const history = await readBoundedSessionCatalogHistory({
+      read: catalogReader([{ type: "toolResult", text: "🙂".repeat(100) }]),
+      limits: { maxItems: 10, maxBytes: 100 },
+    });
+
+    expect(history).toMatchObject({ totalItems: 1, complete: false });
+    expect(history.items).toHaveLength(1);
+    expect(history.items[0]).toMatchObject({ type: "toolResult", truncated: true });
+    expect(history.items[0]?.text).toMatch(/🙂…$/u);
+    expect(Buffer.byteLength(JSON.stringify(history.items[0]), "utf8")).toBeLessThanOrEqual(100);
   });
 });

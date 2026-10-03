@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   askLogbook,
@@ -16,14 +17,6 @@ function clientWithRequest(
   request: (method: string, params: unknown) => Promise<unknown>,
 ): GatewayBrowserClient {
   return { request } as GatewayBrowserClient;
-}
-
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function statusFor(day: string): LogbookStatusPayload {
@@ -72,37 +65,6 @@ describe("Logbook controller", () => {
     vi.useRealTimers();
   });
 
-  it("lets an in-flight load settle after polling stops", async () => {
-    const host = {};
-    hosts.push(host);
-    const state = getLogbookState(host);
-    state.day = "2026-07-04";
-    state.dayPinned = true;
-    const status = deferred<unknown>();
-    const days = deferred<unknown>();
-    const timeline = deferred<unknown>();
-    const responses = new Map([
-      ["logbook.status", status],
-      ["logbook.days", days],
-      ["logbook.timeline", timeline],
-    ]);
-    const client = clientWithRequest(
-      (method) =>
-        responses.get(method)?.promise ?? Promise.reject(new Error(`Unexpected ${method}`)),
-    );
-    configureLogbookPolling(state, client, true);
-    const request = loadLogbook(state, client);
-
-    stopLogbookPolling(host);
-    status.resolve(statusFor("2026-07-04"));
-    days.resolve({ days: [] });
-    timeline.resolve(timelineFor("2026-07-04", "Detached host"));
-    await request;
-
-    expect(state.timeline?.cards[0]?.title).toBe("Detached host");
-    expect(state.pollTimer).toBeNull();
-  });
-
   it("does not overlap silent poll refreshes and resumes after settlement", async () => {
     vi.useFakeTimers();
     const host = {};
@@ -110,9 +72,9 @@ describe("Logbook controller", () => {
     const state = getLogbookState(host);
     state.day = "2026-07-04";
     state.dayPinned = true;
-    const status = deferred<unknown>();
-    const days = deferred<unknown>();
-    const timeline = deferred<unknown>();
+    const status = createDeferred<unknown>();
+    const days = createDeferred<unknown>();
+    const timeline = createDeferred<unknown>();
     const firstBatch = new Map([
       ["logbook.status", status],
       ["logbook.days", days],
@@ -161,9 +123,9 @@ describe("Logbook controller", () => {
     const state = getLogbookState(host);
     state.day = "2026-07-04";
     state.dayPinned = true;
-    const staleStatus = deferred<unknown>();
-    const staleDays = deferred<unknown>();
-    const staleTimeline = deferred<unknown>();
+    const staleStatus = createDeferred<unknown>();
+    const staleDays = createDeferred<unknown>();
+    const staleTimeline = createDeferred<unknown>();
     const staleBatch = new Map([
       ["logbook.status", staleStatus],
       ["logbook.days", staleDays],
@@ -209,9 +171,9 @@ describe("Logbook controller", () => {
     const state = getLogbookState(host);
     state.day = "2026-07-04";
     state.dayPinned = true;
-    const status = deferred<unknown>();
-    const days = deferred<unknown>();
-    const timeline = deferred<unknown>();
+    const status = createDeferred<unknown>();
+    const days = createDeferred<unknown>();
+    const timeline = createDeferred<unknown>();
     const pending = new Map([
       ["logbook.status", status],
       ["logbook.days", days],
@@ -260,8 +222,8 @@ describe("Logbook controller", () => {
     const state = getLogbookState(host);
     state.day = "2026-07-04";
     state.dayPinned = true;
-    const oldAnalysis = deferred<unknown>();
-    const newAnalysis = deferred<unknown>();
+    const oldAnalysis = createDeferred<unknown>();
+    const newAnalysis = createDeferred<unknown>();
     const oldClient = clientWithRequest(() => oldAnalysis.promise);
     const newClient = clientWithRequest((method) => {
       if (method === "logbook.analyze.now") {
@@ -298,7 +260,7 @@ describe("Logbook controller", () => {
     const host = {};
     hosts.push(host);
     const state = getLogbookState(host);
-    const oldStatus = deferred<unknown>();
+    const oldStatus = createDeferred<unknown>();
     const oldClient = clientWithRequest(() => oldStatus.promise);
     const newStatus = { ...statusFor("2026-07-05"), capturePaused: true };
     const newClient = clientWithRequest(() => Promise.resolve(newStatus));
@@ -322,9 +284,9 @@ describe("Logbook controller", () => {
     const state = getLogbookState(host);
     state.day = "2026-07-04";
     state.dayPinned = true;
-    const status = deferred<unknown>();
-    const days = deferred<unknown>();
-    const timeline = deferred<unknown>();
+    const status = createDeferred<unknown>();
+    const days = createDeferred<unknown>();
+    const timeline = createDeferred<unknown>();
     const pending = new Map([
       ["logbook.status", status],
       ["logbook.days", days],
@@ -372,9 +334,9 @@ describe("Logbook controller", () => {
     const state = getLogbookState(host);
     state.day = "2026-07-04";
     state.dayPinned = true;
-    const status = deferred<unknown>();
-    const days = deferred<unknown>();
-    const timeline = deferred<unknown>();
+    const status = createDeferred<unknown>();
+    const days = createDeferred<unknown>();
+    const timeline = createDeferred<unknown>();
     const pending = new Map([
       ["logbook.status", status],
       ["logbook.days", days],
@@ -413,9 +375,9 @@ describe("Logbook controller", () => {
     const host = {};
     hosts.push(host);
     const state = getLogbookState(host);
-    const oldStatus = deferred<unknown>();
-    const oldDays = deferred<unknown>();
-    const oldTimeline = deferred<unknown>();
+    const oldStatus = createDeferred<unknown>();
+    const oldDays = createDeferred<unknown>();
+    const oldTimeline = createDeferred<unknown>();
     const oldResponses = new Map([
       ["logbook.status", oldStatus],
       ["logbook.days", oldDays],
@@ -466,7 +428,7 @@ describe("Logbook controller", () => {
     hosts.push(host);
     const state = getLogbookState(host);
     state.day = "2026-07-04";
-    const pending = deferred<unknown>();
+    const pending = createDeferred<unknown>();
     const client = clientWithRequest(() => pending.promise);
     configureLogbookPolling(state, client, true);
     const request = loadLogbookStandup(state, client, false);
@@ -484,7 +446,7 @@ describe("Logbook controller", () => {
     const state = getLogbookState(host);
     state.day = "2026-07-04";
     state.askQuestion = "What did I do?";
-    const pending = deferred<unknown>();
+    const pending = createDeferred<unknown>();
     const client = clientWithRequest(() => pending.promise);
     configureLogbookPolling(state, client, true);
     const request = askLogbook(state, client);

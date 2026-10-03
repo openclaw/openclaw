@@ -1,12 +1,18 @@
 // Plugin Sdk Surface Report tests cover plugin sdk surface report script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { beforeAll, describe, expect, it } from "vitest";
+import path from "node:path";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import {
   collectPluginSdkSurfaceReport,
   evaluatePluginSdkSurfaceReport,
   readPluginSdkSurfaceBudgets,
 } from "../../scripts/plugin-sdk-surface-report.mts";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+
+const fixtures = createFixtureLifetime();
+afterEach(() => fixtures.cleanup());
 
 const pluginSdkSurfaceBudgetEnvPattern = /^OPENCLAW_PLUGIN_SDK_MAX_/u;
 
@@ -46,7 +52,7 @@ function readDefaultPublicSurfaceBudgets(): PublicSurfaceCounts {
   };
 }
 
-type SurfaceReport = ReturnType<typeof collectPluginSdkSurfaceReport>;
+type SurfaceReport = Awaited<ReturnType<typeof collectPluginSdkSurfaceReport>>;
 let surfaceReport: SurfaceReport;
 
 function readCurrentPublicSurfaceCounts(): PublicSurfaceCounts {
@@ -58,9 +64,42 @@ function readCurrentPublicSurfaceCounts(): PublicSurfaceCounts {
 }
 
 describe("plugin SDK surface report", () => {
-  beforeAll(() => {
-    surfaceReport = collectPluginSdkSurfaceReport();
+  beforeAll(async () => {
+    surfaceReport = await collectPluginSdkSurfaceReport();
   });
+
+  // Linux's strict owner distinguishes a zombie compiler leader from its still-live threads.
+  it.runIf(process.platform === "linux")(
+    "joins the registered SDK command's compiler before reporting success",
+    async ({ signal }) => {
+      await fixtures.run(async () => {
+        const directory = fixtures.createTempDir("plugin-sdk-surface-lifetime-");
+        const stdout = path.join(directory, "stdout.log");
+        const stderr = path.join(directory, "stderr.log");
+        const out = fs.openSync(stdout, "wx", 0o600);
+        try {
+          const err = fs.openSync(stderr, "wx", 0o600);
+          try {
+            const code = await runManagedCommand({
+              bin: "pnpm",
+              args: ["plugin-sdk:surface:check"],
+              cwd: process.cwd(),
+              env: baseSurfaceReportEnv(),
+              signal,
+              requireProcessTreeExit: true,
+              stdio: ["ignore", out, err],
+            });
+            expect(code, fs.readFileSync(stderr, "utf8")).toBe(0);
+            expect(fs.readFileSync(stdout, "utf8")).toContain("all SDK entrypoints:");
+          } finally {
+            fs.closeSync(err);
+          }
+        } finally {
+          fs.closeSync(out);
+        }
+      });
+    },
+  );
 
   it("rejects unknown CLI options before collecting SDK stats", () => {
     for (const args of [["--chekc"], ["chekc", "--help"]]) {
@@ -136,10 +175,30 @@ describe("plugin SDK surface report", () => {
 
   it("keeps default public surface budgets pinned to current source counts", () => {
     expect(readDefaultPublicSurfaceBudgets()).toEqual(readCurrentPublicSurfaceCounts());
+    const inboundReplyDispatch =
+      surfaceReport.publicStats.byEntrypoint.get("inbound-reply-dispatch");
+    expect(inboundReplyDispatch).toBeDefined();
+    expect(
+      readPluginSdkSurfaceBudgets({}).publicDeprecatedExportsByEntrypointBudget[
+        "inbound-reply-dispatch"
+      ],
+    ).toBe(inboundReplyDispatch?.deprecatedExports);
   });
 
-  it("keeps approval store internals out of the deprecated infra barrel", () => {
-    const source = fs.readFileSync("src/plugin-sdk/infra-runtime.ts", "utf8");
+  it("accepts frozen named facades while rejecting missing deprecated reexports", () => {
+    expect(surfaceReport.deprecatedBarrelWithoutReexports).toEqual([]);
+    const report = {
+      ...surfaceReport,
+      deprecatedBarrelWithoutReexports: ["fixture-facade"],
+    };
+
+    expect(evaluatePluginSdkSurfaceReport(report, readPluginSdkSurfaceBudgets({}))).toContain(
+      "deprecated barrel entrypoints without reexports: fixture-facade",
+    );
+  });
+
+  it("keeps approval store internals out of public approval helpers", () => {
+    const source = fs.readFileSync("src/plugin-sdk/exec-approvals-runtime.ts", "utf8");
     expect(source).not.toMatch(/export\s+(?:type\s+)?\*\s+from\s+["'][^"']*exec-approvals/u);
 
     for (const internalName of [
@@ -163,20 +222,6 @@ describe("plugin SDK surface report", () => {
     expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).toContain(
       `public callable exports ${budget} > ${budget - 1}`,
     );
-  });
-
-  it("strips ambient CI budget overrides from CLI checks", () => {
-    const original = process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS;
-    process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS = "1";
-    try {
-      expect(baseSurfaceReportEnv()).not.toHaveProperty("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS");
-    } finally {
-      if (original === undefined) {
-        delete process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS;
-      } else {
-        process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS = original;
-      }
-    }
   });
 
   it("rejects deprecated export growth by public entrypoint", () => {

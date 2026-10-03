@@ -2,28 +2,27 @@
 const REDACT_REGEX_CHUNK_THRESHOLD = 32_768;
 const REDACT_REGEX_CHUNK_SIZE = 16_384;
 
-type BoundedRedactOptions = {
-  chunkThreshold?: number;
-  chunkSize?: number;
-};
-
 /** Applies a regex replacement in chunks once input crosses the redaction size threshold. */
 export function replacePatternBounded(
   text: string,
   pattern: RegExp,
   replacer: Parameters<string["replace"]>[1],
-  options?: BoundedRedactOptions,
 ): string {
-  const chunkThreshold = options?.chunkThreshold ?? REDACT_REGEX_CHUNK_THRESHOLD;
-  const chunkSize = options?.chunkSize ?? REDACT_REGEX_CHUNK_SIZE;
-  if (chunkThreshold <= 0 || chunkSize <= 0 || text.length <= chunkThreshold) {
+  if (text.length <= REDACT_REGEX_CHUNK_THRESHOLD) {
     return text.replace(pattern, replacer);
   }
 
-  let output = "";
+  let output: string | undefined;
+  // Preserve every chunk-local replacement; only defer assembling unchanged output.
   // Chunking may miss matches spanning chunk boundaries; use only for token-like redaction patterns.
-  for (let index = 0; index < text.length; index += chunkSize) {
-    output += text.slice(index, index + chunkSize).replace(pattern, replacer);
+  for (let index = 0; index < text.length; index += REDACT_REGEX_CHUNK_SIZE) {
+    const chunk = text.slice(index, index + REDACT_REGEX_CHUNK_SIZE);
+    const replaced = chunk.replace(pattern, replacer);
+    if (output !== undefined) {
+      output += replaced;
+    } else if (replaced !== chunk) {
+      output = text.slice(0, index) + replaced;
+    }
   }
-  return output;
+  return output ?? text;
 }

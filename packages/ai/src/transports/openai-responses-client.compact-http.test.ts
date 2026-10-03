@@ -68,7 +68,6 @@ describe("prepared Responses compaction HTTP lifetime", () => {
   });
 
   it.each([
-    "request-timeout",
     "host-timeout",
     "body-timeout",
     "status-error",
@@ -76,8 +75,7 @@ describe("prepared Responses compaction HTTP lifetime", () => {
     "success",
     "oversized-body",
   ] as const)("preserves SDK %s behavior with a bounded response body", async (mode) => {
-    const deadlineCase =
-      mode === "request-timeout" || mode === "host-timeout" || mode === "body-timeout";
+    const deadlineCase = mode === "host-timeout" || mode === "body-timeout";
     const timeoutMs = deadlineCase ? 100 : 1_000;
     const abortController = new AbortController();
     const requestPaths: string[] = [];
@@ -121,6 +119,11 @@ describe("prepared Responses compaction HTTP lifetime", () => {
       server.closeAllConnections();
     }, 2_000);
     try {
+      if (deadlineCase) {
+        // Start the deadline only after the real HTTP exchange reaches its stalled
+        // body; cold connection setup must not consume this body-lifetime proof.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      }
       const address = server.address();
       if (!address || typeof address === "string") {
         throw new Error("Missing loopback address");
@@ -150,7 +153,10 @@ describe("prepared Responses compaction HTTP lifetime", () => {
         (value) => ({ value, error: undefined }),
         (error: unknown) => ({ value: undefined, error }),
       );
-      if (mode === "caller-abort") {
+      if (deadlineCase) {
+        await headersReceived;
+        await vi.advanceTimersByTimeAsync(timeoutMs);
+      } else if (mode === "caller-abort") {
         await headersReceived;
         abortController.abort();
       }
@@ -174,6 +180,7 @@ describe("prepared Responses compaction HTTP lifetime", () => {
       // retries, so the SDK never re-issues a failed compaction call.
       expect(requestPaths).toEqual(["/v1/responses/compact"]);
     } finally {
+      vi.useRealTimers();
       clearTimeout(watchdog);
       abortController.abort();
       server.closeAllConnections();

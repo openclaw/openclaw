@@ -1,8 +1,10 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
@@ -25,35 +27,40 @@ const delay = (ms: number) =>
     setTimeout(resolve, ms);
   });
 
-function listProcesses(): ProcessRow[] {
-  return execFileSync("ps", ["-axo", "pid=,command="], {
-    encoding: "utf8",
-  })
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const match = /^(\d+)\s+(.*)$/.exec(line);
-      if (!match) {
-        throw new Error(`unexpected ps row: ${line}`);
-      }
-      return {
+async function listProcesses(tempDir: string): Promise<ProcessRow[]> {
+  // Stream and retain only owned fixtures: unrelated host command lines can
+  // exceed execFileSync's buffer and must not leak into a failed assertion.
+  const child = spawn("ps", ["-axo", "pid=,command="], { stdio: ["ignore", "pipe", "ignore"] });
+  const closed = once(child, "close");
+  const rows: ProcessRow[] = [];
+  for await (const line of createInterface({ input: child.stdout })) {
+    if (!line.includes(tempDir)) {
+      continue;
+    }
+    const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+    if (match) {
+      rows.push({
         pid: Number(match[1]),
         command: match[2] ?? "",
-      };
-    });
+      });
+    }
+  }
+  expect((await closed)[0]).toBe(0);
+  return rows;
 }
 
-async function waitForFixtureEvents(logPath: string, count: number): Promise<FixtureEvent[]> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    const events = await readFixtureEvents(logPath);
-    if (events.length >= count) {
-      return events;
-    }
-    await delay(20);
-  }
-  throw new Error(`timed out waiting for ${count} process fixture events`);
+function fixtureReadiness(child: ChildProcessWithoutNullStreams, count: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const lines = createInterface({ input: child.stdout });
+    let received = 0;
+    lines.on("line", () => {
+      if (++received === count) {
+        lines.close();
+        resolve();
+      }
+    });
+    child.once("close", () => lines.close());
+  });
 }
 
 async function readFixtureEvents(logPath: string): Promise<FixtureEvent[]> {
@@ -67,8 +74,7 @@ async function readFixtureEvents(logPath: string): Promise<FixtureEvent[]> {
 async function removeTaskOwnedFixtureProcesses(tempDir: string): Promise<void> {
   const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
-    const allRows = listProcesses();
-    const ownedRows = allRows.filter((row) => row.command.includes(tempDir));
+    const ownedRows = await listProcesses(tempDir);
     if (ownedRows.length === 0) {
       return;
     }
@@ -83,7 +89,7 @@ async function removeTaskOwnedFixtureProcesses(tempDir: string): Promise<void> {
     }
     await delay(20);
   }
-  const survivors = listProcesses().filter((row) => row.command.includes(tempDir));
+  const survivors = await listProcesses(tempDir);
   if (survivors.length > 0) {
     throw new Error(`task-owned process fixture survived cleanup: ${JSON.stringify(survivors)}`);
   }
@@ -122,7 +128,9 @@ describe.skipIf(process.platform === "win32")("Codex app-server process containm
     },
   );
 
-  it("reaps descendants in independent and root process groups before close returns", async () => {
+  it("reaps descendants in independent and root process groups before close returns", async ({
+    signal,
+  }) => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-transport-process-"));
     const logPath = path.join(tempDir, "processes.jsonl");
     const rootPath = path.join(tempDir, "root.mjs");
@@ -138,6 +146,7 @@ const [logPath, role] = process.argv.slice(2);
 const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());
 appendFileSync(logPath, JSON.stringify({ role, pid: process.pid, pgid }) + "\\n");
 for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"]) process.on(signal, () => {});
+process.send({ ready: true });
 setInterval(() => {}, 1_000);
 `,
     );
@@ -149,9 +158,11 @@ import { execFileSync, spawn } from "node:child_process";
 const [logPath, role, descendantPath] = process.argv.slice(2);
 const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());
 appendFileSync(logPath, JSON.stringify({ role, pid: process.pid, pgid }) + "\\n");
-const descendant = spawn(process.execPath, [descendantPath, logPath, role.replace("leader", "descendant")], { stdio: "ignore" });
+const descendant = spawn(process.execPath, [descendantPath, logPath, role.replace("leader", "descendant")], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+descendant.on("message", (message) => process.send(message));
 descendant.unref();
 for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"]) process.on(signal, () => {});
+process.send({ ready: true });
 setInterval(() => {}, 1_000);
 `,
     );
@@ -164,9 +175,11 @@ const [logPath, leaderPath, descendantPath] = process.argv.slice(2);
 const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());
 appendFileSync(logPath, JSON.stringify({ role: "root", pid: process.pid, pgid }) + "\\n");
 for (const [role, detached] of [["separate-leader", true], ["shared-leader", false]]) {
-  const child = spawn(process.execPath, [leaderPath, logPath, role, descendantPath], { detached, stdio: "ignore" });
+  const child = spawn(process.execPath, [leaderPath, logPath, role, descendantPath], { detached, stdio: ["ignore", "ignore", "ignore", "ipc"] });
+  child.on("message", () => process.stdout.write("ready\\n"));
   child.unref();
 }
+process.stdout.write("ready\\n");
 process.stdin.resume();
 process.stdin.on("end", () => process.exit(0));
 `,
@@ -177,8 +190,15 @@ process.stdin.on("end", () => process.exit(0));
       stdio: ["pipe", "pipe", "pipe"],
     });
 
+    const ready = fixtureReadiness(root, 5);
+    const closed = once(root, "close");
     try {
-      const events = await waitForFixtureEvents(logPath, 5);
+      await withinTest(
+        awaitGateBeforeSettlement(ready, closed, "timed out waiting for 5 process fixture events"),
+        signal,
+      );
+      // Every fixture appends its identity before relaying readiness through the root's stdout.
+      const events = await readFixtureEvents(logPath);
       const eventByRole = new Map(events.map((event) => [event.role, event]));
       const rootEvent = eventByRole.get("root");
       const separateLeader = eventByRole.get("separate-leader");
@@ -195,11 +215,11 @@ process.stdin.on("end", () => process.exit(0));
           forceKillDelayMs: 500,
           exitTimeoutMs: 2_000,
         }),
-      ).resolves.toBe(true);
+      ).resolves.toEqual({ exited: true, cleanup: "closed" });
       expect(root.exitCode).toBe(0);
       expect(root.signalCode).toBeNull();
 
-      const survivors = listProcesses().filter((row) => row.command.includes(tempDir));
+      const survivors = await listProcesses(tempDir);
       expect(survivors).toEqual([]);
     } finally {
       await removeTaskOwnedFixtureProcesses(tempDir);
@@ -207,17 +227,19 @@ process.stdin.on("end", () => process.exit(0));
     }
   });
 
-  it.each([
+  it.for([
     ["reuse", true],
     ["late", false],
     ["reparented", false],
     ["root-resumed", false],
     ["traced", false],
     ["uninterruptible", false],
+    ["unconfirmed-termination", false],
     ["snapshot-failure", true],
     ["inspection-timeout", true],
     ["extended", false],
-  ] as const)("revalidates identities while quiescing: %s", async (mode, sentinelSurvived) => {
+  ] as const)("revalidates identities while quiescing: %s", async (scenario, ctx) => {
+    const [mode, sentinelSurvived] = scenario;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-identity-reuse-"));
     const rootPath = path.join(tempDir, "root.mjs");
     const sentinelPath = path.join(tempDir, "sentinel.mjs");
@@ -238,6 +260,7 @@ const [sentinelPath, sentinelPidPath] = process.argv.slice(2);
 const sentinel = spawn(process.execPath, [sentinelPath], { detached: true, stdio: "ignore" });
 sentinel.unref();
 writeFileSync(sentinelPidPath, String(sentinel.pid));
+process.stdout.write("ready\\n");
 process.stdin.resume();
 process.stdin.on("end", () => process.exit(0));
 `,
@@ -246,18 +269,16 @@ process.stdin.on("end", () => process.exit(0));
       detached: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    const ready = fixtureReadiness(root, 1);
+    const rootClosed = once(root, "close");
     let restoreInspection: (() => void) | undefined;
     try {
-      let sentinelPid: number | undefined;
-      const deadline = Date.now() + 5_000;
-      while (Date.now() < deadline) {
-        const contents = await fs.readFile(sentinelPidPath, "utf8").catch(() => "");
-        if (contents) {
-          sentinelPid = Number(contents);
-          break;
-        }
-        await delay(20);
-      }
+      await withinTest(
+        awaitGateBeforeSettlement(ready, rootClosed, "Missing root or sentinel process identity"),
+        ctx.signal,
+      );
+      // The root writes this PID before writing readiness to its owned stdout.
+      const sentinelPid = Number(await fs.readFile(sentinelPidPath, "utf8"));
       const initial = await processSnapshot.readCodexAppServerProcessSnapshot();
       const rootIdentity = initial?.find((row) => row.pid === root.pid);
       const sentinelIdentity = initial?.find((row) => row.pid === sentinelPid);
@@ -315,6 +336,12 @@ process.stdin.on("end", () => process.exit(0));
           [stoppedRoot, { ...sentinelIdentity, state: "U" }],
           [stoppedRoot, { ...sentinelIdentity, state: "U" }],
         ],
+        "unconfirmed-termination": [
+          runningTree,
+          runningTree,
+          [stoppedRoot, { ...sentinelIdentity, state: "U" }],
+          [stoppedRoot, { ...sentinelIdentity, state: "U" }],
+        ],
         "snapshot-failure": [runningTree, runningTree, rootStoppedTree, rootStoppedTree, undefined],
         "inspection-timeout": [runningTree, runningTree, "deadline"],
         extended: [
@@ -326,7 +353,27 @@ process.stdin.on("end", () => process.exit(0));
       };
       const snapshots = scenarios[mode];
       let inspection = 0;
-      const readSnapshot = async (inspectionDeadline: number): Promise<PosixProcess[]> => {
+      let descendantSignalled = false;
+      const actualSnapshot = processSnapshot.readCodexAppServerProcessSnapshot;
+      const actualProcess = processSnapshot.readCodexAppServerProcess;
+      let rootStopObserved = false;
+      const actualKill = process.kill.bind(process);
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        const signalled = actualKill(pid, signal);
+        if (pid === sentinelPid && signal === "SIGKILL") {
+          descendantSignalled = true;
+        }
+        return signalled;
+      });
+      const readSnapshot = async (
+        inspectionDeadline: number,
+        pids?: readonly number[],
+      ): Promise<PosixProcess[]> => {
+        // Identity faults exercise signalling; cleanup needs a separate OS
+        // observation. A queued kill alone must not certify an uninterruptible child.
+        if (descendantSignalled && mode !== "unconfirmed-termination") {
+          return await actualSnapshot(inspectionDeadline, pids);
+        }
         const rows = snapshots[Math.min(inspection++, snapshots.length - 1)];
         if (rows === "deadline") {
           await delay(Math.max(1, inspectionDeadline - Date.now()));
@@ -335,30 +382,46 @@ process.stdin.on("end", () => process.exit(0));
         if (!rows) {
           throw new processSnapshot.ProcessInspectionError("unavailable");
         }
+        if (
+          !rootStopObserved &&
+          rows.some((row) => row.pid === rootIdentity.pid && row.state === "T")
+        ) {
+          // Do not let synthetic stopped rows outrun delivery of the real SIGSTOP.
+          while (
+            !(await actualProcess(rootIdentity.pid, inspectionDeadline))?.state.startsWith("T")
+          ) {
+            await delay(1);
+          }
+          rootStopObserved = true;
+        }
         return rows;
       };
       const snapshotSpy = vi
         .spyOn(processSnapshot, "readCodexAppServerProcessSnapshot")
-        .mockImplementation((inspectionDeadline = Date.now() + 2_000) =>
-          readSnapshot(inspectionDeadline),
+        .mockImplementation((inspectionDeadline, pids) =>
+          readSnapshot(inspectionDeadline ?? Date.now() + 2_000, pids),
         );
       const processSpy = vi
         .spyOn(processSnapshot, "readCodexAppServerProcess")
         .mockImplementation(async (pid, inspectionDeadline) =>
-          (await readSnapshot(inspectionDeadline))?.find((row) => row.pid === pid),
+          (await readSnapshot(inspectionDeadline, [pid]))?.find((row) => row.pid === pid),
         );
       restoreInspection = () => {
         snapshotSpy.mockRestore();
         processSpy.mockRestore();
+        killSpy.mockRestore();
       };
       const closed = await closeCodexAppServerTransportAndWait(root, {
         forceKillDelayMs: 500,
         exitTimeoutMs: 2_000,
       });
       restoreInspection();
-      expect(closed).toBe(true);
+      expect(closed).toEqual({
+        exited: true,
+        cleanup: sentinelSurvived || mode === "unconfirmed-termination" ? "uncertain" : "closed",
+      });
       expect(root.exitCode).toBe(0);
-      const survived = listProcesses().some(
+      const survived = (await listProcesses(tempDir)).some(
         (row) => row.pid === sentinelPid && row.command.includes(tempDir),
       );
       expect(survived).toBe(sentinelSurvived);

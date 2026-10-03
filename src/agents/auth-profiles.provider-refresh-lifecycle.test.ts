@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetFileLockStateForTest } from "../infra/file-lock.js";
+import { resetFileLockStateForTest } from "../plugin-sdk/file-lock.js";
 import { isPluginRegistryLoadInFlight } from "../plugins/loader-cache.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -13,15 +13,11 @@ import {
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  oauthCred,
-  readAuthProfileStoreForTest,
-  storeWith,
-} from "./auth-profiles/oauth-test-utils.js";
+import { oauthCred } from "./auth-profiles/credential-fixtures.test-support.js";
+import { readAuthProfileStoreForTest, storeWith } from "./auth-profiles/oauth-test-utils.js";
 import { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 
-const START_AUTH_CALLBACK = "__openclawProviderRefreshLifecycleStart";
 const PLUGIN_ID = "provider-refresh-lifecycle";
 const PROVIDER_ID = "lifecycle-provider";
 const PROFILE_ID = `${PROVIDER_ID}:default`;
@@ -30,41 +26,27 @@ function writeLifecycleProviderPlugin(registerBody: string) {
   useNoBundledPlugins();
   const plugin = writePlugin({
     id: PLUGIN_ID,
-    body: `module.exports = {
-      id: ${JSON.stringify(PLUGIN_ID)},
-      register(api) {
-        ${registerBody}
-      },
-    };`,
+    registration: registerBody,
   });
   fs.writeFileSync(
     path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: plugin.id,
-        providers: [PROVIDER_ID],
-        configSchema: EMPTY_PLUGIN_SCHEMA,
-      },
-      null,
-      2,
-    ),
+    JSON.stringify({
+      id: plugin.id,
+      providers: [PROVIDER_ID],
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+    }),
     "utf8",
   );
   return plugin;
 }
 
-beforeEach(() => {
+function reset() {
   clearRuntimeAuthProfileStoreSnapshots();
   resetFileLockStateForTest();
   resetPluginLoaderTestStateForTest();
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-  clearRuntimeAuthProfileStoreSnapshots();
-  resetFileLockStateForTest();
-  resetPluginLoaderTestStateForTest();
-});
+}
+beforeEach(reset);
+afterEach(reset);
 
 afterAll(cleanupPluginLoaderFixturesForTest);
 
@@ -88,7 +70,7 @@ describe("provider OAuth refresh lifecycle", () => {
         const initialStore = storeWith(PROFILE_ID, expiredCredential);
         await state.writeAuthProfiles(initialStore);
         const plugin = writeLifecycleProviderPlugin(`
-          globalThis[${JSON.stringify(START_AUTH_CALLBACK)}]();
+          api.logger.info("registration-start");
           api.registerProvider({
             id: ${JSON.stringify(PROVIDER_ID)},
             label: "Lifecycle Provider",
@@ -117,12 +99,7 @@ describe("provider OAuth refresh lifecycle", () => {
           onlyPluginIds: [plugin.id],
         };
         let authResolution: ReturnType<typeof resolveApiKeyForProfile> | undefined;
-        let registrationStarted = false;
         const startAuthDuringRegister = vi.fn(() => {
-          if (registrationStarted) {
-            throw new Error("provider lifecycle fixture registered more than once");
-          }
-          registrationStarted = true;
           expect(isPluginRegistryLoadInFlight(loadOptions)).toBe(true);
           authResolution = resolveApiKeyForProfile({
             cfg: config,
@@ -130,9 +107,10 @@ describe("provider OAuth refresh lifecycle", () => {
             profileId: PROFILE_ID,
           });
         });
-        vi.stubGlobal(START_AUTH_CALLBACK, startAuthDuringRegister);
-
-        loadOpenClawPlugins(loadOptions);
+        loadOpenClawPlugins({
+          ...loadOptions,
+          logger: { info: startAuthDuringRegister, warn: vi.fn(), error: vi.fn() },
+        });
 
         expect(isPluginRegistryLoadInFlight(loadOptions)).toBe(false);
         if (!authResolution) {

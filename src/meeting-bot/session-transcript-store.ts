@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import type {
   MeetingSessionRecord,
@@ -55,7 +56,7 @@ export class MeetingTranscriptDeliveryError extends Error {
   readonly finalCaptureError?: string;
 
   constructor(cause: unknown, finalCaptureError?: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    super(coerceErrorMessage(cause), { cause });
     this.name = "MeetingTranscriptDeliveryError";
     if (finalCaptureError !== undefined) {
       this.finalCaptureError =
@@ -86,6 +87,8 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
         session: TSession,
         options?: { finalize?: boolean },
       ): Promise<MeetingTranscriptSnapshot | undefined>;
+      /** Observe every provider revision before the durable transcript cursor deduplicates lines. */
+      onSnapshot?(session: TSession, snapshot: MeetingTranscriptSnapshot): void;
       onLines?(session: TSession, lines: MeetingTranscriptLine[]): Promise<void>;
     },
   ) {}
@@ -139,7 +142,7 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
 
   async capture(session: TSession, options: { finalize?: boolean } = {}): Promise<void> {
     try {
-      await this.#capture(session, options, true);
+      await this.#captures.enqueue(session.id, () => this.#capture(session, options, true));
     } catch (error) {
       if (!(error instanceof MeetingTranscriptDeliveryError)) {
         throw error;
@@ -148,43 +151,23 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
   }
 
   async captureNotes(session: TSession, options: { finalize?: boolean } = {}): Promise<void> {
-    await this.#capture(session, options, false);
+    await this.#captures.enqueue(session.id, () => this.#capture(session, options, false));
   }
 
   async flushPending(session: TSession): Promise<void> {
-    await this.#capture(session, {}, false, true);
+    await this.#captures.enqueue(session.id, () => this.#flushPending(session));
   }
 
   async #capture(
     session: TSession,
     options: { finalize?: boolean },
     requireTranscribeMode: boolean,
-    pendingOnly = false,
-  ): Promise<void> {
-    // Live reads, periodic notes, and finalization share this per-session chain.
-    // Keep cursor reads inside it so overlapping snapshots cannot deliver twice.
-    await this.#captures.enqueue(session.id, async () => {
-      await this.#captureTask(session, options, requireTranscribeMode, pendingOnly);
-    });
-  }
-
-  async #captureTask(
-    session: TSession,
-    options: { finalize?: boolean },
-    requireTranscribeMode: boolean,
-    pendingOnly: boolean,
   ): Promise<void> {
     let pendingError: MeetingTranscriptDeliveryError | undefined;
     try {
       await this.#flushPending(session);
     } catch (error) {
-      if (pendingOnly) {
-        throw error;
-      }
       pendingError = error as MeetingTranscriptDeliveryError;
-    }
-    if (pendingOnly) {
-      return;
     }
     if (
       !this.options.isBrowserSession(session) ||
@@ -206,6 +189,7 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
       throw error;
     }
     if (snapshot) {
+      this.options.onSnapshot?.(session, snapshot);
       if (this.options.isTranscribeSession(session)) {
         this.#merge(session.id, snapshot);
       }

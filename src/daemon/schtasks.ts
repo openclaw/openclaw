@@ -13,7 +13,7 @@ export {
 } from "./schtasks-install.js";
 export { readScheduledTaskCommand, resolveTaskScriptPath } from "./schtasks-layout.js";
 export {
+  isScheduledTaskEnabled,
   isScheduledTaskInstalled,
   readScheduledTaskRuntime,
-  readWindowsStartupFallbackRuntimeForUpdate,
 } from "./schtasks-runtime.js";

@@ -1,10 +1,19 @@
 export function resolveCronRouteData(search: string): {
   jobId: string | null;
   runId: string | null;
+  session?: { sessionKey: string; sessionAgentId: string };
 } {
   const params = new URLSearchParams(search);
   const jobId = params.get("job")?.trim() || null;
-  return { jobId, runId: jobId ? params.get("run")?.trim() || null : null };
+  const sessionKey = params.get("session")?.trim();
+  const agentId = params.get("agent")?.trim();
+  return {
+    jobId,
+    runId: jobId ? params.get("run")?.trim() || null : null,
+    ...(!jobId && sessionKey && agentId
+      ? { session: { sessionKey, sessionAgentId: agentId } }
+      : {}),
+  };
 }
 
 const CRON_EXECUTION_ID_RE = /^cron:(.+):(\d+)$/u;
@@ -12,13 +21,14 @@ const CRON_EXECUTION_ID_RE = /^cron:(.+):(\d+)$/u;
 /**
  * Notifications link runs by execution id (`cron:<jobId>:<startedAtMs>`), while
  * ledger entries carry public run ids (receipt UUIDs, `manual:<...>` ids) that
- * never equal it. Match exact ids first, then the entry's recorded run start.
+ * never equal it. Forwarded cron messages link by transcript session id. Match
+ * either exact id first, then the entry's recorded run start.
  */
 export function cronRunEntryMatchesLink(
   linkedRunId: string,
-  entry: { jobId: string; runId?: string; runAtMs?: number },
+  entry: { jobId: string; runId?: string; sessionId?: string; runAtMs?: number },
 ): boolean {
-  if (entry.runId === linkedRunId) {
+  if (entry.runId === linkedRunId || entry.sessionId === linkedRunId) {
     return true;
   }
   const match = CRON_EXECUTION_ID_RE.exec(linkedRunId);

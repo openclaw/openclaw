@@ -1,16 +1,6 @@
-import prettyMilliseconds from "pretty-ms";
+import { durationUnitMs } from "./duration-units.ts";
 
-const durationUnitMs = {
-  year: 31_536_000_000,
-  day: 86_400_000,
-  hour: 3_600_000,
-  minute: 60_000,
-  second: 1_000,
-  millisecond: 1,
-} as const;
-
-export type DurationUnit = keyof typeof durationUnitMs;
-type DurationPart = { value: number | bigint; unit: DurationUnit };
+export type DurationPart = { value: number | bigint; unit: keyof typeof durationUnitMs };
 
 function resolveDurationParts(ms: number, unitCount: number, showYears = false): DurationPart[] {
   const days = BigInt(Math.trunc(ms / durationUnitMs.day));
@@ -23,21 +13,19 @@ function resolveDurationParts(ms: number, unitCount: number, showYears = false):
     // Large floats can retain a remainder after second-rounding; only subsecond input uses ms.
     { value: ms < 1_000 ? Math.trunc(ms) : 0, unit: "millisecond" },
   ];
-  // pretty-ms counts nonzero units, so an empty middle bucket must not hide the next one.
+  // Count nonzero units so an empty middle bucket does not hide the next one.
   const selected = parts.filter(({ value }) => value !== 0 && value !== 0n).slice(0, unitCount);
   return selected.length ? selected : [{ value: 0, unit: "millisecond" }];
 }
 
+function formatDurationPart({ value, unit }: DurationPart, verbose = false): string {
+  return verbose
+    ? `${value} ${unit}${value === 1 || value === 1n ? "" : "s"}`
+    : `${value}${unit === "millisecond" ? "ms" : unit[0]}`;
+}
+
 export function formatDurationParts(parts: DurationPart[], verbose = false): string {
-  return parts
-    .map(({ value, unit }) =>
-      prettyMilliseconds(BigInt(value) * BigInt(durationUnitMs[unit]), {
-        hideYear: unit !== "year",
-        unitCount: 1,
-        verbose,
-      }),
-    )
-    .join(" ");
+  return parts.map((part) => formatDurationPart(part, verbose)).join(" ");
 }
 
 export function resolveCompactDurationParts(ms?: number | null, showYears = false) {

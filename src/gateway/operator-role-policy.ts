@@ -3,23 +3,33 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { profileCatalogPath } from "../state/user-profile-identity.read.js";
+import { readResidentUserProfileRevision } from "../state/user-profile-list.js";
 import { getUserProfileRole } from "../state/user-profiles.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
-import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
+import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import {
   resolveOperatorSessionCreation,
   type TrustedSessionCreation,
-} from "./server-methods/session-creation-provenance.js";
-import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
+} from "./session-creation-provenance.js";
 
 const operatorRoleLog = createSubsystemLogger("gateway/operator-roles");
 const MAX_OPERATOR_ROLE_ASSIGNMENTS = 1_024;
 const operatorRoleAssignments = new Map<string, string | null>();
 const reportedUnknownAssignments = new Set<string>();
+type OperatorRolePolicyChange =
+  | { kind: "assignment"; profileId: string }
+  | { kind: "config"; context: object };
+const policyListeners = new Set<(change: OperatorRolePolicyChange) => void>();
+let assignmentRevision = 0;
 const deniedOperatorRole: GatewayOperatorRoleDefinition = {
   sessions: { others: "none" },
   agents: [],
@@ -57,6 +67,7 @@ function readOperatorRoleAssignment(profileId: string): string | null {
 
 /** Drops a changed assignment so subsequent authorization reads the durable owner. */
 export function invalidateOperatorRolePolicy(profileId: string): void {
+  assignmentRevision += 1;
   bumpGatewayAccessRevision();
   operatorRoleAssignments.delete(profileId);
   for (const reported of reportedUnknownAssignments) {
@@ -64,6 +75,52 @@ export function invalidateOperatorRolePolicy(profileId: string): void {
       reportedUnknownAssignments.delete(reported);
     }
   }
+  notifyListeners([...policyListeners], { kind: "assignment", profileId });
+}
+
+export function onOperatorRolePolicyChanged(
+  listener: (change: OperatorRolePolicyChange) => void,
+): () => void {
+  return registerListener(policyListeners, listener);
+}
+
+/** Called after this Gateway's committed runtime reader advances, never at tentative activation. */
+export function publishOperatorRoleConfigChange(context: object | undefined): void {
+  if (context) {
+    notifyListeners([...policyListeners], { kind: "config", context });
+  }
+}
+
+export function readOperatorRolePolicyRevision(): number {
+  return assignmentRevision;
+}
+
+/** Resolve names once for both authorization and the administrative profile projection. */
+export function resolveOperatorRoleSelection(
+  profileId: string | undefined,
+  assignedRole: string | null,
+  cfg: OpenClawConfig,
+  githubLogin: string | null,
+): { effectiveRole?: string; roleSource: "assigned" | "githubLogin" | "default" } {
+  const roles = cfg.gateway?.roles;
+  if (!roles || !profileId || profileId === GATEWAY_OWNER_PROFILE_ID) {
+    return { roleSource: "default" };
+  }
+  if (assignedRole && Object.hasOwn(roles.definitions, assignedRole)) {
+    return { effectiveRole: assignedRole, roleSource: "assigned" };
+  }
+  const login = githubLogin?.toLowerCase();
+  if (login) {
+    for (const [configuredLogin, role] of Object.entries(roles.assignments?.byGithubLogin ?? {})) {
+      if (
+        configuredLogin.trim().toLowerCase() === login &&
+        Object.hasOwn(roles.definitions, role)
+      ) {
+        return { effectiveRole: role, roleSource: "githubLogin" };
+      }
+    }
+  }
+  return { effectiveRole: roles.default, roleSource: "default" };
 }
 
 /** An enabled role boundary denies missing identity and unresolvable assignments. */
@@ -71,13 +128,17 @@ export function resolveOperatorRolePolicyForProfile(
   profileId: string | undefined,
   cfg: OpenClawConfig,
 ): GatewayOperatorRoleDefinition | undefined {
-  if (!cfg.gateway?.roles) {
+  // The owner attributes the shared-secret system actor; roles govern identified people only.
+  if (!cfg.gateway?.roles || profileId === GATEWAY_OWNER_PROFILE_ID) {
     return undefined;
   }
   return resolveOperatorRolePolicyForAssignment(
     profileId,
     profileId ? readOperatorRoleAssignment(profileId) : null,
     cfg,
+    profileId && cfg.gateway.roles.assignments?.byGithubLogin
+      ? (readResidentUserProfileRevision(profileId, profileCatalogPath({}))?.githubLogin ?? null)
+      : null,
   );
 }
 
@@ -86,29 +147,33 @@ export function resolveOperatorRolePolicyForAssignment(
   profileId: string | undefined,
   assignedRole: string | null,
   cfg: OpenClawConfig,
+  githubLogin: string | null,
 ): GatewayOperatorRoleDefinition | undefined {
   const roles = cfg.gateway?.roles;
-  if (!roles) {
+  if (!roles || profileId === GATEWAY_OWNER_PROFILE_ID) {
     return undefined;
   }
   if (!profileId) {
     return deniedOperatorRole;
   }
-  if (assignedRole && Object.hasOwn(roles.definitions, assignedRole)) {
-    return roles.definitions[assignedRole];
-  }
-  if (assignedRole) {
+  const selection = resolveOperatorRoleSelection(profileId, assignedRole, cfg, githubLogin);
+  if (assignedRole && selection.roleSource !== "assigned") {
     const reportKey = `${profileId}:${assignedRole}`;
     if (!reportedUnknownAssignments.has(reportKey)) {
       reportedUnknownAssignments.add(reportKey);
       operatorRoleLog.warn(
         `User profile ${profileId} references unknown Gateway role "${assignedRole}"; ${
-          roles.default ? `applying default role "${roles.default}"` : "denying access"
+          selection.effectiveRole
+            ? `applying ${selection.roleSource} role "${selection.effectiveRole}"`
+            : "denying access"
         }. Update gateway.roles.definitions or clear the assignment with users.setRole.`,
       );
     }
   }
-  return (roles.default ? roles.definitions[roles.default] : undefined) ?? deniedOperatorRole;
+  return (
+    (selection.effectiveRole ? roles.definitions[selection.effectiveRole] : undefined) ??
+    deniedOperatorRole
+  );
 }
 
 /** Preserve human-derived restrictions, including ambiguous historical actors; this is not identity proof. */
@@ -132,8 +197,10 @@ export function resolveGatewayOperatorRoleActor(
   if (actor) {
     return actor;
   }
-  const profileId = gatewayClientSessionCreator(client ?? null)?.id;
-  return profileId ? { kind: "operator", profileId } : undefined;
+  const profileId = client?.authenticatedUserProfile?.profileId;
+  return profileId && profileId !== GATEWAY_OWNER_PROFILE_ID
+    ? { kind: "operator", profileId }
+    : undefined;
 }
 
 /** Resolves the current named policy from an authoritative operator or system actor. */
@@ -145,20 +212,94 @@ export function resolveOperatorRolePolicy(
   if (actor?.kind === "system") {
     return undefined;
   }
+  const authority = client?.internal?.operatorRunAuthority;
+  if (actor?.kind === "operator" && authority) {
+    assertAdmittedRunOperatorAuthority(authority);
+    authority.assertCurrent();
+    if (authority.profileId !== actor.profileId) {
+      throw new Error("Gateway requester profile changed");
+    }
+    if (!cfg.gateway?.roles || authority.profileId === GATEWAY_OWNER_PROFILE_ID) {
+      return undefined;
+    }
+    if (!authority.readCurrentRoleAssignment) {
+      throw new Error("Operator role assignment was not prepared");
+    }
+    return resolveOperatorRolePolicyForAssignment(
+      authority.profileId,
+      authority.readCurrentRoleAssignment(),
+      cfg,
+      authority.readCurrentGithubLogin?.() ?? null,
+    );
+  }
+  const prepared = client?.preparedSessionProfile;
+  if (actor?.kind === "operator" && prepared?.aliases.has(actor.profileId)) {
+    return resolveOperatorRolePolicyForAssignment(
+      prepared.profileId,
+      prepared.role,
+      cfg,
+      prepared.githubLogin ?? null,
+    );
+  }
   return resolveOperatorRolePolicyForProfile(actor?.profileId, cfg);
+}
+
+/** A retained caller cannot keep grants removed by the current named role. */
+export function authorizeCurrentOperatorRoleScopes(
+  client: GatewayClient | null,
+  cfg: OpenClawConfig,
+): ErrorShape | undefined {
+  const policy = resolveOperatorRolePolicy(client, cfg);
+  if (
+    policy &&
+    !roleScopesAllow({
+      role: "operator",
+      requestedScopes: client?.connect.scopes ?? [],
+      allowedScopes: policy.scopes,
+    })
+  ) {
+    return errorShape(
+      ErrorCodes.FORBIDDEN,
+      "Your operator role changed; reconnect before continuing.",
+    );
+  }
+  return undefined;
 }
 
 export function operatorSessionCap(client: GatewayClient | null, cfg: OpenClawConfig) {
   return resolveOperatorRolePolicy(client, cfg)?.sessions.others;
 }
 
-export function hasOperatorBoundary(client: GatewayClient | null, cfg: OpenClawConfig): boolean {
-  return operatorSessionCap(client, cfg) !== undefined;
+export function hasOperatorBoundary(
+  client: GatewayClient | null,
+  cfg: OpenClawConfig,
+  prepared?: { sessionCap: ReturnType<typeof operatorSessionCap> },
+): boolean {
+  if ((prepared ? prepared.sessionCap : operatorSessionCap(client, cfg)) !== undefined) {
+    return true;
+  }
+  if (resolveGatewayOperatorRoleActor(client)?.kind === "system") {
+    return false;
+  }
+  const scopes = client?.connect?.scopes ?? [];
+  return (
+    roleScopesAllow({
+      role: "operator",
+      requestedScopes: ["operator.sessions.read"],
+      allowedScopes: scopes,
+    }) &&
+    !roleScopesAllow({
+      role: "operator",
+      requestedScopes: ["operator.read"],
+      allowedScopes: scopes,
+    })
+  );
 }
 
 /** Enforces the owning agent ceiling for session creation and run-start targets. */
 export function authorizeGatewaySessionCreation(
   params: GatewaySessionAgentAuthorization,
+  prepared?: { policy: GatewayOperatorRoleDefinition | undefined },
 ): ErrorShape | undefined {
   const actor =
     params.actor ??
@@ -167,7 +308,9 @@ export function authorizeGatewaySessionCreation(
     return undefined;
   }
   const profileId = actor?.profileId ?? params.profileId;
-  const role = resolveOperatorRolePolicyForProfile(profileId, params.cfg);
+  const role = prepared
+    ? prepared.policy
+    : resolveOperatorRolePolicyForProfile(profileId, params.cfg);
   if (!role || role.agents === "*" || role.agents.includes(params.agentId)) {
     return undefined;
   }

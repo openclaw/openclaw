@@ -1,4 +1,3 @@
-// Telegram plugin module composes the setup-safe channel surface.
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import type { ResolvedTelegramAccount } from "./accounts.js";
@@ -34,6 +33,7 @@ export function createTelegramSetupPluginBase(params: {
     capabilities: {
       chatTypes: ["direct", "group", "channel", "thread"],
       reactions: true,
+      reactionSlots: "single",
       threads: true,
       media: true,
       tts: {
@@ -46,7 +46,24 @@ export function createTelegramSetupPluginBase(params: {
       nativeCommands: true,
       blockStreaming: true,
     },
-    reload: { configPrefixes: ["channels.telegram"] },
+    reload: {
+      configPrefixes: ["channels.telegram"],
+      noopPrefixes: [
+        "messages.inbound",
+        "messages.ackReactionScope",
+        // These settings are captured at ingress/turn admission. Transport and
+        // native command registration keep the channel-wide restart fallback.
+        ...[
+          "dmPolicy",
+          "allowFrom",
+          "groupAllowFrom",
+          "groupPolicy",
+          "replyToMode",
+          "streaming",
+          "textChunkLimit",
+        ].flatMap((key) => [`channels.telegram.${key}`, `channels.telegram.accounts.*.${key}`]),
+      ],
+    },
     configSchema: TelegramChannelConfigSchema,
     config: createTelegramPluginConfig(),
     secrets: {

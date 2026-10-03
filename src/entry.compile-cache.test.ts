@@ -2,6 +2,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { expectDefined, readStringValue } from "@openclaw/normalization-core";
 import {
@@ -14,6 +15,7 @@ import {
   type Mock,
   type MockInstance,
 } from "vitest";
+import { maintainOpenClawCompileCache } from "../node-compile-cache.mjs";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import { mockNodeBuiltinModule } from "./plugin-sdk/test-helpers/node-builtin-mocks.js";
 import { createDeferredCore } from "./shared/deferred.js";
@@ -54,6 +56,7 @@ import {
   resolveEntryInstallRoot,
   respawnWithoutOpenClawCompileCacheIfNeeded,
 } from "./entry.compile-cache.js";
+import { resolveNodeCompileCacheEnv } from "./infra/node-compile-cache-env.js";
 
 function enabledDirectory(callIndex = 0): string {
   const [directory] = expectDefined(enableCompileCache.mock.calls[callIndex], "cache enable call");
@@ -67,6 +70,7 @@ describe("entry compile cache", () => {
   let argv: string[];
   let child: ChildProcess;
   let kill: Mock<ChildProcess["kill"]>;
+  let processKill: MockInstance<typeof process.kill>;
   let exit: MockInstance<typeof process.exit>;
   let writeStderr: MockInstance<typeof process.stderr.write>;
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -93,6 +97,7 @@ describe("entry compile cache", () => {
     spawn.mockReset().mockReturnValue(child);
     vi.spyOn(process, "argv", "get").mockImplementation(() => argv);
     vi.spyOn(process, "execArgv", "get").mockReturnValue(["--no-warnings"]);
+    processKill = vi.spyOn(process, "kill").mockReturnValue(true);
     exit = vi.spyOn(process, "exit").mockImplementation(vi.fn<typeof process.exit>());
     writeStderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
   });
@@ -130,6 +135,9 @@ describe("entry compile cache", () => {
     expect(enableCompileCache).toHaveBeenCalledOnce();
     enableOpenClawCompileCache({ env: { NODE_DISABLE_COMPILE_CACHE: "1" }, installRoot: root });
     expect(enableCompileCache).toHaveBeenCalledOnce();
+    setTestEnvValue("NODE_DISABLE_COMPILE_CACHE", "1");
+    enableOpenClawCompileCache({ installRoot: root });
+    expect(enableCompileCache).toHaveBeenCalledOnce();
   });
 
   it("scopes packaged compile cache by package install metadata", async () => {
@@ -144,7 +152,34 @@ describe("entry compile cache", () => {
     expect(path.basename(directory)).toMatch(/^\d+-\d+$/);
   });
 
-  it("invalidates a replaced installation without deleting shared compile caches", async () => {
+  it("skips cache activation with a warning when Windows TEMP makes the path too long", () => {
+    vi.spyOn(os, "tmpdir").mockReturnValue(path.join(root, "x".repeat(200)));
+    withMockedPlatform("win32", () => {
+      enableOpenClawCompileCache({ env: {}, installRoot: root });
+    });
+    expect(enableCompileCache).not.toHaveBeenCalled();
+    expect(writeStderr).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("Compile cache disabled: Windows cache path exceeds 200 characters"),
+    );
+  });
+
+  it.each([200, 201])("bounds Windows child cache paths at 200 characters: %s", (length) => {
+    const directory = path.join(root, "x".repeat(length - root.length - 1));
+    const env = { NODE_COMPILE_CACHE: directory, KEEP: "unchanged" };
+    withMockedPlatform("win32", () => {
+      const childEnv = resolveNodeCompileCacheEnv(env);
+      if (length === 200) {
+        expect(childEnv).toBe(env);
+        expect(writeStderr).not.toHaveBeenCalled();
+      } else {
+        expect(childEnv).toEqual({ NODE_DISABLE_COMPILE_CACHE: "1", KEEP: "unchanged" });
+        expect(writeStderr).toHaveBeenCalledOnce();
+      }
+    });
+    expect(env.NODE_COMPILE_CACHE).toBe(directory);
+  });
+
+  it("retires a replaced installation without deleting other applications' compile caches", async () => {
     const packageJsonPath = path.join(root, "package.json");
     const env = { NODE_COMPILE_CACHE: path.join(root, ".node-cache") };
     await fs.writeFile(packageJsonPath, '{"version":"2026.4.29"}\n', "utf8");
@@ -153,6 +188,8 @@ describe("entry compile cache", () => {
     await fs.mkdir(originalDirectory, { recursive: true });
     const originalCacheEntry = path.join(originalDirectory, "keep.txt");
     await fs.writeFile(originalCacheEntry, "previous cached installation\n", "utf8");
+    const sharedCacheEntry = path.join(env.NODE_COMPILE_CACHE, "another-application");
+    await fs.writeFile(sharedCacheEntry, "keep\n");
     await fs.writeFile(
       packageJsonPath,
       '{"version":"2026.4.29","installation":"replacement"}\n',
@@ -162,9 +199,9 @@ describe("entry compile cache", () => {
     const replacementDirectory = enabledDirectory(1);
     expect(replacementDirectory).toContain(path.join("openclaw", "2026.4.29"));
     expect(replacementDirectory).not.toBe(originalDirectory);
-    await expect(fs.readFile(originalCacheEntry, "utf8")).resolves.toBe(
-      "previous cached installation\n",
-    );
+    await maintainOpenClawCompileCache(replacementDirectory);
+    await expect(fs.stat(originalDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(sharedCacheEntry, "utf8")).resolves.toBe("keep\n");
   });
 
   it("runs a one-shot no-cache respawn when source checkout inherits NODE_COMPILE_CACHE", async () => {
@@ -217,6 +254,20 @@ describe("entry compile cache", () => {
     },
   );
 
+  it.each(["linux", "darwin"] as const)(
+    "keeps the serving Gateway in process with inherited compile cache on %s",
+    async (platform) => {
+      await markSourceCheckout();
+      argv = [process.execPath, entryFile, "--profile=fixture", "gateway", "run"];
+      await withMockedPlatform(platform, async () => {
+        await expect(
+          respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root }),
+        ).resolves.toBe(false);
+        expect(spawn).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("keeps interactive no-cache respawns attached to the terminal", async () => {
     await markSourceCheckout();
     argv = [process.execPath, entryFile, "tui"];
@@ -258,36 +309,62 @@ describe("entry compile cache", () => {
     expect(writeStderr).not.toHaveBeenCalled();
   });
 
-  it("marks signal-terminated compile-cache respawn children as failed without forcing another exit", async () => {
-    await markSourceCheckout();
-    await respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root });
-    child.emit("exit", null, "SIGTERM");
-    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
-  });
-
-  it("waits for a signaled compile-cache respawn child after force-killing it", async () => {
-    await markSourceCheckout();
-    argv = [process.execPath, entryFile, "tui"];
-    vi.useFakeTimers();
-    try {
-      await respawnWithoutOpenClawCompileCacheIfNeeded({
-        currentFile: entryFile,
-        installRoot: root,
+  it.each(["linux", "win32"] as const)(
+    "preserves compile-cache respawn child signal termination on %s",
+    async (platform) => {
+      await markSourceCheckout();
+      await withMockedPlatform(platform, async () => {
+        await respawnWithoutOpenClawCompileCacheIfNeeded({
+          currentFile: entryFile,
+          installRoot: root,
+        });
+        child.emit("exit", null, "SIGTERM");
+        if (platform === "win32") {
+          expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+          expect(processKill).not.toHaveBeenCalled();
+        } else {
+          expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, "SIGTERM");
+          expect(exit).not.toHaveBeenCalled();
+        }
       });
-      const [, options] = expectDefined(attachChildProcessBridge.mock.calls[0], "bridge call");
-      expectDefined(options?.onSignal, "signal handler")("SIGTERM");
-      vi.advanceTimersByTime(1_000);
-      expect(kill).toHaveBeenCalledWith("SIGTERM");
-      expect(exit).not.toHaveBeenCalled();
-      vi.advanceTimersByTime(1_000);
-      expect(kill).toHaveBeenCalledWith(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
-      expect(exit).not.toHaveBeenCalled();
-      child.emit("exit", null, "SIGKILL");
-      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
+
+  it.each(["linux", "win32"] as const)(
+    "waits for a signaled compile-cache respawn child after force-killing it on %s",
+    async (platform) => {
+      await markSourceCheckout();
+      argv = [process.execPath, entryFile, "tui"];
+      vi.useFakeTimers();
+      try {
+        await withMockedPlatform(platform, async () => {
+          await respawnWithoutOpenClawCompileCacheIfNeeded({
+            currentFile: entryFile,
+            installRoot: root,
+          });
+          const [, options] = expectDefined(attachChildProcessBridge.mock.calls[0], "bridge call");
+          expectDefined(options?.onSignal, "signal handler")("SIGTERM");
+          vi.advanceTimersByTime(1_000);
+          expect(kill).toHaveBeenCalledWith("SIGTERM");
+          expect(exit).not.toHaveBeenCalled();
+          vi.advanceTimersByTime(1_000);
+          expect(kill).toHaveBeenCalledWith(platform === "win32" ? "SIGTERM" : "SIGKILL");
+          expect(exit).not.toHaveBeenCalled();
+          expect(processKill).not.toHaveBeenCalled();
+          child.emit("exit", null, "SIGKILL");
+          if (platform === "win32") {
+            expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+            expect(processKill).not.toHaveBeenCalled();
+          } else {
+            expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, "SIGKILL");
+            expect(exit).not.toHaveBeenCalled();
+          }
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("respawns when Node already enabled its cache without an inherited cache path", async () => {
     await markSourceCheckout();

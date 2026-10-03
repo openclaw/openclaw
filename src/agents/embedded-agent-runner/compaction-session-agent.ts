@@ -1,10 +1,12 @@
 import type { LlmRuntime } from "@openclaw/ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveProviderTextTransforms } from "../../plugins/provider-runtime.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
+import type { StreamFn } from "../runtime/index.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -14,14 +16,14 @@ import {
 import { mapThinkingLevelForProvider } from "./utils.js";
 
 export async function prepareCompactionSessionAgent(params: {
-  session: { agent: { streamFn?: unknown } };
+  session: { agent: { streamFn?: StreamFn } };
   llmRuntime: LlmRuntime;
-  providerStreamFn: unknown;
+  providerStreamFn: StreamFn | undefined;
   sessionId: string;
   signal: AbortSignal;
   effectiveModel: ProviderRuntimeModel;
   resolvedApiKey?: string;
-  authStorage: unknown;
+  authStorage: Parameters<typeof resolveEmbeddedAgentStream>[0]["authStorage"];
   config?: OpenClawConfig;
   provider: string;
   modelId: string;
@@ -43,48 +45,43 @@ export async function prepareCompactionSessionAgent(params: {
   senderUsername?: string | null;
   senderE164?: string | null;
 }) {
-  const authStorage =
-    params.authStorage &&
-    typeof params.authStorage === "object" &&
-    "getApiKey" in params.authStorage &&
-    typeof params.authStorage.getApiKey === "function"
-      ? (params.authStorage as {
-          getApiKey(provider: string): Promise<string | undefined>;
-        })
-      : undefined;
-  const transportApiKey = authStorage
+  const transportApiKey = params.authStorage
     ? await resolveEmbeddedAgentApiKey({
         provider: params.effectiveModel.provider,
         resolvedApiKey: params.resolvedApiKey,
-        authStorage,
+        authStorage: params.authStorage,
       })
     : params.resolvedApiKey;
   params.session.agent.streamFn = resolveEmbeddedAgentStream({
     llmRuntime: params.llmRuntime,
-    currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
-    providerStreamFn: params.providerStreamFn as never,
+    currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session }),
+    providerStreamFn: params.providerStreamFn,
     sessionId: params.sessionId,
     signal: params.signal,
     model: params.effectiveModel,
     resolvedApiKey: params.resolvedApiKey,
     transportAuthAvailable: Boolean(transportApiKey?.trim()),
     authProfileId: params.runtimePlan?.auth.forwardedAuthProfileId,
-    authStorage: params.authStorage as never,
+    authStorage: params.authStorage,
   }).streamFn;
   const providerTextTransforms = resolveProviderTextTransforms({
     provider: params.provider,
     config: params.config,
     workspaceDir: params.effectiveWorkspace,
+    runtimeHandle: getModelProviderRuntimePluginHandle(params.effectiveModel),
   });
   if (providerTextTransforms) {
     params.session.agent.streamFn = wrapStreamFnTextTransforms({
-      streamFn: params.session.agent.streamFn as never,
+      streamFn: params.session.agent.streamFn,
       input: providerTextTransforms.input,
       output: providerTextTransforms.output,
       transformSystemPrompt: false,
-    }) as never;
+    });
   }
-  const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel);
+  const providerThinkingLevel = mapThinkingLevelForProvider(
+    params.thinkLevel,
+    params.effectiveModel,
+  );
   const preparedRuntimeExtraParams = params.runtimePlan?.transport.resolveExtraParams({
     thinkingLevel: providerThinkingLevel,
     agentId: params.sessionAgentId,
@@ -92,7 +89,7 @@ export async function prepareCompactionSessionAgent(params: {
     model: params.effectiveModel,
   });
   const extraParams = applyExtraParamsToAgent(
-    params.session.agent as never,
+    params.session.agent,
     params.config,
     params.provider,
     params.modelId,
@@ -105,6 +102,12 @@ export async function prepareCompactionSessionAgent(params: {
     undefined,
     {
       ...(preparedRuntimeExtraParams ? { preparedExtraParams: preparedRuntimeExtraParams } : {}),
+      auth: params.runtimePlan?.auth.selectedAuthMode
+        ? {
+            mode: params.runtimePlan.auth.selectedAuthMode,
+            authFlow: params.runtimePlan.auth.selectedAuthFlow,
+          }
+        : undefined,
       nativeWebSearchPolicyContext: {
         // Summaries have no tool loop; provider-hosted tools must not inherit
         // the originating conversation's broader web-search authority.

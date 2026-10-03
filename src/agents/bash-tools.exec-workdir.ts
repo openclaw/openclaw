@@ -213,16 +213,13 @@ async function mapExistingHostPath(params: {
     return { kind: "invalid" };
   }
   const stats = safeStatSync(resolved.resolved);
+  const relative = resolved.relative.split(path.sep).join(path.posix.sep);
   if (!stats) {
-    return {
-      kind: "missing",
-      relative: resolved.relative ? resolved.relative.split(path.sep).join(path.posix.sep) : "",
-    };
+    return { kind: "missing", relative };
   }
   if (!stats.isDirectory()) {
     return { kind: "invalid" };
   }
-  const relative = resolved.relative ? resolved.relative.split(path.sep).join(path.posix.sep) : "";
   return {
     kind: "available",
     workdir: {
@@ -238,13 +235,7 @@ async function validateBackendWorkdir(params: {
   sandbox: BashSandboxConfig;
 }): Promise<SandboxWorkdir | null> {
   const containerCwd = await params.sandbox.validateWorkdir?.(params.workdir.containerCwd);
-  return containerCwd
-    ? {
-        hostCwd: params.workdir.hostCwd,
-        containerCwd,
-        scriptPreflightCwd: params.workdir.scriptPreflightCwd,
-      }
-    : null;
+  return containerCwd ? { ...params.workdir, containerCwd } : null;
 }
 
 function resolveBackendHostWorkdirCandidate(params: {
@@ -294,11 +285,7 @@ async function resolveBackendValidatedSandboxWorkdir(params: {
   }
   const hostCandidate = resolveBackendHostWorkdirCandidate(params);
   if (hostCandidate) {
-    const mappedWorkdir = await mapExistingHostPath({
-      hostPath: hostCandidate.hostPath,
-      hostRoot: hostCandidate.hostRoot,
-      containerRoot: hostCandidate.containerRoot,
-    });
+    const mappedWorkdir = await mapExistingHostPath(hostCandidate);
     if (mappedWorkdir.kind === "available") {
       return await validateBackendWorkdir({
         workdir: mappedWorkdir.workdir,
@@ -315,7 +302,7 @@ async function resolveBackendValidatedSandboxWorkdir(params: {
         sandbox: params.sandbox,
       });
     }
-    if (hostCandidate.failIfInvalid && mappedWorkdir.kind === "invalid") {
+    if (hostCandidate.failIfInvalid) {
       return null;
     }
   }
@@ -417,14 +404,7 @@ export async function resolveExecWorkdir(params: {
         ? explicitWorkdir.value
         : (defaultCwd ?? sandbox.containerWorkdir);
     const resolved = await resolveSandboxWorkdir({ workdir: requestedCwd, sandbox });
-    return resolved
-      ? {
-          kind: "sandbox",
-          hostCwd: resolved.hostCwd,
-          containerCwd: resolved.containerCwd,
-          scriptPreflightCwd: resolved.scriptPreflightCwd,
-        }
-      : unavailable(requestedCwd);
+    return resolved ? { kind: "sandbox", ...resolved } : unavailable(requestedCwd);
   }
 
   const requestedCwd =
@@ -432,6 +412,15 @@ export async function resolveExecWorkdir(params: {
   if (!requestedCwd) {
     return unavailable("current working directory");
   }
-  const resolved = resolveExistingHostWorkdir(requestedCwd);
+  let hostPath = requestedCwd;
+  if (explicitWorkdir.kind === "specified" && defaultCwd && !path.isAbsolute(requestedCwd)) {
+    const baseCwd = resolveExistingHostWorkdir(defaultCwd);
+    if (!baseCwd) {
+      return unavailable(defaultCwd);
+    }
+    // Preserve filesystem traversal through symlinks and reject missing path segments.
+    hostPath = `${baseCwd}${path.sep}${requestedCwd}`;
+  }
+  const resolved = resolveExistingHostWorkdir(hostPath);
   return resolved ? { kind: "local", hostCwd: resolved } : unavailable(requestedCwd);
 }

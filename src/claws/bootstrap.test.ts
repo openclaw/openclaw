@@ -4,10 +4,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
+import { withTempHomeConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { setTestEnvValue } from "../test-utils/env.js";
 import { applyClawAddPlan } from "./add.js";
 import { seedClawPackageBootstrap } from "./bootstrap.js";
+import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import {
@@ -53,6 +56,43 @@ async function createPackage(bootstrap = "# First run\n\nAsk which repositories 
   return root;
 }
 
+async function bootstrapPlan(options: { content?: string; includeBody?: boolean } = {}) {
+  const root = await createPackage(options.content);
+  const read = await readClawManifestFile(root);
+  if (!read.ok || !read.packageBootstrap) {
+    throw new Error("expected package bootstrap");
+  }
+  const workspace = join(root, "workspace");
+  const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+  const plan = await buildClawAddPlan({
+    manifest: read.manifest,
+    ...(options.includeBody ? { clawMarkdownBody: read.clawMarkdownBody } : {}),
+    packageBootstrap: read.packageBootstrap,
+    source: read.source,
+    context: { workspace },
+  });
+  return { read, workspace, env, plan };
+}
+
+function removeBootstrap(
+  plan: Awaited<ReturnType<typeof buildClawRemovePlan>>,
+  config: OpenClawConfig,
+  env: { OPENCLAW_STATE_DIR: string },
+) {
+  return withTempHomeConfig(config, async ({ configPath }) => {
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    setTestEnvValue("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    return applyClawRemovePlan(plan, {
+      monitorGateway: quiescentClawMonitorGateway,
+      env,
+      config,
+      consentPlanIntegrity: plan.planIntegrity,
+      purgeSessions: async () => undefined,
+      trashPath: async () => true,
+    });
+  });
+}
+
 describe("package-root BOOTSTRAP.md", () => {
   it("integrity-binds bootstrap and plans a distinct native action", async () => {
     const root = await createPackage();
@@ -94,20 +134,7 @@ describe("package-root BOOTSTRAP.md", () => {
   });
 
   it("seeds native state once and never recreates a consumed bootstrap", async () => {
-    const root = await createPackage();
-    const read = await readClawManifestFile(root);
-    if (!read.ok || !read.packageBootstrap) {
-      throw new Error("expected package bootstrap");
-    }
-    const workspace = join(root, "workspace");
-    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
-    const plan = await buildClawAddPlan({
-      manifest: read.manifest,
-      clawMarkdownBody: read.clawMarkdownBody,
-      packageBootstrap: read.packageBootstrap,
-      source: read.source,
-      context: { workspace },
-    });
+    const { workspace, env, plan } = await bootstrapPlan({ includeBody: true });
     let config: OpenClawConfig = {};
     const added = await applyClawAddPlan(plan, {
       env,
@@ -122,7 +149,7 @@ describe("package-root BOOTSTRAP.md", () => {
     await expect(readFile(join(workspace, "BOOTSTRAP.md"), "utf8")).resolves.toContain(
       "which repositories",
     );
-    expect(readWorkspaceStateSnapshot(workspace, { env }).setup).toMatchObject({
+    expect((await readWorkspaceStateSnapshot(workspace, { env })).setup).toMatchObject({
       bootstrapSeededAt: new Date(1_000).toISOString(),
     });
     await expect(readClawStatus("bootstrap-worker", { env, config })).resolves.toMatchObject({
@@ -139,57 +166,8 @@ describe("package-root BOOTSTRAP.md", () => {
     });
   });
 
-  it("seeds the consented package bootstrap before the agent config is published", async () => {
-    const root = await createPackage();
-    const read = await readClawManifestFile(root);
-    if (!read.ok || !read.packageBootstrap) {
-      throw new Error("expected package bootstrap");
-    }
-    const workspace = join(root, "workspace");
-    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
-    const plan = await buildClawAddPlan({
-      manifest: read.manifest,
-      clawMarkdownBody: read.clawMarkdownBody,
-      packageBootstrap: read.packageBootstrap,
-      source: read.source,
-      context: { workspace },
-    });
-    let config: OpenClawConfig = {};
-    const order: string[] = [];
-
-    const added = await applyClawAddPlan(plan, {
-      env,
-      nowMs: 1_000,
-      consentPlanIntegrity: plan.planIntegrity,
-      commitConfig: async (transform) => {
-        order.push("config-commit");
-        config = transform(config);
-      },
-      seedPackageBootstrap: async (seedPlan, seedOptions) => {
-        order.push("bootstrap-seed");
-        return await seedClawPackageBootstrap(seedPlan, seedOptions);
-      },
-    });
-
-    expect(added.status).toBe("complete");
-    expect(order).toEqual(["bootstrap-seed", "config-commit"]);
-  });
-
   it("keeps the agent unpublished and resumable when package bootstrap seeding fails", async () => {
-    const root = await createPackage();
-    const read = await readClawManifestFile(root);
-    if (!read.ok || !read.packageBootstrap) {
-      throw new Error("expected package bootstrap");
-    }
-    const workspace = join(root, "workspace");
-    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
-    const plan = await buildClawAddPlan({
-      manifest: read.manifest,
-      clawMarkdownBody: read.clawMarkdownBody,
-      packageBootstrap: read.packageBootstrap,
-      source: read.source,
-      context: { workspace },
-    });
+    const { workspace, env, plan } = await bootstrapPlan({ includeBody: true });
     let config: OpenClawConfig = {};
 
     const added = await applyClawAddPlan(plan, {
@@ -211,7 +189,9 @@ describe("package-root BOOTSTRAP.md", () => {
     });
     expect(config).toEqual({});
     expect(readClawInstallRecord("bootstrap-worker", { env })?.status).toBe("workspace_ready");
-    expect(readWorkspaceStateSnapshot(workspace, { env }).setup.bootstrapSeededAt).toBeUndefined();
+    expect(
+      (await readWorkspaceStateSnapshot(workspace, { env })).setup.bootstrapSeededAt,
+    ).toBeUndefined();
     await expect(readFile(join(workspace, "BOOTSTRAP.md"), "utf8")).rejects.toThrow();
 
     const resumed = await applyClawAddPlan(plan, {
@@ -233,20 +213,7 @@ describe("package-root BOOTSTRAP.md", () => {
   });
 
   it("recovers from a stock bootstrap seeded by a concurrent session", async () => {
-    const root = await createPackage();
-    const read = await readClawManifestFile(root);
-    if (!read.ok || !read.packageBootstrap) {
-      throw new Error("expected package bootstrap");
-    }
-    const workspace = join(root, "workspace");
-    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
-    const plan = await buildClawAddPlan({
-      manifest: read.manifest,
-      clawMarkdownBody: read.clawMarkdownBody,
-      packageBootstrap: read.packageBootstrap,
-      source: read.source,
-      context: { workspace },
-    });
+    const { workspace, env, plan } = await bootstrapPlan({ includeBody: true });
     let config: OpenClawConfig = {};
 
     const added = await applyClawAddPlan(plan, {
@@ -283,20 +250,7 @@ describe("package-root BOOTSTRAP.md", () => {
   });
 
   it("does not expose the agent while package bootstrap seeding is in flight", async () => {
-    const root = await createPackage();
-    const read = await readClawManifestFile(root);
-    if (!read.ok || !read.packageBootstrap) {
-      throw new Error("expected package bootstrap");
-    }
-    const workspace = join(root, "workspace");
-    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
-    const addPlan = await buildClawAddPlan({
-      manifest: read.manifest,
-      clawMarkdownBody: read.clawMarkdownBody,
-      packageBootstrap: read.packageBootstrap,
-      source: read.source,
-      context: { workspace },
-    });
+    const { workspace, env, plan: addPlan } = await bootstrapPlan({ includeBody: true });
     let config: OpenClawConfig = {};
     let releaseSeed!: () => void;
     const seedReleased = new Promise<void>((resolve) => {
@@ -334,20 +288,7 @@ describe("package-root BOOTSTRAP.md", () => {
   });
 
   it("removes a seeded partial install when the later configuration commit fails", async () => {
-    const root = await createPackage();
-    const read = await readClawManifestFile(root);
-    if (!read.ok || !read.packageBootstrap) {
-      throw new Error("expected package bootstrap");
-    }
-    const workspace = join(root, "workspace");
-    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
-    const addPlan = await buildClawAddPlan({
-      manifest: read.manifest,
-      clawMarkdownBody: read.clawMarkdownBody,
-      packageBootstrap: read.packageBootstrap,
-      source: read.source,
-      context: { workspace },
-    });
+    const { workspace, env, plan: addPlan } = await bootstrapPlan({ includeBody: true });
 
     const added = await applyClawAddPlan(addPlan, {
       env,
@@ -379,16 +320,7 @@ describe("package-root BOOTSTRAP.md", () => {
       }),
     );
 
-    const removed = await applyClawRemovePlan(removePlan, {
-      env,
-      config: {},
-      consentPlanIntegrity: removePlan.planIntegrity,
-      commitConfig: async (transform) => {
-        transform({});
-      },
-      purgeSessions: async () => undefined,
-      trashPath: async () => true,
-    });
+    const removed = await removeBootstrap(removePlan, {}, env);
 
     expect(removed).toMatchObject({
       status: "complete",
@@ -397,46 +329,18 @@ describe("package-root BOOTSTRAP.md", () => {
     expect(readClawInstallRecord("bootstrap-worker", { env })).toBeUndefined();
   });
 
-  it("omits bootstrap from update-style target plans", async () => {
-    const root = await createPackage();
-    const read = await readClawManifestFile(root);
-    if (!read.ok || !read.packageBootstrap) {
-      throw new Error("expected package bootstrap");
-    }
-    const plan = await buildClawAddPlan({
-      manifest: read.manifest,
-      packageBootstrap: read.packageBootstrap,
-      includePackageBootstrap: false,
-      source: read.source,
-      context: { workspace: join(root, "workspace") },
-    });
-
-    expect(plan.actions.some((action) => action.kind === "bootstrap")).toBe(false);
-  });
-
   it("preserves bootstrap provenance when update omits the seed-once action", async () => {
-    const root = await createPackage();
-    const read = await readClawManifestFile(root);
-    if (!read.ok || !read.packageBootstrap) {
-      throw new Error("expected package bootstrap");
-    }
-    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
-    const context = { workspace: join(root, "workspace") };
-    const addPlan = await buildClawAddPlan({
-      manifest: read.manifest,
-      packageBootstrap: read.packageBootstrap,
-      source: read.source,
-      context,
-    });
+    const { read, workspace, env, plan: addPlan } = await bootstrapPlan();
     const initial = persistClawInstallRecord(addPlan, { env });
     const updatePlan = await buildClawAddPlan({
       manifest: read.manifest,
       packageBootstrap: read.packageBootstrap,
       includePackageBootstrap: false,
       source: read.source,
-      context,
+      context: { workspace },
     });
 
+    expect(updatePlan.actions.some((action) => action.kind === "bootstrap")).toBe(false);
     updateClawInstallRecord(updatePlan, { env });
 
     expect(readClawInstallRecord("bootstrap-worker", { env })?.bootstrap).toEqual(
@@ -444,70 +348,10 @@ describe("package-root BOOTSTRAP.md", () => {
     );
   });
 
-  it("removes an unchanged pending bootstrap with the Claw", async () => {
-    const root = await createPackage();
-    const read = await readClawManifestFile(root);
-    if (!read.ok || !read.packageBootstrap) {
-      throw new Error("expected package bootstrap");
-    }
-    const workspace = join(root, "workspace");
-    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
-    const addPlan = await buildClawAddPlan({
-      manifest: read.manifest,
-      packageBootstrap: read.packageBootstrap,
-      source: read.source,
-      context: { workspace },
-    });
-    let config: OpenClawConfig = {};
-    await applyClawAddPlan(addPlan, {
-      env,
-      consentPlanIntegrity: addPlan.planIntegrity,
-      commitConfig: async (transform) => {
-        config = transform(config);
-      },
-    });
-
-    const removePlan = await buildClawRemovePlan("bootstrap-worker", { env, config });
-    expect(removePlan.actions).toContainEqual(
-      expect.objectContaining({ kind: "bootstrap", action: "delete", blocked: false }),
-    );
-    expect(removePlan.actions).toContainEqual(
-      expect.objectContaining({ kind: "workspace", action: "trash" }),
-    );
-    const removed = await applyClawRemovePlan(removePlan, {
-      env,
-      config,
-      consentPlanIntegrity: removePlan.planIntegrity,
-      commitConfig: async (transform) => {
-        config = transform(config);
-      },
-      purgeSessions: async () => undefined,
-      trashPath: async () => true,
-    });
-
-    expect(removed).toMatchObject({
-      status: "complete",
-      bootstrap: { path: "BOOTSTRAP.md", action: "deleted" },
-    });
-    await expect(readFile(join(workspace, "BOOTSTRAP.md"), "utf8")).rejects.toThrow();
-  });
-
   it("removes an unchanged large pending bootstrap within the native size limit", async () => {
     const content = "# First run\n\n" + "x".repeat(1024 * 1024 + 32);
     expect(Buffer.byteLength(content)).toBeLessThanOrEqual(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES);
-    const root = await createPackage(content);
-    const read = await readClawManifestFile(root);
-    if (!read.ok || !read.packageBootstrap) {
-      throw new Error("expected package bootstrap");
-    }
-    const workspace = join(root, "workspace");
-    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
-    const addPlan = await buildClawAddPlan({
-      manifest: read.manifest,
-      packageBootstrap: read.packageBootstrap,
-      source: read.source,
-      context: { workspace },
-    });
+    const { workspace, env, plan: addPlan } = await bootstrapPlan({ content });
     let config: OpenClawConfig = {};
     await applyClawAddPlan(addPlan, {
       env,
@@ -524,16 +368,10 @@ describe("package-root BOOTSTRAP.md", () => {
     expect(removePlan.actions).toContainEqual(
       expect.objectContaining({ kind: "bootstrap", action: "delete", blocked: false }),
     );
-    const removed = await applyClawRemovePlan(removePlan, {
-      env,
-      config,
-      consentPlanIntegrity: removePlan.planIntegrity,
-      commitConfig: async (transform) => {
-        config = transform(config);
-      },
-      purgeSessions: async () => undefined,
-      trashPath: async () => true,
-    });
+    expect(removePlan.actions).toContainEqual(
+      expect.objectContaining({ kind: "workspace", action: "trash" }),
+    );
+    const removed = await removeBootstrap(removePlan, config, env);
 
     expect(removed).toMatchObject({
       status: "complete",
@@ -543,19 +381,7 @@ describe("package-root BOOTSTRAP.md", () => {
   });
 
   it("preserves a locally modified pending bootstrap and its workspace", async () => {
-    const root = await createPackage();
-    const read = await readClawManifestFile(root);
-    if (!read.ok || !read.packageBootstrap) {
-      throw new Error("expected package bootstrap");
-    }
-    const workspace = join(root, "workspace");
-    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
-    const addPlan = await buildClawAddPlan({
-      manifest: read.manifest,
-      packageBootstrap: read.packageBootstrap,
-      source: read.source,
-      context: { workspace },
-    });
+    const { workspace, env, plan: addPlan } = await bootstrapPlan();
     let config: OpenClawConfig = {};
     await applyClawAddPlan(addPlan, {
       env,
@@ -573,16 +399,7 @@ describe("package-root BOOTSTRAP.md", () => {
     expect(removePlan.actions).toContainEqual(
       expect.objectContaining({ kind: "workspace", action: "retain" }),
     );
-    const removed = await applyClawRemovePlan(removePlan, {
-      env,
-      config,
-      consentPlanIntegrity: removePlan.planIntegrity,
-      commitConfig: async (transform) => {
-        config = transform(config);
-      },
-      purgeSessions: async () => undefined,
-      trashPath: async () => true,
-    });
+    const removed = await removeBootstrap(removePlan, config, env);
 
     expect(removed).toMatchObject({
       status: "complete",

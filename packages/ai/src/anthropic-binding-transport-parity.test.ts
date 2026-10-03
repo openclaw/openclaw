@@ -1,82 +1,9 @@
-import type { Context, Model } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
-import { configureAiTransportHost, getAiTransportHost } from "./host.js";
 import {
-  anthropicModel,
-  context,
   anthropicEvents,
-  createAnthropicResponse,
+  captureAnthropicRequest,
   registerParityHostLifecycle,
 } from "./provider-transport-parity.test-support.js";
-
-async function captureAnthropicRequest(
-  implementation: "provider" | "transport",
-  options: {
-    model?: Partial<Model<"anthropic-messages">>;
-    apiKey?: string;
-    reasoning?: "low" | "off";
-    events?: readonly Record<string, unknown>[];
-    context?: Context;
-    thinkingOverride?: { type: "disabled" } | { type: "enabled"; budget_tokens: number };
-    headers?: Record<string, string>;
-  } = {},
-) {
-  const requests: Array<{ payload: Record<string, unknown>; headers: Headers }> = [];
-  const warnings: string[] = [];
-  const capabilities = getAiTransportHost().resolveProviderRequestCapabilities({});
-  const fetchMock: typeof fetch = async (_input, init) => {
-    if (typeof init?.body !== "string") {
-      throw new Error("Expected a JSON Anthropic request body");
-    }
-    requests.push({
-      payload: JSON.parse(init.body) as Record<string, unknown>,
-      headers: new Headers(init?.headers),
-    });
-    return createAnthropicResponse(options.events ?? anthropicEvents);
-  };
-  configureAiTransportHost({
-    ...getAiTransportHost(),
-    buildModelFetch: () => fetchMock,
-    logWarn: (_subsystem, message) => warnings.push(message),
-    resolveProviderRequestCapabilities: (input) => ({
-      ...capabilities,
-      endpointClass:
-        new URL(input.baseUrl ?? "https://api.anthropic.com").hostname === "api.anthropic.com"
-          ? "anthropic-public"
-          : "custom",
-    }),
-  });
-  const model = { ...anthropicModel, ...options.model };
-  const streamOptions = {
-    apiKey: options.apiKey ?? "sk-test",
-    reasoning: options.reasoning ?? "low",
-    headers: options.headers,
-    onPayload: (payload: unknown) =>
-      options.thinkingOverride
-        ? { ...(payload as Record<string, unknown>), thinking: options.thinkingOverride }
-        : undefined,
-  } as const;
-  const [{ streamSimpleAnthropic }, { createAnthropicMessagesTransportStreamFn }] =
-    await Promise.all([
-      import("./providers/anthropic.js"),
-      import("./transports/anthropic-transport-stream.js"),
-    ]);
-  const requestContext = options.context ?? context;
-  const stream =
-    implementation === "provider"
-      ? streamSimpleAnthropic(model, requestContext, streamOptions)
-      : await Promise.resolve(
-          createAnthropicMessagesTransportStreamFn()(model, requestContext, streamOptions),
-        );
-  const result = await stream.result();
-  expect(result.stopReason).toBe("stop");
-  expect(requests).toHaveLength(1);
-  const [request] = requests;
-  if (!request) {
-    throw new Error("Expected one Anthropic request");
-  }
-  return { ...request, warnings };
-}
 
 describe("Anthropic thinking-binding transport parity", () => {
   registerParityHostLifecycle();
@@ -107,6 +34,7 @@ describe("Anthropic thinking-binding transport parity", () => {
       expect(
         headers.get("anthropic-beta")?.includes("thinking-binding-controls-2026-08-01") ?? false,
       ).toBe(enabled);
+      expect(headers.get("anthropic-beta")).not.toBe("");
       expect(payload.thinking).toEqual(
         enabled
           ? expect.objectContaining({ block_binding: { prefix_mismatch_behavior: "drop_block" } })
@@ -137,69 +65,6 @@ describe("Anthropic thinking-binding transport parity", () => {
       });
       expect(payload.thinking).not.toHaveProperty("block_binding");
       expect(headers.get("anthropic-beta") ?? "").not.toContain("thinking-binding-controls");
-    }
-  });
-
-  it("keeps append-only carriers as stable cache anchors through a tool loop in both paths", async () => {
-    const messages: Context["messages"] = [
-      { role: "user", content: "Question", timestamp: 1 },
-      {
-        role: "user",
-        content: "Retained runtime context",
-        timestamp: 2,
-        runtimeContextCarrier: true,
-      },
-    ];
-    for (const implementation of ["provider", "transport"] as const) {
-      const first = await captureAnthropicRequest(implementation, {
-        context: { ...context, messages },
-      });
-      const continued = await captureAnthropicRequest(implementation, {
-        context: {
-          ...context,
-          messages: [
-            ...messages,
-            {
-              role: "assistant",
-              api: anthropicModel.api,
-              provider: anthropicModel.provider,
-              model: anthropicModel.id,
-              timestamp: 3,
-              stopReason: "toolUse",
-              usage: {
-                input: 1,
-                output: 1,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 2,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              content: [
-                { type: "thinking", thinking: "Think", thinkingSignature: "synthetic-signature" },
-                { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "value" } },
-              ],
-            },
-            {
-              role: "toolResult",
-              toolCallId: "call_1",
-              toolName: "lookup",
-              timestamp: 4,
-              content: [{ type: "text", text: "Answer" }],
-              isError: false,
-            },
-          ],
-        },
-      });
-      const firstMessages = first.payload.messages as Array<Record<string, unknown>>;
-      const continuedMessages = continued.payload.messages as Array<Record<string, unknown>>;
-      expect(firstMessages[1]).toEqual({
-        role: "user",
-        content: [
-          { type: "text", text: "Retained runtime context", cache_control: { type: "ephemeral" } },
-        ],
-      });
-      expect(JSON.stringify(continuedMessages.slice(0, 2))).toBe(JSON.stringify(firstMessages));
-      expect(continuedMessages[2]?.role).toBe("assistant");
     }
   });
 

@@ -7,7 +7,9 @@ title: "Bot loop protection"
 sidebarTitle: "Bot loop protection"
 ---
 
-OpenClaw can accept messages written by other bots on channels that support `allowBots`. When that path is enabled, pair loop protection prevents two bot identities from replying to each other indefinitely.
+OpenClaw can accept messages written by other bots on channels that support `allowBots`. Discord and Slack default to accepting them under the normal mention and access rules; an explicit `allowBots: false` still disables bot-triggered turns. Bot messages can remain visible as conversation context independently of turn admission.
+
+Pair loop protection bounds rapid exchanges between two bot identities. It is a sliding-window rate guard, so slower exchanges below the budget can continue.
 
 The guard is enforced by the core inbound reply runner. Each supporting channel maps its inbound event into generic facts: account or scope, conversation id, sender bot id, and receiver bot id. Core tracks the participant pair in both directions (A to B and B to A count as the same pair), applies a sliding-window budget, and suppresses the pair during a cooldown after the budget is exceeded.
 
@@ -117,3 +119,22 @@ Supporting channels layer their own config over the shared default, key by key. 
 Channels that do not expose a reliable inbound bot identity keep using their normal self-message and access-policy filters. They should not opt into this guard until they can identify both participants in the bot pair.
 
 See [SDK runtime](/plugins/sdk-runtime#reusable-runtime-utilities) for plugin implementation details.
+
+## Internal agent group rounds
+
+[Agent group threads](/channels/broadcast-groups) use a separate coordinator
+budget for participants sharing one inbound message. Qualified `broadcast`
+entries allow at most 4 rounds and 32 participant turns. `maxRounds` includes
+the initial round; `maxTurns` counts agent runs started, with slots reserved
+before parallel launch. Every participant passing, either limit, or
+cancellation stops further turns.
+
+A participant turn may produce several physical messages through chunking,
+previews, or message-tool sends. The coordinator does not count those messages.
+Its in-memory budget is scoped to the channel, account, conversation, thread,
+and root message, and cannot resume after a Gateway restart.
+
+Internal continuations have distinct identities so ordinary inbound dedupe does
+not suppress them. They do not change the transport pair guard’s thresholds or
+replace channel bot-admission and self-message policies. Keep those protections
+enabled for bot-authored messages arriving from the platform.

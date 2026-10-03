@@ -7,10 +7,7 @@ import { persistSessionTranscriptTurn } from "../config/sessions/session-accesso
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import {
-  readSessionTitleFieldsFromTranscript,
-  readSessionTitleFieldsFromTranscriptBatch,
-} from "./session-transcript-title-reader.js";
+import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -64,9 +61,6 @@ describe("session titles with inbound Gateway metadata", () => {
 
       const entry: SessionEntry = { sessionId, updatedAt: 0 };
       const syncFields = readSessionTitleFieldsFromTranscript(scope);
-      const [batchFields] = readSessionTitleFieldsFromTranscriptBatch([scope]);
-
-      expect(batchFields).toEqual(syncFields);
       expect(deriveSessionTitle(entry, syncFields.firstUserMessage)).toBe(
         "Help me investigate the flaky deployment",
       );

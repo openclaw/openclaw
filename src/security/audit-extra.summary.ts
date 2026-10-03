@@ -1,5 +1,9 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentConfig } from "../agents/agent-scope-config.js";
+import {
+  listAgentEntries,
+  listAgentIds,
+  resolveAgentConfig,
+} from "../agents/agent-scope-config.js";
 // Summarizes extra security audit findings for user-facing output.
 import {
   resolveConfiguredToolPolicies,
@@ -11,36 +15,32 @@ import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
-import { hasConfiguredInternalHooks } from "../hooks/configured.js";
+import { resolveInternalHookSelection } from "../hooks/configured.js";
+import {
+  createAgentToAgentPolicy,
+  resolveSandboxSessionToolsVisibility,
+  resolveSessionToolsVisibility,
+} from "../plugin-sdk/session-visibility.js";
 import { normalizePluginsConfigWithResolverCore } from "../plugins/config-normalization-shared.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
+import { listPotentialMultiUserSignals } from "./audit-extra.sync.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
-
-/** Lightweight audit finding shape used by summary-only audit helpers. */
-type SecurityAuditFinding = {
-  checkId: string;
-  severity: "info" | "warn" | "critical";
-  title: string;
-  detail: string;
-  remediation?: string;
-};
+import type { SecurityAuditFinding } from "./audit.types.js";
 
 const SMALL_MODEL_PARAM_B_MAX = 300;
 
 function summarizeGroupPolicy(cfg: OpenClawConfig): {
   open: number;
   allowlist: number;
-  other: number;
 } {
   const channels = cfg.channels as Record<string, unknown> | undefined;
   if (!channels || typeof channels !== "object") {
-    return { open: 0, allowlist: 0, other: 0 };
+    return { open: 0, allowlist: 0 };
   }
   let open = 0;
   let allowlist = 0;
-  let other = 0;
   for (const value of Object.values(channels)) {
     if (!value || typeof value !== "object") {
       continue;
@@ -51,11 +51,9 @@ function summarizeGroupPolicy(cfg: OpenClawConfig): {
       open += 1;
     } else if (policy === "allowlist") {
       allowlist += 1;
-    } else {
-      other += 1;
     }
   }
-  return { open, allowlist, other };
+  return { open, allowlist };
 }
 
 function extractAgentIdFromSource(source: string): string | null {
@@ -90,14 +88,6 @@ function resolveToolPolicies(params: {
   });
 }
 
-function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return hasConfiguredWebSearchCredential({
-    config: cfg,
-    env,
-    origin: "bundled",
-  });
-}
-
 function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   const enabled = cfg.tools?.web?.search?.enabled;
   if (enabled === false) {
@@ -106,15 +96,7 @@ function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolea
   if (enabled === true) {
     return true;
   }
-  return hasWebSearchKey(cfg, env);
-}
-
-function isWebFetchEnabled(cfg: OpenClawConfig): boolean {
-  const enabled = cfg.tools?.web?.fetch?.enabled;
-  if (enabled === false) {
-    return false;
-  }
-  return true;
+  return hasConfiguredWebSearchCredential({ config: cfg, env, origin: "bundled" });
 }
 
 function isBrowserEnabled(cfg: OpenClawConfig): boolean {
@@ -136,7 +118,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const webhooksEnabled = cfg.hooks?.enabled === true;
-  const internalHooksEnabled = hasConfiguredInternalHooks(cfg);
+  const internalHooksEnabled = resolveInternalHookSelection(cfg).configured;
   const browserEnabled = isBrowserEnabled(cfg);
 
   const detail =
@@ -152,12 +134,113 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
     `\n` +
     "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway. For multiple users or organizations, run one isolated Gateway cell per tenant: https://docs.openclaw.ai/gateway/multi-tenant-hosting";
 
-  return [
+  const findings: SecurityAuditFinding[] = [
     {
       checkId: "summary.attack_surface",
       severity: "info",
       title: "Attack surface summary",
       detail,
+    },
+  ];
+  for (const entry of listAgentEntries(cfg)) {
+    if (typeof entry.id !== "string" || entry.tools?.github?.allowInSandbox !== true) {
+      continue;
+    }
+    const configPath = `agents.entries.${entry.id}.tools.github.allowInSandbox`;
+    findings.push({
+      checkId: "sandbox.github_identity_exposed",
+      severity: "warn",
+      title: "Managed GitHub identity reaches sandboxed execution",
+      detail:
+        `${configPath}=true allows agent "${entry.id}" to use its managed GitHub credentials ` +
+        "and Git author in its own sandboxed execution. Commands in that sandbox can read and use the credentials.",
+      remediation: `Set ${configPath}=false unless this agent's sandboxed code is trusted with its GitHub access.`,
+    });
+  }
+  return findings;
+}
+
+/** Surface default cross-agent session access, escalating when trust boundaries may differ. */
+export function collectCrossAgentSessionAccessFindings(
+  cfg: OpenClawConfig,
+): SecurityAuditFinding[] {
+  const agentIds = listAgentIds(cfg);
+  if (agentIds.length < 2 || resolveSessionToolsVisibility(cfg) !== "all") {
+    return [];
+  }
+  // Even blank allow entries are a configured restriction: the runtime denies them.
+  if (!createAgentToAgentPolicy(cfg).enabled || cfg.tools?.agentToAgent?.allow?.length) {
+    return [];
+  }
+
+  const sandboxClamp = resolveSandboxSessionToolsVisibility(cfg);
+  const reachers: string[] = [];
+  const nonReachers: string[] = [];
+  const signals: string[] = [];
+  for (const agentId of agentIds) {
+    const sandboxMode = resolveSandboxConfigForAgent(cfg, agentId).mode;
+    if (sandboxMode !== "off") {
+      signals.push(`${agentId}: sandbox.mode="${sandboxMode}"`);
+    }
+    const tools = resolveAgentConfig(cfg, agentId)?.tools;
+    const policies = resolveToolPolicies({ cfg, agentTools: tools, sandboxMode, agentId });
+    const allowedTools = [
+      "sessions_list",
+      "sessions_history",
+      "sessions_search",
+      "sessions_send",
+      "session_status",
+    ].filter((name) => isToolAllowedByPolicies(name, policies));
+    const unclamped = sandboxMode !== "all" || sandboxClamp === "all";
+    if (unclamped && allowedTools.length > 0) {
+      const context =
+        sandboxMode === "off"
+          ? "unsandboxed sessions"
+          : sandboxMode === "non-main"
+            ? "unsandboxed main session"
+            : "sandboxed sessions (clamp disabled)";
+      reachers.push(`- ${agentId}: ${context}; allowed session tools: ${allowedTools.join(", ")}.`);
+    } else {
+      const reason = unclamped
+        ? "session tools removed by agent tool policy"
+        : "sandboxed sessions clamped to their spawn tree";
+      nonReachers.push(
+        `- ${agentId}: ${reason}; its transcripts remain readable by the agents above.`,
+      );
+    }
+    const restrictions = (["profile", "allow", "deny"] as const).filter(
+      (key) => tools?.[key] !== undefined,
+    );
+    if (restrictions.length > 0) {
+      signals.push(
+        `${agentId}: agent-level tool restrictions (${restrictions.map((key) => `tools.${key}`).join(", ")})`,
+      );
+    }
+  }
+  if (reachers.length === 0) {
+    return [];
+  }
+  signals.push(...listPotentialMultiUserSignals(cfg));
+  const trustDetail =
+    signals.length > 0
+      ? "\nTrust-boundary signals:\n" +
+        signals.map((signal) => `- ${signal}`).join("\n") +
+        "\nSandboxing, agent-level tool restrictions, or shared-user ingress suggest different trust levels, but session access remains Gateway-wide."
+      : "";
+
+  return [
+    {
+      checkId: "security.trust_model.cross_agent_session_access_default",
+      severity: signals.length > 0 ? "warn" : "info",
+      title: "Agents share Gateway-wide session access (default)",
+      detail:
+        `Agents: ${agentIds.join(", ")}\n` +
+        'tools.sessions.visibility resolves to "all" and tools.agentToAgent is enabled with no allow list.\n' +
+        "Agents that can reach other agents' sessions, including other users' transcripts:\n" +
+        [...reachers, ...nonReachers, "Incognito sessions remain hidden."].join("\n") +
+        trustDetail,
+      remediation:
+        'Set tools.sessions.visibility to "agent", "tree", or "self"; restrict tools.agentToAgent.allow to the intended requester and target ids; or set tools.agentToAgent.enabled: false. See https://docs.openclaw.ai/gateway/config-tools#tools-agenttoagent and https://docs.openclaw.ai/gateway/security#scope-one-trust-boundary-per-gateway.',
     },
   ];
 }
@@ -168,9 +251,7 @@ export function collectSmallModelRiskFindings(params: {
   env: NodeJS.ProcessEnv;
 }): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const models = collectAuditModelRefs(params.cfg).filter(
-    (entry) => !entry.source.includes("imageModel"),
-  );
+  const models = collectAuditModelRefs(params.cfg);
   if (models.length === 0) {
     return findings;
   }
@@ -214,7 +295,10 @@ export function collectSmallModelRiskFindings(params: {
     ) {
       exposed.push("web_search");
     }
-    if (isWebFetchEnabled(params.cfg) && isToolAllowedByPolicies("web_fetch", policies)) {
+    if (
+      params.cfg.tools?.web?.fetch?.enabled !== false &&
+      isToolAllowedByPolicies("web_fetch", policies)
+    ) {
       exposed.push("web_fetch");
     }
     if (isBrowserEnabled(params.cfg) && isToolAllowedByPolicies("browser", policies)) {

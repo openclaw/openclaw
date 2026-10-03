@@ -35,6 +35,10 @@ const qaFlowExecutionShape = {
   providerMode: qaFlowProviderModeSchema.optional(),
   retryCount: z.number().int().min(0).max(1).optional(),
   runtime: z.enum(["openclaw", "codex"]).optional(),
+  liveConfiguredRuntime: z
+    .object({ id: z.literal("codex"), model: z.string().trim().min(1) })
+    .strict()
+    .optional(),
   timeoutMs: z.number().int().positive().optional(),
 };
 
@@ -49,6 +53,22 @@ const qaSharedFlowPreparationActions = [
 ] as const;
 // The DSL branch value is an action array, never a callable JavaScript `then`.
 const qaSharedFlowPositiveBranch = ["th", "en"].join("");
+
+function sendSharedFlowMarker(marker: string) {
+  return {
+    sendInbound: {
+      conversation: {
+        id: { ref: "config.conversationId" },
+        kind: { ref: "config.conversationKind" },
+      },
+      senderId: { ref: "config.senderId" },
+      senderName: "QA Driver",
+      text: {
+        expr: "`${config.mentionPrefix}Reply with only this exact marker: ${" + marker + "}`",
+      },
+    },
+  };
+}
 
 const qaSharedFlows = {
   "channel-access-control": {
@@ -69,19 +89,7 @@ const qaSharedFlows = {
               expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').length",
             },
           },
-          {
-            sendInbound: {
-              conversation: {
-                id: { ref: "config.conversationId" },
-                kind: { ref: "config.conversationKind" },
-              },
-              senderId: { ref: "config.senderId" },
-              senderName: "QA Driver",
-              text: {
-                expr: "`${config.mentionPrefix}Reply with only this exact marker: ${marker}`",
-              },
-            },
-          },
+          sendSharedFlowMarker("marker"),
           {
             // Object literals with a `then` property become JavaScript thenables.
             // Build the QA DSL branch as data so an accidental await cannot execute it.
@@ -128,19 +136,7 @@ const qaSharedFlows = {
               expr: "`${config.firstPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`",
             },
           },
-          {
-            sendInbound: {
-              conversation: {
-                id: { ref: "config.conversationId" },
-                kind: { ref: "config.conversationKind" },
-              },
-              senderId: { ref: "config.senderId" },
-              senderName: "QA Driver",
-              text: {
-                expr: "`${config.mentionPrefix}Reply with only this exact marker: ${firstMarker}`",
-              },
-            },
-          },
+          sendSharedFlowMarker("firstMarker"),
           {
             waitForOutbound: {
               textIncludes: { ref: "firstMarker" },
@@ -173,19 +169,7 @@ const qaSharedFlows = {
               expr: "`${config.secondPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`",
             },
           },
-          {
-            sendInbound: {
-              conversation: {
-                id: { ref: "config.conversationId" },
-                kind: { ref: "config.conversationKind" },
-              },
-              senderId: { ref: "config.senderId" },
-              senderName: "QA Driver",
-              text: {
-                expr: "`${config.mentionPrefix}Reply with only this exact marker: ${secondMarker}`",
-              },
-            },
-          },
+          sendSharedFlowMarker("secondMarker"),
           {
             waitForOutbound: {
               textIncludes: { ref: "secondMarker" },
@@ -253,6 +237,7 @@ function resolveQaScenarioFileFlow<TFlow extends QaScenarioFlowShape>(
         ],
         detailsExpr:
           "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)",
+        resultExpr: "result",
       },
     ],
   };

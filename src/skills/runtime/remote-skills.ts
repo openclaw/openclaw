@@ -1,20 +1,22 @@
 import type { NodeSkillDescriptor } from "../../../packages/gateway-protocol/src/schema/nodes.js";
 import { createSyntheticSourceInfo } from "../../agents/sessions/source-info.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
 import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";
 import type { ParsedSkillFrontmatter, SkillEntry } from "../types.js";
+import { areOrderedArraysEqual } from "./ordered-array-equality.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 
 type PreparedNodeSkill = NodeSkillDescriptor & {
   frontmatter: ParsedSkillFrontmatter;
+  contentHash: string;
 };
 
 type RemoteSkillNode = {
   nodeId: string;
   connId?: string;
   displayName?: string;
-  connected: boolean;
   canExec: boolean;
   skills: PreparedNodeSkill[];
 };
@@ -22,16 +24,24 @@ type RemoteSkillNode = {
 const remoteSkillNodes = new Map<string, RemoteSkillNode>();
 const log = createSubsystemLogger("gateway/skills-remote");
 let reconcileRemoteSkillConnections: (() => ReadonlySet<string> | undefined) | null = null;
+let prepareRemoteSkillConnectionsOwner: (() => Promise<unknown>) | undefined;
 
-function remoteConnectionKey(nodeId: string, connId: string): string {
+export function remoteConnectionKey(nodeId: string, connId: string): string {
   return `${nodeId}\0${connId}`;
 }
 
 /** Installs the gateway-owned persistent-generation reconciliation boundary. */
 export function setRemoteSkillConnectionReconciler(
   reconcile: (() => ReadonlySet<string> | undefined) | null,
+  prepare?: () => Promise<unknown>,
 ): void {
   reconcileRemoteSkillConnections = reconcile;
+  prepareRemoteSkillConnectionsOwner = prepare;
+}
+
+/** Acquire persistent pairing facts before synchronous remote skill projections. */
+export async function prepareRemoteSkillConnections(): Promise<void> {
+  await prepareRemoteSkillConnectionsOwner?.();
 }
 
 function prepareNodeSkills(
@@ -49,28 +59,13 @@ function prepareNodeSkills(
         log.warn(`dropped node skill with mismatched frontmatter: ${nodeId}/${skill.name}`);
         continue;
       }
-      prepared.push({ ...skill, frontmatter });
+      prepared.push({ ...skill, frontmatter, contentHash: sha256Hex(skill.content) });
     } catch (error) {
-      const filePath = `node://${encodeURIComponent(nodeId)}/skills/${skill.name}/SKILL.md`;
+      const filePath = remoteSkillLocation(nodeId, skill.name);
       log.warn(`dropped node skill with invalid frontmatter (${filePath}): ${String(error)}`);
     }
   }
   return prepared;
-}
-
-function sameSkills(
-  left: readonly PreparedNodeSkill[],
-  right: readonly PreparedNodeSkill[],
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every(
-      (skill, index) =>
-        skill.name === right[index]?.name &&
-        skill.description === right[index]?.description &&
-        skill.content === right[index]?.content,
-    )
-  );
 }
 
 export function recordRemoteSkillNodeInfo(node: {
@@ -88,7 +83,6 @@ export function recordRemoteSkillNodeInfo(node: {
     nodeId: node.nodeId,
     connId: node.connId ?? existing?.connId,
     displayName: node.displayName,
-    connected: true,
     canExec,
     skills: connectionChanged ? [] : (existing?.skills ?? []),
   });
@@ -107,15 +101,22 @@ export function replaceRemoteNodeSkills(params: {
 }): void {
   const nextSkills = prepareNodeSkills(params.nodeId, params.skills);
   const existing = remoteSkillNodes.get(params.nodeId);
+  const displayName = params.displayName ?? existing?.displayName;
   const changed =
-    !existing?.connected ||
-    existing.displayName !== params.displayName ||
-    !sameSkills(existing.skills, nextSkills);
+    !existing ||
+    existing.displayName !== displayName ||
+    !areOrderedArraysEqual(
+      existing.skills,
+      nextSkills,
+      (previous, next) =>
+        previous.name === next.name &&
+        previous.description === next.description &&
+        previous.content === next.content,
+    );
   remoteSkillNodes.set(params.nodeId, {
     nodeId: params.nodeId,
     connId: existing?.connId,
-    displayName: params.displayName ?? existing?.displayName,
-    connected: true,
+    displayName,
     canExec: existing?.canExec ?? false,
     skills: nextSkills,
   });
@@ -182,7 +183,6 @@ export function mergeRemoteNodeSkillEntries(
   const currentConnections = reconcileRemoteSkillConnections?.();
   const connectedNodes = [...remoteSkillNodes.values()].filter(
     (node) =>
-      node.connected &&
       node.canExec &&
       (!currentConnections ||
         (node.connId !== undefined &&
@@ -212,8 +212,7 @@ export function mergeRemoteNodeSkillEntries(
   for (const { skill } of remote) {
     remoteNameCounts.set(skill.name, (remoteNameCounts.get(skill.name) ?? 0) + 1);
   }
-  const localNames = new Set(localEntries.map((entry) => entry.skill.name));
-  const usedNames = new Set(localNames);
+  const usedNames = new Set(localEntries.map((entry) => entry.skill.name));
   const remoteEntries: SkillEntry[] = [];
   for (const { node, skill } of remote) {
     const hasCollision = usedNames.has(skill.name) || (remoteNameCounts.get(skill.name) ?? 0) > 1;
@@ -233,6 +232,7 @@ export function mergeRemoteNodeSkillEntries(
         description: skill.description,
         locationNote: locatorNote(node, skill.name),
         readContent: skill.content,
+        contentHash: skill.contentHash,
         filePath,
         baseDir: filePath.slice(0, -"/SKILL.md".length),
         source: "openclaw-node",
@@ -264,6 +264,7 @@ export function mergeRemoteNodeSkillEntries(
 function resetRemoteNodeSkillsForTests(): void {
   remoteSkillNodes.clear();
   reconcileRemoteSkillConnections = null;
+  prepareRemoteSkillConnectionsOwner = undefined;
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

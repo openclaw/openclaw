@@ -1,7 +1,19 @@
 // Delivery result types define the normalized channel send contract plus
 // partial-failure metadata for multi-payload outbound sends.
+import type {
+  AuditMessageDeliveryKind,
+  AuditMessageFailureStage,
+  AuditOutboundMessageSuppressedReasonCode,
+} from "../../audit/audit-event-types.js";
 import type { MessageReceipt, MessageReceiptSourceResult } from "../../channels/message/types.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+
+export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
+
+export type PlatformSendRoute = {
+  replyToId?: string | null;
+  threadId?: string | number | null;
+};
 
 /** Channel send result or explicit non-outcome normalized for delivery accounting. */
 export type OutboundDeliveryResult = {
@@ -18,6 +30,36 @@ export type OutboundDeliveryResult = {
   receipt?: MessageReceipt;
   // Channel docking: stash channel-specific fields here to avoid core type churn.
   meta?: Record<string, unknown>;
+};
+
+export type OutboundAuditTerminal =
+  | {
+      outcome: "sent";
+      results: readonly OutboundDeliveryResult[];
+      deliveryKind?: AuditMessageDeliveryKind;
+    }
+  | {
+      outcome: "suppressed";
+      reasonCode: AuditOutboundMessageSuppressedReasonCode;
+      results?: readonly OutboundDeliveryResult[];
+    }
+  | {
+      outcome: "failed";
+      failureStage: AuditMessageFailureStage;
+      results?: readonly OutboundDeliveryResult[];
+      sentBeforeError?: boolean;
+      deliveryKind?: AuditMessageDeliveryKind;
+    }
+  | {
+      outcome: "unknown";
+      failureStage: AuditMessageFailureStage;
+      results?: readonly OutboundDeliveryResult[];
+      sentBeforeError?: boolean;
+    };
+
+export type IndexedOutboundAuditTerminal = {
+  payloadIndex: number;
+  terminal: OutboundAuditTerminal;
 };
 
 /** Count platform sends without double-counting equivalent receipt representations. */
@@ -133,7 +175,7 @@ export class OutboundDeliveryError extends Error {
   readonly payloadOutcomes: OutboundPayloadDeliveryOutcome[];
   readonly sentBeforeError: boolean;
   readonly stage: OutboundDeliveryFailureStage;
-  recoveryOwnedRetry?: true;
+  queueCustody?: "held" | "released";
 
   constructor(
     message: string,

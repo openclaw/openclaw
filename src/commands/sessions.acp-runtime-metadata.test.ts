@@ -71,7 +71,7 @@ describe("session ACP runtime metadata", () => {
               ...(source === "provider" ? { agentRuntime: { id: "codex" } } : {}),
               models: [
                 {
-                  id: "gpt-5.6-sol",
+                  id: "gpt-5.6-luna",
                   name: "Sol",
                   reasoning: true,
                   input: ["text"],
@@ -87,7 +87,7 @@ describe("session ACP runtime metadata", () => {
         agents: {
           defaults: {
             models: {
-              "openai/gpt-5.6-sol": source === "model" ? { agentRuntime: { id: "codex" } } : {},
+              "openai/gpt-5.6-luna": source === "model" ? { agentRuntime: { id: "codex" } } : {},
             },
           },
         },
@@ -96,7 +96,7 @@ describe("session ACP runtime metadata", () => {
         cfg,
         agentId: "main",
         provider: "openai",
-        model: "gpt-5.6-sol",
+        model: "gpt-5.6-luna",
         sessionKey: NON_ACP_SESSION_KEY,
         sessionEntry: {
           agentHarnessId: "codex",
@@ -191,14 +191,14 @@ describe("session ACP runtime metadata", () => {
           agents: {
             defaults: {
               models: {
-                "openai/gpt-5.6-sol": runtime ? { agentRuntime: { id: runtime } } : {},
+                "openai/gpt-5.6-luna": runtime ? { agentRuntime: { id: runtime } } : {},
               },
             },
           },
         } as OpenClawConfig,
         agentId: "main",
         provider: "openai",
-        model: "gpt-5.6-sol",
+        model: "gpt-5.6-luna",
         sessionKey: NON_ACP_SESSION_KEY,
         sessionEntry: {
           agentHarnessId: "openclaw",
@@ -214,7 +214,7 @@ describe("session ACP runtime metadata", () => {
       cfg: buildConfigWithoutAgentRuntimePolicy(),
       agentId: "main",
       provider: "openai",
-      model: "gpt-5.6-sol",
+      model: "gpt-5.6-luna",
       sessionKey: NON_ACP_SESSION_KEY,
       sessionEntry: {
         agentHarnessId: "openclaw",

@@ -1,9 +1,14 @@
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { GatewayDrainingError } from "../process/gateway-work-admission.js";
+import {
+  AgentRunTerminalOutcomeError,
+  findAgentRunTerminalOutcome,
+} from "./agent-run-terminal-error.js";
 import { createCliOutputFailoverError } from "./cli-runner/output-error.js";
 import {
   FailoverError,
-  findCliMaxTurnsError,
+  findCliTerminalStopError,
   findCliTimeoutError,
   resolveModelFallbackError,
 } from "./failover-error.js";
@@ -15,29 +20,28 @@ import {
 } from "./model-fallback-attempt.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
+import { recordModelFallbackStop as recordLightweightStop } from "./model-fallback-stop.js";
 import {
-  createAgentRunDirectAbortError,
-  createAgentRunRestartAbortError,
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
+import {
+  createSessionPlacementSettlementClosedAbortError,
+  isSessionPlacementSettlementClosedError,
+  createAgentRunSupersededAbortError,
 } from "./run-termination.js";
 
 const { providerHook } = vi.hoisted(() => ({
   providerHook: vi.fn<() => "overloaded" | undefined>(),
 }));
-
 vi.mock("../plugins/provider-failover.js", () => ({
   classifyProviderFailoverSignalWithPlugin: providerHook,
 }));
-
 beforeEach(() => {
   providerHook.mockReset().mockImplementation(() => {
     throw new Error("unexpected provider policy consultation");
   });
 });
-
-function maxTurns() {
-  return new FailoverError("recorded terminal stop", { reason: "unknown", code: "cli_max_turns" });
-}
-
 const fallbackOptions = {
   cfg: undefined,
   provider: "fixture-provider",
@@ -45,59 +49,87 @@ const fallbackOptions = {
   manifestPlugins: [],
   fallbacksOverride: ["fixture-next/fixture-model"],
 };
+function maxTurns() {
+  return new FailoverError("recorded terminal stop", { reason: "unknown", code: "cli_max_turns" });
+}
+function recordedStop() {
+  const error = Object.freeze(new Error("401 invalid API key"));
+  recordLightweightStop(error);
+  return error;
+}
+async function expectTerminalStop(
+  error: unknown,
+  options: Partial<Parameters<typeof runWithModelFallback>[0]> = {},
+  run = vi.fn().mockRejectedValue(error),
+) {
+  const onError = vi.fn();
+  const onFallbackStep = vi.fn();
+  await expect(
+    runWithModelFallback({ ...fallbackOptions, run, onError, onFallbackStep, ...options }),
+  ).rejects.toBe(error);
+  expect(run).toHaveBeenCalledOnce();
+  expect(onError).not.toHaveBeenCalled();
+  expect(onFallbackStep).not.toHaveBeenCalled();
+  expect(providerHook).not.toHaveBeenCalled();
+}
 
 it("does not replay an unscoped preflight subclass on another model", async () => {
   class PolicyRefusal extends AgentHarnessPreflightError {}
-  const error = new PolicyRefusal("handoff refused", {
-    cause: new FailoverError("529 overloaded", { reason: "overloaded", status: 529 }),
-  });
-  const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("unexpected fallback");
-  await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toBe(error);
-  expect(run).toHaveBeenCalledOnce();
-  expect(providerHook).not.toHaveBeenCalled();
+  await expectTerminalStop(
+    new PolicyRefusal("handoff refused", {
+      cause: new FailoverError("529 overloaded", { reason: "overloaded", status: 529 }),
+    }),
+  );
 });
 
-const wrappers = [
-  { name: "direct", wrap: (error: FailoverError): unknown => error },
-  { name: "error", wrap: (error: FailoverError): unknown => ({ error }) },
+it.each([
+  PreparedModelRuntimePublicationSupersededError,
+  PreparedModelRuntimeOwnerNotPublishedError,
+])("does not rotate providers after %s", async (ErrorType) => {
+  await expectTerminalStop(new ErrorType("fixture prepared runtime publication failed"));
+});
+
+it("does not rotate providers when SQLite worker capacity is exhausted", async () => {
+  await expectTerminalStop(
+    new SqliteWorkerError("SQLite worker store capacity reached", "overloaded"),
+  );
+});
+
+it("retains closed ownership when async disposal also fails", async () => {
+  const closed = createSessionPlacementSettlementClosedAbortError();
+  const produceError = async () => {
+    await using lease = {
+      [Symbol.asyncDispose]: async () => {
+        throw new Error("cleanup failed");
+      },
+    };
+    void lease;
+    throw closed;
+  };
+  const error: unknown = await produceError().catch((caught: unknown) => caught);
+  expect(isSessionPlacementSettlementClosedError(error)).toBe(true);
+  expect(shouldDiscardDeferredSessionSuspension({ error })).toBe(true);
+  await expectTerminalStop(error);
+});
+
+it.each([
   {
-    name: "cause",
-    wrap: (error: FailoverError): unknown => new Error("wrapper", { cause: error }),
-  },
-  {
-    name: "aggregate",
-    wrap: (error: FailoverError): unknown =>
-      new AggregateError([error, new Error("persistence failed")], "wrapper"),
-  },
-  {
-    name: "cyclic",
-    wrap: (error: FailoverError): unknown => {
-      const wrapper = { message: "wrapper", cause: undefined as unknown, errors: [{ error }] };
-      wrapper.cause = wrapper;
-      return wrapper;
+    name: "lightweight stop in a cyclic aggregate",
+    make: () => {
+      const error = {
+        message: "wrapper",
+        cause: undefined as unknown,
+        errors: [{ error: recordedStop() }],
+      };
+      error.cause = error;
+      return error;
     },
   },
-  {
-    name: "preflight",
-    wrap: (error: FailoverError): unknown =>
-      new AgentHarnessPreflightError("wrapper", { cause: error }),
-  },
-];
-
-it.each(wrappers)("does not replay a terminal $name failure", async ({ wrap }) => {
-  const error = wrap(maxTurns());
-  const run = vi.fn().mockRejectedValue(error);
-  const onError = vi.fn();
-  await expect(runWithModelFallback({ ...fallbackOptions, run, onError })).rejects.toBe(error);
-  expect(run).toHaveBeenCalledTimes(1);
-  expect(onError).not.toHaveBeenCalled();
-  expect(providerHook).not.toHaveBeenCalled();
-});
-
-it("does not consult context policy for provider-looking text around a terminal stop", () => {
-  const error = new Error("model maximum reached in wrapper", { cause: maxTurns() });
-  expect(shouldDiscardDeferredSessionSuspension({ error })).toBe(false);
-  expect(providerHook).not.toHaveBeenCalled();
+  { name: "recorded supersession", make: createAgentRunSupersededAbortError },
+])("does not replay $name", async ({ make }) => {
+  const error = make();
+  expect(resolveModelFallbackError(error)).toEqual({ kind: "terminal", error });
+  await expectTerminalStop(error);
 });
 
 it("records a CLI max-turn stop before provider policy can replace it with a retryable error", async () => {
@@ -114,13 +146,11 @@ it("records a CLI max-turn stop before provider policy can replace it with a ret
     assert(error instanceof FailoverError);
     throw error;
   });
-  await expect(
-    runWithModelFallback({
-      ...fallbackOptions,
-      run,
-    }),
-  ).rejects.toMatchObject({ code: "cli_max_turns", reason: "unknown" });
-  expect(run).toHaveBeenCalledTimes(1);
+  await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toMatchObject({
+    code: "cli_max_turns",
+    reason: "unknown",
+  });
+  expect(run).toHaveBeenCalledOnce();
   expect(providerHook).not.toHaveBeenCalled();
 });
 
@@ -134,18 +164,7 @@ it("honors cancellation before advancing past a captured harness preflight failu
     controller.abort();
     throw error;
   });
-  const onError = vi.fn();
-  await expect(
-    runWithModelFallback({
-      ...fallbackOptions,
-      abortSignal: controller.signal,
-      run,
-      onError,
-    }),
-  ).rejects.toBe(error);
-  expect(run).toHaveBeenCalledTimes(1);
-  expect(onError).not.toHaveBeenCalled();
-  expect(providerHook).not.toHaveBeenCalled();
+  await expectTerminalStop(error, { abortSignal: controller.signal }, run);
 });
 
 it("honors cancellation in the failure callback before starting another candidate", async () => {
@@ -159,116 +178,55 @@ it("honors cancellation in the failure callback before starting another candidat
     controller.abort(cancellation);
   });
   await expect(
-    runWithModelFallback({
-      ...fallbackOptions,
-      abortSignal: controller.signal,
-      run,
-      onError,
-    }),
+    runWithModelFallback({ ...fallbackOptions, abortSignal: controller.signal, run, onError }),
   ).rejects.toBe(cancellation);
-  expect(run).toHaveBeenCalledTimes(1);
-  expect(onError).toHaveBeenCalledTimes(1);
+  expect(run).toHaveBeenCalledOnce();
+  expect(onError).toHaveBeenCalledOnce();
   expect(providerHook).not.toHaveBeenCalled();
 });
 
-it.each(["throw", "reject"] as const)(
-  "preserves recovery when its fallback observer fails by %s",
-  async (observerFailure) => {
-    const observerError = new Error("fallback observer failed");
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(new FailoverError("provider overloaded", { reason: "overloaded" }))
-      .mockResolvedValueOnce("recovered");
-    const onError = vi.fn();
-    const onFallbackStep = vi.fn<ModelFallbackStepHandler>(() => {
-      if (observerFailure === "throw") {
-        throw observerError;
-      }
-      return Promise.reject(observerError);
-    });
-    await expect(
-      runWithModelFallback({ ...fallbackOptions, run, onError, onFallbackStep }),
-    ).resolves.toMatchObject({ outcome: "completed", result: "recovered" });
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(onError).toHaveBeenCalledOnce();
-    expect(onFallbackStep.mock.calls.map(([step]) => step.fallbackStepFinalOutcome)).toEqual([
-      "next_fallback",
-      "succeeded",
-    ]);
-  },
-);
-
-it("does not replay a terminal failure returned by result classification", async () => {
-  const error = new AggregateError([maxTurns()], "wrapper");
-  const run = vi.fn().mockResolvedValue("partial result");
+it("preserves recovery when its fallback observer rejects", async () => {
+  const run = vi
+    .fn()
+    .mockRejectedValueOnce(new FailoverError("provider overloaded", { reason: "overloaded" }))
+    .mockResolvedValueOnce("recovered");
   const onError = vi.fn();
+  const onFallbackStep = vi.fn<ModelFallbackStepHandler>(() =>
+    Promise.reject(new Error("fallback observer failed")),
+  );
   await expect(
-    runWithModelFallback({
-      ...fallbackOptions,
-      run,
-      onError,
-      classifyResult: () => ({ error }),
-    }),
-  ).rejects.toBe(error);
-  expect(run).toHaveBeenCalledTimes(1);
-  expect(onError).not.toHaveBeenCalled();
-  expect(providerHook).not.toHaveBeenCalled();
+    runWithModelFallback({ ...fallbackOptions, run, onError, onFallbackStep }),
+  ).resolves.toMatchObject({ outcome: "completed", result: "recovered" });
+  expect(run).toHaveBeenCalledTimes(2);
+  expect(onError).toHaveBeenCalledOnce();
+  expect(onFallbackStep.mock.calls.map(([step]) => step.fallbackStepFinalOutcome)).toEqual([
+    "next_fallback",
+    "succeeded",
+  ]);
 });
 
-it("stops image fallback at the same terminal boundary", async () => {
-  const error = new AggregateError([maxTurns()], "wrapper");
+it("does not replay a recorded stop returned by result classification", async () => {
+  const error = new AggregateError([recordedStop()], "wrapper");
+  const run = vi.fn().mockResolvedValue("partial result");
+  await expectTerminalStop(error, { classifyResult: () => ({ error }) }, run);
+});
+
+it("stops image fallback after a recorded stop", async () => {
+  const error = new AggregateError([recordedStop()], "wrapper");
   const run = vi.fn().mockRejectedValue(error);
+  const imageModel = {
+    primary: "fixture-provider/fixture-model",
+    fallbacks: fallbackOptions.fallbacksOverride,
+  };
   await expect(
     runWithImageModelFallback({
-      cfg: {
-        agents: {
-          defaults: {
-            imageModel: {
-              primary: "fixture-provider/fixture-model",
-              fallbacks: ["fixture-next/fixture-model"],
-            },
-          },
-        },
-      },
+      cfg: { agents: { defaults: { imageModel } } },
       run,
     }),
   ).rejects.toBe(error);
-  expect(run).toHaveBeenCalledTimes(1);
+  expect(run).toHaveBeenCalledOnce();
   expect(providerHook).not.toHaveBeenCalled();
 });
-
-it.each(["caller signal", "direct abort", "restart abort"])(
-  "honors %s before provider consultation",
-  async (kind) => {
-    const controller = new AbortController();
-    const error =
-      kind === "direct abort"
-        ? createAgentRunDirectAbortError()
-        : kind === "restart abort"
-          ? createAgentRunRestartAbortError()
-          : new Error("fixture failure");
-    if (kind === "caller signal") {
-      controller.abort();
-    }
-    await expect(
-      runFallbackAttempt({
-        run: async () => {
-          throw error;
-        },
-        provider: "fixture-provider",
-        model: "fixture-model",
-        attempts: [],
-        attempt: 1,
-        total: 2,
-        abortSignal: controller.signal,
-      }),
-    ).rejects.toBe(error);
-    expect(shouldDiscardDeferredSessionSuspension({ error, abortSignal: controller.signal })).toBe(
-      true,
-    );
-    expect(providerHook).not.toHaveBeenCalled();
-  },
-);
 
 it("still classifies a genuine provider failure through its hook", async () => {
   providerHook.mockReturnValue("overloaded");
@@ -290,10 +248,10 @@ it("still classifies a genuine provider failure through its hook", async () => {
       model: "fixture-model",
     },
   });
-  expect(providerHook).toHaveBeenCalledTimes(1);
+  expect(providerHook).toHaveBeenCalledOnce();
 });
 
-it("preserves coordination precedence and suspension discard for mixed failures", () => {
+it("preserves coordination precedence over a recorded terminal stop", () => {
   const error = new AggregateError([maxTurns(), new GatewayDrainingError()], "wrapper");
   expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
   expect(shouldDiscardDeferredSessionSuspension({ error })).toBe(true);
@@ -301,7 +259,7 @@ it("preserves coordination precedence and suspension discard for mixed failures"
 });
 
 describe.each([
-  { name: "max turns", find: findCliMaxTurnsError, make: maxTurns },
+  { name: "max turns", find: findCliTerminalStopError, make: maxTurns },
   {
     name: "CLI timeout",
     find: findCliTimeoutError,
@@ -329,4 +287,53 @@ describe.each([
     expect(find(cycle)).toBe(first);
     expect(find({ cause: null, errors: [null, { error: third }] })).toBe(third);
   });
+});
+
+it("does not infer settlement ownership from display text", () => {
+  expect(
+    isSessionPlacementSettlementClosedError(
+      new Error("session placement turn settlement is closed"),
+    ),
+  ).toBe(false);
+});
+
+it("preserves the typed marker behind a hostile sibling accessor", async () => {
+  const wrapper = Object.defineProperty(
+    { errors: [createSessionPlacementSettlementClosedAbortError()] },
+    "cause",
+    {
+      get() {
+        throw new Error("opaque cause");
+      },
+    },
+  );
+  expect(isSessionPlacementSettlementClosedError(wrapper)).toBe(true);
+  expect(shouldDiscardDeferredSessionSuspension({ error: wrapper })).toBe(true);
+  await expectTerminalStop(wrapper);
+});
+
+it("discovers a canonical timeout beside an opaque cause and a settlement closure", async () => {
+  const timeout = new AgentRunTerminalOutcomeError(new Error("timeout"), {
+    status: "timeout",
+    reason: "hard_timeout",
+  });
+  const wrapper = Object.defineProperty(
+    { errors: [createSessionPlacementSettlementClosedAbortError(), timeout] },
+    "cause",
+    {
+      get() {
+        throw new Error("opaque cause");
+      },
+    },
+  );
+  expect(findAgentRunTerminalOutcome(wrapper)).toBe(timeout.terminalOutcome);
+  expect(shouldDiscardDeferredSessionSuspension({ error: wrapper })).toBe(true);
+  await expectTerminalStop(wrapper);
+});
+
+it("does not infer terminal outcomes from untyped fields or cyclic wrappers", () => {
+  const wrapper = { cause: undefined as unknown, terminalOutcome: { status: "timeout" } };
+  wrapper.cause = wrapper;
+  expect(findAgentRunTerminalOutcome(wrapper)).toBeUndefined();
+  expect(findAgentRunTerminalOutcome(null)).toBeUndefined();
 });

@@ -3,21 +3,35 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
-import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-types.ts";
+import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
-  stripMessageDisplayMetadataText,
+  canvasPreviewsMatch,
+  readCanvasContentPreview,
   normalizeRoleForGrouping,
+  normalizeMessage,
 } from "../../lib/chat/message-normalizer.ts";
-import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
+import {
+  extractToolCardsCached,
+  extractToolPreview,
+  type CanvasToolPreview,
+} from "../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
+import { stripThinkingTags } from "../../lib/strip-thinking-tags.ts";
+import {
+  messageRecoveryKey,
+  resolveCappedMessageId,
+  resolveSourceMessageId,
+  type ChatMessageRecovery,
+} from "./chat-message-recovery.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 export function appendCanvasBlockToAssistantMessage(
   message: unknown,
-  preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>,
+  preview: CanvasToolPreview,
   rawText: string | null,
 ) {
   const raw = message as Record<string, unknown>;
@@ -28,22 +42,14 @@ export function appendCanvasBlockToAssistantMessage(
       : typeof raw.text === "string"
         ? [{ type: "text", text: raw.text }]
         : [];
-  const alreadyHasArtifact = existingContent.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const typed = block as {
-      type?: unknown;
-      preview?: { kind?: unknown; viewId?: unknown; url?: unknown };
-    };
-    return (
-      typed.type === "canvas" &&
-      typed.preview?.kind === "canvas" &&
-      ((preview.viewId && typed.preview.viewId === preview.viewId) ||
-        (preview.url && typed.preview.url === preview.url))
-    );
-  });
-  if (alreadyHasArtifact) {
+  // A shortcode carries identity, not the tool's sandbox or App descriptor.
+  // Only an existing structured block can replace the canonical projection.
+  if (
+    existingContent.some((block) => {
+      const existing = readCanvasContentPreview(block);
+      return existing && canvasPreviewsMatch(existing, preview);
+    })
+  ) {
     return message;
   }
   return {
@@ -59,43 +65,55 @@ export function appendCanvasBlockToAssistantMessage(
   };
 }
 
-export function messageMatchesSearchQuery(message: unknown, query: string): boolean {
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
-  return (
-    !normalizedQuery ||
-    normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery)
-  );
-}
-
-export function turnHasMatchingAssistant(
-  messages: unknown[],
-  sourceIndex: number,
-  searchQuery: string,
+export function messageMatchesSearchQuery(
+  message: unknown,
+  query: string,
+  recovery?: ChatMessageRecovery,
 ): boolean {
-  for (let index = sourceIndex + 1; index < messages.length; index += 1) {
-    const message = messages[index];
-    const normalized = safeNormalizeMessage(message);
-    if (!normalized) {
-      continue;
-    }
-    const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-    if (role === "user" || role === "system") {
-      return false;
-    }
-    if (role === "assistant" && messageMatchesSearchQuery(message, searchQuery)) {
-      return true;
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
+  if (!normalizedQuery) {
+    return true;
+  }
+  const messageId = recovery && resolveSourceMessageId(message);
+  const expansion =
+    recovery && messageId
+      ? recovery.messages.get(messageRecoveryKey(recovery.agentId, messageId))
+      : undefined;
+  if (expansion?.status === "loaded") {
+    const role = normalizeRoleForGrouping(normalizeMessage(message).role);
+    if (resolveCappedMessageId(message, role)) {
+      return normalizeLowercaseStringOrEmpty(
+        role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown,
+      ).includes(normalizedQuery);
     }
   }
-  return false;
+  return normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery);
 }
 
 type ChatMessagePreview = {
-  preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
+  preview: CanvasToolPreview;
   text: string | null;
   timestamp: number | null;
 };
 
+const chatMessagePreviews = new WeakMap<object, ChatMessagePreview | null>();
+
 export function extractChatMessagePreview(toolMessage: unknown): ChatMessagePreview | null {
+  const message = asRecord(toolMessage);
+  if (!message) {
+    return null;
+  }
+  const cached = chatMessagePreviews.get(message);
+  if (cached !== undefined) {
+    return cached;
+  }
+  // A negative result also belongs to this immutable message snapshot.
+  const preview = readChatMessagePreview(message);
+  chatMessagePreviews.set(message, preview);
+  return preview;
+}
+
+function readChatMessagePreview(toolMessage: Record<string, unknown>): ChatMessagePreview | null {
   if (!safeNormalizeMessage(toolMessage)) {
     return null;
   }
@@ -111,14 +129,7 @@ export function extractChatMessagePreview(toolMessage: unknown): ChatMessagePrev
     }
   }
   const text = extractTextCached(toolMessage) ?? undefined;
-  const toolRecord = toolMessage as Record<string, unknown>;
-  const toolName =
-    typeof toolRecord.toolName === "string"
-      ? toolRecord.toolName
-      : typeof toolRecord.tool_name === "string"
-        ? toolRecord.tool_name
-        : undefined;
-  const preview = extractToolPreview(text, toolName);
+  const preview = extractToolPreview(text);
   if (preview?.kind !== "canvas") {
     return null;
   }
@@ -130,7 +141,11 @@ export function canvasPreviewBaseIdentity(
   source: ChatMessagePreview,
 ): string | null {
   const toolCallId = resolveMessageToolUseId(asRecord(message) ?? {});
-  const previewId = source.preview.viewId ?? source.preview.url;
+  const previewId = source.preview.viewId
+    ? `viewId:${source.preview.viewId}`
+    : source.preview.url
+      ? `url:${source.preview.url}`
+      : null;
   return toolCallId && previewId ? JSON.stringify([toolCallId, previewId]) : null;
 }
 
@@ -259,13 +274,7 @@ export function findCanvasInsertionIndex(
 }
 
 function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
-  for (const field of ["tool_call_id", "toolCallId", "tool_use_id", "toolUseId"] as const) {
-    const value = message[field];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return resolveToolUseId({ ...message, id: undefined });
 }
 
 export function resolveToolBlockId(
@@ -279,17 +288,20 @@ export function isPendingSendMessage(message: unknown): boolean {
   return asRecord(asRecord(message)?.["__openclaw"])?.kind === "pending-send";
 }
 
-export function readPendingSendFailure(message: unknown): {
+export function readPendingSendStatus(message: unknown): {
   error?: string;
   id: string;
-  state: "failed" | "unconfirmed";
+  state: "failed" | "unconfirmed" | "held" | "waiting-reconnect";
 } | null {
   const metadata = asRecord(asRecord(message)?.["__openclaw"]);
   const state = metadata?.state;
   const id = metadata?.id;
   if (
     metadata?.kind !== "pending-send" ||
-    (state !== "failed" && state !== "unconfirmed") ||
+    (state !== "failed" &&
+      state !== "unconfirmed" &&
+      state !== "held" &&
+      state !== "waiting-reconnect") ||
     typeof id !== "string"
   ) {
     return null;
@@ -416,13 +428,15 @@ export function hasRenderableNormalizedMessage(
 }
 
 export function sanitizeStreamText(text: string): string {
-  const stripped = stripMessageDisplayMetadataText(text);
+  const stripped = stripInboundMetadata(text);
   return stripped.trim().length > 0 ? stripped : "";
 }
 
 export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {
   return buildLocalUserMessage({
     text: item.text,
+    workContext: item.workContext,
+    mentions: item.mentions,
     attachments: item.attachments,
     createdAt: item.createdAt,
     runId: item.sendRunId ?? item.pendingRunId,
@@ -578,10 +592,6 @@ export function insertChatItemsByTimestamp(items: ChatItem[], inserts: ChatProje
       return existingTimestamp > effectiveTimestamp;
     });
 
-    if (insertionIndex === -1) {
-      items.splice(maximum, 0, item);
-    } else {
-      items.splice(insertionIndex, 0, item);
-    }
+    items.splice(insertionIndex === -1 ? maximum : insertionIndex, 0, item);
   }
 }

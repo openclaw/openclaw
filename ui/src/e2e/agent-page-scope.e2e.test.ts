@@ -1,13 +1,16 @@
 // Control UI E2E tests cover chip-selected page scope and the all-agents escape.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   waitForControlUiRoute,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -93,7 +96,28 @@ suite.define(() => {
                 { id: "charlie", name: "Needle Charlie" },
               ],
             },
-            "cron.list": { jobs: [{ id: "bravo", name: "Needle Bravo" }] },
+            "cron.list": cronListResponseFixture({
+              jobs: [
+                {
+                  id: "bravo",
+                  name: "Needle Bravo",
+                  enabled: true,
+                  createdAtMs: 0,
+                  updatedAtMs: 0,
+                  schedule: { kind: "every", everyMs: 60_000 },
+                  sessionTarget: "main",
+                  wakeMode: "next-heartbeat",
+                  payload: { kind: "systemEvent", text: "Prepare the sample report." },
+                  state: {},
+                },
+              ],
+              snapshotRevision: "palette-group-order",
+              total: 1,
+              offset: 0,
+              limit: 50,
+              hasMore: false,
+              nextOffset: null,
+            }),
             "sessions.list": { ts: 1, path: "", count: 0, defaults: {}, sessions: [] },
             "sessions.usage": emptyUsage,
           },
@@ -155,7 +179,7 @@ suite.define(() => {
           await result.waitFor();
           await screenshot(page, "07-palette-reviewer-result.png");
           await result.click();
-          const selectedAgent = page.locator("openclaw-agents-page openclaw-agent-select");
+          const selectedAgent = page.locator(".settings-sidebar openclaw-agent-select");
           await selectedAgent.waitFor();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/reviewer");
           await expect
@@ -182,8 +206,8 @@ suite.define(() => {
             .toBe("reviewer");
           await waitForRequest(
             gateway,
-            "agents.files.list",
-            (params) => params.agentId === "reviewer",
+            "models.list",
+            (params) => params.agentId === "reviewer" && params.view === "configured",
           );
           await screenshot(page, "10-reloaded-reviewer.png");
           await page.goBack();
@@ -310,7 +334,15 @@ suite.define(() => {
         await agentMenu.getByText("Research", { exact: true }).waitFor();
         await agentMenu.getByText("Writer", { exact: true }).waitFor();
         expect(await agentMenu.getByText("Stale Main", { exact: true }).count()).toBe(0);
-        await screenshot(page, "00-refreshed-roster-wins.png");
+        if (captureUiProof) {
+          await writeFile(
+            path.join(proofDir, "00-refreshed-roster-wins.png"),
+            await takeControlUiViewportScreenshot(page, agentMenu.locator('[part="menu"]'), [
+              agentMenu.getByText("Research", { exact: true }),
+              agentMenu.getByText("Writer", { exact: true }),
+            ]),
+          );
+        }
       },
     );
   });

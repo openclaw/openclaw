@@ -1,3 +1,4 @@
+import { getPluginInstanceRuntimeSlot } from "../plugins/plugin-instance-scope.js";
 // Runtime store exports expose plugin runtime type contracts without loading runtime code.
 import { getNamedPluginRuntimeStoreSlot } from "./runtime-store-registry.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -15,14 +16,6 @@ type PluginRuntimeStorePluginOptions = {
 };
 type PluginRuntimeStoreOptions = PluginRuntimeStoreKeyOptions | PluginRuntimeStorePluginOptions;
 
-function pluginRuntimeStoreKeyForPluginId(pluginId: string): string {
-  const normalizedPluginId = pluginId.trim();
-  if (!normalizedPluginId) {
-    throw new Error("createPluginRuntimeStore: pluginId must not be empty");
-  }
-  return `plugin-runtime:${normalizedPluginId}`;
-}
-
 function resolvePluginRuntimeStoreOptions(
   options: string | PluginRuntimeStoreOptions,
 ): PluginRuntimeStoreKeyOptions {
@@ -30,8 +23,12 @@ function resolvePluginRuntimeStoreOptions(
     return { key: options, errorMessage: options };
   }
   if ("pluginId" in options) {
+    const normalizedPluginId = options.pluginId.trim();
+    if (!normalizedPluginId) {
+      throw new Error("createPluginRuntimeStore: pluginId must not be empty");
+    }
     return {
-      key: pluginRuntimeStoreKeyForPluginId(options.pluginId),
+      key: `plugin-runtime:${normalizedPluginId}`,
       errorMessage: options.errorMessage,
     };
   }
@@ -65,27 +62,26 @@ export function createPluginRuntimeStore<T>(options: string | PluginRuntimeStore
   getRuntime: () => T;
 } {
   const resolved = resolvePluginRuntimeStoreOptions(options);
-  const slot =
-    typeof options === "string"
-      ? { runtime: null }
-      : (() => {
-          // Store named slots on globalThis so duplicate SDK module instances
-          // still share one runtime for the same plugin id or explicit key.
-          return getNamedPluginRuntimeStoreSlot(resolved.key);
-        })();
+  const defaultSlot =
+    typeof options === "string" ? { runtime: null } : getNamedPluginRuntimeStoreSlot(resolved.key);
+  const instanceKey = typeof options === "string" ? Symbol(resolved.key) : resolved.key;
+  // Bundled module functions can survive a reload. Resolve their slot from the
+  // invoking instance so preparing a candidate cannot overwrite the live runtime.
+  const resolveSlot = () => getPluginInstanceRuntimeSlot(instanceKey) ?? defaultSlot;
 
   return {
     setRuntime(next: T) {
-      slot.runtime = next;
+      resolveSlot().runtime = next;
     },
     clearRuntime() {
-      slot.runtime = null;
+      resolveSlot().runtime = null;
     },
     tryGetRuntime() {
-      return (slot.runtime as T | null) ?? null;
+      return (resolveSlot().runtime as T | null) ?? null;
     },
     getRuntime() {
-      if (slot.runtime === null) {
+      const slot = resolveSlot();
+      if (slot.runtime == null) {
         throw new Error(resolved.errorMessage);
       }
       return slot.runtime as T;

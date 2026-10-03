@@ -1,5 +1,4 @@
-/** Tool streaming and execution-approval relay for ACP prompt runs. */
-import type { AgentSideConnection } from "@agentclientprotocol/sdk";
+import type { AgentSideConnection, SessionUpdate } from "@agentclientprotocol/sdk";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
@@ -72,6 +71,7 @@ export class AcpTranslatorAgentEvents {
       return;
     }
 
+    let update: SessionUpdate;
     if (phase === "start") {
       if (!pending.toolCalls) {
         pending.toolCalls = new Map();
@@ -86,69 +86,42 @@ export class AcpTranslatorAgentEvents {
       pending.toolCalls.set(toolCallId, {
         title,
         kind,
-        rawInput: args,
         locations,
       });
-      await this.sessionUpdates.emit({
-        sessionId: pending.sessionId,
-        sessionKey: pending.sessionKey,
-        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
-        runId: pending.idempotencyKey,
-        record: true,
-        update: {
-          sessionUpdate: "tool_call",
-          toolCallId,
-          title,
-          status: "in_progress",
-          rawInput: args,
-          kind,
-          locations,
-        },
-      });
+      update = {
+        sessionUpdate: "tool_call",
+        toolCallId,
+        title,
+        status: "in_progress",
+        rawInput: args,
+        kind,
+        locations,
+      };
+    } else if (phase === "update" || phase === "result") {
+      const toolState = pending.toolCalls?.get(toolCallId);
+      const result = phase === "update" ? data.partialResult : data.result;
+      if (phase === "result") {
+        pending.toolCalls?.delete(toolCallId);
+      }
+      update = {
+        sessionUpdate: "tool_call_update",
+        toolCallId,
+        status: phase === "update" ? "in_progress" : data.isError ? "failed" : "completed",
+        rawOutput: result,
+        content: extractToolCallContent(result),
+        locations: extractToolCallLocations(toolState?.locations, result),
+      };
+    } else {
       return;
     }
-
-    if (phase === "update") {
-      const toolState = pending.toolCalls?.get(toolCallId);
-      const partialResult = data.partialResult;
-      await this.sessionUpdates.emit({
-        sessionId: pending.sessionId,
-        sessionKey: pending.sessionKey,
-        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
-        runId: pending.idempotencyKey,
-        record: true,
-        update: {
-          sessionUpdate: "tool_call_update",
-          toolCallId,
-          status: "in_progress",
-          rawOutput: partialResult,
-          content: extractToolCallContent(partialResult),
-          locations: extractToolCallLocations(toolState?.locations, partialResult),
-        },
-      });
-      return;
-    }
-
-    if (phase === "result") {
-      const isError = Boolean(data.isError);
-      const toolState = pending.toolCalls?.get(toolCallId);
-      pending.toolCalls?.delete(toolCallId);
-      await this.sessionUpdates.emit({
-        sessionId: pending.sessionId,
-        sessionKey: pending.sessionKey,
-        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
-        runId: pending.idempotencyKey,
-        record: true,
-        update: {
-          sessionUpdate: "tool_call_update",
-          toolCallId,
-          status: isError ? "failed" : "completed",
-          rawOutput: data.result,
-          content: extractToolCallContent(data.result),
-          locations: extractToolCallLocations(toolState?.locations, data.result),
-        },
-      });
-    }
+    await this.sessionUpdates.emit({
+      sessionId: pending.sessionId,
+      sessionKey: pending.sessionKey,
+      ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+      runId: pending.idempotencyKey,
+      record: true,
+      update,
+    });
   }
 
   handleExecApprovalRequestEvent(evt: EventFrame): void {
@@ -231,7 +204,6 @@ export class AcpTranslatorAgentEvents {
       approvalId: approvalEvent.approvalId,
       runId: pending.idempotencyKey,
       sessionId: pending.sessionId,
-      sessionKey: pending.sessionKey,
       state: "active",
     };
     this.approvalRelays.set(relay.approvalId, relay);
@@ -247,15 +219,11 @@ export class AcpTranslatorAgentEvents {
       return this.findPendingBySessionKey(params.sessionKey, params.runId);
     }
     const toolCallId = params.approvalEvent.toolCallId;
-    if (!toolCallId) {
-      return this.findUniquePendingBySessionKey(params.sessionKey);
-    }
-
     let match: AcpPendingPrompt | undefined;
     for (const pending of this.pendingPrompts.values()) {
       if (
         pending.sessionKey !== params.sessionKey ||
-        pending.toolCalls?.get(toolCallId)?.kind !== "execute"
+        (toolCallId && pending.toolCalls?.get(toolCallId)?.kind !== "execute")
       ) {
         continue;
       }
@@ -367,19 +335,5 @@ export class AcpTranslatorAgentEvents {
       relay.state === "active" &&
       this.getPendingPrompt(relay.sessionId, relay.runId) !== undefined
     );
-  }
-
-  private findUniquePendingBySessionKey(sessionKey: string): AcpPendingPrompt | undefined {
-    let match: AcpPendingPrompt | undefined;
-    for (const pending of this.pendingPrompts.values()) {
-      if (pending.sessionKey !== sessionKey) {
-        continue;
-      }
-      if (match) {
-        return undefined;
-      }
-      match = pending;
-    }
-    return match;
   }
 }

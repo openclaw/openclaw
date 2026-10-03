@@ -1,15 +1,30 @@
-import type { HealthCheck } from "openclaw/plugin-sdk/health";
+import type {
+  HealthCheck,
+  HealthCheckContext,
+  HealthFinding,
+  HealthRepairContext,
+} from "openclaw/plugin-sdk/health";
 import type { POLICY_CHECK_IDS } from "./check-ids.js";
-import type { PolicyDoctorCheckDeps } from "./types.js";
+import type { PolicyEvaluation } from "./types.js";
 
 type PolicyDoctorCheckDefinition = readonly [
   id: (typeof POLICY_CHECK_IDS)[number],
   description: string,
-  repair?: NonNullable<HealthCheck["repair"]>,
+  repair?: (
+    ctx: HealthRepairContext,
+    findings: readonly HealthFinding[],
+    checkId: (typeof POLICY_CHECK_IDS)[number],
+  ) => ReturnType<NonNullable<HealthCheck["repair"]>>,
 ];
 
 export function createPolicyScopedChecks(
-  deps: Pick<PolicyDoctorCheckDeps, "evaluatePolicy" | "findingsForCheck">,
+  deps: {
+    evaluatePolicy: (ctx: HealthCheckContext) => Promise<PolicyEvaluation>;
+    findingsForCheck: (
+      evaluation: PolicyEvaluation,
+      checkId: (typeof POLICY_CHECK_IDS)[number],
+    ) => readonly HealthFinding[];
+  },
   definitions: readonly PolicyDoctorCheckDefinition[],
 ): readonly HealthCheck[] {
   const { evaluatePolicy, findingsForCheck } = deps;
@@ -21,6 +36,6 @@ export function createPolicyScopedChecks(
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), id);
     },
-    ...(repair ? { repair } : {}),
+    ...(repair ? { repair: (ctx, findings) => repair(ctx, findings, id) } : {}),
   }));
 }

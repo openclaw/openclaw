@@ -1,6 +1,15 @@
 // Typed terminal RPCs plus per-session event routing; DOM-free for focused tests.
 
-import type { TerminalOpenParams } from "@openclaw/gateway-protocol";
+import type {
+  EventFrame,
+  SessionsCatalogStartTerminalParams,
+  TerminalAttachResult,
+  TerminalDataEvent,
+  TerminalExitEvent,
+  TerminalOpenParams,
+  TerminalSessionInfo,
+} from "@openclaw/gateway-protocol";
+import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
 
 type TerminalRequestOptions = { timeoutMs?: number | null; signal?: AbortSignal };
@@ -12,40 +21,14 @@ export interface TerminalGatewayClient {
     params?: unknown,
     options?: TerminalRequestOptions,
   ): Promise<T>;
-  addEventListener(listener: (evt: { event: string; payload: unknown }) => void): () => void;
+  addEventListener(listener: (evt: Pick<EventFrame, "event" | "payload">) => void): () => void;
   inboundActivitySeq?: number;
   /** Recovers unreplayable output gaps and half-open terminal streams. */
   forceReconnect(reason: string): void;
 }
 
-export type TerminalOpenResult = {
-  sessionId: string;
-  agentId: string;
-  shell: string;
-  cwd: string;
-  confined: boolean;
-  title?: string;
-  owner?: "conn" | `agent:${string}`;
-};
-
-type TerminalAttachResult = TerminalOpenResult & {
-  /** Recent output replayed into the emulator before live data resumes. */
-  buffer: string;
-  /** Cumulative UTF-16 output offset at the end of the replay snapshot. */
-  seq?: number;
-};
-
-export type TerminalSessionInfo = {
-  sessionId: string;
-  agentId: string;
-  shell: string;
-  title?: string;
-  cwd: string;
-  confined: boolean;
-  attached: boolean;
-  owner?: "conn" | `agent:${string}`;
-  createdAtMs: number;
-};
+export type TerminalOpenResult = Omit<TerminalAttachResult, "buffer" | "seq">;
+export type { TerminalSessionInfo } from "@openclaw/gateway-protocol";
 
 type TerminalExitInfo = {
   exitCode: number | null;
@@ -71,8 +54,7 @@ type SessionSink = {
 type StreamState = {
   abort: AbortController;
   sink: SessionSink;
-  seqMode: "unknown" | "offset" | "counter";
-  expectedSeq: number | null;
+  expectedSeq: number;
   recovering: boolean;
 };
 
@@ -104,26 +86,37 @@ export class TerminalOpenUnusableSessionError extends Error {
   }
 }
 
-function nonEmptyStringField(value: unknown): boolean {
-  return typeof value === "string" && value.length > 0;
-}
-
 /** Names the first protocol-required field the payload failed to deliver.
  *  `terminal.open`/`terminal.attach` responses reach the panel through a bare
  *  cast, so every consumer downstream would otherwise trust unchecked data. */
 function missingTerminalSessionField(result: Partial<TerminalAttachResult>): string | null {
   for (const field of ["sessionId", "agentId", "shell", "cwd"] as const) {
-    if (!nonEmptyStringField(result[field])) {
+    if (!readNonEmptyStringPreservingWhitespace(result[field])) {
       return field;
     }
   }
   return null;
 }
 
+function assertTerminalReplay(
+  result: TerminalAttachResult,
+): asserts result is TerminalAttachResult & { seq: number } {
+  // The bundled UI always advertises terminal-offset-seq to its same-version Gateway.
+  const missingField =
+    missingTerminalSessionField(result) ??
+    (typeof result.buffer === "string" ? null : "buffer") ??
+    (typeof result.seq === "number" && Number.isSafeInteger(result.seq) ? null : "seq");
+  if (missingField) {
+    throw new TerminalOpenUnusableSessionError(missingField);
+  }
+}
+
 function isTerminalOpenRequestTimeout(error: unknown): boolean {
   return (
     error instanceof Error &&
-    /^gateway request timed out after \d+ms: terminal\.open$/u.test(error.message)
+    /^gateway request timed out after \d+ms: (?:terminal\.open|sessions\.catalog\.startTerminal)$/u.test(
+      error.message,
+    )
   );
 }
 
@@ -136,7 +129,6 @@ function isTerminalOpenTimeout(error: unknown): boolean {
 
 /** Routes the shared terminal event stream to the session that owns each id. */
 export class TerminalConnection {
-  private readonly client: TerminalGatewayClient;
   private readonly streams = new Map<string, StreamState>();
   // Events can race ahead of open/attach responses. Preserve their seq so a
   // capped buffer becomes a detectable gap instead of silent output loss.
@@ -157,9 +149,7 @@ export class TerminalConnection {
   // Failed opens never register, so bound their pre-registration output.
   private static readonly MAX_PENDING_EVENTS = 512;
 
-  constructor(client: TerminalGatewayClient) {
-    this.client = client;
-  }
+  constructor(private readonly client: TerminalGatewayClient) {}
 
   /** Starts listening for terminal events; idempotent. */
   private ensureSubscribed(): void {
@@ -169,9 +159,7 @@ export class TerminalConnection {
     this.unsubscribe = this.client.addEventListener((evt) => {
       if (evt.event === "terminal.data") {
         this.noteTerminalActivity();
-        const payload = evt.payload as
-          | { sessionId?: string; seq?: number; data?: string }
-          | undefined;
+        const payload = evt.payload as Partial<TerminalDataEvent> | undefined;
         if (
           payload?.sessionId &&
           typeof payload.seq === "number" &&
@@ -189,15 +177,7 @@ export class TerminalConnection {
       }
       if (evt.event === "terminal.exit") {
         this.noteTerminalActivity();
-        const payload = evt.payload as
-          | {
-              sessionId?: string;
-              exitCode?: number | null;
-              signal?: number | null;
-              reason?: string;
-              error?: string;
-            }
-          | undefined;
+        const payload = evt.payload as Partial<TerminalExitEvent> | undefined;
         if (payload?.sessionId) {
           const info: TerminalExitInfo = {
             exitCode: payload.exitCode ?? null,
@@ -206,12 +186,8 @@ export class TerminalConnection {
             error: payload.error,
           };
           const stream = this.streams.get(payload.sessionId);
-          if (stream) {
-            if (stream.recovering) {
-              this.bufferEarly(payload.sessionId, { kind: "exit", info });
-            } else {
-              this.deliverExit(payload.sessionId, stream, info);
-            }
+          if (stream && !stream.recovering) {
+            this.deliverExit(payload.sessionId, stream, info);
           } else {
             this.bufferEarly(payload.sessionId, { kind: "exit", info });
           }
@@ -222,10 +198,25 @@ export class TerminalConnection {
 
   /** Opens a session and registers its output/exit sinks before returning. */
   async open(params: TerminalOpenParams, sink: SessionSink): Promise<TerminalOpenResult> {
+    return this.openRequest("terminal.open", params, sink);
+  }
+
+  async start(
+    params: SessionsCatalogStartTerminalParams,
+    sink: SessionSink,
+  ): Promise<TerminalOpenResult> {
+    return this.openRequest("sessions.catalog.startTerminal", params, sink);
+  }
+
+  private async openRequest(
+    method: "terminal.open" | "sessions.catalog.startTerminal",
+    params: TerminalOpenParams | SessionsCatalogStartTerminalParams,
+    sink: SessionSink,
+  ): Promise<TerminalOpenResult> {
     let result: TerminalOpenResult;
     try {
       result = await this.requestWhileHoldingStream(() =>
-        this.client.request<TerminalOpenResult>("terminal.open", params, {
+        this.client.request<TerminalOpenResult>(method, params, {
           timeoutMs: TERMINAL_OPEN_WATCHDOG_MS,
         }),
       );
@@ -245,7 +236,7 @@ export class TerminalConnection {
       // The gateway already created the session. Without the fields the protocol
       // guarantees it cannot be driven, so release it here instead of leaving a
       // live server session that nothing owns and nothing can close.
-      if (nonEmptyStringField(result.sessionId)) {
+      if (readNonEmptyStringPreservingWhitespace(result.sessionId)) {
         void this.close(result.sessionId);
       }
       throw new TerminalOpenUnusableSessionError(missingField);
@@ -254,7 +245,6 @@ export class TerminalConnection {
       return result;
     }
     const stream = this.setStream(result.sessionId, sink, {
-      seqMode: "unknown",
       expectedSeq: 0,
       recovering: false,
     });
@@ -265,23 +255,12 @@ export class TerminalConnection {
 
   /** Rebinds a session and resets the emulator to its authoritative replay. */
   async attach(sessionId: string, sink: SessionSink): Promise<TerminalAttachResult> {
-    const result = await this.requestWhileHoldingStream(() =>
-      this.client.request<TerminalAttachResult>("terminal.attach", { sessionId }),
-    );
-    // Same unchecked cast as open(): a replay without its buffer would throw on
-    // `result.buffer.length` further down instead of reporting a bad response.
-    const missingAttachField =
-      missingTerminalSessionField(result) ?? (typeof result.buffer === "string" ? null : "buffer");
-    if (missingAttachField) {
-      throw new TerminalOpenUnusableSessionError(missingAttachField);
-    }
-    const offset =
-      typeof result.seq === "number" && Number.isSafeInteger(result.seq) ? result.seq : null;
+    const result = await this.requestReplay(sessionId);
+    const offset = result.seq;
     if (this.disposed) {
       return result;
     }
     const stream = this.setStream(sessionId, sink, {
-      seqMode: offset === null ? "counter" : "offset",
       expectedSeq: offset,
       recovering: true,
     });
@@ -305,9 +284,7 @@ export class TerminalConnection {
       return result;
     }
     stream.recovering = false;
-    // Old protocol-4 replies have no snapshot high-water. Preserve raced
-    // counter frames because they may have been emitted after the snapshot.
-    this.flushPending(sessionId, stream, offset ?? undefined, true);
+    this.flushPending(sessionId, stream, offset, true);
     this.scheduleLivenessCheck();
     return result;
   }
@@ -315,6 +292,16 @@ export class TerminalConnection {
   async list(): Promise<TerminalSessionInfo[]> {
     const result = await this.client.request<{ sessions?: TerminalSessionInfo[] }>("terminal.list");
     return result?.sessions ?? [];
+  }
+
+  private requestReplay(sessionId: string) {
+    return this.requestWhileHoldingStream(async () => {
+      const result = await this.client.request<TerminalAttachResult>("terminal.attach", {
+        sessionId,
+      });
+      assertTerminalReplay(result);
+      return result;
+    });
   }
 
   private async requestWhileHoldingStream<T>(run: () => Promise<T>): Promise<T> {
@@ -345,26 +332,9 @@ export class TerminalConnection {
       this.recoverGap(sessionId, stream, frame);
       return;
     }
-    if (stream.seqMode === "counter") {
-      // Shipped protocol-4 counters were diagnostic-only. Jumps cannot prove
-      // byte loss, and legacy attach replies lack a replay high-water.
-      stream.expectedSeq = frame.seq + 1;
-      stream.sink.onData(frame.data);
-      return;
-    }
     const startOfChunk = frame.seq - frame.data.length;
     if (startOfChunk === stream.expectedSeq) {
-      if (frame.data.length > 0) {
-        stream.seqMode = "offset";
-      }
       stream.expectedSeq = frame.seq;
-      stream.sink.onData(frame.data);
-      return;
-    }
-    // Shipped protocol-4 gateways started their per-frame counter at zero.
-    if (stream.seqMode === "unknown" && stream.expectedSeq === 0 && frame.seq === 0) {
-      stream.seqMode = "counter";
-      stream.expectedSeq = 1;
       stream.sink.onData(frame.data);
       return;
     }
@@ -382,35 +352,22 @@ export class TerminalConnection {
     }
     stream.recovering = true;
     const signal = stream.abort.signal;
-    void this.client
-      .request<TerminalAttachResult>("terminal.attach", { sessionId })
+    void this.requestReplay(sessionId)
       .then(async (result) => {
         if (signal.aborted) {
           return;
         }
-        const offset =
-          typeof result.seq === "number" && Number.isSafeInteger(result.seq) ? result.seq : null;
-        if (offset === null) {
-          // Version-skew fallback: a legacy snapshot cannot identify which
-          // queued counter frames it covers. Keep the live stream exactly once.
-          stream.seqMode = "counter";
-          stream.expectedSeq = null;
-          stream.recovering = false;
-          this.deliverData(sessionId, stream, gapFrame);
-          this.flushPending(sessionId, stream, undefined, true);
-          return;
-        }
+        const offset = result.seq;
         const previouslyObservedThrough = stream.expectedSeq;
-        stream.seqMode = "offset";
         stream.expectedSeq = offset;
         // The ring may include both bytes already delivered and the gap's
         // missing suffix. Preserve that boundary so response-producing
         // emulators do not answer historical control queries twice.
         const replayStart = offset - result.buffer.length;
-        const newlyObservedFrom =
-          typeof previouslyObservedThrough === "number"
-            ? Math.max(0, Math.min(result.buffer.length, previouslyObservedThrough - replayStart))
-            : 0;
+        const newlyObservedFrom = Math.max(
+          0,
+          Math.min(result.buffer.length, previouslyObservedThrough - replayStart),
+        );
         await stream.sink.onReplay({
           data: result.buffer,
           newlyObservedFrom,
@@ -502,7 +459,7 @@ export class TerminalConnection {
   private setStream(
     sessionId: string,
     sink: SessionSink,
-    state: Pick<StreamState, "seqMode" | "expectedSeq" | "recovering">,
+    state: Pick<StreamState, "expectedSeq" | "recovering">,
   ): StreamState {
     this.removeStream(sessionId);
     const stream = { abort: new AbortController(), sink, ...state };

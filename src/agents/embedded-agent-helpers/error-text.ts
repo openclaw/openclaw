@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -7,29 +8,34 @@ import {
   extractLeadingHttpStatus,
   formatProviderRefusalText,
   formatRawAssistantErrorForUi,
+  formatTransportErrorCopy,
   isGenericProviderInternalError,
+  isKnownTransportErrorCode,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
-import { renderAssistantRequestFailureCopy } from "../failover/assistant-request-failure-copy.js";
+import {
+  PROVIDER_SCHEMA_REJECTION_USER_TEXT,
+  renderAssistantFormatFailureCopy,
+  renderAssistantRequestFailureCopy,
+  renderFormatErrorCopy,
+} from "../failover/assistant-request-failure-copy.js";
+import { failoverReasonFromClassification } from "../failover/classification-rules.js";
 import {
   classifyFailoverSignal,
   isProviderCompletedErrorFinishReasonMessage,
-  isReasoningConstraintErrorMessage,
   isTimeoutErrorMessage,
 } from "../failover/classify.js";
+import { isReasoningConstraintErrorMessage } from "../failover/context-overflow-tables.js";
+import { resolveExecutionApprovalFailureMessage } from "../failover/message-patterns.js";
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
-import type { FailoverReason } from "../failover/signal.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
   formatBillingErrorMessage,
   formatDiskSpaceErrorCopy,
-  formatTransportErrorCopy,
   isInvalidStreamingEventOrderError,
   isLikelyHttpErrorText,
   isRawApiErrorPayload,
   isStreamingJsonParseError,
-  PROVIDER_SCHEMA_REJECTION_USER_TEXT,
-  renderFormatErrorCopy,
   renderRateLimitOrOverloadedCopy,
 } from "../failover/user-copy.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
@@ -40,7 +46,32 @@ const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
 export const SYNTHESIZED_TIMEOUT_ERROR_TEXT = "LLM request timed out.";
 const MODEL_NOT_FOUND_USER_TEXT =
-  "The selected model was not found by the provider. Check the model id or choose a different model.";
+  "This model was not found. Choose another model in the Control UI.";
+const RUNTIME_FAILURE_COPY: Partial<
+  Record<ReturnType<typeof classifyProviderRuntimeFailureKind>, string>
+> = {
+  auth_refresh:
+    "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+  refresh_contention: "Another sign-in is still in progress. Wait a moment, then try again.",
+  refresh_timeout:
+    "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the Control UI.",
+  callback_timeout:
+    "Sign-in wasn't completed. Try signing in again. If asked for a link, paste the full link from your browser.",
+  callback_validation:
+    "The sign-in link wasn't accepted. Try signing in again. If asked for a link, paste the full link from your browser.",
+  auth_scope:
+    "This login doesn't have the access OpenClaw needs. Sign in again under Models in the Control UI.",
+  auth_html:
+    "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+  auth_invalid_token: AUTH_INVALID_TOKEN_USER_TEXT,
+  upstream_html:
+    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+  proxy:
+    "Couldn't connect to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+  tls_certificate:
+    "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+  model_not_found: MODEL_NOT_FOUND_USER_TEXT,
+};
 const TOOL_CALL_INPUT_MISSING_RE =
   /tool_(?:use|call)\.(?:input|arguments).*?(?:field required|required)/i;
 const TOOL_CALL_INPUT_PATH_RE =
@@ -55,17 +86,8 @@ type AssistantErrorTextOptions = {
   /** Credential auth mode; OAuth/token billing copy omits API-key language (#80877). */
   authMode?: string;
 };
-type ClassifiedAssistantErrorFacts = {
-  provider?: string;
-  model?: string;
-  providerRuntimeFailureKind: ReturnType<typeof classifyProviderRuntimeFailureKind>;
-  reason: FailoverReason | null;
-  status?: number;
-};
-function classifyAssistantErrorFacts(
-  msg: AssistantMessage,
-  opts?: AssistantErrorTextOptions,
-): ClassifiedAssistantErrorFacts {
+type ClassifiedAssistantErrorFacts = ReturnType<typeof classifyAssistantErrorFacts>;
+function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErrorTextOptions) {
   const signal = buildAssistantFailoverSignal(msg, {
     provider: opts?.providerOwner?.id ?? opts?.provider,
   });
@@ -76,14 +98,11 @@ function classifyAssistantErrorFacts(
   return {
     provider: opts?.provider ?? msg.provider ?? opts?.providerOwner?.id,
     model: opts?.model ?? msg.model,
-    reason:
-      classification?.kind === "reason"
-        ? classification.reason
-        : classification
-          ? "context_overflow"
-          : null,
+    reason: failoverReasonFromClassification(classification),
     status: signal.status ?? extractErrorHttpStatus(signal.message ?? "")?.code,
     providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(signal, { providerPlugin }),
+    storageFailure: classifyGatewayStorageFailure(msg),
+    code: signal.code,
   };
 }
 function isMissingToolCallInputError(raw: string): boolean {
@@ -107,6 +126,9 @@ export function formatAssistantErrorText(
   }
   const formatCopy = renderFormatErrorCopy(raw);
   const classifiedFacts = facts ?? classifyAssistantErrorFacts(msg, opts);
+  if (classifiedFacts.storageFailure) {
+    return renderAssistantRequestFailureCopy(classifiedFacts);
+  }
   const {
     reason: failoverReason,
     status: formatStatus,
@@ -135,66 +157,9 @@ export function formatAssistantErrorText(
   if (diskSpaceCopy) {
     return diskSpaceCopy;
   }
-  if (providerRuntimeFailureKind === "auth_refresh") {
-    return "Authentication refresh failed. Re-authenticate this provider and try again.";
-  }
-  if (providerRuntimeFailureKind === "refresh_contention") {
-    return (
-      "Authentication refresh is already in progress elsewhere and this attempt " +
-      "timed out waiting for it. Retry in a moment."
-    );
-  }
-  if (providerRuntimeFailureKind === "refresh_timeout") {
-    return (
-      "Authentication refresh timed out before the provider completed. " +
-      "Retry in a moment; re-authenticate only if it keeps failing."
-    );
-  }
-  if (providerRuntimeFailureKind === "callback_timeout") {
-    return (
-      "Browser OAuth did not complete before manual fallback kicked in. " +
-      "Retry the login flow and paste the redirect URL if prompted."
-    );
-  }
-  if (providerRuntimeFailureKind === "callback_validation") {
-    return (
-      "Browser OAuth returned an invalid or incomplete callback. " +
-      "Retry the login flow and make sure the full redirect URL is pasted if prompted."
-    );
-  }
-  if (providerRuntimeFailureKind === "auth_scope") {
-    return (
-      "Authentication is missing the required OpenAI ChatGPT scopes. " +
-      "Re-run OpenAI login and try again."
-    );
-  }
-  if (providerRuntimeFailureKind === "auth_html") {
-    return (
-      "Authentication failed at the provider. " +
-      "Re-authenticate and verify your provider credentials and account access."
-    );
-  }
-  if (providerRuntimeFailureKind === "auth_invalid_token") {
-    return AUTH_INVALID_TOKEN_USER_TEXT;
-  }
-  if (providerRuntimeFailureKind === "upstream_html") {
-    return (
-      "The provider returned an HTML error page instead of an API response. " +
-      "This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. " +
-      "Retry in a moment or check provider status."
-    );
-  }
-  if (providerRuntimeFailureKind === "proxy") {
-    return "LLM request failed: proxy or tunnel configuration blocked the provider request.";
-  }
-  if (providerRuntimeFailureKind === "tls_certificate") {
-    return (
-      "LLM request failed: TLS certificate validation rejected the provider endpoint. " +
-      "Check the endpoint hostname, proxy, and local certificate trust."
-    );
-  }
-  if (providerRuntimeFailureKind === "model_not_found") {
-    return MODEL_NOT_FOUND_USER_TEXT;
+  const runtimeCopy = RUNTIME_FAILURE_COPY[providerRuntimeFailureKind];
+  if (runtimeCopy) {
+    return runtimeCopy;
   }
   if (failoverReason === "billing") {
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
@@ -270,7 +235,9 @@ export function formatAssistantErrorText(
     return formatRawAssistantErrorForUi(raw);
   }
 
-  const transportCopy = formatTransportErrorCopy(raw);
+  const transportCopy = formatTransportErrorCopy(
+    msg.errorCode && isKnownTransportErrorCode(msg.errorCode) ? `${raw} ${msg.errorCode}` : raw,
+  );
   if (transportCopy) {
     return transportCopy;
   }
@@ -339,24 +306,23 @@ export function formatUserFacingAssistantErrorText(
   opts?: AssistantErrorTextOptions,
 ): string {
   const rawError = msg.errorMessage?.trim();
+  const approvalMessage = resolveExecutionApprovalFailureMessage(rawError);
+  if (approvalMessage) {
+    return `⚠️ ${approvalMessage}`;
+  }
   const facts = classifyAssistantErrorFacts(msg, opts);
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
-  const structuredSchemaDetail = [
-    parseApiErrorInfo(rawError ?? ""),
-    parseApiErrorInfo(typeof msg.errorBody === "string" ? msg.errorBody.trim() : ""),
-  ].find((error) => error?.type?.toLowerCase().includes("invalid_request"))?.message;
   const schemaFriendlyError =
     friendlyError === PROVIDER_SCHEMA_REJECTION_USER_TEXT ||
     friendlyError?.startsWith("LLM request rejected:");
   const safeFriendlyError =
-    structuredSchemaDetail && schemaFriendlyError
-      ? renderFormatErrorCopy(structuredSchemaDetail)
-      : rawPassthrough
-        ? schemaFriendlyError
-          ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
-          : undefined
-        : friendlyError;
+    (schemaFriendlyError ? renderAssistantFormatFailureCopy(msg) : undefined) ??
+    (rawPassthrough
+      ? schemaFriendlyError
+        ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
+        : undefined
+      : friendlyError);
   if (safeFriendlyError) {
     return safeFriendlyError.trim();
   }

@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { fileTypeFromBuffer } from "file-type";
+import { isSelfContainedSvg } from "../../packages/gateway-protocol/src/svg-image.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 
 /** Authenticated UI images are deliberately small, bounded presentation assets. */
@@ -48,24 +49,6 @@ export function createHttpImageRepresentation(
   };
 }
 
-/**
- * SVG images stay self-contained: no script, document expansion, embedded
- * documents, or outbound fetches can reach the browser through an image route.
- */
-function isRenderableHttpSvg(body: Buffer): boolean {
-  if (body.byteLength > HTTP_SVG_MAX_BYTES) {
-    return false;
-  }
-  const text = body.toString("utf8");
-  return (
-    !text.includes("\0") &&
-    !/<!doctype|<!entity/iu.test(text) &&
-    !/<\s*(?:script|foreignObject|image|use|iframe)\b/iu.test(text) &&
-    !/\b(?:href|xlink:href|src)\s*=/iu.test(text) &&
-    /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg(?:\s|>)/iu.test(text)
-  );
-}
-
 /** Sniffs and validates bytes before they become a browser image response. */
 export async function resolveHttpImageRepresentation(
   sourceName: string,
@@ -76,7 +59,10 @@ export async function resolveHttpImageRepresentation(
   }
   let contentType: string | undefined;
   if (path.extname(sourceName).toLowerCase() === ".svg") {
-    contentType = isRenderableHttpSvg(body) ? SVG_MIME_TYPE : undefined;
+    contentType =
+      body.byteLength <= HTTP_SVG_MAX_BYTES && isSelfContainedSvg(body.toString("utf8"))
+        ? SVG_MIME_TYPE
+        : undefined;
   } else {
     contentType = resolveHttpImageMimeType((await fileTypeFromBuffer(body))?.mime);
   }
@@ -84,6 +70,14 @@ export async function resolveHttpImageRepresentation(
     return undefined;
   }
   return createHttpImageRepresentation(body, contentType);
+}
+
+/** Prevent image documents from executing scripts or making cross-origin requests. */
+export function applyHttpImageContentSecurityPolicy(res: ServerResponse): void {
+  res.setHeader(
+    "content-security-policy",
+    "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; sandbox",
+  );
 }
 
 /** Writes the shared private-cache and document-sandbox policy for image bytes. */
@@ -99,10 +93,7 @@ export function sendHttpImageResponse(params: {
   res.setHeader("cache-control", params.cacheControl ?? "private, max-age=3600");
   res.setHeader("cross-origin-resource-policy", "same-origin");
   res.setHeader("x-content-type-options", "nosniff");
-  res.setHeader(
-    "content-security-policy",
-    "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; sandbox",
-  );
+  applyHttpImageContentSecurityPolicy(res);
   res.setHeader("content-disposition", `attachment; filename="${params.filename}"`);
   if (matchesHttpIfNoneMatch(req.headers["if-none-match"], image.etag)) {
     res.statusCode = 304;

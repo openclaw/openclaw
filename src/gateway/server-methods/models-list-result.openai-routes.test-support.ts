@@ -1,15 +1,20 @@
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   type PreparedGatewayModelCatalogSnapshot,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
-import { buildModelsListResult } from "./models-list-result.js";
+import {
+  buildModelsListResult,
+  createGatewayAgentModelCatalogProjector,
+} from "./models-list-result.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export const WITHOUT_OPENAI_ENV_AUTH = {
@@ -29,24 +34,12 @@ export function providerCatalogEntry(provider: string, id: string): ModelCatalog
   return { ...catalogEntry(id, "openai-completions"), provider };
 }
 
-export function registerTestCatalogAccess(
-  context: GatewayRequestContext,
-  readPrepared?: () => Promise<PreparedGatewayModelCatalogSnapshot | undefined>,
-): void {
-  registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
-    loadDeferred: async (params) =>
-      (await context.loadGatewayModelCatalogSnapshot(
-        params,
-      )) as PreparedGatewayModelCatalogSnapshot,
-    readPrepared: readPrepared ?? (async () => undefined),
-  });
-}
-
-export async function listModels(params: {
+type ListModelsParams = {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   preparedOnly?: boolean;
+  includeDefaultModels?: boolean;
   catalog: ModelCatalogEntry[];
   catalogLoadDelayMs?: number;
   preparedCatalog?: ModelCatalogEntry[];
@@ -56,11 +49,44 @@ export async function listModels(params: {
   cfg?: OpenClawConfig;
   discoveryModes?: Record<string, "refreshable" | "runtime" | "static">;
   catalogComplete?: boolean;
+  catalogDiagnostics?: Pick<
+    PreparedGatewayModelCatalogSnapshot,
+    "pendingProviders" | "providerOutcomes" | "refreshFailed"
+  >;
   preparedAuthModes?: PreparedAgentCredentialModes;
+  preparedAuthStore?: AuthProfileStore;
   metadataSnapshot?: PluginMetadataSnapshot;
+  pluginRegistry?: PluginRegistry;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   view?: "all" | "configured" | "provider-config" | "default";
-}) {
+};
+
+const chatMetadataSnapshot = createPluginMetadataSnapshotFixture({
+  plugins: [
+    {
+      id: "openai",
+      providers: ["openai"],
+      modelCatalog: {
+        discovery: { openai: "runtime" },
+        providers: { openai: { defaultUtilityModel: "gpt-5.6-luna", models: [] } },
+      },
+      setup: { providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }] },
+    },
+    {
+      id: "anthropic",
+      providers: ["anthropic"],
+      cliBackends: ["claude-cli"],
+      syntheticAuthRefs: ["claude-cli"],
+      providerAuthAliases: { "claude-cli": "anthropic" },
+      modelCatalog: { discovery: { anthropic: "refreshable", "claude-cli": "static" } },
+      setup: {
+        providers: [{ id: "anthropic", envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] }],
+      },
+    },
+  ],
+});
+
+export function createModelsListTestContext(params: ListModelsParams) {
   const agentId = params.agentId ?? "main";
   const config = params.cfg ?? ({} as OpenClawConfig);
   const createCatalogSnapshot = (entries: ModelCatalogEntry[]) =>
@@ -70,20 +96,26 @@ export async function listModels(params: {
       catalogComplete: params.catalogComplete ?? false,
       workspaceDir: params.workspaceDir ?? "/tmp/models-list-openai-workspace",
       config,
+      observationConfig: config,
+      pluginRegistry: params.pluginRegistry,
+      isCurrent: () => true,
       authModes: params.preparedAuthModes ?? {},
-      authStore: loadAuthProfileStoreWithoutExternalProfiles(
-        params.agentDir ?? "/tmp/models-list-openai-agent",
-        {
-          allowKeychainPrompt: false,
-        },
-      ),
-      metadataSnapshot:
-        params.metadataSnapshot ?? loadManifestMetadataSnapshot({ config, env: process.env }),
+      authStore:
+        params.preparedAuthStore ??
+        loadAuthProfileStoreWithoutExternalProfiles(
+          params.agentDir ?? "/tmp/models-list-openai-agent",
+          {
+            allowKeychainPrompt: false,
+          },
+        ),
+      metadataSnapshot: params.metadataSnapshot ?? chatMetadataSnapshot,
       entries,
       routeVariants: entries,
       ...(params.staticEntries ? { staticEntries: params.staticEntries } : {}),
       authMaterializations: [],
+      ...params.catalogDiagnostics,
     }) satisfies PreparedGatewayModelCatalogSnapshot;
+  let publishedEntries = params.publishedCatalog ?? params.catalog;
   const loadGatewayModelCatalogSnapshot = async (loadParams?: object) => {
     if (params.catalogLoadDelayMs !== undefined) {
       await new Promise<void>((resolve) => {
@@ -91,26 +123,36 @@ export async function listModels(params: {
       });
     }
     const readOnly = loadParams && "readOnly" in loadParams && loadParams.readOnly === true;
-    return createCatalogSnapshot(
-      readOnly && params.preparedCatalog ? params.preparedCatalog : params.catalog,
-    );
+    const entries = readOnly && params.preparedCatalog ? params.preparedCatalog : params.catalog;
+    if (!readOnly) {
+      publishedEntries = entries;
+    }
+    return createCatalogSnapshot(entries);
   };
   registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
     loadDeferred: loadGatewayModelCatalogSnapshot,
-    readPrepared: params.publishedCatalog
-      ? async () => createCatalogSnapshot(params.publishedCatalog ?? [])
-      : loadGatewayModelCatalogSnapshot,
+    readPrepared: async () => createCatalogSnapshot(publishedEntries),
   });
   const context = {
     getRuntimeConfig: () => config,
     loadGatewayModelCatalogSnapshot,
     logGateway: { debug: () => {}, warn: () => {} },
   } as unknown as GatewayRequestContext;
+  return context;
+}
+
+export async function listModels(params: ListModelsParams) {
+  const context = createModelsListTestContext(params);
+  const agentId = params.agentId ?? "main";
+  const config = params.cfg ?? ({} as OpenClawConfig);
   return await buildModelsListResult({
-    context,
+    source: { kind: "gateway", context },
     agentId,
     params: {
       view: params.view ?? "all",
+      ...(params.includeDefaultModels === undefined
+        ? {}
+        : { includeDefaultModels: params.includeDefaultModels }),
       ...(params.refresh ? { refresh: true } : {}),
       ...(params.preparedOnly ? { preparedOnly: true } : {}),
     },
@@ -121,16 +163,17 @@ export async function listModels(params: {
             config,
             snapshot: { entries: params.catalog, routeVariants: params.catalog },
           },
-          catalogProjector: {
-            metadataSnapshot: {
-              index: { plugins: [] },
-              manifestRegistry: { plugins: [] },
+          catalogProjector: createGatewayAgentModelCatalogProjector({
+            cfg: config,
+            agentId,
+            snapshot: { entries: params.catalog, routeVariants: params.catalog },
+            metadataSnapshot: createPluginMetadataSnapshotFixture({
               plugins: [
                 { id: "test-provider", modelCatalog: { discovery: params.discoveryModes } },
               ],
-            },
-            authStore: { version: 1, profiles: {} },
-          } as never,
+            }),
+            preparedAuthStore: { version: 1, profiles: {} },
+          }),
         }
       : {}),
     ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),

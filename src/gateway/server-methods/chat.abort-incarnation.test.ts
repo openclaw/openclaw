@@ -1,27 +1,27 @@
 /** Cancellation binds session incarnations and retains exact durable dispatch fences. */
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { readFileSync, writeFileSync } from "node:fs";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
-import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
-import {
-  closeOpenClawAgentDatabaseByPath,
-  listOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
+import { observeSessionWorkAdmissionDrain } from "../../sessions/session-lifecycle-admission.test-support.js";
+import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
-import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import {
   createActiveRun,
   createChatAbortContext,
@@ -31,6 +31,11 @@ import { sessionMutationHandlers } from "./sessions-mutations.js";
 
 const fixture = useChatAbortRegistryFixture();
 const parentKey = "agent:main:main";
+
+afterEach(() => {
+  clearAgentRunContext("active");
+  clearAgentRunContext("ended");
+});
 
 function abortParent() {
   const context = createChatAbortContext({
@@ -69,7 +74,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         defaultSessionId: `${runId}-session`,
         lifecycleRevision: "original",
       });
-      registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey: parentKey,
@@ -81,6 +86,12 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         collect: true,
         expectsCompletionMessage: false,
       });
+      // Running fixture turns need real ownership so cold lifecycle setup cannot
+      // let the registry sweeper mistake them for lost executions.
+      registerAgentRunContext(runId, {
+        sessionKey: childSessionKey,
+        sessionId: `${runId}-session`,
+      });
     }
     const ended = subagentRuns.get("ended")!;
     if (completed) {
@@ -90,33 +101,51 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         stream: "lifecycle",
         data: { phase: "end", endedAt: Date.now() },
       });
-      await vi.waitFor(() => expect(ended.execution.status).toBe("terminal"));
-      await settleSubagentRegistryPersistenceWork();
-      expect(ended.endedReason).toBe("subagent-complete");
+      await fixture.settle();
+      expect(subagentRuns.get("ended")?.execution.status).toBe("terminal");
+      clearAgentRunContext("ended");
+      await fixture.settle();
+      expect(subagentRuns.get("ended")?.endedReason).toBe("subagent-complete");
     }
-    expect(subagentRuns.get("ended")).toBe(ended);
+    expect(isSameSubagentRunOwner(subagentRuns.get("ended"), ended)).toBe(true);
     const entered = createDeferred();
     const resume = createDeferred();
+    const endedMutationEntered = createDeferred();
+    const resumeEndedMutation = createDeferred();
     const admission = await sessionLifecycle.beginSessionWorkAdmission({
       scope: storePath,
       identities: [activeKey, "active-session"],
       assertAllowed: () => {},
       onInterrupt: () => admission.release(),
     });
-    const interruptAdmissions = sessionLifecycle.interruptSessionWorkAdmissions;
-    const drain = vi
-      .spyOn(sessionLifecycle, "interruptSessionWorkAdmissions")
-      .mockImplementation(async (params) => {
-        const released = await interruptAdmissions(params);
-        if (params.scope === storePath && Array.from(params.identities).includes(activeKey)) {
-          expect(released).toBe(true);
-          // Keep the captured kill scope pending after the real drain. A cold
-          // sibling reset must not consume the active admission's deadline.
-          entered.resolve();
-          await resume.promise;
+    const mutateSession = sessionLifecycle.runExclusiveSessionLifecycleMutation;
+    let holdEndedMutation = !completed;
+    const mutation = vi
+      .spyOn(sessionLifecycle, "runExclusiveSessionLifecycleMutation")
+      .mockImplementation(async (operation, params) => {
+        if (
+          holdEndedMutation &&
+          "scope" in params &&
+          params.scope === storePath &&
+          Array.from(params.identities).includes(endedKey)
+        ) {
+          holdEndedMutation = false;
+          // Preserve the reset/admission-before-Stop race at the actual mutation
+          // entry. Completed ancestors remain ungated late-discovery coverage.
+          endedMutationEntered.resolve();
+          await resumeEndedMutation.promise;
         }
-        return released;
+        return await mutateSession(operation, params);
       });
+    const restoreDrain = observeSessionWorkAdmissionDrain(async (params, released) => {
+      if (params.scope === storePath && Array.from(params.identities).includes(activeKey)) {
+        expect(released).toBe(true);
+        // Keep the captured kill scope pending after the real drain. A cold
+        // sibling reset must not consume the active admission's deadline.
+        entered.resolve();
+        await resume.promise;
+      }
+    });
     const abort = abortParent();
     const dispatch = vi.fn(async () => {});
     const interrupted = vi.fn();
@@ -132,6 +161,9 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       ]);
       expect(abort.parent.controller.signal.aborted).toBe(true);
       expect(sessionLifecycle.isSessionWorkAdmissionActive(storePath, [activeKey])).toBe(false);
+      if (!completed) {
+        await endedMutationEntered.promise;
+      }
       if (reset) {
         const respond = vi.fn();
         await sessionMutationHandlers["sessions.reset"]!({
@@ -151,7 +183,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       const session = loadExactSessionEntryReadOnly({ storePath, sessionKey: endedKey })?.entry;
       expect(session?.sessionId).toBe("ended-session");
       expect(session?.lifecycleRevision === "original").toBe(!reset);
-      expect(subagentRuns.get("ended")).toBe(ended);
+      expect(isSameSubagentRunOwner(subagentRuns.get("ended"), ended)).toBe(true);
       if (!completed) {
         newAdmission = await sessionLifecycle.beginSessionWorkAdmission({
           scope: storePath,
@@ -163,7 +195,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
           },
         });
       }
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: "grandchild",
         childSessionKey: grandchildKey,
         requesterSessionKey: endedKey,
@@ -185,13 +217,14 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         onStartFailure: () => true,
       });
       resume.resolve();
+      resumeEndedMutation.resolve();
       const respond = await abort.pending;
       expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ aborted: true }));
       expect(subagentRuns.get("active")?.endedReason).toBe("subagent-killed");
       expect(subagentRuns.get("grandchild")?.execution.status).toBe(reset ? "queued" : "terminal");
       if (!completed) {
         expect(interrupted).toHaveBeenCalledTimes(reset ? 0 : 1);
-        expect(ended.execution.status).toBe(reset ? "running" : "terminal");
+        expect(subagentRuns.get("ended")?.execution.status).toBe(reset ? "running" : "terminal");
       }
       releaseSwarmRun("capacity");
       if (reset) {
@@ -203,11 +236,13 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
     } finally {
       newAdmission?.release();
       resume.resolve();
+      resumeEndedMutation.resolve();
       admission.release();
       try {
         await abort.pending;
       } finally {
-        drain.mockRestore();
+        restoreDrain();
+        mutation.mockRestore();
         releaseSwarmRun("capacity");
         releaseSwarmRun("grandchild");
       }
@@ -229,7 +264,7 @@ it.each(["child", "ancestor"])(
         sessionKey: ancestorKey,
         defaultSessionId: "ancestor-session",
       });
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: "ancestor",
         childSessionKey: ancestorKey,
         requesterSessionKey: parentKey,
@@ -253,7 +288,7 @@ it.each(["child", "ancestor"])(
       ["bad", badKey],
       ["healthy", healthyKey],
     ] as const) {
-      registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey: faultOwner === "ancestor" && runId === "bad" ? ancestorKey : parentKey,
@@ -273,7 +308,7 @@ it.each(["child", "ancestor"])(
     expect(database).toBeDefined();
     let original: Buffer | undefined;
     let fault: unknown;
-    const unsubscribe = onSubagentRegistryPersisted(() => {
+    const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
       if (original || !subagentRuns.get("bad")?.killIntent) {
         return;
       }

@@ -5,6 +5,7 @@ import * as sqliteQueries from "../../infra/kysely-sync.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import {
   applySessionEntryLifecycleMutation,
+  loadSessionEntry,
   loadTranscriptEvents,
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
@@ -18,6 +19,41 @@ import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcrip
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const transactionInjection = vi.hoisted(() => ({ run: null as (() => void) | null }));
+
+vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
+  return {
+    ...actual,
+    captureOpenClawAgentDatabaseExecution: (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
+    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
+      const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
+      return {
+        ...owner,
+        get fileIdentity() {
+          return owner.fileIdentity;
+        },
+        runExisting: (source, operation, options) =>
+          owner.runExisting(
+            source,
+            (worker) =>
+              operation({
+                execute: (command, commandOptions) => {
+                  if (command.type === "session.lifecycle.reset") {
+                    // The snapshot is prepared, but the worker has not begun its transaction.
+                    const inject = transactionInjection.run;
+                    transactionInjection.run = null;
+                    inject?.();
+                  }
+                  return worker.execute(command, commandOptions);
+                },
+              }),
+            options,
+          ),
+      };
+    },
+  };
+});
 
 vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => {
   const actual = await importOriginal<typeof agentDatabase>();
@@ -45,10 +81,38 @@ describe("reset boundary concurrency", () => {
     storePath = path.join(tempDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     transactionInjection.run = null;
+    await agentDatabase.closeOpenClawAgentDatabasesAsync();
     agentDatabase.closeOpenClawAgentDatabasesForTest();
     cleanupTempDirs(tempDirs);
+  });
+
+  it("does not commit a reset after its caller closes during entry preparation", async () => {
+    const sessionKey = "agent:main:closing-reset";
+    const scope = { sessionKey, storePath };
+    await upsertSessionEntryCore(scope, { sessionId: "current-reset", updatedAt: 10 });
+    let current = true;
+    const commitGuard = () => {
+      if (!current) {
+        throw new Error("reset caller closed");
+      }
+    };
+    await expect(
+      resetSessionEntryLifecycle({
+        storePath,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+        commitGuard,
+        buildNextEntry: () => {
+          commitGuard();
+          queueMicrotask(() => {
+            current = false;
+          });
+          return { sessionId: "stale-reset", updatedAt: 20 };
+        },
+      }),
+    ).rejects.toThrow("reset caller closed");
+    expect(loadSessionEntry(scope)?.sessionId).toBe("current-reset");
   });
 
   it.each([
@@ -57,7 +121,7 @@ describe("reset boundary concurrency", () => {
       reset: async (scope: { sessionId: string; sessionKey: string; storePath: string }) =>
         resetSessionEntryLifecycle({
           buildNextEntry: () => ({ sessionId: "next-single", updatedAt: 20 }),
-          resetBoundary: { context: "preserve-tail", reason: "reset" },
+          resetBoundary: { context: "preserve-tail", reason: "reset", cwd: "/tmp/workspace" },
           storePath: scope.storePath,
           target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
         }),
@@ -71,13 +135,13 @@ describe("reset boundary concurrency", () => {
           upserts: [
             {
               entry: { sessionId: "next-bulk", updatedAt: 20 },
-              resetBoundary: { context: "preserve-tail", reason: "reset" },
+              resetBoundary: { context: "preserve-tail", reason: "reset", cwd: "/tmp/workspace" },
               sessionKey: scope.sessionKey,
             },
           ],
         }),
     },
-  ])("parents the $name boundary without hydrating prior message bodies", async ({ reset }) => {
+  ])("parents the $name boundary without hydrating caller message bodies", async ({ reset }) => {
     const scope = {
       sessionId: "current-session",
       sessionKey: "agent:main:reset-race",

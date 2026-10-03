@@ -1,45 +1,20 @@
 // Normalizes env flag values and logs env warnings lazily.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { SubsystemLogger } from "../logging/subsystem.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { parseBooleanValue } from "../utils/boolean.js";
+import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
 export { isFastTestRuntimeEnv, isVitestRuntimeEnv } from "./test-runtime-env.js";
 
-let log: SubsystemLogger | null = null;
-const loadLog = createLazyPromise(
-  () =>
-    import("../logging/subsystem.js").then(({ createSubsystemLogger }) =>
-      createSubsystemLogger("env"),
-    ),
-  { cacheRejections: true },
-);
+const loadLog = createLazyPromise(() => import("./env-log.runtime.js"), {
+  cacheRejections: true,
+});
 const loggedEnv = new Set<string>();
 const ENV_NORMALIZATION_KEY_GROUPS = [["ZAI_API_KEY", "Z_AI_API_KEY"]] as const;
-
-async function getLog(): Promise<SubsystemLogger> {
-  if (!log) {
-    log = await loadLog();
-  }
-  return log;
-}
 
 type AcceptedEnvOption = {
   key: string;
   description: string;
-  value?: string;
   redact?: boolean;
 };
-
-function formatEnvValue(value: string, redact?: boolean): string {
-  if (redact) {
-    return "<redacted>";
-  }
-  const singleLine = value.replace(/\s+/g, " ").trim();
-  if (singleLine.length <= 160) {
-    return singleLine;
-  }
-  return `${truncateUtf16Safe(singleLine, 160)}…`;
-}
 
 /** Logs an accepted env option once, with optional redaction for sensitive values. */
 export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
@@ -49,16 +24,14 @@ export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
   if (loggedEnv.has(option.key)) {
     return;
   }
-  const rawValue = option.value ?? process.env[option.key];
+  const rawValue = process.env[option.key];
   if (!rawValue || !rawValue.trim()) {
     return;
   }
   loggedEnv.add(option.key);
-  void getLog()
-    .then((logger) => {
-      logger.info(
-        `env: ${option.key}=${formatEnvValue(rawValue, option.redact)} (${option.description})`,
-      );
+  void loadLog()
+    .then(({ logAcceptedEnvValue }) => {
+      logAcceptedEnvValue(option.key, rawValue, option.description, option.redact);
     })
     .catch(() => {
       // Best-effort diagnostics only.
@@ -101,4 +74,5 @@ export function isTruthyEnvValue(value?: string): boolean {
 /** Applies process-wide env normalization before runtime configuration is read. */
 export function normalizeEnv(): void {
   normalizeZaiEnv(process.env);
+  normalizeFsSafeNativeEnv(process.env);
 }

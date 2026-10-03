@@ -1,6 +1,3 @@
-/**
- * Chutes model catalog, static model definitions, and dynamic model discovery.
- */
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { buildLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
@@ -19,7 +16,6 @@ import { normalizeChutesModelPricing } from "./pricing-api.js";
 
 const CHUTES_MANIFEST_CATALOG = manifest.modelCatalog.providers.chutes;
 
-/** Base URL for Chutes OpenAI-compatible inference. */
 export const CHUTES_BASE_URL = CHUTES_MANIFEST_CATALOG.baseUrl;
 
 const CHUTES_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -35,7 +31,6 @@ function decorateChutesModelDefinition(model: ModelDefinitionConfig): ModelDefin
   };
 }
 
-/** Bundled fallback Chutes model catalog, normalized from the plugin manifest. */
 export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestModelProviderConfig({
   providerId: "chutes",
   catalog: CHUTES_MANIFEST_CATALOG,
@@ -99,9 +94,12 @@ function projectChutesModels(rows: readonly unknown[]): ModelDefinitionConfig[] 
   return models;
 }
 
-/** Discovers Chutes models dynamically, falling back to the bundled static catalog. */
-export async function discoverChutesModels(accessToken?: string): Promise<ModelDefinitionConfig[]> {
+export async function discoverChutesModels(
+  accessToken?: string,
+  options: { discoveryMode?: "strict" } = {},
+): Promise<ModelDefinitionConfig[]> {
   const provider = await buildLiveModelProviderConfig({
+    ...options,
     providerId: "chutes",
     endpoint: `${CHUTES_BASE_URL}/models`,
     providerConfig: { baseUrl: CHUTES_BASE_URL, api: "openai-completions" },
@@ -109,10 +107,6 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
     discoveryApiKey: normalizeOptionalString(accessToken),
     timeoutMs: 10_000,
     ttlMs: CACHE_TTL,
-    buildRequestHeaders: ({ discoveryApiKey }) => ({
-      Accept: "application/json",
-      ...(discoveryApiKey ? { Authorization: `Bearer ${discoveryApiKey}` } : {}),
-    }),
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(CHUTES_BASE_URL),
     auditContext: "chutes-model-discovery",
     fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),

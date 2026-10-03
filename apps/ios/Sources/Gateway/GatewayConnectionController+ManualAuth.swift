@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import os
 
 extension GatewayConnectionController {
     static func resolvedManualPort(host: String, port: Int) -> Int? {
@@ -15,21 +16,15 @@ extension GatewayConnectionController {
     }
 
     static func clearDeviceAuthTokens(gatewayID: String) {
-        if let primaryIdentity = DeviceIdentityStore.loadOrCreatePersisted() {
-            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "node", gatewayID: gatewayID)
-            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "operator", gatewayID: gatewayID)
-        }
-        if let shareIdentity = DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension) {
-            DeviceAuthStore.clearToken(
-                deviceId: shareIdentity.deviceId,
-                role: "node",
-                gatewayID: gatewayID,
-                profile: .shareExtension)
-            DeviceAuthStore.clearToken(
-                deviceId: shareIdentity.deviceId,
-                role: "operator",
-                gatewayID: gatewayID,
-                profile: .shareExtension)
+        for profile in [GatewayDeviceIdentityProfile.primary, .shareExtension] {
+            guard let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: profile) else { continue }
+            for role in ["node", "operator"] {
+                DeviceAuthStore.clearToken(
+                    deviceId: identity.deviceId,
+                    role: role,
+                    gatewayID: gatewayID,
+                    profile: profile)
+            }
         }
     }
 
@@ -121,6 +116,95 @@ extension GatewayConnectionController {
     }
 
     struct ManualAuthOverride: Equatable {
+        struct Fields {
+            var token = ""
+            var password = ""
+            var targetStableID: String?
+            var pendingOverride: ManualAuthOverride?
+
+            mutating func load(instanceId: String, targetStableID: String) {
+                let credentials = GatewaySettingsStore.loadGatewayCredentials(
+                    instanceId: instanceId,
+                    gatewayStableID: targetStableID)
+                let ownsFields = credentials.hasCredentials || credentials.suppressStoredDeviceAuth
+                self.targetStableID = ownsFields ? targetStableID : nil
+                self.token = credentials.token ?? ""
+                self.password = credentials.password ?? ""
+                self.pendingOverride = ManualAuthOverride.selectingCredentialTarget(
+                    current: self.pendingOverride,
+                    instanceId: instanceId,
+                    targetStableID: targetStableID,
+                    allowManualOverride: true)
+            }
+
+            mutating func selectTarget(_ targetStableID: String, instanceId: String, allowManualOverride: Bool) {
+                if !GatewayStableIdentifier.matches(self.targetStableID, targetStableID) {
+                    let credentials = GatewaySettingsStore.loadGatewayCredentials(
+                        instanceId: instanceId,
+                        gatewayStableID: targetStableID)
+                    self.targetStableID = targetStableID
+                    self.token = credentials.token ?? ""
+                    self.password = credentials.password ?? ""
+                } else if let fields = self.pendingOverride?.refreshedFieldsAfterHandoff(
+                    token: self.token,
+                    password: self.password,
+                    instanceId: instanceId,
+                    targetStableID: targetStableID)
+                {
+                    self.token = fields.token
+                    self.password = fields.password
+                }
+                self.pendingOverride = ManualAuthOverride.selectingCredentialTarget(
+                    current: self.pendingOverride,
+                    instanceId: instanceId,
+                    targetStableID: targetStableID,
+                    allowManualOverride: allowManualOverride)
+            }
+
+            mutating func persist(instanceId: String, targetStableID: String?) {
+                guard !instanceId.isEmpty, let targetStableID else { return }
+                self.targetStableID = targetStableID
+                let saved = GatewaySettingsStore.updateGatewayCredentials(
+                    token: self.token,
+                    password: self.password,
+                    gatewayStableID: targetStableID,
+                    instanceId: instanceId)
+                self.pendingOverride = saved
+                    ? ManualAuthOverride.selectingCredentialTarget(
+                        current: self.pendingOverride,
+                        instanceId: instanceId,
+                        targetStableID: targetStableID,
+                        allowManualOverride: true)
+                    : nil
+            }
+
+            func prepareManualConnection(instanceId: String, targetStableID: String) -> ManualAuthOverride? {
+                let fieldsMatchTarget = GatewayStableIdentifier.matches(self.targetStableID, targetStableID)
+                let pending = GatewayStableIdentifier.matches(self.pendingOverride?.targetStableID, targetStableID)
+                    ? self.pendingOverride
+                    : nil
+                let authOverride = ManualAuthOverride.currentManualInput(
+                    token: fieldsMatchTarget ? self.token : nil,
+                    pendingOverride: pending,
+                    password: fieldsMatchTarget ? self.password : nil,
+                    targetStableID: targetStableID)
+                if !instanceId.isEmpty, fieldsMatchTarget || pending != nil {
+                    GatewaySettingsStore.saveGatewayCredentials(
+                        token: authOverride?.token,
+                        bootstrapToken: authOverride?.bootstrapToken,
+                        password: authOverride?.password,
+                        gatewayStableID: targetStableID,
+                        suppressStoredDeviceAuth: authOverride?.suppressStoredDeviceAuth == true,
+                        instanceId: instanceId)
+                }
+                return authOverride
+            }
+        }
+
+        private final class Handoff: Sendable {
+            let accepted = OSAllocatedUnfairLock(initialState: false)
+        }
+
         struct SetupAuth {
             let token: String
             let bootstrapToken: String
@@ -156,6 +240,52 @@ extension GatewayConnectionController {
         let expiresAtMs: Int64?
         let isSetupCodeOrigin: Bool
         let suppressStoredDeviceAuth: Bool
+        private var handoff = Handoff()
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.token == rhs.token &&
+                lhs.bootstrapToken == rhs.bootstrapToken &&
+                lhs.password == rhs.password &&
+                lhs.targetStableID == rhs.targetStableID &&
+                lhs.tlsFingerprintSha256 == rhs.tlsFingerprintSha256 &&
+                lhs.expiresAtMs == rhs.expiresAtMs &&
+                lhs.isSetupCodeOrigin == rhs.isSetupCodeOrigin &&
+                lhs.suppressStoredDeviceAuth == rhs.suppressStoredDeviceAuth
+        }
+
+        var wasHandedOff: Bool {
+            self.handoff.accepted.withLock { $0 }
+        }
+
+        var unconsumed: Self? {
+            self.wasHandedOff ? nil : self
+        }
+
+        func markHandedOff() {
+            // Root Retry and the form can retain copies of one setup attempt. Record handoff
+            // on their shared receipt so neither can replay credentials after consumption.
+            self.handoff.accepted.withLock { $0 = true }
+        }
+
+        func refreshedFieldsAfterHandoff(
+            token: String,
+            password: String,
+            instanceId: String,
+            targetStableID: String) -> (token: String, password: String)?
+        {
+            guard self.wasHandedOff,
+                  GatewayStableIdentifier.matches(self.targetStableID, targetStableID)
+            else { return nil }
+            let credentials = GatewaySettingsStore.loadGatewayCredentials(
+                instanceId: instanceId,
+                gatewayStableID: targetStableID)
+            // Reload unchanged fields, but retain edits made after another surface retried.
+            return (
+                token.trimmingCharacters(in: .whitespacesAndNewlines) == (self.token ?? "")
+                    ? credentials.token ?? "" : token,
+                password.trimmingCharacters(in: .whitespacesAndNewlines) == (self.password ?? "")
+                    ? credentials.password ?? "" : password)
+        }
 
         static func explicit(
             token: String?,
@@ -221,7 +351,7 @@ extension GatewayConnectionController {
             allowManualOverride: Bool) -> ManualAuthOverride?
         {
             guard allowManualOverride else { return nil }
-            if let current,
+            if let current = current?.unconsumed,
                GatewayStableIdentifier.matches(current.targetStableID, targetStableID)
             {
                 return current
@@ -258,7 +388,7 @@ extension GatewayConnectionController {
                     expiresAtMs: nil,
                     suppressStoredDeviceAuth: true)
             }
-            return ManualAuthOverride.explicit(
+            var override = ManualAuthOverride.explicit(
                 token: token,
                 bootstrapToken: pendingOverride.bootstrapToken,
                 password: password,
@@ -267,6 +397,8 @@ extension GatewayConnectionController {
                 expiresAtMs: pendingOverride.expiresAtMs,
                 isSetupCodeOrigin: pendingOverride.isSetupCodeOrigin,
                 suppressStoredDeviceAuth: pendingOverride.suppressStoredDeviceAuth)
+            override.handoff = pendingOverride.handoff
+            return override
         }
 
         static func manualStableID(host: String, port: Int, contextPath: String? = nil) -> String {

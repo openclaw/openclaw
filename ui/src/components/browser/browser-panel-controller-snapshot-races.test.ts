@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
@@ -16,6 +17,44 @@ import { BrowserPanelController } from "./browser-panel-controller.ts";
 setupBrowserPanelTestCleanup();
 
 describe("BrowserPanelController superseded tab snapshots", () => {
+  it("reads page geometry while the screenshot body is downloading", async () => {
+    stubScreenshotMedia();
+    const body = createDeferred<Blob>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, blob: () => body.promise })),
+    );
+    const url = "https://example.test/page";
+    const { client, request } = createBrowserClient(async (envelope) => {
+      if (envelope.path === "/screenshot") {
+        return { path: "/fresh.png", targetId: "tab-a", url };
+      }
+      if (envelope.path === "/act") {
+        return createBrowserPanelTestMetrics(url);
+      }
+      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    });
+    const controller = createBrowserPanelTestController(client, "tab-a", url);
+    const previousView = controller.view;
+    const capture = controller.refreshView("tab-a");
+    try {
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith(
+          "browser.request",
+          expect.objectContaining({ path: "/act" }),
+        ),
+      );
+      expect(controller.view).toBe(previousView);
+      expect(controller.loading).toBe(true);
+    } finally {
+      body.resolve(new Blob(["fresh screenshot"], { type: "image/png" }));
+      await capture;
+    }
+    expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
+    expect(controller.view?.metrics).toEqual(createBrowserPanelTestMetrics(url).result);
+    expect(controller.loading).toBe(false);
+  });
+
   it.each([true, false])(
     "never reselects a closed active tab when refreshing the remaining tabs fails (fallback: %s)",
     async (hasFallback) => {
@@ -39,10 +78,17 @@ describe("BrowserPanelController superseded tab snapshots", () => {
       });
       const controller = createBrowserPanelTestController(client, "active-tab", activeUrl);
       controller.tabs = [
-        { id: "active-tab", targetId: "raw-active", title: "Active", url: activeUrl },
+        {
+          kind: "remote" as const,
+          id: "active-tab",
+          targetId: "raw-active",
+          title: "Active",
+          url: activeUrl,
+        },
         ...(hasFallback
           ? [
               {
+                kind: "remote" as const,
                 id: "fallback-tab",
                 targetId: "raw-fallback",
                 title: "Fallback",
@@ -126,12 +172,14 @@ describe("BrowserPanelController superseded tab snapshots", () => {
       const previousView = controller.view;
       controller.tabs = [
         {
+          kind: "remote" as const,
           id: "active-tab",
           targetId: "raw-active",
           title: "Active",
           url: activeUrl,
         },
         {
+          kind: "remote" as const,
           id: "background-tab",
           targetId: "raw-background",
           title: "Background",
@@ -222,74 +270,68 @@ describe("BrowserPanelController superseded tab snapshots", () => {
     expect(controller.errorText).toBeNull();
   });
 
-  it.each(["reject", "resolve"] as const)(
-    "does not let a stale snapshot start a capture that %ss during a new-tab mutation",
-    async (completion) => {
-      stubScreenshotMedia();
-      const activeUrl = "https://example.test/active";
-      const nextUrl = "https://example.test/new";
-      const activeTab = createBrowserPanelTestTab("active-tab", activeUrl, "Active");
-      const tabs = [activeTab];
-      const previousSnapshot = createDeferred<{ running: boolean; tabs: typeof tabs }>();
-      const openedTab = createDeferred<ReturnType<typeof createBrowserPanelTestTab>>();
-      let snapshotCount = 0;
-      const { client, request } = createBrowserClient(async (envelope) => {
-        if (envelope.path === "/tabs") {
-          snapshotCount += 1;
-          return snapshotCount === 1
-            ? await previousSnapshot.promise
-            : { running: true, tabs: [...tabs] };
+  it("does not let a stale snapshot start a capture during a new-tab mutation", async () => {
+    stubScreenshotMedia();
+    const activeUrl = "https://example.test/active";
+    const nextUrl = "https://example.test/new";
+    const activeTab = createBrowserPanelTestTab("active-tab", activeUrl, "Active");
+    const tabs = [activeTab];
+    const previousSnapshot = createDeferred<{ running: boolean; tabs: typeof tabs }>();
+    const openedTab = createDeferred<ReturnType<typeof createBrowserPanelTestTab>>();
+    let snapshotCount = 0;
+    const { client, request } = createBrowserClient(async (envelope) => {
+      if (envelope.path === "/tabs") {
+        snapshotCount += 1;
+        return snapshotCount === 1
+          ? await previousSnapshot.promise
+          : { running: true, tabs: [...tabs] };
+      }
+      if (envelope.path === "/tabs/open") {
+        const next = await openedTab.promise;
+        tabs.push(next);
+        return next;
+      }
+      if (envelope.path === "/screenshot") {
+        if (envelope.body?.targetId === "active-tab") {
+          throw new Error("Superseded snapshot capture failed");
         }
-        if (envelope.path === "/tabs/open") {
-          const next = await openedTab.promise;
-          tabs.push(next);
-          return next;
-        }
-        if (envelope.path === "/screenshot") {
-          if (envelope.body?.targetId === "active-tab") {
-            if (completion === "reject") {
-              throw new Error("Superseded snapshot capture failed");
-            }
-            return { path: "/old.png", targetId: "raw-active", url: activeUrl };
-          }
-          return { path: "/fresh.png", targetId: "raw-new", url: nextUrl };
-        }
-        if (envelope.path === "/act") {
-          return createBrowserPanelTestMetrics(nextUrl, "New");
-        }
-        throw new Error(`Unexpected browser route: ${envelope.path}`);
-      });
-      const controller = createBrowserPanelTestController(client, "active-tab", activeUrl);
-      const previousView = controller.view;
+        return { path: "/fresh.png", targetId: "raw-new", url: nextUrl };
+      }
+      if (envelope.path === "/act") {
+        return createBrowserPanelTestMetrics(nextUrl, "New");
+      }
+      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    });
+    const controller = createBrowserPanelTestController(client, "active-tab", activeUrl);
+    const previousView = controller.view;
 
-      const refresh = controller.refreshAll();
-      await flushBrowserResponses();
-      const opening = controller.openUrl(nextUrl, { newTab: true });
-      previousSnapshot.resolve({ running: true, tabs: [activeTab] });
-      await refresh;
+    const refresh = controller.refreshAll();
+    await flushBrowserResponses();
+    const opening = controller.openUrl(nextUrl, { newTab: true });
+    previousSnapshot.resolve({ running: true, tabs: [activeTab] });
+    await refresh;
 
-      expect(controller.loading).toBe(true);
-      expect(controller.errorText).toBeNull();
-      expect(controller.view).toBe(previousView);
-      expect(
-        request.mock.calls.some(([, envelope]) => {
-          const browserRequest = envelope as {
-            path?: string;
-            body?: { targetId?: string };
-          };
-          return (
-            browserRequest.path === "/screenshot" && browserRequest.body?.targetId === "active-tab"
-          );
-        }),
-      ).toBe(false);
+    expect(controller.loading).toBe(true);
+    expect(controller.errorText).toBeNull();
+    expect(controller.view).toBe(previousView);
+    expect(
+      request.mock.calls.some(([, envelope]) => {
+        const browserRequest = envelope as {
+          path?: string;
+          body?: { targetId?: string };
+        };
+        return (
+          browserRequest.path === "/screenshot" && browserRequest.body?.targetId === "active-tab"
+        );
+      }),
+    ).toBe(false);
 
-      openedTab.resolve(createBrowserPanelTestTab("new-tab", nextUrl, "New"));
-      await opening;
+    openedTab.resolve(createBrowserPanelTestTab("new-tab", nextUrl, "New"));
+    await opening;
 
-      expect(controller.activeTargetId).toBe("new-tab");
-      expect(controller.view?.url).toBe(nextUrl);
-      expect(controller.loading).toBe(false);
-      expect(controller.errorText).toBeNull();
-    },
-  );
+    expect(controller.activeTargetId).toBe("new-tab");
+    expect(controller.view?.url).toBe(nextUrl);
+    expect(controller.loading).toBe(false);
+    expect(controller.errorText).toBeNull();
+  });
 });

@@ -19,10 +19,14 @@ struct MacNodeClaudeSessionCatalogTests {
 
     private final class Fixture {
         let home: URL
+        let configDir: URL
+        var environment: [String: String]
 
-        init() throws {
+        init(configDir: String = ".claude", environment: [String: String] = [:]) throws {
             self.home = FileManager.default.temporaryDirectory
                 .appendingPathComponent("openclaw-claude-home-\(UUID().uuidString)", isDirectory: true)
+            self.configDir = self.home.appendingPathComponent(configDir, isDirectory: true)
+            self.environment = environment
             try FileManager.default.createDirectory(at: self.home, withIntermediateDirectories: true)
         }
 
@@ -32,7 +36,7 @@ struct MacNodeClaudeSessionCatalogTests {
         }
 
         var projects: URL {
-            self.home.appendingPathComponent(".claude/projects", isDirectory: true)
+            self.configDir.appendingPathComponent("projects", isDirectory: true)
         }
 
         func project(_ name: String = "-workspace") throws -> URL {
@@ -131,7 +135,10 @@ struct MacNodeClaudeSessionCatalogTests {
         }
 
         func list(paramsJSON: String? = nil) throws -> [String: Any]? {
-            try self.decode(MacNodeClaudeSessionCatalog.list(paramsJSON: paramsJSON, homeURL: self.home))
+            try self.decode(MacNodeClaudeSessionCatalog.list(
+                paramsJSON: paramsJSON,
+                homeURL: self.home,
+                environment: self.environment))
         }
 
         func read(_ paramsJSON: String) throws -> [String: Any]? {
@@ -139,7 +146,10 @@ struct MacNodeClaudeSessionCatalogTests {
         }
 
         func readJSON(_ paramsJSON: String) throws -> String {
-            try MacNodeClaudeSessionCatalog.read(paramsJSON: paramsJSON, homeURL: self.home)
+            try MacNodeClaudeSessionCatalog.read(
+                paramsJSON: paramsJSON,
+                homeURL: self.home,
+                environment: self.environment)
         }
 
         func observeEnumerations() -> EnumerationCounter {
@@ -150,6 +160,74 @@ struct MacNodeClaudeSessionCatalogTests {
             }
             return counter
         }
+    }
+
+    @Test func `CLAUDE_CONFIG_DIR scopes discovery reads and leases while Desktop metadata stays HOME scoped`() throws {
+        let fixture = try Fixture(configDir: "custom-claude")
+        fixture.environment = ["CLAUDE_CONFIG_DIR": " \n\(fixture.configDir.path)\t "]
+        let project = try fixture.project()
+        #expect(MacNodeClaudeSessionCatalog.shouldAdvertise(
+            root: [:], homeURL: fixture.home, environment: fixture.environment))
+
+        let sessionId = "custom-session"
+        try fixture.writeTranscript([
+            fixture.message(sessionId, "old", entrypoint: "cli"),
+            fixture.message(sessionId, "new", role: "assistant", index: 2),
+        ], to: fixture.file(sessionId, in: project))
+        try fixture.writeJSON(
+            ["cliSessionId": sessionId, "title": "Desktop title", "isArchived": false],
+            to: fixture.desktopMetadata("local_custom"))
+
+        let defaultProject = fixture.home.appendingPathComponent(".claude/projects/-decoy", isDirectory: true)
+        try FileManager.default.createDirectory(at: defaultProject, withIntermediateDirectories: true)
+        let decoyId = "decoy-session"
+        try fixture.writeTranscript(
+            [fixture.message(decoyId, "Decoy", entrypoint: "cli")],
+            to: fixture.file(decoyId, in: defaultProject))
+        try fixture.writeIndex([
+            fixture.indexEntry(sessionId, in: project, summary: "Index title"),
+            fixture.indexEntry(decoyId, in: defaultProject),
+        ], in: project)
+
+        let list = try #require(try fixture.list())
+        let sessions = try #require(list["sessions"] as? [[String: Any]])
+        #expect(sessions.map { $0["threadId"] as? String } == [sessionId])
+        #expect(sessions.first?["name"] as? String == "Desktop title")
+        #expect(throws: MacNodeClaudeSessionCatalog.CatalogError.self) {
+            try fixture.read(#"{"threadId":"decoy-session"}"#)
+        }
+
+        let enumerations = fixture.observeEnumerations()
+        let latest = try #require(try fixture.read(#"{"threadId":"custom-session","limit":1}"#))
+        #expect((latest["items"] as? [[String: Any]])?.first?["text"] as? String == "new")
+        let cursor = try #require(latest["nextCursor"] as? String)
+        let olderParams = try #require(try fixture.params([
+            "threadId": sessionId, "limit": 1, "cursor": cursor,
+        ]))
+        let older = try #require(try fixture.read(olderParams))
+        #expect((older["items"] as? [[String: Any]])?.first?["text"] as? String == "old")
+        #expect(older["nextCursor"] == nil)
+        #expect(enumerations.value() == 1)
+
+        try FileManager.default.removeItem(at: fixture.projects)
+        #expect(!MacNodeClaudeSessionCatalog.shouldAdvertise(
+            root: [:], homeURL: fixture.home, environment: fixture.environment))
+    }
+
+    @Test(arguments: [nil, "", "  \n\t"] as [String?])
+    func `unset or blank CLAUDE_CONFIG_DIR uses home Claude projects`(configured: String?) throws {
+        let fixture = try Fixture(environment: configured.map { ["CLAUDE_CONFIG_DIR": $0] } ?? [:])
+        let project = try fixture.project()
+        let sessionId = "default-session"
+        try fixture.writeTranscript(
+            [fixture.message(sessionId, "Default", entrypoint: "cli")],
+            to: fixture.file(sessionId, in: project))
+
+        let list = try #require(try fixture.list())
+        let sessions = try #require(list["sessions"] as? [[String: Any]])
+        #expect(sessions.map { $0["threadId"] as? String } == [sessionId])
+        #expect(MacNodeClaudeSessionCatalog.shouldAdvertise(
+            root: [:], homeURL: fixture.home, environment: fixture.environment))
     }
 
     @Test(arguments: [true, false])
@@ -254,8 +332,11 @@ struct MacNodeClaudeSessionCatalogTests {
             (cliId, "Interactive CLI prompt", "cli", "/work/cli", "2.1.216"),
             (sdkCLIId, "Headless CLI prompt", "sdk-cli", "/work/sdk", "2.1.204"),
         ] {
+            var meta = fixture.message(
+                id, "<local-command-caveat>CLI metadata</local-command-caveat>", entrypoint: entrypoint)
+            meta["isMeta"] = true
             try fixture.writeTranscript(
-                [fixture.message(
+                [meta, fixture.message(
                     id,
                     text,
                     entrypoint: entrypoint,
@@ -542,20 +623,21 @@ struct MacNodeClaudeSessionCatalogTests {
     @Test func `advertises only when Anthropic is enabled and Claude projects exist`() throws {
         let fixture = try Fixture()
         let root: [String: Any] = ["plugins": ["entries": ["anthropic": ["enabled": true]]]]
-        #expect(!MacNodeClaudeSessionCatalog.shouldAdvertise(root: root, homeURL: fixture.home))
+        #expect(!MacNodeClaudeSessionCatalog.shouldAdvertise(root: root, homeURL: fixture.home, environment: [:]))
         try FileManager.default.createDirectory(
             at: fixture.projects,
             withIntermediateDirectories: true)
-        #expect(MacNodeClaudeSessionCatalog.shouldAdvertise(root: [:], homeURL: fixture.home))
-        #expect(MacNodeClaudeSessionCatalog.shouldAdvertise(root: root, homeURL: fixture.home))
+        #expect(MacNodeClaudeSessionCatalog.shouldAdvertise(root: [:], homeURL: fixture.home, environment: [:]))
+        #expect(MacNodeClaudeSessionCatalog.shouldAdvertise(root: root, homeURL: fixture.home, environment: [:]))
         let disabled: [String: Any] = ["plugins": ["entries": ["anthropic": ["enabled": false]]]]
-        #expect(!MacNodeClaudeSessionCatalog.shouldAdvertise(root: disabled, homeURL: fixture.home))
+        #expect(!MacNodeClaudeSessionCatalog.shouldAdvertise(root: disabled, homeURL: fixture.home, environment: [:]))
         let denied: [String: Any] = ["plugins": ["deny": ["anthropic"]]]
-        #expect(!MacNodeClaudeSessionCatalog.shouldAdvertise(root: denied, homeURL: fixture.home))
+        #expect(!MacNodeClaudeSessionCatalog.shouldAdvertise(root: denied, homeURL: fixture.home, environment: [:]))
         let omittedByAllowlist: [String: Any] = ["plugins": ["allow": ["codex"]]]
-        #expect(!MacNodeClaudeSessionCatalog.shouldAdvertise(root: omittedByAllowlist, homeURL: fixture.home))
+        #expect(!MacNodeClaudeSessionCatalog.shouldAdvertise(
+            root: omittedByAllowlist, homeURL: fixture.home, environment: [:]))
         let entries: [String: Any] = ["anthropic": ["enabled": true], "Anthropic": ["enabled": false]]
         let ambiguous: [String: Any] = ["plugins": ["entries": entries]]
-        #expect(!MacNodeClaudeSessionCatalog.shouldAdvertise(root: ambiguous, homeURL: fixture.home))
+        #expect(!MacNodeClaudeSessionCatalog.shouldAdvertise(root: ambiguous, homeURL: fixture.home, environment: [:]))
     }
 }

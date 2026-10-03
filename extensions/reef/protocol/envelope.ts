@@ -3,8 +3,8 @@ import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { randomBytes } from "@noble/hashes/utils.js";
-import { canonicalBytes } from "./canonical.js";
-import { base64, decodeUtf8, fromBase64, fromBase64url, hex, utf8 } from "./encoding.js";
+import { canonicalBytes, sha256Hex } from "./canonical.js";
+import { base64, decodeUtf8, fromBase64, fromBase64url, utf8 } from "./encoding.js";
 import { parseHandleEpoch } from "./identity.js";
 import type { SignedReceipt } from "./receipts.js";
 
@@ -122,7 +122,7 @@ export interface SealOptions {
 }
 
 export interface OpenOptions {
-  envelope: Envelope;
+  envelope: Omit<Envelope, "v"> & { v: number };
   self: string;
   recipientEncryptionSecretKey: string;
   senderSigningPublicKey?: string;
@@ -221,7 +221,7 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
     throw new WrongRecipientError();
   }
   const peer = parseHandleEpoch(envelope.from).handle;
-  const hash = hex(sha256(canonicalBytes(envelope)));
+  const hash = sha256Hex(canonicalBytes(envelope));
   const claim = await options.replayStore.claim(peer, envelope.id, hash);
   if (claim === "mismatch") {
     throw new ReplayedError("replay id binding mismatch");
@@ -266,12 +266,8 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
   }
 }
 
-export function envelopeHash(envelope: Envelope): string {
-  return hex(sha256(canonicalBytes(envelope)));
-}
-
 export function bodyHash(body: MessageBody): string {
-  return hex(sha256(canonicalBytes(body)));
+  return sha256Hex(canonicalBytes(body));
 }
 
 function decodeKey(value: string): Uint8Array {
@@ -318,7 +314,7 @@ export function validateMessageBody(value: unknown): asserts value is MessageBod
   }
 }
 
-function validateEnvelope(value: unknown): Envelope {
+function validateEnvelope(value: unknown): OpenOptions["envelope"] {
   if (!isExactObject(value, ["v", "id", "from", "to", "ts", "epk", "n", "ct", "sig"])) {
     throw new MalformedError();
   }
@@ -363,7 +359,7 @@ function validateEnvelope(value: unknown): Envelope {
   if (canonicalBytes(value).length > MAX_ENVELOPE_BYTES) {
     throw new TooLargeError();
   }
-  return value as unknown as Envelope;
+  return value as OpenOptions["envelope"];
 }
 
 function isExactObject(value: unknown, keys: string[]): value is Record<string, unknown> {

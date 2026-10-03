@@ -44,6 +44,15 @@ struct ComputerCommandsWireDecodeTests {
         #expect(params.keys == testCase.keys)
     }
 
+    @Test(arguments: [true, false])
+    func `preserves the window screenshot option`(includeScreenshot: Bool) throws {
+        let json = """
+        {"action":"get_window_state","windowRef":"window-1","includeScreenshot":\(includeScreenshot)}
+        """
+        let params = try JSONDecoder().decode(OpenClawComputerActParams.self, from: Data(json.utf8))
+        #expect(params.includeScreenshot == includeScreenshot)
+    }
+
     @Test func `decodes every implemented v2 action family and delivery mode`() throws {
         let cases = [
             DecodeCase(

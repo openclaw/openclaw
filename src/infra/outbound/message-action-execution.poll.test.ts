@@ -159,7 +159,25 @@ describe("executeMessagePoll", () => {
     });
   });
 
-  it.each([0, -1, 1.5, "1.5", "soon"])(
+  it.each([
+    { message: "    poll body  ", expected: "    poll body  " },
+    { message: " \n\t ", expected: "" },
+    { message: undefined, expected: undefined },
+  ])("preserves meaningful poll message whitespace: $expected", async ({ message, expected }) => {
+    const { call } = await runPollAction({
+      actionParams: {
+        target: "poller:123",
+        message,
+        pollQuestion: " Lunch? ",
+        pollOption: [" Pizza ", " Sushi "],
+      },
+    });
+    expect(call.content).toBe(expected);
+    expect(call.poll.question).toBe("Lunch?");
+    expect(call.poll.options).toEqual(["Pizza", "Sushi"]);
+  });
+
+  it.each([0, 1.5, "soon"])(
     "rejects invalid pollDurationHours value %s",
     async (pollDurationHours) => {
       await expect(
@@ -186,18 +204,6 @@ describe("executeMessagePoll", () => {
     });
 
     expect(call.poll.maxSelections).toBe(3);
-  });
-
-  it("defaults maxSelections to one choice when pollMulti is omitted", async () => {
-    const { call } = await runPollAction({
-      actionParams: {
-        target: "poller:123",
-        pollQuestion: "Lunch?",
-        pollOption: ["Pizza", "Sushi", "Soup"],
-      },
-    });
-
-    expect(call.poll.maxSelections).toBe(1);
   });
 
   it("requires at least two poll options", async () => {

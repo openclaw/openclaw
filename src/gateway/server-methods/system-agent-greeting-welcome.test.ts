@@ -44,21 +44,9 @@ vi.mock("../../system-agent/onboarding-welcome.js", () => ({
   buildOnboardingWelcome: onboardingWelcomeMocks.buildOnboardingWelcome,
 }));
 
-type FakeEngine = {
-  handle: ReturnType<typeof vi.fn>;
-  seedHistory: ReturnType<typeof vi.fn>;
-  historyLength: ReturnType<typeof vi.fn>;
-  historySince: ReturnType<typeof vi.fn>;
-  getPendingOperatorProposal: ReturnType<typeof vi.fn>;
-  resolveOperatorApproval: ReturnType<typeof vi.fn>;
-  dispose: ReturnType<typeof vi.fn>;
-  loadOverview: ReturnType<typeof vi.fn>;
-  noteAssistantMessage: ReturnType<typeof vi.fn>;
-  planGreeting: ReturnType<typeof vi.fn>;
-  decorateRejoinReply: ReturnType<typeof vi.fn>;
-};
+type FakeEngine = ReturnType<typeof makeEngine>;
 
-function makeEngine(): FakeEngine {
+function makeEngine() {
   const history: Array<{ role: "user" | "assistant"; text: string }> = [];
   return {
     handle: vi.fn(async () => ({ text: "did the thing", action: "none" })),
@@ -103,6 +91,7 @@ function makeContext(sessions: Map<string, SystemAgentChatSession>): GatewayRequ
 async function callChat(
   context: GatewayRequestContext,
   params: Record<string, unknown>,
+  client: GatewayClient = defaultClient,
 ): Promise<RespondCall> {
   const calls: RespondCall[] = [];
   const respond = (ok: boolean, payload?: unknown, error?: unknown) => {
@@ -111,7 +100,7 @@ async function callChat(
   await expectDefined(
     systemAgentHandlers["openclaw.chat"],
     'systemAgentHandlers["openclaw.chat"] test invariant',
-  )({ params, respond, context, client: defaultClient } as never);
+  )({ params, respond, context, client } as never);
   return expectDefined(calls[0], "system-agent response");
 }
 
@@ -161,6 +150,120 @@ afterEach(() => {
 });
 
 describe("openclaw.chat caretaker welcome", () => {
+  it.each([undefined, "new-agent"] as const)(
+    "opens creation choices on the retained %s session without duplicating passive history",
+    async (welcomeVariant) => {
+      transcriptStoreMocks.readTranscriptTail.mockReturnValue([
+        { role: "user", text: "Earlier conversation", at: 1 },
+      ]);
+      const sessions = new Map<string, SystemAgentChatSession>();
+      const context = makeContext(sessions);
+      const initial = await callChat(context, {
+        sessionId: "retained",
+        ...(welcomeVariant ? { welcomeVariant } : {}),
+      });
+      const session = expectDefined(sessions.get("retained"), "retained session");
+      const originalHistory = session.engine.historySince(0);
+      const [creation, overlapping] = await Promise.all([
+        callChat(context, { sessionId: "retained", welcomeVariant: "new-agent" }),
+        callChat(context, { sessionId: "retained", welcomeVariant: "new-agent" }),
+      ]);
+
+      expect(creation.ok).toBe(true);
+      expect(overlapping).toEqual(creation);
+      expect(creation.payload).toMatchObject({
+        sessionId: "retained",
+        reply: expect.stringContaining("Let's create an agent."),
+        action: "none",
+      });
+      expect(creation.payload).not.toHaveProperty("question");
+      const history = session.engine.historySince(0);
+      expect(history.slice(0, originalHistory.length)).toEqual(originalHistory);
+      expect(history.filter((turn) => turn.text.startsWith("Let's create an agent."))).toHaveLength(
+        1,
+      );
+
+      const retry = await callChat(context, {
+        sessionId: "retained",
+        welcomeVariant: "new-agent",
+      });
+      expect(retry).toEqual(creation);
+      expect(session.engine.historySince(0)).toEqual(history);
+      expect(await callChat(context, { sessionId: "retained" })).toEqual(initial);
+      expect(sessions.get("retained")).toBe(session);
+      expect(createdEngines).toHaveLength(1);
+      expect(session.engine.dispose).not.toHaveBeenCalled();
+      expect(transcriptStoreMocks.appendTranscriptReset).not.toHaveBeenCalled();
+      expect(transcriptStoreMocks.appendTranscriptTurn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["wizard", "question", "proposal", "approval"] as const)(
+    "keeps an active %s ahead of the creation entry",
+    async (pending) => {
+      const sessions = new Map<string, SystemAgentChatSession>();
+      const context = makeContext(sessions);
+      await callChat(context, { sessionId: "busy" });
+      const session = expectDefined(sessions.get("busy"), "busy session");
+      const history = session.engine.historySince(0);
+      const liveQuestion = {
+        id: "live-question",
+        header: "Choose",
+        question: "Which option?",
+        options: [{ label: "A" }],
+      };
+      if (pending === "wizard" || pending === "question") {
+        vi.spyOn(session.engine, "decorateRejoinReply").mockImplementation((reply) => ({
+          ...reply,
+          question: liveQuestion,
+          ...(pending === "wizard"
+            ? {
+                sensitive: true,
+                wizardInputPending: true,
+                step: { id: "live-step", type: "text" as const, message: "Enter a value" },
+              }
+            : {}),
+        }));
+      } else if (pending === "proposal") {
+        vi.spyOn(session.engine, "getPendingOperatorProposal").mockReturnValue({
+          operation: { kind: "setup", workspace: "/synthetic/workspace" },
+          hash: "proposal-hash",
+        });
+      } else {
+        session.pendingApproval = {
+          id: "approval-id",
+          proposalHash: "proposal-hash",
+          completion: new Promise(() => {}),
+        };
+      }
+      const proposal = session.engine.getPendingOperatorProposal();
+      const approval = session.pendingApproval;
+      const before = await callChat(context, { sessionId: "busy" });
+      const creation = await callChat(context, {
+        sessionId: "busy",
+        welcomeVariant: "new-agent",
+      });
+      expect(creation).toEqual(before);
+      expect(session.engine.historySince(0)).toEqual(history);
+      expect(session.engine.getPendingOperatorProposal()).toBe(proposal);
+      expect(session.pendingApproval).toBe(approval);
+      expect(session.engine.dispose).not.toHaveBeenCalled();
+      expect(session.engine.resolveOperatorApproval).not.toHaveBeenCalled();
+      expect(sessions.get("busy")).toBe(session);
+
+      vi.spyOn(session.engine, "decorateRejoinReply").mockImplementation((reply) => reply);
+      vi.spyOn(session.engine, "getPendingOperatorProposal").mockReturnValue(null);
+      delete session.pendingApproval;
+      const available = await callChat(context, {
+        sessionId: "busy",
+        welcomeVariant: "new-agent",
+      });
+      expect(available.payload).toMatchObject({
+        reply: expect.stringContaining("Let's create an agent."),
+      });
+    },
+  );
+
   it.each([
     { label: "caretaker", welcomeVariant: undefined },
     { label: "onboarding", welcomeVariant: "onboarding" },
@@ -182,6 +285,9 @@ describe("openclaw.chat caretaker welcome", () => {
       const second = await callChat(context, { sessionId: "second-welcome", ...variant });
 
       expect(first.ok).toBe(true);
+      expect(first.payload).toMatchObject({ optionalWelcome: welcomeVariant === undefined });
+      const rejoin = await callChat(context, { sessionId: "first-welcome", ...variant });
+      expect(rejoin.payload).toMatchObject({ optionalWelcome: welcomeVariant === undefined });
       expect(second.payload).toMatchObject({
         reply: expectDefined(first.payload as { reply?: string }, "first welcome").reply,
       });
@@ -208,6 +314,7 @@ describe("openclaw.chat caretaker welcome", () => {
 
     expect(call.payload).toMatchObject({
       reply: "I'm healthy. An update is ready, and I noticed a manual config edit.",
+      optionalWelcome: false,
       question: {
         header: "Quick actions",
         options: [
@@ -293,6 +400,16 @@ describe("openclaw.chat caretaker welcome", () => {
     expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).not.toHaveBeenCalled();
     expect(sessions.get("failed-delivery")?.welcomeAuditSequence).toBe(42);
 
+    const creation = await callChat(context, {
+      sessionId: "failed-delivery",
+      welcomeVariant: "new-agent",
+    });
+    expect(creation.payload).toMatchObject({
+      reply: expect.stringContaining("Let's create an agent."),
+    });
+    expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).not.toHaveBeenCalled();
+    expect(sessions.get("failed-delivery")?.welcomeAuditSequence).toBe(42);
+
     const retry = await callChat(context, { sessionId: "failed-delivery" });
     expect(retry.payload).toMatchObject({ reply: "I'm OpenClaw. All systems nominal." });
     expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).toHaveBeenCalledWith({
@@ -312,5 +429,39 @@ describe("openclaw.chat caretaker welcome", () => {
     expect(greetingMocks.loadSystemAgentGreetingFacts).not.toHaveBeenCalled();
     expect(greetingMocks.resolveSystemAgentGreeting).not.toHaveBeenCalled();
     expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).not.toHaveBeenCalled();
+  });
+
+  it("renders the onboarding welcome in the connected client's locale", async () => {
+    const { buildOnboardingWelcome } = await vi.importActual<
+      typeof import("../../system-agent/onboarding-welcome.js")
+    >("../../system-agent/onboarding-welcome.js");
+    onboardingWelcomeMocks.buildOnboardingWelcome.mockImplementationOnce(({ locale }) =>
+      buildOnboardingWelcome({
+        locale,
+        workspace: "/workspace/example",
+        engine: {
+          loadOverview: async () => ({
+            config: { exists: false, valid: true },
+            defaultModel: "example/verified-model",
+          }),
+          propose: () => undefined,
+          noteAssistantMessage: () => undefined,
+        } as never,
+      }),
+    );
+    const call = await callChat(
+      makeContext(new Map()),
+      { sessionId: "localized-onboarding", welcomeVariant: "onboarding" },
+      { ...defaultClient, connect: { ...defaultClient.connect, locale: "zh-TW" } },
+    );
+
+    expect(call.payload).toMatchObject({
+      reply: expect.stringContaining("你好，我是 OpenClaw — 我們來孵化你的智慧代理吧。"),
+      question: {
+        options: expect.arrayContaining([
+          expect.objectContaining({ label: "是的 — 開始設定", reply: "yes" }),
+        ]),
+      },
+    });
   });
 });

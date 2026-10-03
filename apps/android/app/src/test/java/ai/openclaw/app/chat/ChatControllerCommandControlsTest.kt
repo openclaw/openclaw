@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CancellationException
@@ -20,8 +21,11 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerCommandControlsTest {
   private val json = chatControllerTestJson
 
@@ -29,27 +33,29 @@ class ChatControllerCommandControlsTest {
   fun parseChatCommandsKeepsTextAliasesAndArgumentFlag() {
     val commands =
       parseChatCommands(
-        json,
-        """
-        {
-          "commands": [
+        json
+          .parseToJsonElement(
+            """
             {
-              "name": "new",
-              "description": "Start a fresh chat",
-              "category": "session",
-              "textAliases": ["/new", "/reset"],
-              "acceptsArgs": false
-            },
-            {
-              "name": "/model",
-              "description": "Switch models",
-              "category": "options",
-              "textAliases": ["model", "/model"],
-              "acceptsArgs": true
+              "commands": [
+                {
+                  "name": "new",
+                  "description": "Start a fresh chat",
+                  "category": "session",
+                  "textAliases": ["/new", "/reset"],
+                  "acceptsArgs": false
+                },
+                {
+                  "name": "/model",
+                  "description": "Switch models",
+                  "category": "options",
+                  "textAliases": ["model", "/model"],
+                  "acceptsArgs": true
+                }
+              ]
             }
-          ]
-        }
-        """.trimIndent(),
+            """.trimIndent(),
+          ).jsonObject,
       )
 
     assertEquals(2, commands.size)
@@ -139,8 +145,10 @@ class ChatControllerCommandControlsTest {
       val controller =
         createChatController(
           requestGatewayForGateway = { gatewayId, method, _ ->
-            require(method == "chat.metadata")
-            if (gatewayId == "gateway-a") {
+            require(method == "chat.metadata" || method == "models.list")
+            if (method == "models.list") {
+              """{"models":[]}"""
+            } else if (gatewayId == "gateway-a") {
               gatewayAResponse.await()
             } else {
               commandResponse("gateway-b")
@@ -263,7 +271,7 @@ class ChatControllerCommandControlsTest {
             }
 
             else -> {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           }
         }
@@ -471,6 +479,7 @@ class ChatControllerCommandControlsTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = { method, _ ->
             check(method != "sessions.patch") { "archive must use its captured request lease" }
@@ -508,6 +517,8 @@ class ChatControllerCommandControlsTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
           json = json,
           requestGateway = { method, _ ->
             requests += method
@@ -537,7 +548,7 @@ class ChatControllerCommandControlsTest {
       advanceUntilIdle()
       requests.clear()
 
-      controller.renameSessionGroup(from = "Work", to = "Focus")
+      controller.renameSessionGroup(from = "Work", to = "Focus", expectedGatewayId = "gateway-test")
 
       // Membership enumeration sends the explicit high bound (absent limit is
       // capped at 100 rows server-side) across active + archived rows.
@@ -551,6 +562,68 @@ class ChatControllerCommandControlsTest {
       assertTrue(patches.any { it.contains("\"key\":\"agent:main:archived\"") && it.contains("\"category\":\"Focus\"") })
       // Group enumeration must not replace the requested display window.
       assertEquals(JsonPrimitive(100), json.parseToJsonElement(lists.last()).jsonObject["limit"])
+    }
+
+  @Test
+  fun renameSessionGroupDoesNotCrossGatewayAfterAcceptedListResponse() =
+    runTest {
+      var gatewayScope = ChatCacheScope("gateway-a", 1)
+      val listEntered = CompletableDeferred<Unit>()
+      val firstListResponse = CompletableDeferred<String>()
+      val patches = mutableListOf<Pair<String, String?>>()
+
+      suspend fun request(
+        gatewayId: String,
+        method: String,
+        paramsJson: String?,
+      ): String =
+        when (method) {
+          "sessions.list" -> {
+            if (gatewayId == "gateway-a" && !paramsJson.orEmpty().contains("\"archived\":true")) {
+              listEntered.complete(Unit)
+              firstListResponse.await()
+            } else {
+              """{"sessions":[]}"""
+            }
+          }
+
+          "sessions.patch" -> {
+            patches += gatewayId to paramsJson
+            "{}"
+          }
+
+          else -> {
+            emptyChatGatewayResponse(method)
+          }
+        }
+
+      val controller =
+        createChatController(
+          cacheScope = { gatewayScope },
+          requestGatewayForGateway = { gatewayId, method, paramsJson ->
+            if (gatewayId != gatewayScope.gatewayId) throw GatewayRequestNotEnqueued("gateway request lease changed")
+            request(gatewayId, method, paramsJson)
+          },
+          requestGateway = { method, paramsJson -> request(gatewayScope.gatewayId, method, paramsJson) },
+        )
+      val rename = async { controller.renameSessionGroup(from = "Work", to = "Focus", expectedGatewayId = "gateway-a") }
+      try {
+        listEntered.await()
+        // A accepted this reply before retirement; its queued continuation resumes on B.
+        firstListResponse.complete("""{"sessions":[{"key":"agent:main:from-a","category":"Work"}]}""")
+        gatewayScope = ChatCacheScope("gateway-b", 2)
+        controller.onGatewayScopeChanging()
+        controller.handleGatewayEvent("agent", """{"stream":"error"}""")
+        val replacementError = controller.errorText.value
+        assertFalse(replacementError.isNullOrEmpty())
+        rename.await()
+
+        assertTrue("Retired group selection must not mutate a replacement gateway: $patches", patches.isEmpty())
+        assertEquals(replacementError, controller.errorText.value)
+      } finally {
+        firstListResponse.complete("""{"sessions":[]}""")
+        rename.cancelAndJoin()
+      }
     }
 
   @Test
@@ -572,7 +645,7 @@ class ChatControllerCommandControlsTest {
           }
         }
 
-      controller.dissolveSessionGroup("Work")
+      controller.dissolveSessionGroup("Work", expectedGatewayId = "gateway-test")
 
       // One failed member patch must not abandon the remaining members.
       val patches = requests.filter { it.first == "sessions.patch" }.map { it.second.orEmpty() }
@@ -668,11 +741,17 @@ class ChatControllerCommandControlsTest {
     runTest {
       val controller =
         createScriptedChatController {
-          respond("sessions.list", """{"sessions":[{"key":"main","label":"Named","category":"Work","color":" BLUE "}]}""")
+          respond(
+            "sessions.list",
+            """{"sessions":[{"key":"main","label":"Named","autoLabel":"Device fallback","displayName":"Generated title","category":"Work","color":" BLUE "}]}""",
+          )
         }
 
       controller.refreshSessions()
       advanceUntilIdle()
+      val initialSession = controller.sessions.value.single()
+      assertEquals("Device fallback", initialSession.autoLabel)
+      assertEquals("Generated title", initialSession.displayName)
       assertEquals(
         "Work",
         controller.sessions.value
@@ -690,11 +769,13 @@ class ChatControllerCommandControlsTest {
       // Another client cleared the metadata; the gateway sends explicit nulls.
       controller.handleGatewayEvent(
         "sessions.changed",
-        """{"sessionKey":"main","session":{"key":"main","agentId":"main","label":null,"category":null,"color":null}}""",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","label":null,"autoLabel":null,"displayName":null,"category":null,"color":null}}""",
       )
       advanceUntilIdle()
       val merged = controller.sessions.value.single()
       assertEquals(null, merged.label)
+      assertEquals(null, merged.autoLabel)
+      assertEquals(null, merged.displayName)
       assertEquals(null, merged.category)
       assertEquals(null, merged.color)
     }
@@ -916,7 +997,8 @@ class ChatControllerCommandControlsTest {
           respond("chat.send", """{"runId":"run-new"}""")
           respond("health", "{}")
         }
-      controller.handleGatewayEvent("health", null)
+      controller.load("main")
+      runCurrent()
 
       assertTrue(controller.sendMessageAwaitAcceptance("/new", "off", emptyList()))
 
@@ -933,7 +1015,8 @@ class ChatControllerCommandControlsTest {
           respond("chat.send", """{"runId":"run-1"}""")
           respond("health", "{}")
         }
-      controller.handleGatewayEvent("health", null)
+      controller.load("main")
+      runCurrent()
 
       assertTrue(controller.sendMessageAwaitAcceptance("hello", "off", emptyList()))
       assertEquals(1, controller.pendingRunCount.value)

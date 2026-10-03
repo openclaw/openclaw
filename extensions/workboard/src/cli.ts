@@ -3,7 +3,6 @@ import {
   type WorkboardCard,
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
-// Workboard plugin module implements cli behavior.
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { addGatewayClientOptions, callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
@@ -11,8 +10,8 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
-import { redactClaimToken } from "./card-redaction.js";
-import type { WorkboardDispatchResult, WorkboardStore } from "./store.js";
+import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
+import type { WorkboardStore } from "./store.js";
 
 type JsonOptions = {
   json?: boolean;
@@ -73,22 +72,20 @@ function formatCardLine(card: WorkboardCard): string {
   return `${card.id.slice(0, 8)}  ${card.status.padEnd(8)}  ${card.priority.padEnd(6)}  ${boardId}${agent}  ${card.title}${archived}`;
 }
 
-function redactDispatchResult(result: WorkboardDispatchResult): WorkboardDispatchResult {
-  return {
-    ...result,
-    promoted: result.promoted.map(redactClaimToken),
-    reclaimed: result.reclaimed.map(redactClaimToken),
-    blocked: result.blocked.map(redactClaimToken),
-    orchestrated: result.orchestrated.map(redactClaimToken),
-  };
-}
-
 function writeCards(cards: WorkboardCard[], options: JsonOptions): void {
   if (options.json) {
     writeJson({ cards: cards.map(redactClaimToken) });
     return;
   }
   for (const card of cards) {
+    writeLine(formatCardLine(card));
+  }
+}
+
+function writeCard(card: WorkboardCard, options: JsonOptions): void {
+  if (options.json) {
+    writeJson({ card: redactClaimToken(card) });
+  } else {
     writeLine(formatCardLine(card));
   }
 }
@@ -205,11 +202,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
           labels: splitLabels(options.labels),
           workspaceAccess: { unrestricted: true },
         });
-        if (options.json) {
-          writeJson({ card: redactClaimToken(card) });
-        } else {
-          writeLine(formatCardLine(card));
-        }
+        writeCard(card, options);
       },
     );
 
@@ -224,13 +217,9 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       if (!card) {
         throw new Error(error);
       }
-      if (options.json) {
-        writeJson({ card: redactClaimToken(card) });
-      } else {
-        writeLine(formatCardLine(card));
-        if (card.notes) {
-          writeLine(card.notes);
-        }
+      writeCard(card, options);
+      if (!options.json && card.notes) {
+        writeLine(card.notes);
       }
     });
 
@@ -250,11 +239,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
         throw new Error(error);
       }
       const updated = await params.store.move(card.id, options.status, undefined);
-      if (options.json) {
-        writeJson({ card: redactClaimToken(updated) });
-      } else {
-        writeLine(formatCardLine(updated));
-      }
+      writeCard(updated, options);
     });
 
   addGatewayClientOptions(

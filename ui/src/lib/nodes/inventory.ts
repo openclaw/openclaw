@@ -6,36 +6,47 @@ import { asFiniteNumber as optionalNumber } from "@openclaw/normalization-core/n
 // renders one row per machine instead of one row per historical keypair.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
+import { z } from "zod";
+import { parseWorkerCapacity } from "../../../../packages/gateway-protocol/src/worker-capacity.js";
+import type {
+  NodeListNode,
+  NodeWorkerBundleStatus,
+} from "../../../../src/shared/node-list-types.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { PairedDevice } from "./index.ts";
 
-type NodeApprovalState = "approved" | "pending-approval" | "pending-reapproval" | "unapproved";
-type NodeWorkerSlots = { total: number; available: number };
-type NodeWorkerBundleStatus = { status: "installed"; version: string } | { status: "missing" };
+type NodeApprovalState = NonNullable<NodeListNode["approvalState"]>;
+
+const hostStatsSchema = z
+  .object({
+    cpuCount: z.number().int().positive(),
+    loadAverage: z
+      .tuple([z.number().nonnegative(), z.number().nonnegative(), z.number().nonnegative()])
+      .optional(),
+    memoryTotalBytes: z.number().positive(),
+    memoryFreeBytes: z.number().nonnegative(),
+    diskTotalBytes: z.number().positive().optional(),
+    diskAvailableBytes: z.number().nonnegative().optional(),
+    updatedAtMs: z.number().nonnegative(),
+  })
+  .refine(
+    (stats) =>
+      stats.memoryFreeBytes <= stats.memoryTotalBytes &&
+      (stats.diskAvailableBytes === undefined ||
+        stats.diskTotalBytes === undefined ||
+        stats.diskAvailableBytes <= stats.diskTotalBytes),
+  );
 
 /** Typed projection of one raw `node.list` row. */
-type NodeListEntry = {
-  nodeId: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  modelIdentifier?: string;
-  clientId?: string;
-  clientMode?: string;
-  remoteIp?: string;
+type NodeListEntry = NodeListNode & {
   caps: string[];
   commands: string[];
-  approvalState?: NodeApprovalState;
-  pendingRequestId?: string;
-  workerSlots?: NodeWorkerSlots;
-  workerBundle?: NodeWorkerBundleStatus;
   connected: boolean;
   paired: boolean;
-  connectedAtMs?: number;
-  lastSeenAtMs?: number;
-  approvedAtMs?: number;
 };
 
 export type DeviceInventoryEntry = {
@@ -45,6 +56,7 @@ export type DeviceInventoryEntry = {
   clientId?: string;
   clientMode?: string;
   platform?: string;
+  deviceFamily?: string;
   version?: string;
   modelIdentifier?: string;
   remoteIp?: string;
@@ -74,47 +86,15 @@ const NODE_APPROVAL_STATES: ReadonlySet<string> = new Set([
   "unapproved",
 ]);
 
-function stringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => entry !== undefined);
-}
-
-function parseWorkerSlots(value: unknown): NodeWorkerSlots | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const keys = Object.keys(value);
-  const total = value.total;
-  const available = value.available;
-  return keys.length === 2 &&
-    keys.includes("total") &&
-    keys.includes("available") &&
-    typeof total === "number" &&
-    typeof available === "number" &&
-    Number.isSafeInteger(total) &&
-    Number.isSafeInteger(available) &&
-    total >= 1 &&
-    total <= 1_024 &&
-    available >= 0 &&
-    available <= total
-    ? { total, available }
-    : undefined;
-}
-
 function parseWorkerBundleStatus(value: unknown): NodeWorkerBundleStatus | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  const raw = value;
-  if (raw.status === "missing" && Object.keys(raw).length === 1) {
+  if (value.status === "missing" && Object.keys(value).length === 1) {
     return { status: "missing" };
   }
-  const version = normalizeOptionalString(raw.version);
-  return raw.status === "installed" && version && Object.keys(raw).length === 2
+  const version = normalizeOptionalString(value.version);
+  return value.status === "installed" && version && Object.keys(value).length === 2
     ? { status: "installed", version }
     : undefined;
 }
@@ -129,6 +109,7 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
     nodeId,
     displayName: normalizeOptionalString(raw.displayName),
     platform: normalizeOptionalString(raw.platform),
+    deviceFamily: normalizeOptionalString(raw.deviceFamily),
     version: normalizeOptionalString(raw.version),
     coreVersion: normalizeOptionalString(raw.coreVersion),
     uiVersion: normalizeOptionalString(raw.uiVersion),
@@ -136,32 +117,22 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
     clientId: normalizeOptionalString(raw.clientId),
     clientMode: normalizeOptionalString(raw.clientMode),
     remoteIp: normalizeOptionalString(raw.remoteIp),
-    caps: stringList(raw.caps),
-    commands: stringList(raw.commands),
+    caps: normalizeTrimmedStringList(raw.caps),
+    commands: normalizeTrimmedStringList(raw.commands),
     approvalState:
       approvalState && NODE_APPROVAL_STATES.has(approvalState)
         ? (approvalState as NodeApprovalState)
         : undefined,
     pendingRequestId: normalizeOptionalString(raw.pendingRequestId),
-    workerSlots: parseWorkerSlots(raw.workerSlots),
+    workerSlots: parseWorkerCapacity(raw.workerSlots) ?? undefined,
     workerBundle: parseWorkerBundleStatus(raw.workerBundle),
+    hostStats: hostStatsSchema.safeParse(raw.hostStats).data,
     connected: raw.connected === true,
     paired: raw.paired === true,
     connectedAtMs: optionalNumber(raw.connectedAtMs),
     lastSeenAtMs: optionalNumber(raw.lastSeenAtMs),
     approvedAtMs: optionalNumber(raw.approvedAtMs),
   };
-}
-
-function deviceRoles(device: PairedDevice): string[] {
-  const roles = new Set<string>();
-  for (const role of [...(device.roles ?? []), device.role]) {
-    const normalized = normalizeOptionalString(role);
-    if (normalized) {
-      roles.add(normalized);
-    }
-  }
-  return [...roles];
 }
 
 function maxDefined(...values: Array<number | undefined>): number | undefined {
@@ -180,7 +151,9 @@ function buildEntry(
   node?: NodeListEntry,
   presence?: PresenceEntry,
 ): DeviceInventoryEntry {
-  const roles = device ? deviceRoles(device) : [];
+  const roles = device
+    ? normalizeUniqueTrimmedStringList([...(device.roles ?? []), device.role])
+    : [];
   if (node?.paired && !roles.includes("node")) {
     // Legacy nodes/paired.json rows have no device record; they are still nodes.
     roles.push("node");
@@ -200,11 +173,15 @@ function buildEntry(
       normalizeOptionalString(presence?.platform) ??
       normalizeOptionalString(device?.platform) ??
       node?.platform,
+    deviceFamily:
+      normalizeOptionalString(presence?.deviceFamily) ??
+      normalizeOptionalString(device?.deviceFamily) ??
+      node?.deviceFamily,
     version: normalizeOptionalString(presence?.version) ?? node?.version,
     modelIdentifier: normalizeOptionalString(presence?.modelIdentifier) ?? node?.modelIdentifier,
     remoteIp: normalizeOptionalString(device?.remoteIp) ?? node?.remoteIp,
     roles,
-    scopes: stringList(device?.scopes),
+    scopes: normalizeTrimmedStringList(device?.scopes),
     // Server-computed device/node connectivity accounts for multiple live
     // connections sharing one device id; one disconnect beacon cannot.
     connected: node?.connected === true || device?.connected === true,
@@ -244,22 +221,14 @@ function entryRecency(entry: DeviceInventoryEntry): number {
 }
 
 function compareEntries(left: DeviceInventoryEntry, right: DeviceInventoryEntry): number {
-  if (left.connected !== right.connected) {
-    return left.connected ? -1 : 1;
-  }
-  const recency = entryRecency(right) - entryRecency(left);
-  if (recency !== 0) {
-    return recency;
-  }
-  return left.id.localeCompare(right.id);
+  const order =
+    Number(right.connected) - Number(left.connected) || entryRecency(right) - entryRecency(left);
+  return order !== 0 ? order : left.id.localeCompare(right.id);
 }
 
 function compareGroups(left: DeviceInventoryGroup, right: DeviceInventoryGroup): number {
   const order = compareEntries(left.primary, right.primary);
-  if (order !== 0) {
-    return order;
-  }
-  return left.name.localeCompare(right.name);
+  return order !== 0 ? order : left.name.localeCompare(right.name);
 }
 
 /** Joins paired devices with node catalog rows and groups duplicate pairings. */
@@ -413,4 +382,17 @@ export function resolveInventoryRemoval(entry: DeviceInventoryEntry): {
     // other roles (or tokenless records) need the device-level removal too.
     removeDevice: Boolean(entry.device) && (nonNodeRoles.length > 0 || entry.roles.length === 0),
   };
+}
+
+export function presenceConnectivitySignature(entries: PresenceEntry[]): string {
+  const states = new Map<string, "connected" | "offline">();
+  for (const entry of entries) {
+    const id = (entry.deviceId ?? entry.instanceId)?.trim().toLowerCase();
+    if (!id || entry.mode?.trim().toLowerCase() === "gateway") {
+      continue;
+    }
+    const key = entry.roles?.includes("node") ? `${id}:node` : id;
+    states.set(key, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");
+  }
+  return JSON.stringify([...states].toSorted(([left], [right]) => left.localeCompare(right)));
 }

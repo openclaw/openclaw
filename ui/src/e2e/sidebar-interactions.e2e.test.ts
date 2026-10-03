@@ -16,6 +16,7 @@ import {
   captureSidebarUiProof,
   createSidebarCustomizationSuite,
   openSidebarCustomizationPage,
+  openSidebarMoreMenu,
 } from "./sidebar-customization.test-support.ts";
 
 const suite = createSidebarCustomizationSuite("Control UI sidebar interactions mocked Gateway E2E");
@@ -36,6 +37,10 @@ suite.define(() => {
       defaultAgentId: agentId,
       sessionKey: `agent:${agentId}:main`,
       sessionGroups: [group],
+      sessions: [
+        { key: `agent:${agentId}:main`, label: "Grouped conversation", category: group },
+        { key: `agent:${agentId}:notes`, label: "Ungrouped notes" },
+      ],
       featureMethods: [...defaultControlUiFeatureMethods, "sessions.catalog.list"],
       methodResponses: {
         "sessions.catalog.list": {
@@ -48,7 +53,24 @@ suite.define(() => {
                 archive: false,
                 startTerminal: true,
               },
-              hosts: [],
+              hosts: [
+                {
+                  hostId: "gateway:local",
+                  label: "Gateway Mac",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [
+                    {
+                      threadId: "cli-thread",
+                      name: "CLI plan",
+                      status: "stored",
+                      archived: false,
+                      canContinue: true,
+                      canArchive: false,
+                    },
+                  ],
+                },
+              ],
             },
           ],
         },
@@ -97,6 +119,11 @@ suite.define(() => {
             selector: `[data-session-section="category:${group}"] .sidebar-new-session`,
             section: `category:${group}`,
             params: { agent: agentId, group },
+          },
+          {
+            selector: '[data-session-section="ungrouped"] .sidebar-new-session',
+            section: "ungrouped",
+            params: { agent: agentId },
           },
           {
             selector: `[data-session-section="catalog:${catalogId}"] .sidebar-session-catalog-new`,
@@ -302,11 +329,8 @@ suite.define(() => {
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
       const moreButton = sidebar.locator(".sidebar-nav__head-action");
-      await moreButton.click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-more-menu")
-        .getByRole("menuitem", { name: "Edit pinned items" })
-        .click();
+      const moreMenu = await openSidebarMoreMenu(page);
+      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
       const pinItems = sidebar
         .locator(
           "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
@@ -345,8 +369,7 @@ suite.define(() => {
 
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
-      const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
+      const moreMenu = await openSidebarMoreMenu(page);
       await expect
         .poll(() =>
           moreMenu
@@ -411,7 +434,12 @@ suite.define(() => {
           cases: [
             {
               match: { agentId: "main" },
-              response: { agentId: "main", avatar: "", emoji: "🦞", name: "Main" },
+              response: {
+                agentId: "main",
+                avatar: "",
+                emoji: "🦞",
+                name: "Scheduled Automations",
+              },
             },
             {
               match: { agentId: "research" },
@@ -444,7 +472,7 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       const menu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
-      const mainSwitch = menu.getByRole("menuitemradio", { name: "Main" });
+      const mainSwitch = menu.getByRole("menuitemradio", { name: "Scheduled Automations" });
       const researchSwitch = menu.getByRole("menuitemradio", { name: "Research" });
       await expect
         .poll(() =>
@@ -454,7 +482,7 @@ suite.define(() => {
         )
         .toBe(true);
       await expect
-        .poll(() => researchSwitch.locator("img.agent-select__avatar").getAttribute("src"))
+        .poll(() => researchSwitch.locator(".agent-select__avatar img").getAttribute("src"))
         .toContain("data:image/png;base64,");
       await expect.poll(() => menu.getByText(/^New session —/).count()).toBe(0);
       const gridLayout = await menu.evaluate((dropdown) => {
@@ -489,9 +517,27 @@ suite.define(() => {
       expect(new Set(gridLayout.widths).size).toBe(1);
       expect(gridLayout.avatarOffsets).toEqual([0, 0, 0]);
       expect(gridLayout.labelOffsets).toEqual([0, 0, 0]);
-      await page.evaluate(() => {
-        document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
+      const capabilities = menu.getByRole("menuitem", {
+        name: "What can Scheduled Automations do?",
+        exact: true,
       });
+      for (const scale of [1, 1.4]) {
+        await page.evaluate((value) => {
+          document.documentElement.style.setProperty("--control-ui-text-scale", String(value));
+        }, scale);
+        await captureSidebarUiProof(suite, page, `agent-menu-long-label-${scale}.png`);
+        await expect
+          .poll(() =>
+            capabilities.evaluate((item) => {
+              const label = item.querySelector(".sidebar-customize-menu__text");
+              if (!label) {
+                throw new Error("Capabilities label is missing");
+              }
+              return label.getBoundingClientRect().right - item.getBoundingClientRect().right;
+            }),
+          )
+          .toBeLessThanOrEqual(0);
+      }
       await expect
         .poll(() =>
           menu.evaluate((dropdown) => {

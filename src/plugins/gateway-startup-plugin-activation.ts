@@ -3,28 +3,21 @@ import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtime
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { isBundledProviderCompatPlugin } from "./bundled-provider-compat.js";
-import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import {
   blocksPluginStartup,
   hasConfiguredActivationPath,
-  listManifestChannelIds,
-  normalizePluginsConfigForInstalledIndex,
 } from "./gateway-startup-plugin-config.js";
 import type {
   ConfiguredGenerationProviderIds,
   ConfiguredVoiceProviderIds,
-  ManifestRegistryLookup,
   NormalizedPluginsConfig,
 } from "./gateway-startup-plugin-contracts.js";
-import {
-  manifestOwnsConfiguredModelProvider,
-  manifestOwnsConfiguredSpeechProvider,
-  manifestOwnsConfiguredWebSearchProvider,
-} from "./gateway-startup-plugin-providers.js";
+import { manifestOwnsConfiguredModelProvider } from "./gateway-startup-plugin-providers.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { manifestOwnsStorageProvider } from "./storage-provider-manifest.js";
 import { manifestOwnsWorkerProvider } from "./worker-provider-manifest.js";
 
 type PluginStartupActivationParams = {
@@ -40,18 +33,22 @@ type GatewayStartupActivationParams = PluginStartupActivationParams & {
   manifest: PluginManifestRecord | undefined;
   requiredAgentHarnessRuntimes: ReadonlySet<string>;
   configuredWorkerProviderIds: ReadonlySet<string>;
+  configuredStorageProviderIds: ReadonlySet<string>;
   configuredSpeechProviderIds: ReadonlySet<string>;
   configuredWebSearchProviderIds: ReadonlySet<string>;
   configuredModelProviderIds: ReadonlySet<string>;
   configuredGenerationProviderIds: ConfiguredGenerationProviderIds;
   configuredVoiceProviderIds: ConfiguredVoiceProviderIds;
   configuredMemoryEmbeddingProviderIds: ReadonlySet<string>;
+  configuredDecisionProviderIds: ReadonlySet<string>;
 };
 
 type StartupActivationPolicy =
   | "provider"
   | "implicit-external"
   | "worker"
+  | "storage"
+  | "decision"
   | "speech"
   | "root"
   | "harness"
@@ -60,7 +57,9 @@ type StartupActivationPolicy =
 type StartupContractKey =
   | keyof ConfiguredGenerationProviderIds
   | keyof ConfiguredVoiceProviderIds
-  | "embeddingProviders";
+  | "embeddingProviders"
+  | "decisionProviders"
+  | "webSearchProviders";
 
 export function addRequiredAgentHarnessPluginIds(
   target: Set<string>,
@@ -68,9 +67,9 @@ export function addRequiredAgentHarnessPluginIds(
     activationSourceConfig: OpenClawConfig;
     config: OpenClawConfig;
     index: InstalledPluginIndex;
-    pluginsConfig: ReturnType<typeof normalizePluginsConfigForInstalledIndex>;
+    pluginsConfig: NormalizedPluginsConfig;
     activationSource: {
-      plugins: ReturnType<typeof normalizePluginsConfigForInstalledIndex>;
+      plugins: NormalizedPluginsConfig;
       rootConfig?: OpenClawConfig;
     };
     env: NodeJS.ProcessEnv;
@@ -126,6 +125,7 @@ function isProviderCompatStartupPolicy(policy: StartupActivationPolicy): boolean
   return (
     policy === "provider" ||
     policy === "worker" ||
+    policy === "storage" ||
     policy === "speech" ||
     policy === "implicit-external"
   );
@@ -181,7 +181,13 @@ function passesPluginStartupPolicy(
   }
   const activationState = resolveStartupActivationState(
     params,
-    policy === "worker" ? "cloud worker provider required" : undefined,
+    policy === "worker"
+      ? "cloud worker provider required"
+      : policy === "storage"
+        ? "storage provider required"
+        : policy === "decision"
+          ? "decision model selected"
+          : undefined,
     isProviderCompatStartupPolicy(policy) &&
       isBundledProviderCompatPlugin({
         origin: plugin.origin,
@@ -192,7 +198,7 @@ function passesPluginStartupPolicy(
   if (!activationState.enabled) {
     return false;
   }
-  if (policy === "harness" || policy === "implicit-external") {
+  if (policy === "harness" || policy === "implicit-external" || policy === "decision") {
     return true;
   }
   if (policy === "hook") {
@@ -233,6 +239,11 @@ const GATEWAY_STARTUP_ACTIVATION_POLICIES: readonly {
   matches: (params: GatewayStartupActivationParams) => boolean;
 }[] = [
   {
+    policy: "decision",
+    matches: ({ manifest, configuredDecisionProviderIds }) =>
+      manifestOwnsConfiguredContract(manifest, "decisionProviders", configuredDecisionProviderIds),
+  },
+  {
     policy: "harness",
     matches: ({ plugin, requiredAgentHarnessRuntimes }) =>
       plugin.startup.agentHarnesses.some((runtime) => requiredAgentHarnessRuntimes.has(runtime)),
@@ -248,14 +259,23 @@ const GATEWAY_STARTUP_ACTIVATION_POLICIES: readonly {
       manifestOwnsWorkerProvider(manifest, configuredWorkerProviderIds),
   },
   {
+    policy: "storage",
+    matches: ({ manifest, configuredStorageProviderIds }) =>
+      manifestOwnsStorageProvider(manifest, configuredStorageProviderIds),
+  },
+  {
     policy: "speech",
     matches: ({ manifest, configuredSpeechProviderIds }) =>
-      manifestOwnsConfiguredSpeechProvider({ manifest, configuredSpeechProviderIds }),
+      manifestOwnsConfiguredContract(manifest, "speechProviders", configuredSpeechProviderIds),
   },
   {
     policy: "implicit-external",
     matches: ({ manifest, configuredWebSearchProviderIds }) =>
-      manifestOwnsConfiguredWebSearchProvider({ manifest, configuredWebSearchProviderIds }),
+      manifestOwnsConfiguredContract(
+        manifest,
+        "webSearchProviders",
+        configuredWebSearchProviderIds,
+      ),
   },
   {
     policy: "provider",
@@ -304,37 +324,4 @@ export function canStartGatewayStartupPlugin(params: GatewayStartupActivationPar
   return GATEWAY_STARTUP_ACTIVATION_POLICIES.some(
     ({ matches, policy }) => matches(params) && passesPluginStartupPolicy(params, policy),
   );
-}
-
-export function canStartConfiguredChannelPlugin(
-  params: PluginStartupActivationParams & { manifestLookup: ManifestRegistryLookup },
-): boolean {
-  const { activationSource, config, manifestLookup, plugin, pluginsConfig } = params;
-  if (
-    !pluginsConfig.enabled ||
-    pluginsConfig.deny.includes(plugin.pluginId) ||
-    pluginsConfig.entries[plugin.pluginId]?.enabled === false
-  ) {
-    return false;
-  }
-  const explicitBundledChannelConfig =
-    plugin.origin === "bundled" &&
-    listManifestChannelIds(manifestLookup, plugin.pluginId).some((channelId) =>
-      hasExplicitChannelConfig({
-        config: activationSource.rootConfig ?? config,
-        channelId,
-      }),
-    );
-  if (
-    pluginsConfig.allow.length > 0 &&
-    !pluginsConfig.allow.includes(plugin.pluginId) &&
-    !explicitBundledChannelConfig
-  ) {
-    return false;
-  }
-  if (plugin.origin === "bundled") {
-    return true;
-  }
-  const activationState = resolveStartupActivationState(params);
-  return activationState.enabled && activationState.explicitlyEnabled;
 }

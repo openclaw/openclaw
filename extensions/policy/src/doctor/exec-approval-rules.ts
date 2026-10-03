@@ -3,6 +3,7 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { EXEC_APPROVALS_POLICY_URI, execApprovalsPolicyUri } from "../exec-approvals-uri.js";
 import type { PolicyExecApprovalEvidence } from "../policy-state.js";
+import { getPolicyPath } from "../policy-value.js";
 import { policyShapeFinding, unsupportedPolicyKey } from "./shape-helpers.js";
 import { ocPathSegment } from "./utils.js";
 
@@ -50,13 +51,7 @@ export function readExecApprovalAllowlistRequirements(
   policy: unknown,
   path: readonly string[],
 ): readonly ExecApprovalAllowlistRequirement[] | undefined {
-  let current: unknown = policy;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
+  const current = getPolicyPath(policy, path);
   if (!Array.isArray(current)) {
     return undefined;
   }
@@ -117,20 +112,11 @@ export function execApprovalAllowlistMissingTarget(agentId: string | undefined):
     : execApprovalsPolicyUri(`agents/${ocPathSegment(agentId)}/allowlist`);
 }
 
-export function formatExecApprovalAllowlistRequirement(
-  entry: ExecApprovalAllowlistRequirement,
-): string {
-  return formatExecApprovalAllowlistParts(entry.pattern, entry.argPattern);
-}
-
 export function formatExecApprovalAllowlistEntry(
-  entry: PolicyExecApprovalEvidence | undefined,
+  entry: Pick<PolicyExecApprovalEvidence, "pattern" | "argPattern"> | undefined,
 ): string {
-  return formatExecApprovalAllowlistParts(entry?.pattern ?? "", entry?.argPattern);
-}
-
-function formatExecApprovalAllowlistParts(pattern: string, argPattern: string | undefined): string {
-  return argPattern === undefined ? pattern : `${pattern} argPattern=${argPattern}`;
+  const pattern = entry?.pattern ?? "";
+  return entry?.argPattern === undefined ? pattern : `${pattern} argPattern=${entry.argPattern}`;
 }
 
 export function effectiveExecApprovalAgentSecurityEntry(

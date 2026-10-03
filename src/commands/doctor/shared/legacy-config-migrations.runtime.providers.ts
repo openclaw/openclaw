@@ -1,10 +1,11 @@
 // Legacy provider runtime config migrations for plugin ids and bundled discovery policy.
 import {
   defineLegacyConfigMigration,
-  mergeMissing,
+  ensureRecord,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { mergeMissing } from "../../../config/merge-missing.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 import {
   migrateLegacyXSearchConfig,
@@ -141,24 +142,14 @@ function migrateLegacyCodexSupervisorEntry(
   const codexEntryKey =
     Object.keys(entries).find((key) => normalizePluginIdForMigration(key) === CODEX_PLUGIN_ID) ??
     CODEX_PLUGIN_ID;
-  const rawCodexEntry = entries[codexEntryKey];
-  let codexEntry: Record<string, unknown>;
-  if (isRecord(rawCodexEntry)) {
-    codexEntry = rawCodexEntry;
-  } else {
-    codexEntry = {};
-    entries[codexEntryKey] = codexEntry;
-  }
+  const codexEntry = ensureRecord(entries, codexEntryKey);
   // Top-level false disables the Codex harness too; inactive supervision must
   // stay nested while active migrated supervision explicitly activates Codex.
   if (migratedEnabled && codexEntry.enabled === undefined) {
     codexEntry.enabled = true;
   }
 
-  const codexConfig = isRecord(codexEntry.config) ? codexEntry.config : {};
-  codexEntry.config = codexConfig;
-  const supervision = isRecord(codexConfig.supervision) ? codexConfig.supervision : {};
-  codexConfig.supervision = supervision;
+  const supervision = ensureRecord(ensureRecord(codexEntry, "config"), "supervision");
 
   const legacyConfig = isRecord(legacyEntry.config) ? legacyEntry.config : undefined;
   const migratedSupervision: Record<string, unknown> = {

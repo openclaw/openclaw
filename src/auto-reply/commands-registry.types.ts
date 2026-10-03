@@ -6,7 +6,7 @@ import type { ThinkingCatalogEntry } from "./thinking.shared.js";
 export type { CommandArgValues, CommandArgs } from "./commands-args.types.js";
 
 /** Where a command may be invoked. */
-export type CommandScope = "text" | "native" | "both";
+type CommandScope = "text" | "native" | "both";
 
 /**
  * Controls progressive disclosure of commands in the UI.
@@ -56,7 +56,7 @@ export type CommandArgDefinition = {
 };
 
 /** Menu metadata for commands that should prompt for a missing argument. */
-export type CommandArgMenuSpec = {
+type CommandArgMenuSpec = {
   arg: string;
   title?: string;
 };
@@ -84,6 +84,8 @@ export type ChatCommandDefinition = {
   tier?: CommandTier;
   /** Handler is safe to resolve while another run owns the session execution slot. */
   activeRunSafe?: true;
+  /** Browser command forms that do not need the selected chat model; authorization still applies. */
+  modelIndependent?: "always" | "no-args" | "directive" | ((args: string) => boolean);
 };
 
 /** Provider-facing native command registration shape. */
@@ -99,6 +101,8 @@ export type NativeCommandSpec = {
 /** Extra context used when normalizing slash command text. */
 export type CommandNormalizeOptions = {
   botUsername?: string;
+  /** Keeps complete directive/task arguments, including whitespace and later lines. */
+  preserveArguments?: boolean;
   /** Strip an explicit command target only while channel bot identity is unavailable. */
   targetedCommandMode?: "pre-identity";
 };

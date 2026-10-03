@@ -1,4 +1,3 @@
-// ACP Core type module defines shared TypeScript contracts.
 export type AcpRuntimePromptMode = "prompt" | "steer";
 
 export type AcpRuntimeSessionMode = "persistent" | "oneshot";
@@ -41,6 +40,11 @@ export type AcpRuntimeHandle = {
    * model before the first turn. Absent when the backend did not deviate from the request.
    */
   appliedModel?: { kind: "applied"; model: string } | { kind: "dropped" };
+  /**
+   * Effective thinking value when the backend intentionally changes the request. `dropped`
+   * prevents an unsupported inherited default from being persisted and replayed.
+   */
+  appliedThinking?: { kind: "applied"; thinking: string } | { kind: "dropped" };
 };
 
 export type AcpRuntimeEnsureInput = {
@@ -62,6 +66,8 @@ export type AcpRuntimeEnsureInput = {
   modelExplicit?: boolean;
   /** Optional runtime thinking/reasoning override that must be available during session creation. */
   thinking?: string;
+  /** Whether `thinking` was an explicit caller selection rather than an inherited default. */
+  thinkingExplicit?: boolean;
   cwd?: string;
   env?: Record<string, string>;
 };

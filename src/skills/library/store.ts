@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import type { SelectQueryBuilder } from "kysely";
 import type { SkillLibraryEntry } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { authorizeOperatorScopesForRequiredScope } from "../../gateway/method-scopes.js";
@@ -18,9 +19,14 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
-import { selectResolvedUserProfileById } from "../../state/user-profiles-internal.js";
+import { selectStoredGitHubIdentities } from "../../state/user-profile-github-identity.js";
+import {
+  selectResolvedUserProfile,
+  selectResolvedUserProfileMetadataById,
+  userProfilesDb,
+} from "../../state/user-profiles-internal.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import { managedSkillCommandName } from "./command-name.js";
-import { SkillLibraryError } from "./errors.js";
 
 export type SkillLibraryAuthority = {
   /** Host-authenticated profile only. Neither session attribution nor model arguments qualify. */
@@ -30,6 +36,10 @@ export type SkillLibraryAuthority = {
   getConfig: () => OpenClawConfig;
   /** Must revalidate the admitted run/placement and request owner, synchronously at commit. */
   assertCurrent: () => void;
+  /** Additional pure, synchronous admission for client bytes; must not perform database reads. */
+  assertFileMutationAllowed?: () => void;
+  /** Worker-local profile dependencies bound to the host identity owner before disclosure. */
+  profileDependencies?: Set<string>;
 };
 export type SkillLibraryRow = StateDatabase["skill_library_entries"];
 export type SkillLibraryRevisionRow = StateDatabase["skill_library_revisions"];
@@ -43,7 +53,10 @@ export type SkillLibraryDatabase = Pick<
 export const skillLibraryDb = (db: DatabaseSync) => getNodeSqliteKysely<SkillLibraryDatabase>(db);
 const ensured = new WeakSet<DatabaseSync>();
 
-export function ensureSkillLibrarySchema(options: OpenClawStateDatabaseOptions): void {
+export function ensureSkillLibrarySchema(
+  options: OpenClawStateDatabaseOptions,
+  admit: (stage: "transaction" | "commit") => void,
+): void {
   const { db } = openOpenClawStateDatabase(options);
   if (ensured.has(db)) {
     return;
@@ -57,7 +70,9 @@ export function ensureSkillLibrarySchema(options: OpenClawStateDatabaseOptions):
   }
   runOpenClawStateWriteTransaction(
     ({ db: transactionDb }) => {
+      admit("transaction");
       transactionDb.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end)); // sqlite-allow-raw -- canonical first-use additive DDL.
+      admit("commit");
     },
     options,
     { operationLabel: "skills.library.schema" },
@@ -82,9 +97,13 @@ export function readSkillLibraryStore<T>(
 
 export function resolveSkillLibraryActor(db: DatabaseSync, authority: SkillLibraryAuthority) {
   authority.assertCurrent();
+  const config = authority.getConfig();
+  if (authority.profileId) {
+    authority.profileDependencies?.add(authority.profileId);
+  }
   const profile =
     authority.profileId && tableExists(db, "user_profiles")
-      ? selectResolvedUserProfileById(db, authority.profileId)
+      ? selectResolvedUserProfileMetadataById(db, authority.profileId)
       : undefined;
   if (authority.profileId && !profile) {
     throw new SkillLibraryError(
@@ -92,10 +111,16 @@ export function resolveSkillLibraryActor(db: DatabaseSync, authority: SkillLibra
       "Your Gateway profile is no longer available. Sign in again before accessing the library.",
     );
   }
+  if (profile) {
+    authority.profileDependencies?.add(profile.id);
+  }
   const ceiling = resolveOperatorRolePolicyForAssignment(
     profile?.id,
     profile?.role ?? null,
-    authority.getConfig(),
+    config,
+    profile && config.gateway?.roles?.assignments?.byGithubLogin
+      ? (selectStoredGitHubIdentities(db, [profile.id]).get(profile.id)?.primary?.login ?? null)
+      : null,
   )?.scopes;
   const permits = (scope: "operator.read" | "operator.write" | "operator.admin") =>
     authorizeOperatorScopesForRequiredScope(scope, [...authority.scopes]).allowed &&
@@ -125,30 +150,58 @@ export function requireSkillLibraryProfile(
   return actor.profileId;
 }
 
-export function requireSkillLibraryUpload(
+function requireSelectedSkillLibraryUpload<
+  T extends Pick<SkillLibraryDatabase["skill_library_uploads"], "owner_profile_id" | "expires_at">,
+>(
   db: DatabaseSync,
   uploadId: string,
   authority: SkillLibraryAuthority,
+  query: SelectQueryBuilder<SkillLibraryDatabase, "skill_library_uploads", T>,
 ) {
   const actor = requireSkillLibraryProfile(db, authority);
-  const upload = executeSqliteQueryTakeFirstSync(
-    db,
-    skillLibraryDb(db)
-      .selectFrom("skill_library_uploads")
-      .selectAll()
-      .where("upload_id", "=", uploadId),
-  );
-  if (
-    !upload ||
-    upload.expires_at <= Date.now() ||
-    selectResolvedUserProfileById(db, upload.owner_profile_id)?.id !== actor
-  ) {
+  const upload = executeSqliteQueryTakeFirstSync(db, query.where("upload_id", "=", uploadId));
+  const owner = upload && selectSkillLibraryOwner(db, upload.owner_profile_id)?.id;
+  if (upload) {
+    authority.profileDependencies?.add(upload.owner_profile_id);
+  }
+  if (owner) {
+    authority.profileDependencies?.add(owner);
+  }
+  if (!upload || upload.expires_at <= Date.now() || owner !== actor) {
     throw new SkillLibraryError(
       "NOT_FOUND",
       "Upload not found for your profile, or expired. Start a new import.",
     );
   }
   return upload;
+}
+
+export function requireSkillLibraryUpload(
+  db: DatabaseSync,
+  uploadId: string,
+  authority: SkillLibraryAuthority,
+) {
+  return requireSelectedSkillLibraryUpload(
+    db,
+    uploadId,
+    authority,
+    skillLibraryDb(db).selectFrom("skill_library_uploads").selectAll(),
+  );
+}
+
+export function requireSkillLibraryUploadMetadata(
+  db: DatabaseSync,
+  uploadId: string,
+  authority: SkillLibraryAuthority,
+) {
+  return requireSelectedSkillLibraryUpload(
+    db,
+    uploadId,
+    authority,
+    skillLibraryDb(db)
+      .selectFrom("skill_library_uploads")
+      .select(["owner_profile_id", "expires_at", "slug", "published_skill_id"]),
+  );
 }
 
 export function selectSkillLibraryRow(
@@ -163,6 +216,13 @@ export function selectSkillLibraryRow(
       .where("skill_id", "=", skillId),
   );
 }
+function skillLibraryRevisionQuery(db: DatabaseSync, skillId: string, revision: string) {
+  return skillLibraryDb(db)
+    .selectFrom("skill_library_revisions")
+    .where("skill_id", "=", skillId)
+    .where("revision", "=", revision);
+}
+
 export function selectSkillLibraryRevision(
   db: DatabaseSync,
   skillId: string,
@@ -170,17 +230,33 @@ export function selectSkillLibraryRevision(
 ): SkillLibraryRevisionRow | undefined {
   return executeSqliteQueryTakeFirstSync(
     db,
-    skillLibraryDb(db)
-      .selectFrom("skill_library_revisions")
-      .selectAll()
-      .where("skill_id", "=", skillId)
-      .where("revision", "=", revision),
+    skillLibraryRevisionQuery(db, skillId, revision).selectAll(),
+  );
+}
+
+export function selectSkillLibraryRevisionMetadata(
+  db: DatabaseSync,
+  skillId: string,
+  revision: string,
+) {
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    skillLibraryRevisionQuery(db, skillId, revision).select("description"),
+  );
+}
+
+export function selectSkillLibraryOwner(db: DatabaseSync, profileId: string) {
+  // Actor resolution stays separate because existing profile tables may omit its optional role.
+  return selectResolvedUserProfile(
+    db,
+    profileId,
+    userProfilesDb(db).selectFrom("user_profiles").select(["id", "display_name", "merged_into"]),
   );
 }
 
 function canonicalOwner(db: DatabaseSync, owner: string | null): string | null {
   return owner && tableExists(db, "user_profiles")
-    ? (selectResolvedUserProfileById(db, owner)?.id ?? owner)
+    ? (selectSkillLibraryOwner(db, owner)?.id ?? owner)
     : owner;
 }
 
@@ -193,6 +269,12 @@ export function projectSkillLibraryEntry(
 ): SkillLibraryEntry | undefined {
   const actor = resolveSkillLibraryActor(db, authority);
   const owner = canonicalOwner(db, row.owner_profile_id);
+  if (row.owner_profile_id) {
+    authority.profileDependencies?.add(row.owner_profile_id);
+  }
+  if (owner) {
+    authority.profileDependencies?.add(owner);
+  }
   if (
     !actor.read ||
     (!selectedBySession &&
@@ -203,7 +285,7 @@ export function projectSkillLibraryEntry(
   ) {
     return undefined;
   }
-  const metadata = selectSkillLibraryRevision(db, row.skill_id, revision);
+  const metadata = selectSkillLibraryRevisionMetadata(db, row.skill_id, revision);
   if (!metadata) {
     return undefined;
   }
@@ -212,7 +294,7 @@ export function projectSkillLibraryEntry(
     slug: row.slug,
     name: managedSkillCommandName(row.slug, row.skill_id),
     ownerLabel:
-      owner === null ? "Team" : (selectResolvedUserProfileById(db, owner)?.display_name ?? owner),
+      owner === null ? "Team" : (selectSkillLibraryOwner(db, owner)?.display_name ?? owner),
     description: metadata.description,
     ownerProfileId: owner,
     authorProfileId: row.author_profile_id,

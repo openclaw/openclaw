@@ -1,7 +1,7 @@
-// Diagnostic stability bundle helpers collect stable diagnostic data for comparison.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
@@ -9,15 +9,26 @@ import type {
   DiagnosticMemoryPressureEvent,
   DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
-import { isMissingPathError } from "../infra/errors.js";
+import {
+  collectErrorGraphCandidates,
+  formatErrorMessage,
+  isMissingPathError,
+} from "../infra/errors.js";
 import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
+import { readMemoryUsage } from "./diagnostic-memory-bundle.js";
+import {
+  assignOptionalFields,
+  readObject,
+  readOptionalPositiveInteger,
+  readRequiredNumber,
+} from "./diagnostic-stability-readers.js";
 import {
   getDiagnosticStabilitySnapshot,
   MAX_DIAGNOSTIC_STABILITY_LIMIT,
   type DiagnosticStabilitySnapshot,
 } from "./diagnostic-stability.js";
 import { redactSensitiveText } from "./redact.js";
+import { formatDiagnosticFilenameTimestamp } from "./timestamps.js";
 
 export const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
 const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_LIMIT = MAX_DIAGNOSTIC_STABILITY_LIMIT;
@@ -29,6 +40,8 @@ const BUNDLE_PREFIX = "openclaw-stability-";
 const BUNDLE_SUFFIX = ".json";
 const REDACTED_HOSTNAME = "<redacted-hostname>";
 const MAX_SAFE_ERROR_MESSAGE_LENGTH = 500;
+const MAX_SHUTDOWN_ERRORS = 32;
+const MAX_SAFE_ERROR_STACK_LENGTH = 8_000;
 
 type DiagnosticHeapSpaceSummary = {
   spaceName: string;
@@ -82,6 +95,10 @@ type DiagnosticMemoryPressureBundleEvidence = {
 
 type DiagnosticStabilityBundleEvidence = {
   memoryPressure?: DiagnosticMemoryPressureBundleEvidence;
+  shutdown?: {
+    step: string;
+    errors: Array<NonNullable<DiagnosticStabilityBundle["error"]>>;
+  };
 };
 
 export type DiagnosticStabilityBundle = {
@@ -102,6 +119,7 @@ export type DiagnosticStabilityBundle = {
     name?: string;
     code?: string;
     message?: string;
+    stack?: string;
   };
   evidence?: DiagnosticStabilityBundleEvidence;
   snapshot: DiagnosticStabilitySnapshot;
@@ -122,6 +140,7 @@ type WriteDiagnosticStabilityBundleOptions = {
   stateDir?: string;
   retention?: number;
   evidence?: DiagnosticStabilityBundleEvidence;
+  shutdownStep?: string;
 };
 
 type DiagnosticStabilityBundleLocationOptions = {
@@ -155,37 +174,7 @@ function normalizeReason(reason: string): string {
   return SAFE_REASON_CODE.test(reason) ? reason : "unknown";
 }
 
-function formatBundleTimestamp(now: Date): string {
-  return now.toISOString().replace(/[:.]/g, "-");
-}
-
-function readErrorCode(error: unknown): string | undefined {
-  if (!error || typeof error !== "object" || !("code" in error)) {
-    return undefined;
-  }
-  const code = (error as { code?: unknown }).code;
-  if (typeof code === "string" && SAFE_REASON_CODE.test(code)) {
-    return code;
-  }
-  if (typeof code === "number" && Number.isFinite(code)) {
-    return String(code);
-  }
-  return undefined;
-}
-
-function readErrorName(error: unknown): string | undefined {
-  if (!error || typeof error !== "object" || !("name" in error)) {
-    return undefined;
-  }
-  const name = (error as { name?: unknown }).name;
-  return typeof name === "string" && SAFE_REASON_CODE.test(name) ? name : undefined;
-}
-
-function readErrorMessage(error: unknown): string | undefined {
-  if (!error || typeof error !== "object" || !("message" in error)) {
-    return undefined;
-  }
-  const message = (error as { message?: unknown }).message;
+function readErrorMessage(message: unknown): string | undefined {
   if (typeof message !== "string") {
     return undefined;
   }
@@ -199,17 +188,56 @@ function readErrorMessage(error: unknown): string | undefined {
 }
 
 function readSafeErrorMetadata(error: unknown): DiagnosticStabilityBundle["error"] | undefined {
-  const name = readErrorName(error);
-  const code = readErrorCode(error);
-  const message = readErrorMessage(error);
-  if (!name && !code && !message) {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const rawName = "name" in error ? error.name : undefined;
+  const name = typeof rawName === "string" && SAFE_REASON_CODE.test(rawName) ? rawName : undefined;
+  const rawCode = "code" in error ? error.code : undefined;
+  const code =
+    typeof rawCode === "string" && SAFE_REASON_CODE.test(rawCode)
+      ? rawCode
+      : typeof rawCode === "number" && Number.isFinite(rawCode)
+        ? String(rawCode)
+        : undefined;
+  const message = readErrorMessage("message" in error ? error.message : undefined);
+  const stack =
+    "stack" in error && typeof error.stack === "string"
+      ? truncateUtf16Safe(
+          redactSensitiveText(error.stack, { mode: "tools" }),
+          MAX_SAFE_ERROR_STACK_LENGTH,
+        )
+      : undefined;
+  if (!name && !code && !message && !stack) {
     return undefined;
   }
   return {
     ...(name ? { name } : {}),
     ...(code ? { code } : {}),
     ...(message ? { message } : {}),
+    ...(stack ? { stack } : {}),
   };
+}
+
+function readShutdownError(error: unknown) {
+  const normalized =
+    error && typeof error === "object" ? error : { message: formatErrorMessage(error) };
+  return readSafeErrorMetadata(normalized) ?? {};
+}
+
+function collectShutdownErrors(error: unknown) {
+  let remaining = MAX_SHUTDOWN_ERRORS - 1;
+  const candidates = collectErrorGraphCandidates(error, (current) => {
+    const nested: unknown[] = [
+      current.cause,
+      ...(Array.isArray(current.errors) ? current.errors.slice(0, remaining) : []),
+    ]
+      .filter((value) => value !== undefined)
+      .slice(0, remaining);
+    remaining -= nested.length;
+    return nested;
+  });
+  return (candidates.length ? candidates : [error]).map(readShutdownError);
 }
 
 function resolveDiagnosticStabilityBundleDir(
@@ -225,34 +253,12 @@ function resolveDiagnosticStabilityBundleDir(
 function buildBundlePath(dir: string, now: Date, reason: string): string {
   return path.join(
     dir,
-    `${BUNDLE_PREFIX}${formatBundleTimestamp(now)}-${process.pid}-${normalizeReason(reason)}${BUNDLE_SUFFIX}`,
+    `${BUNDLE_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}-${normalizeReason(reason)}${BUNDLE_SUFFIX}`,
   );
 }
 
 function isBundleFile(name: string): boolean {
   return name.startsWith(BUNDLE_PREFIX) && name.endsWith(BUNDLE_SUFFIX);
-}
-
-function readObject(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Invalid stability bundle: ${label} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function readRequiredNumber(value: unknown, label: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`Invalid stability bundle: ${label} must be a finite number`);
-  }
-  return value;
-}
-
-function readOptionalPositiveInteger(value: unknown, label: string): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const parsed = readRequiredNumber(value, label);
-  return parsed >= 0 ? Math.floor(parsed) : undefined;
 }
 
 function readTimestampMs(value: unknown, label: string): number {
@@ -301,33 +307,6 @@ function readOptionalCodeString(value: unknown, label: string): string | undefin
   return SAFE_REASON_CODE.test(code) ? code : undefined;
 }
 
-function assignOptionalFields<T extends object>(
-  target: T,
-  source: Record<string, unknown>,
-  label: string,
-  fields: readonly (keyof T & string)[],
-  read: (value: unknown, label: string) => string | number | undefined,
-): void {
-  // The fixed order preserves serialized fields and the first failing validation label.
-  for (const key of fields) {
-    const parsed = read(source[key], `${label}.${key}`);
-    if (parsed !== undefined) {
-      (target as Record<string, unknown>)[key] = parsed;
-    }
-  }
-}
-
-function readMemoryUsage(value: unknown, label: string): DiagnosticMemoryUsage {
-  const memory = readObject(value, label);
-  return {
-    rssBytes: readRequiredNumber(memory.rssBytes, `${label}.rssBytes`),
-    heapTotalBytes: readRequiredNumber(memory.heapTotalBytes, `${label}.heapTotalBytes`),
-    heapUsedBytes: readRequiredNumber(memory.heapUsedBytes, `${label}.heapUsedBytes`),
-    externalBytes: readRequiredNumber(memory.externalBytes, `${label}.externalBytes`),
-    arrayBuffersBytes: readRequiredNumber(memory.arrayBuffersBytes, `${label}.arrayBuffersBytes`),
-  };
-}
-
 function readHeapStatistics(value: unknown): DiagnosticHeapStatisticsSummary | undefined {
   if (value === undefined) {
     return undefined;
@@ -364,35 +343,25 @@ function readHeapSpaces(value: unknown): DiagnosticHeapSpaceSummary[] | undefine
   }
   const spaces: DiagnosticHeapSpaceSummary[] = [];
   for (const [index, entry] of value.entries()) {
-    const source = readObject(entry, `evidence.memoryPressure.heapSpaces[${index}]`);
-    const spaceName = readOptionalCodeString(
-      source.spaceName,
-      `evidence.memoryPressure.heapSpaces[${index}].spaceName`,
-    );
+    const label = `evidence.memoryPressure.heapSpaces[${index}]`;
+    const source = readObject(entry, label);
+    const spaceName = readOptionalCodeString(source.spaceName, `${label}.spaceName`);
     if (!spaceName) {
       continue;
     }
     spaces.push({
       spaceName,
       spaceSizeBytes:
-        readOptionalPositiveInteger(
-          source.spaceSizeBytes,
-          `evidence.memoryPressure.heapSpaces[${index}].spaceSizeBytes`,
-        ) ?? 0,
+        readOptionalPositiveInteger(source.spaceSizeBytes, `${label}.spaceSizeBytes`) ?? 0,
       spaceUsedBytes:
-        readOptionalPositiveInteger(
-          source.spaceUsedBytes,
-          `evidence.memoryPressure.heapSpaces[${index}].spaceUsedBytes`,
-        ) ?? 0,
+        readOptionalPositiveInteger(source.spaceUsedBytes, `${label}.spaceUsedBytes`) ?? 0,
       spaceAvailableBytes:
-        readOptionalPositiveInteger(
-          source.spaceAvailableBytes,
-          `evidence.memoryPressure.heapSpaces[${index}].spaceAvailableBytes`,
-        ) ?? 0,
+        readOptionalPositiveInteger(source.spaceAvailableBytes, `${label}.spaceAvailableBytes`) ??
+        0,
       physicalSpaceSizeBytes:
         readOptionalPositiveInteger(
           source.physicalSpaceSizeBytes,
-          `evidence.memoryPressure.heapSpaces[${index}].physicalSpaceSizeBytes`,
+          `${label}.physicalSpaceSizeBytes`,
         ) ?? 0,
     });
   }
@@ -404,10 +373,7 @@ function readCgroupMemorySummary(value: unknown): DiagnosticCgroupMemorySummary 
     return undefined;
   }
   const source = readObject(value, "evidence.memoryPressure.cgroup");
-  const version = readCodeString(
-    source.version,
-    "evidence.memoryPressure.cgroup.version",
-  ) as DiagnosticCgroupMemorySummary["version"];
+  const version = readCodeString(source.version, "evidence.memoryPressure.cgroup.version");
   if (version !== "v2") {
     return undefined;
   }
@@ -455,11 +421,9 @@ function readSessionFiles(value: unknown): DiagnosticSessionFileSummary[] | unde
   }
   const files: DiagnosticSessionFileSummary[] = [];
   for (const [index, entry] of value.entries()) {
-    const source = readObject(entry, `evidence.memoryPressure.topSessionFiles[${index}]`);
-    const relativePath = readRequiredString(
-      source.relativePath,
-      `evidence.memoryPressure.topSessionFiles[${index}].relativePath`,
-    );
+    const label = `evidence.memoryPressure.topSessionFiles[${index}]`;
+    const source = readObject(entry, label);
+    const relativePath = readRequiredString(source.relativePath, `${label}.relativePath`);
     if (
       path.isAbsolute(relativePath) ||
       relativePath.includes("..") ||
@@ -470,16 +434,8 @@ function readSessionFiles(value: unknown): DiagnosticSessionFileSummary[] | unde
     }
     files.push({
       relativePath: sanitizeSessionEvidencePath(relativePath),
-      sizeBytes:
-        readOptionalPositiveInteger(
-          source.sizeBytes,
-          `evidence.memoryPressure.topSessionFiles[${index}].sizeBytes`,
-        ) ?? 0,
-      mtimeMs:
-        readOptionalPositiveInteger(
-          source.mtimeMs,
-          `evidence.memoryPressure.topSessionFiles[${index}].mtimeMs`,
-        ) ?? 0,
+      sizeBytes: readOptionalPositiveInteger(source.sizeBytes, `${label}.sizeBytes`) ?? 0,
+      mtimeMs: readOptionalPositiveInteger(source.mtimeMs, `${label}.mtimeMs`) ?? 0,
     });
   }
   return files.length > 0 ? files : undefined;
@@ -492,14 +448,8 @@ function readMemoryPressureEvidence(
     return undefined;
   }
   const pressure = readObject(value, "evidence.memoryPressure");
-  const level = readCodeString(
-    pressure.level,
-    "evidence.memoryPressure.level",
-  ) as DiagnosticMemoryPressureEvent["level"];
-  const reason = readCodeString(
-    pressure.reason,
-    "evidence.memoryPressure.reason",
-  ) as DiagnosticMemoryPressureEvent["reason"];
+  const level = readCodeString(pressure.level, "evidence.memoryPressure.level");
+  const reason = readCodeString(pressure.reason, "evidence.memoryPressure.reason");
   if ((level !== "warning" && level !== "critical") || !isMemoryPressureReason(reason)) {
     return undefined;
   }
@@ -536,7 +486,20 @@ function readBundleEvidence(value: unknown): DiagnosticStabilityBundleEvidence |
   }
   const source = readObject(value, "evidence");
   const memoryPressure = readMemoryPressureEvidence(source.memoryPressure);
-  return memoryPressure ? { memoryPressure } : undefined;
+  let shutdown: DiagnosticStabilityBundleEvidence["shutdown"];
+  if (source.shutdown !== undefined) {
+    const shutdownSource = readObject(source.shutdown, "evidence.shutdown");
+    if (!Array.isArray(shutdownSource.errors)) {
+      throw new Error("Invalid stability bundle: evidence.shutdown.errors must be an array");
+    }
+    shutdown = {
+      step: readCodeString(shutdownSource.step, "evidence.shutdown.step"),
+      errors: shutdownSource.errors.slice(0, MAX_SHUTDOWN_ERRORS).map(readShutdownError),
+    };
+  }
+  return memoryPressure || shutdown
+    ? { ...(memoryPressure ? { memoryPressure } : {}), ...(shutdown ? { shutdown } : {}) }
+    : undefined;
 }
 
 function readNumberMap(value: unknown, label: string): Record<string, number> {
@@ -551,35 +514,26 @@ function readNumberMap(value: unknown, label: string): Record<string, number> {
   return result;
 }
 
-function readOptionalMemorySummary(
+function readMemorySummary(
   value: unknown,
-): DiagnosticStabilitySnapshot["summary"]["memory"] | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
+): NonNullable<DiagnosticStabilitySnapshot["summary"]["memory"]> {
   const memory = readObject(value, "snapshot.summary.memory");
   const latest =
     memory.latest === undefined
       ? undefined
       : readMemoryUsage(memory.latest, "snapshot.summary.memory.latest");
+  const result: Partial<NonNullable<DiagnosticStabilitySnapshot["summary"]["memory"]>> = latest
+    ? { latest }
+    : {};
+  assignOptionalFields(
+    result,
+    memory,
+    "snapshot.summary.memory",
+    ["maxRssBytes", "maxHeapUsedBytes"],
+    readOptionalNumber,
+  );
   return {
-    ...(latest ? { latest } : {}),
-    ...(memory.maxRssBytes !== undefined
-      ? {
-          maxRssBytes: readRequiredNumber(
-            memory.maxRssBytes,
-            "snapshot.summary.memory.maxRssBytes",
-          ),
-        }
-      : {}),
-    ...(memory.maxHeapUsedBytes !== undefined
-      ? {
-          maxHeapUsedBytes: readRequiredNumber(
-            memory.maxHeapUsedBytes,
-            "snapshot.summary.memory.maxHeapUsedBytes",
-          ),
-        }
-      : {}),
+    ...result,
     pressureCount: readRequiredNumber(
       memory.pressureCount,
       "snapshot.summary.memory.pressureCount",
@@ -587,12 +541,9 @@ function readOptionalMemorySummary(
   };
 }
 
-function readOptionalPayloadLargeSummary(
+function readPayloadLargeSummary(
   value: unknown,
-): DiagnosticStabilitySnapshot["summary"]["payloadLarge"] | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
+): NonNullable<DiagnosticStabilitySnapshot["summary"]["payloadLarge"]> {
   const payloadLarge = readObject(value, "snapshot.summary.payloadLarge");
   return {
     count: readRequiredNumber(payloadLarge.count, "snapshot.summary.payloadLarge.count"),
@@ -741,11 +692,9 @@ function readStabilitySnapshot(value: unknown): DiagnosticStabilitySnapshot {
     events,
     summary: {
       byType: readNumberMap(summary.byType, "snapshot.summary.byType"),
-      ...(summary.memory !== undefined
-        ? { memory: readOptionalMemorySummary(summary.memory) }
-        : {}),
+      ...(summary.memory !== undefined ? { memory: readMemorySummary(summary.memory) } : {}),
       ...(summary.payloadLarge !== undefined
-        ? { payloadLarge: readOptionalPayloadLargeSummary(summary.payloadLarge) }
+        ? { payloadLarge: readPayloadLargeSummary(summary.payloadLarge) }
         : {}),
     },
   };
@@ -919,6 +868,15 @@ export function writeDiagnosticStabilityBundleSync(
 
     const reason = normalizeReason(options.reason);
     const error = options.error ? readSafeErrorMetadata(options.error) : undefined;
+    const evidence = options.shutdownStep
+      ? {
+          ...options.evidence,
+          shutdown: {
+            step: readCodeString(options.shutdownStep, "shutdownStep"),
+            errors: collectShutdownErrors(options.error),
+          },
+        }
+      : options.evidence;
     const bundle: DiagnosticStabilityBundle = {
       version: DIAGNOSTIC_STABILITY_BUNDLE_VERSION,
       generatedAt: now.toISOString(),
@@ -934,7 +892,7 @@ export function writeDiagnosticStabilityBundleSync(
         hostname: REDACTED_HOSTNAME,
       },
       ...(error ? { error } : {}),
-      ...(options.evidence ? { evidence: options.evidence } : {}),
+      ...(evidence ? { evidence } : {}),
       snapshot,
     };
 
@@ -999,7 +957,4 @@ export function uninstallDiagnosticStabilityFatalHook(): void {
   fatalHookUnsubscribe = null;
 }
 
-export function resetDiagnosticStabilityBundleForTest(): void {
-  uninstallDiagnosticStabilityFatalHook();
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

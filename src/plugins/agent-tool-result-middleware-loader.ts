@@ -1,4 +1,3 @@
-// Loads agent tool result middleware from plugin runtime surfaces.
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import type {
@@ -42,13 +41,10 @@ function listRuntimeMiddlewareOwnerPluginIds(
 }
 
 function registryHasMiddlewareOwners(params: {
-  registry: PluginRegistry | undefined;
+  registry: PluginRegistry;
   pluginIds: readonly string[];
   runtime: AgentToolResultMiddlewareRuntime;
 }): boolean {
-  if (!params.registry) {
-    return false;
-  }
   const ownerPluginIds = listRuntimeMiddlewareOwnerPluginIds(params.registry, params.runtime);
   return params.pluginIds.every((pluginId) => ownerPluginIds.has(pluginId));
 }

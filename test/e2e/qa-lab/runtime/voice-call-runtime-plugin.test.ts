@@ -8,10 +8,13 @@ type GatewayMethod = (options: {
 }) => Promise<void>;
 
 type FixturePlugin = {
-  register(api: {
-    registerGatewayMethod(method: string, handler: GatewayMethod): void;
-    registerRealtimeVoiceProvider(provider: unknown): void;
-  }): void;
+  register(
+    api: {
+      registerGatewayMethod(method: string, handler: GatewayMethod): void;
+      registerRealtimeVoiceProvider(provider: unknown): void;
+    },
+    sendReceipt: (source: string, line: string) => void,
+  ): void;
 };
 
 const runtimeCoordinatorKey = Symbol.for("openclaw.voice-call.runtimeCoordinator");
@@ -30,14 +33,19 @@ function setRuntimeCoordinator(coordinator: unknown): void {
 
 function registerStreamSessionMethod(): GatewayMethod {
   let streamSessionMethod: GatewayMethod | undefined;
-  fixturePlugin.register({
-    registerGatewayMethod(method, handler) {
-      if (method === "qa.voiceCall.streamSession") {
-        streamSessionMethod = handler;
-      }
+  fixturePlugin.register(
+    {
+      registerGatewayMethod(method, handler) {
+        if (method === "qa.voiceCall.streamSession") {
+          streamSessionMethod = handler;
+        }
+      },
+      registerRealtimeVoiceProvider() {},
     },
-    registerRealtimeVoiceProvider() {},
-  });
+    () => {
+      throw new Error("Stream-session issuance must not submit a realtime tool result");
+    },
+  );
   if (!streamSessionMethod) {
     throw new Error("Voice Call fixture did not register qa.voiceCall.streamSession");
   }

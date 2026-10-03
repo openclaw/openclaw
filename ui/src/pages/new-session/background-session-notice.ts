@@ -1,7 +1,14 @@
+import type { AgentWaitResult } from "../../../../src/agents/run-wait.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import {
+  autoPromptNotificationsOnSend,
+  hasActiveNotificationPromptGesture,
+  shouldAutoPromptNotificationsOnSend,
+} from "../../app/notifications-auto-prompt.ts";
 import { t } from "../../i18n/index.ts";
+import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -9,15 +16,7 @@ import {
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-
-type AgentWaitResult = {
-  status?: "error" | "ok" | "pending" | "timeout";
-  endedAt?: number;
-  error?: string;
-  pendingError?: boolean;
-  providerStarted?: boolean;
-  stopReason?: string;
-};
+import { captureSessionNoticeOwner } from "./session-notice-owner.ts";
 
 const RETRY_DELAY_MS = 1_000;
 
@@ -32,11 +31,12 @@ async function notifyWhenBackgroundSessionEnds(params: {
   context: ApplicationContext;
   key: string;
   runId: string;
+  isCurrentOwner: () => boolean;
 }): Promise<void> {
-  let result: AgentWaitResult | undefined;
+  let result: Partial<AgentWaitResult> | undefined;
   while (!result) {
     try {
-      const observed = await params.client.request<AgentWaitResult>(
+      const observed = await params.client.request<Partial<AgentWaitResult>>(
         "agent.wait",
         { runId: params.runId, timeoutMs: 30_000 },
         { timeoutMs: null },
@@ -77,14 +77,11 @@ async function notifyWhenBackgroundSessionEnds(params: {
     }
   }
 
+  if (!params.isCurrentOwner()) {
+    return;
+  }
   const gateway = params.context.gateway.snapshot;
-  if (
-    uiSessionEventMatches(
-      { ...gateway, sessionKey: gateway.sessionKey },
-      params.key,
-      params.agentId,
-    )
-  ) {
+  if (uiSessionEventMatches(gateway, params.key, params.agentId)) {
     return;
   }
   const row = params.context.sessions.state.result?.sessions.find((session) =>
@@ -114,6 +111,9 @@ async function notifyWhenBackgroundSessionEnds(params: {
     message: `${resolveSessionDisplayName(params.key, row)}: ${status}`,
     actionLabel: t("sessionsView.openSession"),
     onAction: () => {
+      if (!params.isCurrentOwner()) {
+        return;
+      }
       selectApplicationSession({
         selection: params.context.agentSelection,
         gateway: params.context.gateway,
@@ -138,21 +138,45 @@ export function prepareBackgroundSessionCompletion(params: {
   agentId: string;
   client: GatewayBrowserClient;
   context: ApplicationContext;
-  clearDraft: () => void;
 }): (key: string, runId?: string) => boolean {
+  const isCurrentOwner = captureSessionNoticeOwner(params.context);
   return (key, runId) => {
     const normalizedRunId = runId?.trim();
-    if (!params.enabled || !normalizedRunId) {
+    if (!params.enabled) {
       return false;
     }
-    params.clearDraft();
+    // Creation disposition is independent of whether the Gateway returned a watchable run.
+    if (!normalizedRunId) {
+      return true;
+    }
     void notifyWhenBackgroundSessionEnds({
       agentId: params.agentId,
       client: params.client,
       context: params.context,
       key,
       runId: normalizedRunId,
+      isCurrentOwner,
     });
     return true;
   };
+}
+
+/** Keep notification permission on the original input event, before startup awaits. */
+export function promptNewSessionNotifications(
+  context: ApplicationContext,
+  message: string,
+  hasAttachments: boolean,
+  direct: boolean,
+) {
+  if (
+    shouldAutoPromptNotificationsOnSend({
+      connected: context.gateway.snapshot.phase === "connected",
+      directComposerSend: direct && hasActiveNotificationPromptGesture(),
+      message,
+      hasAttachments,
+      isCommand: parseSlashCommand(message) !== null,
+    })
+  ) {
+    autoPromptNotificationsOnSend(context);
+  }
 }

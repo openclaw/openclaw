@@ -173,7 +173,7 @@ Set-Mailbox -Identity "principal@[organization].org" `
 
 **Read access** (Graph API with application permissions):
 
-Register an Azure AD application with `Mail.Read` and `Calendars.Read` application permissions. **Before using the application**, scope access with an [application access policy](https://learn.microsoft.com/graph/auth-limit-mailbox-access) to restrict it to only the delegate and principal mailboxes:
+Register a Microsoft Entra ID (formerly Azure AD) application with `Mail.Read` and `Calendars.Read` application permissions. **Before using the application**, scope access with an [application access policy](https://learn.microsoft.com/graph/auth-limit-mailbox-access) to restrict it to only the delegate and principal mailboxes:
 
 ```powershell
 New-ApplicationAccessPolicy `
@@ -209,12 +209,18 @@ Route inbound messages to the delegate agent using [Multi-Agent Routing](/concep
 ```json5
 {
   agents: {
+    ownership: "explicit",
+    defaults: {
+      heartbeat: { agentId: "main" },
+      systemAgent: { agentId: "main" },
+    },
     entries: {
-      main: { default: true, workspace: "~/.openclaw/workspace" },
+      main: { workspace: "~/.openclaw/workspace" },
       delegate: {
         workspace: "~/.openclaw/workspace-delegate",
         tools: {
-          deny: ["browser", "canvas"],
+          allow: ["read", "exec", "message", "cron"],
+          deny: ["write", "edit", "apply_patch", "browser", "canvas"],
         },
       },
     },
@@ -230,9 +236,11 @@ Route inbound messages to the delegate agent using [Multi-Agent Routing](/concep
       agentId: "delegate",
       match: { channel: "discord", guildId: "123456789012345678" },
     },
-    // Everything else goes to the main personal agent
-    { agentId: "main", match: { channel: "whatsapp" } },
+    // Other traffic on these channels goes to the main personal agent.
+    { agentId: "main", match: { channel: "whatsapp", accountId: "*" } },
+    { agentId: "main", match: { channel: "discord", accountId: "*" } },
   ],
+  talk: { agentId: "main" },
 }
 ```
 
@@ -254,8 +262,13 @@ A complete delegate configuration handling email, calendar, and social media:
 ```json5
 {
   agents: {
+    ownership: "explicit",
+    defaults: {
+      heartbeat: { agentId: "main" },
+      systemAgent: { agentId: "main" },
+    },
     entries: {
-      main: { default: true, workspace: "~/.openclaw/workspace" },
+      main: { workspace: "~/.openclaw/workspace" },
       "org-assistant": {
         name: "[Organization] Assistant",
         workspace: "~/.openclaw/workspace-org",
@@ -274,9 +287,10 @@ A complete delegate configuration handling email, calendar, and social media:
       match: { channel: "signal", peer: { kind: "group", id: "[group-id]" } },
     },
     { agentId: "org-assistant", match: { channel: "whatsapp", accountId: "org" } },
-    { agentId: "main", match: { channel: "whatsapp" } },
-    { agentId: "main", match: { channel: "signal" } },
+    { agentId: "main", match: { channel: "whatsapp", accountId: "*" } },
+    { agentId: "main", match: { channel: "signal", accountId: "*" } },
   ],
+  talk: { agentId: "main" },
 }
 ```
 

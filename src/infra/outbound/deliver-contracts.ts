@@ -1,23 +1,31 @@
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 // Shared type contracts for outbound planning, queueing, and transport.
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { OutboundReplyFacts } from "../../channels/message/types.js";
+import type { OutboundReplyFacts, RenderedMessageBatchPlan } from "../../channels/message/types.js";
 import type {
   ChannelDeliveryCapabilities,
   ChannelOutboundAdapter,
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
-import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
-import type { OutboundDeliveryResult, OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
-import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type {
-  QueuedReplyPayloadSendingHook,
-  QueuedRenderedMessageBatchPlan,
-} from "./delivery-queue-storage.js";
+  DeliveryQueueCompletionRetention,
+  DeliveryQueueStateContext,
+} from "../delivery-queue-sqlite.js";
+import type { QueuedDeliveryOwner } from "./deliver-queue-state.js";
+import type {
+  OutboundDeliveryQueuePolicy,
+  OutboundDeliveryResult,
+  OutboundPayloadDeliveryOutcome,
+  PlatformSendRoute,
+} from "./deliver-types.js";
+import type { ConversationDeliveryTarget } from "./delivery-completion.js";
+import type { QueuedReplyPayloadSendingHook } from "./delivery-queue-storage.js";
+import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { OutboundMessageSendOverrides } from "./message-plan.js";
@@ -33,7 +41,7 @@ type ConversationDeliveryAttemptAuthority = Omit<
   "kind"
 >;
 
-export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
+export type { OutboundDeliveryQueuePolicy, PlatformSendRoute } from "./deliver-types.js";
 
 export type OutboundDeliveryIntent = {
   id: string;
@@ -69,8 +77,10 @@ export type ChannelHandler = {
   chunkerMode?: "text" | "markdown";
   chunkedTextFormatting?: OutboundDeliveryFormattingOptions;
   textChunkLimit?: number;
+  extractMarkdownImages?: boolean;
   preserveMarkdownDetails?: boolean;
   supportsMedia: boolean;
+  supportsMediaPayload?: boolean;
   sanitizeText?: (payload: ReplyPayload) => string;
   normalizePayload?: (payload: ReplyPayload) => ReplyPayload | null;
   normalizePayloadBatch?: (
@@ -88,6 +98,7 @@ export type ChannelHandler = {
     messageId: string;
     pin: ReplyPayloadDeliveryPin;
     gatewayClientScopes?: readonly string[];
+    assertDirectAdapterHandoff?: () => void;
   }) => Promise<void>;
   afterDeliverPayload?: (params: {
     target: ChannelOutboundTargetRef;
@@ -128,11 +139,6 @@ export type ChannelHandler = {
   ) => Promise<OutboundDeliveryResult>;
 };
 
-export type PlatformSendRoute = {
-  replyToId?: string | null;
-  threadId?: string | number | null;
-};
-
 export type ChannelHandlerParams = {
   cfg: OpenClawConfig;
   /** Admitted run owner for agent-scoped channel runtime discovery. */
@@ -149,6 +155,7 @@ export type ChannelHandlerParams = {
   gifPlayback?: boolean;
   forceDocument?: boolean;
   silent?: boolean;
+  abortSignal?: AbortSignal;
   mediaAccess?: OutboundMediaAccess;
   gatewayClientScopes?: readonly string[];
   conversationReadOrigin?: "delegated" | "direct-operator";
@@ -249,6 +256,7 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
   skipQueue?: boolean;
   /** @internal Fence recovery ownership at the same provider boundary as live sends. */
   deliveryProducerClaimId?: string;
+  deliveryQueueOwner?: QueuedDeliveryOwner;
   /** @internal Keep the exact live producer claim alive during platform preparation. */
   deliveryProducerLeaseRequired?: boolean;
   /** @internal Recovery already ran provider admission after its pending-row re-read. */
@@ -258,6 +266,14 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
   /** @internal Let recovery run commit hooks after it has acked the recovered queue entry. */
   deferCommitHooks?: boolean;
   queuePolicy?: OutboundDeliveryQueuePolicy;
-  renderedBatchPlan?: QueuedRenderedMessageBatchPlan;
+  renderedBatchPlan?: RenderedMessageBatchPlan;
   onDeliveryIntent?: (intent: OutboundDeliveryIntent) => void;
+};
+
+/** Private owner facts excluded from SDK delivery parameters and stored payloads. */
+export type InternalDeliverOutboundPayloadsParams = DeliverOutboundPayloadsParams & {
+  /** Host-captured session generation retained independently by this delivery intent. */
+  sessionGeneration?: SessionDeliveryGeneration;
+  conversationDeliveryTarget?: ConversationDeliveryTarget;
+  deliveryQueueStateContext?: DeliveryQueueStateContext;
 };

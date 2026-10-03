@@ -1,4 +1,3 @@
-// Builds structured context reports for context command responses.
 import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
@@ -36,9 +35,6 @@ function formatCharsAndTokens(chars: number): string {
 }
 
 function parseContextArgs(commandBodyNormalized: string): string {
-  if (commandBodyNormalized === "/context") {
-    return "";
-  }
   if (commandBodyNormalized.startsWith("/context ")) {
     return commandBodyNormalized.slice(8).trim();
   }
@@ -70,17 +66,6 @@ function resolveContextReportAgentId(params: HandleCommandsParams): string {
   }).sessionAgentId;
 }
 
-type TranscriptCompactabilityReport =
-  | {
-      available: true;
-      totalMessages: number;
-      realConversationMessages: number;
-    }
-  | {
-      available: false;
-      reason: string;
-    };
-
 async function readContextTranscriptMessages(
   params: HandleCommandsParams,
   targetSessionEntry: SessionEntry | undefined,
@@ -105,17 +90,17 @@ async function readContextTranscriptMessages(
   )) as AgentMessage[];
 }
 
-async function resolveTranscriptCompactabilityReport(
+async function buildTranscriptCompactabilityLines(
   params: HandleCommandsParams,
   targetSessionEntry: SessionEntry | undefined,
-): Promise<TranscriptCompactabilityReport> {
+): Promise<string[]> {
   if (!targetSessionEntry?.sessionId?.trim()) {
-    return { available: false, reason: "no active transcript session" };
+    return ["Compactable transcript: unavailable (no active transcript session)"];
   }
 
   const messages = await readContextTranscriptMessages(params, targetSessionEntry);
   if (!messages.length) {
-    return { available: false, reason: "no transcript messages found" };
+    return ["Compactable transcript: unavailable (no transcript messages found)"];
   }
 
   const realConversationMessages = messages.reduce(
@@ -123,11 +108,14 @@ async function resolveTranscriptCompactabilityReport(
       count + (isRealConversationMessage(message, messages, index) ? 1 : 0),
     0,
   );
-  return {
-    available: true,
-    totalMessages: messages.length,
-    realConversationMessages,
-  };
+  return [
+    `Compactable transcript: ${formatInt(realConversationMessages)} real conversation message(s) / ${formatInt(messages.length)} transcript message(s)`,
+    ...(realConversationMessages === 0
+      ? [
+          "Compaction note: prompt/cache usage may be high even when there are no compactable conversation messages.",
+        ]
+      : []),
+  ];
 }
 
 async function resolveContextReport(
@@ -295,15 +283,14 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const sandboxLine = `Sandbox: mode=${report.sandbox?.mode ?? "unknown"} sandboxed=${report.sandbox?.sandboxed ?? false}`;
   const toolSchemaLine = `Tool schemas (JSON): ${formatCharsAndTokens(report.tools.schemaChars)} (counts toward context; not shown as text)`;
   const toolListLine = `Tool list (system prompt text): ${formatCharsAndTokens(report.tools.listChars)}`;
-  const skillNameSet = new Set(report.skills.entries.map((s) => s.name));
-  const skillNames = Array.from(skillNameSet);
+  const skillNames = [...new Set(report.skills.entries.map((s) => s.name))];
   const toolNames = report.tools.entries.map((t) => t.name);
   const formatNameList = (names: string[], cap: number) =>
     names.length <= cap
       ? names.join(", ")
       : `${names.slice(0, cap).join(", ")}, … (+${names.length - cap} more)`;
-  const skillsLine = `Skills list (system prompt text): ${formatCharsAndTokens(report.skills.promptChars)} (${skillNameSet.size} skills)`;
-  const skillsNamesLine = skillNameSet.size
+  const skillsLine = `Skills list (system prompt text): ${formatCharsAndTokens(report.skills.promptChars)} (${skillNames.length} skills)`;
+  const skillsNamesLine = skillNames.length
     ? `Skills: ${formatNameList(skillNames, 20)}`
     : "Skills: (none)";
   const toolsNamesLine = toolNames.length
@@ -334,24 +321,15 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     bootstrapTotalMaxChars,
   });
   const truncatedBootstrapFiles = bootstrapAnalysis.truncatedFiles;
-  const truncationCauseCounts = truncatedBootstrapFiles.reduce(
-    (acc, file) => {
-      for (const cause of file.causes) {
-        if (cause === "per-file-limit") {
-          acc.perFile += 1;
-        } else if (cause === "total-limit") {
-          acc.total += 1;
-        }
-      }
-      return acc;
-    },
-    { perFile: 0, total: 0 },
-  );
+  const perFile = truncatedBootstrapFiles.filter((file) =>
+    file.causes.includes("per-file-limit"),
+  ).length;
+  const total = truncatedBootstrapFiles.filter((file) =>
+    file.causes.includes("total-limit"),
+  ).length;
   const truncationCauseParts = [
-    truncationCauseCounts.perFile > 0
-      ? `${truncationCauseCounts.perFile} file(s) exceeded max/file`
-      : null,
-    truncationCauseCounts.total > 0 ? `${truncationCauseCounts.total} file(s) hit max/total` : null,
+    perFile > 0 ? `${perFile} file(s) exceeded max/file` : null,
+    total > 0 ? `${total} file(s) hit max/total` : null,
   ].filter(Boolean);
   const bootstrapWarningLines =
     truncatedBootstrapFiles.length > 0
@@ -433,20 +411,10 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         : overheadTokens > 0
           ? `Untracked provider/runtime overhead: ~${formatInt(overheadTokens)} tok`
           : "Untracked provider/runtime overhead: not observed in cached usage";
-    const transcriptCompactability = await resolveTranscriptCompactabilityReport(
+    const transcriptCompactabilityLines = await buildTranscriptCompactabilityLines(
       params,
       targetSessionEntry,
     );
-    const transcriptCompactabilityLines = transcriptCompactability.available
-      ? [
-          `Compactable transcript: ${formatInt(transcriptCompactability.realConversationMessages)} real conversation message(s) / ${formatInt(transcriptCompactability.totalMessages)} transcript message(s)`,
-          ...(transcriptCompactability.realConversationMessages === 0
-            ? [
-                "Compaction note: prompt/cache usage may be high even when there are no compactable conversation messages.",
-              ]
-            : []),
-        ]
-      : [`Compactable transcript: unavailable (${transcriptCompactability.reason})`];
 
     return {
       text: [

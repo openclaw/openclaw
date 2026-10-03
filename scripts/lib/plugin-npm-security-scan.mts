@@ -95,8 +95,16 @@ const MAX_SCANNABLE_FILE_BYTES = 1024 * 1024;
 const MAX_SCANNABLE_TOTAL_BYTES_PER_PACKAGE = 64 * 1024 * 1024;
 const PACKAGE_SCAN_CONCURRENCY = 4;
 const CANONICAL_NPM_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
+const PLUGIN_TARBALL_INSPECTION_LIMITS = {
+  maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
+  maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
+  maxEntryBytes: MAX_PACKED_FILE_BYTES,
+  maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
+  maxPathBytes: 4 * 1024 * 1024,
+  maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
+};
 
-const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+const RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
   ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts", 1],
@@ -109,6 +117,41 @@ const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>(
   ["@openclaw/signal:dangerous-exec:src/daemon.ts", 1],
   ["@openclaw/voice-call:dangerous-exec:src/tunnel.ts", 1],
 ]);
+
+const RELEASE_2026_9_2_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+  ...RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+  ["@openclaw/llama-cpp-provider:dangerous-exec:src/hardware.ts", 1],
+]);
+
+// The bounded async Codex version probe no longer produces this syntactic finding.
+// Keep shipped inventories intact; a new direct call must be reviewed again.
+const RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map(
+  [...RELEASE_2026_9_2_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS].filter(
+    ([key]) => key !== "@openclaw/codex:dangerous-exec:src/doctor.ts",
+  ),
+);
+
+// Runtime launches added after 9.5: FaceTime starts its own staged capture
+// helper with no arguments and a sanitized env, and ONNX forks its bundled
+// worker entry from process.execPath. Freeze these requirements for 9.6 and 9.7.
+const RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+  ...RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+  ["@openclaw/facetime:dangerous-exec:src/audio-pump.ts", 1],
+  ["@openclaw/onnx:dangerous-exec:src/worker-client.ts", 1],
+]);
+
+const RELEASE_2026_9_8_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+  ...RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+  ["@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-vc-runtime.ts", 1],
+]);
+
+// The ACPX proxy asset was removed from the packed plugin after 2026.9.8.
+// Preserve the shipped inventory while matching current package contents.
+const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map(
+  [...RELEASE_2026_9_8_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS].filter(
+    ([key]) => key !== "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
+  ),
+);
 
 type ReviewedReleaseLayout = {
   id: string;
@@ -129,7 +172,7 @@ const CURRENT_REVIEWED_RELEASE_LAYOUT = {
   ]),
 };
 
-const CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<string, number>([
+const FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs", 1],
   ["@openclaw/acpx:dangerous-exec:dist/service-<hash>.js", 1],
   ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.test.ts", 3],
@@ -138,6 +181,7 @@ const CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<string, number>(
   ["@openclaw/codex:dangerous-exec:dist/session-catalog-<hash>.js", 1],
   ["@openclaw/codex:dangerous-exec:dist/transport-stdio-<hash>.js", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/attempt-startup-retry.test.ts", 6],
+  ["@openclaw/codex:dangerous-exec:src/app-server/run-attempt-one-shot-cleanup.test.ts", 3],
   ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.http.test.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-orphan.test-helper.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-orphan.test.ts", 3],
@@ -155,11 +199,147 @@ const CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<string, number>(
   ["@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
 ]);
 
+const CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
+  FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+);
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/doctor.test.ts",
+  1,
+);
+// Freeze the shipped 9.4 inventory before reviewing fixtures added for 9.5.
+const RELEASE_2026_9_4_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+);
+// The Signal socket-path fixture launches two bounded child probes to leave
+// stale Unix sockets behind for cleanup coverage. It was added after 2026.9.4.
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/signal:dangerous-exec:src/socket-path.test.ts",
+  2,
+);
+// The composition fixture runs the real shell bridge under its owned temporary
+// workspace to prove denied canonical destinations cannot receive mutations.
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.fs-bridge-composition.test.ts",
+  1,
+);
+// The native session-catalog performance support spawns the real Codex
+// app-server once under its owned test state to time catalog queries. It was
+// added after 2026.9.4 (#150659).
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/session-catalog-native-performance.test-support.ts",
+  1,
+);
+
+// The native catalog fixture launches the pinned app-server with a temporary home,
+// child-only environment, and denied outbound proxies; it always joins the child.
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/session-catalog-native.test.ts",
+  1,
+);
+
+// Process-inspection fixtures added after 9.4 deliberately run bounded child commands.
+// Keep their exact reviewed counts out of the already-shipped inventories above.
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/transport-process-snapshot.test.ts",
+  3,
+);
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/transport-procfs.test-support.ts",
+  3,
+);
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/test-support/transport-process-blocked-command.test-support.mjs",
+  2,
+);
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/test-support/transport-process-starvation.test-support.mjs",
+  1,
+);
+// These packed test fixtures deliberately launch bounded child processes to
+// exercise the native session catalog, logbook CLI, and 1Password process
+// cleanup paths. Keep their exact counts reviewed without broadening runtime
+// source admission or any already-shipped release inventory.
+for (const [key, count] of [
+  ["@openclaw/codex:dangerous-exec:src/session-catalog-native.test.ts", 1],
+  ["@openclaw/logbook:dangerous-exec:src/analyze.test.ts", 1],
+  ["@openclaw/onepassword:dangerous-exec:src/secret-ref-resolver.test.ts", 4],
+] as const) {
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
+}
+
+const RELEASE_2026_9_5_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+);
+// The post-9.5 lifecycle fixtures forward spawn and run an owned temporary
+// descendant to prove output drainage and failed-spawn settlement. Freeze 9.5
+// before admitting their exact test-only sites.
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.exit.test.ts",
+  2,
+);
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.spawn-error.test.ts",
+  1,
+);
+// The stabilized startup retry race fixtures (#155612) launch two fewer
+// bounded children; the acpx fixture pipes JSON-RPC frames through its own
+// checked-in app-server stub, and the node exec proof runs process.execPath
+// with an inline script under the exec server's owned workspace. The Codex
+// launcher-failure matcher launches nothing: its `spawn(` is a regex literal.
+for (const [key, count] of [
+  ["@openclaw/acpx:dangerous-exec:test/codex-app-server.test.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/app-server/attempt-startup-retry.test.ts", 4],
+  ["@openclaw/codex:dangerous-exec:src/app-server/managed-launcher-failure.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/node-exec-server.test.ts", 1],
+] as const) {
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
+}
+
+const RELEASE_2026_9_6_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+);
+// Post-9.6 test-only drift: the Codex auth-refresh harness spawns its checked-in
+// child stub over real pipes, iMessage adds a real child for Contacts
+// diagnostics (#156334), the Feishu proxy test sets HTTPS_PROXY beside a mocked
+// request, and Signal keeps one stale-socket probe after #159648.
+for (const [key, count] of [
+  ["@openclaw/codex:dangerous-exec:src/app-server/auth-refresh-authority.integration.test.ts", 1],
+  ["@openclaw/feishu:env-harvesting:src/client.test.ts", 1],
+  ["@openclaw/imessage:dangerous-exec:src/client.test.ts", 4],
+  ["@openclaw/signal:dangerous-exec:src/socket-path.test.ts", 1],
+] as const) {
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
+}
+
+const RELEASE_2026_9_8_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+);
+
 const CURRENT_SECURITY_INVENTORY_POLICY: PluginSecurityInventoryPolicy = {
   layout: CURRENT_REVIEWED_RELEASE_LAYOUT,
   optionalPackedFindingCounts: CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
   requiredSourceFindingCounts: CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
 };
+
+const REVIEWED_EXACT_PACKED_FIXTURES = [
+  // This loopback-only native fixture owns its temporary home and joins its child.
+  {
+    packageName: "@openclaw/codex",
+    path: "src/app-server/run-attempt.skills.native.test.ts",
+    ruleId: "dangerous-exec",
+    count: 1,
+    sha256: "111364dcbc09d239ddac974953b2fe4d587b32ebcba3da8ac579a0dc1768569a",
+  },
+  // The Windows-only fixture invokes the pinned MXC executable with a generated
+  // config in dry-run mode and a fixed timeout.
+  {
+    packageName: "@openclaw/mxc-sandbox",
+    path: "test/mxc-sdk-wire-contract.integration.test.ts",
+    ruleId: "dangerous-exec",
+    count: 1,
+    sha256: "9b5b0dc1f3f43bf2983135a35e12e53c76d9769bc3abdd5da1f08f2f1085d4ee",
+  },
+] as const;
 
 const FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
@@ -190,6 +370,14 @@ const FROZEN_RELEASE_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<string, n
   ["@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
 ]);
 
+const FROZEN_EXTENDED_STABLE_2026_7_33_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
+  FROZEN_RELEASE_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+);
+FROZEN_EXTENDED_STABLE_2026_7_33_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.test.ts",
+  3,
+);
+
 const FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT = {
   id: "extended-stable-2026.6.33",
   findings: new Map<string, number>([
@@ -198,14 +386,113 @@ const FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT = {
   ]),
 };
 
+const FROZEN_EXTENDED_STABLE_2026_7_33_LAYOUT = {
+  id: "extended-stable-2026.7.33",
+  findings: FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT.findings,
+};
+
+const FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT = {
+  id: "extended-stable-2026.8.33",
+  findings: new Map<string, number>([
+    ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/sandbox-child.ts", 1],
+    ["@openclaw/codex:dangerous-exec:src/app-server/transport-process-snapshot.ts", 1],
+  ]),
+};
+
+const FROZEN_EXTENDED_STABLE_2026_8_33_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map([
+  ...RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+  ["@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-vc-runtime.ts", 1],
+]);
+
 const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurityInventoryPolicy>([
-  ["release/2026.9.1", CURRENT_SECURITY_INVENTORY_POLICY],
+  [
+    "release/2026.9.1",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  [
+    "release/2026.9.2",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_2_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  [
+    "release/2026.9.3",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  [
+    "release/2026.9.4",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: RELEASE_2026_9_4_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  [
+    "release/2026.9.5",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: RELEASE_2026_9_5_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  [
+    "release/2026.9.6",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: RELEASE_2026_9_6_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  [
+    "release/2026.9.7",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      requiredSourceFindingCounts: RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  [
+    "release/2026.9.8",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: RELEASE_2026_9_8_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_8_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  ["release/2026.10.1", CURRENT_SECURITY_INVENTORY_POLICY],
   [
     "extended-stable/2026.6.33",
     {
       layout: FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT,
       optionalPackedFindingCounts: FROZEN_RELEASE_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
       requiredSourceFindingCounts: FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  [
+    "extended-stable/2026.7.33",
+    {
+      layout: FROZEN_EXTENDED_STABLE_2026_7_33_LAYOUT,
+      optionalPackedFindingCounts:
+        FROZEN_EXTENDED_STABLE_2026_7_33_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  [
+    "extended-stable/2026.8.33",
+    {
+      layout: FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT,
+      optionalPackedFindingCounts: FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts:
+        FROZEN_EXTENDED_STABLE_2026_8_33_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
 ]);
@@ -221,6 +508,7 @@ function selectPluginSecurityInventoryPolicy(
 const REVIEWED_LAYOUT_FINDING_COUNTS = new Map<string, number>([
   ...CURRENT_REVIEWED_RELEASE_LAYOUT.findings,
   ...FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT.findings,
+  ...FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT.findings,
 ]);
 
 function expandFindingCounts(counts: ReadonlyMap<string, number>): string[] {
@@ -232,7 +520,7 @@ function compareCodeUnits(left: string, right: string): number {
 }
 
 function sortStrings(values: readonly string[]): string[] {
-  return [...values].toSorted(compareCodeUnits);
+  return values.toSorted(compareCodeUnits);
 }
 
 function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
@@ -437,17 +725,16 @@ function parseExpectedPackages(value: unknown): PublishablePluginPackage[] {
     throw new Error("Expected plugin package inventory is invalid.");
   }
   const packages = value.map((entry, index) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    if (!isRecord(entry)) {
       throw new Error(`Expected plugin package entry ${index} is invalid.`);
     }
-    const candidate = entry as Record<string, unknown>;
-    const extensionId = candidate.extensionId;
-    const packageDir = candidate.packageDir;
+    const extensionId = entry.extensionId;
+    const packageDir = entry.packageDir;
     const packageName = assertCanonicalNpmPackageName(
-      candidate.packageName,
+      entry.packageName,
       `Expected plugin package entry ${index}`,
     );
-    const packageVersion = candidate.packageVersion;
+    const packageVersion = entry.packageVersion;
     if (
       typeof extensionId !== "string" ||
       !/^[a-z0-9][a-z0-9._-]*$/u.test(extensionId) ||
@@ -566,14 +853,7 @@ function readPluginSecurityArtifact(
   });
   let inspection: ReturnType<typeof inspectPackageTarballBytes>;
   try {
-    inspection = inspectPackageTarballBytes(tarballBytes, {
-      maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
-      maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
-      maxEntryBytes: MAX_PACKED_FILE_BYTES,
-      maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-      maxPathBytes: 4 * 1024 * 1024,
-      maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-    });
+    inspection = inspectPackageTarballBytes(tarballBytes, PLUGIN_TARBALL_INSPECTION_LIMITS);
   } catch {
     throw new Error("Plugin security artifact tarball structure is invalid.");
   }
@@ -729,29 +1009,19 @@ export function loadPluginNpmSecurityArtifacts(params: {
   };
 }
 
-export function listPluginNpmSecurityArtifacts(params: {
-  artifactRoot: string;
-  candidateSha: string;
-  expectedPackages: unknown;
-  limits?: PluginNpmSecurityArtifactLimits;
-  toolingSha: string;
-}): PluginNpmSecurityArtifact[] {
-  const result = loadPluginNpmSecurityArtifacts(params);
-  if (result.ingestionErrors.length > 0) {
-    throw new Error(result.ingestionErrors.join("\n"));
-  }
-  return result.artifacts;
-}
+type PluginTarballInspection = {
+  inventory: Array<
+    { path: string; sizeBytes: number } & ({ type: "file"; sha256: string } | { type: "directory" })
+  >;
+  packageManifest: Record<string, unknown>;
+  tarballSha256: string;
+};
 
 export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
   directlyScannedFileCount: number;
   directlyScannedFindings: SkillScanFinding[];
   fileCount: number;
-  inspection: {
-    inventory: Array<{ path: string; sizeBytes: number; type: string }>;
-    packageManifest: Record<string, unknown>;
-    tarballSha256: string;
-  };
+  inspection: PluginTarballInspection;
   packedFiles: string[];
   stageDir: string;
   totalBytes: number;
@@ -767,18 +1037,10 @@ export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
       label: "Plugin security tarball",
       maxBytes: MAX_PLUGIN_TARBALL_BYTES,
     });
-    const inspection = inspectPackageTarballBytes(tarballBytes, {
-      maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
-      maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
-      maxEntryBytes: MAX_PACKED_FILE_BYTES,
-      maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-      maxPathBytes: 4 * 1024 * 1024,
-      maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-    }) as {
-      inventory: Array<{ path: string; sizeBytes: number; type: string }>;
-      packageManifest: Record<string, unknown>;
-      tarballSha256: string;
-    };
+    const inspection = inspectPackageTarballBytes(
+      tarballBytes,
+      PLUGIN_TARBALL_INSPECTION_LIMITS,
+    ) as PluginTarballInspection;
     for (const entry of inspection.inventory) {
       if (entry.type !== "file") {
         continue;
@@ -793,12 +1055,7 @@ export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
       packedFiles,
     );
     inspectPackageTarballBytes(tarballBytes, {
-      maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
-      maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
-      maxEntryBytes: MAX_PACKED_FILE_BYTES,
-      maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-      maxPathBytes: 4 * 1024 * 1024,
-      maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
+      ...PLUGIN_TARBALL_INSPECTION_LIMITS,
       onFile: ({ content, path }: { content: Uint8Array; path: string }) => {
         if (!path.startsWith("package/")) {
           throw new Error("Plugin tarball file escaped package/.");
@@ -935,6 +1192,7 @@ export function assertCompleteScannerSummary(
 async function scanSupplementalInertPluginInput(
   plugin: PluginNpmSecurityArtifact,
   policy: PluginSecurityInventoryPolicy | undefined,
+  targetContextRef: string,
 ): Promise<ScanPackageResult> {
   const reviewedCriticalFindings: string[] = [];
   const expectedReviewedCriticalFindings: string[] = [];
@@ -948,6 +1206,22 @@ async function scanSupplementalInertPluginInput(
       staged.inspection.tarballSha256 !== plugin.tarballSha256
     ) {
       throw new Error(`${plugin.packageName}: supplemental inert package input identity mismatch.`);
+    }
+    let qualifiedFixtureKey: string | undefined;
+    const fixture = REVIEWED_EXACT_PACKED_FIXTURES.find(
+      (candidate) => candidate.packageName === plugin.packageName,
+    );
+    if (fixture && (targetContextRef === "" || targetContextRef === "release/2026.10.1")) {
+      const entry = staged.inspection.inventory.find(
+        (candidate) => candidate.type === "file" && candidate.path === `package/${fixture.path}`,
+      );
+      if (entry?.type === "file") {
+        const key = `${fixture.packageName}:${fixture.ruleId}:${fixture.path}`;
+        expectedReviewedCriticalFindings.push(...Array.from({ length: fixture.count }, () => key));
+        if (entry.sha256 === fixture.sha256) {
+          qualifiedFixtureKey = key;
+        }
+      }
     }
     const normalizedPackedPaths = new Set<string>();
     for (const packedFile of staged.packedFiles) {
@@ -983,7 +1257,7 @@ async function scanSupplementalInertPluginInput(
       }
       const record = findingRecord(staged.stageDir, finding);
       const key = findingKey(plugin.packageName, record);
-      if (isReviewedCriticalFinding(key, policy)) {
+      if (isReviewedCriticalFinding(key, policy) || key === qualifiedFixtureKey) {
         reviewedCriticalFindings.push(key);
       } else {
         unexpectedCriticalFindings.push(record);
@@ -1163,7 +1437,9 @@ export async function scanPublishablePluginPackages(
         plugin ? sanitizePackageScanError(plugin, error) : "Unknown package: package scan failed.",
       );
     },
-    tasks: packages.map((plugin) => () => scanSupplementalInertPluginInput(plugin, policy)),
+    tasks: packages.map(
+      (plugin) => () => scanSupplementalInertPluginInput(plugin, policy, targetContextRef),
+    ),
   });
   return {
     packageResults: results.filter((result): result is ScanPackageResult => result !== undefined),

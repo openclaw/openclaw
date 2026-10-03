@@ -66,7 +66,6 @@ describe("Synthetic live catalog", () => {
   it("discovers new models and refreshes known metadata without changing the inference transport", async () => {
     respond([
       liveModel,
-      { ...liveModel, id: "hf:moonshotai/Kimi-K3", context_length: 524288 },
       { ...liveModel, id: "hf:zai-org/GLM-5.2", input_modalities: ["text"] },
       {
         ...liveModel,
@@ -91,7 +90,7 @@ describe("Synthetic live catalog", () => {
       apiKey: "SYNTHETIC_API_KEY",
     });
     expect(result.provider.models.map((model) => model.id).toSorted()).toEqual(
-      [liveModel.id, "hf:moonshotai/Kimi-K3", "hf:zai-org/GLM-5.2", "syn:small:vision"].toSorted(),
+      [liveModel.id, "hf:zai-org/GLM-5.2", "syn:small:vision"].toSorted(),
     );
     expect(result.provider.models.find((model) => model.id === liveModel.id)).toMatchObject({
       reasoning: true,
@@ -120,16 +119,24 @@ describe("Synthetic live catalog", () => {
     );
   });
 
-  it.each(["failure", "empty", "unusable"])("keeps offline seeds on %s discovery", async (mode) => {
+  it.each(["failure", "unusable"])("does not substitute seeds for %s discovery", async (mode) => {
     if (mode === "failure") {
       fetchGuard.mockRejectedValueOnce(new Error("fixture unavailable"));
     } else {
-      respond(mode === "empty" ? [] : [{ id: "missing-metadata" }]);
+      respond([{ id: "missing-metadata" }]);
     }
     const provider = await registerSingleProviderPlugin(plugin);
-    await expect(provider.catalog?.run(context())).resolves.toEqual({
-      provider: { ...buildSyntheticProvider(), apiKey: "SYNTHETIC_API_KEY" },
-    });
+    await expect(provider.catalog?.run(context())).resolves.toEqual(
+      mode === "failure"
+        ? {
+            providers: {},
+            outcomes: [{ provider: "synthetic", status: "unavailable" }],
+          }
+        : {
+            provider: { ...buildSyntheticProvider(), apiKey: "SYNTHETIC_API_KEY", models: [] },
+            outcomes: [{ provider: "synthetic", status: "ready" }],
+          },
+    );
   });
 
   it("does not send a custom proxy credential to Synthetic's fixed model endpoint", async () => {

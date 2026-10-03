@@ -2,6 +2,7 @@
 import { vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createDeferredCore, type Deferred } from "../../../shared/deferred.js";
+import { GatewayClientRegistry } from "../client-registry.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
@@ -50,9 +51,10 @@ export function createDispatchTestHarness(
     getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
   } = {},
 ) {
+  const clients = new GatewayClientRegistry();
   const sentResponses: GatewayTestResponseFrame[] = [];
   const responseWaiters: { id: string; deferred: Deferred<GatewayTestResponseFrame> }[] = [];
-  const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
+  const send = vi.fn<GatewayWsMessageHandlerParams["send"]>(() => ({ kind: "sent" }));
   // Recording lives outside the spy so tests may replace send's implementation
   // (to observe call context) without silently breaking awaitResponseFrame.
   const sendForDispatcher = (frame: unknown) => {
@@ -74,6 +76,7 @@ export function createDispatchTestHarness(
   const logGateway = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const dispatcher = createGatewayAuthenticatedRequestDispatcher({
     handler: {
+      clients,
       connId: options.connId ?? "dispatch-test-connection",
       extraHandlers: options.extraHandlers ?? {},
       buildRequestContext: () => (options.buildRequestContext?.() ?? {}) as never,
@@ -86,9 +89,8 @@ export function createDispatchTestHarness(
     } as unknown as GatewayWsMessageHandlerParams,
     isWebchatConnect: () => false,
   });
-  // dispatch() is fire-and-forget behind a lazy server-methods import, so waiting
-  // on the response event keeps tests off polling deadlines that lose to a slow
-  // first module load and leak in-flight dispatches into sibling cases.
+  // A response can precede handler completion. Tests driving ongoing work wait
+  // for this event, then release their gates and join the original dispatch.
   const awaitResponseFrame = (id: string): Promise<GatewayTestResponseFrame> => {
     const already = sentResponses.find((frame) => frame.id === id);
     if (already) {
@@ -99,6 +101,7 @@ export function createDispatchTestHarness(
     return deferred.promise;
   };
   return {
+    clients,
     awaitResponseFrame,
     close,
     dispatcher: {

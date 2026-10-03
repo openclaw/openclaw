@@ -1,13 +1,16 @@
-// Google provider adapts Gemini streams and tools to the agent runtime.
-import { type GenerateContentParameters, GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, type HttpOptions } from "@google/genai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
+import { createAssistantOutput } from "../transports/assistant-output.js";
+import { buildManagedModelFetch } from "../transports/host-policy.js";
+import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
+import { mergeTransportHeaders } from "../transports/transport-stream-shared.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { requireApiKey } from "../utils/required-api-key.js";
 import {
   buildGoogleGenerateContentParams,
   buildGoogleSimpleThinking,
-  createGoogleAssistantOutput,
   type GoogleProviderOptions,
   runGoogleGenerateContentLifecycle,
 } from "./google-shared.js";
@@ -15,7 +18,6 @@ import { buildBaseOptions } from "./simple-options.js";
 
 type GoogleOptions = GoogleProviderOptions;
 
-// Counter for generating unique tool call IDs
 let toolCallCounter = 0;
 
 export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions> = (
@@ -24,7 +26,7 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
   options?: GoogleOptions,
 ) => {
   const stream = new AssistantMessageEventStream();
-  const output = createGoogleAssistantOutput(model, "google-generative-ai");
+  const output = createAssistantOutput(model, "google-generative-ai");
 
   void runGoogleGenerateContentLifecycle({
     stream,
@@ -33,9 +35,9 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
     options,
     createClient: () => {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-      return createClient(model, apiKey, options?.headers);
+      return createClient(model, apiKey, resolveOpencodeSessionHeaders(model, options));
     },
-    buildParams: () => buildParams(model, context, options),
+    buildParams: () => buildGoogleGenerateContentParams(model, context, options),
     nextToolCallId: (name) => `${name}_${Date.now()}_${++toolCallCounter}`,
   });
 
@@ -47,18 +49,11 @@ export const streamSimpleGoogle: StreamFunction<"google-generative-ai", SimpleSt
   context: Context,
   options?: SimpleStreamOptions,
 ) => {
-  const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
-
+  const apiKey = requireApiKey(model.provider, options?.apiKey);
   const base = buildBaseOptions(model, options, apiKey);
   return streamGoogle(model, context, {
     ...base,
-    thinking: buildGoogleSimpleThinking(model, options, {
-      includeGemma4ThinkingLevel: true,
-      useFlashLiteBudgets: true,
-    }),
+    thinking: buildGoogleSimpleThinking(model, options),
   } satisfies GoogleOptions);
 };
 
@@ -67,31 +62,25 @@ function createClient(
   apiKey?: string,
   optionsHeaders?: Record<string, string>,
 ): GoogleGenAI {
-  const httpOptions: { baseUrl?: string; apiVersion?: string; headers?: Record<string, string> } =
-    {};
+  const httpOptions: HttpOptions = {};
+  const fetcher = buildManagedModelFetch(model);
+  if (fetcher) {
+    httpOptions.fetch = fetcher;
+  }
   if (model.baseUrl) {
     httpOptions.baseUrl = model.baseUrl;
     httpOptions.apiVersion = ""; // baseUrl already includes version path, don't append
   }
   if (model.headers || optionsHeaders) {
-    httpOptions.headers = resolveAiTransportHeaderSentinels({
-      ...model.headers,
-      ...optionsHeaders,
-    });
+    httpOptions.headers = resolveAiTransportHeaderSentinels(
+      mergeTransportHeaders(model.headers, optionsHeaders),
+    );
   }
 
-  // @google/genai exposes RequestInit options but no custom fetch; unwrap at construction.
+  // Authentication is resolved before construction; the SDK also retains the host fetch policy.
   const resolvedApiKey = apiKey ? getAiTransportHost().resolveSecretSentinel(apiKey) : undefined;
   return new GoogleGenAI({
     apiKey: resolvedApiKey,
     httpOptions: Object.keys(httpOptions).length > 0 ? httpOptions : undefined,
   });
-}
-
-function buildParams(
-  model: Model<"google-generative-ai">,
-  context: Context,
-  options: GoogleOptions = {},
-): GenerateContentParameters {
-  return buildGoogleGenerateContentParams(model, context, options);
 }

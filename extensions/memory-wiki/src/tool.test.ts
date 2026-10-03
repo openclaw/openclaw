@@ -99,21 +99,18 @@ describe("memory-wiki tools", () => {
     return { tool: createWikiApplyTool(config), pagePath, original };
   }
 
-  it.each(["synthesise", "update"])(
-    "keeps wiki pages unchanged for unknown operation %s",
-    async (op) => {
-      const { tool, pagePath, original } = await createApplyFixture();
-      const outcome = await tool
-        .execute("unknown-operation", { op, lookup: "entity.alpha", status: "review" })
-        .then(
-          () => "accepted",
-          () => "rejected",
-        );
+  it("keeps wiki pages unchanged for unknown operation update", async () => {
+    const { tool, pagePath, original } = await createApplyFixture();
+    const outcome = await tool
+      .execute("unknown-operation", { op: "update", lookup: "entity.alpha", status: "review" })
+      .then(
+        () => "accepted",
+        () => "rejected",
+      );
 
-      expect(await fs.readFile(pagePath, "utf8")).toBe(original);
-      expect(outcome).toBe("rejected");
-    },
-  );
+    expect(await fs.readFile(pagePath, "utf8")).toBe(original);
+    expect(outcome).toBe("rejected");
+  });
 
   it.each(["update_metadata", "metadata"])(
     "applies supported metadata operation %s",
@@ -129,6 +126,24 @@ describe("memory-wiki tools", () => {
       expect(result.details).toMatchObject({ changed: true, operation: "update_metadata" });
       expect(page.frontmatter.status).toBe("review");
       expect(page.body).toContain("Keep this human note.");
+    },
+  );
+
+  it.each([-0.5, 999])(
+    "keeps wiki pages unchanged for out-of-range claim confidence %s",
+    async (confidence) => {
+      const { tool, pagePath, original } = await createApplyFixture();
+
+      await expect(
+        tool.execute("invalid-claim-confidence", {
+          op: "update_metadata",
+          lookup: "entity.alpha",
+          claims: [{ text: "Alpha fact", confidence }],
+        }),
+      ).rejects.toThrow(
+        `claims[0].confidence must be a number between 0 and 1; received ${confidence}.`,
+      );
+      await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(original);
     },
   );
 

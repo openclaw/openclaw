@@ -9,8 +9,8 @@ import { normalizeSpeechText } from "./speech-text.js";
 import type { TtsResult, TtsSynthesisResult } from "./tts-runtime-types.js";
 import {
   executeTtsProviderAttempts,
-  resolveTtsRequestSetup,
   sanitizeTtsErrorForLog,
+  withOwnedTtsRequest,
 } from "./tts-synthesis-support.js";
 
 export type TtsAudioPersistence = (params: {
@@ -80,17 +80,7 @@ export function shouldDeliverTtsAsVoice(params: {
 }
 
 export async function textToSpeechCore(
-  params: {
-    text: string;
-    cfg: OpenClawConfig;
-    prefsPath?: string;
-    channel?: string;
-    overrides?: TtsDirectiveOverrides;
-    disableFallback?: boolean;
-    timeoutMs?: number;
-    agentId?: string;
-    accountId?: string;
-  },
+  params: SpeechSynthesisParams,
   persistTtsAudio: TtsAudioPersistence,
 ): Promise<TtsResult> {
   const synthesis = await synthesizeSpeech(params);
@@ -104,21 +94,24 @@ export async function textToSpeechCore(
     };
   }
 
-  let audioBuffer = synthesis.audioBuffer;
-  let fileExtension = synthesis.fileExtension;
-  let outputFormat = synthesis.outputFormat;
   const transcoded = await maybePreTranscodeForVoiceDelivery({
     channel: params.channel,
     target: synthesis.target,
-    audioBuffer,
-    fileExtension,
-    outputFormat,
+    audioBuffer: synthesis.audioBuffer,
+    fileExtension: synthesis.fileExtension,
+    outputFormat: synthesis.outputFormat,
   });
-  if (transcoded) {
-    audioBuffer = transcoded.audioBuffer;
-    fileExtension = transcoded.fileExtension;
-    outputFormat = transcoded.outputFormat;
-  }
+  const audioBuffer = transcoded ? transcoded.audioBuffer : synthesis.audioBuffer;
+  const fileExtension = transcoded ? transcoded.fileExtension : synthesis.fileExtension;
+  const outputFormat = transcoded ? transcoded.outputFormat : synthesis.outputFormat;
+  const metadata = {
+    latencyMs: synthesis.latencyMs,
+    provider: synthesis.provider,
+    persona: synthesis.persona,
+    fallbackFrom: synthesis.fallbackFrom,
+    attemptedProviders: synthesis.attemptedProviders,
+    attempts: synthesis.attempts,
+  };
 
   let audioPath: string;
   try {
@@ -133,24 +126,14 @@ export async function textToSpeechCore(
     return {
       success: false,
       error: "TTS audio persistence failed",
-      latencyMs: synthesis.latencyMs,
-      provider: synthesis.provider,
-      persona: synthesis.persona,
-      fallbackFrom: synthesis.fallbackFrom,
-      attemptedProviders: synthesis.attemptedProviders,
-      attempts: synthesis.attempts,
+      ...metadata,
     };
   }
 
   return {
     success: true,
     audioPath,
-    latencyMs: synthesis.latencyMs,
-    provider: synthesis.provider,
-    persona: synthesis.persona,
-    fallbackFrom: synthesis.fallbackFrom,
-    attemptedProviders: synthesis.attemptedProviders,
-    attempts: synthesis.attempts,
+    ...metadata,
     outputFormat,
     voiceCompatible: synthesis.voiceCompatible,
     audioAsVoice: shouldDeliverTtsAsVoice({
@@ -233,52 +216,44 @@ export async function synthesizeTalkSpeech(
 async function synthesizeSpeechInternal(
   params: SpeechSynthesisParams,
 ): Promise<TtsSynthesisResult> {
-  const setup = resolveTtsRequestSetup({
-    text: params.text,
-    cfg: params.cfg,
-    prefsPath: params.prefsPath,
-    providerOverride: params.overrides?.provider,
-    disableFallback: params.disableFallback,
-    agentId: params.agentId,
-    channelId: params.channel,
-    accountId: params.accountId,
-  });
-  if ("error" in setup) {
-    return { success: false, error: setup.error };
-  }
+  return await withOwnedTtsRequest(
+    {
+      text: params.text,
+      cfg: params.cfg,
+      prefsPath: params.prefsPath,
+      providerOverride: params.overrides?.provider,
+      disableFallback: params.disableFallback,
+      agentId: params.agentId,
+      channelId: params.channel,
+      accountId: params.accountId,
+    },
+    async (setup) => {
+      if ("error" in setup) {
+        return { success: false, error: setup.error };
+      }
 
-  const { cfg, config, persona, providers } = setup;
-  const target = resolveTtsSynthesisTarget(params.channel);
-  return executeTtsProviderAttempts({
-    cfg,
-    config,
-    persona,
-    providers,
-    synthesisText: normalizeSpeechText(params.text),
-    providerOverrides: params.overrides?.providerOverrides,
-    timeoutMs: params.timeoutMs,
-    target,
-    logLabel: "TTS",
-    selectOperation: ({ resolvedProvider }) => ({
-      kind: "ready",
-      synthesize: ({ prepared, cfg: runtimeCfg, target: synthesisTarget, timeoutMs }) =>
-        resolvedProvider.provider.synthesize({
-          text: prepared.text,
-          cfg: runtimeCfg,
-          providerConfig: prepared.providerConfig,
-          target: synthesisTarget,
-          providerOverrides: prepared.providerOverrides,
-          timeoutMs,
+      const target = resolveTtsSynthesisTarget(params.channel);
+      return await executeTtsProviderAttempts({
+        ...setup,
+        synthesisText: normalizeSpeechText(params.text),
+        providerOverrides: params.overrides?.providerOverrides,
+        timeoutMs: params.timeoutMs,
+        target,
+        logLabel: "TTS",
+        selectOperation: ({ resolvedProvider }) => ({
+          kind: "ready",
+          synthesize: (request) => resolvedProvider.provider.synthesize(request),
         }),
-    }),
-    buildSuccess: ({ synthesis, ...metadata }) => ({
-      success: true,
-      ...metadata,
-      audioBuffer: synthesis.audioBuffer,
-      outputFormat: synthesis.outputFormat,
-      voiceCompatible: synthesis.voiceCompatible,
-      fileExtension: synthesis.fileExtension,
-      target,
-    }),
-  });
+        buildSuccess: ({ synthesis, ...metadata }) => ({
+          success: true,
+          ...metadata,
+          audioBuffer: synthesis.audioBuffer,
+          outputFormat: synthesis.outputFormat,
+          voiceCompatible: synthesis.voiceCompatible,
+          fileExtension: synthesis.fileExtension,
+          target,
+        }),
+      });
+    },
+  );
 }

@@ -59,7 +59,7 @@ const CHAT_METADATA_BOUNDARY_CONFIG = {
       model: { primary: "openai/gpt-boundary" },
       models: { "openai/gpt-boundary": {} },
     },
-    entries: { main: { default: true } },
+    entries: { main: { default: true }, healthy: {} },
   },
   models: {
     providers: {
@@ -98,7 +98,7 @@ async function writeGatewayConfig(
   }
 }
 
-test("chat.metadata retries owner misses without broadly retrying cached failures", async () => {
+test("chat.metadata isolates projection failures while retaining owner publication failures", async () => {
   const ws = requireGateway().ws;
   const publicationEvents = await import("../agents/prepared-model-runtime.publication-events.js");
   const initial = await rpcReq(ws, "chat.metadata", { agentId: "main" });
@@ -129,7 +129,6 @@ test("chat.metadata retries owner misses without broadly retrying cached failure
     models?: Array<{ id?: string; provider?: string }>;
   }>(ws, "chat.metadata", { agentId: "main" });
 
-  // On the merge-base this remains false: readCurrent rethrows the cached unavailable error.
   expect(recovered.ok).toBe(true);
   expect(recovered.payload?.models).toEqual(
     expect.arrayContaining([expect.objectContaining({ id: "gpt-boundary", provider: "openai" })]),
@@ -143,17 +142,19 @@ test("chat.metadata retries owner misses without broadly retrying cached failure
   expect(reset.ok).toBe(true);
 
   const modelsListResult = await import("./server-methods/models-list-result.js");
+  const prepareModelsListResult = modelsListResult.prepareModelsListResult;
   const projectionFailure = new Error("configured model catalog unavailable");
   const projectionSpy = vi
     .spyOn(modelsListResult, "prepareModelsListResult")
-    .mockRejectedValue(projectionFailure);
+    .mockImplementation(async (params) => {
+      if (params.agentId === "main") {
+        throw projectionFailure;
+      }
+      return prepareModelsListResult(params);
+    });
 
   publicationEvents.notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   publicationEvents.notifyPreparedModelRuntimePublication({ phase: "published" });
-  await vi.waitFor(() => expect(projectionSpy).toHaveBeenCalled(), {
-    interval: 1,
-    timeout: 2_000,
-  });
   const projectionUnavailable = await rpcReq(ws, "chat.metadata", { agentId: "main" });
   expect(projectionUnavailable).toMatchObject({
     ok: false,
@@ -162,16 +163,25 @@ test("chat.metadata retries owner misses without broadly retrying cached failure
       message: expect.stringContaining("configured model catalog unavailable"),
     },
   });
+  const healthy = await rpcReq(ws, "chat.metadata", { agentId: "healthy" });
+  expect(healthy.ok, JSON.stringify(healthy)).toBe(true);
 
   projectionSpy.mockRestore();
-  const stillUnavailable = await rpcReq(ws, "chat.metadata", { agentId: "main" });
+  const projectionRecovered = await rpcReq(ws, "chat.metadata", { agentId: "main" });
+  expect(projectionRecovered.ok, JSON.stringify(projectionRecovered)).toBe(true);
 
-  // A broad retry would turn this into a false recovery and hide a genuinely broken catalog.
-  expect(stillUnavailable).toMatchObject({
-    ok: false,
-    error: {
-      code: "UNAVAILABLE",
-      message: expect.stringContaining("configured model catalog unavailable"),
-    },
+  publicationEvents.notifyPreparedModelRuntimePublication({ phase: "invalidated" });
+  publicationEvents.notifyPreparedModelRuntimePublication({
+    phase: "failed",
+    error: new Error("prepared model owner publication failed"),
   });
+  for (const agentId of ["main", "healthy"]) {
+    expect(await rpcReq(ws, "chat.metadata", { agentId })).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("prepared model owner publication failed"),
+      },
+    });
+  }
 });

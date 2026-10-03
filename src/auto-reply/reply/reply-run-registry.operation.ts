@@ -7,6 +7,7 @@ import {
 } from "../../agents/run-termination.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
@@ -16,45 +17,46 @@ import {
   ReplyRunAlreadyActiveError,
   ReplyRunFollowupAdmissionBlockedError,
   ReplyRunSuccessorAdmissionBlockedError,
+  type ReplyBackendCancelReason,
   type ReplyOperation,
   type ReplyOperationPhase,
-  type ReplyToolAuthorityProjector,
   type ReplyTurnKind,
 } from "./reply-run-registry.contracts.js";
 import {
   abortFrozenOperations,
   attachedBackendByOperation,
+  clearReplyOperationByOperation,
   clearReplyRunState,
-  createUserAbortError,
   evictReplyOperationByOperation,
   expireReplyOperationByOperation,
   flushReplyOperationAfterClear,
+  forceClearReplyOperation,
   getAttachedBackend,
+  hasCommittedReplyOperationOutcome,
   isReplyOperationAbortable,
   isReplyOperationPreBackendPhase,
-  markReplyRunDiagnosticProgress,
   notifyReplyRunEnded,
   operationsByUpstreamAbortSignal,
+  producerCompletionByOperation,
+  prepareReplyRunKeyUpdate,
   registerFollowupAdmissionBarrier,
-  registerWaitSessionId,
   replyRunState,
+  resolveReplyOperationAgentId,
   retainStateUntilCompleteOperations,
   type ReplyRunAdmissionBarrier,
-  runAfterReplyOperationClear,
   startReplyOperationSuccessorBarriers,
-  type ReplyOperationStaleExpiryOptions,
   updateFollowupAdmissionSessionId,
   updateSuccessorAdmissionSessionId,
-  waitForReplyBarrierSettlement,
 } from "./reply-run-registry.state.js";
+import { createReplyOperationToolAuthority } from "./reply-run-registry.tool-authority.js";
 
-type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 type ReplyOperationResult = NonNullable<ReplyOperation["result"]>;
 type ReplyOperationAbortCode = Extract<ReplyOperationResult, { kind: "aborted" }>["code"];
 
 export function createReplyOperation(params: {
   sessionKey: string;
   sessionId: string;
+  agentId?: string;
   turnKind?: ReplyTurnKind;
   resetTriggered: boolean;
   routeThreadId?: string | number;
@@ -88,27 +90,33 @@ export function createReplyOperation(params: {
   // adoption); every closure below must read this, never params.sessionKey.
   let currentSessionKey = sessionKey;
   let currentSessionId = sessionId;
+  let currentAgentId = resolveReplyOperationAgentId(sessionKey, params.agentId);
   let phase: ReplyOperationPhase = "queued";
   let phaseBeforeGlobalLaneWait: "queued" | "running" | undefined;
   let staleExpiryReason: replyRunSettle.ReplyOperationStaleReason | undefined;
   let result: ReplyOperationResult | null = null;
   let stateCleared = false;
-  let clearBarrierSettlement: Promise<void> | undefined;
   let pendingClearBarrier: ReplyRunAdmissionBarrier | undefined;
   let retainFailureUntilComplete = false;
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
-  let toolAuthorityFingerprint: string | undefined;
-  let toolAuthorityProjector: ReplyToolAuthorityProjector | undefined;
-  let toolAuthorityRoute: { provider: string; model: string } | undefined;
+  let sourceReplyDelivered = false;
+  const toolAuthority = createReplyOperationToolAuthority({
+    isOpen: () => result === null,
+    ownsRunSlot: () => replyRunState.activeRunsByKey.get(currentSessionKey) === operation,
+  });
   const ownerSettlement = createDeferredCore();
-  let ownerSettled = false;
-  const settleOwner = () => {
-    if (ownerSettled) {
+  const producerCompletion = createDeferredCore();
+  let ownerCompletionBarrier: Promise<void> | undefined;
+  const settleOwner = (): void => {
+    const pending = ownerCompletionBarrier;
+    if (!pending) {
+      ownerSettlement.resolve(undefined);
       return;
     }
-    ownerSettled = true;
-    ownerSettlement.resolve(undefined);
+    void pending.then(() =>
+      pending === ownerCompletionBarrier ? ownerSettlement.resolve(undefined) : settleOwner(),
+    );
   };
   const startedAtMs = Date.now();
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -128,7 +136,16 @@ export function createReplyOperation(params: {
   };
   const setResult = (next: ReplyOperationResult) => {
     result = next;
+    toolAuthority.close();
     recordActivity();
+    phase = next.kind;
+  };
+  const markProgress = (reason: string) => {
+    markDiagnosticRunProgress({
+      sessionId: currentSessionId,
+      sessionKey: currentSessionKey,
+      reason,
+    });
   };
 
   const clearState = (
@@ -139,29 +156,26 @@ export function createReplyOperation(params: {
       return;
     }
     stateCleared = true;
+    toolAuthority.close();
     terminalSettleTimer.clear();
     finalizationLease.clear();
     expireReplyOperationByOperation.delete(operation);
     evictReplyOperationByOperation.delete(operation);
+    clearReplyOperationByOperation.delete(operation);
     detachUpstreamAbort();
     const registeredBarrier = afterClearBarrier
       ? registerFollowupAdmissionBarrier(
-          currentSessionKey,
-          currentSessionId,
+          operation,
           afterClearBarrier,
           followupAdmissionBarrierTimeout,
         )
       : pendingClearBarrier;
     pendingClearBarrier = undefined;
-    updateFollowupAdmissionSessionId(currentSessionKey, currentSessionId);
+    updateFollowupAdmissionSessionId(operation);
     // Recovery-owner handoff must begin before the old slot wakes a successor;
     // otherwise that successor can snapshot durable state the handoff then mutates.
     startReplyOperationSuccessorBarriers(operation);
-    markReplyRunDiagnosticProgress({
-      sessionKey: currentSessionKey,
-      sessionId: currentSessionId,
-      reason: "reply_operation:ended",
-    });
+    markProgress("reply_operation:ended");
     clearReplyRunState({
       sessionKey: currentSessionKey,
       sessionId: currentSessionId,
@@ -172,15 +186,8 @@ export function createReplyOperation(params: {
       return;
     }
     void registeredBarrier.settled.then(() =>
-      flushReplyOperationAfterClear(operation, registeredBarrier.sessionId),
+      flushReplyOperationAfterClear(operation, registeredBarrier.source.sessionId),
     );
-    clearBarrierSettlement = registeredBarrier.settled;
-  };
-
-  const abortInternally = (reason?: unknown) => {
-    if (!controller.signal.aborted) {
-      controller.abort(reason);
-    }
   };
 
   const scheduleTerminalSettle = () => {
@@ -201,7 +208,7 @@ export function createReplyOperation(params: {
       detachUpstreamAbort();
     }
     phase = "aborted";
-    abortInternally(abortReason);
+    controller.abort(abortReason);
     // Cancellation may throw, but lifecycle cleanup still must run. Pre-backend
     // non-retained owners release now; retained/running owners await terminal settle.
     try {
@@ -211,7 +218,7 @@ export function createReplyOperation(params: {
         isReplyOperationPreBackendPhase(phaseBeforeAbort) &&
         !retainStateUntilCompleteOperations.has(operation)
       ) {
-        clearState();
+        operation.complete();
       } else {
         scheduleTerminalSettle();
       }
@@ -225,6 +232,9 @@ export function createReplyOperation(params: {
     get sessionId() {
       return currentSessionId;
     },
+    get agentId() {
+      return currentAgentId;
+    },
     turnKind: params.turnKind ?? "visible",
     lifecycleGeneration,
     get routeThreadId() {
@@ -233,24 +243,35 @@ export function createReplyOperation(params: {
     get originatingLeafEntryId() {
       return params.originatingLeafEntryId;
     },
-    get abortSignal() {
-      return controller.signal;
-    },
+    abortSignal: controller.signal,
     get resetTriggered() {
       return params.resetTriggered;
     },
     get terminalRecovery() {
       return terminalRecovery;
     },
+    get sourceReplyDelivered() {
+      return sourceReplyDelivered;
+    },
     get acceptedSteeredInboundAudio() {
       return acceptedSteeredInboundAudio;
     },
     get toolAuthorityFingerprint() {
-      return toolAuthorityFingerprint;
+      return toolAuthority.toolAuthorityFingerprint;
+    },
+    get personalToolParticipants() {
+      return toolAuthority.personalToolParticipants;
     },
     get toolAuthorityRoute() {
-      return toolAuthorityRoute;
+      return toolAuthority.toolAuthorityRoute;
     },
+    get requestedToolAuthorityRoute() {
+      return toolAuthority.requestedToolAuthorityRoute;
+    },
+    get automaticFallbackRoute() {
+      return toolAuthority.automaticFallbackRoute;
+    },
+    setAutomaticFallbackRoute: toolAuthority.setAutomaticFallbackRoute,
     get phase() {
       return phase;
     },
@@ -266,9 +287,8 @@ export function createReplyOperation(params: {
     get lastActivityAtMs() {
       return lastActivityAtMs;
     },
-    hasOwnedSessionId(candidateSessionId) {
-      const normalizedSessionId = normalizeOptionalString(candidateSessionId);
-      return normalizedSessionId ? ownedSessionIds.has(normalizedSessionId) : false;
+    captureOwnedSessionIds() {
+      return new Set(ownedSessionIds);
     },
     recordActivity() {
       finalizationLease.recordActivity();
@@ -285,22 +305,14 @@ export function createReplyOperation(params: {
         return;
       }
       phase = "waiting_for_deferred_maintenance";
-      markReplyRunDiagnosticProgress({
-        sessionKey: currentSessionKey,
-        sessionId: currentSessionId,
-        reason: "deferred_maintenance:waiting",
-      });
+      markProgress("deferred_maintenance:waiting");
     },
     markDeferredMaintenanceWaitEnded() {
       if (result || phase !== "waiting_for_deferred_maintenance") {
         return;
       }
       phase = "queued";
-      markReplyRunDiagnosticProgress({
-        sessionKey: currentSessionKey,
-        sessionId: currentSessionId,
-        reason: "deferred_maintenance:wait_ended",
-      });
+      markProgress("deferred_maintenance:wait_ended");
     },
     markWaitingForGlobalLane() {
       if (result || (phase !== "queued" && phase !== "running")) {
@@ -310,11 +322,7 @@ export function createReplyOperation(params: {
       // lets stale recovery silently drop replies while global capacity is busy.
       phaseBeforeGlobalLaneWait = phase;
       phase = "waiting_for_global_lane";
-      markReplyRunDiagnosticProgress({
-        sessionKey: currentSessionKey,
-        sessionId: currentSessionId,
-        reason: "global_lane:waiting",
-      });
+      markProgress("global_lane:waiting");
     },
     markGlobalLaneWaitEnded() {
       if (result || phase !== "waiting_for_global_lane") {
@@ -322,52 +330,21 @@ export function createReplyOperation(params: {
       }
       phase = phaseBeforeGlobalLaneWait ?? "queued";
       phaseBeforeGlobalLaneWait = undefined;
-      markReplyRunDiagnosticProgress({
-        sessionKey: currentSessionKey,
-        sessionId: currentSessionId,
-        reason: "global_lane:wait_ended",
-      });
+      markProgress("global_lane:wait_ended");
     },
     markTerminalRecovery() {
       terminalRecovery = true;
     },
-    markAcceptedSteeredInboundAudio() {
-      acceptedSteeredInboundAudio = true;
+    markSteeredInputAccepted({ inboundAudio }) {
+      acceptedSteeredInboundAudio ||= inboundAudio;
+      sourceReplyDelivered = false;
     },
-    bindToolAuthorityFingerprint(fingerprint) {
-      const normalized = normalizeOptionalString(fingerprint);
-      if (!normalized) {
-        throw new Error("Reply operation tool authority fingerprint is required");
-      }
-      if (toolAuthorityFingerprint && toolAuthorityFingerprint !== normalized) {
-        throw new Error("Reply operation cannot change tool authority after admission");
-      }
-      toolAuthorityFingerprint = normalized;
+    markSourceReplyDelivered() {
+      sourceReplyDelivered = true;
     },
-    bindToolAuthorityProjector(projector) {
-      if (toolAuthorityProjector && toolAuthorityProjector !== projector) {
-        throw new Error("Reply operation cannot change tool authority projector after admission");
-      }
-      toolAuthorityProjector = projector;
-    },
-    projectToolAuthorityFingerprint(overlay) {
-      if (result || !toolAuthorityProjector || !toolAuthorityRoute) {
-        return undefined;
-      }
-      try {
-        return normalizeOptionalString(toolAuthorityProjector(overlay, toolAuthorityRoute));
-      } catch {
-        return undefined;
-      }
-    },
-    bindToolAuthorityRoute(route) {
-      const provider = normalizeOptionalString(route.provider);
-      const model = normalizeOptionalString(route.model);
-      if (!provider || !model) {
-        throw new Error("Reply operation tool authority route is required");
-      }
-      toolAuthorityRoute = { provider, model };
-    },
+    bindToolAuthoritySnapshot: toolAuthority.bindToolAuthoritySnapshot,
+    projectToolAuthorityFingerprint: toolAuthority.projectToolAuthorityFingerprint,
+    bindToolAuthorityRoute: toolAuthority.bindToolAuthorityRoute,
     updateSessionId(nextSessionId) {
       if (result) {
         return;
@@ -386,44 +363,30 @@ export function createReplyOperation(params: {
         );
       }
       replyRunState.activeKeysBySessionId.delete(currentSessionId);
-      registerWaitSessionId(currentSessionKey, currentSessionId);
+      replyRunState.waitKeysBySessionId.set(currentSessionId, currentSessionKey);
       currentSessionId = normalizedNextSessionId;
       ownedSessionIds.add(currentSessionId);
-      updateFollowupAdmissionSessionId(currentSessionKey, currentSessionId);
+      updateFollowupAdmissionSessionId(operation);
       updateSuccessorAdmissionSessionId(operation, currentSessionId);
       replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
-      registerWaitSessionId(currentSessionKey, currentSessionId);
-      markReplyRunDiagnosticProgress({
-        sessionKey: currentSessionKey,
-        sessionId: currentSessionId,
-        reason: "reply_operation:session_updated",
-      });
+      replyRunState.waitKeysBySessionId.set(currentSessionId, currentSessionKey);
+      markProgress("reply_operation:session_updated");
     },
-    updateSessionKey(nextSessionKey) {
-      const normalizedNextKey = normalizeOptionalString(nextSessionKey);
-      if (!normalizedNextKey) {
-        throw new Error("Reply operations require a canonical sessionKey");
-      }
-      if (normalizedNextKey === currentSessionKey) {
+    updateSessionKey(nextSessionKey, agentId) {
+      const update = prepareReplyRunKeyUpdate(operation, nextSessionKey, agentId, stateCleared);
+      if (!update) {
         return;
       }
-      // Only a queued reservation may move slots: once the run started (or the
-      // operation settled), abort/steer/wait paths already resolved this key.
-      if (result || stateCleared || phase !== "queued") {
-        throw new Error(`Cannot rekey reply operation ${currentSessionKey} in phase ${phase}`);
-      }
-      if (replyRunState.activeRunsByKey.has(normalizedNextKey)) {
-        throw new ReplyRunAlreadyActiveError(normalizedNextKey);
-      }
-      if (replyRunState.successorAdmissionBarriersByKey.has(normalizedNextKey)) {
-        throw new ReplyRunSuccessorAdmissionBlockedError(normalizedNextKey);
-      }
       recordActivity();
+      currentAgentId = update.agentId;
+      if (update.sessionKey === currentSessionKey) {
+        return;
+      }
       const previousKey = currentSessionKey;
       replyRunState.activeRunsByKey.delete(previousKey);
       replyRunState.activeSessionIdsByKey.delete(previousKey);
-      currentSessionKey = normalizedNextKey;
+      currentSessionKey = update.sessionKey;
       replyRunState.activeRunsByKey.set(currentSessionKey, operation);
       replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
@@ -436,11 +399,7 @@ export function createReplyOperation(params: {
       }
       // The previous key's slot is idle now; wake turns waiting on it.
       notifyReplyRunEnded(previousKey);
-      markReplyRunDiagnosticProgress({
-        sessionKey: currentSessionKey,
-        sessionId: currentSessionId,
-        reason: "reply_operation:session_key_adopted",
-      });
+      markProgress("reply_operation:session_key_adopted");
     },
     attachBackend(handle) {
       if (result) {
@@ -456,12 +415,7 @@ export function createReplyOperation(params: {
         return;
       }
       recordActivity();
-      const backendToolAuthorityFingerprint = normalizeOptionalString(
-        handle.toolAuthorityFingerprint,
-      );
-      if (backendToolAuthorityFingerprint) {
-        toolAuthorityFingerprint = backendToolAuthorityFingerprint;
-      }
+      toolAuthority.bindBackendFingerprint(handle.toolAuthorityFingerprint);
       attachedBackendByOperation.set(operation, handle);
       if (controller.signal.aborted) {
         handle.cancel("superseded");
@@ -482,38 +436,33 @@ export function createReplyOperation(params: {
     },
     ownerSettlement: ownerSettlement.promise,
     complete() {
+      producerCompletion.resolve();
       if (!result) {
         setResult({ kind: "completed" });
-        phase = "completed";
       }
       clearState();
       settleOwner();
     },
-    completeThen(afterClear) {
-      runAfterReplyOperationClear(operation, afterClear);
-      operation.complete();
-    },
     completeWithAfterClearBarrier(barrier, timeoutMs) {
+      // Producer work is done; delivery may still need a successor operation.
+      producerCompletion.resolve();
+      // Admission may time out to free a slot; the old writer settles only when
+      // its actual delivery/persistence barrier finishes, including repeated complete().
+      const completed = Promise.resolve(barrier).then(
+        () => {},
+        () => {},
+      );
+      ownerCompletionBarrier = ownerCompletionBarrier
+        ? Promise.all([ownerCompletionBarrier, completed]).then(() => {})
+        : completed;
       if (!result) {
         setResult({ kind: "completed" });
-        phase = "completed";
       }
-      const wasAlreadyCleared = stateCleared;
-      const ownerCompletionSettlement = pendingClearBarrier
-        ? waitForReplyBarrierSettlement(barrier, timeoutMs)
-        : undefined;
       clearState(barrier, timeoutMs);
       // This barrier owns dispatch delivery and terminal persistence. Stale
       // expiry may have already cleared the slot, but recovery must still wait
       // for that old owner's durable work before admitting a queued turn.
-      const completionSettlement = wasAlreadyCleared
-        ? waitForReplyBarrierSettlement(barrier, timeoutMs)
-        : (ownerCompletionSettlement ?? clearBarrierSettlement);
-      if (completionSettlement) {
-        void completionSettlement.then(settleOwner);
-      } else {
-        settleOwner();
-      }
+      settleOwner();
     },
     fail(code, cause) {
       abortFrozenOperations.add(operation);
@@ -521,7 +470,6 @@ export function createReplyOperation(params: {
       finalizationLease.clear();
       if (!result) {
         setResult({ kind: "failed", code, cause });
-        phase = "failed";
       }
       if (!retainFailureUntilComplete && !retainStateUntilCompleteOperations.has(operation)) {
         clearState();
@@ -533,7 +481,11 @@ export function createReplyOperation(params: {
       if (!isReplyOperationAbortable(operation)) {
         return false;
       }
-      abortOperation("user_abort", createUserAbortError(), "aborted_by_user");
+      abortOperation(
+        "user_abort",
+        createAbortError("Reply operation aborted by user"),
+        "aborted_by_user",
+      );
       return true;
     },
     abortForRestart() {
@@ -551,7 +503,6 @@ export function createReplyOperation(params: {
       beforeSupersede?.();
       if (abortFrozen) {
         setResult({ kind: "aborted", code: "aborted_for_supersession" });
-        phase = "aborted";
         scheduleTerminalSettle();
         return true;
       }
@@ -560,8 +511,13 @@ export function createReplyOperation(params: {
     },
   };
 
+  clearReplyOperationByOperation.set(operation, clearState);
+  producerCompletionByOperation.set(operation, producerCompletion.promise);
   expireReplyOperationByOperation.set(operation, (reason, options) => {
-    if (replyRunState.activeRunsByKey.get(currentSessionKey) !== operation) {
+    if (
+      replyRunState.activeRunsByKey.get(currentSessionKey) !== operation ||
+      (reason !== "finalization_stalled" && hasCommittedReplyOperationOutcome(operation))
+    ) {
       return false;
     }
     // Set the terminal result BEFORE cancelling the backend: cancel can
@@ -574,21 +530,12 @@ export function createReplyOperation(params: {
       // from post-output stalls (finalization/terminal cleanup; feedback is noise).
       staleExpiryReason = reason;
       setResult({ kind: "failed", code: "run_stalled" });
-      phase = "failed";
     }
-    const logStaleTakeoverRelease = () => {
-      diag.warn(
-        `reply run stale takeover: forced release sessionKey=${currentSessionKey} reason=${reason} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
-          result,
-        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
-      );
-    };
     if (options?.afterClearBarrier) {
       // Prepare the recovery fence before cancellation, but retain exact lane
       // ownership until cancel returns or the backend re-enters completion.
       pendingClearBarrier = registerFollowupAdmissionBarrier(
-        currentSessionKey,
-        currentSessionId,
+        operation,
         options.afterClearBarrier,
         options.followupAdmissionBarrierTimeout,
       );
@@ -603,9 +550,13 @@ export function createReplyOperation(params: {
         `reply run stale takeover cancel failed: sessionKey=${currentSessionKey} reason=${reason} owner=${stateCleared ? "completed" : "retained"} error=${String(error)}`,
       );
     }
-    abortInternally(createAbortError("Reply operation expired as stale"));
+    controller.abort(createAbortError("Reply operation expired as stale"));
     if (stateCleared) {
-      logStaleTakeoverRelease();
+      diag.warn(
+        `reply run stale takeover: forced release sessionKey=${currentSessionKey} reason=${reason} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
+          result,
+        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
+      );
       return true;
     }
     // cancel() only requests shutdown. A missing backend can also be a live
@@ -625,12 +576,7 @@ export function createReplyOperation(params: {
       !result &&
       replyRunState.activeRunsByKey.get(currentSessionKey) === operation,
     onActivity: recordActivity,
-    onFinalizationProgress: () =>
-      markReplyRunDiagnosticProgress({
-        sessionKey: currentSessionKey,
-        sessionId: currentSessionId,
-        reason: "reply_operation:finalizing_progress",
-      }),
+    onFinalizationProgress: () => markProgress("reply_operation:finalizing_progress"),
     onExpire: () => {
       diag.warn(
         `reply run finalization settle: forced release sessionKey=${currentSessionKey} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
@@ -664,36 +610,25 @@ export function createReplyOperation(params: {
     }
     if (!result) {
       setResult({ kind: "aborted", code: "aborted_for_restart" });
-      phase = "aborted";
     }
-    abortInternally(createAgentRunRestartAbortError());
-    let cancelError: unknown;
-    let cancelFailed = false;
+    controller.abort(createAgentRunRestartAbortError());
     try {
       getAttachedBackend(operation)?.cancel("restart");
     } catch (error) {
-      cancelFailed = true;
-      cancelError = error;
       diag.warn(
         `reply run lifecycle eviction cancel failed: sessionKey=${currentSessionKey} error=${String(error)}`,
       );
+      throw error;
     } finally {
       clearState();
-    }
-    if (cancelFailed) {
-      throw cancelError;
     }
   });
 
   replyRunState.activeRunsByKey.set(sessionKey, operation);
   replyRunState.activeSessionIdsByKey.set(sessionKey, currentSessionId);
   replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
-  registerWaitSessionId(sessionKey, currentSessionId);
-  markReplyRunDiagnosticProgress({
-    sessionKey,
-    sessionId: currentSessionId,
-    reason: "reply_operation:queued",
-  });
+  replyRunState.waitKeysBySessionId.set(currentSessionId, sessionKey);
+  markProgress("reply_operation:queued");
   if (upstreamAbortSignal) {
     operationsByUpstreamAbortSignal.set(upstreamAbortSignal, operation);
     const abortFromUpstream = () => {
@@ -721,21 +656,4 @@ export function createReplyOperation(params: {
   }
 
   return operation;
-}
-
-export function expireStaleReplyOperation(
-  operation: ReplyOperation,
-  reason: replyRunSettle.ReplyOperationStaleReason,
-  options?: ReplyOperationStaleExpiryOptions,
-): boolean {
-  return expireReplyOperationByOperation.get(operation)?.(reason, options) ?? false;
-}
-
-export function forceClearReplyOperation(operation: ReplyOperation, cause?: unknown): boolean {
-  if (replyRunState.activeRunsByKey.get(operation.key) !== operation) {
-    return false;
-  }
-  operation.fail("run_failed", cause);
-  operation.complete();
-  return true;
 }

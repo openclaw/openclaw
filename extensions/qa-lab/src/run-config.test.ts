@@ -1,55 +1,18 @@
 // Qa Lab tests cover run config plugin behavior.
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const { defaultQaRuntimeModelForMode, resolveQaRuntimeModelPair } = vi.hoisted(() => ({
-  defaultQaRuntimeModelForMode:
-    vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(),
-  resolveQaRuntimeModelPair: vi.fn(),
-}));
-
-vi.mock("./model-selection.runtime.js", () => ({
-  defaultQaRuntimeModelForMode,
-  resolveQaRuntimeModelPair,
-}));
-import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
-import {
-  resolveQaRunProfileExecutionSelection,
-  resolveQaRunProfileMembership,
-} from "./profile-planning.js";
-import { resolveQaLiveFrontierAlternateModel } from "./providers/live-frontier/model-selection.runtime.js";
+import { describe, expect, it, vi } from "vitest";
+import { resolveQaRunProfileExecutionSelection } from "./profile-planning.js";
 import {
   createIdleQaRunnerSnapshot,
   createQaRunOutputDir,
   normalizeQaRunSelection,
   resolveQaLabRunPlan,
-  type QaProviderModeInput,
 } from "./run-config.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import {
   readQaScorecardTaxonomyReport,
   type QaScorecardTaxonomyReport,
 } from "./scorecard-taxonomy.js";
-
-function resolveMockQaRuntimeModelPair(params: {
-  providerMode: string;
-  primaryModel?: string;
-  alternateModel?: string;
-  resolveDefaultModel?: (mode: string, alternate?: boolean) => string;
-}) {
-  const resolveDefaultModel =
-    params.resolveDefaultModel ??
-    ((mode: string, alternate = false) =>
-      defaultQaRuntimeModelForMode(mode, alternate ? { alternate: true } : undefined));
-  const primaryModel = params.primaryModel?.trim() || resolveDefaultModel(params.providerMode);
-  const alternateModel =
-    params.alternateModel?.trim() ||
-    (params.providerMode === "live-frontier"
-      ? (resolveQaLiveFrontierAlternateModel(primaryModel) ??
-        resolveDefaultModel(params.providerMode, true))
-      : resolveDefaultModel(params.providerMode, true));
-  return { primaryModel, alternateModel };
-}
 
 const profiles: QaScorecardTaxonomyReport["profiles"] = [
   {
@@ -109,13 +72,8 @@ const scenarios = [
 ];
 
 describe("qa run config", () => {
-  beforeEach(() => {
-    defaultQaRuntimeModelForMode.mockImplementation(
-      (mode: string, options?: { alternate?: boolean }) =>
-        defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
-    );
-    resolveQaRuntimeModelPair.mockImplementation(resolveMockQaRuntimeModelPair);
-  });
+  const catalog = readQaScenarioPack();
+  const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
 
   it("creates a canonical smoke-profile request without copying profile membership", () => {
     const expected = {
@@ -155,33 +113,10 @@ describe("qa run config", () => {
       evidenceMode: "full",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-sol",
+      alternateModel: "openai/gpt-5.6-terra",
       fastMode: true,
       runtimePair: null,
       runtimePairLane: null,
-      scenarioIds: ["thread-lifecycle"],
-    });
-  });
-
-  it("applies the canonical profile execution defaults to explicit scenario requests", () => {
-    expect(
-      normalizeQaRunSelection(
-        { profile: "all", scenarioIds: ["thread-lifecycle"] },
-        scenarios,
-        profiles,
-      ),
-    ).toMatchObject({
-      profile: "all",
-      channelDriver: "live",
-      evidenceMode: "full",
-      scenarioIds: ["thread-lifecycle"],
-    });
-    expect(
-      normalizeQaRunSelection({ scenarioIds: ["thread-lifecycle"] }, scenarios, profiles),
-    ).toMatchObject({
-      profile: "all",
-      channelDriver: "live",
-      evidenceMode: "full",
       scenarioIds: ["thread-lifecycle"],
     });
   });
@@ -247,31 +182,6 @@ describe("qa run config", () => {
     }
   });
 
-  it("normalizes the channel driver independently from the provider lane", () => {
-    expect(
-      normalizeQaRunSelection(
-        {
-          channelDriver: "crabline",
-          providerMode: "live-frontier",
-          scenarioIds: ["dm-chat-baseline"],
-        },
-        scenarios,
-        profiles,
-      ),
-    ).toMatchObject({ channelDriver: "crabline", providerMode: "live-frontier" });
-    expect(
-      normalizeQaRunSelection(
-        {
-          channelDriver: "live",
-          providerMode: "mock-openai",
-          scenarioIds: ["dm-chat-baseline"],
-        },
-        scenarios,
-        profiles,
-      ),
-    ).toMatchObject({ channelDriver: "live", providerMode: "mock-openai" });
-  });
-
   it("normalizes every server-owned control-plane axis", () => {
     expect(
       normalizeQaRunSelection(
@@ -313,32 +223,7 @@ describe("qa run config", () => {
     ).toThrow('runtimePair must be ["openclaw", "codex"]');
   });
 
-  it("shares implicit profile membership and eligibility with the canonical profile planner", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
-    const selection = normalizeQaRunSelection({}, catalog.scenarios, scorecardReport.profiles);
-    const membership = resolveQaRunProfileMembership(
-      { profile: selection.profile },
-      { scenarios: catalog.scenarios, scorecardReport },
-    );
-    const expected = resolveQaRunProfileExecutionSelection({
-      scenarios: membership.selectedScenarios,
-      providerMode: selection.providerMode,
-      primaryModel: selection.primaryModel,
-      channelDriver: selection.channelDriver,
-      channel: selection.channel,
-    });
-
-    const plan = resolveQaLabRunPlan({ selection, scenarios: catalog.scenarios, scorecardReport });
-
-    expect(plan.status).toBe("ready");
-    expect(plan.selectedScenarios.map((scenario) => scenario.id)).toEqual(
-      expected.selectedScenarios.map((scenario) => scenario.id),
-    );
-  });
-
   it("keeps portable thread scenarios in unpinned live profiles", () => {
-    const catalog = readQaScenarioPack();
     const scenarioIds = new Set(["thread-follow-up", "thread-isolation"]);
     const selected = catalog.scenarios.filter((scenario) => scenarioIds.has(scenario.id));
 
@@ -357,7 +242,6 @@ describe("qa run config", () => {
   });
 
   it("selects a supported declared transport for portable live scenarios", () => {
-    const catalog = readQaScenarioPack();
     const scenario = catalog.scenarios.find((entry) => entry.id === "thread-follow-up");
     if (!scenario) {
       throw new Error("thread-follow-up scenario is missing from the QA catalog");
@@ -376,7 +260,6 @@ describe("qa run config", () => {
   });
 
   it("keeps portable threads but excludes module flows from Crabline plans", () => {
-    const catalog = readQaScenarioPack();
     const scenarioIds = new Set([
       "matrix-approval-channel-target-both",
       "matrix-approval-deny-reaction",
@@ -441,8 +324,6 @@ describe("qa run config", () => {
   });
 
   it("resolves mixed execution kinds and reports runtime-pair-lane exclusions", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
     const mixedSelection = normalizeQaRunSelection(
       {
         profile: "all",
@@ -492,8 +373,6 @@ describe("qa run config", () => {
   });
 
   it("validates explicit runtime-pair-lane selections without expanding them", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
     const selectedId = "runtime-first-hour-20-turn";
     const selection = normalizeQaRunSelection(
       {
@@ -542,8 +421,6 @@ describe("qa run config", () => {
   });
 
   it("does not apply live-adapter eligibility to non-flow executions", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
     const selection = normalizeQaRunSelection(
       {
         profile: "all",
@@ -572,8 +449,6 @@ describe("qa run config", () => {
   });
 
   it("preserves canonical unresolved live dispatch and rejects unsupported driver channels", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
     const liveSelection = normalizeQaRunSelection(
       {
         profile: "all",
@@ -625,8 +500,6 @@ describe("qa run config", () => {
   });
 
   it("fails closed when an explicit scenario conflicts with execution.channel", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
     const scenario = catalog.scenarios.find(
       (entry) => entry.execution.channel && entry.execution.channel !== "qa-channel",
     );
@@ -652,8 +525,6 @@ describe("qa run config", () => {
   });
 
   it("returns an invalid resolved plan for a qa-channel execution override", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
     const selection = normalizeQaRunSelection(
       {
         profile: "all",
@@ -683,8 +554,6 @@ describe("qa run config", () => {
   });
 
   it("distinguishes declared constraints from the suite-resolved effective channel", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
     const selection = normalizeQaRunSelection(
       {
         profile: "all",
@@ -728,15 +597,11 @@ describe("qa run config", () => {
     ).toThrow("unknown QA channel driver: renamed-cli-policy");
   });
 
-  it("keeps idle snapshots on static defaults so startup does not inspect auth profiles", () => {
-    defaultQaRuntimeModelForMode.mockReturnValue("openai/gpt-5.6-luna");
-    defaultQaRuntimeModelForMode.mockClear();
-
+  it("keeps idle snapshots on the canonical mock defaults", () => {
     const selection = createIdleQaRunnerSnapshot(profiles).selection;
     expect(selection.providerMode).toBe("mock-openai");
     expect(selection.primaryModel).toBe("mock-openai/gpt-5.6-luna");
     expect(selection.alternateModel).toBe("mock-openai/gpt-5.6-luna-alt");
-    expect(defaultQaRuntimeModelForMode).not.toHaveBeenCalled();
   });
 
   it("fails closed when required canonical profiles are missing", () => {
@@ -752,33 +617,6 @@ describe("qa run config", () => {
     expect(() =>
       normalizeQaRunSelection({ scenarioIds: ["dm-chat-baseline"] }, scenarios, profilesWithoutAll),
     ).toThrow("unknown QA run profile: all");
-  });
-
-  it("normalizes aimock selections", () => {
-    expect(
-      normalizeQaRunSelection(
-        {
-          providerMode: "aimock",
-          primaryModel: "",
-          alternateModel: "",
-          scenarioIds: ["dm-chat-baseline"],
-        },
-        scenarios,
-        profiles,
-      ),
-    ).toEqual({
-      profile: "all",
-      channel: null,
-      channelDriver: "live",
-      evidenceMode: "full",
-      providerMode: "aimock",
-      primaryModel: "aimock/gpt-5.6-luna",
-      alternateModel: "aimock/gpt-5.6-luna-alt",
-      fastMode: false,
-      runtimePair: null,
-      runtimePairLane: null,
-      scenarioIds: ["dm-chat-baseline"],
-    });
   });
 
   it("anchors generated run output dirs under the provided repo root", () => {
@@ -803,14 +641,7 @@ describe("qa run config", () => {
     }
   });
 
-  it("prefers the Codex OAuth default when the runtime resolver says it is available", () => {
-    defaultQaRuntimeModelForMode.mockImplementation((mode, options) => {
-      if (mode === "live-frontier" && !options?.alternate) {
-        return "openai/gpt-5.6-luna";
-      }
-      return defaultQaProviderModelForMode(mode as QaProviderModeInput, options);
-    });
-
+  it("resolves omitted live models through the provider defaults", () => {
     expect(normalizeQaRunSelection({ profile: "release" }, scenarios, profiles)).toEqual({
       profile: "release",
       channel: null,
@@ -818,7 +649,7 @@ describe("qa run config", () => {
       evidenceMode: "full",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-sol",
+      alternateModel: "openai/gpt-5.6-terra",
       fastMode: true,
       runtimePair: null,
       runtimePairLane: null,

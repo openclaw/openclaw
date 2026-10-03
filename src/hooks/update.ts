@@ -1,4 +1,3 @@
-// Hook update helpers refresh installed hook records and config references.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -12,7 +11,7 @@ import {
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.types.js";
-import { resolvePluginInstallTransactionSink } from "../plugins/install-transaction.js";
+import { resolvePluginInstallTransactionRequest } from "../plugins/install-transaction.js";
 import type { PluginLifecycleLeaseContext } from "../plugins/plugin-lifecycle-lease.js";
 import { stageHookInstall } from "./install-record-transaction.js";
 import {
@@ -85,7 +84,6 @@ function createHookPackUpdateIntegrityDriftHandler(params: {
 /** Update npm-installed hook packs and return config changes plus per-pack outcomes. */
 export async function updateNpmInstalledHookPacks(params: {
   config: OpenClawConfig;
-  dangerouslyForceUnsafeInstall?: boolean;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   logger?: HookPackUpdateLogger;
   hookIds?: string[];
@@ -96,13 +94,14 @@ export async function updateNpmInstalledHookPacks(params: {
   onIntegrityDrift?: (params: HookPackUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<HookPackUpdateSummary> {
   const logger = params.logger ?? {};
+  const transactionRequest = resolvePluginInstallTransactionRequest(params);
   // The caller owns the config commit and settles every staged payload/record together.
   const persistence = params.dryRun
     ? undefined
     : {
         lease: expectDefined(params.lease, "hook update lifecycle lease"),
         transactions: expectDefined(
-          resolvePluginInstallTransactionSink(params),
+          transactionRequest?.transactionSink,
           "hook update transaction sink",
         ),
       };
@@ -166,24 +165,26 @@ export async function updateNpmInstalledHookPacks(params: {
     }
     const currentVersion = await readInstalledPackageVersion(installPath);
     const result = await installHooksFromNpmSpec(
-      requestDeferredPackageDirInstall({
-        config: params.config,
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-        onInstallPolicyWarning: params.onInstallPolicyWarning,
-        spec: effectiveSpec,
-        mode: "update",
-        dryRun: params.dryRun,
-        beforePersistentApply,
-        expectedHookPackId: hookId,
-        expectedIntegrity,
-        onIntegrityDrift: createHookPackUpdateIntegrityDriftHandler({
-          hookId,
-          dryRun: Boolean(params.dryRun),
+      requestDeferredPackageDirInstall(
+        {
+          config: params.config,
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
+          spec: effectiveSpec,
+          mode: "update",
+          dryRun: params.dryRun,
+          beforePersistentApply,
+          expectedHookPackId: hookId,
+          expectedIntegrity,
+          onIntegrityDrift: createHookPackUpdateIntegrityDriftHandler({
+            hookId,
+            dryRun: Boolean(params.dryRun),
+            logger,
+            onIntegrityDrift: params.onIntegrityDrift,
+          }),
           logger,
-          onIntegrityDrift: params.onIntegrityDrift,
-        }),
-        logger,
-      }),
+        },
+        transactionRequest?.assertOwned,
+      ),
     );
 
     if (!result.ok) {
@@ -202,38 +203,32 @@ export async function updateNpmInstalledHookPacks(params: {
       currentVersion && nextVersion && currentVersion === nextVersion ? "unchanged" : "updated";
     const downgraded = isPackageVersionDowngrade(currentVersion, nextVersion);
 
-    if (!persistence) {
-      outcomes.push({
-        hookId,
-        status,
-        currentVersion: currentVersion ?? undefined,
-        nextVersion: nextVersion ?? undefined,
-        message:
-          status === "unchanged"
-            ? `Hook pack "${hookId}" is up to date (${currentLabel}).`
-            : `${downgraded ? "Would downgrade" : "Would update"} hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
-      });
-      continue;
+    if (persistence) {
+      persistence.transactions.push(
+        await stageHookInstall({
+          update: {
+            hookId,
+            source: "npm",
+            spec: effectiveSpec,
+            installPath: result.targetDir,
+            version: nextVersion,
+            ...buildNpmResolutionFields(result.npmResolution),
+            hooks: result.hooks,
+          },
+          payloadTransaction: resolvePackageDirInstallTransaction(result),
+          lease: persistence.lease,
+          beforePersistentApply,
+        }),
+      );
+      changed = true;
     }
-
-    persistence.transactions.push(
-      await stageHookInstall({
-        update: {
-          hookId,
-          source: "npm",
-          spec: effectiveSpec,
-          installPath: result.targetDir,
-          version: nextVersion,
-          ...buildNpmResolutionFields(result.npmResolution),
-          hooks: result.hooks,
-        },
-        payloadTransaction: resolvePackageDirInstallTransaction(result),
-        lease: persistence.lease,
-        beforePersistentApply,
-      }),
-    );
-    changed = true;
-
+    const action = persistence
+      ? downgraded
+        ? "Downgraded"
+        : "Updated"
+      : downgraded
+        ? "Would downgrade"
+        : "Would update";
     outcomes.push({
       hookId,
       status,
@@ -241,8 +236,10 @@ export async function updateNpmInstalledHookPacks(params: {
       nextVersion: nextVersion ?? undefined,
       message:
         status === "unchanged"
-          ? `Hook pack "${hookId}" already at ${currentLabel}.`
-          : `${downgraded ? "Downgraded" : "Updated"} hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
+          ? persistence
+            ? `Hook pack "${hookId}" already at ${currentLabel}.`
+            : `Hook pack "${hookId}" is up to date (${currentLabel}).`
+          : `${action} hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
     });
   }
 

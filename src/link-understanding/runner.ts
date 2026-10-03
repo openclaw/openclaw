@@ -3,7 +3,6 @@ import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-// Link-understanding runner fetches allowed URLs and invokes configured commands with bounded content.
 import { createAbortError, isAbortError } from "../infra/abort-signal.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
@@ -12,11 +11,6 @@ import { resolveScopeDecision, resolveTimeoutMs } from "../media-understanding/r
 import { runCommandWithTimeout } from "../process/exec.js";
 import { DEFAULT_LINK_TIMEOUT_SECONDS } from "./defaults.js";
 import { extractLinksFromMessage } from "./detect.js";
-
-type LinkUnderstandingResult = {
-  urls: string[];
-  outputs: string[];
-};
 
 function resolveTimeoutMsFromConfig(params: {
   config?: LinkToolsConfig;
@@ -43,30 +37,6 @@ function resolveFetchTimeoutMsFromConfig(params: {
 
 function isLinkUrlTemplate(value: string): boolean {
   return value.includes("LinkUrl") || value.includes("LinkFinalUrl");
-}
-
-function commandName(command: string): string {
-  return (command.split(/[\\/]/).pop() ?? command).toLowerCase();
-}
-
-function isUrlFetcherCommand(command: string): boolean {
-  return commandName(command) === "curl" || commandName(command) === "wget";
-}
-
-function buildLinkCliArgs(params: {
-  args: string[];
-  ctx: MsgContext;
-  finalUrl: string;
-  url: string;
-}): string[] {
-  const templCtx = {
-    ...params.ctx,
-    LinkFinalUrl: params.finalUrl,
-    LinkUrl: params.url,
-  };
-  return params.args
-    .filter((arg) => !isLinkUrlTemplate(arg))
-    .map((arg) => applyTemplate(arg, templCtx));
 }
 
 async function fetchLinkContent(params: {
@@ -122,19 +92,16 @@ async function runCliEntry(params: {
   }
   const args = params.entry.args ?? [];
   const timeoutMs = resolveTimeoutMsFromConfig({ config: params.config, entry: params.entry });
-  if (isUrlFetcherCommand(command) && args.some(isLinkUrlTemplate)) {
+  const name = (command.split(/[\\/]/).pop() ?? command).toLowerCase();
+  if ((name === "curl" || name === "wget") && args.some(isLinkUrlTemplate)) {
     // curl/wget URL templates mark the entry as a fetcher; guarded fetch already supplied content.
     return params.content;
   }
 
+  const templCtx = { ...params.ctx };
   const argv = [
     command,
-    ...buildLinkCliArgs({
-      args,
-      ctx: params.ctx,
-      finalUrl: params.finalUrl,
-      url: params.url,
-    }),
+    ...args.filter((arg) => !isLinkUrlTemplate(arg)).map((arg) => applyTemplate(arg, templCtx)),
   ];
 
   if (shouldLogVerbose()) {
@@ -177,15 +144,7 @@ async function runLinkEntries(params: {
       break;
     }
     try {
-      const output = await runCliEntry({
-        content: params.content,
-        entry,
-        finalUrl: params.finalUrl,
-        ctx: params.ctx,
-        url: params.url,
-        config: params.config,
-        signal: params.signal,
-      });
+      const output = await runCliEntry({ ...params, entry });
       if (output) {
         return output;
       }
@@ -207,17 +166,16 @@ async function runLinkEntries(params: {
 
 /**
  * Fetches detected links through the SSRF guard and runs configured CLI processors.
- * Returns detected URLs even when processors are absent so callers can report discovery.
  */
 export async function runLinkUnderstanding(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
   message?: string;
   signal?: AbortSignal;
-}): Promise<LinkUnderstandingResult> {
+}): Promise<string[]> {
   const config = params.cfg.tools?.links;
   if (!config || config.enabled === false) {
-    return { urls: [], outputs: [] };
+    return [];
   }
 
   const scopeDecision = resolveScopeDecision({ scope: config.scope, ctx: params.ctx });
@@ -225,18 +183,18 @@ export async function runLinkUnderstanding(params: {
     if (shouldLogVerbose()) {
       logVerbose("Link understanding disabled by scope policy.");
     }
-    return { urls: [], outputs: [] };
+    return [];
   }
 
   const message = params.message ?? params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body;
   const links = extractLinksFromMessage(message ?? "", { maxLinks: config?.maxLinks });
   if (links.length === 0) {
-    return { urls: [], outputs: [] };
+    return [];
   }
 
   const entries = config?.models ?? [];
   if (entries.length === 0) {
-    return { urls: links, outputs: [] };
+    return [];
   }
 
   const outputs: string[] = [];
@@ -281,5 +239,5 @@ export async function runLinkUnderstanding(params: {
     }
   }
 
-  return { urls: links, outputs };
+  return outputs;
 }

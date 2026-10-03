@@ -1,4 +1,3 @@
-// Deepseek plugin entrypoint registers its OpenClaw integration.
 import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
@@ -22,6 +21,7 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/deepseek",
     manifestAuth: { applyConfig: applyDeepSeekConfig },
     catalog: {
+      discoveryMode: "strict",
       buildProvider: buildDeepSeekProvider,
       buildStaticProvider: buildDeepSeekProvider,
       liveModelDiscovery: true,

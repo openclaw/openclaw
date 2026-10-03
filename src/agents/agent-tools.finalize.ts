@@ -1,4 +1,5 @@
 import type { ModelCompatConfig } from "../config/types.models.js";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import {
@@ -20,12 +21,12 @@ type FinalizeAgentToolsOptions = {
   emitBeforeToolCallDiagnostics?: boolean;
   approvalMode?: "request" | "report" | "deny";
   abortSignal?: AbortSignal;
-  agentId?: string;
   recordToolPrepStage?: (name: string) => void;
 };
 
 /** Apply the shared schema, hook, abort, and description wrappers to an authorized tool set. */
 export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgentTool[] {
+  finalizeAgentToolAvailability(options.tools, { beforeNormalization: true });
   const normalized = options.tools.map((tool) =>
     normalizeToolParameters(tool, {
       modelProvider: options.modelProvider,
@@ -52,9 +53,7 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, abortSignal))
     : withHooks;
   options.recordToolPrepStage?.("abort-wrappers");
-  const finalized = applyToolAvailabilityDescriptions(withAbort, {
-    agentId: options.agentId,
-  });
+  const finalized = applyToolAvailabilityDescriptions(withAbort);
   options.recordToolPrepStage?.("deferred-followup-descriptions");
   return finalized;
 }

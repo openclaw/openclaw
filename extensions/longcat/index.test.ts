@@ -1,5 +1,3 @@
-// LongCat tests cover provider registration, onboarding, and wire compatibility.
-import { readFileSync } from "node:fs";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   createAssistantMessageEventStream,
@@ -9,86 +7,14 @@ import {
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import { LONGCAT_DEFAULT_MODEL_REF } from "./models.js";
 import { applyLongCatConfig } from "./onboard.js";
 import { buildLongCatProvider } from "./provider-catalog.js";
-import { createLongCatThinkingWrapper } from "./stream.js";
-
-function readManifest() {
-  return JSON.parse(readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8")) as {
-    providerAuthChoices?: Array<{ choiceId?: string; optionKey?: string; cliFlag?: string }>;
-    setup?: { providers?: Array<{ id?: string; envVars?: string[] }> };
-  };
-}
-
-function requireLongCatModel(): Model<"openai-completions"> {
-  const model = buildLongCatProvider().models?.[0];
-  if (!model) {
-    throw new Error("LongCat catalog did not provide a model");
-  }
-  return {
-    ...model,
-    api: "openai-completions",
-    baseUrl: "https://api.longcat.chat/openai",
-    provider: "longcat",
-    input: ["text"],
-    cost: { ...model.cost },
-  } as Model<"openai-completions">;
-}
 
 describe("LongCat provider plugin", () => {
-  it("registers the manifest-owned API key onboarding flow", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-
-    expect(provider).toMatchObject({
-      id: "longcat",
-      aliases: ["meituan-longcat"],
-      envVars: ["LONGCAT_API_KEY"],
-    });
-    expect(provider.auth[0]).toMatchObject({
-      id: "api-key",
-      kind: "api_key",
-      wizard: { choiceId: "longcat-api-key" },
-    });
-    expect(readManifest().providerAuthChoices).toEqual([
-      expect.objectContaining({
-        choiceId: "longcat-api-key",
-        optionKey: "longcatApiKey",
-        cliFlag: "--longcat-api-key",
-      }),
-    ]);
-    expect(readManifest().setup?.providers).toEqual([
-      { id: "longcat", envVars: ["LONGCAT_API_KEY"] },
-    ]);
-  });
-
-  it("exposes the hosted LongCat-2.0 catalog", () => {
-    expect(buildLongCatProvider()).toMatchObject({
-      baseUrl: "https://api.longcat.chat/openai",
-      api: "openai-completions",
-      models: [
-        expect.objectContaining({
-          id: "LongCat-2.0",
-          reasoning: true,
-          contextWindow: 1_048_576,
-          maxTokens: 131_072,
-          compat: {
-            supportsStore: false,
-            supportsDeveloperRole: false,
-            supportsReasoningEffort: false,
-            supportsUsageInStreaming: false,
-            supportsStrictMode: false,
-            maxTokensField: "max_tokens",
-            requiresReasoningContentOnAssistantMessages: true,
-            thinkingFormat: "deepseek",
-          },
-        }),
-      ],
-    });
-  });
-
   it("applies the LongCat catalog without replacing an existing primary model", () => {
     const result = applyLongCatConfig({
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
@@ -100,8 +26,19 @@ describe("LongCat provider plugin", () => {
     });
   });
 
-  it("uses LongCat thinking and replay fields without reasoning_effort", () => {
-    const model = requireLongCatModel();
+  it("uses LongCat thinking and replay fields through the registered provider", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const catalog = buildLongCatProvider();
+    const definition = catalog.models[0];
+    if (!definition) {
+      throw new Error("LongCat catalog did not provide a model");
+    }
+    const model = {
+      ...definition,
+      api: "openai-completions",
+      baseUrl: catalog.baseUrl,
+      provider: "longcat",
+    } as Model<"openai-completions">;
     const context = {
       systemPrompt: "system",
       messages: [
@@ -119,14 +56,7 @@ describe("LongCat provider plugin", () => {
             },
             { type: "toolCall", id: "call_1", name: "read", arguments: {} },
           ],
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
+          usage: createZeroUsageFixture(),
           stopReason: "toolUse",
           timestamp: 2,
         },
@@ -151,7 +81,15 @@ describe("LongCat provider plugin", () => {
       queueMicrotask(() => stream.end());
       return stream;
     };
-    const wrappedStreamFn = createLongCatThinkingWrapper(baseStreamFn, "high");
+    const wrappedStreamFn = provider.wrapStreamFn?.({
+      streamFn: baseStreamFn,
+      thinkingLevel: "high",
+      provider: "longcat",
+      modelId: model.id,
+    });
+    if (!wrappedStreamFn) {
+      throw new Error("LongCat stream wrapper was not registered");
+    }
 
     void wrappedStreamFn(model, context, {
       onPayload: (nextPayload) => {

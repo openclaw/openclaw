@@ -20,7 +20,7 @@ function setGroups(groups: Array<[string, Mode, number]>) {
     mode === "private-qa"
       ? "test/vitest/vitest.extension-qa.config.ts"
       : mode === "runtime"
-        ? "test/vitest/vitest.gateway-core.config.ts"
+        ? "test/vitest/vitest.gateway-server.config.ts"
         : "test/vitest/vitest.unit-support.config.ts";
   fixture.shards.splice(
     0,
@@ -31,7 +31,12 @@ function setGroups(groups: Array<[string, Mode, number]>) {
       projects: [config(mode)],
     })),
   );
-  fixture.timings = Object.fromEntries(groups.map(([name, , seconds]) => [name, seconds]));
+  fixture.timings = Object.fromEntries(
+    groups.map(([name, mode, seconds]) => [
+      mode === "runtime" ? `${name}-parallel` : name,
+      seconds,
+    ]),
+  );
 }
 function plan(runnerBackend = "blacksmith") {
   return createNodeTestShardBundles({
@@ -43,9 +48,9 @@ function plan(runnerBackend = "blacksmith") {
 
 describe("compact node prerequisite admission", () => {
   it.each([
-    { name: "agentic-agents-core-models", measured: 123, blacksmith: [41, 123], hybrid: [81, 107] },
-    { name: "core-unit-fast-1", measured: 100, blacksmith: [68, 100], hybrid: [59, 87] },
-    { name: "core-runtime-hooks", measured: 80, blacksmith: [19, 80], hybrid: [17, 70] },
+    { name: "agentic-agents-core-models", measured: 123, blacksmith: [41, 123], hybrid: [81, 123] },
+    { name: "core-unit-fast-1", measured: 100, blacksmith: [68, 100], hybrid: [59, 100] },
+    { name: "core-runtime-hooks", measured: 80, blacksmith: [19, 80], hybrid: [17, 80] },
     {
       name: "core-runtime-infra-process",
       measured: undefined,
@@ -75,7 +80,11 @@ describe("compact node prerequisite admission", () => {
     ]);
     const jobs = plan();
     expect(jobs).toHaveLength(1);
-    expect(jobs[0]).toMatchObject({ predictedSeconds: 276, pretestBuildMode: "runtime" });
+    expect(jobs[0]).toMatchObject({
+      predictedSeconds: 236,
+      predictedTestSeconds: 176,
+      pretestBuildMode: "runtime",
+    });
     expect(jobs[0]?.groups.map((group) => group.shard_name).toSorted()).toEqual([
       "runtime-a",
       "runtime-b",
@@ -92,7 +101,7 @@ describe("compact node prerequisite admission", () => {
     expect(jobs.map((job) => [job.pretestBuildMode, job.predictedSeconds])).toEqual(
       expect.arrayContaining([
         ["private-qa", 180],
-        ["runtime", 200],
+        ["runtime", 160],
       ]),
     );
   });
@@ -117,7 +126,7 @@ describe("compact node prerequisite admission", () => {
     ]);
     const jobs = plan();
     expect(jobs).toHaveLength(2);
-    expect(jobs.map((job) => job.predictedSeconds).toSorted((a, b) => a! - b!)).toEqual([220, 270]);
+    expect(jobs.map((job) => job.predictedSeconds).toSorted((a, b) => a! - b!)).toEqual([180, 270]);
     const runtime = jobs.find((job) => job.pretestBuildMode === "runtime");
     expect(runtime?.groups.map((group) => group.shard_name).toSorted()).toEqual([
       "runtime-a",
@@ -133,17 +142,18 @@ describe("compact node prerequisite admission", () => {
   });
 
   it.each([
-    { seconds: [180, 100, 20], blacksmithJobs: 1 },
-    { seconds: [280, 20], blacksmithJobs: 2 },
+    { seconds: [180, 100, 20], parallelJobs: 1 },
+    { seconds: [280, 20], parallelJobs: 2 },
   ])("shares ordinary job setup without adding work to oversized groups: $seconds", (sample) => {
     for (const profile of ["blacksmith", "github", "hybrid"]) {
       setGroups(sample.seconds.map((seconds, index) => [`plain-${index}`, undefined, seconds]));
       const jobs = plan(profile);
-      expect(jobs).toHaveLength(profile === "blacksmith" ? sample.blacksmithJobs : 2);
+      expect(jobs).toHaveLength(profile === "github" ? 2 : sample.parallelJobs);
       if (jobs.length === 1) {
         expect(jobs[0]).toMatchObject({
           planConcurrency: 2,
           predictedSeconds: 300,
+          predictedTestSeconds: 180,
           runner: "blacksmith-32vcpu-ubuntu-2404",
         });
         expect(jobs[0]?.pretestBuildMode).toBeUndefined();
@@ -152,15 +162,15 @@ describe("compact node prerequisite admission", () => {
   });
 
   it.each([
-    { profile: "blacksmith", expected: 110, changed: 114 },
-    { profile: "hybrid", expected: 109, changed: 112 },
-    { profile: "github", expected: 170, changed: 174 },
+    { profile: "blacksmith", expected: 70, changed: 74 },
+    { profile: "hybrid", expected: 70, changed: 74 },
+    { profile: "github", expected: 106, changed: 110 },
   ])(
     "preserves direct $profile test measurements while adding the prerequisite",
     ({ profile, expected, changed }) => {
       setGroups([["runtime", "runtime", 10]]);
       expect(plan(profile)[0]?.predictedSeconds).toBe(expected);
-      fixture.timings.runtime = 14;
+      fixture.timings["runtime-parallel"] = 14;
       expect(plan(profile)[0]?.predictedSeconds).toBe(changed);
     },
   );

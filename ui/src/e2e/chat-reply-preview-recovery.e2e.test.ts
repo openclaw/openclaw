@@ -9,6 +9,7 @@ import {
   installMockGateway,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -17,6 +18,7 @@ suite.define(() => {
     {
       name: "temporary lookup failure",
       artifact: "temporary-failure",
+      text: "",
       response: {
         __mockError: {
           code: "UNAVAILABLE",
@@ -27,11 +29,12 @@ suite.define(() => {
     {
       name: "permanently unavailable source",
       artifact: "unavailable-source",
+      text: "Original message unavailable",
       response: { ok: false, unavailableReason: "not_found" },
     },
   ])(
     "settles a $name without repeatedly loading the reply preview",
-    async ({ artifact, response }) => {
+    async ({ artifact, text, response }) => {
       const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       const artifactDir = artifactRoot
         ? createControlUiE2eArtifactDir("chat-reply-preview-recovery", artifactRoot)
@@ -61,9 +64,8 @@ suite.define(() => {
       let firstCount = 0;
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:reply-preview"));
-        const reply = page.locator(".chat-pane-cache__pane--active .chat-reply-preview--message");
-        await reply.waitFor({ state: "visible" });
-        expect(await reply.textContent()).toContain("Replying to message");
+        const pane = page.locator(".chat-pane-cache__pane--active");
+        await pane.locator('[data-entry-id="reply-message"]').waitFor({ state: "visible" });
         await gateway.waitForRequest("chat.message.get");
         const composer = page.locator(
           ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
@@ -72,15 +74,19 @@ suite.define(() => {
         expect(await composer.inputValue()).toBe("This draft remains usable.");
         firstCount = (await gateway.getRequests("chat.message.get")).length;
         await expectRequestCountStable(gateway, "chat.message.get", 1);
-        if (artifact === "unavailable-source") {
-          await reply.click();
-          await page
-            .locator(".chat-pane-cache__pane--active")
-            .getByRole("alert")
-            .getByText("The original message is unavailable.", { exact: true })
-            .waitFor();
-          await expectRequestCountStable(gateway, "chat.message.get", 1);
-        }
+        // The reserved strip row stays: an unconfirmed source keeps it pending and an
+        // anonymous missing source fills it with a placeholder.
+        const strip = pane.locator(".chat-reply-attribution--inline");
+        await expect
+          .poll(() => strip.locator(".chat-reply-attribution__unavailable").count())
+          .toBe(text ? 1 : 0);
+        expect(await strip.count()).toBe(1);
+        expect(
+          (await strip.getAttribute("class"))?.includes("chat-reply-attribution--pending"),
+        ).toBe(!text);
+        expect((await strip.textContent())?.replace(/\s+/g, " ").trim()).toBe(
+          `Replying to ${text}`.trim(),
+        );
       } finally {
         if (artifactDir) {
           await page.screenshot({
@@ -93,7 +99,7 @@ suite.define(() => {
               {
                 firstCount,
                 finalCount: (await gateway.getRequests("chat.message.get")).length,
-                replyText: await page.locator(".chat-reply-preview--message").allTextContents(),
+                replyText: await page.locator(".chat-reply-attribution--inline").allTextContents(),
               },
               null,
               2,
@@ -108,11 +114,7 @@ suite.define(() => {
   it.each(["temporary failure", "previous success", "not found"] as const)(
     "refreshes a reply preview after reconnect from $0 and keeps source navigation working",
     async (initial) => {
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
       const source = {
         role: "assistant",
@@ -186,21 +188,27 @@ suite.define(() => {
 
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:reply-reconnect"));
-        const preview = page.locator(".chat-pane-cache__pane--active .chat-reply-preview--message");
-        await preview.waitFor();
+        const preview = page.locator(
+          ".chat-pane-cache__pane--active .chat-reply-attribution--inline",
+        );
+        await page
+          .locator('.chat-pane-cache__pane--active [data-entry-id="reconnect-reply"]')
+          .waitFor();
         await gateway.waitForRequest("chat.message.get");
         await expectRequestCountStable(gateway, "chat.message.get", 1);
-        if (initial === "previous success") {
-          expect(await preview.textContent()).toContain("Previous preview.");
-        }
+        // An unconfirmed source stays reserved and a missing one keeps a placeholder.
+        expect(await preview.count()).toBe(1);
+        expect(await preview.getByRole("button").count()).toBe(
+          initial === "previous success" ? 1 : 0,
+        );
         await gateway.setMethodResponse("chat.message.get", { ok: true, message: source });
         const connectCount = (await gateway.getRequests("connect")).length;
         await gateway.closeLatest(1006, "reply preview recovery");
         await waitForRequests(gateway, "connect", connectCount + 1);
-        await expect.poll(() => preview.textContent()).toContain("The current original answer.");
+        await expect.poll(() => preview.getByRole("button").count()).toBe(1);
         await expectRequestCountStable(gateway, "chat.message.get", 2);
 
-        await preview.click();
+        await preview.getByRole("button").click();
         await page
           .locator(".chat-pane-cache__pane--active .chat-text")
           .getByText("The current original answer.", { exact: true })

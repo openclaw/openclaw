@@ -1,11 +1,15 @@
 // Qa Lab tests cover self check plugin behavior.
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import { runQaScenario } from "./scenario.js";
+import * as scenarioModule from "./scenario.js";
 import { createQaSelfCheckScenario } from "./self-check-scenario.js";
 import type { QaSelfCheckResult } from "./self-check.js";
-import { isQaSelfCheckSuccessful, resolveQaSelfCheckOutputPath } from "./self-check.js";
+import { isQaSelfCheckSuccessful, runQaSelfCheckAgainstState } from "./self-check.js";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 function makeSelfCheckResult(params: {
   scenarioStatus: "pass" | "fail";
@@ -46,24 +50,31 @@ describe("isQaSelfCheckSuccessful", () => {
   });
 });
 
-describe("resolveQaSelfCheckOutputPath", () => {
-  it("keeps explicit output paths untouched", () => {
-    expect(
-      resolveQaSelfCheckOutputPath({
-        repoRoot: "/tmp/openclaw-repo",
-        outputPath: "/tmp/custom/self-check.md",
-      }),
-    ).toBe("/tmp/custom/self-check.md");
-  });
+describe("runQaSelfCheckAgainstState", () => {
+  it("writes unique default reports under the repo root and honors an explicit output path", async () => {
+    vi.spyOn(scenarioModule, "runQaScenario").mockResolvedValue({
+      name: "Artifact report fixture",
+      status: "pass",
+      steps: [],
+    });
+    const repoRoot = tempDirs.make("qa-self-check-reports-");
+    const params = { state: createQaBusState(), cfg: {}, repoRoot };
+    const first = await runQaSelfCheckAgainstState(params);
+    const second = await runQaSelfCheckAgainstState(params);
+    const outputPath = path.join(repoRoot, "custom", "self-check.md");
+    const explicit = await runQaSelfCheckAgainstState({ ...params, outputPath });
 
-  it("anchors default self-check reports under unique files in the provided repo root", () => {
-    const repoRoot = path.resolve("/tmp/openclaw-repo");
-    const firstPath = resolveQaSelfCheckOutputPath({ repoRoot });
-    const secondPath = resolveQaSelfCheckOutputPath({ repoRoot });
-
-    expect(path.dirname(firstPath)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
-    expect(path.basename(firstPath)).toMatch(/^self-check-[a-z0-9]+-[a-f0-9]{8}\.md$/u);
-    expect(secondPath).not.toBe(firstPath);
+    for (const result of [first, second]) {
+      expect(path.dirname(result.outputPath)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
+      expect(path.basename(result.outputPath)).toMatch(/^self-check-[a-z0-9]+-[a-f0-9]{8}\.md$/u);
+    }
+    expect(second.outputPath).not.toBe(first.outputPath);
+    expect(explicit.outputPath).toBe(outputPath);
+    for (const result of [first, second, explicit]) {
+      expect(result.report).toContain("# OpenClaw QA E2E Self-Check");
+      expect(result.report).toContain("### Artifact report fixture");
+      expect(await readFile(result.outputPath, "utf8")).toBe(result.report);
+    }
   });
 });
 
@@ -105,13 +116,14 @@ describe("createQaSelfCheckScenario", () => {
         });
         return {
           details: {
-            target: `thread:${thread.conversationId}/${thread.id}`,
+            target: `channel:${thread.conversationId}`,
+            threadId: thread.id,
             thread,
           },
         };
       }
       const message = state.readMessage({ messageId: String(args.messageId) });
-      if (args.to !== `thread:${message.conversation.id}/${String(message.threadId)}`) {
+      if (args.to !== `channel:${message.conversation.id}` || args.threadId !== message.threadId) {
         throw new Error("qa-channel message is not in the selected conversation");
       }
       targets.push(args.to);
@@ -137,7 +149,7 @@ describe("createQaSelfCheckScenario", () => {
       state,
       targets,
       run: async () =>
-        await runQaScenario(createQaSelfCheckScenario({ waitTimeoutMs: 20 }), {
+        await scenarioModule.runQaScenario(createQaSelfCheckScenario({ waitTimeoutMs: 20 }), {
           state: testState,
           performAction,
         }),
@@ -157,11 +169,7 @@ describe("createQaSelfCheckScenario", () => {
     const thread = state.getSnapshot().threads[0];
     expect(thread).toBeDefined();
 
-    expect(targets).toEqual([
-      `thread:qa-room/${String(thread?.id)}`,
-      `thread:qa-room/${String(thread?.id)}`,
-      `thread:qa-room/${String(thread?.id)}`,
-    ]);
+    expect(targets).toEqual(["channel:qa-room", "channel:qa-room", "channel:qa-room"]);
     const deletedMessage = state.getSnapshot().messages.find((message) => message.deleted);
     if (!deletedMessage) {
       throw new Error("self-check did not preserve its deleted message tombstone");

@@ -1,11 +1,15 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { CronJob } from "../api/types.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI heartbeat scratch" });
 
-const job = {
+const job: CronJob = {
   id: "heartbeat-monitor",
   name: "Heartbeat (main)",
   enabled: true,
@@ -27,7 +31,7 @@ const scratchResponse = {
 
 function methodResponses(scratch: unknown = scratchResponse) {
   return {
-    "cron.list": {
+    "cron.list": cronListResponseFixture({
       jobs: [job],
       snapshotRevision: "heartbeat-scratch",
       total: 1,
@@ -35,7 +39,7 @@ function methodResponses(scratch: unknown = scratchResponse) {
       limit: 50,
       hasMore: false,
       nextOffset: null,
-    },
+    }),
     "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
     "cron.scratch.get": scratch,
     "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
@@ -69,10 +73,11 @@ suite.define(() => {
         for (const method of ["cron.add", "cron.update", "cron.scratch.set"]) {
           expect(await gateway.getRequests(method)).toEqual([]);
         }
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "heartbeat-monitor-scratch.png"),
-          fullPage: true,
-        });
+        await monitor.scrollIntoViewIfNeeded();
+        await writeFile(
+          path.join(suite.artifactDir, "heartbeat-monitor-scratch.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".cron-page"), [monitor]),
+        );
       },
     );
   });

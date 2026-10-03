@@ -3,25 +3,11 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  SESSIONS_PAGE_DEFAULT_LIMIT,
-  type SessionArchivedFilter,
-  type SessionListOptions,
-} from "../../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 
 export type SessionsRouteData = {
   expandedSessionKey: string | null;
   statusFilter: SessionArchivedFilter;
-};
-
-type SessionsPageListFilters = {
-  activeMinutes?: number;
-  limit?: number;
-  includeGlobal: boolean;
-  includeUnknown: boolean;
-  statusFilter: SessionArchivedFilter;
-  deepLinkSessionKey?: string | null;
 };
 
 function routeOptions(location: RouteLocation) {
@@ -35,52 +21,14 @@ function routeOptions(location: RouteLocation) {
   return { expandedSessionKey, statusFilter };
 }
 
-export function sessionsPageListQuery(
-  context: ApplicationContext,
-  filters: SessionsPageListFilters,
-): SessionListOptions {
-  const deepLinkSessionKey = filters.deepLinkSessionKey?.trim() || null;
-  const scopeAgentId =
-    parseAgentSessionKey(deepLinkSessionKey)?.agentId ??
-    context.agentSelection.state.scopeId?.trim();
-  const activeMinutes =
-    !deepLinkSessionKey && filters.statusFilter === "active" ? filters.activeMinutes : undefined;
-  return {
-    limit: deepLinkSessionKey ? SESSIONS_PAGE_DEFAULT_LIMIT : filters.limit,
-    ...(activeMinutes ? { activeMinutes } : {}),
-    ...(deepLinkSessionKey ? { search: deepLinkSessionKey } : {}),
-    includeGlobal: deepLinkSessionKey ? true : filters.includeGlobal,
-    includeUnknown: deepLinkSessionKey ? true : filters.includeUnknown,
-    includeDerivedTitles: false,
-    includeLastMessage: false,
-    archivedFilter: filters.statusFilter,
-    ...(scopeAgentId ? { agentId: scopeAgentId } : {}),
-  };
-}
-
 async function loadSessionsRoute(
   context: ApplicationContext,
   location: RouteLocation,
 ): Promise<SessionsRouteData> {
-  const sessions = context.sessions;
-  const options = routeOptions(location);
-  const query = sessionsPageListQuery(context, {
-    limit: SESSIONS_PAGE_DEFAULT_LIMIT,
-    includeGlobal: true,
-    includeUnknown: false,
-    statusFilter: options.statusFilter,
-    deepLinkSessionKey: options.expandedSessionKey,
-  });
-  const snapshot = sessions.listSnapshot(query);
-  await Promise.all([
-    !snapshot.result && !snapshot.loading
-      ? sessions.refreshList({ ...query, force: true })
-      : undefined,
-    context.runtimeConfig.ensureLoaded().catch(() => undefined),
-  ]);
-  // Prefetch into the managed query owner. The page may already be subscribed
-  // when this loader finishes, so route data must not republish a list snapshot.
-  return options;
+  await context.runtimeConfig.ensureLoaded().catch(() => undefined);
+  // The mounted page owns list issuance, including scope/status navigation
+  // during a search. Prefetching here bypasses its single in-flight request.
+  return routeOptions(location);
 }
 
 export const page = definePage({

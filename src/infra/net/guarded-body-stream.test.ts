@@ -1,8 +1,55 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { wrapGuardedBodyStream } from "./guarded-body-stream.js";
+import { readResponseWithLimit } from "../http-body.js";
+import { responseWithAbortSignal, wrapGuardedBodyStream } from "./guarded-body-stream.js";
 
 describe("wrapGuardedBodyStream", () => {
+  it("releases abandoned bodies before and after attaching their abort listener", async () => {
+    const signal = new AbortController().signal;
+    async function abandon(mode: "prefetched" | "unread" | "partial") {
+      const cleaned = createDeferredCore();
+      const cancel = vi.fn();
+      const source = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1]));
+        },
+        cancel,
+      });
+      const wrapped = wrapGuardedBodyStream({
+        body: source,
+        cleanup: cleaned.resolve,
+        signal: mode === "prefetched" ? undefined : signal,
+      });
+      if (mode === "partial") {
+        const reader = wrapped.getReader();
+        expect((await reader.read()).value).toEqual(new Uint8Array([1]));
+        reader.releaseLock();
+      }
+      return { reference: new WeakRef(wrapped), source, cancel, cleaned: cleaned.promise };
+    }
+    const abandoned = await Promise.all([
+      abandon("prefetched"),
+      abandon("unread"),
+      abandon("partial"),
+    ]);
+    const control = new WeakRef({});
+    // End the creation job before collecting; the signal and upstream bodies stay live.
+    await nextTurn();
+    queryObjects(WeakRef);
+    expect(control.deref()).toBeUndefined();
+    for (const body of abandoned) {
+      expect(body.reference.deref()).toBeUndefined();
+    }
+    await Promise.all(abandoned.map((body) => body.cleaned));
+    for (const body of abandoned) {
+      expect(body.source.locked).toBe(false);
+      expect(body.cancel).toHaveBeenCalledOnce();
+    }
+    expect(signal.aborted).toBe(false);
+  });
+
   it("releases the source reader lock after downstream cancellation", async () => {
     const cancel = vi.fn();
     const cleanup = vi.fn();
@@ -121,5 +168,44 @@ describe("wrapGuardedBodyStream", () => {
 
     expect(cleanup).toHaveBeenCalledOnce();
     expect(source.locked).toBe(false);
+  });
+});
+
+describe("responseWithAbortSignal", () => {
+  it("preserves response metadata across clones", async () => {
+    const source = new Response("payload");
+    Object.defineProperties(source, {
+      url: { value: "https://example.test/final" },
+      redirected: { value: true },
+      type: { value: "cors" },
+    });
+    const wrapped = responseWithAbortSignal(source, new AbortController().signal);
+    const clone = wrapped.clone();
+
+    expect(clone.url).toBe("https://example.test/final");
+    expect(clone.redirected).toBe(true);
+    expect(clone.type).toBe("cors");
+    expect((await readResponseWithLimit(clone, 32)).toString("utf8")).toBe("payload");
+    await wrapped.body?.cancel();
+  });
+
+  it("attaches the abort listener only when body consumption starts", async () => {
+    const controller = new AbortController();
+    const addEventListener = vi.spyOn(controller.signal, "addEventListener");
+    const wrapped = responseWithAbortSignal(
+      new Response(new ReadableStream<Uint8Array>()),
+      controller.signal,
+    );
+
+    expect(addEventListener).not.toHaveBeenCalled();
+    const reader = wrapped.body!.getReader();
+    const read = reader.read();
+    await vi.waitFor(() =>
+      expect(addEventListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true }),
+    );
+    const reason = new Error("caller stopped");
+    controller.abort(reason);
+    await expect(read).rejects.toBe(reason);
+    reader.releaseLock();
   });
 });

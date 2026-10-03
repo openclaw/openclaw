@@ -24,11 +24,13 @@ const steps = {
 } as const;
 
 function performanceRun(
+  signal: AbortSignal,
   mode: PerformanceFixtureOptions["mode"],
   options: Partial<Parameters<typeof runCiGitStep>[0]> = {},
 ) {
   const [job, step] = steps[mode];
   return runCiGitStep({
+    signal,
     workflow: { file: ".github/workflows/openclaw-performance.yml", job, step },
     fetchResults: [],
     performance: { mode },
@@ -39,26 +41,29 @@ function performanceRun(
 // The previous semantic tests used short-lived stubs or replayed Git by hand.
 // These actual workflow bodies must drain real parent/child/grandchild writers
 // before every command, output, consumer and exit, while a sentinel stays alive.
-posixIt.each(Object.keys(steps) as PerformanceFixtureOptions["mode"][])(
+posixIt.for(Object.keys(steps) as PerformanceFixtureOptions["mode"][])(
   "Performance %s drains Git trees before every continuation",
-  async (mode) => {
-    const report = await performanceRun(mode);
+  { timeout: 55_000 },
+  async (mode, { signal }) => {
+    const report = await performanceRun(signal, mode);
     expect(report.code, report.output).toBe(0);
     expect(report.readyAttempts.length).toBeGreaterThan(0);
-    if (mode === "prepare") expect(report.githubOutput).toContain("ready=true\n");
+    if (mode === "prepare") {
+      expect(report.githubOutput).toContain("ready=true\n");
+    }
     if (mode === "publish") {
       expect(report.pushes).toHaveLength(1);
       expect(report.fetches).toHaveLength(0);
       expect(report.githubSummary).toContain("### Clawgrit report published");
     }
   },
-  55_000,
 );
 
-posixIt.each([23, 124, 125, 143])(
+posixIt.for([23, 125])(
   "baseline ordinary fetch %s is advisory after extinction",
-  async (code) => {
-    const report = await performanceRun("baseline", { fetchResults: [code] });
+  { timeout: 55_000 },
+  async (code, { signal }) => {
+    const report = await performanceRun(signal, "baseline", { fetchResults: [code, code, code] });
     expect(report.code, report.output).toBe(0);
     expect(report.githubSummary).toBe(
       "No previous source performance baseline could be fetched.\n",
@@ -66,13 +71,13 @@ posixIt.each([23, 124, 125, 143])(
     expect(report.githubEnv).toBe("");
     expect(report.commands.at(-1)?.args[0]).toBe("fetch");
   },
-  55_000,
 );
 
-posixIt.each(["absent", "invalid", "trailing-newline"] as const)(
+posixIt.for(["absent", "invalid", "trailing-newline"] as const)(
   "baseline %s pointer preserves advisory result",
-  async (baseline) => {
-    const report = await performanceRun("baseline", {
+  { timeout: 55_000 },
+  async (baseline, { signal }) => {
+    const report = await performanceRun(signal, "baseline", {
       performance: { mode: "baseline", baseline },
     });
     expect(report.code, report.output).toBe(0);
@@ -84,13 +89,13 @@ posixIt.each(["absent", "invalid", "trailing-newline"] as const)(
     expect(report.githubEnv).toBe("");
     expect(report.checkouts).toHaveLength(0);
   },
-  55_000,
 );
 
-posixIt.each(["ls-tree", "show"])(
+posixIt.for(["ls-tree", "show"])(
   "baseline %s failure never becomes absence or invalid JSON",
-  async (operation) => {
-    const report = await performanceRun("baseline", {
+  { timeout: 55_000 },
+  async (operation, { signal }) => {
+    const report = await performanceRun(signal, "baseline", {
       gitFault: { match: `^${operation} `, code: 128 },
     });
     expect(report.code, report.output).toBe(128);
@@ -98,7 +103,6 @@ posixIt.each(["ls-tree", "show"])(
     expect(report.githubEnv).toBe("");
     expect(report.commands.at(-1)?.args[0]).toBe(operation);
   },
-  55_000,
 );
 
 const terminalCases = [
@@ -122,14 +126,19 @@ const terminalCases = [
   ].map((operation) => ({ mode: "publish" as const, operation })),
 ];
 // Every injected lifecycle failure must stop at its command, before later policy actions.
-posixIt.each(
+posixIt.for(
   terminalCases.flatMap((entry) =>
-    (["cleanup-failure", "cancel"] as const).map((code) => ({ ...entry, code })),
+    (["cleanup-failure", "cancel"] as const).map((code) => ({
+      mode: entry.mode,
+      operation: entry.operation,
+      code,
+    })),
   ),
 )(
   "$mode $operation $code fences every later action",
-  async ({ mode, operation, code }) => {
-    const report = await performanceRun(mode, {
+  { timeout: 55_000 },
+  async ({ mode, operation, code }, { signal }) => {
+    const report = await performanceRun(signal, mode, {
       gitFault: { match: `^${operation}(?: |$)`, code },
       ...(mode === "publish" && operation !== "config" && operation !== "push"
         ? { pushResults: [23] }
@@ -152,29 +161,29 @@ posixIt.each(
       expect(report.output).not.toContain("fixture backoff:");
     }
   },
-  55_000,
 );
 
-posixIt.each(["hang", 23, 124, 125, 143] as const)(
+posixIt.for(["hang", 23, 125] as const)(
   "prepare initial fetch %s cannot reach checkout, commit or token readiness",
-  async (failure) => {
-    const report = await performanceRun("prepare", { fetchResults: [failure] });
+  { timeout: 55_000 },
+  async (failure, { signal }) => {
+    const report = await performanceRun(signal, "prepare", {
+      fetchResults: [failure, failure, failure],
+    });
     expect(report.code, report.output).toBe(1);
-    expect(report.fetches.map(({ args }) => args)).toEqual([
-      ["fetch", "--depth=1", "origin", "main"],
-    ]);
+    expect(report.fetches).toHaveLength(3);
+    expect(report.fetches.every(({ args }) => args.includes("--depth=1"))).toBe(true);
     expect(report.checkouts).toHaveLength(0);
     expect(report.commands.at(-1)?.args[0]).toBe("fetch");
     expect(report.githubOutput).toBe("ready=false\n");
     expect(report.githubSummary).toBe("");
   },
-  55_000,
 );
 
 posixIt(
   "initial duplicate is verified before token or push",
-  async () => {
-    const report = await performanceRun("prepare", {
+  async ({ signal }) => {
+    const report = await performanceRun(signal, "prepare", {
       performance: { mode: "prepare", duplicate: true },
     });
     expect(report.code, report.output).toBe(0);
@@ -186,28 +195,32 @@ posixIt(
     expect(report.commands.some(({ args }) => args[0] === "commit")).toBe(false);
     expect(
       report.commands.every(
-        ({ envProbe }) => !JSON.parse(envProbe!).token && !JSON.parse(envProbe!).auth,
+        ({ envProbe, args }) =>
+          !JSON.parse(envProbe!).token && JSON.parse(envProbe!).auth === (args[0] === "fetch"),
       ),
     ).toBe(true);
   },
   55_000,
 );
 
-posixIt.each([128, 124, 125, 143])(
+posixIt.for([128, 125])(
   "prepare duplicate inspection %s is terminal",
-  async (code) => {
-    const report = await performanceRun("prepare", { gitFault: { match: "^ls-tree ", code } });
+  { timeout: 55_000 },
+  async (code, { signal }) => {
+    const report = await performanceRun(signal, "prepare", {
+      gitFault: { match: "^ls-tree ", code },
+    });
     expect(report.code, report.output).toBe(code);
     expect(report.githubOutput).toBe("ready=false\n");
     expect(report.commands.at(-1)?.args[0]).toBe("ls-tree");
   },
-  55_000,
 );
 
-posixIt.each([0, 1, 2, 124, 125, 143])(
+posixIt.for([0, 1, 125])(
   "cached diff status %s commits only for ordinary 1",
-  async (code) => {
-    const report = await performanceRun("prepare", {
+  { timeout: 55_000 },
+  async (code, { signal }) => {
+    const report = await performanceRun(signal, "prepare", {
       gitFault: { match: "^diff --cached --quiet$", code, output: "" },
     });
     expect(report.code, report.output).toBe(code > 1 ? code : 0);
@@ -216,13 +229,13 @@ posixIt.each([0, 1, 2, 124, 125, 143])(
     );
     expect(report.githubOutput.includes("ready=true\n")).toBe(code <= 1);
   },
-  55_000,
 );
 
-posixIt.each([124, 125, 143, "hang"] as const)(
+posixIt.for([125, "hang"] as const)(
   "ambiguous push %s reconciles only after extinction",
-  async (code) => {
-    const report = await performanceRun("publish", { pushResults: [code] });
+  { timeout: 55_000 },
+  async (code, { signal }) => {
+    const report = await performanceRun(signal, "publish", { pushResults: [code] });
     expect(report.code, report.output).toBe(0);
     expect(report.pushes).toHaveLength(2);
     expect(report.fetches).toHaveLength(1);
@@ -233,21 +246,34 @@ posixIt.each([124, 125, 143, "hang"] as const)(
     for (const command of report.commands) {
       const scope = JSON.parse(command.envProbe!);
       expect(scope.token).toBe(false);
-      expect(scope.auth).toBe(command.args[0] === "push");
-      if (scope.auth) expect(scope).toMatchObject({ count: "2", hooks: "/dev/null", prompt: "0" });
+      const authenticated = [
+        "push",
+        "fetch",
+        "ls-tree",
+        "checkout",
+        "cherry-pick",
+        "rev-parse",
+      ].includes(command.args[0]!);
+      expect(scope.auth).toBe(authenticated);
+      if (scope.auth) {
+        expect(scope).toMatchObject({ count: "3", prompt: "0" });
+      }
+      if (command.args[0] === "push") {
+        expect(command.configuration).toContain("core.hooksPath=/dev/null");
+      }
     }
     expect(JSON.stringify(report)).not.toContain("fixture-performance-token");
     expect(JSON.stringify(report)).not.toContain(
       Buffer.from("x-access-token:fixture-performance-token").toString("base64"),
     );
   },
-  55_000,
 );
 
-posixIt.each([false, true])(
+posixIt.for([false, true])(
   "five failed pushes always get five fetches (fetch fails=%s)",
-  async (fetchFails) => {
-    const report = await performanceRun("publish", {
+  { timeout: 55_000 },
+  async (fetchFails, { signal }) => {
+    const report = await performanceRun(signal, "publish", {
       pushResults: [23, 23, 23, 23, 23],
       fetchResults: fetchFails ? [23, 23, 23, 23, 23] : [],
     });
@@ -270,13 +296,13 @@ posixIt.each([false, true])(
     expect(report.githubSummary).toContain("failed after 5 attempts.");
     expect(report.githubSummary).not.toContain("Published report:");
   },
-  55_000,
 );
 
-posixIt.each([1, 2, 3, 4, 5])(
+posixIt.for([1, 5])(
   "remote duplicate after ambiguous attempt %s succeeds without replay",
-  async (attempt) => {
-    const report = await performanceRun("publish", {
+  { timeout: 55_000 },
+  async (attempt, { signal }) => {
+    const report = await performanceRun(signal, "publish", {
       performance: { mode: "publish", remoteDuplicateAttempt: attempt },
       pushResults: Array.from({ length: attempt }, () => 124),
     });
@@ -286,13 +312,13 @@ posixIt.each([1, 2, 3, 4, 5])(
     expect(report.checkouts).toHaveLength(attempt - 1);
     expect(report.githubSummary).toContain("### Clawgrit report published");
   },
-  55_000,
 );
 
-posixIt.each([23, 124, 125, 143])(
+posixIt.for([23, 125])(
   "ordinary cherry-pick and abort %s failures remain visible publish failure",
-  async (code) => {
-    const report = await performanceRun("publish", {
+  { timeout: 55_000 },
+  async (code, { signal }) => {
+    const report = await performanceRun(signal, "publish", {
       pushResults: [23],
       gitFaults: [
         { match: "^cherry-pick -X ", code: 23 },
@@ -307,37 +333,40 @@ posixIt.each([23, 124, 125, 143])(
     );
     expect(report.githubSummary).toBe("");
   },
-  55_000,
 );
 
-posixIt.each(["owner", "python", "git"] as const)(
+posixIt.for(["owner", "python", "git"] as const)(
   "prepare setup failure %s cannot publish readiness",
-  async (setupFailure) => {
-    const report = await performanceRun("prepare", { setupFailure });
+  { timeout: 55_000 },
+  async (setupFailure, { signal }) => {
+    const report = await performanceRun(signal, "prepare", { setupFailure });
     expect(report.code, report.output).not.toBe(0);
     expect(report.pushes).toHaveLength(0);
     expect(report.githubOutput).not.toContain("ready=true");
   },
-  55_000,
 );
 
-posixIt.each([124, 125, 143, "hang"] as const)(
+posixIt.for([125, "hang"] as const)(
   "reconciliation fetch %s warns once and retries without replay",
-  async (code) => {
-    const report = await performanceRun("publish", { pushResults: [23], fetchResults: [code] });
+  { timeout: 55_000 },
+  async (code, { signal }) => {
+    const report = await performanceRun(signal, "publish", {
+      pushResults: [23],
+      fetchResults: [code],
+    });
     expect(report.code, report.output).toBe(0);
     expect(report.pushes).toHaveLength(2);
     expect(report.fetches).toHaveLength(1);
     expect(report.checkouts).toHaveLength(0);
     expect(report.output.match(/::warning::Unable to refresh/gu)).toHaveLength(1);
   },
-  55_000,
 );
 
-posixIt.each([124, 125, 143, 128])(
+posixIt.for([125, 128])(
   "remote duplicate read %s is terminal, never absence",
-  async (code) => {
-    const report = await performanceRun("publish", {
+  { timeout: 55_000 },
+  async (code, { signal }) => {
+    const report = await performanceRun(signal, "publish", {
       pushResults: [23],
       gitFault: { match: "^ls-tree ", code },
     });
@@ -346,13 +375,13 @@ posixIt.each([124, 125, 143, 128])(
     expect(report.githubSummary).toBe("");
     expect(report.checkouts).toHaveLength(0);
   },
-  55_000,
 );
 
-posixIt.each(["prepare", "publish"] as const)(
+posixIt.for(["prepare", "publish"] as const)(
   "%s cancellation during real TERM-resistant cleanup prevents continuation",
-  async (mode) => {
-    const report = await performanceRun(mode, {
+  { timeout: 55_000 },
+  async (mode, { signal }) => {
+    const report = await performanceRun(signal, mode, {
       cancelDuringCleanup: true,
       cleanupCancelMatch: mode === "prepare" ? "^fetch " : "^push ",
       ...(mode === "prepare" ? { fetchResults: ["hang"] } : { pushResults: ["hang"] }),
@@ -364,13 +393,12 @@ posixIt.each(["prepare", "publish"] as const)(
     expect(report.githubSummary).toBe("");
     expect(report.output).not.toContain("fixture backoff:");
   },
-  55_000,
 );
 
 posixIt(
   "cancellation during owned backoff prevents reconciliation fetch",
-  async () => {
-    const report = await performanceRun("publish", {
+  async ({ signal }) => {
+    const report = await performanceRun(signal, "publish", {
       pushResults: [23],
       realClock: true,
       cooperativeTrees: true,

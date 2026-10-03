@@ -1,10 +1,10 @@
-// Memory Wiki plugin module implements tool behavior.
 import path from "node:path";
 import { optionalFiniteNumberSchema } from "openclaw/plugin-sdk/channel-actions";
+import type { MemoryCallerContext } from "openclaw/plugin-sdk/memory-host-search";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
 import {
@@ -13,6 +13,7 @@ import {
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
+import { renderWikiMutationSummary, renderWikiSearchResults } from "./presentation.js";
 import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
@@ -104,24 +105,13 @@ const WikiApplySchema = Type.Object(
   { additionalProperties: false },
 );
 
-async function syncImportedSourcesIfNeeded(
-  config: ResolvedMemoryWikiConfig,
-  appConfig?: OpenClawConfig,
-  signal?: AbortSignal,
-) {
-  await syncMemoryWikiImportedSources({
-    config,
-    appConfig,
-    ...(signal ? { signal } : {}),
-  });
-}
-
 type WikiToolMemoryContext = {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   signal?: AbortSignal;
+  memoryContext?: MemoryCallerContext;
 };
 
 export function createWikiStatusTool(
@@ -136,7 +126,7 @@ export function createWikiStatusTool(
       "Inspect the current memory wiki vault mode, health, and Obsidian CLI availability.",
     parameters: WikiStatusSchema,
     execute: async () => {
-      await syncImportedSourcesIfNeeded(config, appConfig, memoryContext.signal);
+      await syncMemoryWikiImportedSources({ config, appConfig, signal: memoryContext.signal });
       const status = await resolveMemoryWikiStatus(config, {
         appConfig,
         callerAgentId: memoryContext.agentId,
@@ -158,14 +148,8 @@ export function createWikiSearchTool(
       "Search wiki pages and, when shared search is enabled, the active memory corpus by title, path, id, or body text.",
     parameters: WikiSearchSchema,
     execute: async (_toolCallId, rawParams) => {
-      const params = rawParams as {
-        query: string;
-        maxResults?: number;
-        backend?: ResolvedMemoryWikiConfig["search"]["backend"];
-        corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
-        mode?: (typeof WIKI_SEARCH_MODES)[number];
-      };
-      await syncImportedSourcesIfNeeded(config, appConfig, memoryContext.signal);
+      const params = rawParams as Static<typeof WikiSearchSchema>;
+      await syncMemoryWikiImportedSources({ config, appConfig, signal: memoryContext.signal });
       const results = await searchMemoryWiki({
         config,
         appConfig,
@@ -173,22 +157,14 @@ export function createWikiSearchTool(
         agentSessionKey: memoryContext.agentSessionKey,
         sandboxed: memoryContext.sandboxed,
         conversationRecall: memoryContext.conversationRecall,
+        memoryContext: memoryContext.memoryContext,
         query: params.query,
         maxResults: params.maxResults,
         ...(params.backend ? { searchBackend: params.backend } : {}),
         ...(params.corpus ? { searchCorpus: params.corpus } : {}),
         ...(params.mode ? { mode: params.mode } : {}),
       });
-      const text =
-        results.length === 0
-          ? "No wiki or memory results."
-          : results
-              .map(
-                (result, index) =>
-                  `${index + 1}. ${result.title} (${result.corpus}/${result.kind})\nPath: ${result.path}${typeof result.startLine === "number" && typeof result.endLine === "number" ? `\nLines: ${result.startLine}-${result.endLine}` : ""}${result.provenanceLabel ? `\nProvenance: ${result.provenanceLabel}` : ""}${result.matchedClaimId ? `\nClaim: ${result.matchedClaimId}` : ""}${result.evidenceKinds && result.evidenceKinds.length > 0 ? `\nEvidence: ${result.evidenceKinds.join(", ")}` : ""}\nSnippet: ${result.snippet}`,
-              )
-              .join("\n\n");
-      return textResult(text, { results });
+      return textResult(renderWikiSearchResults(results), { results });
     },
   };
 }
@@ -196,7 +172,7 @@ export function createWikiSearchTool(
 export function createWikiLintTool(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
-  signal?: AbortSignal,
+  { signal }: WikiToolMemoryContext = {},
 ): AnyAgentTool {
   return {
     name: "wiki_lint",
@@ -205,7 +181,7 @@ export function createWikiLintTool(
       "Lint the wiki vault and surface structural issues, provenance gaps, contradictions, and open questions.",
     parameters: WikiLintSchema,
     execute: async () => {
-      await syncImportedSourcesIfNeeded(config, appConfig, signal);
+      await syncMemoryWikiImportedSources({ config, appConfig, signal });
       const result = await lintMemoryWikiVault(config, signal ? { signal } : undefined);
       const contradictions = result.issuesByCategory.contradictions.length;
       const openQuestions = result.issuesByCategory["open-questions"].length;
@@ -236,7 +212,7 @@ export function createWikiLintTool(
 export function createWikiApplyTool(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
-  signal?: AbortSignal,
+  { signal }: WikiToolMemoryContext = {},
 ): AnyAgentTool {
   return {
     name: "wiki_apply",
@@ -246,21 +222,13 @@ export function createWikiApplyTool(
     parameters: WikiApplySchema,
     execute: async (_toolCallId, rawParams) => {
       const mutation = normalizeMemoryWikiMutationInput(rawParams);
-      await syncImportedSourcesIfNeeded(config, appConfig, signal);
+      await syncMemoryWikiImportedSources({ config, appConfig, signal });
       const result = await applyMemoryWikiMutation({
         config,
         mutation,
         ...(signal ? { signal } : {}),
       });
-      const action = result.changed ? "Updated" : "No changes for";
-      const compileSummary =
-        result.compile.updatedFiles.length > 0
-          ? `Refreshed ${result.compile.updatedFiles.length} index file${result.compile.updatedFiles.length === 1 ? "" : "s"}.`
-          : "Indexes unchanged.";
-      return textResult(
-        `${action} ${result.pagePath} via ${result.operation}. ${compileSummary}`,
-        result,
-      );
+      return textResult(renderWikiMutationSummary(result), result);
     },
   };
 }
@@ -277,18 +245,12 @@ export function createWikiGetTool(
       "Read a wiki page by id or relative path, or fall back to the active memory corpus when shared search is enabled.",
     parameters: WikiGetSchema,
     execute: async (_toolCallId, rawParams) => {
-      const params = asNonArrayRecord(rawParams) as {
-        lookup?: string;
-        fromLine?: number;
-        lineCount?: number;
-        backend?: ResolvedMemoryWikiConfig["search"]["backend"];
-        corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
-      };
+      const params = asNonArrayRecord(rawParams) as Partial<Static<typeof WikiGetSchema>>;
       const lookup = typeof params.lookup === "string" ? params.lookup.trim() : "";
       if (!lookup) {
         return textResult("wiki_get requires a non-empty `lookup` path or id.", { found: false });
       }
-      await syncImportedSourcesIfNeeded(config, appConfig, memoryContext.signal);
+      await syncMemoryWikiImportedSources({ config, appConfig, signal: memoryContext.signal });
       const result = await getMemoryWikiPage({
         config,
         appConfig,
@@ -296,6 +258,7 @@ export function createWikiGetTool(
         agentSessionKey: memoryContext.agentSessionKey,
         sandboxed: memoryContext.sandboxed,
         conversationRecall: memoryContext.conversationRecall,
+        memoryContext: memoryContext.memoryContext,
         lookup,
         fromLine: params.fromLine,
         lineCount: params.lineCount,

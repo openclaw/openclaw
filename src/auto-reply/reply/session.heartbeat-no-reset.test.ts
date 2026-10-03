@@ -1,71 +1,41 @@
-// Tests heartbeat messages do not reset active session routing.
-import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import type { MsgContext } from "../templating.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { initSessionState as initSessionStateRaw } from "./session.js";
-
-const initSessionState = (
-  params: Omit<Parameters<typeof initSessionStateRaw>[0], "ctx"> & {
-    ctx: MsgContext;
-  },
-) => initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
+import { initSessionState } from "./session.js";
 
 vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
 }));
 
-describe("initSessionState - heartbeat should not trigger session reset", () => {
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let stateDir: string;
+afterEach(async () => {
+  await cleanupSessionStateForTest({ stateDir });
+});
+
+it("keeps an expired session unchanged for heartbeat and resets on the next user turn", async () => {
+  stateDir = tempDirs.make("openclaw-heartbeat-reset-");
+  const storePath = path.join(stateDir, "sessions.json");
   const sessionKey = "agent:main:main:user123";
-  let tempDir: string;
-  let storePath: string;
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp("/tmp/openclaw-test-");
-    storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
-
-  const createBaseConfig = (): OpenClawConfig => ({
-    agents: {
-      defaults: {
-        workspace: tempDir,
-      },
-      list: [
-        {
-          id: "main",
-          workspace: tempDir,
-        },
-      ],
+  const staleTime = Date.now() - 25 * 60 * 60 * 1000;
+  await replaceSessionEntry(
+    { storePath, sessionKey },
+    {
+      sessionId: "daily-session-id",
+      updatedAt: Date.now(),
+      systemSent: true,
+      sessionStartedAt: staleTime,
+      lastInteractionAt: staleTime,
     },
-    session: {
-      store: storePath,
-      reset: {
-        mode: "idle",
-        idleMinutes: 5, // 5 minutes idle timeout
-      },
-    },
-    channels: {},
-    gateway: {
-      port: 18789,
-      mode: "local",
-      bind: "loopback",
-      auth: { mode: "token", token: "test" },
-    },
-    plugins: {
-      entries: {},
-    },
-  });
-
-  const createBaseCtx = (overrides?: Partial<MsgContext>): MsgContext => ({
-    Body: "test message",
+  );
+  const cfg = {
+    agents: { defaults: { workspace: stateDir } },
+    session: { store: storePath, reset: { mode: "daily" as const, atHour: 4 } },
+  };
+  const ctx = {
     From: "user123",
     To: "bot123",
     SessionKey: sessionKey,
@@ -73,159 +43,82 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     Surface: "quietchat",
     ChatType: "direct",
     CommandAuthorized: true,
-    ...overrides,
+  };
+  const heartbeat = await initSessionState({
+    cfg,
+    commandAuthorized: true,
+    ctx: finalizeInboundContext({ ...ctx, InternalTurnSource: "heartbeat", Body: "HEARTBEAT_OK" }),
   });
+  expect(heartbeat).toMatchObject({
+    isNewSession: false,
+    resetTriggered: false,
+    sessionId: "daily-session-id",
+    sessionEntry: { sessionId: "daily-session-id", lastInteractionAt: staleTime },
+  });
+  expect(loadSessionEntry({ storePath, sessionKey })?.lastInteractionAt).toBe(staleTime);
 
-  const saveExistingSession = async (
-    sessionId: string,
-    updatedAt: number,
-    overrides: Partial<SessionEntry> = {},
-  ): Promise<void> => {
+  const user = await initSessionState({
+    cfg,
+    commandAuthorized: true,
+    ctx: finalizeInboundContext({ ...ctx, Body: "real user message" }),
+  });
+  expect(user).toMatchObject({ isNewSession: true, sessionId: "daily-session-id" });
+});
+
+it.each([false, true])(
+  "only user interaction spends snooze (system event: %s)",
+  async (isSystemEvent) => {
+    stateDir = tempDirs.make("openclaw-heartbeat-snooze-");
+    const storePath = path.join(stateDir, "sessions.json");
+    const sessionKey = "agent:main:main:user123";
+    const now = Date.now();
+    const snooze = { snoozedUntil: now + 3_600_000, snoozedAt: now - 1_000 };
     await replaceSessionEntry(
+      { storePath, sessionKey },
       {
-        storePath,
-        sessionKey,
-      },
-      {
-        sessionId,
-        updatedAt,
+        sessionId: "snoozed-session",
+        updatedAt: now,
         systemSent: true,
-        ...overrides,
+        sessionStartedAt: now,
+        lastInteractionAt: now - 1_000,
+        ...snooze,
       },
     );
-  };
 
-  const expectPersistedSession = (): SessionEntry => {
-    const entry = loadSessionEntry({ storePath, sessionKey });
-    if (!entry) {
+    const result = await initSessionState({
+      cfg: {
+        agents: { defaults: { workspace: stateDir } },
+        session: { store: storePath, reset: { mode: "idle", idleMinutes: 5 } },
+      },
+      commandAuthorized: true,
+      ctx: finalizeInboundContext({
+        From: "user123",
+        To: "bot123",
+        SessionKey: sessionKey,
+        Provider: "quietchat",
+        Surface: "quietchat",
+        ChatType: "direct",
+        CommandAuthorized: true,
+        Body: "test message",
+        ...(isSystemEvent ? { InternalTurnSource: "heartbeat" } : {}),
+      }),
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe("snoozed-session");
+    const persisted = loadSessionEntry({ storePath, sessionKey });
+    if (!persisted) {
       throw new Error(`Expected persisted session for ${sessionKey}`);
     }
-    return entry;
-  };
-
-  it.each(["heartbeat", "cron", "exec"] as const)(
-    "does not reset a stale session for an internal %s turn",
-    async (source) => {
-      // Setup: Create a session entry that is "stale" (older than idle timeout)
-      const now = Date.now();
-      const staleTime = now - 10 * 60 * 1000; // 10 minutes ago (exceeds 5min idle timeout)
-
-      await saveExistingSession("original-session-id-12345", staleTime);
-
-      const cfg = createBaseConfig();
-      const ctx = createBaseCtx({
-        InternalTurnSource: source,
-        Body: "HEARTBEAT_OK",
-      });
-
-      const result = await initSessionState({
-        ctx,
-        cfg,
-        commandAuthorized: true,
-      });
-
-      // Assert: Session should NOT be reset (same sessionId)
-      expect(result.isNewSession).toBe(false);
-      expect(result.resetTriggered).toBe(false);
-      expect(result.sessionId).toBe("original-session-id-12345");
-      expect(result.sessionEntry.sessionId).toBe("original-session-id-12345");
-    },
-  );
-
-  it("resets a stale session for a user turn", async () => {
-    // Setup: Create a session entry that is "stale" (older than idle timeout)
-    const now = Date.now();
-    const staleTime = now - 10 * 60 * 1000; // 10 minutes ago (exceeds 5min idle timeout)
-
-    await saveExistingSession("original-session-id-12345", staleTime);
-
-    const cfg = createBaseConfig();
-    const ctx = createBaseCtx({
-      Provider: "quietchat", // Regular provider - SHOULD trigger reset if stale
-      Body: "test message",
-    });
-
-    const result = await initSessionState({
-      ctx,
-      cfg,
-      commandAuthorized: true,
-    });
-
-    // Assert: Session SHOULD reset in place because it's stale.
-    expect(result.isNewSession).toBe(true);
-    expect(result.resetTriggered).toBe(false); // Not a manual reset, but idle reset
-    expect(result.sessionId).toBe("original-session-id-12345");
-  });
-
-  it("preserves the session for an internal heartbeat with daily reset mode", async () => {
-    // Setup: Create a session entry from yesterday (would trigger daily reset)
-    const now = Date.now();
-    const yesterday = now - 25 * 60 * 60 * 1000; // 25 hours ago
-
-    await saveExistingSession("original-session-id-67890", yesterday);
-
-    const cfg = createBaseConfig();
-    cfg.session!.reset = {
-      mode: "daily",
-      atHour: 4, // 4 AM daily reset
-    };
-
-    const ctx = createBaseCtx({
-      InternalTurnSource: "heartbeat",
-      Body: "HEARTBEAT_OK",
-    });
-
-    const result = await initSessionState({
-      ctx,
-      cfg,
-      commandAuthorized: true,
-    });
-
-    // Assert: Session should NOT be reset even though it's past daily reset time
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe("original-session-id-67890");
-  });
-
-  it("does not let heartbeat keep an expired daily session fresh for the next user message", async () => {
-    const now = Date.now();
-    const staleTime = now - 25 * 60 * 60 * 1000;
-
-    await saveExistingSession("daily-session-id", now, {
-      sessionStartedAt: staleTime,
-      lastInteractionAt: staleTime,
-    });
-
-    const cfg = createBaseConfig();
-    cfg.session!.reset = {
-      mode: "daily",
-      atHour: 4,
-    };
-
-    const heartbeatResult = await initSessionState({
-      ctx: createBaseCtx({
-        InternalTurnSource: "heartbeat",
-        Body: "HEARTBEAT_OK",
-      }),
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(heartbeatResult.isNewSession).toBe(false);
-    expect(heartbeatResult.sessionId).toBe("daily-session-id");
-    expect(heartbeatResult.sessionEntry.lastInteractionAt).toBe(staleTime);
-
-    expect(expectPersistedSession().lastInteractionAt).toBe(staleTime);
-
-    const userResult = await initSessionState({
-      ctx: createBaseCtx({
-        Provider: "quietchat",
-        Body: "real user message",
-      }),
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(userResult.isNewSession).toBe(true);
-    expect(userResult.sessionId).toBe("daily-session-id");
-  });
-});
+    for (const entry of [result.sessionEntry, persisted]) {
+      if (isSystemEvent) {
+        expect(entry).toMatchObject(snooze);
+        expect(entry.lastInteractionAt).toBe(now - 1_000);
+      } else {
+        expect(entry.snoozedUntil).toBeUndefined();
+        expect(entry.snoozedAt).toBeUndefined();
+        expect(entry.lastInteractionAt).toBeGreaterThanOrEqual(now);
+      }
+    }
+  },
+);

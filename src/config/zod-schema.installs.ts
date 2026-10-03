@@ -1,4 +1,3 @@
-// Defines install-related Zod schema fragments for config parsing.
 import { z } from "zod";
 
 const InstallSourceSchema = z.union([
@@ -60,14 +59,17 @@ const InstallRecordShape = {
   gitCommit: z.string().optional(),
 } as const;
 
-export const PluginInstallRecordShape = {
+const InstallRecordSchema = z.object(InstallRecordShape);
+export type InstallRecordBase = z.infer<typeof InstallRecordSchema>;
+
+const PluginInstallRecordShape = {
   ...InstallRecordShape,
   source: PluginInstallSourceSchema,
   marketplaceName: z.string().optional(),
   marketplaceSource: z.string().optional(),
   marketplacePlugin: z.string().optional(),
   acceptedSurface: z
-    .object({
+    .strictObject({
       channels: z.array(z.string().min(1)),
       providers: z.array(z.string().min(1)),
       tools: z.array(z.string().min(1)),
@@ -79,9 +81,12 @@ export const PluginInstallRecordShape = {
       skills: z.array(z.string().min(1)),
       dangerousConfigFlags: z.array(z.string().min(1)),
     })
-    .strict()
     .optional(),
   acceptedSurfaceHash: z.string().optional(),
   acceptedSurfaceAt: z.string().optional(),
   acceptedSurfaceIntegrity: z.string().optional(),
 } as const;
+
+export const StrictPluginInstallRecordSchema = z.object(PluginInstallRecordShape);
+export type PluginInstallRecord = z.infer<typeof StrictPluginInstallRecordSchema>;
+export type PluginAcceptedDeclaredSurface = NonNullable<PluginInstallRecord["acceptedSurface"]>;

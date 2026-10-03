@@ -1,4 +1,3 @@
-// Detects the package manager used by a project directory.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -73,7 +72,7 @@ export function resolveBunGlobalInstallOwner(
   };
 }
 
-export function resolvePnpmNodeModulesRoot(root: string): string | null {
+function resolvePnpmNodeModulesRoot(root: string): string | null {
   const resolved = path.resolve(root);
   const parts = resolved.split(path.sep);
   const pnpmIndex = parts.lastIndexOf(".pnpm");
@@ -88,16 +87,9 @@ export function resolvePnpmNodeModulesRoot(root: string): string | null {
   return path.basename(parent) === "node_modules" ? parent : null;
 }
 
-export async function isBunOwnedPackageRoot(root: string): Promise<boolean> {
-  return resolveBunGlobalInstallOwner(root) !== null;
-}
-
-export async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {
+async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {
   const nodeModulesRoot = resolvePnpmNodeModulesRoot(root);
-  if (!nodeModulesRoot || !(await exists(path.join(nodeModulesRoot, ".modules.yaml")))) {
-    return false;
-  }
-  return true;
+  return nodeModulesRoot !== null && (await exists(path.join(nodeModulesRoot, ".modules.yaml")));
 }
 
 /** Detects the package manager that owns a package root from manifests, locks, and install layout. */
@@ -110,7 +102,7 @@ export async function detectPackageManager(root: string): Promise<DetectedPackag
 
   // Published packages retain source pnpm metadata, and modern releases omit
   // shrinkwrap; detect Bun by its install root before checking older npm locks.
-  if (await isBunOwnedPackageRoot(root)) {
+  if (resolveBunGlobalInstallOwner(root)) {
     return "bun";
   }
   if (hasNpmShrinkwrap) {
@@ -133,7 +125,7 @@ export async function detectPackageManager(root: string): Promise<DetectedPackag
   if (hasBunLock) {
     return "bun";
   }
-  if (files.includes("package-lock.json") || hasNpmShrinkwrap) {
+  if (files.includes("package-lock.json")) {
     return "npm";
   }
   return null;

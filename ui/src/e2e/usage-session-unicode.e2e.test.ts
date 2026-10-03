@@ -57,7 +57,12 @@ function usageResponse(sessionKey?: string) {
               ...usageTotals,
               activityDates: [day],
               dailyBreakdown: [
-                { date: day, tokens: usageTotals.totalTokens, cost: usageTotals.totalCost },
+                {
+                  ...usageTotals,
+                  date: day,
+                  tokens: usageTotals.totalTokens,
+                  cost: usageTotals.totalCost,
+                },
               ],
               messageCounts: {
                 total: 2,
@@ -79,6 +84,7 @@ function usageResponse(sessionKey?: string) {
       byProvider: [],
       byAgent: [{ agentId: "main", totals: usageTotals }],
       byChannel: [],
+      costDaily: [{ date: day, ...usageTotals }],
       daily: [
         {
           date: day,
@@ -90,15 +96,6 @@ function usageResponse(sessionKey?: string) {
         },
       ],
     },
-  };
-}
-
-function costResponse() {
-  return {
-    updatedAt: Date.now(),
-    days: 1,
-    daily: [{ date: currentDay(), ...usageTotals }],
-    totals: usageTotals,
   };
 }
 
@@ -140,7 +137,6 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "sessions.usage": usageResponse(scenario.key),
-            "usage.cost": costResponse(),
             "usage.status": { updatedAt: Date.now(), providers: [] },
           },
         });

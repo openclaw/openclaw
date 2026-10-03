@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
+import { resolveRuntimeArgs, resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 
 const requireFromHere = createRequire(import.meta.url);
@@ -43,7 +43,7 @@ export function filterOpenClawChildExecArgv(
       }
       continue;
     }
-    // Node resolves bare preloads from the child cwd. Pin only our known TSX
+    // Runtimes resolve bare preloads from the child cwd. Pin only our known TSX
     // spelling; unrelated parent import hooks retain their own semantics.
     const bareTsx = arg === "tsx" && execArgv[index - 1] === "--import";
     filtered.push(
@@ -67,7 +67,7 @@ function buildPackageRootCliArgs(packageRoot: string, execPath: string): string[
       // A checkout without TSX can still use its built package launcher.
     }
   }
-  return [path.join(packageRoot, "openclaw.mjs")];
+  return [...resolveRuntimeArgs(execPath), path.join(packageRoot, "openclaw.mjs")];
 }
 
 export function resolveCurrentOpenClawCliInvocation(
@@ -109,9 +109,7 @@ export function resolveCurrentOpenClawCliInvocation(
     ? [
         ...filterOpenClawChildExecArgv(
           options.execArgv ?? process.execArgv,
-          currentEntry === sourceEntry && !isBunRuntime(execPath)
-            ? (packageRoot ?? undefined)
-            : undefined,
+          currentEntry === sourceEntry ? (packageRoot ?? undefined) : undefined,
         ),
         currentEntry,
       ]

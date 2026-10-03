@@ -20,12 +20,13 @@ enum ExecHostExecutor {
         }
 
         let effectiveCwd = approvedCwdSnapshot.path
-        let context = await self.buildContext(
-            request: request,
+        let context = await ExecApprovalEvaluator.evaluate(
             command: validatedRequest.command,
             rawCommand: validatedRequest.evaluationRawCommand,
             displayCommand: validatedRequest.displayCommand,
-            cwd: effectiveCwd)
+            cwd: effectiveCwd,
+            envOverrides: request.env,
+            agentId: request.agentId)
         guard !Task.isCancelled else { return self.cancelledResponse() }
         let approvalSource = validatedRequest.approvalSource
         let security = ExecHostRequestEvaluator.effectiveSecurity(
@@ -67,22 +68,14 @@ enum ExecHostExecutor {
                     reason: "approval-cancelled")
             }
 
-            let followupDecision: ExecApprovalDecision
-            switch decision {
-            case .deny:
-                followupDecision = .deny
-            case .allowAlways:
+            if decision != .deny {
                 explicitlyApproved = true
-                followupDecision = .allowAlways
-            case .allowOnce:
-                explicitlyApproved = true
-                followupDecision = .allowOnce
             }
-            persistAllowlist = followupDecision == .allowAlways
+            persistAllowlist = decision == .allowAlways
 
             switch ExecHostRequestEvaluator.evaluate(
                 context: context,
-                approvalDecision: followupDecision,
+                approvalDecision: decision,
                 approvalSource: approvalSource)
             {
             case let .deny(error):
@@ -129,7 +122,6 @@ enum ExecHostExecutor {
             persistAllowlist: persistAllowlist,
             delayedPolicySnapshot: validatedRequest.delayedPolicySnapshot)
         let timeoutSec = request.timeoutMs.flatMap { Double($0) / 1000.0 }
-        let cwd = effectiveCwd
         let env = context.env
         if case .failure = ExecApprovalsStore.commitExecution(executionCommit) {
             return self.approvalStoreErrorResponse()
@@ -138,34 +130,44 @@ enum ExecHostExecutor {
         // The store commit linearizes authorization. Enqueue before the next
         // suspension so no unrelated MainActor work sits between those steps.
         let execution = Task.detached { () -> ShellExecutor.ShellResult in
-            await ShellExecutor.runDetailed(
+            await self.runApprovedCommand(
+                authorization: executionCommit.authorization,
                 command: executionCommand,
-                cwd: cwd,
+                cwd: approvedCwdSnapshot,
                 env: env,
-                timeout: timeoutSec,
-                beforeSpawn: {
-                    ExecCommandResolution.revalidateApprovalCwdSnapshot(approvedCwdSnapshot)
-                        ? nil
-                        : ExecCommandResolution.approvalCwdDriftDeniedMessage
-                })
+                timeout: timeoutSec)
         }
         return await self.commandResponse(execution: execution)
     }
 
-    private static func buildContext(
-        request: ExecHostRequest,
+    nonisolated static func runApprovedCommand(
+        authorization: ExecApprovalAuthorization,
         command: [String],
-        rawCommand: String?,
-        displayCommand: String,
-        cwd: String) async -> ExecApprovalEvaluation
+        cwd: ExecApprovalCwdSnapshot,
+        env: [String: String],
+        timeout: Double?) async -> ShellExecutor.ShellResult
     {
-        await ExecApprovalEvaluator.evaluate(
+        await ShellExecutor.runDetailed(
             command: command,
-            rawCommand: rawCommand,
-            displayCommand: displayCommand,
-            cwd: cwd,
-            envOverrides: request.env,
-            agentId: request.agentId)
+            cwd: cwd.path,
+            env: env,
+            timeout: timeout,
+            beforeSpawn: {
+                // Local policy is committed, but Gateway-derived trust can retire
+                // while the command waits for application launch admission.
+                switch authorization {
+                case let .currentPolicy(.allowlist, _, .autoAllowedSkill(snapshot)?),
+                     let .askFallback(.allowlist, .autoAllowedSkill(snapshot)?):
+                    guard snapshot.isCurrent else {
+                        return "SYSTEM_RUN_DENIED: gateway skill trust changed; retry on the current gateway"
+                    }
+                default:
+                    break
+                }
+                return ExecCommandResolution.revalidateApprovalCwdSnapshot(cwd)
+                    ? nil
+                    : ExecCommandResolution.approvalCwdDriftDeniedMessage
+            })
     }
 
     private static func approvalStoreErrorResponse() -> ExecHostResponse {

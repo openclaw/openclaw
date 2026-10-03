@@ -10,17 +10,13 @@ import type {
   AgentToolResultMiddlewareEvent,
   OpenClawAgentToolResult,
 } from "../../plugins/agent-tool-result-middleware-types.js";
+import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
+import { getPluginRegistryGatewayOwner } from "../../plugins/registry-lifecycle.js";
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
-import {
-  hasPluginMessagingDeliveryId,
-  isDeliveredMessagingToolResult,
-} from "../embedded-agent-message-tool-source-reply.js";
-import {
-  isMessagingToolSendAction,
-  isPluginNativeMessagingTool,
-} from "../embedded-agent-messaging.js";
+import { isDeliveredMessagingToolResult } from "../embedded-agent-message-tool-source-reply.js";
+import { isMessagingToolSendAction } from "../embedded-agent-messaging.js";
 import { isToolResultError } from "../tool-result-error.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -35,10 +31,6 @@ const NESTED_TOOL_RESULT_BLOCK_TYPES = new Set(["toolresult", "tool_result"]);
 
 type MiddlewareContentBlock = OpenClawAgentToolResult["content"][number];
 type MiddlewareContentCoerceState = { depth: number; seen: Set<object> };
-type MiddlewareToolResultCoerceOptions = {
-  sanitizeContent?: boolean;
-  sanitizeDetails?: boolean;
-};
 
 function isValidMiddlewareContentBlock(value: unknown): boolean {
   if (!isRecord(value) || typeof value.type !== "string") {
@@ -148,7 +140,7 @@ function serializeMiddlewareValue(value: unknown): string | undefined {
 function coerceMiddlewareText(
   value: unknown,
   state: MiddlewareContentCoerceState,
-  options: MiddlewareToolResultCoerceOptions = {},
+  sanitize = false,
 ): string | undefined {
   if (typeof value === "string") {
     return value;
@@ -164,13 +156,13 @@ function coerceMiddlewareText(
     return undefined;
   }
   for (const key of ["text", "output", "result", "message"]) {
-    const text = coerceMiddlewareText(value[key], nextState, options);
+    const text = coerceMiddlewareText(value[key], nextState, sanitize);
     if (text !== undefined) {
       return text;
     }
   }
   if (Array.isArray(value.content)) {
-    const text = coerceMiddlewareContentArray(value.content, nextState, options)
+    const text = coerceMiddlewareContentArray(value.content, nextState, sanitize)
       .flatMap((block) => (block.type === "text" && block.text ? [block.text] : []))
       .join("\n");
     return text || undefined;
@@ -209,15 +201,15 @@ function appendMiddlewareContentBlock(
 function coerceMiddlewareContentArray(
   content: unknown[],
   state: MiddlewareContentCoerceState,
-  options: MiddlewareToolResultCoerceOptions = {},
+  sanitize = false,
 ): MiddlewareContentBlock[] {
   const blocks: MiddlewareContentBlock[] = [];
   for (const entry of content.slice(0, MAX_MIDDLEWARE_CONTENT_BLOCKS)) {
     if (blocks.length >= MAX_MIDDLEWARE_CONTENT_BLOCKS) {
       break;
     }
-    const coerced = coerceMiddlewareContentBlocks(entry, state, options);
-    const text = coerced.length === 0 ? coerceMiddlewareText(entry, state, options) : undefined;
+    const coerced = coerceMiddlewareContentBlocks(entry, state, sanitize);
+    const text = coerced.length === 0 ? coerceMiddlewareText(entry, state, sanitize) : undefined;
     for (const block of text
       ? [{ type: "text" as const, text: truncateUtf16Safe(text, MAX_MIDDLEWARE_TEXT_CHARS) }]
       : coerced) {
@@ -230,7 +222,7 @@ function coerceMiddlewareContentArray(
 function coerceMiddlewareContentBlocks(
   value: unknown,
   state: MiddlewareContentCoerceState,
-  options: MiddlewareToolResultCoerceOptions = {},
+  sanitize = false,
 ): MiddlewareContentBlock[] {
   if (isValidMiddlewareContentBlock(value)) {
     return [value as MiddlewareContentBlock];
@@ -238,12 +230,7 @@ function coerceMiddlewareContentBlocks(
   // Tool emitters can produce legitimate transcript text larger than the
   // middleware cap. Normalize that only before the first handler; handlers
   // remain fail-closed if they return an oversized replacement.
-  if (
-    options.sanitizeContent === true &&
-    isRecord(value) &&
-    value.type === "text" &&
-    typeof value.text === "string"
-  ) {
+  if (sanitize && isRecord(value) && value.type === "text" && typeof value.text === "string") {
     return [{ type: "text", text: truncateUtf16Safe(value.text, MAX_MIDDLEWARE_TEXT_CHARS) }];
   }
   if (!isRecord(value) || typeof value.type !== "string") {
@@ -256,10 +243,10 @@ function coerceMiddlewareContentBlocks(
   const content = value.content;
   if (Array.isArray(content) && content.length > 0) {
     const nextState = descendMiddlewareContentCoerceState(value, state);
-    return nextState ? coerceMiddlewareContentArray(content, nextState, options) : [];
+    return nextState ? coerceMiddlewareContentArray(content, nextState, sanitize) : [];
   }
   const text =
-    coerceMiddlewareText(content, state, options) ?? coerceMiddlewareText(value, state, options);
+    coerceMiddlewareText(content, state, sanitize) ?? coerceMiddlewareText(value, state, sanitize);
   if (!text) {
     return [];
   }
@@ -273,7 +260,7 @@ function coerceMiddlewareContentBlocks(
 
 function coerceMiddlewareToolResult(
   value: unknown,
-  options: MiddlewareToolResultCoerceOptions = {},
+  sanitize = false,
 ): OpenClawAgentToolResult | undefined {
   if (isValidMiddlewareToolResult(value)) {
     return value;
@@ -284,7 +271,7 @@ function coerceMiddlewareToolResult(
   const state: MiddlewareContentCoerceState = { depth: 0, seen: new Set() };
   const content: OpenClawAgentToolResult["content"] = [];
   for (const block of value.content.slice(0, MAX_MIDDLEWARE_CONTENT_BLOCKS)) {
-    for (const coerced of coerceMiddlewareContentBlocks(block, state, options)) {
+    for (const coerced of coerceMiddlewareContentBlocks(block, state, sanitize)) {
       if (content.length >= MAX_MIDDLEWARE_CONTENT_BLOCKS) {
         break;
       }
@@ -299,7 +286,7 @@ function coerceMiddlewareToolResult(
   }
   const details = isValidMiddlewareDetails(value.details)
     ? value.details
-    : options.sanitizeDetails === true
+    : sanitize
       ? sanitizeMiddlewareDetailsValue(value.details)
       : undefined;
   if (details === undefined && !isValidMiddlewareDetails(value.details)) {
@@ -313,24 +300,20 @@ function coerceMiddlewareToolResult(
   return isValidMiddlewareToolResult(result) ? result : undefined;
 }
 
-/**
- * Coerce an arbitrary value into a JSON-safe shape that satisfies
- * `isValidMiddlewareDetails`. Round-trips through `JSON.stringify` with a
- * WeakSet replacer that drops functions, symbols, and `undefined`; coerces
- * bigints to their decimal string form; breaks cycles at the offending
- * reference; and collapses payloads larger than the validator byte cap to a
- * `{ truncated, originalSizeBytes }` marker. Returns `null` for inputs that
- * cannot be represented at all (top-level function/symbol/undefined).
- */
+// Normalize incoming details to satisfy the validator's byte and shape limits.
 function sanitizeMiddlewareDetailsValue(value: unknown): unknown {
   const serialized = serializeMiddlewareValue(value);
   if (serialized === undefined) {
     return null;
   }
   const bytes = Buffer.byteLength(serialized, "utf8");
-  return bytes > MAX_MIDDLEWARE_DETAILS_BYTES
-    ? { truncated: true, originalSizeBytes: bytes }
-    : JSON.parse(serialized);
+  if (bytes <= MAX_MIDDLEWARE_DETAILS_BYTES) {
+    const parsed = JSON.parse(serialized);
+    if (hasValidMiddlewareDetailsShape(parsed)) {
+      return parsed;
+    }
+  }
+  return { truncated: true, originalSizeBytes: bytes };
 }
 
 /**
@@ -342,10 +325,7 @@ function sanitizeMiddlewareDetailsValue(value: unknown): unknown {
  * subsequent middleware-side mutations are still validated strictly.
  */
 function sanitizeToolResultForMiddleware(result: OpenClawAgentToolResult): OpenClawAgentToolResult {
-  const coerced = coerceMiddlewareToolResult(result, {
-    sanitizeContent: true,
-    sanitizeDetails: true,
-  });
+  const coerced = coerceMiddlewareToolResult(result, true);
   if (coerced) {
     return coerced;
   }
@@ -378,13 +358,12 @@ function buildDeliveredMessagingFailureFallback(
   );
   const delivered = deliveryFact
     ? deliveryFact.status === "settled"
-    : isPluginNativeMessagingTool(event.toolName) &&
-      isDeliveredMessagingToolResult({
+    : isDeliveredMessagingToolResult({
         toolName: event.toolName,
         args: event.args,
         result,
-      }) &&
-      hasPluginMessagingDeliveryId(result);
+        requirePluginDeliveryId: true,
+      });
   if (
     event.isError === true ||
     isToolResultError(result) ||
@@ -412,11 +391,31 @@ function reconcileDeliveredMessagingFailure(
     : result;
 }
 
+/**
+ * A run resolves middleware once. When a handler's own plugin was retired and is
+ * gone from its Gateway's current registry, its post-processing no longer applies. The runner
+ * checks this before choosing a path and again before each call, so a skipped
+ * plugin never runs and cannot have touched the result.
+ */
+function isRemovedPluginMiddleware(handler: AgentToolResultMiddleware): boolean {
+  const instance = getPluginValueInstance(handler);
+  if (!instance?.owner || (!instance.disposing && instance.acceptingCalls)) {
+    return false;
+  }
+  // Decide against the plugin's own Gateway; without that owner a stale handler fails closed.
+  const successor = getPluginRegistryGatewayOwner(instance.owner.registry)?.current();
+  return (
+    successor !== undefined &&
+    !successor.plugins.some(
+      (record) => record.id === instance.pluginId && record.enabled && record.status === "loaded",
+    )
+  );
+}
+
 export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
 ) {
-  let resolvedHandlers = handlers;
   const resolvedHandlersLoader = createLazyPromiseLoader(async () => {
     const { loadAgentToolResultMiddlewaresForRuntime } =
       await import("../../plugins/agent-tool-result-middleware-loader.js");
@@ -424,18 +423,15 @@ export function createAgentToolResultMiddlewareRunner(
       runtime: ctx.runtime,
     });
   });
-  const resolveHandlers = async (): Promise<AgentToolResultMiddleware[]> => {
-    if (resolvedHandlers) {
-      return resolvedHandlers;
-    }
-    resolvedHandlers = await resolvedHandlersLoader.load();
-    return resolvedHandlers;
-  };
   return {
     async applyToolResultMiddleware(
       event: AgentToolResultMiddlewareEvent,
     ): Promise<OpenClawAgentToolResult> {
-      const handlersForRun = await resolveHandlers();
+      // Drop removed plugins' handlers before choosing a path, so a run whose
+      // only middleware was removed keeps the untouched no-middleware result.
+      const handlersForRun = (await (handlers ?? resolvedHandlersLoader.load())).filter(
+        (handler) => !isRemovedPluginMiddleware(handler),
+      );
       // Fast path: with no middleware registered the result is delivered
       // unchanged; skip validation entirely so tool emitters that produce
       // dependency payloads on `details` (SDK objects with methods, cycles)
@@ -451,6 +447,10 @@ export function createAgentToolResultMiddlewareRunner(
       );
       let current = sanitizeToolResultForMiddleware(event.result);
       for (const handler of handlersForRun) {
+        // An earlier handler can await while a later handler's plugin is removed.
+        if (isRemovedPluginMiddleware(handler)) {
+          continue;
+        }
         try {
           const next = await handler({ ...event, result: current }, ctx);
           // Middleware may mutate event.result in place for legacy runtime parity.

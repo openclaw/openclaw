@@ -1,18 +1,20 @@
 // Claw doctor diagnostics project the lifecycle ownership ledger into health findings.
-import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDefaultCronStaggerMs } from "../cron/stagger.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { clawCronGatewayInput } from "./cron.js";
+import { digestClawValue } from "./digest.js";
 import { isExperimentalClawsEnabled } from "./experimental.js";
 import { readClawStatus, type ClawStatusRecord } from "./lifecycle-state.js";
 
@@ -48,41 +50,29 @@ type CronInventorySnapshot =
   | { ok: false; error: string }
   | undefined;
 
-function cronExecutionDigest(value: unknown): string {
-  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
-}
-
 function expectedCronExecutionDigest(
   record: ClawStatusRecord,
   cron: ClawStatusRecord["cronJobs"][number],
 ): string {
-  const job = cron.job;
-  const staggerMs = resolveDefaultCronStaggerMs(job.schedule.cron);
-  return cronExecutionDigest({
-    declarationKey: cron.declarationKey,
-    ownerAgentId: record.install.agentId,
-    enabled: true,
+  const input = clawCronGatewayInput(record.install.agentId, cron);
+  const staggerMs = resolveDefaultCronStaggerMs(cron.job.schedule.cron);
+  return digestClawValue({
+    declarationKey: input.declarationKey,
+    ownerAgentId: input.owner.agentId,
+    enabled: input.enabled,
     schedule: {
-      kind: "cron",
-      expr: job.schedule.cron,
-      ...(job.schedule.timezone ? { tz: job.schedule.timezone } : {}),
+      ...input.schedule,
       ...(staggerMs !== undefined ? { staggerMs } : {}),
     },
-    sessionTarget:
-      job.session === "main" ? `session:agent:${record.install.agentId}:main` : job.session,
-    wakeMode: "now",
-    payload: { kind: "agentTurn", message: job.message },
-    delivery: job.delivery
-      ? {
-          mode: job.delivery.mode,
-          ...(job.delivery.channel ? { channel: job.delivery.channel } : {}),
-        }
-      : { mode: "none" },
+    sessionTarget: input.sessionTarget,
+    wakeMode: input.wakeMode,
+    payload: input.payload,
+    delivery: input.delivery,
   });
 }
 
 function liveCronExecutionDigest(job: CronJob): string {
-  return cronExecutionDigest({
+  return digestClawValue({
     declarationKey: job.declarationKey,
     ownerAgentId: job.owner?.agentId ?? job.agentId,
     enabled: job.enabled,
@@ -200,29 +190,19 @@ function collectInstallFindings(
       );
       continue;
     }
-    if (!cronInventory) {
+    if (!cronInventory?.ok) {
       findings.push(
         finding({
-          message: `Claw cron declaration ${JSON.stringify(cron.manifestId)} live Gateway state is unknown; no cron inventory was available.`,
+          message: cronInventory
+            ? `Claw cron declaration ${JSON.stringify(cron.manifestId)} live Gateway state is unknown: ${cronInventory.error}`
+            : `Claw cron declaration ${JSON.stringify(cron.manifestId)} live Gateway state is unknown; no cron inventory was available.`,
           path: `claws.${agentId}.cronJobs.${cron.manifestId}`,
           target: cron.schedulerJobId,
           requirement:
             "Claw cron health requires live Gateway corroboration by job id, declaration key, owner, enabled state, and execution digest",
-          fixHint:
-            "Run diagnostics with Gateway cron inventory available before treating this cron as healthy.",
-        }),
-      );
-      continue;
-    }
-    if (!cronInventory.ok) {
-      findings.push(
-        finding({
-          message: `Claw cron declaration ${JSON.stringify(cron.manifestId)} live Gateway state is unknown: ${cronInventory.error}`,
-          path: `claws.${agentId}.cronJobs.${cron.manifestId}`,
-          target: cron.schedulerJobId,
-          requirement:
-            "Claw cron health requires live Gateway corroboration by job id, declaration key, owner, enabled state, and execution digest",
-          fixHint: "Restore Gateway cron inventory before treating this cron as healthy.",
+          fixHint: cronInventory
+            ? "Restore Gateway cron inventory before treating this cron as healthy."
+            : "Run diagnostics with Gateway cron inventory available before treating this cron as healthy.",
         }),
       );
       continue;
@@ -263,14 +243,6 @@ function collectInstallFindings(
     }
   }
   return findings;
-}
-
-function tableExists(db: DatabaseSync, name: string): boolean {
-  return Boolean(
-    db /* sqlite-allow-raw: read-only Claw doctor table-existence probe with bound table name. */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get(name),
-  );
 }
 
 function orphanedAgentIds(options: OpenClawStateDatabaseOptions): string[] {
@@ -335,14 +307,14 @@ export async function collectClawStateHealthFindings(
   }
   let database: OpenClawStateDatabase | undefined;
   try {
-    database = await openExistingOpenClawStateDatabaseReadOnly(options);
+    database = await openExistingOpenClawStateDatabaseReadOnly({
+      ...options,
+      requireCanonicalSchema: true,
+    });
     if (!database) {
       return [];
     }
     const orphanedRefs = orphanedAgentIds({ ...options, database, readOnly: true });
-    if (!tableExists(database.db, "claw_installs")) {
-      return orphanedRefs.map(orphanedReferenceFinding);
-    }
     let sourceMcpServers = options.sourceMcpServers ?? {};
     if (hasClawMcpServerRefs(database.db) && !options.sourceMcpServers) {
       const listed = await (options.listMcpServers ?? listConfiguredMcpServers)();

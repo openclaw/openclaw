@@ -7,7 +7,8 @@ title: "Z.AI"
 ---
 
 Z.AI is the API platform for **GLM** models. It provides REST APIs for GLM and
-uses API keys for authentication. Create your API key in the Z.AI console.
+uses API keys for authentication. Create your API key in the
+[Z.AI console](https://z.ai/manage-apikey/apikey-list).
 OpenClaw uses the `zai` provider with a Z.AI API key.
 
 | Property | Value                                        |
@@ -163,7 +164,7 @@ listing can show known GLM rows without loading provider runtime:
 openclaw models list --all --provider zai
 ```
 
-The manifest-backed catalog currently includes:
+The manifest-backed catalog includes:
 
 | Model ref           | Notes                                              |
 | ------------------- | -------------------------------------------------- |
@@ -194,6 +195,36 @@ GLM-5.3. Run
 `openclaw models list --all --provider zai` to see the catalog known to your
 installed version.
 </Note>
+
+## Video generation
+
+The same plugin and `ZAI_API_KEY` (or `Z_AI_API_KEY`) support the
+[video generation tool](/tools/video-generation) with `zai/cogvideox-3`.
+It accepts text prompts or one PNG/JPEG image, including local files sent
+as data URIs (maximum 5 MB). Video references are unsupported.
+
+Durations normalize to 5 or 10 seconds. Size and aspect-ratio hints map to
+the nearest supported size: `1280x720`, `720x1280`, `1024x1024`,
+`1920x1080`, `1080x1920`, `2048x1080`, or `3840x2160`.
+Output defaults to 720P landscape without audio; `audio: true` enables sound.
+Use `providerOptions.quality` (`speed` or `quality`) and `providerOptions.fps`
+(`30` or `60`) for further control.
+
+Video uses the configured global or China region's general `/api/paas/v4`
+endpoint. Coding Plan chat endpoints map to the general video endpoint in
+the same region; video requires API access and billing for that endpoint.
+
+```json5
+{
+  agents: {
+    defaults: {
+      mediaModels: {
+        video: { primary: "zai/cogvideox-3" },
+      },
+    },
+  },
+}
+```
 
 ## Thinking levels
 

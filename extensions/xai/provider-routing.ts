@@ -2,19 +2,21 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { isXaiProviderId } from "./provider-id.js";
 
-const XAI_NATIVE_ENDPOINT_HOSTS = new Set(["api.x.ai"]);
-
 function resolveHostname(value: string): string | undefined {
-  try {
-    return new URL(value).hostname.toLowerCase();
-  } catch {
-    return undefined;
-  }
+  return URL.parse(value)?.hostname.toLowerCase();
 }
 
 function isXaiNativeEndpoint(baseUrl: unknown): boolean {
+  return typeof baseUrl === "string" && resolveHostname(baseUrl) === "api.x.ai";
+}
+
+export function supportsXaiPromptCacheKey(params: { api?: unknown; baseUrl?: unknown }): boolean {
+  const baseUrl = normalizeOptionalString(params.baseUrl) ?? XAI_BASE_URL;
+  // Native Chat Completions routes are normalized to Responses after model compat.
   return (
-    typeof baseUrl === "string" && XAI_NATIVE_ENDPOINT_HOSTS.has(resolveHostname(baseUrl) ?? "")
+    (params.api === "openai-responses" || params.api === "openai-completions") &&
+    (isXaiNativeEndpoint(baseUrl) ||
+      (params.api === "openai-responses" && resolveHostname(baseUrl) === "cli-chat-proxy.grok.com"))
   );
 }
 

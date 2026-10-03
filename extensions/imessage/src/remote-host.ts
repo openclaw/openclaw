@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { expandIMessageUserPath } from "./cli-path.js";
 
 // CLI installation and wrapper contents are process-stable channel metadata.
@@ -99,6 +98,8 @@ export async function resolveIMessageRemoteHost(params: {
   if (configured) {
     return configured;
   }
+  // Synchronous discovery reads only the cache; logging belongs to async host resolution.
+  const { logVerbose } = await import("openclaw/plugin-sdk/runtime-env");
   if (params.remoteHost?.trim()) {
     logVerbose("imessage: ignoring unsafe configured remoteHost value");
   }
@@ -133,14 +134,11 @@ export async function resolveIMessageRemoteHost(params: {
       detectedRemoteHosts.set(key, ambiguousSshWrapper);
       throwAmbiguousSshWrapper();
     }
-    const normalized = normalizeScpRemoteHost(detected);
-    if (detected && !normalized) {
-      logVerbose("imessage: ignoring unsafe auto-detected remoteHost from cliPath");
-    } else if (normalized) {
-      logVerbose(`imessage: detected remoteHost=${normalized} from cliPath`);
+    if (detected) {
+      logVerbose(`imessage: detected remoteHost=${detected} from cliPath`);
     }
-    detectedRemoteHosts.set(key, normalized ?? null);
-    return normalized;
+    detectedRemoteHosts.set(key, detected ?? null);
+    return detected;
   })().finally(() => remoteHostLookups.delete(key));
   remoteHostLookups.set(key, lookup);
   return await lookup;

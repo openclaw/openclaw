@@ -7,7 +7,10 @@ import {
   FakeWebSocket,
 } from "./background.test-support.js";
 import type { RuntimeMessageListener } from "./background.test-support.js";
-import { computeRelayAuthProof } from "./modules/relay-auth-v2-crypto.js";
+import {
+  computeRelayAuthProof,
+  type RelayAuthProofFields,
+} from "./modules/relay-auth-v2-crypto.js";
 import type { BrowserTabSnapshot } from "./modules/tab-eligibility.js";
 import { relayTestKey } from "./relay-key.test-support.js";
 
@@ -533,7 +536,7 @@ export async function loadBackground({
       }
       const hello = JSON.parse(helloRaw) as { keyId: string; clientNonce: string };
       const issuedAtMs = Date.now();
-      const fields = {
+      const fields: RelayAuthProofFields = {
         keyId: hello.keyId,
         instanceId: AUTH_INSTANCE_ID,
         sessionId: AUTH_SESSION_ID,
@@ -583,6 +586,7 @@ export async function loadBackground({
     setBadgeText,
     sockets,
     storageRemove,
+    storageGet,
     storageSet,
     storageValues,
     setRetiredStorageFailureStage: (stage?: RetiredStorageFailureStage) => {

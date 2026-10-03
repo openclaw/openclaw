@@ -1,16 +1,75 @@
 // Sandbox workspace tests cover bootstrap file seeding into isolated workspaces
 // without following unsafe host links.
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { nodeFilePath } from "../../test-utils/node-file-path.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
 import { DEFAULT_AGENTS_FILENAME, DEFAULT_SOUL_FILENAME } from "../workspace.js";
+import { captureSandboxStateOwner } from "./state-owner.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("ensureSandboxWorkspace", () => {
+  it("rejects released hosted custody before bootstrap publication after a destination read", async () => {
+    const root = tempDirs.make("sandbox-bootstrap-owner-");
+    const seed = path.join(root, "seed");
+    const sandbox = path.join(root, "sandbox");
+    const target = path.join(sandbox, DEFAULT_AGENTS_FILENAME);
+    await fs.mkdir(seed, { recursive: true });
+    await fs.mkdir(sandbox);
+    await fs.writeFile(path.join(seed, DEFAULT_AGENTS_FILENAME), "seeded-agents");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+      const owner = acquireGatewayStateOwner({
+        databasePath: resolveOpenClawStateSqlitePath(),
+        payload: {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: path.join(root, "openclaw.json"),
+          role: "gateway",
+        },
+      });
+      const assertCurrent = await captureSandboxStateOwner();
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const access = fs.access.bind(fs);
+      const read = vi.spyOn(fs, "access").mockImplementation(async (...args) => {
+        if (nodeFilePath(args[0]) === target) {
+          entered.resolve();
+          await resume.promise;
+        }
+        return access(...args);
+      });
+      const preparation = ensureSandboxWorkspace(sandbox, seed, true, undefined, {
+        assertHost: assertCurrent,
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          preparation,
+          "Bootstrap skipped destination read",
+        );
+        owner.release();
+        resume.resolve();
+        const result = await preparation.catch((error: unknown) => error);
+        expect(await fs.readdir(sandbox)).toEqual([]);
+        expect(result).toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
+      } finally {
+        resume.resolve();
+        await preparation.catch(() => {});
+        read.mockRestore();
+        owner.release();
+      }
+    });
+  });
+
   it("seeds regular bootstrap files from the source workspace", async () => {
     const root = tempDirs.make("openclaw-sandbox-workspace-");
     const seed = path.join(root, "seed");
@@ -103,5 +162,78 @@ describe("ensureSandboxWorkspace", () => {
 
     const seeded = await fs.readFile(path.join(sandbox, DEFAULT_AGENTS_FILENAME), "utf-8");
     expect(seeded).toContain("Do startup things");
+  });
+
+  it("does not publish a partial sandbox seed when the first write fails", async () => {
+    const root = tempDirs.make("openclaw-sandbox-workspace-");
+    const seed = path.join(root, "seed");
+    const sandbox = path.join(root, "sandbox");
+    const agentsPath = path.join(sandbox, DEFAULT_AGENTS_FILENAME);
+    await fs.mkdir(seed, { recursive: true });
+    await fs.mkdir(sandbox, { recursive: true });
+    await fs.writeFile(path.join(seed, DEFAULT_AGENTS_FILENAME), "seeded-agents", "utf-8");
+    const resolvedSandbox = await fs.realpath(sandbox);
+    const realOpen = fs.open.bind(fs);
+    let injected = false;
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      const rawPath = nodeFilePath(args[0]);
+      const exclusiveCreate =
+        typeof args[1] === "number" &&
+        (args[1] & syncFs.constants.O_CREAT) !== 0 &&
+        (args[1] & syncFs.constants.O_EXCL) !== 0;
+      if (
+        !injected &&
+        rawPath &&
+        path.dirname(path.resolve(rawPath)) === resolvedSandbox &&
+        exclusiveCreate
+      ) {
+        vi.spyOn(handle, "write").mockImplementationOnce(async () => {
+          injected = true;
+          await handle.writeFile("# PARTIAL\n");
+          throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+        });
+      }
+      return handle;
+    });
+
+    try {
+      await expect(
+        withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () =>
+          ensureSandboxWorkspace(sandbox, seed, true),
+        ),
+      ).rejects.toMatchObject({ cause: { code: "ENOSPC" } });
+      expect(injected).toBe(true);
+      await expect(fs.readFile(agentsPath, "utf-8")).rejects.toThrow("no such file");
+      expect(await fs.readdir(sandbox)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+
+    await ensureSandboxWorkspace(sandbox, seed, true);
+    await expect(fs.readFile(agentsPath, "utf-8")).resolves.toBe("seeded-agents");
+  });
+
+  it("reports when sandbox seed publication cannot use hard links", async () => {
+    const root = tempDirs.make("openclaw-sandbox-workspace-");
+    const seed = path.join(root, "seed");
+    const sandbox = path.join(root, "sandbox");
+    const agentsPath = path.join(sandbox, DEFAULT_AGENTS_FILENAME);
+    await fs.mkdir(seed, { recursive: true });
+    await fs.writeFile(path.join(seed, DEFAULT_AGENTS_FILENAME), "seeded-agents", "utf-8");
+    const linkSpy = vi.spyOn(syncFs, "linkSync").mockImplementation(() => {
+      throw Object.assign(new Error("not supported"), { code: "ENOTSUP" });
+    });
+
+    try {
+      await expect(
+        withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () =>
+          ensureSandboxWorkspace(sandbox, seed, true),
+        ),
+      ).rejects.toThrow(/filesystem does not support atomic bootstrap publication/u);
+      await expect(fs.readFile(agentsPath, "utf8")).rejects.toThrow("no such file");
+    } finally {
+      linkSpy.mockRestore();
+    }
   });
 });

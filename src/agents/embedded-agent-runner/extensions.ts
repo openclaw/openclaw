@@ -1,6 +1,3 @@
-/**
- * Builds extension factories available to embedded-agent runtime sessions.
- */
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -31,26 +28,6 @@ type AgentToolResultEvent = {
   details?: unknown;
   isError?: boolean;
 };
-
-function snapshotToolReceipt(
-  details: unknown,
-  includeMessageDelivery: boolean,
-): { toolSend?: unknown; messageDelivery?: unknown } | undefined {
-  const record = asOptionalRecord(details);
-  const snapshot = (value: unknown) => {
-    const valueRecord = asOptionalRecord(value);
-    return valueRecord ? { ...valueRecord } : value;
-  };
-  const toolSend = record?.toolSend;
-  const messageDelivery = includeMessageDelivery ? record?.messageDelivery : undefined;
-  if (toolSend === undefined && messageDelivery === undefined) {
-    return undefined;
-  }
-  return {
-    ...(toolSend !== undefined ? { toolSend: snapshot(toolSend) } : {}),
-    ...(messageDelivery !== undefined ? { messageDelivery: snapshot(messageDelivery) } : {}),
-  };
-}
 
 function buildAgentToolResultMiddlewareFactory(
   sessionManager: SessionManager,
@@ -88,10 +65,14 @@ function buildAgentToolResultMiddlewareFactory(
         content,
         details: event.details,
       } satisfies AgentToolResult<unknown>;
-      const receipt = snapshotToolReceipt(current.details, event.toolName === "message");
-      if (eventToolCallId && receipt) {
+      if (eventToolCallId) {
         // Delivery evidence stays private so middleware may fully replace result details.
-        recordEmbeddedToolReceipt(sessionManager, eventToolCallId, receipt);
+        recordEmbeddedToolReceipt(
+          sessionManager,
+          eventToolCallId,
+          current.details,
+          event.toolName === "message",
+        );
       }
       const inputHadErrorStatus = isToolResultError(current);
       const adjustedInput = eventToolCallId
@@ -109,12 +90,8 @@ function buildAgentToolResultMiddlewareFactory(
       });
       const isAcceptedSessionSpawn =
         event.toolName === "sessions_spawn" && normalizeAcceptedSessionSpawnResult(result) !== null;
-      const isError =
-        !isAcceptedSessionSpawn &&
-        (event.isError === true || inputHadErrorStatus || isToolResultError(result));
-      const clearsAcceptedSessionSpawnError =
-        isAcceptedSessionSpawn &&
-        (event.isError === true || inputHadErrorStatus || isToolResultError(result));
+      const hasError = event.isError === true || inputHadErrorStatus || isToolResultError(result);
+      const isError = !isAcceptedSessionSpawn && hasError;
       if (eventToolCallId) {
         finalizeToolTerminalPresentation({
           toolCallId: eventToolCallId,
@@ -127,8 +104,7 @@ function buildAgentToolResultMiddlewareFactory(
         content: result.content,
         details: result.details,
         ...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
-        ...(isError ? { isError: true } : {}),
-        ...(clearsAcceptedSessionSpawnError ? { isError: false } : {}),
+        ...(hasError ? { isError } : {}),
       };
     });
   };
@@ -176,13 +152,6 @@ export function buildEmbeddedExtensionFactories(params: {
     });
     factories.push(compactionSafeguardExtension);
   }
-  factories.push(
-    buildAgentToolResultMiddlewareFactory(params.sessionManager, {
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-    }),
-  );
+  factories.push(buildAgentToolResultMiddlewareFactory(params.sessionManager, params));
   return factories;
 }

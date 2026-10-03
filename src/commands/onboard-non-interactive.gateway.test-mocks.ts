@@ -1,18 +1,26 @@
 // Shared mocks and harness for the non-interactive gateway onboarding suites.
 // vi.mock calls live here so sibling suites share one config-write/daemon/health surface.
+import fs from "node:fs/promises";
 import path from "node:path";
-import { vi } from "vitest";
+import { afterAll, afterEach, beforeAll, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { makeTempWorkspace } from "../test-helpers/workspace.js";
+import { setTestEnvValue } from "../test-utils/env.js";
 import {
+  createOnboardStateDirHarness,
   createOnboardTestConfigStore,
   createThrowingRuntime,
   mockOnboardingAgent,
+  prepareOnboardGatewayTestEnv,
 } from "./onboard-non-interactive.test-helpers.js";
 import type { WaitForGatewayReachableMock } from "./onboard-non-interactive.test-helpers.js";
 import type { installGatewayDaemonNonInteractive } from "./onboard-non-interactive/local/daemon-install.js";
+import { createTestConfigFileStore } from "./test-runtime-config-helpers.js";
 
 export const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
 const onboardTestConfigStore = createOnboardTestConfigStore();
+const committedConfigFiles = createTestConfigFileStore();
+afterEach(() => committedConfigFiles.clear());
 export const {
   configStore: testConfigStore,
   resolveConfigPath: resolveTestConfigPath,
@@ -27,11 +35,19 @@ type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemon
 const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
   vi.fn(async (): Promise<InstallGatewayDaemonResult> => ({ installed: true })),
 );
-const healthCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const healthCommandMock = vi.hoisted(() =>
+  vi.fn<typeof import("./health.js").healthCommandNonExiting>(async () => {}),
+);
+const waitForGatewayReachableMock = vi.hoisted(() =>
+  vi.fn<NonNullable<WaitForGatewayReachableMock>>(
+    (params) => gatewayReachableState.mock?.(params) ?? Promise.resolve({ ok: true }),
+  ),
+);
 const gatewayServiceMock = vi.hoisted(() => ({
   label: "LaunchAgent",
   loadedText: "loaded",
   isLoaded: vi.fn(async () => true),
+  readCommand: vi.fn(async () => null),
   readRuntime: vi.fn(async () => ({
     status: "running",
     state: "active",
@@ -48,7 +64,8 @@ gatewayOnboardConfigSnapshotMock.mockImplementation(async () =>
   onboardTestConfigStore.readSnapshot(),
 );
 
-vi.mock("../config/io.js", () => ({
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
   createConfigIO: () => ({
     configPath: resolveTestConfigPath(),
   }),
@@ -88,6 +105,7 @@ export const capturedReplaceConfigFileCalls: Array<{
 vi.mock("../config/config.js", async (importActual) => {
   const actual = await importActual<typeof import("../config/config.js")>();
   return {
+    ...actual,
     replaceConfigFile: async ({
       nextConfig,
       writeOptions,
@@ -101,6 +119,7 @@ vi.mock("../config/config.js", async (importActual) => {
         ...(writeOptions ? { writeOptions } : {}),
       });
       testConfigStore.set(resolveTestConfigPath(), nextConfig);
+      return committedConfigFiles.write(nextConfig, resolveTestConfigPath());
     },
     resolveConfigWriteAfterWrite: actual.resolveConfigWriteAfterWrite,
     resolveGatewayPort: (cfg: OpenClawConfig) => cfg.gateway?.port ?? 18789,
@@ -121,7 +140,7 @@ vi.mock("../config/config.js", async (importActual) => {
         writeOptions: params.writeOptions,
         afterWrite: { mode: "auto" },
       });
-      return { nextConfig: committed.config };
+      return committedConfigFiles.write(committed.config, snapshot.path);
     },
   };
 });
@@ -150,13 +169,9 @@ vi.mock("./onboard-helpers.js", () => {
       httpUrl: `http://127.0.0.1:${port}`,
       wsUrl: `ws://127.0.0.1:${port}`,
     }),
-    waitForGatewayReachable: (params: {
-      url: string;
-      token?: string;
-      password?: string;
-      deadlineMs?: number;
-      probeTimeoutMs?: number;
-    }) => gatewayReachableState.mock?.(params) ?? Promise.resolve({ ok: true }),
+    probeGatewayReachable: (params: { url: string; token?: string; password?: string }) =>
+      gatewayReachableState.mock?.(params) ?? Promise.resolve({ ok: true }),
+    waitForGatewayReachable: waitForGatewayReachableMock,
   };
 });
 
@@ -197,9 +212,32 @@ vi.mock("../daemon/diagnostics.js", () => ({
 
 export let runNonInteractiveSetup: typeof import("./onboard-non-interactive.js").runNonInteractiveSetup;
 
-export async function loadGatewayOnboardModules(): Promise<void> {
+async function loadGatewayOnboardModules(): Promise<void> {
   vi.resetModules();
   ({ runNonInteractiveSetup } = await import("./onboard-non-interactive.js"));
+}
+
+/** Owns one onboarding suite's temporary home and shared module setup. */
+export function useGatewayOnboardTestHarness(prefix: string) {
+  let envSnapshot: ReturnType<typeof prepareOnboardGatewayTestEnv>;
+  let tempHome: string | undefined;
+  const { withStateDir } = createOnboardStateDirHarness(() => tempHome);
+
+  beforeAll(async () => {
+    envSnapshot = prepareOnboardGatewayTestEnv();
+    tempHome = await makeTempWorkspace(prefix);
+    setTestEnvValue("HOME", tempHome);
+    await loadGatewayOnboardModules();
+  });
+
+  afterAll(async () => {
+    if (tempHome) {
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+    envSnapshot.restore();
+  });
+
+  return { withStateDir };
 }
 
 export const getPseudoPort = (base: number): number => base + (process.pid % 1000);
@@ -213,4 +251,5 @@ export {
   installGatewayDaemonNonInteractiveMock,
   gatewayOnboardConfigSnapshotMock,
   readLastGatewayErrorLineMock,
+  waitForGatewayReachableMock,
 };

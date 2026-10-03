@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -90,15 +90,7 @@ function preserveSessionConversationIdentity(params: {
       .orderBy("sc.last_seen_at", "desc")
       .limit(1),
   ).rows[0];
-  let metadata: Record<string, unknown> | undefined;
-  if (row?.metadata_json) {
-    try {
-      const parsed = JSON.parse(row.metadata_json) as unknown;
-      metadata = isRecord(parsed) ? parsed : undefined;
-    } catch {
-      metadata = undefined;
-    }
-  }
+  const metadata = row?.metadata_json ? safeParseJsonRecord(row.metadata_json) : undefined;
   return row
     ? {
         conversationRef: row.conversation_id,
@@ -149,39 +141,32 @@ export function upsertConversationIdentity(
   updatedAt: number,
 ): void {
   const db = getSessionKysely(database.db);
+  const identityColumns = () => ({
+    channel: identity.channel,
+    account_id: identity.accountId,
+    kind: identity.kind,
+    peer_id: identity.peerId,
+    delivery_target: identity.deliveryTarget,
+    parent_conversation_id: identity.parentConversationRef ?? null,
+    thread_id: identity.threadId ?? null,
+    native_channel_id: identity.nativeChannelId ?? null,
+    native_direct_user_id: identity.nativeDirectUserId ?? null,
+    label: identity.label ?? null,
+    metadata_json: identity.metadata ? JSON.stringify(identity.metadata) : null,
+  });
   executeSqliteQuerySync(
     database.db,
     db
       .insertInto("conversations")
       .values({
         conversation_id: identity.conversationRef,
-        channel: identity.channel,
-        account_id: identity.accountId,
-        kind: identity.kind,
-        peer_id: identity.peerId,
-        delivery_target: identity.deliveryTarget,
-        parent_conversation_id: identity.parentConversationRef ?? null,
-        thread_id: identity.threadId ?? null,
-        native_channel_id: identity.nativeChannelId ?? null,
-        native_direct_user_id: identity.nativeDirectUserId ?? null,
-        label: identity.label ?? null,
-        metadata_json: identity.metadata ? JSON.stringify(identity.metadata) : null,
+        ...identityColumns(),
         created_at: updatedAt,
         updated_at: updatedAt,
       })
       .onConflict((conflict) =>
         conflict.column("conversation_id").doUpdateSet({
-          channel: identity.channel,
-          account_id: identity.accountId,
-          kind: identity.kind,
-          peer_id: identity.peerId,
-          delivery_target: identity.deliveryTarget,
-          parent_conversation_id: identity.parentConversationRef ?? null,
-          thread_id: identity.threadId ?? null,
-          native_channel_id: identity.nativeChannelId ?? null,
-          native_direct_user_id: identity.nativeDirectUserId ?? null,
-          label: identity.label ?? null,
-          metadata_json: identity.metadata ? JSON.stringify(identity.metadata) : null,
+          ...identityColumns(),
           updated_at: updatedAt,
         }),
       ),

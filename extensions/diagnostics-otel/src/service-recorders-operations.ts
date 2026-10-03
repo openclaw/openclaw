@@ -1,14 +1,14 @@
-import { SpanStatusCode } from "@opentelemetry/api";
+import { ROOT_CONTEXT, SpanStatusCode } from "@opentelemetry/api";
 import {
   normalizeDiagnosticValue,
   normalizeDiagnosticLane,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { redactSensitiveText } from "../api.js";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   DiagnosticEventPrivateData,
-} from "../api.js";
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOtelErrorMessage } from "./service-content-normalization.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import type { SessionRecoveryDiagnosticEvent, TalkDiagnosticEvent } from "./service-types.js";
@@ -16,6 +16,12 @@ import type { SessionRecoveryDiagnosticEvent, TalkDiagnosticEvent } from "./serv
 export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
   const {
     durationHistogram,
+    gatewayRpcRequestsCounter,
+    gatewayRpcOutcomesCounter,
+    gatewayRpcFirstResponseHistogram,
+    gatewayRpcHandlerHistogram,
+    gatewayRpcAdmissionHistogram,
+    gatewayRpcQueueWaitHistogram,
     queueDepthHistogram,
     queueWaitHistogram,
     laneEnqueueCounter,
@@ -44,11 +50,72 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     spanWithDuration,
     trustedTraceContext,
     activeTrustedParentContext,
+    internalOrTrustedExplicitParentContext,
     setSpanAttrs,
     completeTrackedLifecycleSpan,
     addRunAttrs,
     tracesEnabled,
   } = runtime;
+
+  const recordGatewayRpc = (
+    evt: Extract<DiagnosticEventPayload, { type: "gateway.rpc" }>,
+    metadata: DiagnosticEventMetadata,
+  ) => {
+    if (!metadata.trusted || (evt.phase === "response" && evt.firstResponse === false)) {
+      return;
+    }
+    const attrs = { "openclaw.gateway.rpc.method": evt.method };
+    if (evt.phase === "received") {
+      gatewayRpcRequestsCounter.add(1, attrs);
+      return;
+    }
+    const outcomeAttrs = {
+      "openclaw.gateway.rpc.phase": evt.phase,
+      "openclaw.gateway.rpc.outcome": evt.outcome,
+    };
+    gatewayRpcOutcomesCounter.add(1, outcomeAttrs);
+    switch (evt.phase) {
+      case "response":
+        if (evt.outcome === "ok" || evt.outcome === "error") {
+          gatewayRpcFirstResponseHistogram.record(evt.durationMs, attrs);
+        }
+        break;
+      case "handler":
+        gatewayRpcHandlerHistogram.record(evt.durationMs, attrs);
+        gatewayRpcAdmissionHistogram.record(evt.admissionMs, attrs);
+        break;
+      case "dispatch":
+        if (evt.queueWaitMs !== undefined) {
+          gatewayRpcQueueWaitHistogram.record(evt.queueWaitMs, attrs);
+        }
+        break;
+    }
+    if (!tracesEnabled) {
+      return;
+    }
+    // These completed observations do not own the handler or later response callbacks.
+    // Preserve the explicit upstream parent; an absent parent must not borrow the export callback scope.
+    const span = spanWithDuration(
+      `openclaw.gateway.rpc.${evt.phase}`,
+      {
+        ...attrs,
+        ...outcomeAttrs,
+        ...(evt.phase === "handler"
+          ? { "openclaw.gateway.rpc.admission_ms": evt.admissionMs }
+          : {}),
+        ...(evt.phase === "dispatch" ? { "openclaw.gateway.rpc.response": evt.response } : {}),
+      },
+      evt.durationMs,
+      {
+        endTimeMs: evt.ts,
+        parentContext: internalOrTrustedExplicitParentContext(evt, metadata) ?? ROOT_CONTEXT,
+      },
+    );
+    if (evt.outcome === "error" || evt.outcome === "threw") {
+      span.setStatus({ code: SpanStatusCode.ERROR });
+    }
+    span.end(evt.ts);
+  };
 
   const recordLaneEnqueue = (
     evt: Extract<DiagnosticEventPayload, { type: "queue.lane.enqueue" }>,
@@ -182,7 +249,9 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     if (!tracesEnabled) {
       return;
     }
-    const span = spanWithDuration("openclaw.tool.loop", attrs, 0, { endTimeMs: evt.ts });
+    const spanAttrs: Record<string, string | number | boolean> = { ...attrs };
+    addRunAttrs(spanAttrs, evt);
+    const span = spanWithDuration("openclaw.tool.loop", spanAttrs, 0, { endTimeMs: evt.ts });
     if (evt.level === "critical" || evt.action === "block") {
       span.setStatus({
         code: SpanStatusCode.ERROR,
@@ -204,12 +273,6 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     memoryHeapTotalHistogram.record(evt.memory.heapTotalBytes, attrs);
     memoryExternalHistogram.record(evt.memory.externalBytes, attrs);
     memoryArrayBuffersHistogram.record(evt.memory.arrayBuffersBytes, attrs);
-  };
-
-  const recordMemorySample = (
-    evt: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.sample" }>,
-  ) => {
-    recordMemoryUsageMetrics(evt);
   };
 
   const recordMemoryPressure = (
@@ -257,20 +320,16 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     asyncQueueDroppedCounter.add(evt.droppedEvents, {
       "openclaw.diagnostic.async_queue.drop_class": "total",
     });
-    if (evt.droppedTrustedEvents !== undefined) {
-      asyncQueueDroppedCounter.add(evt.droppedTrustedEvents, {
-        "openclaw.diagnostic.async_queue.drop_class": "trusted",
-      });
-    }
-    if (evt.droppedUntrustedEvents !== undefined) {
-      asyncQueueDroppedCounter.add(evt.droppedUntrustedEvents, {
-        "openclaw.diagnostic.async_queue.drop_class": "untrusted",
-      });
-    }
-    if (evt.droppedPriorityEvents !== undefined) {
-      asyncQueueDroppedCounter.add(evt.droppedPriorityEvents, {
-        "openclaw.diagnostic.async_queue.drop_class": "priority",
-      });
+    for (const [dropClass, field] of [
+      ["trusted", "droppedTrustedEvents"],
+      ["untrusted", "droppedUntrustedEvents"],
+      ["priority", "droppedPriorityEvents"],
+    ] as const) {
+      if (evt[field] !== undefined) {
+        asyncQueueDroppedCounter.add(evt[field], {
+          "openclaw.diagnostic.async_queue.drop_class": dropClass,
+        });
+      }
     }
   };
 
@@ -328,14 +387,11 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         ...(message ? { message } : {}),
       });
     }
-    if (trackedSpan && trustedTrace?.spanId) {
-      completeTrackedLifecycleSpan(trustedTrace, trackedSpan, evt.ts);
-      return;
-    }
-    span.end(evt.ts);
+    completeTrackedLifecycleSpan(trackedSpan ? trustedTrace : undefined, span, evt.ts);
   };
 
   return {
+    recordGatewayRpc,
     recordLaneEnqueue,
     recordLaneDequeue,
     recordSessionState,
@@ -347,7 +403,6 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     recordRunAttempt,
     recordToolLoop,
     recordMemoryUsageMetrics,
-    recordMemorySample,
     recordMemoryPressure,
     recordAsyncQueueDropped,
     recordRunCompleted,

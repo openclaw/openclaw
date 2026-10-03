@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
@@ -127,6 +128,7 @@ function createHarness(params: {
   for (const handle of params.claims) {
     claim.mockResolvedValueOnce({ kind: "claimed", handle });
   }
+  const hasProcessedMessage = vi.fn(async (_messageId: string | undefined | null) => false);
   const handler = createFeishuMessageReceiveHandler({
     cfg: {} as ClawdbotConfig,
     channelRuntime,
@@ -134,8 +136,9 @@ function createHarness(params: {
     runtime: { ...createNonExitingRuntimeEnv(), error: runtimeError } satisfies RuntimeEnv,
     chatHistories: new Map(),
     handleMessage,
-    resolveDebounceText: () => "hello",
-    hasProcessedMessage: vi.fn(async () => false),
+    resolveDebounceText: ({ event }) =>
+      (JSON.parse(event.message.content) as { text: string }).text,
+    hasProcessedMessage,
     getBotOpenId: () => "ou-bot",
     resolveIngressLifecycle: (data) => {
       const eventId = (data as { event_id?: string }).event_id;
@@ -147,6 +150,7 @@ function createHarness(params: {
     entries,
     handler,
     handleMessage,
+    hasProcessedMessage,
     flush: async () => {
       if (!onFlush) {
         throw new Error("debouncer flush callback missing");
@@ -163,21 +167,51 @@ function createHarness(params: {
   };
 }
 
+function createTurn(name: string, options: { adoptTurn?: boolean; noClaim?: boolean } = {}) {
+  const transport = createLifecycle();
+  const logicalClaim = createClaim(name);
+  const event = createTextEvent(`evt-${name}`, `om-${name}`, "queued");
+  const harness = createHarness({
+    lifecycles: new Map([[event.event_id, transport.lifecycle]]),
+    claims: options.noClaim ? [] : [logicalClaim],
+    adoptTurn: options.adoptTurn ?? true,
+  });
+  return { transport, logicalClaim, event, harness };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("Feishu durable ingress debounce lifecycle", () => {
-  it("accepts an empty group message body without losing bot mentions or ingress adoption", async () => {
+  it("releases a claim acquired after ingress abandonment instead of enqueueing it", async () => {
     const transport = createLifecycle();
-    const logicalClaim = createClaim("empty-group-mention");
+    const logicalClaim = createClaim("delayed-admission");
+    const pending =
+      createDeferred<Awaited<ReturnType<typeof dedup.claimUnprocessedFeishuMessage>>>();
     const harness = createHarness({
-      lifecycles: new Map([["evt-empty-group-mention", transport.lifecycle]]),
-      claims: [logicalClaim],
+      lifecycles: new Map([["evt-delayed", transport.lifecycle]]),
+      claims: [],
       adoptTurn: true,
     });
-    const event = createTextEvent("evt-empty-group-mention", "om-empty-group-mention", "");
-    event.message.chat_type = "group";
+    harness.claim.mockReturnValueOnce(pending.promise);
+    const handling = harness.handler(createTextEvent("evt-delayed", "om-delayed", "hello"));
+    transport.controller.abort();
+    await transport.lifecycle.onAbandoned();
+    pending.resolve({ kind: "claimed", handle: logicalClaim });
+
+    await expect(handling).resolves.toMatchObject({ kind: "failed-retryable" });
+    expect(logicalClaim.release).toHaveBeenCalledOnce();
+    expect(logicalClaim.commit).not.toHaveBeenCalled();
+    expect(harness.entries).toEqual([]);
+    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(transport.calls.adopted).not.toHaveBeenCalled();
+  });
+
+  it("accepts an empty private message body without losing bot mentions or ingress adoption", async () => {
+    const { transport, logicalClaim, event, harness } = createTurn("empty-group-mention");
+
+    event.message.chat_type = "private";
     event.message.content = "";
     event.message.mentions = [
       {
@@ -190,41 +224,33 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
     await harness.flush();
 
-    expect(harness.handleMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            chat_type: "group",
-            content: "",
-            mentions: event.message.mentions,
-          }),
-        }),
-      }),
-    );
+    expect(harness.handleMessage).toHaveBeenCalledOnce();
+    expect(harness.handleMessage.mock.calls[0]?.[0].event.message).toEqual(event.message);
     expect(logicalClaim.commit).toHaveBeenCalledTimes(1);
     expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
     expect(transport.calls.abandoned).not.toHaveBeenCalled();
     expect(harness.runtimeError).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "missing",
-      setContent: (event: FeishuMessageEvent) => Reflect.deleteProperty(event.message, "content"),
-    },
-    {
-      name: "non-string",
-      setContent: (event: FeishuMessageEvent) => Reflect.set(event.message, "content", 42),
-    },
-  ])("rejects a $name message body before durable dispatch", async ({ setContent }) => {
-    const transport = createLifecycle();
-    const harness = createHarness({
-      lifecycles: new Map([["evt-invalid-body", transport.lifecycle]]),
-      claims: [],
-      adoptTurn: true,
-    });
-    const event = createTextEvent("evt-invalid-body", "om-invalid-body", "");
-    setContent(event);
+  it("rejects a non-string chat type with a valid body before claims or dispatch", async () => {
+    const { transport, event, harness } = createTurn("invalid-chat-type", { noClaim: true });
+
+    Reflect.set(event.message, "chat_type", 42);
+
+    await expect(harness.handler(event)).rejects.toThrow(
+      "Feishu durable message event payload is malformed.",
+    );
+
+    expect(harness.claim).not.toHaveBeenCalled();
+    expect(harness.entries).toEqual([]);
+    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(transport.calls.adopted).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing message body before durable dispatch", async () => {
+    const { transport, event, harness } = createTurn("invalid-body", { noClaim: true });
+
+    Reflect.deleteProperty(event.message, "content");
 
     await expect(harness.handler(event)).rejects.toThrow(
       "Feishu durable message event payload is malformed.",
@@ -235,11 +261,15 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     expect(transport.calls.adopted).not.toHaveBeenCalled();
   });
 
-  it("returns deferred and fans merged adoption to every constituent claim", async () => {
+  it("adopts every constituent while dispatching the latest fresh message", async () => {
     const first = createLifecycle();
     const second = createLifecycle();
     const firstClaim = createClaim("first");
     const secondClaim = createClaim("second");
+    const events = [
+      createTextEvent("evt-a", "om-a", "alpha"),
+      createTextEvent("evt-b", "om-b", "beta"),
+    ];
     const harness = createHarness({
       lifecycles: new Map([
         ["evt-a", first.lifecycle],
@@ -248,34 +278,34 @@ describe("Feishu durable ingress debounce lifecycle", () => {
       claims: [firstClaim, secondClaim],
       adoptTurn: true,
     });
-
-    await expect(harness.handler(createTextEvent("evt-a", "om-a", "alpha"))).resolves.toEqual({
-      kind: "deferred",
-    });
-    await expect(harness.handler(createTextEvent("evt-b", "om-b", "beta"))).resolves.toEqual({
-      kind: "deferred",
-    });
+    for (const event of events) {
+      await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
+    }
+    const keys = harness.claim.mock.calls.map(([params]) => params.messageId);
+    harness.hasProcessedMessage.mockImplementation(async (key) => key === keys[1]);
     await harness.flush();
 
     expect(harness.handleMessage).toHaveBeenCalledTimes(1);
-    expect(firstClaim.commit).toHaveBeenCalledTimes(1);
-    expect(secondClaim.commit).toHaveBeenCalledTimes(1);
-    expect(first.calls.finalizing).toHaveBeenCalledTimes(1);
-    expect(second.calls.finalizing).toHaveBeenCalledTimes(1);
-    expect(first.calls.adopted).toHaveBeenCalledTimes(1);
-    expect(second.calls.adopted).toHaveBeenCalledTimes(1);
+    expect(harness.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: events[0],
+        messageDedupeKey: keys[0],
+        preparedContent: "alpha",
+      }),
+    );
+    for (const claim of [firstClaim, secondClaim]) {
+      expect(claim.commit).toHaveBeenCalledOnce();
+    }
+    for (const transport of [first, second]) {
+      expect(transport.calls.finalizing).toHaveBeenCalledOnce();
+      expect(transport.calls.adopted).toHaveBeenCalledOnce();
+    }
   });
 
   it("completes gated no-dispatch transport claims and releases the logical guard", async () => {
-    const transport = createLifecycle();
-    const logicalClaim = createClaim("gated");
-    const harness = createHarness({
-      lifecycles: new Map([["evt-gated", transport.lifecycle]]),
-      claims: [logicalClaim],
-      adoptTurn: false,
-    });
+    const { transport, logicalClaim, event, harness } = createTurn("gated", { adoptTurn: false });
 
-    await harness.handler(createTextEvent("evt-gated", "om-gated", "gated"));
+    await harness.handler(event);
     await harness.flush();
 
     expect(logicalClaim.commit).not.toHaveBeenCalled();
@@ -284,37 +314,12 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     expect(transport.calls.abandoned).not.toHaveBeenCalled();
   });
 
-  it("completes the transport claim when the permanent logical guard suppresses a twin", async () => {
-    const transport = createLifecycle();
-    const harness = createHarness({
-      lifecycles: new Map([["evt-twin", transport.lifecycle]]),
-      claims: [],
-      adoptTurn: false,
-    });
-    harness.claim.mockResolvedValueOnce({ kind: "duplicate" });
-
-    await expect(harness.handler(createTextEvent("evt-twin", "om-twin", "twin"))).resolves.toBe(
-      undefined,
-    );
-
-    expect(harness.entries).toHaveLength(0);
-    expect(transport.calls.finalizing).toHaveBeenCalledTimes(1);
-    expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
-    expect(transport.calls.abandoned).not.toHaveBeenCalled();
-  });
-
   it("releases a deferred logical claim when the drain abandons before debounce flush", async () => {
-    const transport = createLifecycle();
-    const logicalClaim = createClaim("pre-flush-abandonment");
-    const harness = createHarness({
-      lifecycles: new Map([["evt-abandoned", transport.lifecycle]]),
-      claims: [logicalClaim],
+    const { transport, logicalClaim, event, harness } = createTurn("abandoned", {
       adoptTurn: false,
     });
 
-    await expect(
-      harness.handler(createTextEvent("evt-abandoned", "om-abandoned", "queued")),
-    ).resolves.toEqual({ kind: "deferred" });
+    await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
     await transport.lifecycle.onAbandoned();
     await harness.flush();
 
@@ -324,16 +329,12 @@ describe("Feishu durable ingress debounce lifecycle", () => {
   });
 
   it("reports rejected durable abandonment after a debounce flush error", async () => {
-    const transport = createLifecycle();
-    transport.calls.abandoned.mockRejectedValueOnce(new Error("state store unavailable"));
-    const logicalClaim = createClaim("flush-error");
-    const harness = createHarness({
-      lifecycles: new Map([["evt-flush-error", transport.lifecycle]]),
-      claims: [logicalClaim],
+    const { transport, logicalClaim, event, harness } = createTurn("flush-error", {
       adoptTurn: false,
     });
+    transport.calls.abandoned.mockRejectedValueOnce(new Error("state store unavailable"));
 
-    await harness.handler(createTextEvent("evt-flush-error", "om-flush-error", "queued"));
+    await harness.handler(event);
     harness.failFlush(new Error("flush failed"));
 
     await vi.waitFor(() => {

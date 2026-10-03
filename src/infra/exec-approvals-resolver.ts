@@ -10,7 +10,6 @@ import {
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsDefaultOverrides } from "./exec-approvals-contracts.js";
 import type {
-  ExecApprovalsAgent,
   ExecApprovalsDefaults,
   ExecApprovalsFile,
   ExecApprovalsResolved,
@@ -40,113 +39,7 @@ type ResolvedExecPolicyField<TValue extends ExecSecurity | ExecAsk> = {
   source: string | null;
 };
 
-function resolveDefaultSecurityField(params: {
-  field: "security" | "askFallback";
-  defaults: ExecApprovalsDefaults;
-  fallback: ExecSecurity;
-}): ResolvedExecPolicyField<ExecSecurity> {
-  const defaultValue = params.defaults[params.field];
-  if (isExecSecurity(defaultValue)) {
-    return {
-      value: defaultValue,
-      source: `defaults.${params.field}`,
-    };
-  }
-  return {
-    value: params.fallback,
-    source: null,
-  };
-}
-
-function resolveDefaultAskField(params: {
-  defaults: ExecApprovalsDefaults;
-  fallback: ExecAsk;
-}): ResolvedExecPolicyField<ExecAsk> {
-  if (isExecAsk(params.defaults.ask)) {
-    return {
-      value: params.defaults.ask,
-      source: "defaults.ask",
-    };
-  }
-  return {
-    value: params.fallback,
-    source: null,
-  };
-}
-
-function resolveAgentSecurityField(params: {
-  field: "security" | "askFallback";
-  defaults: ExecApprovalsDefaults;
-  agent: ExecApprovalsAgent;
-  rawAgent: ExecApprovalsAgent;
-  wildcard: ExecApprovalsAgent;
-  rawWildcard: ExecApprovalsAgent;
-  agentKey: string;
-  fallback: ExecSecurity;
-}): ResolvedExecPolicyField<ExecSecurity> {
-  const fallbackField = resolveDefaultSecurityField({
-    field: params.field,
-    defaults: params.defaults,
-    fallback: params.fallback,
-  });
-  const rawAgentValue = params.rawAgent[params.field];
-  if (rawAgentValue != null) {
-    if (isExecSecurity(params.agent[params.field])) {
-      return {
-        value: params.agent[params.field] as ExecSecurity,
-        source: `agents.${params.agentKey}.${params.field}`,
-      };
-    }
-    return fallbackField;
-  }
-  const rawWildcardValue = params.rawWildcard[params.field];
-  if (rawWildcardValue != null) {
-    if (isExecSecurity(params.wildcard[params.field])) {
-      return {
-        value: params.wildcard[params.field] as ExecSecurity,
-        source: `agents.*.${params.field}`,
-      };
-    }
-    return fallbackField;
-  }
-  return fallbackField;
-}
-
-function resolveAgentAskField(params: {
-  defaults: ExecApprovalsDefaults;
-  agent: ExecApprovalsAgent;
-  rawAgent: ExecApprovalsAgent;
-  wildcard: ExecApprovalsAgent;
-  rawWildcard: ExecApprovalsAgent;
-  agentKey: string;
-  fallback: ExecAsk;
-}): ResolvedExecPolicyField<ExecAsk> {
-  const fallbackField = resolveDefaultAskField({
-    defaults: params.defaults,
-    fallback: params.fallback,
-  });
-  if (params.rawAgent.ask != null) {
-    if (isExecAsk(params.agent.ask)) {
-      return {
-        value: params.agent.ask,
-        source: `agents.${params.agentKey}.ask`,
-      };
-    }
-    return fallbackField;
-  }
-  if (params.rawWildcard.ask != null) {
-    if (isExecAsk(params.wildcard.ask)) {
-      return {
-        value: params.wildcard.ask,
-        source: "agents.*.ask",
-      };
-    }
-    return fallbackField;
-  }
-  return fallbackField;
-}
-
-export function resolveExecApprovalsFromFilePrepared(params: {
+function resolveExecApprovalsFromFilePrepared(params: {
   rawFile: ExecApprovalsFile;
   file: ExecApprovalsFile;
   token: string;
@@ -176,35 +69,32 @@ export function resolveExecApprovalsFromFilePrepared(params: {
     ),
     autoAllowSkills: defaults.autoAllowSkills ?? fallbackAutoAllowSkills,
   };
-  const resolvedAgentSecurity = resolveAgentSecurityField({
-    field: "security",
-    defaults,
-    agent,
-    rawAgent,
-    wildcard,
-    rawWildcard,
-    agentKey,
-    fallback: resolvedDefaults.security,
-  });
-  const resolvedAgentAsk = resolveAgentAskField({
-    defaults,
-    agent,
-    rawAgent,
-    wildcard,
-    rawWildcard,
-    agentKey,
-    fallback: resolvedDefaults.ask,
-  });
-  const resolvedAgentAskFallback = resolveAgentSecurityField({
-    field: "askFallback",
-    defaults,
-    agent,
-    rawAgent,
-    wildcard,
-    rawWildcard,
-    agentKey,
-    fallback: resolvedDefaults.askFallback,
-  });
+  const resolveField = <TValue extends ExecSecurity | ExecAsk>(
+    field: "security" | "ask" | "askFallback",
+    fallback: TValue,
+    isValid: (value: unknown) => value is TValue,
+  ): ResolvedExecPolicyField<TValue> => {
+    const defaultValue = defaults[field];
+    const fallbackField = isValid(defaultValue)
+      ? { value: defaultValue, source: `defaults.${field}` }
+      : { value: fallback, source: null };
+    if (rawAgent[field] != null) {
+      const value = agent[field];
+      return isValid(value) ? { value, source: `agents.${agentKey}.${field}` } : fallbackField;
+    }
+    if (rawWildcard[field] != null) {
+      const value = wildcard[field];
+      return isValid(value) ? { value, source: `agents.*.${field}` } : fallbackField;
+    }
+    return fallbackField;
+  };
+  const resolvedAgentSecurity = resolveField("security", resolvedDefaults.security, isExecSecurity);
+  const resolvedAgentAsk = resolveField("ask", resolvedDefaults.ask, isExecAsk);
+  const resolvedAgentAskFallback = resolveField(
+    "askFallback",
+    resolvedDefaults.askFallback,
+    isExecSecurity,
+  );
   const resolvedAgent: Required<ExecApprovalsDefaults> = {
     security: resolvedAgentSecurity.value,
     ask: resolvedAgentAsk.value,

@@ -3,19 +3,15 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mergeAbortSignals } from "../../api.js";
 import {
-  isAbortError as runtimeApiIsAbortError,
-  normalizeDiscordInboundWorkerTimeoutMs as runtimeApiNormalizeDiscordInboundWorkerTimeoutMs,
-  normalizeDiscordListenerTimeoutMs as runtimeApiNormalizeDiscordListenerTimeoutMs,
-  runDiscordTaskWithTimeout as runtimeApiRunDiscordTaskWithTimeout,
+  isAbortError,
+  normalizeDiscordInboundWorkerTimeoutMs,
+  normalizeDiscordListenerTimeoutMs,
+  runDiscordTaskWithTimeout,
 } from "../../runtime-api.js";
 import {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-  isAbortError,
-  normalizeDiscordInboundWorkerTimeoutMs,
-  normalizeDiscordListenerTimeoutMs,
   raceWithTimeout,
-  runDiscordTaskWithTimeout,
   withAbortTimeout,
 } from "./timeouts.js";
 
@@ -25,15 +21,6 @@ afterEach(() => {
 });
 
 describe("discord monitor timeouts", () => {
-  it("keeps deprecated timeout helpers on shipped compatibility surfaces", () => {
-    expect(runtimeApiIsAbortError).toBe(isAbortError);
-    expect(runtimeApiNormalizeDiscordInboundWorkerTimeoutMs).toBe(
-      normalizeDiscordInboundWorkerTimeoutMs,
-    );
-    expect(runtimeApiNormalizeDiscordListenerTimeoutMs).toBe(normalizeDiscordListenerTimeoutMs);
-    expect(runtimeApiRunDiscordTaskWithTimeout).toBe(runDiscordTaskWithTimeout);
-  });
-
   it("keeps the shipped public abort-signal compatibility semantics", () => {
     const first = new AbortController();
     const second = new AbortController();
@@ -131,4 +118,36 @@ describe("discord monitor timeouts", () => {
 
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "keeps the deadline error when aborted work synchronously %ss",
+    async (settlement) => {
+      vi.useFakeTimers();
+      const timeoutError = new Error("Discord request timed out");
+      let receivedSignal: AbortSignal | undefined;
+      const failure = withAbortTimeout({
+        timeoutMs: 100,
+        createTimeoutError: () => timeoutError,
+        run: (signal) => {
+          receivedSignal = signal;
+          return new Promise<string>((resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () =>
+                settlement === "resolve" ? resolve("closed") : reject(new Error("request aborted")),
+              { once: true },
+            );
+          });
+        },
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(await failure).toBe(timeoutError);
+      expect(receivedSignal?.aborted).toBe(true);
+    },
+  );
 });

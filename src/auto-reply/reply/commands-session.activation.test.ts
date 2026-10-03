@@ -1,5 +1,6 @@
 // Tests owner gating for group activation session changes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { handleActivationCommand } from "./commands-session.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const persistSessionEntryMock = vi.hoisted(() => vi.fn(async () => true));
@@ -73,19 +74,20 @@ describe("handleActivationCommand", () => {
   });
 
   it("rejects authorized non-owner senders without changing group activation", async () => {
-    const { handleActivationCommand } = await import("./commands-session.js");
     const params = buildActivationParams({ senderIsOwner: false });
 
     const result = await handleActivationCommand(params, true);
 
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
+    });
     expect(params.sessionEntry?.groupActivation).toBe("mention");
     expect(params.sessionEntry?.groupActivationNeedsSystemIntro).toBeUndefined();
     expect(persistSessionEntryMock).not.toHaveBeenCalled();
   });
 
   it("allows owners to change group activation", async () => {
-    const { handleActivationCommand } = await import("./commands-session.js");
     const params = buildActivationParams();
 
     const result = await handleActivationCommand(params, true);
@@ -103,7 +105,6 @@ describe("handleActivationCommand", () => {
   });
 
   it("reports a concurrent session change instead of acknowledging persistence", async () => {
-    const { handleActivationCommand } = await import("./commands-session.js");
     const params = buildActivationParams();
     persistSessionEntryMock.mockResolvedValueOnce(false);
 

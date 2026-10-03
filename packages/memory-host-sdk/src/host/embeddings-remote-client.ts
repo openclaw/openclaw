@@ -1,4 +1,3 @@
-// Memory Host SDK module implements embeddings remote client behavior.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
@@ -86,6 +85,7 @@ function isNativeOpenAIEmbeddingRoute(provider: string, baseUrl: string): boolea
 /** Resolve base URL, bearer headers, header overrides, and SSRF policy for remote embeddings. */
 export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;
+  capability?: string;
   options: EmbeddingProviderOptions;
   defaultBaseUrl: string;
 }): Promise<{ baseUrl: string; headers: Record<string, string>; ssrfPolicy?: SsrFPolicy }> {
@@ -121,6 +121,8 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
         ? requireApiKey(
             await resolveApiKeyForProvider({
               provider: params.provider,
+              capability: params.capability,
+              modelBaseUrl: baseUrl,
               cfg: params.options.config,
               agentDir: params.options.agentDir,
             }),

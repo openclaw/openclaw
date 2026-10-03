@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements channel react action behavior.
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
@@ -56,10 +55,6 @@ function readUploadFileCaptionText(args: Record<string, unknown>): string {
   );
 }
 
-function hasUploadFileBufferPayload(args: Record<string, unknown>): boolean {
-  return readStringParam(args, "buffer", { trim: false }) !== undefined;
-}
-
 function readWhatsAppActionChatJid(params: WhatsAppMessageActionParams): string | undefined {
   const explicit =
     readStringParam(params.params, "chatJid") ?? readStringParam(params.params, "to");
@@ -80,13 +75,11 @@ function decodeUploadFileMediaPayload(params: {
   contentType?: string;
   fileName?: string;
   maxBytes?: number;
-}):
-  | {
-      buffer: Buffer;
-      contentType?: string;
-      fileName?: string;
-    }
-  | undefined {
+}): {
+  buffer: Buffer;
+  contentType?: string;
+  fileName?: string;
+} {
   const dataUrl = /^data:([^;]+);base64,(.*)$/is.exec(params.encoded.trim());
   const payload = dataUrl?.[2] ?? params.encoded;
   if (params.maxBytes !== undefined) {
@@ -124,7 +117,7 @@ async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParam
     readStringParam(params.params, "contentType") ?? readStringParam(params.params, "mimeType");
   const fileName =
     readStringParam(params.params, "filename") ?? readStringParam(params.params, "fileName");
-  if (!mediaUrl && !hasUploadFileBufferPayload(params.params)) {
+  if (!mediaUrl && encodedPayload === undefined) {
     throw new Error(
       "WhatsApp upload-file requires media, mediaUrl, filePath, path, fileUrl, or buffer.",
     );

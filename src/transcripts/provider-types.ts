@@ -1,13 +1,6 @@
-// Transcript provider contracts for external and manual transcript sources.
 import type { Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-/**
- * Public contracts for transcript source providers.
- *
- * Providers can stream live utterances, import post-hoc transcript text, expose
- * status, and stop active sessions using shared session/source descriptors.
- */
 /** Supported source families for transcript providers. */
 export type TranscriptSourceKind =
   | "live-audio"
@@ -84,7 +77,7 @@ export type TranscriptOccupancyWatchRequest = {
   onEmpty: () => void;
 };
 
-export type TranscriptOccupancyWatchHandle = { stop: () => void };
+export type TranscriptOccupancyWatchHandle = { stop: () => void | Promise<void> };
 
 /**
  * Result from starting a transcript source provider.
@@ -110,7 +103,7 @@ export type TranscriptStopRequest = {
   reason?: string;
 };
 
-/** Result from stopping a transcript source provider. */
+/** Failure does not prove release; only success or a terminal onStatus ends cleanup custody. */
 export type TranscriptsStopResult =
   | {
       ok: true;

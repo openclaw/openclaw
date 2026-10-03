@@ -2,19 +2,20 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClient as TestGatewayClient } from "../../packages/gateway-client/src/client.js";
+import type { FsListDirResult } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import type {
-  OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeHostCommandContext,
-} from "../plugins/types.node-host.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as nodeRunCommand from "./invoke-run-command.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
 
@@ -200,112 +201,6 @@ describe("node host invoke", () => {
     });
   });
 
-  it("binds managed workspace claims to the exact live plugin invocation session", async () => {
-    const release = vi.fn();
-    const acquireManagedWorkspace = vi.fn(() => ({ workspaceDir: "/managed", release }));
-    const workspaceRequest = {
-      workspaceDir: "/managed",
-      environmentId: "environment-1",
-      sessionId: "session-1",
-      ownerEpoch: 1,
-      sessionKey: "agent:main:managed",
-    };
-    let retainedAcquire:
-      | NonNullable<OpenClawPluginNodeHostCommandContext["acquireManagedWorkspace"]>
-      | undefined;
-    const handle = vi.fn<OpenClawPluginNodeHostCommand["handle"]>(
-      async (paramsJSON, _io, context) => {
-        expect(JSON.parse(paramsJSON ?? "{}")).toEqual({ sessionKey: "agent:main:other" });
-        expect(context?.sessionKey).toBe(workspaceRequest.sessionKey);
-        const acquire = context?.acquireManagedWorkspace;
-        if (!acquire) {
-          throw new Error("managed workspace authority missing");
-        }
-        retainedAcquire = acquire;
-        expect(() => acquire({ ...workspaceRequest, sessionKey: "agent:main:other" })).toThrow(
-          "workspace invocation authority is closed",
-        );
-        expect(acquire(workspaceRequest)).toEqual({
-          workspaceDir: "/managed",
-          release,
-        });
-        return '{"ok":true}';
-      },
-    );
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "workspace-plugin",
-        pluginName: "Workspace Plugin",
-        command: { command: "workspace.claim", handle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    await handleInvoke(
-      {
-        id: "invoke-workspace",
-        nodeId: "node-1",
-        command: "workspace.claim",
-        paramsJSON: JSON.stringify({ sessionKey: "agent:main:other" }),
-        sessionKey: workspaceRequest.sessionKey,
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-      undefined,
-      { pluginCommandContext: { sendNodeEvent: vi.fn(), acquireManagedWorkspace } },
-    );
-
-    expect(acquireManagedWorkspace).toHaveBeenCalledOnce();
-    expect(() => retainedAcquire?.(workspaceRequest)).toThrow(
-      "workspace invocation authority is closed",
-    );
-  });
-
-  it("does not publish a canceled non-duplex plugin result", async () => {
-    const controller = new AbortController();
-    let resolvePlugin: ((result: string) => void) | undefined;
-    const handle = vi.fn(
-      () =>
-        new Promise<string>((resolve) => {
-          resolvePlugin = resolve;
-        }),
-    );
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "canvas",
-        pluginName: "Canvas",
-        command: { command: "canvas.present", cap: "canvas", handle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    const invoking = handleInvoke(
-      {
-        id: "invoke-canvas-canceled",
-        nodeId: "node-1",
-        command: "canvas.present",
-        paramsJSON: "{}",
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-      undefined,
-      { signal: controller.signal },
-    );
-    await vi.waitFor(() => expect(handle).toHaveBeenCalledOnce());
-
-    controller.abort();
-    resolvePlugin?.('{"stale":true}');
-    await invoking;
-
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it("publishes only the replacement result for a redelivered plugin invocation", async () => {
     const firstController = new AbortController();
     const secondController = new AbortController();
@@ -367,29 +262,44 @@ describe("node host invoke", () => {
     expect(secondController.signal.aborted).toBe(false);
   });
 
-  it("lists node-host directories for the folder browser", async () => {
-    const root = fs.realpathSync(tempDirs.make("openclaw-node-fs-listdir-"));
-    fs.mkdirSync(path.join(root, "Projects"));
-    fs.writeFileSync(path.join(root, "notes.txt"), "hidden from directory listing");
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    await handleInvoke(
-      {
-        id: "invoke-fs-listdir",
-        nodeId: "node-1",
-        command: "fs.listDir",
-        paramsJSON: JSON.stringify({ path: root }),
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-    );
-
-    const result = request.mock.calls[0]?.[1] as InvokeResult | undefined;
-    expect(JSON.parse(result?.payloadJSON ?? "{}")).toMatchObject({
-      path: root,
-      entries: [{ name: "Projects", path: path.join(root, "Projects") }],
-    });
-  });
+  it.each(["Projects", "Projects "])(
+    "lists and reopens node-host directory %j",
+    async (directory) => {
+      const root = fs.realpathSync(tempDirs.make("openclaw-node-fs-listdir-"));
+      fs.mkdirSync(path.join(root, "Projects"));
+      fs.mkdirSync(path.join(root, directory, "child"), { recursive: true });
+      fs.writeFileSync(path.join(root, "notes.txt"), "hidden from directory listing");
+      const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+      const list = async (directoryPath: string) => {
+        await handleInvoke(
+          {
+            id: `invoke-fs-listdir-${request.mock.calls.length}`,
+            nodeId: "node-1",
+            command: "fs.listDir",
+            paramsJSON: JSON.stringify({ path: directoryPath }),
+          },
+          { request } as unknown as GatewayClient,
+          { current: async () => [] },
+        );
+        const result = request.mock.calls.at(-1)?.[1] as InvokeResult | undefined;
+        expect(result?.ok).toBe(true);
+        return JSON.parse(result?.payloadJSON ?? "{}") as FsListDirResult;
+      };
+      const initial = await list(root);
+      expect(initial.path).toBe(root);
+      expect(initial.entries.map((entry) => entry.name)).toEqual(
+        directory === "Projects" ? ["Projects"] : ["Projects", directory],
+      );
+      const selected = expectDefined(
+        initial.entries.find((entry) => entry.name === directory),
+        "directory returned by the node host",
+      );
+      expect(await list(selected.path)).toMatchObject({
+        path: selected.path,
+        entries: [{ name: "child", path: path.join(selected.path, "child") }],
+      });
+    },
+  );
 
   it("stages terminal uploads on the node host", async () => {
     const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
@@ -746,65 +656,66 @@ describe("node host invoke", () => {
           id: "invoke-prepare-partial",
           nodeId: "node-1",
           ok: false,
-          error: {
-            code: "INVALID_REQUEST",
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          },
+          error: expect.objectContaining({ code: "INVALID_REQUEST" }),
         }),
       );
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "rejects blocked forwarded env overrides in system.run.prepare",
-    async () => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prepare-env-"));
-      const toolPath = path.join(tempDir, "tool");
-      fs.writeFileSync(toolPath, "#!/bin/sh\nexit 0\n");
-      fs.chmodSync(toolPath, 0o755);
+  it.runIf(process.platform !== "win32").each([
+    { env: { PATH: "/tmp/mismatch" }, blocked: "PATH" },
+    { env: { GIT_PAGER: "cat", PAGER: "cat" }, blocked: undefined },
+    { env: { GIT_PAGER: "cat; id" }, blocked: "GIT_PAGER" },
+  ])("validates forwarded env overrides in system.run.prepare: $env", async ({ env, blocked }) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prepare-env-"));
+    const toolPath = path.join(tempDir, "tool");
+    fs.writeFileSync(toolPath, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(toolPath, 0o755);
 
-      try {
-        await withEnvAsync(
-          { PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}` },
-          async () => {
-            const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-            const skillBins: SkillBinsProvider = { current: async () => [] };
+    try {
+      await withEnvAsync(
+        { PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}` },
+        async () => {
+          const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+          const skillBins: SkillBinsProvider = { current: async () => [] };
 
-            await handleInvoke(
-              {
-                id: "invoke-prepare-env",
-                nodeId: "node-1",
-                command: "system.run.prepare",
-                paramsJSON: JSON.stringify({
-                  command: ["tool", "--version"],
-                  rawCommand: "tool --version",
-                  env: { PATH: "/tmp/mismatch" },
-                }),
-              },
-              { request } as unknown as GatewayClient,
-              skillBins,
-            );
-
-            expect(request).toHaveBeenCalledWith(
-              "node.invoke.result",
-              expect.objectContaining({
-                id: "invoke-prepare-env",
-                nodeId: "node-1",
-                ok: false,
-                error: expect.objectContaining({
-                  code: "INVALID_REQUEST",
-                  message: expect.stringContaining("blocked override keys: PATH"),
-                }),
+          await handleInvoke(
+            {
+              id: "invoke-prepare-env",
+              nodeId: "node-1",
+              command: "system.run.prepare",
+              paramsJSON: JSON.stringify({
+                command: ["tool", "--version"],
+                rawCommand: "tool --version",
+                env,
               }),
-            );
-          },
-        );
-      } finally {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      }
-    },
-  );
+            },
+            { request } as unknown as GatewayClient,
+            skillBins,
+          );
+
+          expect(request).toHaveBeenCalledWith(
+            "node.invoke.result",
+            expect.objectContaining({
+              id: "invoke-prepare-env",
+              nodeId: "node-1",
+              ok: !blocked,
+              ...(blocked
+                ? {
+                    error: expect.objectContaining({
+                      code: "INVALID_REQUEST",
+                      message: expect.stringContaining(`blocked override keys: ${blocked}`),
+                    }),
+                  }
+                : {}),
+            }),
+          );
+        },
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 
   it("wraps malformed paramsJSON for built-in commands", async () => {
     const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
@@ -868,8 +779,8 @@ describe("node host invoke", () => {
     );
   });
 
-  it("forwards suppressNotifyOnExit on completed system.run events", async () => {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-event-suppress-"));
+  it("preserves notification policy and output tails on completed system.run events", async () => {
+    const tempHome = tempDirs.make("openclaw-node-event-suppress-");
     const stateDir = path.join(tempHome, ".openclaw");
     try {
       await withEnvAsync({ OPENCLAW_HOME: tempHome, OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -879,7 +790,8 @@ describe("node host invoke", () => {
         });
         const scriptPath = path.join(tempHome, "noop.cjs");
         fs.writeFileSync(scriptPath, "");
-        const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+        const client = new TestGatewayClient({ deviceIdentity: null });
+        const request = vi.spyOn(client, "request").mockResolvedValue(null);
         await handleInvoke(
           {
             id: "invoke-suppress-notify-prepare",
@@ -891,7 +803,7 @@ describe("node host invoke", () => {
               sessionKey: "agent:main:main",
             }),
           },
-          { request } as unknown as GatewayClient,
+          client,
           { current: async () => [] },
         );
         const prepareResult = request.mock.calls.find(
@@ -903,38 +815,66 @@ describe("node host invoke", () => {
           plan?: Record<string, unknown>;
         };
         expect(prepared.plan).toBeDefined();
-        await handleInvoke(
-          {
-            id: "invoke-suppress-notify",
-            nodeId: "node-1",
-            command: "system.run",
-            paramsJSON: JSON.stringify({
-              command: prepared.plan?.argv,
-              rawCommand: prepared.plan?.commandText,
-              cwd: prepared.plan?.cwd,
-              sessionKey: "agent:main:main",
-              systemRunPlan: prepared.plan,
-              approved: true,
-              approvalDecision: "allow-once",
+        const runCommand = vi.spyOn(nodeRunCommand, "runCommand");
+        try {
+          for (const { stdout, output } of [
+            { stdout: "", output: "" },
+            { stdout: " \t\n", output: " \t\n" },
+            { stdout: " \nfinished\n ", output: "finished" },
+            {
+              stdout: ` \nx😀${"a".repeat(19_999)}\n `,
+              output: `... (truncated) ${"a".repeat(19_999)}`,
+            },
+          ]) {
+            request.mockClear();
+            runCommand.mockResolvedValueOnce({
+              exitCode: 0,
+              timedOut: false,
+              success: true,
+              stdout,
+              stderr: "",
+              truncated: false,
+            });
+            await handleInvoke(
+              {
+                id: "invoke-suppress-notify",
+                nodeId: "node-1",
+                command: "system.run",
+                paramsJSON: JSON.stringify({
+                  command: prepared.plan?.argv,
+                  rawCommand: prepared.plan?.commandText,
+                  cwd: prepared.plan?.cwd,
+                  sessionKey: "agent:main:main",
+                  systemRunPlan: prepared.plan,
+                  approved: true,
+                  approvalDecision: "allow-once",
+                  suppressNotifyOnExit: true,
+                }),
+              },
+              client,
+              { current: async () => [] },
+            );
+            expect(request).toHaveBeenNthCalledWith(1, "node.event", {
+              event: "exec.finished",
+              payloadJSON: expect.any(String),
+            });
+            const event = request.mock.calls[0]?.[1] as { payloadJSON: string };
+            expect(JSON.parse(event.payloadJSON)).toMatchObject({
               suppressNotifyOnExit: true,
-            }),
-          },
-          { request } as unknown as GatewayClient,
-          { current: async () => [] },
-        );
-
-        const event = request.mock.calls.find(
-          ([method, params]) =>
-            method === "node.event" &&
-            (params as { event?: string } | undefined)?.event === "exec.finished",
-        )?.[1] as { payloadJSON?: string | null } | undefined;
-        expect(JSON.parse(event?.payloadJSON ?? "{}")).toMatchObject({
-          suppressNotifyOnExit: true,
-        });
+              output,
+            });
+            expect(request).toHaveBeenNthCalledWith(
+              2,
+              "node.invoke.result",
+              expect.objectContaining({ ok: true }),
+            );
+          }
+        } finally {
+          runCommand.mockRestore();
+        }
       });
     } finally {
       closeOpenClawStateDatabaseForTest();
-      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 

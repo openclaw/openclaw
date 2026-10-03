@@ -39,7 +39,12 @@ export function openControlUiDatabase(): Promise<IDBDatabase> {
   if (databasePromise) {
     return databasePromise;
   }
-  databasePromise = new Promise((resolve, reject) => {
+  const opening = new Promise<IDBDatabase>((resolve, reject) => {
+    const release = () => {
+      if (databasePromise === opening) {
+        databasePromise = null;
+      }
+    };
     if (typeof indexedDB === "undefined") {
       reject(new Error("IndexedDB is unavailable"));
       return;
@@ -68,12 +73,14 @@ export function openControlUiDatabase(): Promise<IDBDatabase> {
         const database = request.result;
         if (blocked) {
           database.close();
-          databasePromise = null;
+          release();
           return;
         }
+        // Browser-forced closure does not emit versionchange; never reuse its dead handle.
+        database.addEventListener("close", release, { once: true });
         database.addEventListener("versionchange", () => {
           database.close();
-          databasePromise = null;
+          release();
         });
         resolve(database);
       },
@@ -82,7 +89,7 @@ export function openControlUiDatabase(): Promise<IDBDatabase> {
     request.addEventListener(
       "error",
       () => {
-        databasePromise = null;
+        release();
         reject(indexedDbError(request.error, "IndexedDB open failed"));
       },
       { once: true },
@@ -98,5 +105,6 @@ export function openControlUiDatabase(): Promise<IDBDatabase> {
       { once: true },
     );
   });
-  return databasePromise;
+  databasePromise = opening;
+  return opening;
 }

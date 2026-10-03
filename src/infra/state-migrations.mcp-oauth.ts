@@ -3,27 +3,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
 import { mcpOAuthStoreKeyFromLegacyFileName } from "../agents/mcp-oauth-identity.js";
-import { parseMcpOAuthStoreJson } from "../agents/mcp-oauth-store.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+  executeOpenClawStateWorker,
+  runOpenClawStateWorkerOperation,
+} from "../state/openclaw-state-worker-store.js";
 import { pathMayExistSync } from "./path-existence.js";
+import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import { parseLegacyMcpOAuthStore } from "./state-migrations.mcp-oauth-format.js";
 import { withRootBoundedLegacyFileLock } from "./state-migrations.mcp-oauth-lock.js";
+import { importLegacyMcpOAuthStore } from "./state-migrations.mcp-oauth-store.js";
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
-import {
-  markLegacyMigrationSourceRemoved,
-  readLegacyMigrationReceipt,
-  readLegacyMigrationReceiptFromDatabase,
-  recordLegacyMigrationReceipt,
-  resolveLegacyMigrationSourceKey,
-  type LegacyMigrationReceipt,
-} from "./state-migrations.receipts.js";
+import type { LegacyMcpOAuthImportResult } from "./state-migrations.mcp-oauth.worker-contract.js";
+import { resolveLegacyMigrationSourceKey } from "./state-migrations.receipts.js";
 import {
   LegacyMigrationSourceClaim,
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
@@ -35,11 +29,8 @@ import type { MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_MCP_OAUTH_DIR = "mcp-oauth";
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
-const MIGRATION_KIND = "legacy-mcp-oauth-json";
 const MAX_LEGACY_STORE_BYTES = 4 * 1024 * 1024;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
-
-type McpOAuthMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "mcp_oauth_stores">;
 
 type LegacySourceSnapshot = LegacyMigrationSourceSnapshot & { store: Record<string, unknown> };
 
@@ -137,159 +128,29 @@ function storeKeyForSource(sourcePath: string): string {
   return storeKey;
 }
 
-function importAndRecordReceipt(params: {
-  env: NodeJS.ProcessEnv;
-  sourcePath: string;
-  snapshot: LegacySourceSnapshot;
-}): { sourceKey: string; imported: boolean } {
-  const sourceKey = resolveLegacyMigrationSourceKey("mcp-oauth-json", params.sourcePath);
-  const storeKey = storeKeyForSource(params.sourcePath);
-  const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
-  const now = Date.now();
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const stateDb = getNodeSqliteKysely<McpOAuthMigrationDatabase>(db);
-      const existingReceipt = readLegacyMigrationReceiptFromDatabase(db, sourceKey);
-      if (existingReceipt) {
-        return { sourceKey, imported: false };
-      }
-
-      const existingStore = executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb.selectFrom("mcp_oauth_stores").selectAll().where("store_key", "=", storeKey),
-      );
-      let importedLegacyState: boolean;
-      if (existingStore) {
-        if (existingStore.format_version !== 1) {
-          throw new Error("canonical MCP OAuth store has an unsupported format version");
-        }
-        const canonicalStore = parseMcpOAuthStoreJson(storeKey, existingStore.store_json);
-        const canMergeLegacyState = canonicalStore.credentialState === "uninitialized";
-        const legacyStore = { ...params.snapshot.store };
-        if (canonicalStore.pendingAuthorizationChallenge?.resourceMetadataUrl) {
-          delete legacyStore.discoveryState;
-        }
-        importedLegacyState =
-          canMergeLegacyState &&
-          Object.keys(legacyStore).some((key) => !Object.hasOwn(canonicalStore, key));
-        if (importedLegacyState) {
-          const mergedStore = { ...legacyStore, ...canonicalStore };
-          delete mergedStore.credentialState;
-          executeSqliteQuerySync(
-            db,
-            stateDb
-              .updateTable("mcp_oauth_stores")
-              .set({
-                store_json: JSON.stringify(mergedStore),
-                updated_at: now,
-              })
-              .where("store_key", "=", storeKey),
-          );
-        }
-      } else {
-        importedLegacyState = true;
-        executeSqliteQuerySync(
-          db,
-          stateDb.insertInto("mcp_oauth_stores").values({
-            store_key: storeKey,
-            format_version: 1,
-            store_json: JSON.stringify(params.snapshot.store),
-            updated_at: now,
-          }),
-        );
-      }
-
-      const verified = executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb.selectFrom("mcp_oauth_stores").selectAll().where("store_key", "=", storeKey),
-      );
-      if (!verified || verified.format_version !== 1) {
-        throw new Error("SQLite verification failed for an MCP OAuth store");
-      }
-      parseMcpOAuthStoreJson(storeKey, verified.store_json);
-
-      const reportJson = JSON.stringify({
-        source: MIGRATION_KIND,
-        target: "mcp_oauth_stores",
-        storeKey,
-        sourceSha256: params.snapshot.sha256,
-        importedRecordCount: importedLegacyState ? 1 : 0,
-        preservedSqliteRecordCount: existingStore ? 1 : 0,
-      });
-      recordLegacyMigrationReceipt(db, {
-        sourceKey,
-        migrationKind: MIGRATION_KIND,
-        sourcePath: params.sourcePath,
-        targetTable: "mcp_oauth_stores",
-        sourceSha256: params.snapshot.sha256,
-        sourceSizeBytes: params.snapshot.size,
-        sourceRecordCount: 1,
-        runId,
-        now,
-        reportJson,
-      });
-      return { sourceKey, imported: importedLegacyState };
+async function markLegacySourceRemoved(context: OpenClawStateWorkerContext, sourceKey: string) {
+  await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "legacyMcpOAuth.markRemoved", input: { sourceKey } }),
+    {
+      createAdmission: createSqliteWorkerWriteAdmission(context.admission.assertCurrent, [
+        context.admission.databasePath,
+      ]),
     },
-    { env: params.env },
   );
-}
-
-async function cleanupReceiptAuthoritativeSources(params: {
-  stateRoot: Root;
-  stateDir: string;
-  sourcePath: string;
-  receipt: LegacyMigrationReceipt;
-  env: NodeJS.ProcessEnv;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
-}): Promise<number> {
-  let removed = 0;
-  for (const candidate of [params.sourcePath, `${params.sourcePath}${DOCTOR_CLAIM_SUFFIX}`]) {
-    if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, candidate)))) {
-      continue;
-    }
-    await readLegacySourceSnapshot(params.stateRoot, params.stateDir, candidate, {
-      parseStore: false,
-    });
-    if (params.removeSource) {
-      await params.removeSource(candidate);
-    } else {
-      await params.stateRoot.remove(relativeLegacyPath(params.stateDir, candidate));
-    }
-    removed += 1;
-  }
-  if (!params.receipt.removedSource || removed > 0) {
-    markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
-  }
-  return removed;
 }
 
 async function migrateOneStore(params: {
   stateRoot: Root;
   stateDir: string;
   sourcePath: string;
-  env: NodeJS.ProcessEnv;
+  context: OpenClawStateWorkerContext;
   beforeClaim?: (sourcePath: string) => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
   const changes: string[] = [];
   const warnings: string[] = [];
   const notices: string[] = [];
-  const receipt = readLegacyMigrationReceipt(
-    resolveLegacyMigrationSourceKey("mcp-oauth-json", params.sourcePath),
-    params.env,
-  );
-  if (receipt) {
-    try {
-      const removed = await cleanupReceiptAuthoritativeSources({ ...params, receipt });
-      if (removed > 0) {
-        changes.push("Discarded recreated retired MCP OAuth JSON without importing it.");
-      }
-    } catch (error) {
-      warnings.push(`MCP OAuth state is in SQLite, but legacy cleanup failed: ${String(error)}`);
-    }
-    return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
-  }
-
   const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
     stateRoot: params.stateRoot,
     stateDir: params.stateDir,
@@ -300,6 +161,33 @@ async function migrateOneStore(params: {
     readSnapshot: (snapshotPath) =>
       readLegacySourceSnapshot(params.stateRoot, params.stateDir, snapshotPath),
   });
+  await source.recoverLinkedMove();
+  const sourceKey = resolveLegacyMigrationSourceKey("mcp-oauth-json", params.sourcePath);
+  const receipt = await executeOpenClawStateWorker(params.context, {
+    type: "legacyMcpOAuth.readReceipt",
+    input: { sourceKey },
+  });
+  if (receipt) {
+    try {
+      const removed = await source.removeRetiredSources({
+        readSnapshot: (candidate) =>
+          readLegacySourceSnapshot(params.stateRoot, params.stateDir, candidate, {
+            parseStore: false,
+          }),
+        removeSource: params.removeSource,
+      });
+      if (!receipt.removedSource || removed > 0) {
+        await markLegacySourceRemoved(params.context, receipt.sourceKey);
+      }
+      if (removed > 0) {
+        changes.push("Discarded recreated retired MCP OAuth JSON without importing it.");
+      }
+    } catch (error) {
+      warnings.push(`MCP OAuth state is in SQLite, but legacy cleanup failed: ${String(error)}`);
+    }
+    return { changes, warnings };
+  }
+
   const hasSource = await source.exists();
   const hasClaim = await source.exists(true);
   if (hasSource && hasClaim) {
@@ -325,33 +213,41 @@ async function migrateOneStore(params: {
     return { changes, warnings };
   }
 
-  if (activePath === params.sourcePath) {
-    try {
+  let result: LegacyMcpOAuthImportResult;
+  let restoreSource = true;
+  try {
+    if (activePath === params.sourcePath) {
       snapshot = await source.claim({
         snapshot,
         mismatchMessage: "legacy MCP OAuth source changed before Doctor could claim it",
         beforeClaim: () => params.beforeClaim?.(params.sourcePath),
       });
-    } catch (error) {
-      const restoreError = await source.restore();
-      warnings.push(
-        `Failed migrating legacy MCP OAuth store ${path.basename(params.sourcePath)}: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-      );
-      return { changes, warnings };
     }
-  }
-
-  let result: ReturnType<typeof importAndRecordReceipt>;
-  try {
-    result = importAndRecordReceipt({
-      env: params.env,
+    // Only the worker's definite pre-commit outcome can release this claim back to legacy code.
+    restoreSource = false;
+    const outcome = await importLegacyMcpOAuthStore(params.context, {
+      sourceKey,
       sourcePath: params.sourcePath,
-      snapshot,
+      storeKey: storeKeyForSource(params.sourcePath),
+      sourceSha256: snapshot.sha256,
+      sourceSizeBytes: snapshot.size,
+      store: snapshot.store,
+      now: Date.now(),
     });
+    if (!outcome.ok) {
+      restoreSource = outcome.restoreSource;
+      throw outcome.error;
+    }
+    result = outcome.value;
+    if (outcome.deliveryFailure) {
+      warnings.push(
+        `MCP OAuth import committed, but result delivery failed: ${String(outcome.deliveryFailure.error)}`,
+      );
+    }
   } catch (error) {
-    const restoreError = await source.restore();
+    const restoreError = restoreSource ? await source.restore() : undefined;
     warnings.push(
-      `Failed migrating legacy MCP OAuth store ${path.basename(params.sourcePath)}: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+      `Failed migrating legacy MCP OAuth store ${path.basename(params.sourcePath)}: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}${restoreSource ? "" : "; SQLite import outcome is unresolved; retained Doctor claim for receipt verification on the next run."}`,
     );
     return { changes, warnings };
   }
@@ -369,7 +265,7 @@ async function migrateOneStore(params: {
       claimRemainingMessage: "legacy MCP OAuth Doctor claim remains after cleanup",
       skipSourceCheck: true,
     });
-    markLegacyMigrationSourceRemoved(result.sourceKey, params.env);
+    await markLegacySourceRemoved(params.context, result.sourceKey);
   } catch (error) {
     warnings.push(`MCP OAuth state is in SQLite, but legacy cleanup failed: ${String(error)}`);
     return { changes, warnings };
@@ -405,6 +301,7 @@ async function migrateWithExclusiveStateOwnership(params: {
     }
     return { changes, warnings: [`Failed reading legacy MCP OAuth directory: ${String(error)}`] };
   }
+  const context = captureOpenClawStateWorkerContext({ env: params.env });
   for (const sourcePath of sourcePaths) {
     try {
       // Retired releases serialize complete refresh/login flows on this exact
@@ -415,7 +312,7 @@ async function migrateWithExclusiveStateOwnership(params: {
           stateRoot: params.stateRoot,
           targetRelativePath: relativeLegacyPath(params.stateDir, sourcePath),
         },
-        async () => await migrateOneStore({ ...params, sourcePath }),
+        async () => await migrateOneStore({ ...params, sourcePath, context }),
       );
       changes.push(...result.changes);
       warnings.push(...result.warnings);

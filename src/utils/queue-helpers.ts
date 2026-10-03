@@ -8,16 +8,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 
-/** Pending overflow summary state produced by the summarize drop policy. */
 type QueueSummaryState = {
   droppedCount: number;
   summaryLines: string[];
 };
 
-/** Queue overflow strategy for future admissions. */
 type QueueDropPolicy = "summarize" | "old" | "new";
 
-/** Generic capped queue state with shared overflow summary fields. */
 type QueueState<T> = QueueSummaryState & {
   items: T[];
   cap: number;
@@ -73,24 +70,9 @@ export function applyQueueRuntimeSettings<TMode extends string>(params: {
   params.target.dropPolicy = params.settings.dropPolicy ?? params.target.dropPolicy;
 }
 
-/** Normalize whitespace and elide one dropped item for queue summaries. */
-function buildQueueSummaryLine(text: string, limit = 160): string {
+function buildQueueSummaryLine(text: string): string {
   const cleaned = text.replace(/\s+/g, " ").trim();
-  return cleaned.length <= limit
-    ? cleaned
-    : `${truncateUtf16Safe(cleaned, Math.max(0, limit - 1)).trimEnd()}…`;
-}
-
-/** Run optional duplicate detection before an item enters a queue. */
-export function shouldSkipQueueItem<T>(params: {
-  item: T;
-  items: T[];
-  dedupe?: (item: T, items: T[]) => boolean;
-}): boolean {
-  if (!params.dedupe) {
-    return false;
-  }
-  return params.dedupe(params.item, params.items);
+  return cleaned.length <= 160 ? cleaned : `${truncateUtf16Safe(cleaned, 159).trimEnd()}…`;
 }
 
 /** Count identities that are still pending in the queue, excluding active deliveries. */
@@ -157,14 +139,10 @@ export function applyQueueDropPolicy<T>(params: {
     }
     // Summary memory is bounded independently from the item cap to avoid prompt blowups.
     const limit = Math.max(0, params.summaryLimit ?? cap);
-    const elidedLines: string[] = [];
-    while (params.queue.summaryLines.length > limit) {
-      const line = params.queue.summaryLines.shift();
-      if (line !== undefined) {
-        elidedLines.push(line);
-      }
-    }
-    if (elidedLines.length > 0) {
+    const summaryLines = params.queue.summaryLines;
+    if (summaryLines.length > limit) {
+      // Round the cutoff first; subtraction can erase a fraction just below an integer.
+      const elidedLines = summaryLines.splice(0, summaryLines.length - Math.floor(limit));
       params.onSummaryElide?.(elidedLines);
     }
   }
@@ -191,13 +169,10 @@ export function waitForQueueDebounce(
     return Promise.resolve();
   }
   return new Promise<void>((resolve) => {
-    let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let observedEnqueuedAt: number | undefined;
+    let observedAtMs = 0;
     const finish = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
       if (timer !== undefined) {
         clearTimeout(timer);
       }
@@ -209,7 +184,14 @@ export function waitForQueueDebounce(
         finish();
         return;
       }
-      const since = Date.now() - queue.lastEnqueuedAt;
+      const nowMs = performance.now();
+      if (queue.lastEnqueuedAt !== observedEnqueuedAt) {
+        observedEnqueuedAt = queue.lastEnqueuedAt;
+        observedAtMs = nowMs;
+      }
+      // Wall time counts quiet time before this wait; elapsed time keeps a
+      // backward wall-clock step from extending the window until wall time catches up.
+      const since = Math.max(Date.now() - queue.lastEnqueuedAt, nowMs - observedAtMs);
       if (since >= debounceMs) {
         finish();
         return;
@@ -313,18 +295,15 @@ export function hasCrossChannelItems<T>(
   items: T[],
   resolveKey: (item: T) => { key?: string; cross?: boolean },
 ): boolean {
-  const keys = new Set<string>();
+  let firstKey: string | undefined;
 
   for (const item of items) {
     const resolved = resolveKey(item);
-    if (resolved.cross) {
+    if (resolved.cross || (resolved.key && firstKey && resolved.key !== firstKey)) {
       return true;
     }
-    if (!resolved.key) {
-      continue;
-    }
-    keys.add(resolved.key);
+    firstKey ||= resolved.key;
   }
 
-  return keys.size > 1;
+  return false;
 }

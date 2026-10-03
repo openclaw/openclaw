@@ -1,42 +1,60 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   type SessionCatalogLocator,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import {
   allowProcessHomeFallback,
   createSessionCatalogRequestNodeSnapshot,
   listSessionCatalogProvider,
 } from "./session-catalog-provider-access.js";
-import { isSessionCatalogThreadVisible } from "./session-catalog-visibility.js";
+import {
+  resolveSessionCatalogThreadVisibility,
+  type SessionCatalogThreadVisibility,
+} from "./session-catalog-visibility.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export async function authorizeSessionCatalogThread(params: {
   access: "read" | "mutate";
-  agentId: string;
   client: GatewayClient | null;
   context: GatewayRequestContext;
   provider: SessionCatalogProvider;
-  request: SessionCatalogLocator;
+  request: SessionCatalogLocator & { agentId?: string };
   respond: RespondFn;
-}): Promise<{ allowProcessHomeFallback: boolean } | null> {
+}): Promise<{
+  agentId: string;
+  allowProcessHomeFallback: boolean;
+  sourceVisibility: SessionCatalogThreadVisibility;
+} | null> {
+  const resolvedAgent = resolveAgentIdOrRespondError({
+    rawAgentId: params.request.agentId,
+    respond: params.respond,
+    cfg: params.context.getRuntimeConfig(),
+    normalize: normalizeOptionalString,
+  });
+  if (!resolvedAgent) {
+    return null;
+  }
+  const { agentId } = resolvedAgent;
   const allowHomeFallback = allowProcessHomeFallback(params.context.logGateway);
-  const visible = await isSessionCatalogThreadVisible({
+  const sourceVisibility = await resolveSessionCatalogThreadVisibility({
     access: params.access,
     allowProcessHomeFallback: allowHomeFallback,
+    audience: params.provider.audience,
     client: params.client,
-    getConfig: () => params.context.getRuntimeConfig(),
-    fallbackAgentId: params.agentId,
+    context: params.context,
+    fallbackAgentId: agentId,
     hostId: params.request.hostId,
-    list: (request) =>
-      listSessionCatalogProvider(params.provider, { ...request, agentId: params.agentId }),
+    list: (request) => listSessionCatalogProvider(params.provider, { ...request, agentId }),
     listNodes: createSessionCatalogRequestNodeSnapshot(),
     ...(params.request.sourceHomeId ? { sourceHomeId: params.request.sourceHomeId } : {}),
     threadId: params.request.threadId,
   });
-  if (visible) {
-    return { allowProcessHomeFallback: allowHomeFallback };
+  if (sourceVisibility) {
+    return { agentId, allowProcessHomeFallback: allowHomeFallback, sourceVisibility };
   }
   params.respond(
     false,

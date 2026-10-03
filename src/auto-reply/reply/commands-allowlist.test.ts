@@ -329,6 +329,37 @@ describe("handleAllowlistCommand", () => {
     expect(result?.reply?.text).toContain("Paired allowFrom (store): 456");
   });
 
+  it("surfaces pairing-store read failures instead of an empty store list", async () => {
+    readChannelAllowFromStoreMock.mockRejectedValueOnce(new Error("pairing db locked"));
+
+    const cfg = {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["123"] } },
+    } as OpenClawConfig;
+    const result = await handleAllowlistCommand(
+      buildAllowlistParams("/allowlist list dm", cfg),
+      true,
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain(
+      "Paired allowFrom (store): unavailable (read failed). Retry this command; if it still fails, run openclaw doctor.",
+    );
+  });
+
+  it("omits the pairing-store line when the store is empty", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["123"] } },
+    } as OpenClawConfig;
+    const result = await handleAllowlistCommand(
+      buildAllowlistParams("/allowlist list dm", cfg),
+      true,
+    );
+
+    expect(result?.reply?.text).not.toContain("Paired allowFrom (store):");
+  });
+
   it("adds allowlist entries to config and pairing stores", async () => {
     const cases = [
       {
@@ -438,24 +469,6 @@ describe("handleAllowlistCommand", () => {
   });
 
   it("uses the configured default account for omitted-account list", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: {
-            ...telegramAllowlistTestPlugin,
-            config: {
-              ...telegramAllowlistTestPlugin.config,
-              defaultAccountId: (cfg: OpenClawConfig) =>
-                (cfg.channels?.telegram as TelegramTestSectionConfig | undefined)?.defaultAccount ??
-                DEFAULT_ACCOUNT_ID,
-            },
-          },
-        },
-      ]),
-    );
-
     const cfg = {
       commands: { text: true, config: true },
       channels: {
@@ -511,24 +524,6 @@ describe("handleAllowlistCommand", () => {
   });
 
   it("honors the configured default account when gating omitted-account config edits", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: {
-            ...telegramAllowlistTestPlugin,
-            config: {
-              ...telegramAllowlistTestPlugin.config,
-              defaultAccountId: (cfg: OpenClawConfig) =>
-                (cfg.channels?.telegram as TelegramTestSectionConfig | undefined)?.defaultAccount ??
-                DEFAULT_ACCOUNT_ID,
-            },
-          },
-        },
-      ]),
-    );
-
     const previousWriteCount = replaceConfigFileMock.mock.calls.length;
     const cfg = {
       commands: { text: true, config: true },
@@ -586,7 +581,7 @@ describe("handleAllowlistCommand", () => {
     const result = await handleAllowlistCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply).toBeUndefined();
+    expect(result?.reply?.text).toContain("commands.ownerAllowFrom");
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
   });
@@ -609,7 +604,7 @@ describe("handleAllowlistCommand", () => {
     const result = await handleAllowlistCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply).toBeUndefined();
+    expect(result?.reply?.text).toContain("commands.ownerAllowFrom");
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
   });

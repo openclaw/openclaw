@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { readFileRangeAsync } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   classifyClaudeCliHistoryMessage,
   classifyClaudeCliHistoryLine,
@@ -12,67 +13,6 @@ import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
 
 const MAX_CLAUDE_UPSTREAM_SCAN_BYTES = 1024 * 1024;
 
-async function readFileRange(
-  handle: Awaited<ReturnType<typeof fs.open>>,
-  position: number,
-  length: number,
-): Promise<Buffer> {
-  const buffer = Buffer.alloc(length);
-  let offset = 0;
-  while (offset < length) {
-    const { bytesRead } = await handle.read(buffer, offset, length - offset, position + offset);
-    if (bytesRead <= 0) {
-      break;
-    }
-    offset += bytesRead;
-  }
-  return offset === length ? buffer : buffer.subarray(0, offset);
-}
-
-async function link(
-  sessionKey: string,
-  hostId: string,
-  threadId: string,
-  listSessions: () => Promise<Array<{ threadId: string; filePath: string }>>,
-): Promise<SessionCatalogContinueProviderResult> {
-  if (hostId !== "gateway:local") {
-    return { sessionKey };
-  }
-  try {
-    const record = (await listSessions()).find((candidate) => candidate.threadId === threadId);
-    const stat = record ? await fs.stat(record.filePath).catch(() => undefined) : undefined;
-    return record && stat?.isFile()
-      ? {
-          sessionKey,
-          upstream: {
-            kind: "claude-cli",
-            ref: { filePath: record.filePath },
-            marker: { offset: stat.size },
-          },
-        }
-      : { sessionKey };
-  } catch {
-    // Liveness metadata is optional; continuation success must survive baseline failure.
-    return { sessionKey };
-  }
-}
-
-function linkRemote(
-  sessionKey: string,
-  nodeId: string,
-  threadId: string,
-  markerUuid: string | null,
-): SessionCatalogContinueProviderResult {
-  return {
-    sessionKey,
-    upstream: {
-      kind: "claude-cli",
-      ref: { nodeId, threadId },
-      marker: { uuid: markerUuid },
-    },
-  };
-}
-
 export async function linkContinued(params: {
   sessionKey: string;
   hostId: string;
@@ -81,29 +21,46 @@ export async function linkContinued(params: {
   listLocalSessions: () => Promise<Array<{ threadId: string; filePath: string }>>;
   readRemote: () => Promise<ClaudeTranscriptItem[]>;
 }): Promise<SessionCatalogContinueProviderResult> {
-  if (params.hostId === "gateway:local") {
-    return await link(params.sessionKey, params.hostId, params.threadId, params.listLocalSessions);
-  }
-  if (!params.hostId.startsWith("node:")) {
-    return { sessionKey: params.sessionKey };
-  }
+  const { sessionKey, hostId, threadId } = params;
   try {
+    if (hostId === "gateway:local") {
+      const record = (await params.listLocalSessions()).find(
+        (candidate) => candidate.threadId === threadId,
+      );
+      const stat = record ? await fs.stat(record.filePath).catch(() => undefined) : undefined;
+      return record && stat?.isFile()
+        ? {
+            sessionKey,
+            upstream: {
+              kind: "claude-cli",
+              ref: { filePath: record.filePath },
+              marker: { offset: stat.size },
+            },
+          }
+        : { sessionKey };
+    }
+    if (!hostId.startsWith("node:")) {
+      return { sessionKey };
+    }
     const items = params.history ?? (await params.readRemote());
     const newest = items[0];
     // A UUID-less newest item cannot anchor a baseline distinguishable from an empty
     // thread, which would later replay pre-adoption history as new activity. Decline
     // the link; empty history (no newest) still baselines safely as null.
     if (newest && !newest.uuid) {
-      return { sessionKey: params.sessionKey };
+      return { sessionKey };
     }
-    return linkRemote(
-      params.sessionKey,
-      params.hostId.slice("node:".length),
-      params.threadId,
-      newest?.uuid ?? null,
-    );
+    return {
+      sessionKey,
+      upstream: {
+        kind: "claude-cli",
+        ref: { nodeId: hostId.slice("node:".length), threadId },
+        marker: { uuid: newest?.uuid ?? null },
+      },
+    };
   } catch {
-    return { sessionKey: params.sessionKey };
+    // Liveness metadata is optional; continuation success must survive baseline failure.
+    return { sessionKey };
   }
 }
 
@@ -149,7 +106,7 @@ async function checkClaudeSessionUpstreamActivity(
       return undefined;
     }
     const readLength = Math.min(stat.size - markerOffset, MAX_CLAUDE_UPSTREAM_SCAN_BYTES);
-    const tail = await readFileRange(handle, markerOffset, readLength);
+    const tail = await readFileRangeAsync(handle, markerOffset, readLength);
     const lastNewline = tail.lastIndexOf(0x0a);
     if (lastNewline < 0) {
       // Cursor movement requires a complete classified row. A row beyond the

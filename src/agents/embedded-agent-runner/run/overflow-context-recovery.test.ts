@@ -47,11 +47,12 @@ describe("recoverEmbeddedRunOverflow transcript ownership", () => {
         prompt: "continue",
         timeoutMs: 1_000,
       };
-      const sessionPromptState = createEmbeddedRunSessionPromptState({
+      await using sessionPromptState = await createEmbeddedRunSessionPromptState({
         runParams,
         sessionAgentId: "main",
         resolvedSessionKey: target.sessionKey,
         lifecycleGeneration: getAgentRunLifecycleGeneration(),
+        onInterrupt: () => {},
       });
       const contextEngine: ContextEngine = {
         info: { id: "fixture", name: "Fixture engine" },
@@ -89,7 +90,7 @@ describe("recoverEmbeddedRunOverflow transcript ownership", () => {
           runParams,
           state,
           usageAccumulator: createUsageAccumulator(),
-          prepareRecoverySession: () => {
+          prepareRecoverySession: async () => {
             throw new Error("unexpected transcript rewrite");
           },
           contextEngine,
@@ -103,23 +104,19 @@ describe("recoverEmbeddedRunOverflow transcript ownership", () => {
             promptErrorSource: "precheck",
             replayMetadata: { replaySafe: false, hadPotentialSideEffects: true },
           }),
-          toolResultPromptProjectionState: {
-            replacements: new Map(),
-            frozen: new Set(),
-            ambiguousBaseKeys: new Set(),
-            sourceTextByKey: new Map(),
-          },
           attemptCompactionCount: 0,
           runtimeAuthPlan: undefined,
           resolvedSessionKey: target.sessionKey,
           sessionAgentId: "main",
           agentDir: "/tmp/agent",
           workspaceDir: "/tmp/workspace",
-          provider: "fixture-provider",
-          modelId: "fixture-model",
+          modelSelection: {
+            provider: "fixture-provider",
+            model: "fixture-model",
+            authProfileIdSource: "auto",
+          },
           harnessRuntime: "openclaw",
           thinkLevel: "off",
-          authProfileIdSource: "auto",
           resolveContextEnginePluginId: () => undefined,
           buildRuntimeSettings: ({ tokenBudget, degradedReason }) =>
             buildContextEngineRuntimeSettings({

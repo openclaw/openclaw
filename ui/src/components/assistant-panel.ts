@@ -1,9 +1,10 @@
 import { consume } from "@lit/context";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, nothing, type PropertyValues } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
-import "./openclaw-mascot.ts";
-import type { RouteId } from "../app-route-paths.ts";
+import { isSettingsTakeover } from "../app-navigation.ts";
+import { isSessionRouteId, type RouteId } from "../app-route-paths.ts";
+import type { AssistantDockOwner } from "../app/assistant-dock.ts";
 import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import {
@@ -15,6 +16,7 @@ import { t } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
+  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   normalizeAgentId,
   resolveUiConfiguredMainKey,
@@ -22,45 +24,65 @@ import {
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { buildHomeWorkContext, subscribeChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import {
-  custodianSessionStore,
-  type CustodianSessionStore,
-} from "../pages/custodian/custodian-session-store.ts";
+  CHAT_ROUTE_READY_EVENT,
+  CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
+} from "../pages/chat/chat-history-events.ts";
+import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import type { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
+import {
+  consumePluginHelpAutoOpen,
+  dismissPluginHelpAutoOpen,
+  subscribePluginHelp,
+} from "../pages/custodian/plugin-help-state.ts";
+import { renderAssistantPanelLoading } from "./assistant-panel-loading.ts";
 import { DockLayoutController } from "./dock-layout-controller.ts";
-import { assistantPanelLayout, type DockPanelSide } from "./dock-panel-layout.ts";
+import { assistantPanelLayout } from "./dock-panel-layout.ts";
 import { icons } from "./icons.ts";
 import { renderLazyElementState } from "./lazy-view-error.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import "../pages/custodian/custodian-surface.ts";
+import "../styles/rail-header.css";
 import "../styles/assistant-panel.css";
 
-const HOME_SESSION_ELEMENT = {
-  tagName: "openclaw-home-session",
+const ASSISTANT_CONTENT_ELEMENT = {
+  tagName: "openclaw-assistant-panel-content",
   get label() {
-    return t("assistantPanel.home");
+    return t("assistantPanel.title");
   },
-  loadModule: () => import("./home-session.runtime.ts"),
+  loadModule: () => import("./assistant-panel-content.ts"),
 };
 
-type AssistantDestination = "home" | "custodian";
-type AssistantDock = Exclude<DockPanelSide, "left">;
+type AssistantDestination =
+  | "home"
+  | "custodian"
+  | {
+      kind: "session";
+      params: Parameters<AssistantDockOwner["openSession"]>[0];
+      activation: object;
+    };
 
 export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   @property({ attribute: false })
-  context: ApplicationContext<RouteId> | undefined;
+  context: ApplicationContext | undefined;
   @property({ type: Boolean }) custodianAvailable = false;
   @property({ type: Boolean }) homeAvailable = false;
   @property({ type: Boolean }) custodianSuppressed = false;
   @property() pageSessionKey = "";
   @property() pageAgentId = "";
   @property() pageRouteId: RouteId = "chat";
+  @property({ type: Boolean }) pageRouteFailed = false;
+  @state() private homeStarted = false;
+  private pendingPrimaryPane: ChatPaneElement | null = null;
   @state() private destination: AssistantDestination = "custodian";
-  private readonly homeLoader = new LazyCustomElementRequestController(this);
+  /** Built-in target a plugin dock replaced; restored when that dock closes. */
+  private builtInDestination: "home" | "custodian" = "custodian";
+  private publishedSessionKey: string | null = null;
+  private readonly contentLoader = new LazyCustomElementRequestController(this);
   @property({ type: Number }) minimizeRequestId = 0;
-  @property({ attribute: false }) store: CustodianSessionStore = custodianSessionStore;
+  @property({ attribute: false }) store: CustodianSessionStore | undefined;
 
   private readonly dockLayout = new DockLayoutController(this, {
     layout: assistantPanelLayout,
@@ -74,53 +96,59 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     agentsList?: ApplicationContext["agents"]["state"]["agentsList"];
     hello?: ApplicationContext["gateway"]["snapshot"]["hello"];
   } = {};
-  private contextCleanup: (() => void) | null = null;
-  private subscribedStore: CustodianSessionStore | null = null;
-  private storeCleanup: (() => void) | null = null;
+
+  constructor() {
+    super();
+    void new SubscriptionsController(this)
+      .effect(
+        () => this.context?.assistantDock,
+        (dock) => dock.attach(this),
+      )
+      .watch(
+        () => this.context,
+        (context, notify) => subscribePluginHelp(context, notify),
+      )
+      .watchStore(() => this.store)
+      .watchStore(() => this.context?.agentSelection)
+      .watchStore(() => this.context?.agents)
+      .watchStore(() => this.context?.gateway);
+  }
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.subscribeToStore();
+    document.addEventListener(CHAT_ROUTE_READY_EVENT, this.startHomeAfterPrimaryChat);
+    document.addEventListener(
+      CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
+      this.startHomeAfterPrimaryChat,
+    );
     window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.addEventListener(HOME_PANEL_TOGGLE_EVENT, this.onToggleRequest);
-    this.dockLayout.setSuppressed(this.suppressed);
-    this.refreshCustodianTranscript(this.dockLayout.open);
+    this.dockLayout.setSuppressed(this.restoreSuppressed);
   }
 
   override disconnectedCallback(): void {
+    document.removeEventListener(CHAT_ROUTE_READY_EVENT, this.startHomeAfterPrimaryChat);
+    document.removeEventListener(
+      CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
+      this.startHomeAfterPrimaryChat,
+    );
+    this.pendingPrimaryPane = null;
     window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.removeEventListener(HOME_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    if (typeof this.destination !== "string") {
+      this.closeSession();
+    }
     this.claimInput("page");
-    this.contextCleanup?.();
-    this.contextCleanup = null;
-    this.storeCleanup?.();
-    this.storeCleanup = null;
-    this.subscribedStore = null;
     super.disconnectedCallback();
   }
 
-  override willUpdate(changed: PropertyValues): void {
+  override willUpdate(): void {
     const wasOpen = this.dockLayout.open;
-    if (changed.has("context") && this.context) {
-      this.contextCleanup?.();
-      const cleanups = [
-        subscribeChatWorkContext(this.context, () => this.requestUpdate()),
-        // The sidebar switcher owns agent choice; the dock follows it.
-        this.context.agentSelection.subscribe(() => this.requestUpdate()),
-        // Snapshot changes need not change route facts; keep the open Home reference current.
-        this.context.sessions.subscribe(() => this.requestUpdate()),
-        this.context.agents.subscribe(() => this.requestUpdate()),
-        this.context.gateway.subscribe(() => this.requestUpdate()),
-      ];
-      this.contextCleanup = () => {
-        for (const cleanup of cleanups) {
-          cleanup();
-        }
-      };
-    }
     const scope = this.context?.gateway.connection.gatewayUrl ?? "";
     if (scope !== this.targetScope) {
       this.targetScope = scope;
+      this.homeStarted = false;
+      this.pendingPrimaryPane = null;
       this.homeDefaults = {};
       let saved: Record<string, unknown> | null = null;
       try {
@@ -129,6 +157,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
         );
       } catch {}
       this.destination = saved?.destination === "home" ? "home" : "custodian";
+      this.builtInDestination = this.destination;
     }
     if (this.context?.gateway.snapshot.phase === "connected") {
       // Roster/hello disappear during reconnect; keep the captured Home identity with its outbox.
@@ -137,17 +166,15 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
         hello: this.context.gateway.snapshot.hello,
       };
     }
-    if (changed.has("store")) {
-      this.subscribeToStore();
-    }
-    this.dockLayout.setSuppressed(this.suppressed);
+    this.dockLayout.setSuppressed(this.restoreSuppressed);
     if (
       this.minimizeRequestId > 0 &&
       this.minimizeRequestId !== this.handledMinimizeRequestId &&
-      this.custodianAvailable
+      this.custodianAvailable &&
+      this.store
     ) {
       this.handledMinimizeRequestId = this.minimizeRequestId;
-      if (this.store.hasRealUserTurn()) {
+      if (typeof this.destination === "string" && this.store.hasRealUserTurn()) {
         this.openDestination("custodian");
       }
     }
@@ -156,22 +183,86 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     } else {
       this.dockLayout.restoreOpenState();
     }
-    this.refreshCustodianTranscript(!wasOpen && this.dockLayout.open);
     if (wasOpen && !this.dockLayout.open) {
       this.claimInput("page");
     }
-    this.homeLoader.requestWhileActive(
-      HOME_SESSION_ELEMENT,
-      this.dockLayout.open && this.destination === "home",
+    if (
+      typeof this.destination === "string" &&
+      this.context &&
+      this.custodianAvailable &&
+      !this.custodianSuppressed &&
+      window.innerWidth > 1100 &&
+      consumePluginHelpAutoOpen(this.context)
+    ) {
+      this.openDestination("custodian");
+    }
+    this.startHomeAfterPrimaryChat();
+    this.contentLoader.requestWhileActive(
+      ASSISTANT_CONTENT_ELEMENT,
+      (this.dockLayout.open && (this.destination !== "home" || this.homeStarted)) ||
+        (this.custodianAvailable && this.minimizeRequestId > this.handledMinimizeRequestId),
     );
     this.dockLayout.syncReservation();
+    this.publishSessionKey();
   }
+
+  private primaryChatPane(): ChatPaneElement | undefined {
+    const root = this.closest("openclaw-app-shell") ?? this.parentElement;
+    return [
+      ...(root?.querySelectorAll<ChatPaneElement>(
+        "openclaw-chat-pane.chat-pane-cache__pane--active",
+      ) ?? []),
+    ].find(
+      (pane) =>
+        pane.presented !== false &&
+        pane.sessionKey &&
+        areUiSessionKeysEquivalent(pane.sessionKey, this.pageSessionKey),
+    );
+  }
+
+  private readonly startHomeAfterPrimaryChat = (): void => {
+    if (this.homeStarted || !this.dockLayout.open || this.destination !== "home") {
+      return;
+    }
+    if (this.pageRouteId !== "chat" || this.pageRouteFailed) {
+      this.homeStarted = true;
+      return;
+    }
+    const pane = this.primaryChatPane();
+    if (!pane?.transcriptReady || this.pendingPrimaryPane === pane) {
+      return;
+    }
+    this.pendingPrimaryPane = pane;
+    const context = this.context;
+    // The loading edge precedes the pane's render invalidation. Wait for that
+    // commit before a restored Home starts its competing transcript request.
+    void Promise.resolve()
+      .then(() => pane.updateComplete)
+      .then(() => {
+        if (this.pendingPrimaryPane !== pane) {
+          return;
+        }
+        this.pendingPrimaryPane = null;
+        if (
+          this.isConnected &&
+          this.context === context &&
+          this.primaryChatPane() === pane &&
+          pane.transcriptReady
+        ) {
+          this.homeStarted = true;
+        }
+      });
+  };
 
   private get targetStorageKey(): string {
     return `openclaw.assistant.panel.target.v1:${this.targetScope}`;
   }
 
   private persistTarget(): void {
+    // Plugin targets belong to their activation, never to browser persistence.
+    if (typeof this.destination !== "string") {
+      return;
+    }
     try {
       getSafeLocalStorage()?.setItem(
         this.targetStorageKey,
@@ -203,15 +294,13 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     };
   }
 
-  /** Ask OpenClaw hydrates lazily; only refresh when it actually becomes visible. */
-  private refreshCustodianTranscript(becameVisible: boolean): void {
-    if (becameVisible && this.destination === "custodian") {
-      void this.store.refreshTranscriptIfIdle();
-    }
-  }
-
   private availableFor(destination: AssistantDestination): boolean {
-    return destination === "home" ? this.homeAvailable : this.custodianAvailable;
+    // The chat pane owns access errors and read-only composition. Always show
+    // explicitly requested sessions so a denied read has its normal visible outcome.
+    return (
+      typeof destination !== "string" ||
+      (destination === "home" ? this.homeAvailable : this.custodianAvailable)
+    );
   }
 
   private get available(): boolean {
@@ -223,7 +312,11 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
       return this.custodianSuppressed;
     }
     const context = this.context;
-    if (!context || this.pageRouteId !== "chat") {
+    const sessionPage =
+      this.destination === "home"
+        ? this.pageRouteId === "chat"
+        : isSessionRouteId(this.pageRouteId);
+    if (!context || !sessionPage) {
       return false;
     }
     const page = resolveUiConversationIdentity(
@@ -231,8 +324,18 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
       this.pageSessionKey,
       this.pageAgentId,
     );
-    const home = this.homeTarget;
-    return page.sessionKey === home.sessionKey && normalizeAgentId(page.agentId) === home.agentId;
+    const target =
+      typeof this.destination === "string"
+        ? this.homeTarget
+        : resolveUiConversationIdentity(
+            this.homeDefaults,
+            this.destination.params.sessionKey,
+            this.destination.params.agentId,
+          );
+    return (
+      page.sessionKey === target.sessionKey &&
+      normalizeAgentId(page.agentId) === normalizeAgentId(target.agentId)
+    );
   }
 
   private claimInput(region: "page" | "dock"): void {
@@ -241,9 +344,47 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     }
   }
 
+  private get restoreSuppressed(): boolean {
+    // Home follows the visible Settings context; automatic diagnostic restores yield to it.
+    return (
+      this.suppressed || (this.destination === "custodian" && isSettingsTakeover(this.pageRouteId))
+    );
+  }
+
+  openSession(params: Parameters<AssistantDockOwner["openSession"]>[0], activation: object): void {
+    if (typeof this.destination === "string") {
+      this.builtInDestination = this.destination;
+    }
+    this.openDestination({ kind: "session", params: structuredClone(params), activation });
+  }
+
+  closeSession(activation?: object): void {
+    if (
+      activation &&
+      (typeof this.destination === "string" || this.destination.activation !== activation)
+    ) {
+      return;
+    }
+    this.setOpen(false);
+  }
+
+  get openSessionKey(): string | null {
+    return this.dockLayout.open && !this.suppressed && typeof this.destination !== "string"
+      ? this.destination.params.sessionKey
+      : null;
+  }
+
+  private publishSessionKey(): void {
+    const key = this.openSessionKey;
+    if (key !== this.publishedSessionKey) {
+      this.publishedSessionKey = key;
+      this.context?.assistantDock?.notify();
+    }
+  }
+
   private openDestination(destination: AssistantDestination): void {
     this.destination = destination;
-    this.dockLayout.setSuppressed(this.suppressed);
+    this.dockLayout.setSuppressed(this.restoreSuppressed);
     if (this.available) {
       // Keep explicit open intent even when the same Home conversation owns the page.
       this.setOpen(true);
@@ -255,15 +396,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
         }
       }
     }
-  }
-
-  private subscribeToStore(): void {
-    if (!this.isConnected || this.subscribedStore === this.store) {
-      return;
-    }
-    this.storeCleanup?.();
-    this.subscribedStore = this.store;
-    this.storeCleanup = this.store.subscribe(() => this.requestUpdate());
+    this.publishSessionKey();
   }
 
   private openHomePage(): void {
@@ -280,15 +413,22 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     }
   }
 
-  private setDock(dock: AssistantDock): void {
-    this.dockLayout.setDock(dock);
-  }
-
   private setOpen(open: boolean): void {
+    if (!open && this.destination !== "home" && this.context) {
+      dismissPluginHelpAutoOpen(this.context);
+    }
+    if (open && this.destination === "home") {
+      this.homeStarted = true;
+    }
     this.persistTarget();
     this.dockLayout.setOpen(open);
     this.claimInput(open ? "dock" : "page");
-    this.refreshCustodianTranscript(open);
+    if (!open && typeof this.destination !== "string") {
+      // Closing discards the activation-owned target without reopening a dock; the
+      // operator's built-in Home/Ask choice and its persisted value stay untouched.
+      this.destination = this.builtInDestination;
+    }
+    this.publishSessionKey();
   }
 
   toggle(): void {
@@ -330,22 +470,19 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   }
 
   override render() {
-    if (!this.available || !this.dockLayout.open) {
-      return nothing;
-    }
+    const visible = this.available && this.dockLayout.open;
     const dock = this.dockLayout.dock;
-    const home = this.homeTarget;
-    const homeState = this.homeLoader.visibleState;
-    // The deferred panel owns preparation; the eager shell supplies route facts only.
-    const workContext = this.context
-      ? buildHomeWorkContext(this.context, this.pageRouteId, this.pageSessionKey, this.pageAgentId)
-      : undefined;
+    const session = typeof this.destination === "string" ? undefined : this.destination.params;
+    const target = session ?? this.homeTarget;
+    const destinationKind = typeof this.destination === "string" ? this.destination : "session";
+    const contentState = this.contentLoader.visibleState;
     const style =
       dock === "bottom" ? `height:${this.dockLayout.height}px` : `width:${this.dockLayout.width}px`;
     return html`
       <section
         class="assistant-panel assistant-panel--${dock}"
         style=${style}
+        ?hidden=${!visible}
         aria-label=${t("assistantPanel.title")}
         @pointerdown=${() => this.claimInput("dock")}
         @focusin=${() => this.claimInput("dock")}
@@ -354,11 +491,12 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
         <header class="rail-header assistant-panel-header" @mousedown=${beginNativeWindowDrag}>
           <div class="assistant-panel-title">
             <openclaw-mascot
-              .mood=${this.destination === "custodian" && this.store.sending ? "thinking" : "idle"}
+              .mood=${this.destination === "custodian" && this.store?.sending ? "thinking" : "idle"}
               .size=${16}
             ></openclaw-mascot>
+            ${session ? html`<button type="button" class="assistant-panel-tab rail-header__title" aria-pressed="true" title=${session.label}>${session.label}</button>` : nothing}
             ${(["home", "custodian"] as const).map((destination) =>
-              (destination === "home" ? this.homeAvailable : this.custodianAvailable)
+              this.availableFor(destination)
                 ? html`<button
                     type="button"
                     class="assistant-panel-tab"
@@ -371,23 +509,25 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
             )}
           </div>
           <div class="rail-header__actions assistant-panel-actions">
-            ${this.destination === "home"
-              ? html`<button
-                  class="rail-header__action assistant-panel-icon"
-                  type="button"
-                  aria-label=${t("assistantPanel.openHome")}
-                  @click=${() => this.openHomePage()}
-                >
-                  ${icons.maximize}
-                </button>`
-              : nothing}
+            ${
+              this.destination === "home"
+                ? html`<button
+                    class="rail-header__action assistant-panel-icon"
+                    type="button"
+                    aria-label=${t("assistantPanel.openHome")}
+                    @click=${() => this.openHomePage()}
+                  >
+                    ${icons.maximize}
+                  </button>`
+                : nothing
+            }
             <button
               class="rail-header__action assistant-panel-icon"
               type="button"
-              aria-label=${dock === "bottom"
-                ? t("assistantPanel.dockRight")
-                : t("assistantPanel.dockBottom")}
-              @click=${() => this.setDock(dock === "bottom" ? "right" : "bottom")}
+              aria-label=${
+                dock === "bottom" ? t("assistantPanel.dockRight") : t("assistantPanel.dockBottom")
+              }
+              @click=${() => this.dockLayout.setDock(dock === "bottom" ? "right" : "bottom")}
             >
               ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
             </button>
@@ -401,26 +541,39 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
             </button>
           </div>
         </header>
-        ${this.destination === "home"
-          ? html`${isOptionalElementDefined(HOME_SESSION_ELEMENT)
-              ? html`<openclaw-home-session
-                  .sessionKey=${home.sessionKey}
-                  .agentId=${home.agentId}
-                  .workContext=${workContext}
-                ></openclaw-home-session>`
-              : homeState
-                ? renderLazyElementState(
-                    homeState,
-                    () => this.homeLoader.retry(),
-                    () => this.setOpen(false),
-                  )
-                : nothing}`
-          : html`<openclaw-custodian-surface
-              .store=${this.store}
-              .onboarding=${this.store.activeVariant === "onboarding"}
-              .newAgentIntent=${this.store.activeVariant === "new-agent"}
-              compact
-            ></openclaw-custodian-surface>`}
+        ${
+          isOptionalElementDefined(ASSISTANT_CONTENT_ELEMENT)
+            ? html`<openclaw-assistant-panel-content
+                ?hidden=${!visible || (this.destination === "home" && !this.homeStarted)}
+                .active=${visible && (this.destination !== "home" || this.homeStarted)}
+                .destination=${destinationKind}
+                .sessionKey=${target.sessionKey}
+                .agentId=${target.agentId}
+                .sessionContext=${session?.context}
+                .context=${this.context}
+                .pageRouteId=${this.pageRouteId}
+                .pageSessionKey=${this.pageSessionKey}
+                .pageAgentId=${this.pageAgentId}
+                .store=${this.store}
+                @assistant-custodian-store=${(event: CustomEvent<CustodianSessionStore>) => {
+                  this.store = event.detail;
+                }}
+              ></openclaw-assistant-panel-content>`
+            : nothing
+        }
+        ${
+          visible &&
+          (!isOptionalElementDefined(ASSISTANT_CONTENT_ELEMENT) ||
+            (this.destination === "home" && !this.homeStarted))
+            ? contentState?.status === "error"
+              ? renderLazyElementState(
+                  contentState,
+                  () => this.contentLoader.retry(),
+                  () => this.setOpen(false),
+                )
+              : renderAssistantPanelLoading()
+            : nothing
+        }
       </section>
     `;
   }

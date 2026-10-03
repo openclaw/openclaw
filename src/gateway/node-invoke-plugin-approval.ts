@@ -18,12 +18,8 @@ import {
   type NodeInvokePlacementGrantAuthorization,
 } from "./node-invoke-placement-grant.js";
 import type { NodeSession } from "./node-registry.js";
-import { runApprovalRequestDeliveries } from "./server-methods/approval-request-delivery.js";
-import {
-  bindApprovalRequesterMetadata,
-  buildRequestedApprovalEvent,
-  handlePendingApprovalRequest,
-} from "./server-methods/approval-shared.js";
+import { handlePendingApprovalRequestWithDelivery } from "./server-methods/approval-request-delivery.js";
+import { bindApprovalRequesterMetadata } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
 function sanitizeOptionalMeta(value?: string | null): string | null {
@@ -36,27 +32,6 @@ function normalizeRouteThreadId(value: unknown): string | number | null {
     return value;
   }
   return normalizeOptionalString(value) ?? null;
-}
-
-function resolveNodeInvokeTurnSourceFields(
-  turnSource:
-    | {
-        channel?: unknown;
-        to?: unknown;
-        accountId?: unknown;
-        threadId?: unknown;
-      }
-    | undefined,
-): Pick<
-  PluginApprovalRequestPayload,
-  "turnSourceChannel" | "turnSourceTo" | "turnSourceAccountId" | "turnSourceThreadId"
-> {
-  return {
-    turnSourceChannel: normalizeOptionalString(turnSource?.channel) ?? null,
-    turnSourceTo: normalizeOptionalString(turnSource?.to) ?? null,
-    turnSourceAccountId: normalizeOptionalString(turnSource?.accountId) ?? null,
-    turnSourceThreadId: normalizeRouteThreadId(turnSource?.threadId),
-  };
 }
 
 export function createPluginNodeInvokeApprovalRuntime(params: {
@@ -101,7 +76,12 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
   return {
     async request(input) {
       const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
-      const turnSource = resolveNodeInvokeTurnSourceFields(params.turnSource);
+      const turnSource = {
+        turnSourceChannel: normalizeOptionalString(params.turnSource?.channel) ?? null,
+        turnSourceTo: normalizeOptionalString(params.turnSource?.to) ?? null,
+        turnSourceAccountId: normalizeOptionalString(params.turnSource?.accountId) ?? null,
+        turnSourceThreadId: normalizeRouteThreadId(params.turnSource?.threadId),
+      };
       const callerIdentity = params.callerIdentity;
       const invocationSessionKey =
         params.client?.internal?.pluginRuntimeOwnerId === params.pluginId
@@ -153,8 +133,8 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
       const { allowedDecisions, binding: placementGrant } = placementGrantResolution;
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
-        // The record feeds the same broadcast, forwarder, and push paths as
-        // RPC ingress. Normalize before escaping so empty prompts fail closed.
+        // Internal node prompts truncate; RPC ingress rejects oversized prompts.
+        // Normalize before escaping so empty prompts still fail closed.
         title: truncateUtf16Safe(
           sanitizeExecApprovalDisplayText(normalizeOptionalString(input.title) ?? ""),
           80,
@@ -180,10 +160,7 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
           null,
         runId: callerIdentity?.operationalRunInstance.runId ?? scopedAuthority?.runId ?? null,
         placementGrant,
-        turnSourceChannel: turnSource.turnSourceChannel,
-        turnSourceTo: turnSource.turnSourceTo,
-        turnSourceAccountId: turnSource.turnSourceAccountId,
-        turnSourceThreadId: turnSource.turnSourceThreadId,
+        ...turnSource,
       };
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       if (callerIdentity) {
@@ -200,47 +177,19 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
       }
       bindApprovalRequesterMetadata({ record, client: params.client });
       const respond: RespondFn = () => {};
-      const decisionPromise = manager.register(record, timeoutMs);
-      const requestEvent = buildRequestedApprovalEvent(record, "plugin");
-      const forwardRequest = params.context.forwardPluginApprovalRequest;
-      const iosPushRequest = params.context.pluginApprovalIosPushDelivery?.handleRequested?.bind(
-        params.context.pluginApprovalIosPushDelivery,
-      );
-      await handlePendingApprovalRequest({
+      const { decision: decisionPromise } = await manager.register(record, timeoutMs);
+      await handlePendingApprovalRequestWithDelivery({
+        approvalKind: "plugin",
         manager,
         record,
-        decisionPromise,
         respond,
         context: params.context,
         // The carried connection is turn provenance, not the presenter. Keep
         // a sole-reviewer operator eligible for this internally minted prompt.
-        requestEventName: "plugin.approval.requested",
-        requestEvent,
         twoPhase: false,
-        approvalKind: "plugin",
-        deliverRequest: () =>
-          runApprovalRequestDeliveries({
-            context: params.context,
-            record,
-            forward: forwardRequest
-              ? [
-                  () => forwardRequest(requestEvent),
-                  "plugin approvals: forward node policy request failed",
-                ]
-              : undefined,
-            iosPush: iosPushRequest
-              ? [
-                  (isTargetVisible) => iosPushRequest(requestEvent, { isTargetVisible }),
-                  "plugin approvals: iOS push node policy request failed",
-                ]
-              : undefined,
-          }),
-        afterDecision: async (decision) => {
-          if (decision === null) {
-            await params.context.pluginApprovalIosPushDelivery?.handleExpired?.(requestEvent);
-          }
-        },
-        afterDecisionErrorLabel: "plugin approvals: iOS push node policy expire failed",
+        forwardRequest: params.context.forwardPluginApprovalRequest,
+        getIosPushDelivery: () => params.context.pluginApprovalIosPushDelivery,
+        source: "node-policy",
       });
       let decision = manager.projectDecisionIfActive(record.id, await decisionPromise);
       if (!params.isCurrent()) {
@@ -248,7 +197,7 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
       }
       if (
         decision === "allow-once" &&
-        !manager.consumeAllowOnce(record.id, `plugin.node.invoke:${record.id}`)
+        !(await manager.consumeAllowOnce(record.id, `plugin.node.invoke:${record.id}`))
       ) {
         return { id: record.id, decision: null };
       }

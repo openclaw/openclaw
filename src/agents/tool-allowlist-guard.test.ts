@@ -7,10 +7,55 @@ import {
 } from "./tool-allowlist-guard.js";
 
 describe("tool allowlist guard", () => {
+  it.each([
+    {
+      entries: ["skill_workshop"],
+      toolsEnabled: true,
+      disableTools: false,
+      expected: "sandboxed run without library-authoring authority",
+    },
+    {
+      entries: ["skill_*"],
+      toolsEnabled: true,
+      disableTools: false,
+      expected: "sandboxed run without library-authoring authority",
+    },
+    {
+      entries: ["query_db"],
+      toolsEnabled: true,
+      disableTools: false,
+      expected: "no registered tools matched",
+    },
+    {
+      entries: ["skill_workshop"],
+      toolsEnabled: false,
+      disableTools: false,
+      expected: "selected model does not support tools",
+    },
+    {
+      entries: ["skill_workshop"],
+      toolsEnabled: true,
+      disableTools: true,
+      expected: "tools are disabled for this run",
+    },
+  ])(
+    "reports the relevant gate for $entries (enabled=$toolsEnabled, disabled=$disableTools)",
+    ({ entries, toolsEnabled, disableTools, expected }) => {
+      const input = {
+        sources: [{ label: "runtime toolsAllow", entries, enforceWhenToolsDisabled: true }],
+        hasCallableTools: false,
+        toolsEnabled,
+        disableTools,
+        skillWorkshop: { sandboxed: true },
+      };
+      expect(buildEmptyExplicitToolAllowlistError(input)?.message).toContain(expected);
+    },
+  );
+
   it("fails closed when explicit allowlists resolve to no callable tools", () => {
     const error = buildEmptyExplicitToolAllowlistError({
       sources: [{ label: "tools.allow", entries: [" query_db "] }],
-      callableToolNames: [],
+      hasCallableTools: false,
       toolsEnabled: true,
     });
 
@@ -24,7 +69,7 @@ describe("tool allowlist guard", () => {
       sources: [
         { label: "runtime toolsAllow", entries: ["query_db"], enforceWhenToolsDisabled: true },
       ],
-      callableToolNames: [],
+      hasCallableTools: false,
       toolsEnabled: true,
       disableTools: true,
     });
@@ -39,7 +84,7 @@ describe("tool allowlist guard", () => {
     expect(
       buildEmptyExplicitToolAllowlistError({
         sources: [{ label: "tools.allow", entries: ["lobster", "llm-task"] }],
-        callableToolNames: [],
+        hasCallableTools: false,
         toolsEnabled: true,
         disableTools: true,
       }),
@@ -50,7 +95,7 @@ describe("tool allowlist guard", () => {
     expect(
       buildEmptyExplicitToolAllowlistError({
         sources: [{ label: "tools.allow", entries: ["*", "read", "cron"] }],
-        callableToolNames: [],
+        hasCallableTools: false,
         toolsEnabled: true,
         toolsAllowExplicitlyEmpty: true,
       }),
@@ -63,7 +108,7 @@ describe("tool allowlist guard", () => {
         { label: "tools.allow", entries: ["read"] },
         { label: "runtime toolsAllow", entries: ["query_db"], enforceWhenToolsDisabled: true },
       ],
-      callableToolNames: [],
+      hasCallableTools: false,
       toolsEnabled: true,
       toolsAllowExplicitlyEmpty: true,
     });
@@ -75,7 +120,7 @@ describe("tool allowlist guard", () => {
   it("fails closed when the selected model cannot use requested tools", () => {
     const error = buildEmptyExplicitToolAllowlistError({
       sources: [{ label: "agents.db.tools.allow", entries: ["query_db"] }],
-      callableToolNames: [],
+      hasCallableTools: false,
       toolsEnabled: false,
     });
 
@@ -87,7 +132,7 @@ describe("tool allowlist guard", () => {
     expect(
       buildEmptyExplicitToolAllowlistError({
         sources: [],
-        callableToolNames: [],
+        hasCallableTools: false,
         toolsEnabled: true,
       }),
     ).toBeNull();
@@ -97,7 +142,7 @@ describe("tool allowlist guard", () => {
     expect(
       buildEmptyExplicitToolAllowlistError({
         sources: [{ label: "tools.allow", entries: ["read", "missing_tool"] }],
-        callableToolNames: ["read"],
+        hasCallableTools: true,
         toolsEnabled: true,
       }),
     ).toBeNull();

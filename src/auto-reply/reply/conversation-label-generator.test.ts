@@ -1,5 +1,7 @@
 /** Tests generated conversation labels for reply sessions. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 
 const runIsolatedCompletion = vi.hoisted(() => vi.fn());
 const resolveSimpleCompletionSelectionForAgent = vi.hoisted(() => vi.fn());
@@ -105,18 +107,44 @@ describe("generateConversationLabel", () => {
     );
   });
 
-  it("falls back to the primary after a utility failure", async () => {
-    runIsolatedCompletion
-      .mockRejectedValueOnce(new Error("utility unavailable"))
-      .mockResolvedValueOnce({ text: "Primary title" });
+  it.each(["active", "retired", "aborted"] as const)(
+    "allows utility fallback only while its caller is active (%s)",
+    async (state) => {
+      const abort = new AbortController();
+      const expired = new Error("The label owner retired.");
+      let current = true;
+      runIsolatedCompletion
+        .mockImplementationOnce(async () => {
+          current = state !== "retired";
+          if (state === "aborted") {
+            abort.abort(expired);
+          }
+          throw new Error("utility unavailable");
+        })
+        .mockResolvedValueOnce({ text: "Primary title" });
 
-    await expect(
-      generateConversationLabel({ userMessage: "Message", prompt: "Prompt", cfg: {} }),
-    ).resolves.toBe("Primary title");
+      const label = generateConversationLabel({
+        userMessage: "Message",
+        prompt: "Prompt",
+        cfg: {},
+        abortSignal: abort.signal,
+        assertCurrent() {
+          if (!current) {
+            throw expired;
+          }
+        },
+      });
+      if (state !== "active") {
+        await expect(label).rejects.toBe(expired);
+        expect(runIsolatedCompletion).toHaveBeenCalledOnce();
+        return;
+      }
+      await expect(label).resolves.toBe("Primary title");
 
-    expect(runIsolatedCompletion).toHaveBeenCalledTimes(2);
-    expect(runIsolatedCompletion.mock.calls[1]?.[0]?.model).toBe("gpt-main");
-  });
+      expect(runIsolatedCompletion).toHaveBeenCalledTimes(2);
+      expect(runIsolatedCompletion.mock.calls[1]?.[0]?.model).toBe("gpt-main");
+    },
+  );
 
   it("throws a sanitized error after every configured attempt fails", async () => {
     runIsolatedCompletion.mockRejectedValue(new Error("secret-bearing provider failure"));
@@ -169,6 +197,33 @@ describe("generateConversationLabelWithFallback", () => {
     regularModelRef: "openai/gpt-main@work",
     preferredProfile: "work",
   };
+
+  it("skips a denied utility model and carries the requester into the permitted regular fallback", async () => {
+    const cfg = { agents: { entries: { main: {} }, defaults: { model: "label-test/regular" } } };
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "label-reader",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+      modelPolicy: prepareOperatorModelPolicy({
+        cfg,
+        policy: { sourceAgent: "main" },
+        manifestPlugins: [],
+      }),
+    });
+    await expect(
+      generateConversationLabelWithFallback({
+        ...params,
+        cfg,
+        agentId: "main",
+        utilityModelRef: "label-test/utility",
+        regularModelRef: "label-test/regular",
+        operatorAuthority,
+      }),
+    ).resolves.toBe("Topic label");
+    expect(runIsolatedCompletion).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ provider: "label-test", model: "regular", operatorAuthority }),
+    );
+  });
 
   it("locks an inherited profile onto a same-provider utility ref", async () => {
     await generateConversationLabelWithFallback({ ...params, utilityModelRef: "openai/gpt-mini" });

@@ -1,6 +1,8 @@
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { PlainTextToolCallProtectedRangeResolver } from "./contracts.js";
-// Tool Call Repair module implements promote behavior.
+import {
+  isOffsetInProtectedRanges,
+  type PlainTextToolCallProtectedRangeResolver,
+} from "./contracts.js";
 import { parseStandalonePlainTextToolCallBlocks, type PlainTextToolCallBlock } from "./payload.js";
 
 /** Resolves model-emitted tool names to the exact names allowed by the provider request. */
@@ -87,11 +89,7 @@ function createPromotedToolCallBlocks(
     return undefined;
   }
   const protectedRanges = options.resolveProtectedRanges?.(text) ?? [];
-  if (
-    parsedBlocks.some((block) =>
-      protectedRanges.some((range) => block.start >= range.start && block.start < range.end),
-    )
-  ) {
+  if (parsedBlocks.some((block) => isOffsetInProtectedRanges(block.start, protectedRanges))) {
     return undefined;
   }
 
@@ -122,9 +120,7 @@ function createPromotedToolCallBlocksFromTextParts(
       return offset;
     }),
   );
-  if (lineBreakOffsets.has(text.length)) {
-    lineBreakOffsets.delete(text.length);
-  }
+  lineBreakOffsets.delete(text.length);
   return createPromotedToolCallBlocks(text, options, lineBreakOffsets);
 }
 
@@ -200,10 +196,7 @@ export function projectStandalonePlainTextToolCallMessage(
     return undefined;
   }
 
-  if (!flushTextParts()) {
-    return undefined;
-  }
-  if (!promotedTextBlock) {
+  if (!flushTextParts() || !promotedTextBlock) {
     return undefined;
   }
 

@@ -3,7 +3,8 @@
 import { mkdtempSync, mkdirSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   getSandboxHostPathPolicyKey,
   isSandboxHostFilesystemRoot,
@@ -11,6 +12,8 @@ import {
   normalizeSandboxHostPath,
   resolveSandboxHostPathViaExistingAncestor,
 } from "./host-paths.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("isSandboxHostFilesystemRoot", () => {
   it.each(["/", "//", "/srv/..", "C:/", "c:\\", "c:\\shared\\..", "\\\\?\\C:\\"])(
@@ -33,10 +36,31 @@ describe("normalizeSandboxHostPath", () => {
     expect(normalizeSandboxHostPath("/tmp/a/../b//")).toBe("/tmp/b");
   });
 
+  it("preserves meaningful whitespace in host path identity", () => {
+    expect(normalizeSandboxHostPath("/tmp/project ")).toBe("/tmp/project ");
+    expect(getSandboxHostPathPolicyKey("/tmp/project ")).not.toBe(
+      getSandboxHostPathPolicyKey("/tmp/project"),
+    );
+    expect(isSandboxHostPathAbsolute(" /tmp/project")).toBe(false);
+  });
+
   it("normalizes Windows drive-letter paths without losing the drive root", () => {
     expect(normalizeSandboxHostPath("c:\\Users\\Kai\\..\\Project\\")).toBe("C:/Users/Project");
+    expect(normalizeSandboxHostPath("\\\\?\\c:\\Users\\Kai\\..\\Project\\")).toBe(
+      "C:/Users/Project",
+    );
     expect(normalizeSandboxHostPath("d:/")).toBe("D:/");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "keeps literal POSIX backslashes distinct from separators",
+    () => {
+      expect(normalizeSandboxHostPath("/tmp/a\\b/./leaf")).toBe("/tmp/a\\b/leaf");
+      expect(getSandboxHostPathPolicyKey("/tmp/a\\b")).not.toBe(
+        getSandboxHostPathPolicyKey("/tmp/a/b"),
+      );
+    },
+  );
 });
 
 describe("isSandboxHostPathAbsolute", () => {
@@ -62,6 +86,24 @@ describe("getSandboxHostPathPolicyKey", () => {
 });
 
 describe("resolveSandboxHostPathViaExistingAncestor", () => {
+  it.runIf(process.platform !== "win32")(
+    "preserves literal root bytes through realpath and missing leaves",
+    () => {
+      const root = realpathSync(tempDirs.make("openclaw-host-paths-"));
+      const literal = join(root, "a\\b");
+      const slash = join(root, "a/b");
+      mkdirSync(literal);
+      mkdirSync(slash, { recursive: true });
+      symlinkSync(literal, join(root, "alias"));
+      expect(resolveSandboxHostPathViaExistingAncestor(join(root, "alias/missing"))).toBe(
+        join(literal, "missing"),
+      );
+      expect(resolveSandboxHostPathViaExistingAncestor(join(slash, "missing"))).toBe(
+        join(slash, "missing"),
+      );
+    },
+  );
+
   it("keeps non-absolute paths unchanged", () => {
     expect(resolveSandboxHostPathViaExistingAncestor("relative/path")).toBe("relative/path");
   });

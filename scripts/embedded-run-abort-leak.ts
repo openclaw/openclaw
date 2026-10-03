@@ -18,9 +18,10 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { setImmediate, setTimeout } from "node:timers/promises";
 import * as v8 from "node:v8";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { toErrorObject as toLintErrorObject } from "./lib/error-format.mts";
+import { coerceErrorMessage, toErrorObject as toLintErrorObject } from "./lib/error-format.mts";
 import { parseNonNegativeInt, parsePositiveInt } from "./lib/numeric-options.mjs";
 
 type Mode = "production" | "closure-extracted" | "closure-inline" | "synthetic-leak";
@@ -69,28 +70,26 @@ function parseArgs(argv: string[]): Options {
   const seenValueFlags = new Set<string>();
   for (let i = 0; i < argv.length; i += 1) {
     const arg = expectDefined(argv[i], `embedded abort benchmark argument at index ${i}`);
-    const next = argv[i + 1];
+    let value = "";
     if (VALUE_FLAGS.has(arg)) {
       if (seenValueFlags.has(arg)) {
         fail(`${arg} was provided more than once`);
       }
       seenValueFlags.add(arg);
+      value = readValue(argv[++i], arg);
     }
     switch (arg) {
       case "--iters":
-        opts.iters = parsePositiveInt(readValue(next, arg), arg);
-        i += 1;
+        opts.iters = parsePositiveInt(value, arg);
         break;
       case "--batches":
-        opts.batches = parsePositiveInt(readValue(next, arg), arg);
-        i += 1;
+        opts.batches = parsePositiveInt(value, arg);
         break;
       case "--snap-dir":
-        opts.snapDir = readValue(next, arg);
-        i += 1;
+        opts.snapDir = value;
         break;
       case "--mode": {
-        const mode = readValue(next, arg);
+        const mode = value;
         if (
           mode === "production" ||
           mode === "closure-extracted" ||
@@ -103,20 +102,16 @@ function parseArgs(argv: string[]): Options {
             `--mode must be one of: production, closure-extracted, closure-inline, synthetic-leak`,
           );
         }
-        i += 1;
         break;
       }
       case "--max-rss-growth-mb":
-        opts.maxRssGrowthMb = parseNonNegativeInt(readValue(next, arg), arg);
-        i += 1;
+        opts.maxRssGrowthMb = parseNonNegativeInt(value, arg);
         break;
       case "--max-tracked-retention":
-        opts.maxTrackedRetention = parseNonNegativeInt(readValue(next, arg), arg);
-        i += 1;
+        opts.maxTrackedRetention = parseNonNegativeInt(value, arg);
         break;
       case "--scope-bytes":
-        opts.scopeBytes = parsePositiveInt(readValue(next, arg), arg);
-        i += 1;
+        opts.scopeBytes = parsePositiveInt(value, arg);
         break;
       case "--quiet":
         opts.quiet = true;
@@ -125,7 +120,6 @@ function parseArgs(argv: string[]): Options {
       case "-h":
         printUsage();
         process.exit(0);
-        break;
       default:
         fail(`Unknown arg: ${arg}`);
     }
@@ -162,13 +156,6 @@ const finalizer = new FinalizationRegistry<number>(() => {
   FINALIZED.count += 1;
 });
 let productionAbortable: Abortable | null = null;
-
-async function loadProductionAbortable(): Promise<void> {
-  const module = (await import("../src/agents/embedded-agent-runner/run/abortable.js")) as {
-    abortable: Abortable;
-  };
-  productionAbortable = module.abortable;
-}
 
 function abortableExtracted<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
   if (signal.aborted) {
@@ -249,19 +236,14 @@ function runOnce(mode: Mode, scopeBytes: number, iter: number): void {
 
 async function settleAndGc(): Promise<void> {
   for (let i = 0; i < 4; i += 1) {
-    await new Promise<void>((r) => {
-      setImmediate(r);
-    });
+    await setImmediate();
     globalThis.gc?.();
   }
-  await new Promise<void>((r) => {
-    setTimeout(r, 100);
-  });
+  await setTimeout(100);
   globalThis.gc?.();
 }
 
 type SampleRow = {
-  label: string;
   rssBytes: number;
   heapUsedBytes: number;
   totalIters: number;
@@ -269,11 +251,17 @@ type SampleRow = {
   snapshotPath: string;
 };
 
-function takeSnapshot(snapDir: string, label: string): string {
+function takeSnapshot(snapDir: string, label: string, totalIters: number): SampleRow {
   fs.mkdirSync(snapDir, { recursive: true });
-  const filename = path.join(snapDir, `${label}-${process.pid}-${Date.now()}.heapsnapshot`);
-  v8.writeHeapSnapshot(filename);
-  return filename;
+  const snapshotPath = path.join(snapDir, `${label}-${process.pid}-${Date.now()}.heapsnapshot`);
+  v8.writeHeapSnapshot(snapshotPath);
+  return {
+    rssBytes: process.memoryUsage().rss,
+    heapUsedBytes: process.memoryUsage().heapUsed,
+    totalIters,
+    trackedFinalized: FINALIZED.count,
+    snapshotPath,
+  };
 }
 
 function fmtBytes(bytes: number): string {
@@ -285,17 +273,17 @@ async function main(): Promise<void> {
   try {
     opts = parseArgs(process.argv.slice(2));
   } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
+    fail(coerceErrorMessage(error));
   }
   if (opts.mode === "production") {
-    await loadProductionAbortable();
+    productionAbortable = (await import("../src/agents/embedded-agent-runner/run/abortable.js"))
+      .abortable;
   }
   if (typeof globalThis.gc !== "function") {
     fail("--expose-gc is required (run with: node --expose-gc ...)");
   }
 
   const startedAt = Date.now();
-  const samples: SampleRow[] = [];
 
   if (!opts.quiet) {
     process.stdout.write(
@@ -305,16 +293,8 @@ async function main(): Promise<void> {
   }
 
   await settleAndGc();
-  const baselinePath = takeSnapshot(opts.snapDir, "baseline");
-  const baseline: SampleRow = {
-    label: "baseline",
-    rssBytes: process.memoryUsage().rss,
-    heapUsedBytes: process.memoryUsage().heapUsed,
-    totalIters: 0,
-    trackedFinalized: FINALIZED.count,
-    snapshotPath: baselinePath,
-  };
-  samples.push(baseline);
+  const baseline = takeSnapshot(opts.snapDir, "baseline", 0);
+  let final = baseline;
   if (!opts.quiet) {
     process.stdout.write(
       `  baseline rss=${fmtBytes(baseline.rssBytes)} heap=${fmtBytes(baseline.heapUsedBytes)}\n`,
@@ -328,16 +308,8 @@ async function main(): Promise<void> {
       totalIters += 1;
     }
     await settleAndGc();
-    const snapshotPath = takeSnapshot(opts.snapDir, `batch-${b}`);
-    const row: SampleRow = {
-      label: `batch-${b}`,
-      rssBytes: process.memoryUsage().rss,
-      heapUsedBytes: process.memoryUsage().heapUsed,
-      totalIters,
-      trackedFinalized: FINALIZED.count,
-      snapshotPath,
-    };
-    samples.push(row);
+    const row = takeSnapshot(opts.snapDir, `batch-${b}`, totalIters);
+    final = row;
     if (!opts.quiet) {
       process.stdout.write(
         `  batch ${b} totalIters=${row.totalIters} ` +
@@ -347,10 +319,6 @@ async function main(): Promise<void> {
     }
   }
 
-  const final = samples[samples.length - 1];
-  if (!final) {
-    fail("no samples collected");
-  }
   const rssGrowthMb = (final.rssBytes - baseline.rssBytes) / 1024 / 1024;
   // Tracked retention: how many iter-allocated transcripts are STILL alive
   // (have not been finalized). Lower is better.

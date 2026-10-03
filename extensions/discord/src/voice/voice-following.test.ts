@@ -9,7 +9,6 @@ defineDiscordVoiceTests(
     ChannelType,
     createDefaultVoiceStates,
     createConnectionMock,
-    getVoiceConnectionMock,
     joinVoiceChannelMock,
     agentCommandMock,
     realtimeSessionMock,
@@ -603,22 +602,24 @@ defineDiscordVoiceTests(
 
     it("does not reconnect from an in-flight followed user reconciliation after destroy", async () => {
       const client = createClient();
-      let resolveVoiceState: (state: unknown) => void = () => {};
-      client.rest.get.mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            resolveVoiceState = resolve;
-          }),
-      );
+      const requested = Promise.withResolvers<void>();
+      const response = Promise.withResolvers<unknown>();
+      client.rest.get.mockImplementation(() => {
+        requested.resolve();
+        return response.promise;
+      });
       const manager = createFollowManager({}, client, { guilds: { g1: {} } });
 
       const autoJoinPromise = manager.autoJoin();
-      await vi.waitFor(() => {
-        expect(client.rest.get).toHaveBeenCalled();
+      await requested.promise;
+      let destroyed = false;
+      const destroying = manager.destroy().then(() => {
+        destroyed = true;
       });
-      await manager.destroy();
-      resolveVoiceState({ guild_id: "g1", user_id: "u-owner", channel_id: "1001" });
-      await autoJoinPromise;
+      await Promise.resolve();
+      expect(destroyed).toBe(false);
+      response.resolve({ guild_id: "g1", user_id: "u-owner", channel_id: "1001" });
+      await Promise.all([destroying, autoJoinPromise]);
 
       expect(joinVoiceChannelMock).not.toHaveBeenCalled();
       expect(manager.status()).toEqual([]);
@@ -768,22 +769,6 @@ defineDiscordVoiceTests(
 
       expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
       expect(manager.status()).toEqual([]);
-    });
-
-    it("skips destroying stale tracked voice connections that are already destroyed", async () => {
-      const staleConnection = createConnectionMock();
-      staleConnection.state.status = "destroyed";
-      staleConnection.destroy.mockImplementation(() => {
-        throw new Error("Cannot destroy VoiceConnection - it has already been destroyed");
-      });
-      getVoiceConnectionMock.mockReturnValueOnce(staleConnection);
-      joinVoiceChannelMock.mockReturnValueOnce(createConnectionMock());
-      const manager = createManager();
-
-      const result = await manager.join({ guildId: "g1", channelId: "1001" });
-      expect(result.ok).toBe(true);
-
-      expect(staleConnection.destroy).not.toHaveBeenCalled();
     });
 
     it("skips destroying an already destroyed voice connection on leave", async () => {

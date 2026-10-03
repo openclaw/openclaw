@@ -1,5 +1,4 @@
 import { agentHarnessStructuredInput as structuredInput } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { JsonValue } from "./protocol.js";
 
 type StructuredInputCompileResult = ReturnType<typeof structuredInput.compileForm>;
 
@@ -7,26 +6,13 @@ type CodexOrdinaryElicitation =
   | { kind: "ignored" }
   | { kind: "compiled"; input: StructuredInputCompileResult };
 
-/** Snapshots and compiles ordinary Codex input before it enters the per-turn queue. */
+/** Compiles a validated Codex input snapshot before it enters the per-turn queue. */
 export function compileCodexOrdinaryElicitation(params: {
-  value: JsonValue | undefined;
-  threadId: string;
+  snapshot: Record<string, unknown>;
   turnId: string;
+  resourceContext?: Parameters<typeof structuredInput.compileForm>[0]["options"]["resourceContext"];
 }): CodexOrdinaryElicitation {
-  if (readRawOwnString(params.value, "threadId") !== params.threadId) {
-    return { kind: "ignored" };
-  }
-  const snapshot = structuredInput.snapshot(params.value);
-  if (!structuredInput.isRecord(snapshot)) {
-    return {
-      kind: "compiled",
-      input: {
-        kind: "unsupported",
-        message: "OpenClaw declined a malformed or over-limit MCP elicitation request.",
-      },
-    };
-  }
-  const requestTurnId = readValue(snapshot, "turnId");
+  const requestTurnId = readValue(params.snapshot, "turnId");
   if (typeof requestTurnId === "string" && requestTurnId !== params.turnId) {
     return { kind: "ignored" };
   }
@@ -39,20 +25,20 @@ export function compileCodexOrdinaryElicitation(params: {
       },
     };
   }
-  const mode = readCodexElicitationString(snapshot, "mode");
+  const mode = readCodexElicitationString(params.snapshot, "mode");
   if (mode === "url") {
     return {
       kind: "compiled",
       input: structuredInput.compileUrl({
-        url: readValue(snapshot, "url"),
-        elicitationId: readValue(snapshot, "elicitationId"),
-        message: readValue(snapshot, "message"),
+        url: readValue(params.snapshot, "url"),
+        elicitationId: readValue(params.snapshot, "elicitationId"),
+        message: readValue(params.snapshot, "message"),
         fallbackMessage: "Codex provided a URL",
         protocolName: "MCP",
       }),
     };
   }
-  if (mode !== "form" && mode !== "openai/form") {
+  if (mode !== "form" && mode !== "openai/form" && mode !== "openaiForm") {
     return {
       kind: "compiled",
       input: {
@@ -64,11 +50,14 @@ export function compileCodexOrdinaryElicitation(params: {
   return {
     kind: "compiled",
     input: structuredInput.compileForm({
-      schema: readValue(snapshot, "requestedSchema"),
-      message: readCodexElicitationString(snapshot, "message"),
+      schema: readValue(params.snapshot, "requestedSchema"),
+      message: readCodexElicitationString(params.snapshot, "message"),
       fallbackMessage: "Codex needs input",
       options: {
-        protocolName: mode === "openai/form" ? "OpenAI" : "MCP",
+        protocolName: mode === "form" ? "MCP" : "OpenAI",
+        // Legacy forms keep their label-based question/answer contract.
+        allowRichForms: mode === "openaiForm",
+        resourceContext: params.resourceContext,
         allowEmptyForm: true,
         minimumChoiceCount: 1,
         allowEnumNames: true,
@@ -89,14 +78,4 @@ function readCodexElicitationString(
 ): string | undefined {
   const value = readValue(record, key);
   return typeof value === "string" ? value : undefined;
-}
-
-function readRawOwnString(value: unknown, key: string): string | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  return descriptor && "value" in descriptor && typeof descriptor.value === "string"
-    ? descriptor.value
-    : undefined;
 }

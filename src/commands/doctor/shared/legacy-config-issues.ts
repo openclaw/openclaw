@@ -14,16 +14,13 @@ import {
 } from "../../../plugins/doctor-contract-registry.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
-
-function collectConfiguredChannelIds(raw: unknown): ReadonlySet<string> {
-  return new Set(listDoctorConfiguredChannelIds(raw, { configEntryPolicy: "raw" }));
-}
+import { findLegacySystemAgentOwnerIssue } from "./legacy-config-migrations.runtime.system-agent.js";
 
 function collectPluginLegacyConfigRules(
   raw: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigRule[] {
-  const channelIds = collectConfiguredChannelIds(raw);
+  const channelIds = new Set(listDoctorConfiguredChannelIds(raw, { configEntryPolicy: "raw" }));
   const pluginIds = collectDoctorConfigRepairPluginIds(raw, touchedPaths).filter(
     (pluginId) => !channelIds.has(pluginId),
   );
@@ -39,15 +36,10 @@ export function findDoctorLegacyConfigIssues(
   sourceRaw?: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigIssue[] {
-  return findLegacyConfigIssues(
-    raw,
-    sourceRaw,
-    [
-      ...collectChannelLegacyConfigRules(raw, touchedPaths),
-      ...collectPluginLegacyConfigRules(raw, touchedPaths),
-    ],
-    touchedPaths,
-  );
+  return findLegacyConfigIssues(raw, sourceRaw, [
+    ...collectChannelLegacyConfigRules(raw, touchedPaths),
+    ...collectPluginLegacyConfigRules(raw, touchedPaths),
+  ]);
 }
 
 export function addDoctorLegacyIssues(
@@ -61,6 +53,12 @@ export function addDoctorLegacyIssues(
   const collect = () => {
     const sourceRaw = snapshot.parsed ?? resolvedRaw;
     const legacyIssues = findDoctorLegacyConfigIssues(resolvedRaw, sourceRaw);
+    const ownerIssue = findLegacySystemAgentOwnerIssue(
+      snapshot.sourceConfigBeforeMigrations ?? resolvedRaw,
+    );
+    if (ownerIssue) {
+      legacyIssues.push(ownerIssue);
+    }
     return legacyIssues.length === 0 ? snapshot : { ...snapshot, legacyIssues };
   };
   return pluginMetadataSnapshot

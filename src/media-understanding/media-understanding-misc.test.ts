@@ -9,6 +9,7 @@ import { saveMediaBuffer } from "../media/store.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 
@@ -64,14 +65,6 @@ describe("media understanding attachments SSRF", () => {
     restoreProcessState();
     vi.restoreAllMocks();
   });
-
-  function requireFirstOpenCall(openSpy: ReturnType<typeof vi.spyOn>): unknown[] {
-    const [call] = openSpy.mock.calls;
-    if (!call) {
-      throw new Error("expected fs.open call");
-    }
-    return call;
-  }
 
   it("blocks private IP URLs before fetching", async () => {
     const fetchSpy = vi.fn();
@@ -226,23 +219,6 @@ describe("media understanding attachments SSRF", () => {
       // self-serve target in model context.
       expect(result.buffer.toString()).toBe("remote-bytes");
       expect(result.localPath).toBeUndefined();
-    });
-  });
-
-  it("resolves relative attachment paths against the provided workspaceDir", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-workspace-" }, async (base) => {
-      const workspaceDir = path.join(base, "workspace");
-      const attachmentPath = path.join(workspaceDir, "media", "inbound", "report.pdf");
-      await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
-      await fs.writeFile(attachmentPath, "ok");
-
-      const cache = new MediaAttachmentCache(
-        [{ index: 0, path: "media/inbound/report.pdf", workspaceDir }],
-        { localPathRoots: [workspaceDir] },
-      );
-
-      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
-      expect(result.buffer.toString()).toBe("ok");
     });
   });
 
@@ -458,7 +434,7 @@ describe("media understanding attachments SSRF", () => {
         await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
 
         expect(openSpy).toHaveBeenCalled();
-        const [openedPath, openedFlags] = requireFirstOpenCall(openSpy);
+        const [openedPath, openedFlags] = mockCall(openSpy);
         expect(await fs.realpath(String(openedPath)).catch(() => String(openedPath))).toBe(
           canonicalAttachmentPath,
         );

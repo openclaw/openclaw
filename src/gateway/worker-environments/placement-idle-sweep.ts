@@ -51,18 +51,20 @@ export function createWorkerPlacementIdleSweep(options: {
       if (!profiles || !Object.values(profiles).some((profile) => profile.suspendAfter)) {
         return;
       }
-      const pendingSessions = new Set([
-        ...options.placements.listPendingWorkspaceResults().map((result) => result.sessionId),
-        ...options.placements.listWorkspaceReconciliationOwners().map((owner) => owner.sessionId),
-      ]);
+      const candidates = await options.placements.readRecoveryCandidates();
+      const projection = await options.placements.readProjection(
+        candidates.map(({ sessionId }) => sessionId),
+        { current: true },
+      );
 
-      for (const placement of options.placements.listForReconcile()) {
-        if (placement.state !== "active" || placement.turnClaim) {
+      for (const { sessionId } of candidates) {
+        const placement = projection.placements.get(sessionId);
+        if (placement?.state !== "active" || placement.turnClaim) {
           continue;
         }
         const environment = options.environments.get(placement.environmentId);
         const suspendAfter = environment && profiles[environment.profileId]?.suspendAfter;
-        if (!suspendAfter) {
+        if (!environment || !suspendAfter) {
           continue;
         }
         // Placement activation and every turn-claim admission/release durably refresh this fact.
@@ -70,7 +72,7 @@ export function createWorkerPlacementIdleSweep(options: {
           continue;
         }
         if (
-          pendingSessions.has(placement.sessionId) ||
+          projection.workspaceRecoveryPendingSessionIds.has(placement.sessionId) ||
           options.placements.getPlacementMove(placement.sessionId) ||
           options.isPlacementOperationInFlight?.(placement.sessionId)
         ) {
@@ -84,20 +86,32 @@ export function createWorkerPlacementIdleSweep(options: {
             agentId: placement.agentId,
           };
           const hasSessionWork = await getSessionWorkAdmissionCheck?.(request);
-          const beforeDrain = () => {
-            const current = options.placements.get(placement.sessionId);
+          const assertCurrent = () => {
             if (
-              hasSessionWork?.() ||
-              current?.state !== "active" ||
-              current.generation !== placement.generation ||
-              current.environmentId !== placement.environmentId ||
-              current.activeOwnerEpoch !== placement.activeOwnerEpoch ||
-              current.updatedAtMs !== placement.updatedAtMs ||
-              current.turnClaim
+              options.getConfig().cloudWorkers?.profiles?.[environment.profileId]?.suspendAfter !==
+                suspendAfter ||
+              hasSessionWork?.()
             ) {
               throw new WorkerPlacementAutoSuspendBusyError();
             }
           };
+          const beforeDrain = Object.assign(
+            () => {
+              assertCurrent();
+              const current = options.placements.get(placement.sessionId);
+              if (
+                current?.state !== "active" ||
+                current.generation !== placement.generation ||
+                current.environmentId !== placement.environmentId ||
+                current.activeOwnerEpoch !== placement.activeOwnerEpoch ||
+                current.updatedAtMs !== placement.updatedAtMs ||
+                current.turnClaim
+              ) {
+                throw new WorkerPlacementAutoSuspendBusyError();
+              }
+            },
+            { assertCurrent },
+          );
           await options.dispatch.reclaim(request, undefined, beforeDrain);
           options.info(
             `auto-suspended ${placement.sessionKey} after ${suspendAfter} idle; wakes on next message`,

@@ -1,6 +1,5 @@
 // Browser tests cover agent.act hook current-tab navigation guard behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { toBrowserErrorResponse } from "../errors.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const chromeMcpMocks = vi.hoisted(() => ({
@@ -38,7 +37,7 @@ const { registerBrowserAgentActHookRoutes } = await import("./agent.act.hooks.js
 
 function createProfileContext(options?: {
   attachOnly?: boolean;
-  driver?: "openclaw" | "extension";
+  driver?: "openclaw" | "extension" | "existing-session";
   tabUrl?: string;
 }) {
   return {
@@ -65,7 +64,6 @@ function createRouteContext(
 ) {
   return {
     forProfile: () => profileCtx,
-    mapTabError: vi.fn(toBrowserErrorResponse),
     state: () => ({
       resolved: {
         actionTimeoutMs: 60_000,
@@ -184,6 +182,33 @@ describe("agent act hook current URL guard", () => {
         browserFilesystemLocal: true,
         ref: "upload-button",
         paths: ["/tmp/upload.txt"],
+      }),
+    );
+  });
+
+  it.each([
+    { targeting: { ref: "upload-button" }, paths: ["first.txt"] },
+    { targeting: { inputRef: "upload-button" }, paths: ["first.txt", "second.txt"] },
+  ])("uploads every resolved file through Chrome MCP: $paths", async ({ targeting, paths }) => {
+    const resolvedPaths = paths.map((file) => `/tmp/openclaw/uploads/${file}`);
+    pathMocks.resolveExistingUploadPaths.mockResolvedValueOnce({ ok: true, paths: resolvedPaths });
+    const response = await callHook({
+      path: "/hooks/file-chooser",
+      body: { paths, ...targeting },
+      profileCtx: createProfileContext({
+        driver: "existing-session",
+        tabUrl: "http://127.0.0.1:8080/upload",
+      }),
+      allowPrivateNetwork: true,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true });
+    expect(chromeMcpMocks.uploadChromeMcpFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetId: "tab-1",
+        uid: "upload-button",
+        filePaths: resolvedPaths,
       }),
     );
   });

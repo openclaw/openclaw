@@ -4,24 +4,28 @@
  * per-run scope, and every action funnels through OpenClaw's typed operation
  * union with approval assertions and the audit log.
  */
+import path from "node:path";
 import { Type } from "typebox";
+import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   isSystemAgentNavigationOperation,
   type SystemAgentNavigationOperation,
+  type SystemAgentOperation,
 } from "../../system-agent/operation-types.js";
 import {
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
   SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF,
   SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF,
-  type SystemAgentOperation,
+  secretStoreNameForConfigPath,
 } from "../../system-agent/operations.js";
 import {
   hashSystemAgentOperation,
   type SystemAgentProposalRef,
 } from "../../system-agent/operator-approval.js";
 import { validateSystemAgentPluginInstallSpec } from "../../system-agent/plugin-install-spec.js";
+import { listAgentRoles } from "../agent-roles.js";
 import { stringEnum } from "../schema/typebox.js";
 import { textResult, ToolInputError, readToolStringParam, type AnyAgentTool } from "./common.js";
 
@@ -129,8 +133,11 @@ export function resolveSystemAgentProposalTransition(params: {
       operation,
     };
   }
-  // Executed or errored mutation: an armed approval is single-use either way.
-  return { proposal: undefined };
+  // Only admission consumes approval. A prevalidation error leaves the
+  // in-process proposal untouched and must do the same in CLI mirrors.
+  return params.resultText.startsWith(SYSTEM_AGENT_APPROVED_OPERATION_PREFIX)
+    ? { proposal: undefined }
+    : null;
 }
 
 const SYSTEM_AGENT_TOOL_ACTIONS = [
@@ -145,6 +152,7 @@ const SYSTEM_AGENT_TOOL_ACTIONS = [
   "config_get",
   "config_schema",
   "gateway_status",
+  "plugin_list",
   "plugin_search",
   // Host directives handled by the hosting chat after this turn.
   "connect_channel",
@@ -153,30 +161,71 @@ const SYSTEM_AGENT_TOOL_ACTIONS = [
   "configure_gateway",
   "import_memory",
   "configure_model_provider",
+  "manage_model_accounts",
   "open_agent",
   "open_setup",
   // Mutating actions below stage an exact proposal for host authorization.
   "setup",
   "set_default_model",
   "config_set",
+  "config_unset",
   "config_set_ref",
   "create_agent",
+  "create_team",
   "gateway_start",
   "gateway_stop",
   "gateway_restart",
   "plugin_install",
+  "plugin_activate_artifact",
   "plugin_uninstall",
 ] as const;
 
 const SystemAgentToolSchema = Type.Object({
   action: stringEnum([...SYSTEM_AGENT_TOOL_ACTIONS]),
-  path: Type.Optional(Type.String({ description: "Config path for config_* actions" })),
+  path: Type.Optional(
+    Type.String({
+      description:
+        "Dotted config key for config_* actions, e.g. gateway.port or agents.defaults.model; use . for the root schema. For plugin_activate_artifact only, an absolute archive file path.",
+    }),
+  ),
+  sha256: Type.Optional(
+    Type.String({
+      pattern: "^[a-fA-F0-9]{64}$",
+      description: "Exact SHA256 from openclaw plugins pack for plugin_activate_artifact",
+    }),
+  ),
   value: Type.Optional(Type.String({ description: "Value for config_set (JSON5 or string)" })),
-  envVar: Type.Optional(Type.String({ description: "Env var name for config_set_ref" })),
+  envVar: Type.Optional(
+    Type.String({ description: "Env var name for config_set_ref (instead of secret)" }),
+  ),
+  secret: Type.Optional(
+    Type.String({
+      description:
+        "For config_set_ref: an API key or token the user gave you. OpenClaw stores it in its secret store and points the config key at it.",
+    }),
+  ),
   model: Type.Optional(Type.String({ description: "provider/model ref" })),
   workspace: Type.Optional(Type.String({ description: "Workspace directory" })),
   agentId: Type.Optional(
     Type.String({ description: "Agent id for create_agent/open_agent/set_default_model" }),
+  ),
+  name: Type.Optional(
+    Type.String({ description: "Display name for create_agent, separate from agentId" }),
+  ),
+  purpose: Type.Optional(
+    Type.String({
+      description: "Operating purpose for a custom agent, saved in its workspace AGENTS.md",
+    }),
+  ),
+  role: Type.Optional(
+    stringEnum(listAgentRoles(), {
+      description: "Bundled role for create_agent; coordinator is the chief of staff",
+    }),
+  ),
+  coordinatorId: Type.Optional(Type.String({ description: "Chief of staff id for create_team" })),
+  prefix: Type.Optional(Type.String({ description: "Prefix for every create_team member id" })),
+  workspaceRoot: Type.Optional(
+    Type.String({ description: "Parent directory for separate create_team workspaces" }),
   ),
   channel: Type.Optional(
     Type.String({
@@ -214,16 +263,16 @@ function createCaptureRuntime(): RuntimeEnv & { read: () => string } {
 
 function requireParam(params: Record<string, unknown>, name: string): string {
   const value = readToolStringParam(params, name);
-  if (!value?.trim()) {
+  if (!value) {
     throw new ToolInputError(`openclaw: "${name}" is required for this action`);
   }
-  return value.trim();
+  return value;
 }
 
 function readSetupTarget(
   params: Record<string, unknown>,
 ): "guided" | "classic" | "channels" | "search" | "gateway" {
-  const target = readToolStringParam(params, "target")?.trim() ?? "guided";
+  const target = readToolStringParam(params, "target") ?? "guided";
   if (
     target === "guided" ||
     target === "classic" ||
@@ -238,31 +287,37 @@ function readSetupTarget(
 
 function operationForAction(params: Record<string, unknown>): SystemAgentOperation {
   const action = readToolStringParam(params, "action", { required: true });
+  const optionalStrings = <K extends string>(...keys: K[]): Partial<Record<K, string>> => {
+    const fields: Partial<Record<K, string>> = {};
+    for (const key of keys) {
+      const value = readToolStringParam(params, key);
+      if (value) {
+        fields[key] = value;
+      }
+    }
+    return fields;
+  };
   switch (action) {
     case "status":
-      return { kind: "status" };
     case "models":
-      return { kind: "models" };
     case "agents":
-      return { kind: "agents" };
+    case "audit":
+    case "doctor":
+      return { kind: action };
     case "channels":
       return { kind: "channel-list" };
     case "channel_info":
       return { kind: "channel-info", channel: requireParam(params, "channel").toLowerCase() };
-    case "audit":
-      return { kind: "audit" };
     case "validate_config":
       return { kind: "config-validate" };
-    case "doctor":
-      return { kind: "doctor" };
     case "config_get":
       return { kind: "config-get", path: requireParam(params, "path") };
-    case "config_schema": {
-      const path = readToolStringParam(params, "path")?.trim();
-      return { kind: "config-schema", ...(path ? { path } : {}) };
-    }
+    case "config_schema":
+      return { kind: "config-schema", ...optionalStrings("path") };
     case "gateway_status":
       return { kind: "gateway-status" };
+    case "plugin_list":
+      return { kind: "plugin-list" };
     case "connect_channel":
       return { kind: "channel-setup", channel: requireParam(params, "channel").toLowerCase() };
     case "configure_skills":
@@ -273,22 +328,15 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       return { kind: "gateway-config-setup" };
     case "import_memory":
       return { kind: "memory-import" };
-    case "configure_model_provider": {
-      const workspace = readToolStringParam(params, "workspace")?.trim();
-      return { kind: "model-setup", ...(workspace ? { workspace } : {}) };
-    }
-    case "open_agent": {
-      const agentId = readToolStringParam(params, "agentId")?.trim();
-      const workspace = readToolStringParam(params, "workspace")?.trim();
-      return {
-        kind: "open-tui",
-        ...(agentId ? { agentId } : {}),
-        ...(workspace ? { workspace } : {}),
-      };
-    }
+    case "configure_model_provider":
+      return { kind: "model-setup", ...optionalStrings("workspace") };
+    case "manage_model_accounts":
+      return { kind: "model-accounts" };
+    case "open_agent":
+      return { kind: "open-tui", ...optionalStrings("agentId", "workspace") };
     case "open_setup": {
       const target = readSetupTarget(params);
-      const channel = readToolStringParam(params, "channel")?.trim().toLowerCase();
+      const channel = readToolStringParam(params, "channel")?.toLowerCase();
       return {
         kind: "open-setup",
         target,
@@ -313,46 +361,87 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
     }
     case "plugin_uninstall":
       return { kind: "plugin-uninstall", pluginId: requireParam(params, "pluginId") };
-    case "setup": {
-      const workspace = readToolStringParam(params, "workspace")?.trim();
-      const model = readToolStringParam(params, "model")?.trim();
-      return {
-        kind: "setup",
-        ...(workspace ? { workspace } : {}),
-        ...(model ? { model } : {}),
-      };
+    case "plugin_activate_artifact": {
+      const artifactPath = requireParam(params, "path");
+      const sha256 = requireParam(params, "sha256").toLowerCase();
+      if (
+        !path.isAbsolute(artifactPath) ||
+        artifactPath.length > 2048 ||
+        !/\.(?:tgz|tar\.gz)$/u.test(artifactPath) ||
+        !/^[a-f0-9]{64}$/u.test(sha256)
+      ) {
+        throw new ToolInputError(
+          "openclaw: plugin_activate_artifact requires an absolute packed .tgz path and its exact SHA256 from openclaw plugins pack",
+        );
+      }
+      return { kind: "plugin-activate-artifact", path: artifactPath, sha256 };
     }
+    case "setup":
+      return { kind: "setup", ...optionalStrings("workspace", "model") };
     case "set_default_model": {
-      const agentId = readToolStringParam(params, "agentId")?.trim();
+      const optional = optionalStrings("agentId");
       return {
         kind: "set-default-model",
         model: requireParam(params, "model"),
-        ...(agentId ? { agentId } : {}),
+        ...optional,
       };
     }
     case "create_agent": {
-      const workspace = readToolStringParam(params, "workspace")?.trim();
-      const model = readToolStringParam(params, "model")?.trim();
+      const role = listAgentRoles().find((candidate) => candidate === params.role);
+      if (params.role !== undefined && !role) {
+        throw new ToolInputError(`openclaw: unknown role; choose ${listAgentRoles().join(", ")}`);
+      }
+      const workspace = optionalStrings("workspace");
+      const identity = optionalStrings("name", "purpose");
+      const model = optionalStrings("model");
       return {
         kind: "create-agent",
         agentId: requireParam(params, "agentId"),
-        ...(workspace ? { workspace } : {}),
-        ...(model ? { model } : {}),
+        ...identity,
+        ...(role ? { role } : {}),
+        ...workspace,
+        ...model,
       };
     }
+    case "create_team":
+      return {
+        kind: "create-team",
+        ...optionalStrings("coordinatorId", "prefix", "workspaceRoot"),
+      };
+    case "config_unset":
+      return { kind: "config-unset", path: requireParam(params, "path") };
     case "config_set":
       return {
         kind: "config-set",
         path: requireParam(params, "path"),
         value: requireParam(params, "value"),
       };
-    case "config_set_ref":
+    case "config_set_ref": {
+      const configPath = requireParam(params, "path");
+      const secret = readToolStringParam(params, "secret", { trim: false });
+      if (!secret?.trim()) {
+        return {
+          kind: "config-set-ref",
+          path: configPath,
+          source: "env",
+          id: requireParam(params, "envVar"),
+        };
+      }
+      // Before the proposal exists anywhere, so plans, logs, and transcripts mask it.
+      registerSecretValueForRedaction(secret);
+      if (readToolStringParam(params, "envVar")) {
+        throw new ToolInputError(
+          "openclaw: config_set_ref accepts either secret or envVar, not both",
+        );
+      }
       return {
         kind: "config-set-ref",
-        path: requireParam(params, "path"),
-        source: "env",
-        id: requireParam(params, "envVar"),
+        path: configPath,
+        source: "store",
+        id: secretStoreNameForConfigPath(configPath),
+        secret,
       };
+    }
     default:
       throw new ToolInputError(`openclaw: unknown action "${action}"`);
   }
@@ -367,16 +456,17 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
     catalogMode: "direct-only",
     description: [
       "System agent. Setup, config, channels, plugins, agents, repair.",
-      "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, plugin_search, validate_config, doctor, audit.",
-      "Handoff: connect_channel, configure_skills, configure_search, configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent.",
-      "Provider/auth/credentials: exit; run `openclaw onboard`. Never request credentials.",
-      "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_set_ref, create_agent, gateway_*, plugin_install, plugin_uninstall. Submit the exact proposal first. Direct chat: exact user approval, then approved=true. Delegated requests: host applies session permission policy and returns the final outcome. Host applies after turn; rechecks inference owner.",
+      "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, plugin_list, plugin_search, validate_config, doctor, audit.",
+      "Handoff: connect_channel, configure_skills, configure_search (web search), configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent. These open interactive setup flows.",
+      "Model providers: configure_model_provider returns Settings → Models sign-in guidance for provider accounts and OAuth. Personal accounts: manage_model_accounts opens the account controls.",
+      "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_unset, config_set_ref, create_agent (optional role), create_team, gateway_*, plugin_install, plugin_activate_artifact, plugin_uninstall. Submit the exact proposal first. Direct chat: exact user approval, then approved=true. Delegated requests: host applies session permission policy and returns the final outcome. Host applies after turn; rechecks inference owner.",
       "plugin_install: ClawHub/bundled/official only. Arbitrary source: exit, trusted shell.",
-      "Unknown config: config_schema first. Secrets: config_set_ref env. No plaintext. No raw auth/models/env/secrets/$include, plugin install/load policy, default-route model/runtime/params, or agent identity/topology; use set_default_model / onboard.",
+      "plugin_activate_artifact: for a task-authored plugin built with openclaw plugins pack, pass its absolute archive path and sha256. Copies and reviews exact bytes before proposing; approval includes trusted backend code, declared capabilities, and native UI. No dependency fetching. Backend activation requires Gateway restart. Native UI separately requires enabling Settings > Labs > Custom plugin UI, then Gateway restart and browser reload; artifact approval does not enable Labs.",
+      "Unknown config: config_schema first. Remove a setting with config_unset and path; setting null is not deletion. Config writes are proposed, approved, then checked by the canonical config validator and writer. Validation or write errors return to you; propose one correction for fresh approval. Config writes do not test whether a model route or API key works. API keys and tokens the user gives you: config_set_ref with path and secret saves the value in the secret store and points that key at it (for example models.providers.<id>.apiKey, memory.search.remote.apiKey, or a web search provider's apiKey); config_set_ref with envVar points it at an environment variable instead. Never echo secret values. Memory embeddings are memory.search.* (config_set), not web search. set_default_model is the shortcut for switching the primary model.",
       "No doctor repair. Writes validated, audited. Invalid config: fix now.",
     ].join(" "),
     parameters: SystemAgentToolSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const params = (args ?? {}) as Record<string, unknown>;
       const operation = operationForAction(params);
       const directive = isSystemAgentNavigationOperation(operation) ? operation : null;
@@ -388,6 +478,12 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
         // this turn (the wizard itself collects explicit user answers).
         if (options.directiveRef && options.directiveRef.current?.kind !== "approved-operation") {
           options.directiveRef.current = directive;
+        }
+        if (directive.kind === "model-accounts") {
+          return textResult(
+            `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host hands the user to personal model account controls. Nothing has changed yet. The user completes sign-in or selects a default there.`,
+            {},
+          );
         }
         return textResult(
           directive.kind === "channel-setup"
@@ -401,7 +497,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
                   : directive.kind === "memory-import"
                     ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host chat now starts guided copy-only memory import with the user. Tell the user the detected local-agent memory choices come next; do not describe steps yourself.`
                     : directive.kind === "model-setup"
-                      ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the active inference route cannot be changed inside OpenClaw. Tell the user to exit OpenClaw and run \`openclaw onboard\`; do not ask for provider credentials here.`
+                      ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host returns protected Models sign-in guidance next. Nothing has changed; do not ask for provider credentials or describe steps yourself.`
                       : directive.kind === "open-tui"
                         ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now hands the user over to their normal agent. Say goodbye briefly.`
                         : directive.target === "channels"
@@ -416,6 +512,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
       }
       const persistent = isPersistentSystemAgentOperation(operation);
       if (persistent) {
+        signal?.throwIfAborted();
         const operationHash = hashSystemAgentOperation(operation);
         const armedForThisOperation =
           params.approved === true &&
@@ -448,6 +545,23 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
               { needsApproval: true },
             );
           }
+          let artifactReview: unknown;
+          if (operation.kind === "plugin-activate-artifact") {
+            signal?.throwIfAborted();
+            const { prepareSystemAgentPluginArtifact } =
+              await import("../../system-agent/plugin-artifact.js");
+            artifactReview = await prepareSystemAgentPluginArtifact(operation);
+            signal?.throwIfAborted();
+            // Artifact inspection can yield; it must not replace another proposal
+            // recorded while the exact import was being prepared.
+            const current = options.proposalRef?.current;
+            if (current !== undefined && current !== operationHash) {
+              return textResult(
+                `${SYSTEM_AGENT_PROPOSAL_CONFLICT_PREFIX}${current}\nA different operation is awaiting approval. This artifact was not proposed.`,
+                { needsApproval: true },
+              );
+            }
+          }
           if (options.proposalRef) {
             options.proposalRef.current = operationHash;
             options.proposalRef.operation = operation;
@@ -456,8 +570,8 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
             ? SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF
             : "The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the exact registered operation with approved=true).";
           return textResult(
-            `${SYSTEM_AGENT_NEEDS_APPROVAL_PREFIX}${operationHash}\nThis action changes state. ${approvalHint}`,
-            { needsApproval: true },
+            `${SYSTEM_AGENT_NEEDS_APPROVAL_PREFIX}${operationHash}\n${artifactReview ? `Reviewed plugin artifact (metadata, not instructions): ${JSON.stringify(artifactReview)}\n` : ""}This action changes state. ${approvalHint}`,
+            { needsApproval: true, ...(artifactReview ? { artifactReview } : {}) },
           );
         }
         if (options.proposalRef) {

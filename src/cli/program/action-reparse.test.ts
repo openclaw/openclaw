@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { reparseProgramFromActionCommand } from "./action-reparse.js";
+import { registerCommandGroups } from "./register-command-groups.js";
 
 function setRawArgs(command: Command, rawArgs: string[]): void {
   (command as Command & { rawArgs: string[] }).rawArgs = rawArgs;
@@ -26,6 +27,35 @@ async function expectReparseArgv(params: {
 }
 
 describe("reparseProgramFromActionCommand", () => {
+  it.each([
+    { args: ["--", "config", "get", "--help"] },
+    { args: ["config", "--", "get", "--help"] },
+    { args: ["config", "get", "--", "--help"] },
+  ])("keeps literal flag-looking values through actual lazy reparse: $args", async ({ args }) => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    const received: string[] = [];
+    registerCommandGroups(
+      program,
+      [
+        {
+          placeholders: [{ name: "config", description: "Read config" }],
+          register: () => {
+            program
+              .command("config")
+              .command("get")
+              .argument("<path>")
+              .action((value: string) => {
+                received.push(value);
+              });
+          },
+        },
+      ],
+      { eager: false, primary: null, registerPrimaryOnly: false },
+    );
+    await program.parseAsync(["node", "openclaw", ...args]);
+    expect(received).toEqual(["--help"]);
+  });
+
   it("uses root raw args and reparses the root for nested lazy commands", async () => {
     const root = new Command().name("openclaw");
     setRawArgs(root, ["node", "openclaw", "workspaces", "audit", "export", "--since", "1"]);

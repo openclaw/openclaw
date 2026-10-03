@@ -1,8 +1,3 @@
-/**
- * Rendered channel message batch planner.
- *
- * Summarizes reply payloads so delivery can pick adapter paths and recovery metadata.
- */
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type {
@@ -59,16 +54,16 @@ export function createRenderedMessageBatchPlan(
 ): RenderedMessageBatchPlan {
   const items = payloads.map(createRenderedMessageBatchPlanItem);
   return items.reduce<RenderedMessageBatchPlan>(
-    (plan, item) => ({
-      payloadCount: plan.payloadCount + 1,
-      textCount: plan.textCount + (item.text ? 1 : 0),
-      mediaCount: plan.mediaCount + item.mediaUrls.length,
-      voiceCount: plan.voiceCount + (item.audioAsVoice ? 1 : 0),
-      presentationCount: plan.presentationCount + (item.kinds.includes("presentation") ? 1 : 0),
-      interactiveCount: plan.interactiveCount + (item.hasInteractive ? 1 : 0),
-      channelDataCount: plan.channelDataCount + (item.hasChannelData ? 1 : 0),
-      items: plan.items,
-    }),
+    (plan, item) => {
+      plan.payloadCount += 1;
+      plan.textCount += item.text ? 1 : 0;
+      plan.mediaCount += item.mediaUrls.length;
+      plan.voiceCount += item.audioAsVoice ? 1 : 0;
+      plan.presentationCount += item.kinds.includes("presentation") ? 1 : 0;
+      plan.interactiveCount += item.hasInteractive ? 1 : 0;
+      plan.channelDataCount += item.hasChannelData ? 1 : 0;
+      return plan;
+    },
     {
       payloadCount: 0,
       textCount: 0,

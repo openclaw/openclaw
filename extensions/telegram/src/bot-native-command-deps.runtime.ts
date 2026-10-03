@@ -1,6 +1,5 @@
-import { dispatchChannelInboundTurn } from "openclaw/plugin-sdk/channel-inbound";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
-// Telegram plugin module implements bot native command deps behavior.
+import { createLazyRuntimeMethodBinder } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,
@@ -19,40 +18,22 @@ export type TelegramNativeCommandDeps = Pick<
   | "readChannelAllowFromStore"
   | "syncTelegramMenuCommands"
 > & {
-  dispatchChannelInboundTurn?: typeof dispatchChannelInboundTurn;
   runModelsAuthLoginFlow?: (opts: ModelsAuthLoginFlowOptions) => Promise<ModelsAuthLoginFlowResult>;
   sendMessageTelegram: typeof import("./send.js").sendMessageTelegram;
 };
 
-export const defaultTelegramNativeCommandDeps: TelegramNativeCommandDeps & {
-  dispatchChannelInboundTurn: typeof dispatchChannelInboundTurn;
-} = {
-  get getRuntimeConfig() {
-    return getRuntimeConfig;
-  },
-  get readChannelAllowFromStore() {
-    return readChannelAllowFromStore;
-  },
-  get dispatchChannelInboundTurn() {
-    return dispatchChannelInboundTurn;
-  },
-  get listSkillCommandsForAgents() {
-    return listSkillCommandsForAgents;
-  },
-  get syncTelegramMenuCommands() {
-    return syncTelegramMenuCommands;
-  },
+const bindSend = createLazyRuntimeMethodBinder(loadTelegramSendModule);
+
+export const defaultTelegramNativeCommandDeps: TelegramNativeCommandDeps = {
+  getRuntimeConfig,
+  readChannelAllowFromStore,
+  listSkillCommandsForAgents,
+  syncTelegramMenuCommands,
   async runModelsAuthLoginFlow(opts) {
     const { runModelsAuthLoginFlow } =
       await import("openclaw/plugin-sdk/provider-auth-login-flow-runtime");
     return await runModelsAuthLoginFlow(opts);
   },
-  async editMessageTelegram(...args) {
-    const { editMessageTelegram } = await loadTelegramSendModule();
-    return await editMessageTelegram(...args);
-  },
-  async sendMessageTelegram(...args) {
-    const { sendMessageTelegram } = await loadTelegramSendModule();
-    return await sendMessageTelegram(...args);
-  },
+  editMessageTelegram: bindSend((runtime) => runtime.editMessageTelegram),
+  sendMessageTelegram: bindSend((runtime) => runtime.sendMessageTelegram),
 };

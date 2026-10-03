@@ -6,18 +6,18 @@ import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
   toClientToolDefinitions,
+  toToolDefinitions,
 } from "../../agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
-import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { isCodeModeExecTool } from "../../code-mode-control-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
+import { isCoreToolResultMediaTrustedName } from "../../embedded-agent-tool-media.js";
 import type { AgentTool } from "../../runtime/index.js";
 import {
   createToolDefinitionFromAgentTool,
   wrapToolDefinition,
 } from "../../sessions/tools/tool-definition-wrapper.js";
-import { normalizeToolPolicyName } from "../../tool-policy.js";
 import {
   collectReplaySafeToolNames,
   collectSideEffectToolOwners,
@@ -31,19 +31,15 @@ import {
   collectRegisteredToolNames,
   toSessionToolAllowlist,
 } from "../tool-name-allowlist.js";
-import { splitSdkTools } from "../tool-split.js";
-import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
-import { applyCodeModeRecoveryPreparedToolSurface } from "./code-mode-reconciliation.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptParams } from "./types.js";
 
 export function prepareEmbeddedAttemptClientTools(params: {
   attempt: EmbeddedRunAttemptParams;
-  catalogToolHookContext: Parameters<typeof splitSdkTools>[0]["toolHookContext"];
+  catalogToolHookContext: Parameters<typeof toToolDefinitions>[1];
   codeModeControlsEnabledForRun: boolean;
   deferredDirectoryToolsCallable: boolean;
   effectiveTools: AgentTool[];
   replaySafetyOptions: Parameters<typeof isAgentToolReplaySafe>[1];
-  sandboxEnabled: boolean;
   sandboxSessionKey?: string;
   sessionAgentId: string;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
@@ -54,17 +50,15 @@ export function prepareEmbeddedAttemptClientTools(params: {
 }) {
   // Reserve synchronously so parallel client-tool batches preserve assistant source order.
   const clientToolCallSlots: EmbeddedAttemptClientToolCallSlot[] = [];
-  const clientToolCallSlotIndexes = new Map<string, number>();
+  const clientToolCallSlotsById = new Map<string, EmbeddedAttemptClientToolCallSlot>();
   const reserveClientToolCallSlot = (toolCallId: string, toolName: string) => {
-    if (clientToolCallSlotIndexes.has(toolCallId)) {
-      return;
+    let slot = clientToolCallSlotsById.get(toolCallId);
+    if (!slot) {
+      slot = { toolCallId, name: toolName, completed: false };
+      clientToolCallSlotsById.set(toolCallId, slot);
+      clientToolCallSlots.push(slot);
     }
-    clientToolCallSlotIndexes.set(toolCallId, clientToolCallSlots.length);
-    clientToolCallSlots.push({
-      toolCallId,
-      name: toolName,
-      completed: false,
-    });
+    return slot;
   };
   const clientToolLoopDetection = resolveToolLoopDetectionConfig({
     cfg: params.attempt.config,
@@ -76,25 +70,13 @@ export function prepareEmbeddedAttemptClientTools(params: {
         {
           reserve: reserveClientToolCallSlot,
           complete: (toolCallId, toolName, toolParams) => {
-            reserveClientToolCallSlot(toolCallId, toolName);
-            const slotIndex = clientToolCallSlotIndexes.get(toolCallId);
-            if (slotIndex === undefined) {
-              return;
-            }
-            const slot = clientToolCallSlots[slotIndex];
-            if (!slot) {
-              return;
-            }
+            const slot = reserveClientToolCallSlot(toolCallId, toolName);
             slot.name = toolName;
             slot.params = toolParams;
             slot.completed = true;
           },
           discard: (toolCallId) => {
-            const slotIndex = clientToolCallSlotIndexes.get(toolCallId);
-            if (slotIndex === undefined) {
-              return;
-            }
-            const slot = clientToolCallSlots[slotIndex];
+            const slot = clientToolCallSlotsById.get(toolCallId);
             if (slot) {
               slot.completed = false;
               slot.params = undefined;
@@ -115,22 +97,26 @@ export function prepareEmbeddedAttemptClientTools(params: {
     : [];
   const buildSurface = () => {
     // Raw names gate trusted local media passthrough; normalized aliases are insufficient.
-    const builtinToolNames = new Set(
-      params.uncompactedEffectiveTools.flatMap((tool) => {
-        const name = (tool.name ?? "").trim();
-        return name ? [name] : [];
-      }),
-    );
+    const builtinToolNames = new Set<string>();
+    const trustedLocalMediaToolNames = new Set<string>();
+    for (const tool of params.uncompactedEffectiveTools) {
+      const name = (tool.name ?? "").trim();
+      if (!name) {
+        continue;
+      }
+      builtinToolNames.add(name);
+      const pluginMeta = getPluginToolMeta(tool);
+      if (
+        pluginMeta?.trustedLocalMedia === true ||
+        (!pluginMeta && isCoreToolResultMediaTrustedName(name))
+      ) {
+        trustedLocalMediaToolNames.add(name);
+      }
+    }
     const coreBuiltinToolNames = collectCoreBuiltinToolNames(params.uncompactedEffectiveTools, {
       isPluginTool: (tool) =>
         Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
     });
-    const coreReadAuthorized = params.uncompactedEffectiveTools.some(
-      (tool) =>
-        normalizeToolPolicyName(tool.name ?? "") === "read" &&
-        !getPluginToolMeta(tool) &&
-        !getChannelAgentToolMeta(tool),
-    );
     const isReplaySafeTool = (tool: { name?: string }) =>
       isAgentToolReplaySafe(tool, params.replaySafetyOptions);
     const replaySafeTools = new Set(params.uncompactedEffectiveTools.filter(isReplaySafeTool));
@@ -160,12 +146,6 @@ export function prepareEmbeddedAttemptClientTools(params: {
         wrapToolWithAbortSignal(wrapToolDefinition(definition), params.getToolAbortSignal?.()),
       ),
     );
-    if (params.attempt.codeModeRecovery?.kind === "resume") {
-      clientToolDefs = applyCodeModeRecoveryPreparedToolSurface({
-        tools: clientToolDefs,
-        state: params.attempt.codeModeRecovery,
-      });
-    }
     // Terminal observations are name-only, so ownership is valid only when one
     // concrete OpenClaw or client tool owns the normalized name.
     const sideEffectToolOwners = collectSideEffectToolOwners(
@@ -202,19 +182,17 @@ export function prepareEmbeddedAttemptClientTools(params: {
       );
     }
 
-    const { customTools } = splitSdkTools({
-      tools: params.effectiveTools,
-      sandboxEnabled: params.sandboxEnabled,
-      toolHookContext: params.catalogToolHookContext,
-      abortSignal: params.getToolAbortSignal?.(),
-    });
+    const customTools = toToolDefinitions(
+      params.effectiveTools,
+      params.catalogToolHookContext,
+      params.getToolAbortSignal?.(),
+    );
     const allCustomTools = [...customTools, ...clientToolDefs];
     const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(allCustomTools));
     return {
       allCustomTools,
       builtinToolNames,
       coreBuiltinToolNames,
-      coreReadAuthorized,
       clientToolCallSlots,
       clientToolDefs,
       replaySafeToolNames,
@@ -222,6 +200,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       codeModeExecToolNames,
       sideEffectToolOwners,
       sessionToolAllowlist,
+      trustedLocalMediaToolNames,
     };
   };
   const current = buildSurface();
@@ -241,6 +220,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
         "coreBuiltinToolNames",
         "replaySafeToolNames",
         "codeModeExecToolNames",
+        "trustedLocalMediaToolNames",
       ] as const) {
         current[key].clear();
         for (const name of next[key]) {

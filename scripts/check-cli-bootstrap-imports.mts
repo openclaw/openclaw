@@ -4,18 +4,31 @@
 import fs from "node:fs";
 import module from "node:module";
 import path from "node:path";
-import { parse, type Node as AcornNode } from "acorn";
+import type { Node as AcornNode } from "acorn";
 import {
-  WORKER_BUNDLE_ENTRY_PATH,
-  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+  WORKER_BUNDLE_ARTIFACT_PATHS,
+  WORKER_BUNDLE_CHUNK_PATH_PATTERN,
 } from "../src/shared/worker-bundle-hash.js";
+import { reportLimitViolations, type LimitViolation } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { readGatewayRunChunks } from "./lib/gateway-run-chunk-metadata.mts";
+import { visitJavaScriptStatements } from "./lib/javascript-statements.mjs";
+import { isUnstagedWorkerDeployRuntimeArtifact } from "./lib/worker-deploy-build-plugin.mts";
 
 const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
-const WORKER_DEPLOY_ENTRYPOINTS = [
-  `dist/worker/${WORKER_BUNDLE_ENTRY_PATH}`,
-  `dist/worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
-] as const;
+const DEFAULT_NATIVE_HOOK_RELAY_ENTRYPOINT = "dist/native-hook-relay/entry.js";
+const DEFAULT_NATIVE_HOOK_RELAY_STATIC_MAX_BYTES = 512 * 1024;
+const NATIVE_HOOK_RELAY_FORBIDDEN_STATIC_MARKERS = [
+  "MAX_NATIVE_HOOK_RELAY_INVOCATIONS",
+  "getActivePluginSessionExtensionRegistry",
+  "requestDeferredPluginToolApproval",
+  "runBeforeToolCallHook",
+];
+// fs-safe must retain its package scope for optional native-platform loading.
+const NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_IMPORTS = ["kysely", "@openclaw/fs-safe"];
+const WORKER_DEPLOY_ENTRYPOINTS = WORKER_BUNDLE_ARTIFACT_PATHS.map(
+  (entry) => `dist/worker/${entry}`,
+);
 const DEFAULT_GATEWAY_RUN_CHUNK_MAX_BYTES = 70 * 1024;
 const GATEWAY_RUN_CHUNK_MARKER_SETS = [
   ["const GATEWAY_AUTH_MODES", "function addGatewayRunCommand"],
@@ -28,7 +41,8 @@ const GATEWAY_RUN_FORBIDDEN_STATIC_IMPORTS = [
   "process-respawn",
   "restart-sentinel",
   "server-close",
-  "server-reload-handlers",
+  "server-reload-hot",
+  "server-reload-managed",
 ];
 const STATIC_IMPORT_RE =
   /\b(?:import|export)\s+(?:(?:[^'"()]*?\s+from\s+)|)["'](?<specifier>[^"']+)["']/gu;
@@ -36,8 +50,13 @@ const STATIC_IMPORT_RE =
 type CliBootstrapCheckParams = {
   rootDir?: string;
   entrypoints?: string[];
+  workerDeployEntrypoints?: readonly string[];
   distDir?: string;
   gatewayRunChunkMaxBytes?: number;
+  legacyGatewayChunkDiscovery?: boolean;
+  nativeHookRelayEntrypoint?: string;
+  requireNativeHookRelay?: boolean;
+  nativeHookRelayStaticMaxBytes?: number;
   fs?: typeof fs;
   logger?: { error(message: string): void };
 };
@@ -122,52 +141,51 @@ function isRequireLikeCallee(value: unknown): boolean {
 }
 
 function listRuntimeImportSpecifiers(source: string): string[] {
-  const ast = parse(source, {
-    ecmaVersion: "latest",
-    sourceType: "module",
-    allowHashBang: true,
-  });
   const specifiers: string[] = [];
-  const stack: unknown[] = [ast];
-  while (stack.length > 0) {
-    const value = stack.pop();
-    if (!value || typeof value !== "object") {
-      continue;
-    }
-    if (Array.isArray(value)) {
-      stack.push(...value);
-      continue;
-    }
-    const node = value as AcornNode & Record<string, unknown>;
-    if (
-      node.type === "ImportDeclaration" ||
-      node.type === "ExportNamedDeclaration" ||
-      node.type === "ExportAllDeclaration" ||
-      node.type === "ImportExpression"
-    ) {
-      const specifier = literalString(node.source);
-      if (specifier) {
-        specifiers.push(specifier);
+  visitJavaScriptStatements(source, { sourceType: "module", allowHashBang: true }, (statements) => {
+    const stack: unknown[] = statements;
+    while (stack.length > 0) {
+      const value = stack.pop();
+      if (!value || typeof value !== "object") {
+        continue;
       }
-    } else if (node.type === "CallExpression") {
-      const callee = node.callee;
-      const args = node.arguments;
-      if (isRequireLikeCallee(callee) && Array.isArray(args)) {
-        const specifier = literalString(args[0]);
+      if (Array.isArray(value)) {
+        stack.push(...value);
+        continue;
+      }
+      const node = value as AcornNode & Record<string, unknown>;
+      if (
+        node.type === "ImportDeclaration" ||
+        node.type === "ExportNamedDeclaration" ||
+        node.type === "ExportAllDeclaration" ||
+        node.type === "ImportExpression"
+      ) {
+        const specifier = literalString(node.source);
         if (specifier) {
           specifiers.push(specifier);
         }
+      } else if (node.type === "CallExpression") {
+        const callee = node.callee;
+        const args = node.arguments;
+        if (isRequireLikeCallee(callee) && Array.isArray(args)) {
+          const specifier = literalString(args[0]);
+          if (specifier) {
+            specifiers.push(specifier);
+          }
+        }
+      }
+      // Large worker bundles contain millions of nodes; avoid a pair allocation per property.
+      for (const key of Object.keys(node)) {
+        const child = node[key];
+        if (key === "start" || key === "end" || key === "loc" || key === "range") {
+          continue;
+        }
+        if (child && typeof child === "object") {
+          stack.push(child);
+        }
       }
     }
-    for (const [key, child] of Object.entries(node)) {
-      if (key === "start" || key === "end" || key === "loc" || key === "range") {
-        continue;
-      }
-      if (child && typeof child === "object") {
-        stack.push(child);
-      }
-    }
-  }
+  });
   return [...new Set(specifiers)].toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -181,6 +199,7 @@ function walkStaticImportGraph(
     resolved: string,
     specifier: string,
   ) => string | undefined,
+  onSource?: (filePath: string, source: string) => string[],
 ) {
   const queue = roots.map((entrypoint) => path.resolve(rootDir, entrypoint));
   const visited = new Set<string>();
@@ -201,6 +220,7 @@ function walkStaticImportGraph(
       );
       continue;
     }
+    errors.push(...(onSource?.(filePath, source) ?? []));
     for (const specifier of listStaticImportSpecifiers(source)) {
       if (!specifier || isBuiltinSpecifier(specifier)) {
         continue;
@@ -233,6 +253,72 @@ function walkStaticImportGraph(
   }
 
   return errors;
+}
+
+/** Collects isolation and static-graph budget errors for the native hook relay executable. */
+export function collectNativeHookRelayBundleErrors(params: CliBootstrapCheckParams = {}) {
+  const rootDir = params.rootDir ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  const entrypoint = params.nativeHookRelayEntrypoint ?? DEFAULT_NATIVE_HOOK_RELAY_ENTRYPOINT;
+  const entrypointPath = path.resolve(rootDir, entrypoint);
+  // Release tooling also validates older packages whose supported relay is the general CLI.
+  // Current builds require this artifact; every present relay is checked in either mode.
+  if (!params.requireNativeHookRelay && !fsImpl.existsSync(entrypointPath)) {
+    return [];
+  }
+  const bundleDir = path.resolve(rootDir, params.distDir ?? "dist");
+  const maxBytes =
+    params.nativeHookRelayStaticMaxBytes ?? DEFAULT_NATIVE_HOOK_RELAY_STATIC_MAX_BYTES;
+  let staticBytes = 0;
+  const errors: Array<string | LimitViolation> = walkStaticImportGraph(
+    fsImpl,
+    rootDir,
+    [entrypoint],
+    (filePath, specifier) =>
+      NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_IMPORTS.some(
+        (dependency) => specifier === dependency || specifier.startsWith(`${dependency}/`),
+      )
+        ? ""
+        : `Native hook relay static graph imports unexpected package "${specifier}" from ${
+            path.relative(rootDir, filePath) || filePath
+          }.`,
+    (filePath, resolved, specifier) => {
+      const relativeToBundle = path.relative(bundleDir, resolved);
+      return !relativeToBundle.startsWith("..") && !path.isAbsolute(relativeToBundle)
+        ? undefined
+        : `Native hook relay static graph escapes the built runtime via "${specifier}" from ${
+            path.relative(rootDir, filePath) || filePath
+          }.`;
+    },
+    (filePath, source) => {
+      try {
+        staticBytes += fsImpl.statSync(filePath).size;
+      } catch {
+        staticBytes += Buffer.byteLength(source, "utf8");
+      }
+      return NATIVE_HOOK_RELAY_FORBIDDEN_STATIC_MARKERS.flatMap((marker) =>
+        source.includes(marker)
+          ? [
+              `Native hook relay static graph contains server marker "${marker}" in ${
+                path.relative(rootDir, filePath) || filePath
+              }.`,
+            ]
+          : [],
+      );
+    },
+  ).filter(Boolean);
+  if (staticBytes > maxBytes) {
+    errors.push({
+      file: entrypoint,
+      title: "Native hook relay bundle budget",
+      message: `Native hook relay static graph is ${staticBytes} bytes, above budget ${maxBytes} bytes.`,
+    });
+  }
+  return errors.toSorted((left, right) =>
+    (typeof left === "string" ? left : left.message).localeCompare(
+      typeof right === "string" ? right : right.message,
+    ),
+  );
 }
 
 /**
@@ -270,7 +356,7 @@ function listJsFiles(dirPath: string, fsImpl: typeof fs = fs): string[] {
       files.push(...listJsFiles(fullPath, fsImpl));
       continue;
     }
-    if (entry.isFile() && entry.name.endsWith(".js")) {
+    if (entry.isFile() && /\.m?js$/u.test(entry.name)) {
       files.push(fullPath);
     }
   }
@@ -285,21 +371,33 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
   const fsImpl = params.fs ?? fs;
   const distDir = path.resolve(rootDir, params.distDir ?? "dist");
   const maxBytes = params.gatewayRunChunkMaxBytes ?? DEFAULT_GATEWAY_RUN_CHUNK_MAX_BYTES;
-  const chunks = [];
+  let chunks: Array<{ filePath: string; source: string }> = [];
+  if (params.legacyGatewayChunkDiscovery) {
+    // Current release tooling also qualifies frozen targets predating build-owned locators.
+    // Only that explicit caller may retain the historical full-tree discovery contract.
 
-  for (const filePath of listJsFiles(distDir, fsImpl)) {
-    let source;
-    try {
-      source = fsImpl.readFileSync(filePath, "utf8");
-    } catch {
-      continue;
+    for (const filePath of listJsFiles(distDir, fsImpl)) {
+      let source;
+      try {
+        source = fsImpl.readFileSync(filePath, "utf8");
+      } catch {
+        continue;
+      }
+      if (
+        GATEWAY_RUN_CHUNK_MARKER_SETS.some((markers) =>
+          markers.every((marker) => source.includes(marker)),
+        )
+      ) {
+        chunks.push({ filePath, source });
+      }
     }
-    if (
-      GATEWAY_RUN_CHUNK_MARKER_SETS.some((markers) =>
-        markers.every((marker) => source.includes(marker)),
-      )
-    ) {
-      chunks.push({ filePath, source });
+  } else {
+    try {
+      chunks = readGatewayRunChunks(distDir, fsImpl);
+    } catch (error) {
+      return [
+        `CLI bootstrap import guard could not read gateway run chunk metadata: ${error instanceof Error ? error.message : String(error)}. Run pnpm build first.`,
+      ];
     }
   }
 
@@ -309,7 +407,7 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
     ];
   }
 
-  const errors = [];
+  const errors: Array<string | LimitViolation> = [];
   for (const { filePath, source } of chunks) {
     const relativePath = path.relative(rootDir, filePath) || filePath;
     let size = Buffer.byteLength(source, "utf8");
@@ -319,9 +417,11 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
       // Fall back to source byte length for in-memory test fixtures.
     }
     if (size > maxBytes) {
-      errors.push(
-        `Gateway run chunk ${relativePath} is ${size} bytes, above budget ${maxBytes} bytes.`,
-      );
+      errors.push({
+        file: relativePath,
+        title: "Gateway run chunk budget",
+        message: `Gateway run chunk ${relativePath} is ${size} bytes, above budget ${maxBytes} bytes.`,
+      });
     }
 
     errors.push(
@@ -345,17 +445,21 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
     );
   }
 
-  return errors.toSorted((left, right) => left.localeCompare(right));
+  return errors.toSorted((left, right) =>
+    (typeof left === "string" ? left : left.message).localeCompare(
+      typeof right === "string" ? right : right.message,
+    ),
+  );
 }
 
 /** Collects closure and layout errors for the standalone worker deploy artifact. */
 export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParams = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  const entrypoints = WORKER_DEPLOY_ENTRYPOINTS.map((entrypoint) =>
-    path.resolve(rootDir, entrypoint),
+  const entrypoints = (params.workerDeployEntrypoints ?? WORKER_DEPLOY_ENTRYPOINTS).map(
+    (entrypoint) => path.resolve(rootDir, entrypoint),
   );
-  const artifactDir = path.dirname(entrypoints[0]!);
+  const artifactDir = path.resolve(rootDir, "dist/worker");
   const artifactNames = new Set(
     entrypoints.flatMap((entrypoint) => {
       const name = path.basename(entrypoint);
@@ -364,6 +468,37 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
   );
   const errors: string[] = [];
   const sources: Array<{ relativeEntrypoint: string; source: string }> = [];
+  try {
+    for (const entry of fsImpl.readdirSync(artifactDir, { withFileTypes: true })) {
+      if (artifactNames.has(entry.name)) {
+        continue;
+      }
+      if (WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(entry.name)) {
+        artifactNames.add(entry.name);
+        entrypoints.push(path.join(artifactDir, entry.name));
+      } else if (entry.name === "package.json") {
+        errors.push(
+          "Worker deploy artifact must not contain a dependency manifest or lifecycle scripts.",
+        );
+      } else if (entry.name === "node_modules") {
+        errors.push("Worker deploy artifact must not contain materialized dependencies.");
+      } else if (isUnstagedWorkerDeployRuntimeArtifact(entry.name, artifactNames)) {
+        errors.push(
+          `Worker deploy artifact emits unstaged runtime asset ${path.relative(
+            rootDir,
+            path.join(artifactDir, entry.name),
+          )}.`,
+        );
+      }
+    }
+  } catch (error) {
+    if (entrypoints.length === 0 && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    errors.push(
+      `Worker deploy artifact directory ${path.relative(rootDir, artifactDir)} is unreadable.`,
+    );
+  }
   for (const entrypoint of entrypoints) {
     const relativeEntrypoint = path.relative(rootDir, entrypoint) || entrypoint;
     try {
@@ -379,35 +514,16 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
       return [`Worker deploy artifact ${relativeEntrypoint} is missing. Run pnpm build first.`];
     }
   }
-  try {
-    for (const entry of fsImpl.readdirSync(artifactDir, { withFileTypes: true })) {
-      if (artifactNames.has(entry.name)) {
-        continue;
-      }
-      if (entry.name === "package.json") {
-        errors.push(
-          "Worker deploy artifact must not contain a dependency manifest or lifecycle scripts.",
-        );
-      } else if (entry.name === "node_modules") {
-        errors.push("Worker deploy artifact must not contain materialized dependencies.");
-      } else if (/\.(?:mjs|node|wasm)$/u.test(entry.name)) {
-        errors.push(
-          `Worker deploy artifact emits unstaged runtime asset ${path.relative(
-            rootDir,
-            path.join(artifactDir, entry.name),
-          )}.`,
-        );
-      }
-    }
-  } catch {
-    errors.push(
-      `Worker deploy artifact directory ${path.relative(rootDir, artifactDir)} is unreadable.`,
-    );
-  }
   for (const { relativeEntrypoint, source } of sources) {
     try {
       for (const specifier of listRuntimeImportSpecifiers(source)) {
-        if (isBuiltinSpecifier(specifier)) {
+        if (
+          isBuiltinSpecifier(specifier) ||
+          specifier === "bun:ffi" ||
+          (specifier.startsWith("./") &&
+            specifier.endsWith(".mjs") &&
+            artifactNames.has(specifier.slice(2)))
+        ) {
           continue;
         }
         errors.push(
@@ -429,12 +545,17 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
  * Runs the CLI bootstrap import, chunk-budget, and worker deploy checks.
  */
 export function checkCliBootstrapExternalImports(params: CliBootstrapCheckParams = {}) {
-  const errors = [
+  const findings = [
     ...collectCliBootstrapExternalImportErrors(params),
     ...collectGatewayRunChunkBudgetErrors(params),
+    ...collectNativeHookRelayBundleErrors(params),
     ...collectWorkerDeployArtifactErrors(params),
   ];
-  if (errors.length === 0) {
+  const errors = findings.filter((finding) => typeof finding === "string");
+  const limitsFailed = reportLimitViolations(
+    findings.filter((finding) => typeof finding !== "string"),
+  );
+  if (errors.length === 0 && !limitsFailed) {
     return;
   }
   const logger = params.logger ?? console;
@@ -447,7 +568,7 @@ export function checkCliBootstrapExternalImports(params: CliBootstrapCheckParams
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
-    checkCliBootstrapExternalImports();
+    checkCliBootstrapExternalImports({ requireNativeHookRelay: true });
     console.log("CLI bootstrap import guard passed.");
   } catch {
     process.exit(1);

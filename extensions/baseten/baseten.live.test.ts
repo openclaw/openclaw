@@ -115,7 +115,7 @@ describeLive("Baseten plugin live", () => {
           let stream = await wrappedStream(asLiveModel(model), context, {
             apiKey: LIVE_VALUE,
             maxTokens: 64,
-            reasoning: "off",
+            reasoning: thinkingLevel,
             onPayload: (value) => {
               payload = value as Record<string, unknown>;
             },
@@ -126,7 +126,7 @@ describeLive("Baseten plugin live", () => {
             stream = await wrappedStream(asLiveModel(model), context, {
               apiKey: LIVE_VALUE,
               maxTokens: 512,
-              reasoning: "off",
+              reasoning: thinkingLevel,
               onPayload: (value) => {
                 payload = value as Record<string, unknown>;
               },

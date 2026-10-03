@@ -12,6 +12,10 @@ import { getIMessageRuntime } from "../runtime.js";
 
 const IMESSAGE_RECOVERY_CURSOR_NAMESPACE = "imessage.recovery-cursor";
 const IMESSAGE_RECOVERY_CURSOR_MAX_ENTRIES = 64;
+const RECOVERY_CURSOR_STORE_OPTIONS = {
+  namespace: IMESSAGE_RECOVERY_CURSOR_NAMESPACE,
+  maxEntries: IMESSAGE_RECOVERY_CURSOR_MAX_ENTRIES,
+};
 
 // Retired catchup cursor, seeded into the recovery cursor once on upgrade (see
 // loadIMessageRecoveryCursor) so a user who had catchup enabled still recovers
@@ -22,10 +26,7 @@ const LEGACY_CATCHUP_CURSOR_MAX_ENTRIES = 256;
 type RecoveryCursor = { lastRowid: number };
 
 function openRecoveryCursorStore() {
-  return getIMessageRuntime().state.openSyncKeyedStore<RecoveryCursor>({
-    namespace: IMESSAGE_RECOVERY_CURSOR_NAMESPACE,
-    maxEntries: IMESSAGE_RECOVERY_CURSOR_MAX_ENTRIES,
-  });
+  return getIMessageRuntime().state.openKeyedStore<RecoveryCursor>(RECOVERY_CURSOR_STORE_OPTIONS);
 }
 
 // Canonicalize a local chat.db path (expand a leading ~, then resolve) so the
@@ -84,11 +85,71 @@ function recoveryCursorStoreKey(accountId: string, dbIdentity: string): string {
   return `${accountId}\u0000${dbIdentity}`;
 }
 
-function readRecoveryCursor(accountId: string, dbIdentity: string): number | null {
+type RecoveryCursorUpdate =
+  | { kind: "advance"; rowid: number }
+  | { kind: "rewind"; rowid: number; expectedRowid: number };
+
+function decideRecoveryCursorUpdate(
+  current: RecoveryCursor | undefined,
+  update: RecoveryCursorUpdate,
+): RecoveryCursor | undefined {
+  if (update.kind === "rewind") {
+    if (current?.lastRowid !== update.expectedRowid) {
+      return undefined;
+    }
+  } else if (current && current.lastRowid >= update.rowid) {
+    return undefined;
+  }
+  return { lastRowid: update.rowid };
+}
+
+async function applyRecoveryCursorUpdate(
+  key: string,
+  update: RecoveryCursorUpdate,
+): Promise<RecoveryCursor | undefined> {
+  const state = getIMessageRuntime().state;
+  const store = state.openKeyedStore<RecoveryCursor>(RECOVERY_CURSOR_STORE_OPTIONS);
+  if (!store.observe || !store.compareAndApply) {
+    // Published 2026.9.4 hosts have atomic update but no comparison methods.
+    // Remove this branch when the declared host floor requires comparisons.
+    const legacy = state.openSyncKeyedStore<RecoveryCursor>(RECOVERY_CURSOR_STORE_OPTIONS);
+    if (!legacy.update) {
+      throw new Error("iMessage recovery cursor persistence requires atomic update support.");
+    }
+    let result: RecoveryCursor | undefined;
+    legacy.update(key, (current) => {
+      const next = decideRecoveryCursorUpdate(current, update);
+      result = next ?? current;
+      return next;
+    });
+    return result;
+  }
+
+  const observe = store.observe.bind(store);
+  const compareAndApply = store.compareAndApply.bind(store);
+  let observation = await observe(key);
+  for (;;) {
+    const next = decideRecoveryCursorUpdate(observation.value, update);
+    if (!next) {
+      return observation.value;
+    }
+    const result = await compareAndApply(key, observation.comparison, {
+      operation: "update",
+      action: "set",
+      value: next,
+    });
+    if (result.status !== "conflict") {
+      return next;
+    }
+    observation = result.current;
+  }
+}
+
+async function readRecoveryCursor(accountId: string, dbIdentity: string): Promise<number | null> {
   try {
     const store = openRecoveryCursorStore();
     const key = recoveryCursorStoreKey(accountId, dbIdentity);
-    const value = store.lookup(key);
+    const value = await store.lookup(key);
     if (value) {
       return Number.isFinite(value.lastRowid) ? value.lastRowid : null;
     }
@@ -96,10 +157,11 @@ function readRecoveryCursor(accountId: string, dbIdentity: string): number | nul
     // keyed by accountId alone. Adopt such an entry for the active database so
     // the upgrade restart still replays downtime rows, then consume it so a
     // later dbPath change cannot inherit this database's high-water.
-    const legacy = store.consume(accountId);
+    const legacy = await store.consume(accountId);
     if (legacy && Number.isFinite(legacy.lastRowid)) {
-      store.register(key, { lastRowid: legacy.lastRowid });
-      return legacy.lastRowid;
+      await store.registerIfAbsent(key, { lastRowid: legacy.lastRowid });
+      const adopted = await store.lookup(key);
+      return adopted && Number.isFinite(adopted.lastRowid) ? adopted.lastRowid : null;
     }
     return null;
   } catch {
@@ -110,20 +172,23 @@ function readRecoveryCursor(accountId: string, dbIdentity: string): number | nul
 // One-time, self-cleaning migration: when the recovery cursor is empty (first
 // startup after upgrade or a fresh install), seed it from the retired catchup
 // cursor's lastSeenRowid and consume the legacy entry so this never runs again.
-function migrateLegacyCatchupCursor(accountId: string, dbIdentity: string): number | null {
+async function migrateLegacyCatchupCursor(
+  accountId: string,
+  dbIdentity: string,
+): Promise<number | null> {
   try {
-    const legacy = getIMessageRuntime().state.openSyncKeyedStore<{ lastSeenRowid?: unknown }>({
+    const legacy = getIMessageRuntime().state.openKeyedStore<{ lastSeenRowid?: unknown }>({
       namespace: LEGACY_CATCHUP_CURSOR_NAMESPACE,
       maxEntries: LEGACY_CATCHUP_CURSOR_MAX_ENTRIES,
     });
     const key = createHash("sha256").update(accountId, "utf8").digest("hex").slice(0, 32);
-    const value = legacy.consume(key);
+    const value = await legacy.consume(key);
     const rowid =
       typeof value?.lastSeenRowid === "number" && Number.isFinite(value.lastSeenRowid)
         ? value.lastSeenRowid
         : null;
     if (rowid !== null) {
-      advanceIMessageRecoveryCursor(accountId, dbIdentity, rowid);
+      await advanceIMessageRecoveryCursor(accountId, dbIdentity, rowid);
     }
     return rowid;
   } catch {
@@ -131,22 +196,25 @@ function migrateLegacyCatchupCursor(accountId: string, dbIdentity: string): numb
   }
 }
 
-function reconcileRecoveryCursorToWatermark(
+async function reconcileRecoveryCursorToWatermark(
   accountId: string,
   dbIdentity: string,
   cursorRowid: number | null,
   watermarkRowid: number | null,
-): number | null {
+): Promise<number | null> {
   if (cursorRowid === null || watermarkRowid === null || cursorRowid <= watermarkRowid) {
     return cursorRowid;
   }
   try {
-    const store = openRecoveryCursorStore();
-    store.register(recoveryCursorStoreKey(accountId, dbIdentity), { lastRowid: watermarkRowid });
+    const current = await applyRecoveryCursorUpdate(recoveryCursorStoreKey(accountId, dbIdentity), {
+      kind: "rewind",
+      rowid: watermarkRowid,
+      expectedRowid: cursorRowid,
+    });
+    return current?.lastRowid ?? watermarkRowid;
   } catch {
     return watermarkRowid;
   }
-  return watermarkRowid;
 }
 
 /**
@@ -154,47 +222,44 @@ function reconcileRecoveryCursorToWatermark(
  * none is recorded yet (including when the only stored cursor belongs to a
  * different database).
  */
-export function loadIMessageRecoveryCursor(
+export async function loadIMessageRecoveryCursor(
   accountId: string,
   dbIdentity: string,
   options: { migrateLegacyCatchup?: boolean; watermarkRowid?: number | null } = {},
-): number | null {
+): Promise<number | null> {
   const watermarkRowid =
     typeof options.watermarkRowid === "number" && Number.isFinite(options.watermarkRowid)
       ? options.watermarkRowid
       : null;
-  const current = readRecoveryCursor(accountId, dbIdentity);
+  const current = await readRecoveryCursor(accountId, dbIdentity);
   if (current !== null) {
-    return reconcileRecoveryCursorToWatermark(accountId, dbIdentity, current, watermarkRowid);
+    return await reconcileRecoveryCursorToWatermark(accountId, dbIdentity, current, watermarkRowid);
   }
   if (options.migrateLegacyCatchup === false) {
     return null;
   }
-  return reconcileRecoveryCursorToWatermark(
+  return await reconcileRecoveryCursorToWatermark(
     accountId,
     dbIdentity,
-    migrateLegacyCatchupCursor(accountId, dbIdentity),
+    await migrateLegacyCatchupCursor(accountId, dbIdentity),
     watermarkRowid,
   );
 }
 
 /** Advance the cursor forward to `rowid` (monotonic per database; never rewinds). */
-export function advanceIMessageRecoveryCursor(
+export async function advanceIMessageRecoveryCursor(
   accountId: string,
   dbIdentity: string,
   rowid: number,
-): void {
+): Promise<void> {
   if (!Number.isFinite(rowid)) {
     return;
   }
   try {
-    const store = openRecoveryCursorStore();
-    const key = recoveryCursorStoreKey(accountId, dbIdentity);
-    const current = store.lookup(key);
-    if (current && current.lastRowid >= rowid) {
-      return;
-    }
-    store.register(key, { lastRowid: rowid });
+    await applyRecoveryCursorUpdate(recoveryCursorStoreKey(accountId, dbIdentity), {
+      kind: "advance",
+      rowid,
+    });
   } catch {
     // Best effort: a failed cursor write just means we replay a little more
     // next startup, which durable ingress tombstones reject by GUID.

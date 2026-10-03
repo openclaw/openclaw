@@ -1,5 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveStoredModelOverride } from "./stored-model-overrides.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  resolveDirectStoredModelOverride,
+  resolveStoredModelOverride,
+} from "./stored-model-overrides.js";
+
+function resolveParentOverride(parent: Partial<SessionEntry>) {
+  const parentKey = "agent:main:discord:channel:root";
+  return resolveStoredModelOverride({
+    defaultProvider: "openai",
+    sessionKey: `${parentKey}:thread:child`,
+    sessionStore: { [parentKey]: { sessionId: "parent-session", updatedAt: 1, ...parent } },
+  });
+}
 
 describe("resolveStoredModelOverride", () => {
   it("recovers resolved provenance for legacy auto-fallback overrides", () => {
@@ -48,38 +61,22 @@ describe("resolveStoredModelOverride", () => {
 
   it("does not inherit active automatic fallback overrides from parent sessions", () => {
     expect(
-      resolveStoredModelOverride({
-        defaultProvider: "openai",
-        sessionKey: "agent:main:discord:channel:root:thread:child",
-        sessionStore: {
-          "agent:main:discord:channel:root": {
-            sessionId: "parent-session",
-            updatedAt: 1,
-            providerOverride: "google-vertex",
-            modelOverride: "gemini-fallback",
-            modelOverrideSource: "auto",
-            modelOverrideFallbackOriginProvider: "openai",
-            modelOverrideFallbackOriginModel: "gpt-primary",
-          },
-        },
+      resolveParentOverride({
+        providerOverride: "google-vertex",
+        modelOverride: "gemini-fallback",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "gpt-primary",
       }),
     ).toBeNull();
   });
 
   it("inherits configured automatic selections without fallback provenance", () => {
     expect(
-      resolveStoredModelOverride({
-        defaultProvider: "openai",
-        sessionKey: "agent:main:discord:channel:root:thread:child",
-        sessionStore: {
-          "agent:main:discord:channel:root": {
-            sessionId: "legacy-parent-session",
-            updatedAt: 1,
-            providerOverride: "google-vertex",
-            modelOverride: "gemini-fallback",
-            modelOverrideSource: "auto",
-          },
-        },
+      resolveParentOverride({
+        providerOverride: "google-vertex",
+        modelOverride: "gemini-fallback",
+        modelOverrideSource: "auto",
       }),
     ).toEqual({
       provider: "google-vertex",
@@ -91,11 +88,67 @@ describe("resolveStoredModelOverride", () => {
 
   it("continues to inherit deliberate parent model pins", () => {
     expect(
+      resolveParentOverride({
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        modelOverrideSource: "user",
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      source: "parent",
+      routeResolution: "raw",
+    });
+  });
+
+  it("rejects stale direct fields behind an explicit Default marker", () => {
+    expect(
+      resolveDirectStoredModelOverride({
+        defaultProvider: "openai",
+        sessionEntry: {
+          sessionId: "default-session",
+          updatedAt: 1,
+          modelOverrideSource: "default",
+          providerOverride: "anthropic",
+          modelOverride: "stale-model",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not inherit stale fields from a parent that explicitly selected Default", () => {
+    expect(
       resolveStoredModelOverride({
         defaultProvider: "openai",
-        sessionKey: "agent:main:discord:channel:root:thread:child",
+        sessionKey: "agent:main:dashboard:parent:thread:child",
         sessionStore: {
-          "agent:main:discord:channel:root": {
+          "agent:main:dashboard:parent": {
+            sessionId: "parent-session",
+            updatedAt: 1,
+            modelOverrideSource: "default",
+            providerOverride: "anthropic",
+            modelOverride: "stale-model",
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not inherit a parent pin after the child explicitly selects default", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionEntry: {
+          sessionId: "child-session",
+          updatedAt: 2,
+          modelOverrideSource: "default",
+          providerOverride: "google-vertex",
+          modelOverride: "stale-model",
+        },
+        sessionKey: "agent:main:dashboard:child",
+        parentSessionKey: "agent:main:dashboard:parent",
+        sessionStore: {
+          "agent:main:dashboard:parent": {
             sessionId: "parent-session",
             updatedAt: 1,
             providerOverride: "anthropic",
@@ -104,11 +157,6 @@ describe("resolveStoredModelOverride", () => {
           },
         },
       }),
-    ).toEqual({
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      source: "parent",
-      routeResolution: "raw",
-    });
+    ).toBeNull();
   });
 });

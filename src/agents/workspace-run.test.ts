@@ -3,9 +3,65 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveRunWorkspaceDir } from "./workspace-run.js";
+import { resolveRootedRunRuntimeWorkspace, resolveRunWorkspaceDir } from "./workspace-run.js";
 
 vi.unmock("./agent-scope-config.js");
+
+describe("rooted runtime workspace selection", () => {
+  const canonical = path.resolve("/tmp/rooted-agent-workspace");
+  const executionRoot = path.resolve("/tmp/rooted-task");
+  const config: OpenClawConfig = {
+    agents: { entries: { main: { workspace: canonical } } },
+  };
+
+  it.each([
+    { bootstrapWorkspaceDir: canonical, expected: canonical },
+    { bootstrapWorkspaceDir: `${canonical}/../rooted-agent-workspace`, expected: canonical },
+    { bootstrapWorkspaceDir: executionRoot, expected: undefined },
+    { bootstrapWorkspaceDir: undefined, expected: undefined },
+    { bootstrapWorkspaceDir: "   ", expected: undefined },
+  ])(
+    "only borrows explicit canonical bootstrap $bootstrapWorkspaceDir",
+    ({ bootstrapWorkspaceDir, expected }) => {
+      expect(
+        resolveRootedRunRuntimeWorkspace({
+          config,
+          agentId: "main",
+          workspaceDir: executionRoot,
+          bootstrapWorkspaceDir,
+        })?.workspaceDir,
+      ).toBe(expected);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps same-workspace reload binding unless execution is confined (%s)",
+    (confined) => {
+      expect(
+        resolveRootedRunRuntimeWorkspace({
+          config,
+          agentId: "main",
+          workspaceDir: canonical,
+          bootstrapWorkspaceDir: canonical,
+          ...(confined ? { requireWorkspaceOnly: true, sessionRoot: canonical } : {}),
+        })?.workspaceDir,
+      ).toBe(confined ? canonical : undefined);
+    },
+  );
+
+  it.each([undefined, {}])(
+    "does not invent canonical ownership without a roster (%j)",
+    (missingConfig) => {
+      expect(
+        resolveRootedRunRuntimeWorkspace({
+          config: missingConfig,
+          workspaceDir: executionRoot,
+          bootstrapWorkspaceDir: canonical,
+        }),
+      ).toBeUndefined();
+    },
+  );
+});
 
 describe("resolveRunWorkspaceDir", () => {
   it("resolves explicit workspace values without fallback", () => {
@@ -130,6 +186,31 @@ describe("resolveRunWorkspaceDir", () => {
         config: {},
       }),
     ).toThrow(expect.objectContaining({ code: "RUN_WORKSPACE_ROSTER_REQUIRED" }));
+  });
+
+  it.each(["", "   ", "!!!"])("rejects invalid explicit agent id %j", (agentId) => {
+    expect(() =>
+      resolveRunWorkspaceDir({
+        workspaceDir: path.join(process.cwd(), "tmp", "workspace-main"),
+        agentId,
+        sessionKey: "agent:main:main",
+        config: { agents: { entries: { main: {} } } },
+      }),
+    ).toThrow("Invalid explicit agent id");
+  });
+
+  it("normalizes a valid explicit agent at the selection boundary", () => {
+    const workspaceDir = path.join(process.cwd(), "tmp", "workspace-ops");
+    const result = resolveRunWorkspaceDir({
+      workspaceDir: undefined,
+      agentId: " OPS ",
+      sessionKey: "agent:ops:main",
+      config: { agents: { entries: { ops: { workspace: workspaceDir } } } },
+    });
+
+    expect(result.agentId).toBe("ops");
+    expect(result.agentIdSource).toBe("explicit");
+    expect(result.workspaceDir).toBe(path.resolve(workspaceDir));
   });
 
   it.each([

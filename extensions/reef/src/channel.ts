@@ -21,8 +21,9 @@ import {
   resolveReefConfig,
   type ReefCoreConfig,
 } from "./config-schema.js";
-import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
+import { ReefMessageFlow } from "./flow.js";
 import { ReefFriendManager } from "./friends.js";
+import { createConfiguredGuard } from "./guard.js";
 import { resolveReefInboundDispatchContent } from "./inbound.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import {
@@ -91,22 +92,13 @@ function listTrustedPeerDirectoryEntries(params: {
   }));
 }
 
-function replyText(payload: unknown): string {
-  if (!payload || typeof payload !== "object" || !("text" in payload)) {
-    return "";
-  }
-  return typeof (payload as { text?: unknown }).text === "string"
-    ? (payload as { text: string }).text
-    : "";
-}
-
 function matchesReefToolTarget(target: string, toolContext?: ChannelThreadingToolContext): boolean {
   const currentTarget = toolContext?.currentMessagingTarget ?? toolContext?.currentChannelId;
   const normalizedCurrent = normalizeReefTarget(currentTarget ?? "");
   return normalizedCurrent !== undefined && normalizeReefTarget(target) === normalizedCurrent;
 }
 
-export const reefPlugin: ChannelPlugin<ReefAccount> = {
+export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
   id: "reef",
   meta: {
     id: "reef",
@@ -249,6 +241,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
     }),
   },
   gateway: {
+    apiVersion: 2,
     startAccount: async (ctx) => {
       if (!ctx.account.configured) {
         throw new Error("Reef requires handle, email, and guard config");
@@ -259,7 +252,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         handle: ctx.account.config.handle!,
         relayUrl: parseReefRelayUrl(ctx.account.config.relayUrl),
       };
-      assertReefIdentityBinding(runtime, identityBinding);
+      await assertReefIdentityBinding(runtime, identityBinding);
       const authority = createReefRuntimeAuthority(ctx.abortSignal);
       const transport = new ReefTransportClient(
         ctx.account.config.relayUrl,
@@ -320,7 +313,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           // ReefMessageFlow invokes ingress only after peer trust and guard approval.
           inboundAccessAuthorized: true,
           deliver: async (payload) => {
-            const text = replyText(payload);
+            const text = payload.text ?? "";
             if (text.trim()) {
               await flow.send(message.peer, text, {
                 thread: message.thread ?? message.id,
@@ -386,7 +379,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
               if (!notice.allowResend) {
                 return;
               }
-              const text = replyText(payload);
+              const text = payload.text ?? "";
               if (text.trim()) {
                 resendText = text;
               }
@@ -433,7 +426,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         {
           onError: (error, receiptId) =>
             ctx.log?.error?.(`reef rejection notice failed for ${receiptId}: ${String(error)}`),
-          signal: ctx.abortSignal,
+          scheduler: ctx.scheduler,
         },
       );
       const reconcile = async (signal: AbortSignal) => {
@@ -470,7 +463,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           }),
         createReefWebSocket,
         {
-          initialCursor: inboxCursor.load(),
+          initialCursor: await inboxCursor.load(),
           persistCursor: (cursor) => inboxCursor.advance(cursor),
           onState: (state) => {
             if (ctx.abortSignal.aborted || state !== "connected") {
@@ -496,7 +489,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       );
       try {
         await runReefChannelLifecycle({
-          parentSignal: ctx.abortSignal,
+          scheduler: ctx.scheduler,
           startInbox: (signal) => inbox.start(signal),
           reconcile: async (signal) => {
             // The overdue sweep must run even while the relay is unreachable:
@@ -530,6 +523,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           onReady: activate,
         });
       } finally {
+        await ctx.scheduler.stop();
         authority.release();
         ctx.setStatus({ accountId: "default", running: false, connected: false });
       }

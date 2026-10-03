@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { afterAll, afterEach, expect, it } from "vitest";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginCliLoadSession,
@@ -10,7 +9,7 @@ import {
   loadPluginCliRegistrationEntriesWithDefaults,
 } from "./cli-registry-loader.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
-import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -21,8 +20,8 @@ import {
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-it.each(["retained-agent", "install-roots", "install-state"] as const)(
-  "fences hidden %s changes with unchanged serialized config and env",
+it.each(["system-agent", "install-roots", "install-state"] as const)(
+  "fences %s changes without mutating the supplied config or env",
   async (kind) => {
     const root = fs.realpathSync(makePluginLoaderTempDir());
     for (const id of ["alpha", "beta"]) {
@@ -51,17 +50,20 @@ it.each(["retained-agent", "install-roots", "install-state"] as const)(
     if (kind === "install-state") {
       for (const id of ["alpha", "beta"]) {
         const installPath = path.join(root, id, ".openclaw", "extensions", id);
-        writePersistedInstalledPluginIndexInstallRecordsSync(
-          { [id]: { source: "path", installPath, sourcePath: installPath } },
-          { config: cfg, env, stateDir: path.join(root, id, "state") },
-        );
+        await refreshPersistedInstalledPluginIndex({
+          config: cfg,
+          env,
+          stateDir: path.join(root, id, "state"),
+          reason: "source-changed",
+          installRecords: { [id]: { source: "path", installPath, sourcePath: installPath } },
+        });
       }
     }
-    const serialized = JSON.stringify([cfg, env]);
     const session = createPluginCliLoadSession();
     let previous: Awaited<ReturnType<typeof loadPluginCliRegistrationEntriesWithDefaults>> = [];
     for (const id of ["alpha", "beta"]) {
       const run = async () => {
+        const serialized = JSON.stringify([cfg, env]);
         if (previous.length) {
           await expect(previous[0]!.register(new Command())).rejects.toThrow(
             /preparation inputs changed/,
@@ -90,8 +92,8 @@ it.each(["retained-agent", "install-roots", "install-state"] as const)(
         expect(program.commands.map((command) => command.name())).toEqual([id]);
         expect(JSON.stringify([cfg, env])).toBe(serialized);
       };
-      if (kind === "retained-agent") {
-        retainLegacyDefaultAgentId(cfg, id);
+      if (kind === "system-agent") {
+        cfg.agents!.defaults = { systemAgent: { agentId: id } };
         await run();
       } else {
         await withPluginInstallRoots(

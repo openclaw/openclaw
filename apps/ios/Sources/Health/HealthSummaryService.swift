@@ -14,27 +14,43 @@ enum HealthAuthorization {
     }
 
     static var readTypes: Set<HKObjectType> {
-        var types: Set<HKObjectType> = [HKWorkoutType.workoutType()]
-        if let steps = HKObjectType.quantityType(forIdentifier: .stepCount) {
-            types.insert(steps)
-        }
-        if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
-            types.insert(sleep)
-        }
-        if let restingHeartRate = HKObjectType.quantityType(forIdentifier: .restingHeartRate) {
-            types.insert(restingHeartRate)
-        }
-        return types
+        let types: [HKObjectType?] = [
+            HKWorkoutType.workoutType(),
+            HKObjectType.quantityType(forIdentifier: .stepCount),
+            HKObjectType.categoryType(forIdentifier: .sleepAnalysis),
+            HKObjectType.quantityType(forIdentifier: .restingHeartRate),
+        ]
+        return Set(types.compactMap(\.self))
     }
 
     @MainActor
-    static func enable() async throws {
+    static func enable(isCurrent: @MainActor () -> Bool = { true }) async throws {
         guard self.isAvailable else {
             throw NSError(domain: "Health", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Health data is unavailable on this device.",
             ])
         }
-        try await HKHealthStore().requestAuthorization(toShare: [], read: self.readTypes)
+        let store = HKHealthStore()
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            // The async HealthKit overlay leaves the main actor before starting the OS request.
+            guard !Task.isCancelled, isCurrent() else {
+                continuation.resume(throwing: CancellationError())
+                return
+            }
+            store.requestAuthorization(toShare: [], read: self.readTypes) { [store] success, error in
+                defer { withExtendedLifetime(store) {} }
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if success {
+                    continuation.resume()
+                } else {
+                    continuation.resume(throwing: NSError(
+                        domain: HKErrorDomain,
+                        code: HKError.Code.unknownError.rawValue))
+                }
+            }
+        }
+        guard !Task.isCancelled, isCurrent() else { throw CancellationError() }
         // HealthKit intentionally does not reveal read denial. This flag records only
         // the user's explicit OpenClaw sharing choice, never inferred authorization.
         UserDefaults.standard.set(true, forKey: self.enabledKey)

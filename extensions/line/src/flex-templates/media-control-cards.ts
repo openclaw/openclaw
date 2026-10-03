@@ -1,5 +1,5 @@
-// Line plugin module implements media control cards behavior.
 import { postbackAction, truncateLineActionLabel } from "../actions.js";
+import { createCardBubble, createCardTitle } from "./common.js";
 import type {
   FlexBox,
   FlexBubble,
@@ -16,12 +16,6 @@ function horizontalRow(
   return { type: "box", layout: "horizontal", contents, ...options };
 }
 
-/**
- * Create a media player card for Sonos, Spotify, Apple Music, etc.
- *
- * Editorial design: Album art hero with gradient overlay for text,
- * prominent now-playing indicator, refined playback controls.
- */
 export function createMediaPlayerCard(params: {
   title: string;
   subtitle?: string;
@@ -38,18 +32,7 @@ export function createMediaPlayerCard(params: {
   extraActions?: Array<{ label: string; data: string }>;
 }): FlexBubble {
   const { title, subtitle, source, imageUrl, isPlaying, progress, controls, extraActions } = params;
-
-  // Track info section
-  const trackInfo: FlexComponent[] = [
-    {
-      type: "text",
-      text: title,
-      weight: "bold",
-      size: "xl",
-      color: "#111111",
-      wrap: true,
-    } as FlexText,
-  ];
+  const trackInfo: FlexComponent[] = [createCardTitle(title)];
 
   if (subtitle) {
     trackInfo.push({
@@ -61,8 +44,6 @@ export function createMediaPlayerCard(params: {
       margin: "sm",
     } as FlexText);
   }
-
-  // Status row with source and playing indicator
   const statusItems: FlexComponent[] = [];
 
   if (isPlaying !== undefined) {
@@ -125,19 +106,7 @@ export function createMediaPlayerCard(params: {
     bodyContents.push(horizontalRow(statusItems, { margin: "lg", alignItems: "center" }));
   }
 
-  const bubble: FlexBubble = {
-    type: "bubble",
-    size: "mega",
-    body: {
-      type: "box",
-      layout: "vertical",
-      contents: bodyContents,
-      paddingAll: "xl",
-      backgroundColor: "#FFFFFF",
-    },
-  };
-
-  // Album art hero
+  const bubble = createCardBubble(bodyContents);
   if (imageUrl) {
     bubble.hero = {
       type: "image",
@@ -147,8 +116,6 @@ export function createMediaPlayerCard(params: {
       aspectMode: "cover",
     } as FlexImage;
   }
-
-  // Control buttons in footer
   if (controls || extraActions?.length) {
     const footerContents: FlexComponent[] = [];
 
@@ -183,8 +150,6 @@ export function createMediaPlayerCard(params: {
         footerContents.push(horizontalRow(controlButtons));
       }
     }
-
-    // Extra actions
     if (extraActions?.length) {
       footerContents.push(
         horizontalRow(
@@ -218,9 +183,6 @@ export function createMediaPlayerCard(params: {
   return bubble;
 }
 
-/**
- * Create an Apple TV remote card with a D-pad and control rows.
- */
 export function createAppleTvRemoteCard(params: {
   deviceName: string;
   status?: string;
@@ -241,16 +203,7 @@ export function createAppleTvRemoteCard(params: {
 }): FlexBubble {
   const { deviceName, status, actionData } = params;
 
-  const headerContents: FlexComponent[] = [
-    {
-      type: "text",
-      text: deviceName,
-      weight: "bold",
-      size: "xl",
-      color: "#111111",
-      wrap: true,
-    } as FlexText,
-  ];
+  const headerContents: FlexComponent[] = [createCardTitle(deviceName)];
 
   if (status) {
     headerContents.push({
@@ -304,37 +257,21 @@ export function createAppleTvRemoteCard(params: {
     ),
   ];
 
-  return {
-    type: "bubble",
-    size: "mega",
-    body: {
+  return createCardBubble([
+    {
       type: "box",
       layout: "vertical",
-      contents: [
-        {
-          type: "box",
-          layout: "vertical",
-          contents: headerContents,
-        } as FlexBox,
-        {
-          type: "separator",
-          margin: "lg",
-          color: "#EEEEEE",
-        },
-        ...controlRows,
-      ],
-      paddingAll: "xl",
-      backgroundColor: "#FFFFFF",
+      contents: headerContents,
     },
-  };
+    {
+      type: "separator",
+      margin: "lg",
+      color: "#EEEEEE",
+    },
+    ...controlRows,
+  ]);
 }
 
-/**
- * Create a device control card for Apple TV, smart home devices, etc.
- *
- * Editorial design: Device-focused header with status indicator,
- * clean control grid with clear visual hierarchy.
- */
 export function createDeviceControlCard(params: {
   deviceName: string;
   deviceType?: string;
@@ -349,12 +286,9 @@ export function createDeviceControlCard(params: {
   }>;
 }): FlexBubble {
   const { deviceName, deviceType, status, isOnline, imageUrl, controls } = params;
-
-  // Device header with status indicator
   const headerContents: FlexComponent[] = [
     horizontalRow(
       [
-        // Status dot
         {
           type: "box",
           layout: "vertical",
@@ -365,15 +299,10 @@ export function createDeviceControlCard(params: {
           cornerRadius: "5px",
         } as FlexBox,
         {
-          type: "text",
-          text: deviceName,
-          weight: "bold",
-          size: "xl",
-          color: "#111111",
-          wrap: true,
+          ...createCardTitle(deviceName),
           flex: 1,
           margin: "md",
-        } as FlexText,
+        },
       ],
       { alignItems: "center" },
     ),
@@ -409,17 +338,7 @@ export function createDeviceControlCard(params: {
     } as FlexBox);
   }
 
-  const bubble: FlexBubble = {
-    type: "bubble",
-    size: "mega",
-    body: {
-      type: "box",
-      layout: "vertical",
-      contents: headerContents,
-      paddingAll: "xl",
-      backgroundColor: "#FFFFFF",
-    },
-  };
+  const bubble = createCardBubble(headerContents);
 
   if (imageUrl) {
     bubble.hero = {
@@ -430,8 +349,6 @@ export function createDeviceControlCard(params: {
       aspectMode: "cover",
     } as FlexImage;
   }
-
-  // Control buttons in refined grid layout (2 per row)
   if (controls.length > 0) {
     const rows: FlexComponent[] = [];
     const limitedControls = controls.slice(0, 6);
@@ -451,8 +368,6 @@ export function createDeviceControlCard(params: {
           margin: offset > 0 ? "md" : undefined,
         } as FlexButton);
       }
-
-      // If odd number of controls in last row, add spacer
       if (rowButtons.length === 1) {
         rowButtons.push({
           type: "filler",

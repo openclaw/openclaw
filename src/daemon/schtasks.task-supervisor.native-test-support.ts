@@ -1,8 +1,17 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
-import { readWindowsProcessSnapshot } from "./schtasks-process.js";
+import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
+import { readWindowsProcessSnapshot, terminateGatewayProcessTree } from "./schtasks-process.js";
+import { launchFallbackTaskScript, resolveFallbackRuntime } from "./schtasks-runtime.js";
+import { resolveDiagnosticReplacements } from "./schtasks.integration-observation.test-support.js";
+import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
+import {
+  WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MAX,
+  WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MIN,
+} from "./windows-task-supervisor-contract.js";
 
 const WAIT_INTERVAL_MS = 200;
 const WAIT_TIMEOUT_MS = 30_000;
@@ -16,8 +25,21 @@ type WindowsProcessDiagnostic = {
 export type GatewayTaskSupervisorProbe = {
   childPidPath: string;
   failedAttemptPidPath: string;
+  failedSupervisorPidPath: string;
   probePath: string;
   supervisorPidPath: string;
+};
+
+type GatewayTaskSupervisorProcesses = { childPid: number; supervisorPid: number };
+type ExactProbeRun = { pid: number; ppid: number };
+type HostedLifecycleEvent = {
+  phase: string;
+  code?: number;
+  outcome?: string;
+  reason?: string;
+  roots?: number;
+  active?: number;
+  queued?: number;
 };
 
 async function sleep(): Promise<void> {
@@ -39,25 +61,58 @@ async function waitForRecordedPid(pidPath: string, label: string): Promise<numbe
   throw new Error(`Timed out waiting for Scheduled Task ${label} process id`);
 }
 
-async function waitForProcessExit(pid: number): Promise<void> {
+export function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+export async function waitForProcessExit(pid: number): Promise<void> {
   const deadline = Date.now() + WAIT_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
-        return;
-      }
+    if (!isProcessAlive(pid)) {
+      return;
     }
     await sleep();
   }
   throw new Error(`Timed out waiting for Scheduled Task process ${pid} to exit`);
 }
 
+export function stopGatewayTaskWithPowerShell(taskName: string): void {
+  const encodedTaskName = Buffer.from(taskName, "utf8").toString("base64");
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    `$taskName=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedTaskName}'))`,
+    "Stop-ScheduledTask -TaskName $taskName -TaskPath '\\' -ErrorAction Stop",
+  ].join("; ");
+  const result = spawnSync(
+    getWindowsPowerShellExePath(),
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64"),
+    ],
+    { encoding: "utf8", timeout: 5_000, windowsHide: true },
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `Stop-ScheduledTask failed for ${taskName}: ${result.stderr.trim() || `PowerShell exited ${result.status ?? "without status"}`}`,
+    );
+  }
+}
+
 export function createGatewayTaskSupervisorProbe(rootDir: string): GatewayTaskSupervisorProbe {
   return {
     childPidPath: path.join(rootDir, "child-pid.txt"),
     failedAttemptPidPath: path.join(rootDir, "failed-attempt-pid.txt"),
+    failedSupervisorPidPath: path.join(rootDir, "failed-supervisor-pid.txt"),
     probePath: path.join(rootDir, "probe.mts"),
     supervisorPidPath: path.join(rootDir, "supervisor-pid.txt"),
   };
@@ -66,46 +121,87 @@ export function createGatewayTaskSupervisorProbe(rootDir: string): GatewayTaskSu
 export async function writeGatewayTaskSupervisorProbe(params: {
   activePidPath: string;
   eventsPath: string;
+  moduleUrls: { taskSupervisor: URL; hostedStop: URL };
   probe: GatewayTaskSupervisorProbe;
+  stateDir: string;
 }): Promise<void> {
-  const taskSupervisorModuleUrl = pathToFileURL(
-    path.resolve("src/cli/gateway-cli/task-supervisor.ts"),
-  ).href;
+  const errorPathPattern = [
+    ...resolveDiagnosticReplacements({
+      rootDir: path.dirname(params.probe.probePath),
+      stateDir: params.stateDir,
+    }).map(([value]) => value),
+    process.cwd(),
+  ]
+    .filter(Boolean)
+    .flatMap((value) => [
+      value,
+      value.replaceAll("/", "\\"),
+      value.replaceAll("\\", "/"),
+      pathToFileURL(value).href,
+    ])
+    .toSorted((left, right) => right.length - left.length)
+    .map((value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
+    .join("|");
   await fs.writeFile(
     params.probe.probePath,
     [
-      'import { spawn } from "node:child_process";',
       'import fs from "node:fs";',
-      'import net from "node:net";',
-      `import { runWindowsGatewayTaskSupervisor } from ${JSON.stringify(taskSupervisorModuleUrl)};`,
+      // Bound Scheduler's inherited logon environment before importing product
+      // owners. Actions service tokens must not reach the supervisor or Gateway.
+      "const allowedEnv = new Set([",
+      '  "SYSTEMROOT", "WINDIR", "COMSPEC", "PATH", "PATHEXT", "TEMP", "TMP",',
+      '  "USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",',
+      '  "OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH",',
+      '  "OPENCLAW_GATEWAY_PORT", "OPENCLAW_SERVICE_KIND", "OPENCLAW_SERVICE_MARKER",',
+      '  "OPENCLAW_WINDOWS_TASK_NAME", "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER",',
+      "]);",
+      "for (const key of Object.keys(process.env)) if (!allowedEnv.has(key.toUpperCase())) delete process.env[key];",
       "const eventsPath = process.argv[5];",
       "const activePidPath = process.argv[6];",
       "const childPidPath = process.argv[7];",
       "const supervisorPidPath = process.argv[8];",
       "const failedAttemptPidPath = process.argv[9];",
-      "const appendEvent = (phase) => fs.appendFileSync(eventsPath, `${JSON.stringify({ phase, pid: process.pid, ppid: process.ppid })}\\n`);",
+      "const failedSupervisorPidPath = process.argv[10];",
+      "const appendEvent = (phase, details = {}) => fs.appendFileSync(phase === 'started' || phase === 'listening' ? eventsPath : eventsPath + '.hosted-stop', `${JSON.stringify({ phase, pid: process.pid, ppid: process.ppid, ...details })}\\n`);",
+      "process.once('exit', (code) => appendEvent('process-exit', { code }));",
+      "appendEvent('bounded-environment', { keys: Object.keys(process.env).map((key) => key.toUpperCase()).sort() });",
       "if (process.argv.includes('--task-supervisor')) {",
       "  fs.writeFileSync(supervisorPidPath, String(process.pid));",
+      `  const { runWindowsGatewayTaskSupervisor } = await import(${JSON.stringify(params.moduleUrls.taskSupervisor.href)});`,
       "  await runWindowsGatewayTaskSupervisor();",
+      "  appendEvent('supervisor-joined', { code: process.exitCode ?? 0 });",
       "} else if (!fs.existsSync(failedAttemptPidPath)) {",
+      // Preserve this run's supervisor before a recovery launch overwrites its live PID file.
+      "  fs.copyFileSync(supervisorPidPath, failedSupervisorPidPath);",
       "  fs.writeFileSync(failedAttemptPidPath, String(process.pid));",
       "  process.exit(23);",
       "} else {",
       'const portIndex = process.argv.indexOf("--port");',
       "const port = Number.parseInt(process.argv[portIndex + 1] ?? '', 10);",
       "if (!Number.isInteger(port) || port < 1) throw new Error('Missing gateway --port');",
-      "const activePidTempPath = `${activePidPath}.${process.pid}.tmp`;",
-      "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
-      "fs.writeFileSync(childPidPath, String(child.pid));",
-      "const server = net.createServer((socket) => socket.end());",
       'appendEvent("started");',
-      "server.listen({ host: '127.0.0.1', port, exclusive: true }, () => {",
-      "  fs.writeFileSync(activePidTempPath, String(process.pid));",
-      "  fs.renameSync(activePidTempPath, activePidPath);",
-      '  appendEvent("listening");',
-      "});",
-      "server.on('error', (error) => { console.error(error); process.exit(1); });",
-      "setInterval(() => {}, 1000).unref();",
+      "try {",
+      `  const { runHostedStopNativeProbe } = await import(${JSON.stringify(params.moduleUrls.hostedStop.href)});`,
+      "  await runHostedStopNativeProbe({ port, activePidPath, childPidPath, appendEvent });",
+      "} catch (error) {",
+      "  try {",
+      `    const paths = new RegExp(${JSON.stringify(errorPathPattern)}, "giu");`,
+      "    const sanitize = (value, max) => value.replace(paths, '<fixture>').slice(0, max);",
+      "    const stack = error instanceof Error ? error.stack : undefined;",
+      "    const stackFrames = typeof stack === 'string'",
+      "      ? sanitize(stack, 8192).split(/\\r?\\n/u)",
+      "          .filter((line) => /^\\s+at\\s/u.test(line) && !/\\b(?:data:|eval at\\b)/iu.test(line))",
+      "          .slice(0, 8).join('\\n').slice(0, 2048)",
+      "      : null;",
+      "    appendEvent('startup-failed', {",
+      "      errorName: sanitize(error instanceof Error ? error.name : 'NonError', 80),",
+      "      errorCode: typeof error?.code === 'string' ? sanitize(error.code, 80) : null,",
+      "      message: sanitize(error instanceof Error ? error.message : 'Non-error startup failure', 500),",
+      "      stack: stackFrames || null,",
+      "    });",
+      "  } catch {}",
+      "  throw error;",
+      "}",
       "}",
       "",
     ].join("\n"),
@@ -121,8 +217,6 @@ export function buildGatewayTaskSupervisorProgramArguments(params: {
 }): string[] {
   return [
     process.execPath,
-    "--import",
-    "tsx",
     params.probe.probePath,
     "gateway",
     "--port",
@@ -132,22 +226,24 @@ export function buildGatewayTaskSupervisorProgramArguments(params: {
     params.probe.childPidPath,
     params.probe.supervisorPidPath,
     params.probe.failedAttemptPidPath,
+    params.probe.failedSupervisorPidPath,
   ];
 }
 
 export async function waitForGatewayTaskSupervisorProcesses(params: {
   probe: GatewayTaskSupervisorProbe;
-  requireFailedAttempt?: boolean;
+  failedAttempt?: boolean;
 }): Promise<{ childPid: number; supervisorPid: number }> {
+  const childPidPath = params.failedAttempt
+    ? params.probe.failedAttemptPidPath
+    : params.probe.childPidPath;
+  const supervisorPidPath = params.failedAttempt
+    ? params.probe.failedSupervisorPidPath
+    : params.probe.supervisorPidPath;
   const [childPid, supervisorPid] = await Promise.all([
-    waitForRecordedPid(params.probe.childPidPath, "child"),
-    waitForRecordedPid(params.probe.supervisorPidPath, "supervisor"),
+    waitForRecordedPid(childPidPath, "child"),
+    waitForRecordedPid(supervisorPidPath, "supervisor"),
   ]);
-  if (params.requireFailedAttempt) {
-    await waitForProcessExit(
-      await waitForRecordedPid(params.probe.failedAttemptPidPath, "failed child"),
-    );
-  }
   return { childPid, supervisorPid };
 }
 
@@ -168,6 +264,126 @@ export async function waitForGatewayTaskSupervisorExit(pids: {
   supervisorPid: number;
 }): Promise<void> {
   await Promise.all([waitForProcessExit(pids.childPid), waitForProcessExit(pids.supervisorPid)]);
+}
+
+export function expectPlannedGatewayRestartEvents(events: HostedLifecycleEvent[]): void {
+  expect(events.find((event) => event.phase === "boot-completion")).toMatchObject({
+    outcome: "planned_restart",
+  });
+  const restartExitCode = events.find((event) => event.phase === "gateway-exit")?.code;
+  expect(restartExitCode).toBeGreaterThanOrEqual(WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MIN);
+  expect(restartExitCode).toBeLessThanOrEqual(WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MAX);
+  expect(events.find((event) => event.phase === "process-exit")?.code).toBe(restartExitCode);
+}
+
+export function expectCleanHostedGatewayStopEvents(events: HostedLifecycleEvent[]): void {
+  const phases = events.map((event) => event.phase);
+  expect(phases).not.toContain("request-failed");
+  expect(phases.filter((phase) => phase === "caller-live").length).toBeGreaterThan(1);
+  expect(phases.filter((phase) => phase !== "caller-live")).toEqual([
+    "bounded-environment",
+    "operation-settled",
+    "response-finished",
+    "close",
+    "descendant-exit",
+    "boot-completion",
+    "gateway-exit",
+    "process-exit",
+  ]);
+  expect(events.find((event) => event.phase === "close")).toMatchObject({
+    roots: 0,
+    active: 0,
+    queued: 0,
+  });
+  expect(events.find((event) => event.phase === "boot-completion")).toMatchObject({
+    outcome: "clean_stop",
+    reason: "stop (hosted Gateway stop)",
+  });
+  for (const phase of ["descendant-exit", "gateway-exit", "process-exit"]) {
+    expect(events.find((event) => event.phase === phase)?.code).toBe(0);
+  }
+}
+
+export async function proveHostedGatewayRestart(params: {
+  canBindLoopbackPort: (port: number) => Promise<boolean>;
+  eventsPath: string;
+  expectedRunCount: number;
+  gatewayPort: number;
+  previousGatewayPid: number;
+  previousProcesses: GatewayTaskSupervisorProcesses;
+  probe: GatewayTaskSupervisorProbe;
+  waitForExactProbeRun: (eventsPath: string, count: number) => Promise<ExactProbeRun>;
+}): Promise<{
+  gatewayPid: number;
+  portRecovered: boolean;
+  processes: GatewayTaskSupervisorProcesses;
+  response: unknown;
+}> {
+  const response = await fetch(`http://127.0.0.1:${params.gatewayPort}/approved-restart`, {
+    method: "POST",
+    signal: AbortSignal.timeout(WAIT_TIMEOUT_MS),
+  });
+  expect(response.status).toBe(200);
+  const scheduled = await response.json();
+  expect(scheduled).toEqual({ outcome: "scheduled", nativeCompleted: false });
+  await Promise.all([
+    waitForProcessExit(params.previousGatewayPid),
+    waitForProcessExit(params.previousProcesses.childPid),
+  ]);
+  const run = await params.waitForExactProbeRun(params.eventsPath, params.expectedRunCount);
+  const processes = await waitForGatewayTaskSupervisorProcesses({ probe: params.probe });
+  expect(run.pid).not.toBe(params.previousGatewayPid);
+  expect(processes.childPid).not.toBe(params.previousProcesses.childPid);
+  expect(processes.supervisorPid).toBe(params.previousProcesses.supervisorPid);
+  expect(isProcessAlive(run.pid)).toBe(true);
+  expect(isProcessAlive(processes.childPid)).toBe(true);
+  expectGatewayTaskSupervisorProcessAlive(processes.supervisorPid, params.probe.probePath);
+  const portRecovered = !(await params.canBindLoopbackPort(params.gatewayPort));
+  expect(portRecovered).toBe(true);
+  return { gatewayPid: run.pid, portRecovered, processes, response: scheduled };
+}
+
+export async function proveStartupFallbackGatewayControl(params: {
+  activePidPath: string;
+  clearActivePid: (activePidPath: string, pid: number) => Promise<void>;
+  command: GatewayServiceCommandConfig;
+  env: GatewayServiceEnv;
+  eventsPath: string;
+  expectedRunCount: number;
+  gatewayPort: number;
+  probe: GatewayTaskSupervisorProbe;
+  waitForExactProbeRun: (eventsPath: string, count: number) => Promise<ExactProbeRun>;
+  waitForLoopbackPortRelease: (port: number) => Promise<void>;
+}): Promise<{
+  childPid: number;
+  gatewayPid: number;
+  matchedGatewayPid: number | undefined;
+  stopped: true;
+  supervisorPid: number;
+}> {
+  await Promise.all([
+    fs.rm(params.activePidPath, { force: true }),
+    fs.rm(params.probe.childPidPath, { force: true }),
+    fs.rm(params.probe.supervisorPidPath, { force: true }),
+  ]);
+  await launchFallbackTaskScript(params.env, params.command);
+  const run = await params.waitForExactProbeRun(params.eventsPath, params.expectedRunCount);
+  const processes = await waitForGatewayTaskSupervisorProcesses({ probe: params.probe });
+  expect(isProcessAlive(run.pid)).toBe(true);
+  expect(isProcessAlive(processes.childPid)).toBe(true);
+  expectGatewayTaskSupervisorProcessAlive(processes.supervisorPid, params.probe.probePath);
+  const runtime = await resolveFallbackRuntime(params.env, params.command, "control");
+  expect(runtime).toMatchObject({ status: "running", pid: run.pid });
+  await terminateGatewayProcessTree(run.pid, 300);
+  await Promise.all([waitForProcessExit(run.pid), waitForGatewayTaskSupervisorExit(processes)]);
+  await params.clearActivePid(params.activePidPath, run.pid);
+  await params.waitForLoopbackPortRelease(params.gatewayPort);
+  return {
+    gatewayPid: run.pid,
+    ...processes,
+    matchedGatewayPid: runtime.pid,
+    stopped: true,
+  };
 }
 
 export function expectScheduledTaskProbeOrigin(params: {

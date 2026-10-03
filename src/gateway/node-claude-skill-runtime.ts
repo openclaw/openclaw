@@ -174,7 +174,12 @@ export async function prepareNodeClaudeSkillRuntime(
     assertCurrent();
     const resources: SkillResourceDelivery | undefined = run.skillsSnapshot?.librarySelections
       ?.length
-      ? await prepareSkillResourceDelivery(run.skillsSnapshot, assertCurrent)
+      ? await prepareSkillResourceDelivery(
+          run.skillsSnapshot,
+          assertCurrent,
+          [],
+          context.workspaceDir,
+        )
       : undefined;
     assertCurrent();
     const workshop = context.nodeSkillWorkshop;
@@ -238,7 +243,7 @@ export async function invokeNodeClaudeSkillRuntime(params: {
     maxMessageBytes: NODE_CLAUDE_SKILLS_MESSAGE_BYTES,
     sendFrame(frame) {
       assertCurrent();
-      registry.sendInvokeInput(invokeId!, JSON.parse(frame));
+      registry.sendInvokeInput(invokeId!, frame);
     },
     onReady() {
       assertCurrent();
@@ -293,7 +298,7 @@ export async function invokeNodeClaudeSkillRuntime(params: {
       expectedPairingGeneration: runtime.node.pairingGeneration,
       isDispatchAuthorized: () => {
         runtime.assertCurrent();
-        return !signal.aborted;
+        return !signal.aborted && params.invocation.isDispatchAuthorized?.() !== false;
       },
       onDispatchReady: (id) => {
         invokeId = id;

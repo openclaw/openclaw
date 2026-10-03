@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   QA_EVIDENCE_FILENAME,
   validateQaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import {
   parseDoctorGatewayStartupRecoveryOptions,
   resolveSystemdRecoveryPermission,

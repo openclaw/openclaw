@@ -1,10 +1,8 @@
-// Mattermost plugin module implements reactions behavior.
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeMattermostMessagingTarget } from "../normalize.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -61,30 +59,14 @@ async function resolveBotUserId(
   return userId;
 }
 
-export async function addMattermostReaction(params: {
-  cfg: OpenClawConfig;
-  postId: string;
-  emojiName: string;
-  accountId?: string | null;
-  authorizedTarget?: string;
-  conversationReadOrigin?: ConversationReadInvocationOrigin;
-  fetchImpl?: MattermostFetch;
-}): Promise<Result> {
+export async function addMattermostReaction(params: ReactionParams): Promise<Result> {
   return runMattermostReaction(params, {
     action: "add",
     mutation: createReaction,
   });
 }
 
-export async function removeMattermostReaction(params: {
-  cfg: OpenClawConfig;
-  postId: string;
-  emojiName: string;
-  accountId?: string | null;
-  authorizedTarget?: string;
-  conversationReadOrigin?: ConversationReadInvocationOrigin;
-  fetchImpl?: MattermostFetch;
-}): Promise<Result> {
+export async function removeMattermostReaction(params: ReactionParams): Promise<Result> {
   return runMattermostReaction(params, {
     action: "remove",
     mutation: deleteReaction,
@@ -179,7 +161,7 @@ async function runMattermostReaction(
     baseUrl,
     botToken,
     fetchImpl: params.fetchImpl,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(resolved.config),
+    allowPrivateNetwork: resolved.config.network?.dangerouslyAllowPrivateNetwork === true,
   });
 
   const cacheKey = `${baseUrl}:${botToken}`;
@@ -210,22 +192,22 @@ async function runMattermostReaction(
 }
 
 async function createReaction(client: MattermostClient, params: MutationPayload): Promise<void> {
-  await client.request<Record<string, unknown>>("/reactions", {
+  await client.request<void>("/reactions", {
     method: "POST",
     body: JSON.stringify({
       user_id: params.userId,
       post_id: params.postId,
       emoji_name: params.emojiName,
     }),
+    discardResponse: true,
   });
 }
 
 async function deleteReaction(client: MattermostClient, params: MutationPayload): Promise<void> {
   const emoji = encodeURIComponent(params.emojiName);
-  await client.request<unknown>(
-    `/users/${params.userId}/posts/${params.postId}/reactions/${emoji}`,
-    {
-      method: "DELETE",
-    },
-  );
+  // Mattermost answers with 200 {"status":"OK"}, not 204.
+  await client.request<void>(`/users/${params.userId}/posts/${params.postId}/reactions/${emoji}`, {
+    method: "DELETE",
+    discardResponse: true,
+  });
 }

@@ -36,7 +36,8 @@
   background: var(--bg-elevated);
 }
 
-.channels-tile img {
+.channels-tile img,
+.channels-cover img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -62,10 +63,10 @@
   background: var(--bg-elevated);
 }
 
-.channels-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+.channels-cover--icon img {
+  width: 96px;
+  height: 96px;
+  border-radius: var(--radius-lg);
 }
 
 .channels-cover--fallback {
@@ -77,18 +78,20 @@
   text-shadow: 0 1px 3px rgb(0 0 0 / 25%);
 }
 
-/* ---------- detail overlay ---------- */
-
-.channels-detail {
+.channels-detail,
+.channels-wizard {
   display: flex;
   flex-direction: column;
-  width: min(680px, calc(100vw - 48px));
-  max-height: min(85dvh, 860px);
   overflow-y: auto;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
   background: var(--popover);
   box-shadow: var(--shadow-xl);
+}
+
+.channels-detail {
+  width: min(680px, calc(100vw - 48px));
+  max-height: min(85dvh, 860px);
 }
 
 .channels-detail__header {
@@ -117,13 +120,15 @@
   padding: 7px;
 }
 
+.channels-detail__close svg {
+  stroke-width: 2;
+}
+
 .channels-detail__body {
   display: grid;
   gap: var(--space-3);
   padding: var(--space-4) var(--space-4) var(--space-5);
 }
-
-/* ---------- DM sender access requests ---------- */
 
 .channels-pairing-filters {
   display: flex;
@@ -139,10 +144,6 @@
   gap: var(--space-1);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
-}
-
-.channels-pairing-filters select {
-  width: 100%;
 }
 
 .channels-pairing-feedback {
@@ -232,18 +233,9 @@
   }
 }
 
-/* ---------- setup wizard dialog ---------- */
-
 .channels-wizard {
-  display: flex;
-  flex-direction: column;
   width: min(540px, calc(100vw - 48px));
   max-height: min(85dvh, 760px);
-  overflow-y: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  background: var(--popover);
-  box-shadow: var(--shadow-xl);
 }
 
 .channels-wizard__header {
@@ -284,23 +276,7 @@
   padding: var(--space-3) var(--space-4) var(--space-4);
 }
 
-.channels-wizard__note {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  background: var(--bg-elevated);
-  color: var(--text);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.5;
-}
-
-.channels-wizard__note--code {
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-}
-
+.channels-wizard__note,
 .channels-wizard__output {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -309,6 +285,14 @@
   line-height: 1.5;
 }
 
+.channels-wizard__note {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--bg-elevated);
+}
+
+.channels-wizard__note--code,
 .channels-wizard__output--code {
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
@@ -382,11 +366,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-}
-
-.channels-wizard__link,
-.channels-wizard__link:hover {
-  text-decoration: none;
 }
 
 .channels-wizard__footer {

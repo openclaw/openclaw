@@ -1,6 +1,14 @@
-// Control UI controller manages form utils gateway state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
+import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
+import { translateActive } from "../i18n/lib/translate.ts";
+
+export function isSensitiveLeafValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0 && !/^\$\{[^}]*\}$/.test(value.trim());
+  }
+  return value !== undefined && value !== null;
+}
 
 export type JsonSchema = {
   type?: string | string[];
@@ -32,6 +40,7 @@ export type JsonSchema = {
   anyOf?: JsonSchema[];
   oneOf?: JsonSchema[];
   allOf?: JsonSchema[];
+  not?: JsonSchema | boolean;
   nullable?: boolean;
 };
 
@@ -71,16 +80,23 @@ export function pathKey(path: Array<string | number>): string {
 
 const wildcardHintCache = new WeakMap<ConfigUiHints, Array<[string[], ConfigUiHint]>>();
 
-export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) {
-  const direct = hints[pathKey(path)];
+type ResolvedConfigUiHint = {
+  hint: ConfigUiHint;
+  hintPath: string;
+};
+
+function resolveHintForPath(
+  path: Array<string | number>,
+  hints: ConfigUiHints,
+): ResolvedConfigUiHint | undefined {
+  const directPath = pathKey(path);
+  const direct = hints[directPath];
   if (direct) {
-    return direct;
+    return { hint: direct, hintPath: directPath };
   }
   const segments = path.map(String);
   let wildcardHints = wildcardHintCache.get(hints);
   if (!wildcardHints) {
-    // Schema reloads replace the hints object, so identity safely owns this index.
-    // Reuse it across recursive form and search lookups instead of rescanning the catalog.
     wildcardHints = Object.entries(hints).flatMap(([hintKey, hint]) =>
       hintKey.includes("*") ? [[hintKey.split("."), hint]] : [],
     );
@@ -91,10 +107,31 @@ export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) 
       hintSegments.length === segments.length &&
       hintSegments.every((segment, index) => segment === "*" || segment === segments[index])
     ) {
-      return hint;
+      return { hint, hintPath: hintSegments.join(".") };
     }
   }
   return undefined;
+}
+
+export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) {
+  return resolveHintForPath(path, hints)?.hint;
+}
+
+export function localizedHintForPath(path: Array<string | number>, hints: ConfigUiHints) {
+  const resolved = resolveHintForPath(path, hints);
+  if (!resolved) {
+    return undefined;
+  }
+  const { hint, hintPath } = resolved;
+  return {
+    ...hint,
+    label: hint.label
+      ? (translateActive(configHintTranslationKey(hintPath, "label", hint.label)) ?? hint.label)
+      : hint.label,
+    help: hint.help
+      ? (translateActive(configHintTranslationKey(hintPath, "help", hint.help)) ?? hint.help)
+      : hint.help,
+  };
 }
 
 export function humanize(raw: string) {
@@ -103,10 +140,6 @@ export function humanize(raw: string) {
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .replace(/\s+/g, " ")
     .replace(/^./, (m) => m.toUpperCase());
-}
-
-export function cloneConfigObject<T>(value: T): T {
-  return structuredClone(value);
 }
 
 export function serializeConfigForm(form: Record<string, unknown>): string {
@@ -120,13 +153,7 @@ export function containsRedactedSentinel(value: unknown): boolean {
   const children = Array.isArray(value) ? value : isRecord(value) ? Object.values(value) : [];
   return value === REDACTED_SENTINEL || children.some(containsRedactedSentinel);
 }
-type SanitizeResult = { omitted: true } | { omitted: false; value: unknown };
-
-const OMIT_VALUE: SanitizeResult = { omitted: true };
-
-function keepValue(value: unknown): SanitizeResult {
-  return { omitted: false, value };
-}
+const OMIT_VALUE = Symbol("omit-redacted-config-value");
 
 function sanitizeRedactedValue(params: {
   value: unknown;
@@ -134,15 +161,13 @@ function sanitizeRedactedValue(params: {
   originalRawValue: unknown;
   originalRawPathExists: boolean;
   canOmit: boolean;
-}): SanitizeResult {
+}): unknown {
   if (params.value === REDACTED_SENTINEL) {
-    if (params.originalFormValue !== REDACTED_SENTINEL) {
-      return keepValue(params.value);
-    }
-    if (params.originalRawPathExists) {
-      return keepValue(params.value);
-    }
-    return params.canOmit ? OMIT_VALUE : keepValue(params.value);
+    return params.originalFormValue === REDACTED_SENTINEL &&
+      !params.originalRawPathExists &&
+      params.canOmit
+      ? OMIT_VALUE
+      : params.value;
   }
 
   if (Array.isArray(params.value)) {
@@ -150,22 +175,19 @@ function sanitizeRedactedValue(params: {
       ? params.originalFormValue
       : [];
     const originalRawItems = Array.isArray(params.originalRawValue) ? params.originalRawValue : [];
-    return keepValue(
-      params.value.map((item, index) => {
-        const sanitized = sanitizeRedactedValue({
-          value: item,
-          originalFormValue: originalFormItems[index],
-          originalRawValue: originalRawItems[index],
-          originalRawPathExists: index in originalRawItems,
-          canOmit: false,
-        });
-        return sanitized.omitted ? item : sanitized.value;
+    return params.value.map((item, index) =>
+      sanitizeRedactedValue({
+        value: item,
+        originalFormValue: originalFormItems[index],
+        originalRawValue: originalRawItems[index],
+        originalRawPathExists: index in originalRawItems,
+        canOmit: false,
       }),
     );
   }
 
   if (!isRecord(params.value)) {
-    return keepValue(params.value);
+    return params.value;
   }
 
   const originalFormRecord = isRecord(params.originalFormValue) ? params.originalFormValue : null;
@@ -185,15 +207,15 @@ function sanitizeRedactedValue(params: {
       originalRawPathExists,
       canOmit: true,
     });
-    if (!sanitized.omitted) {
-      next[key] = sanitized.value;
+    if (sanitized !== OMIT_VALUE) {
+      next[key] = sanitized;
     }
   }
 
   if (params.canOmit && Object.keys(next).length === 0 && !params.originalRawPathExists) {
     return OMIT_VALUE;
   }
-  return keepValue(next);
+  return next;
 }
 
 export function sanitizeRedactedFormForSubmit(
@@ -214,7 +236,7 @@ export function sanitizeRedactedFormForSubmit(
     originalRawPathExists: true,
     canOmit: false,
   });
-  return !sanitized.omitted && isRecord(sanitized.value) ? sanitized.value : form;
+  return isRecord(sanitized) ? sanitized : form;
 }
 
 const FORBIDDEN_KEYS = new Set(["__proto__", "prototype", "constructor"]);
@@ -224,7 +246,7 @@ function isForbiddenKey(key: string | number): boolean {
 }
 
 type PathContainer = {
-  current: Record<string, unknown> | unknown[];
+  current: unknown;
   lastKey: string | number;
 };
 
@@ -237,38 +259,30 @@ function resolvePathContainer(
     return null;
   }
 
-  let current: Record<string, unknown> | unknown[] = obj;
+  let current: unknown = obj;
   for (let i = 0; i < path.length - 1; i += 1) {
     const key = path[i];
     const nextKey = path[i + 1];
     if (key === undefined) {
       return null;
     }
-    if (typeof key === "number") {
-      if (!Array.isArray(current)) {
-        return null;
-      }
-      if (current[key] == null) {
-        if (!createMissing) {
-          return null;
-        }
-        current[key] = typeof nextKey === "number" ? [] : ({} as Record<string, unknown>);
-      }
-      current = current[key] as Record<string, unknown> | unknown[];
-      continue;
-    }
-
-    if (typeof current !== "object" || current == null) {
+    if (
+      typeof current !== "object" ||
+      current === null ||
+      (typeof key === "number" && !Array.isArray(current))
+    ) {
       return null;
     }
-    const record = current as Record<string, unknown>;
-    if (record[key] == null) {
+    const record = current as Record<string | number, unknown>;
+    let child = record[key];
+    if (child == null) {
       if (!createMissing) {
         return null;
       }
-      record[key] = typeof nextKey === "number" ? [] : ({} as Record<string, unknown>);
+      child = typeof nextKey === "number" ? [] : {};
+      record[key] = child;
     }
-    current = record[key] as Record<string, unknown> | unknown[];
+    current = child;
   }
 
   const lastKey = path.at(-1);

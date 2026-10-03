@@ -1,9 +1,15 @@
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 // Bash tool helper tests cover conversion from model-facing timeout seconds to
 // timer-safe millisecond values.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
+import { runWithSpawnBroker } from "../../../process/spawn-broker/context.js";
+import { createSpawnBrokerHost } from "../../../process/spawn-broker/host.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { isPidDefinitelyDead } from "../../../shared/pid-alive.js";
 import { buildShellCommandInvocation } from "../../shell-utils.js";
 import {
   expectNativeBashSpill,
@@ -29,12 +35,6 @@ describe("bash tool timeout helpers", () => {
     expect(resolveBashTimeoutMs(undefined)).toBeUndefined();
   });
 
-  it.each([Number.NaN, 0, -1])("rejects invalid timeout %s", (timeout) => {
-    expect(() => resolveBashTimeoutMs(timeout)).toThrow(
-      "Invalid timeout: must be a positive finite number of seconds",
-    );
-  });
-
   it.each([Number.NaN, 0, -1])("rejects invalid timeout %s before execution", async (timeout) => {
     const exec = vi.fn<BashOperations["exec"]>();
     const tool = createBashTool(process.cwd(), { operations: { exec } });
@@ -58,6 +58,83 @@ describe("bash tool timeout helpers", () => {
       stdin: "pipe",
     });
   });
+});
+
+describe("bash tool startup cancellation", () => {
+  it.runIf(process.platform !== "win32").for(["abort", "timeout"] as const)(
+    "settles %s while broker readiness is stalled and cancels the late command",
+    async (reason, { signal }) => {
+      const host = createSpawnBrokerHost();
+      const controller = new AbortController();
+      const admitted = createDeferredCore<ReturnType<typeof host.spawnExeca>>();
+      const spawnExeca = host.spawnExeca.bind(host);
+      const observeSpawn = vi.spyOn(host, "spawnExeca").mockImplementation((...args) => {
+        const command = spawnExeca(...args);
+        admitted.resolve(command);
+        return command;
+      });
+      let paused = false;
+      let remote: ReturnType<typeof host.spawnExeca> | undefined;
+      try {
+        await host.ready();
+        process.kill(host.pid!, "SIGSTOP");
+        paused = true;
+        const tool = createBashTool(process.cwd(), { shellPath: "/bin/bash" });
+        const execution = runWithSpawnBroker(host, () =>
+          tool.execute(
+            `startup-${reason}`,
+            { command: "sleep 30", ...(reason === "timeout" ? { timeout: 0.05 } : {}) },
+            controller.signal,
+          ),
+        );
+        const settled = execution.then(
+          () => ({ status: "success" as const }),
+          (error: unknown) => ({ status: "error" as const, error }),
+        );
+        remote = await withinTest(
+          awaitGateBeforeSettlement(
+            admitted.promise,
+            execution,
+            "Bash settled before requesting a process",
+          ),
+          signal,
+        );
+        if (reason === "abort") {
+          controller.abort();
+        }
+        const outcome = await Promise.race([
+          settled,
+          delay(500).then(() => ({ status: "pending" as const })),
+        ]);
+        expect(outcome.status).toBe("error");
+        if (outcome.status !== "error") {
+          throw new Error("Bash startup did not settle");
+        }
+        expect(outcome.error).toBeInstanceOf(Error);
+        expect(String(outcome.error)).toContain(
+          reason === "abort" ? "Command aborted" : "Command timed out after 0.05 seconds",
+        );
+        process.kill(host.pid!, "SIGCONT");
+        paused = false;
+        await withinTest(remote.result, signal);
+        if (remote.child.pid) {
+          expect(isPidDefinitelyDead(remote.child.pid)).toBe(true);
+        }
+      } finally {
+        if (paused) {
+          process.kill(host.pid!, "SIGCONT");
+        }
+        try {
+          if (remote) {
+            await withinTest(remote.result, signal);
+          }
+        } finally {
+          await host.close();
+          observeSpawn.mockRestore();
+        }
+      }
+    },
+  );
 });
 
 describe("bash tool output lifecycle", () => {
@@ -95,10 +172,10 @@ describe("bash tool output lifecycle", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32").each(nativeBashSpillScenarios)(
+  it.runIf(process.platform !== "win32").for(nativeBashSpillScenarios)(
     "settles real Bash output for %s",
-    async (scenario) => {
-      await expectNativeBashSpill("tool", scenario);
+    async (scenario, { signal }) => {
+      await expectNativeBashSpill("tool", scenario, signal);
     },
   );
 

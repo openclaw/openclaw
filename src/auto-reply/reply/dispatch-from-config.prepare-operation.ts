@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
+import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import {
@@ -10,19 +11,24 @@ import {
   hasShownPluginBindingFallbackNotice,
   markPluginBindingFallbackNoticeShown,
 } from "../../plugins/conversation-binding.js";
+import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
-import type { PluginCommandExecutionReplyOptions } from "../../plugins/plugin-command-runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { ReplyPayload } from "../reply-payload.js";
-import { DispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
+import {
+  DispatchReplyOperationAbortedError,
+  runWithDispatchAbortSignal,
+} from "./dispatch-from-config.abort.js";
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import type { PrepareDispatchOperationContextReadyState } from "./dispatch-from-config.prepare-context.js";
 import {
   loadAbortRuntime,
   loadFastApproveRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
+import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { extractShortModelName } from "./response-prefix-template.js";
+import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
 
 export async function prepareDispatchOperation(state: PrepareDispatchOperationContextReadyState) {
   const {
@@ -63,7 +69,11 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     logKind: "fast_abort" | "fast_approve";
   }) => {
     if (pluginOwnedBinding) {
-      getSessionBindingService().touch(pluginOwnedBinding.bindingId, undefined, pluginOwnedBinding);
+      await getSessionBindingService().touchAsync(
+        pluginOwnedBinding.bindingId,
+        undefined,
+        pluginOwnedBinding,
+      );
     }
     emitMessageReceivedHooks();
     let queuedFinal = false;
@@ -115,8 +125,15 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       result: attachSourceReplyDeliveryMode({ queuedFinal, counts }),
     };
   };
-  const fastAbort = await fastAbortResolver({ ctx, cfg });
+  const fastAbort = await fastAbortResolver({
+    ctx,
+    cfg,
+    isCommandTargetCurrent: params.replyOptions?.isCommandTargetCurrent,
+  });
   if (fastAbort.handled) {
+    if (fastAbort.aborted || (fastAbort.stoppedSubagents ?? 0) > 0) {
+      state.markInboundDedupeReplayUnsafe();
+    }
     return await finishFastCommand({
       payload: {
         text: formatAbortReplyTextResolver(
@@ -149,12 +166,26 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   // Own the session before plugin-bound handlers or message hooks can perform
   // work. Fast abort, fast approval, and inbound dedupe remain ahead of this gate.
   const admissionTicket = params.replyOptions?.[REPLY_ADMISSION_TICKET];
-  if (admissionTicket && !(await admissionTicket.wait(params.replyOptions?.abortSignal))) {
+  if (
+    !state.activeRunSafeCommandTurn &&
+    admissionTicket &&
+    !(await state.traceReplyPhase("reply.wait_admission_ticket", () =>
+      admissionTicket.wait(params.replyOptions?.abortSignal),
+    ))
+  ) {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
   }
-  const preDispatchAcquisition = await state.ensureDispatchReplyOperation(
-    "pre_dispatch",
-    Boolean(pluginOwnedBinding),
+  const assertCurrentBindingRoute = async () => {
+    if (ctx.InternalTurnSource === undefined && readConversationBindingRouteFacts(ctx)) {
+      await assertPreparedConversationBindingRouteCurrent(ctx);
+      if (isPreDispatchOperationAborted()) {
+        throw new DispatchReplyOperationAbortedError();
+      }
+    }
+  };
+  await assertCurrentBindingRoute();
+  const preDispatchAcquisition = await state.traceReplyPhase("reply.admit_pre_dispatch", () =>
+    state.ensureDispatchReplyOperation("pre_dispatch", Boolean(pluginOwnedBinding)),
   );
   if (preDispatchAcquisition.status === "aborted") {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
@@ -182,7 +213,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       result: attachSourceReplyDeliveryMode({
         queuedFinal: false,
         counts: dispatcher.getQueuedCounts(),
-        ...(turnLedger.hasVisibleDelivery() ? { observedReplyDelivery: true } : {}),
+        ...(turnLedger.hasObservedDelivery() ? { observedReplyDelivery: true } : {}),
       }),
     };
   };
@@ -191,15 +222,31 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     if (isPreDispatchOperationAborted()) {
       return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
     }
-    getSessionBindingService().touch(pluginOwnedBinding.bindingId, undefined, pluginOwnedBinding);
-    params.replyOptions ??= {};
+    await getSessionBindingService().touchAsync(
+      pluginOwnedBinding.bindingId,
+      undefined,
+      pluginOwnedBinding,
+    );
+    const currentBinding =
+      await getSessionBindingService().resolveByConversationAsync(pluginOwnedBinding);
     if (
-      shouldBypassPluginOwnedBindingForCommand(
-        ctx,
-        cfg,
-        params.replyOptions as PluginCommandExecutionReplyOptions,
-      )
+      currentBinding?.bindingId !== pluginOwnedBinding.bindingId ||
+      currentBinding.boundAt !== pluginOwnedBinding.boundAt ||
+      currentBinding.targetSessionKey !== state.pluginBindingSessionKey ||
+      currentBinding.targetKind !== state.pluginBindingTargetKind ||
+      currentBinding.metadata?.pluginBindingOwner !== "plugin" ||
+      currentBinding.metadata?.pluginId !== pluginOwnedBinding.pluginId ||
+      currentBinding.metadata?.pluginRoot !== pluginOwnedBinding.pluginRoot
     ) {
+      throw new DispatchSessionRefreshRequiredError(
+        new Error("conversation binding changed while recording activity"),
+      );
+    }
+    if (isPreDispatchOperationAborted()) {
+      return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
+    }
+    params.replyOptions ??= {};
+    if (shouldBypassPluginOwnedBindingForCommand(ctx, cfg, params.replyOptions)) {
       logVerbose(
         `plugin-bound inbound command escaped plugin binding (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to command processing`,
       );
@@ -228,7 +275,11 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       });
       const targetedClaimOutcome = hookRunner?.runInboundClaimForPluginOutcome
         ? await (async () => {
-            await state.prepareHookMediaMetadata();
+            await runWithDispatchAbortSignal(
+              state.getPreDispatchAbortSignal(),
+              state.prepareHookMediaMetadata,
+              state.trackDispatchLifecycleWork,
+            );
             if (isPreDispatchOperationAborted()) {
               throw new DispatchReplyOperationAbortedError();
             }
@@ -236,14 +287,19 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               ...state.hookState.inboundClaimEvent,
               senderIsOwner: bindingAuthorization.senderIsOwner,
             };
-            return await state.runWithDispatchLifecycleAdmission(
+            const claim = state.runWithDispatchLifecycleAdmission(
               async () =>
                 await hookRunner.runInboundClaimForPluginOutcome(
                   pluginOwnedBinding.pluginId,
                   authorizedInboundClaimEvent,
-                  { ...state.hookState.inboundClaimContext, pluginBinding: pluginOwnedBinding },
+                  withClaimingHookAdmission(
+                    { ...state.hookState.inboundClaimContext, pluginBinding: pluginOwnedBinding },
+                    { prepare: assertCurrentBindingRoute },
+                  ),
                 ),
             );
+            state.trackDispatchLifecycleWork(claim);
+            return await claim;
           })()
         : (() => {
             const pluginLoaded =
@@ -315,33 +371,35 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
           }
           break;
         }
-        case "declined": {
-          const transcriptOwner = await persistPluginBindingUserTurn();
-          await sendBindingNotice(
-            { text: buildPluginBindingDeclinedText(pluginOwnedBinding) },
-            "terminal",
-            transcriptOwner,
-          );
-          return await finishPluginBindingDispatch("declined");
-        }
+        case "declined":
         case "error": {
           const transcriptOwner = await persistPluginBindingUserTurn();
-          logVerbose(
-            `plugin-bound inbound claim failed for ${pluginOwnedBinding.pluginId}: ${targetedClaimOutcome.error}`,
-          );
+          if (targetedClaimOutcome.status === "error") {
+            logVerbose(
+              `plugin-bound inbound claim failed for ${pluginOwnedBinding.pluginId}: ${targetedClaimOutcome.error}`,
+            );
+          }
           await sendBindingNotice(
-            { text: buildPluginBindingErrorText(pluginOwnedBinding) },
+            {
+              text:
+                targetedClaimOutcome.status === "error"
+                  ? buildPluginBindingErrorText(pluginOwnedBinding)
+                  : buildPluginBindingDeclinedText(pluginOwnedBinding),
+            },
             "terminal",
             transcriptOwner,
           );
-          return await finishPluginBindingDispatch("error");
+          return await finishPluginBindingDispatch(targetedClaimOutcome.status);
         }
       }
     }
   }
 
   emitMessageReceivedHooks();
-  return { status: "ready" as const, state };
+  return {
+    status: "ready" as const,
+    state: Object.assign(state, { assertCurrentBindingRoute }),
+  };
 }
 
 type PrepareDispatchOperationResult = Awaited<ReturnType<typeof prepareDispatchOperation>>;

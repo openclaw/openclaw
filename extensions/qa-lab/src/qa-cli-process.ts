@@ -1,4 +1,3 @@
-// Qa Lab plugin module runs CLI processes and parses their structured output.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -21,21 +20,12 @@ import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
 const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\x1B\[[0-?]*[ -/]*[@-~]`, "g");
 
-function stripAnsiCodes(text: string) {
-  return text.replace(ANSI_ESCAPE_PATTERN, "");
-}
-
-function findBalancedJsonEnd(text: string, startIndex: number) {
-  const opening = text[startIndex];
-  const firstClosing = opening === "{" ? "}" : opening === "[" ? "]" : "";
-  if (!firstClosing) {
-    return -1;
-  }
-
-  const stack = [firstClosing];
+function parseBalancedJsonPayloadStart(text: string) {
+  // Candidates have already been restricted to lines starting with { or [.
+  const stack = [text[0] === "{" ? "}" : "]"];
   let inString = false;
   let escaping = false;
-  for (let index = startIndex + 1; index < text.length; index += 1) {
+  for (let index = 1; index < text.length; index += 1) {
     const char = text[index];
     if (inString) {
       if (escaping) {
@@ -52,36 +42,19 @@ function findBalancedJsonEnd(text: string, startIndex: number) {
     } else if (char === "{" || char === "[") {
       stack.push(char === "{" ? "}" : "]");
     } else if (char === "}" || char === "]") {
-      if (stack.at(-1) !== char) {
-        return -1;
+      if (stack.pop() !== char) {
+        return undefined;
       }
-      stack.pop();
       if (stack.length === 0) {
-        return index;
+        try {
+          return JSON.parse(text.slice(0, index + 1)) as unknown;
+        } catch {
+          return undefined;
+        }
       }
     }
   }
-  return -1;
-}
-
-function parseBalancedJsonPayloadStart(text: string) {
-  const trimmedStart = text.search(/\S/u);
-  if (trimmedStart < 0) {
-    return undefined;
-  }
-  const char = text[trimmedStart];
-  if (char !== "{" && char !== "[") {
-    return undefined;
-  }
-  const end = findBalancedJsonEnd(text, trimmedStart);
-  if (end <= trimmedStart) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(text.slice(trimmedStart, end + 1)) as unknown;
-  } catch {
-    return undefined;
-  }
+  return undefined;
 }
 
 function isStructuredDiagnosticJson(value: unknown) {
@@ -100,36 +73,11 @@ function isStructuredDiagnosticJson(value: unknown) {
   );
 }
 
-function isMemorySearchJsonPayload(value: unknown) {
-  return isJsonRecord(value) && Array.isArray(value.results);
-}
-
-function isMemoryStatusJsonPayload(value: unknown) {
-  if (Array.isArray(value)) {
-    return true;
-  }
-  return isJsonRecord(value) && value.command === "memory" && value.subcommand === "status";
-}
-
-function resolveQaCliJsonPayloadMatcher(args: readonly string[]) {
-  if (!args.includes("--json")) {
-    return undefined;
-  }
-  if (args[0] === "memory" && args[1] === "search") {
-    return isMemorySearchJsonPayload;
-  }
-  if (args[0] === "memory" && args[1] === "status") {
-    return isMemoryStatusJsonPayload;
-  }
-  return undefined;
-}
-
 function parseQaCliJsonOutput(text: string, args: readonly string[]) {
-  const cleaned = stripAnsiCodes(text).trim();
+  const cleaned = text.replace(ANSI_ESCAPE_PATTERN, "").trim();
   if (!cleaned) {
     return {};
   }
-  const matchesExpectedPayload = resolveQaCliJsonPayloadMatcher(args);
   try {
     return JSON.parse(cleaned) as unknown;
   } catch {
@@ -142,16 +90,24 @@ function parseQaCliJsonOutput(text: string, args: readonly string[]) {
         continue;
       }
       const jsonTail = lines.slice(index).join("\n");
-      try {
-        candidates.push(JSON.parse(jsonTail) as unknown);
-      } catch {
-        const balanced = parseBalancedJsonPayloadStart(jsonTail);
-        if (balanced !== undefined) {
-          candidates.push(balanced);
-        }
+      const balanced = parseBalancedJsonPayloadStart(jsonTail);
+      if (balanced !== undefined) {
+        candidates.push(balanced);
       }
     }
-    const expectedPayload = candidates.find((value) => matchesExpectedPayload?.(value) === true);
+    const expectedPayload = candidates.find((value) => {
+      if (!args.includes("--json") || args[0] !== "memory") {
+        return false;
+      }
+      if (args[1] === "search") {
+        return isJsonRecord(value) && Array.isArray(value.results);
+      }
+      return (
+        args[1] === "status" &&
+        (Array.isArray(value) ||
+          (isJsonRecord(value) && value.command === "memory" && value.subcommand === "status"))
+      );
+    });
     if (expectedPayload !== undefined) {
       return expectedPayload;
     }
@@ -187,22 +143,22 @@ function killQaCliWindowsProcessTree(child: Pick<ChildProcessWithoutNullStreams,
   child.kill("SIGKILL");
 }
 
-async function runQaCli(
-  env: Pick<
-    QaSuiteRuntimeEnv,
-    "gateway" | "repoRoot" | "primaryModel" | "alternateModel" | "providerMode"
-  >,
+export async function runQaCli(
+  env: Pick<QaSuiteRuntimeEnv, "gateway" | "repoRoot">,
   args: string[],
   opts?: { timeoutMs?: number; json?: boolean; env?: NodeJS.ProcessEnv },
 ) {
   const stdout = createQaChildOutputCapture();
   const stdoutTail = createQaChildOutputTail();
   const stderr = createQaChildOutputTail();
-  const distEntryPath = path.join(env.repoRoot, "dist", "index.js");
-  const nodeExecPath = await resolveQaNodeExecPath();
+  const command = env.gateway.cliCommand ?? {
+    executablePath: await resolveQaNodeExecPath(),
+    argsPrefix: [path.join(env.repoRoot, "dist", "index.js")],
+    cwd: env.gateway.tempRoot,
+  };
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(nodeExecPath, [distEntryPath, ...args], {
-      cwd: env.gateway.tempRoot,
+    const child = spawn(command.executablePath, [...command.argsPrefix, ...args], {
+      cwd: command.cwd,
       env: {
         ...env.gateway.runtimeEnv,
         ...opts?.env,
@@ -237,6 +193,11 @@ async function runQaCli(
       const stderrText = formatQaChildOutputTail(stderr, "qa cli stderr");
       return new Error(`qa cli failed (${code ?? "unknown"}): ${stderrText}`);
     };
+    const onStdoutData = (chunk: Buffer) => {
+      appendQaChildOutput(stdout, chunk);
+      appendQaChildOutputTail(stdoutTail, chunk);
+    };
+    const onStderrData = (chunk: Buffer) => appendQaChildOutputTail(stderr, chunk);
     if (process.platform !== "win32") {
       createQaPosixCommandSettlement({
         child,
@@ -269,11 +230,8 @@ async function runQaCli(
           }
           resolve();
         },
-        onStderrData: (chunk) => appendQaChildOutputTail(stderr, chunk),
-        onStdoutData: (chunk) => {
-          appendQaChildOutput(stdout, chunk);
-          appendQaChildOutputTail(stdoutTail, chunk);
-        },
+        onStderrData,
+        onStdoutData,
         processGroupId: child.pid,
         verifyAfterMs: 500,
       });
@@ -283,11 +241,8 @@ async function runQaCli(
       killQaCliWindowsProcessTree(child);
       reject(rejectTimeout());
     }, timeoutMs);
-    child.stdout.on("data", (chunk) => {
-      appendQaChildOutput(stdout, chunk);
-      appendQaChildOutputTail(stdoutTail, chunk);
-    });
-    child.stderr.on("data", (chunk) => appendQaChildOutputTail(stderr, chunk));
+    child.stdout.on("data", onStdoutData);
+    child.stderr.on("data", onStderrData);
     child.once("error", (error) => {
       clearTimeout(timeout);
       reject(error);
@@ -304,5 +259,3 @@ async function runQaCli(
   }
   return parseQaCliJsonOutput(text, args);
 }
-
-export { runQaCli };

@@ -2,6 +2,7 @@
 import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import { resolveEmbeddedAuthCooldownProbePolicy as resolveEmbeddedAuthCooldownProbePolicyActual } from "./embedded-agent-runner/run/auth-controller.js";
 import {
@@ -20,7 +21,11 @@ import {
   installEmbeddedRunnerFastRunE2eMocks,
 } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
+type ProductionModelResolver = typeof import("./embedded-agent-runner/model.js").resolveModelAsync;
+let resolveModelAsyncActual: ProductionModelResolver;
+
 type EmbeddedRunnerModelResolution =
+  | Awaited<ReturnType<ProductionModelResolver>>
   | ReturnType<typeof createResolvedEmbeddedRunnerModel>
   | {
       model?: undefined;
@@ -30,14 +35,16 @@ type EmbeddedRunnerModelResolution =
     };
 
 const runEmbeddedAttemptMock = vi.fn();
+const preparedPluginRegistry = createEmptyPluginRegistry();
 const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>(async () => {
   return undefined;
 });
 const resolveSessionKeyForRequestMock = vi.fn();
 const resolveStoredSessionKeyForSessionIdMock = vi.fn();
 const resolveModelAsyncMock = vi.fn(
-  async (provider: string, modelId: string): Promise<EmbeddedRunnerModelResolution> =>
-    createResolvedEmbeddedRunnerModel(provider, modelId),
+  async (
+    ...[provider, modelId]: Parameters<ProductionModelResolver>
+  ): Promise<EmbeddedRunnerModelResolution> => createResolvedEmbeddedRunnerModel(provider, modelId),
 );
 const ensureOpenClawModelsJsonMock = vi.fn(async () => ({ wrote: false }));
 const loggerWarnMock = vi.fn();
@@ -108,7 +115,10 @@ vi.mock("openclaw/plugin-sdk/llm", async () => {
 const installRunEmbeddedMocks = () => {
   // Install only the runtime seams needed by runner orchestration so tests avoid
   // loading real providers, MCP runtimes, or gateway side effects.
-  installEmbeddedRunnerBaseE2eMocks({ hookRunner: "full" });
+  installEmbeddedRunnerBaseE2eMocks({
+    hookRunner: "full",
+    pluginRegistry: preparedPluginRegistry,
+  });
   installEmbeddedRunnerFastRunE2eMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
   });
@@ -144,6 +154,7 @@ const installRunEmbeddedMocks = () => {
     const actual = await vi.importActual<typeof import("./embedded-agent-runner/model.js")>(
       "./embedded-agent-runner/model.js",
     );
+    resolveModelAsyncActual = actual.resolveModelAsync;
     return {
       ...actual,
       resolveModelAsync: (...args: Parameters<typeof resolveModelAsyncMock>) =>
@@ -216,6 +227,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  preparedPluginRegistry.agentHarnesses.length = 0;
   clearRuntimeConfigSnapshot();
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockReset();
@@ -253,6 +265,37 @@ const resolveTestSessionTarget = async (params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
+
+async function createNativeSessionFixture(
+  config: ReturnType<typeof createEmbeddedAgentRunnerOpenAiConfig>,
+  sessionId: string,
+) {
+  const target = await resolveTestSessionTarget({
+    config,
+    sessionId,
+    sessionKey: nextSessionKey(),
+  });
+  await upsertSessionEntryCore(
+    { agentId: target.agentId, sessionKey: target.sessionKey, storePath: target.storePath },
+    { sessionId, updatedAt: Date.now(), agentHarnessId: "codex", modelSelectionLocked: true },
+  );
+  preparedPluginRegistry.agentHarnesses.push({
+    pluginId: "codex",
+    source: "runtime",
+    harness: {
+      id: "codex",
+      label: "Native Codex fixture",
+      authBootstrap: "harness",
+      supports: () => ({ supported: true }),
+      resolveSessionRuntimeOwnership: ({ assertCurrent }) => {
+        assertCurrent();
+        return { model: "native", auth: "native" };
+      },
+      runAttempt: vi.fn(),
+    },
+  });
+  return { sessionId, sessionKey: target.sessionKey };
+}
 
 const createPersistedTestSessionManager = async (params: {
   config?: ReturnType<typeof createEmbeddedAgentRunnerOpenAiConfig>;
@@ -754,6 +797,114 @@ describe("runEmbeddedAgent", () => {
     expect(result.meta.agentMeta?.contextTokens).toBe(1_050_000);
   });
 
+  it.each([
+    {
+      label: "configured",
+      baseUrl: "https://configured.example.test/proxy/v1",
+      expectedBaseUrl: "https://configured.example.test/proxy/v1",
+    },
+    { label: "static fallback", baseUrl: "", expectedBaseUrl: "https://static.example.test/v1" },
+  ])(
+    "keeps the $label endpoint when runEmbeddedAgent rematerializes a stored profile",
+    async ({ baseUrl, expectedBaseUrl }) => {
+      const { writePersistedAuthProfileStoreRaw } = await import("./auth-profiles/sqlite.js");
+      const { clearRuntimeAuthProfileStoreSnapshot } = await import("./auth-profiles.js");
+      const staticCatalog = await import("./embedded-agent-runner/model.static-catalog.js");
+      const materializer = vi.mocked(
+        (await import("./runtime-plan/materialize-model.js")).materializePreparedRuntimeModel,
+      );
+      const previousMaterializer = materializer.getMockImplementation();
+      if (!previousMaterializer) {
+        throw new Error("expected the fast runner materialization fixture");
+      }
+      materializer.mockImplementation(
+        (
+          await vi.importActual<typeof import("./runtime-plan/materialize-model.js")>(
+            "./runtime-plan/materialize-model.js",
+          )
+        ).materializePreparedRuntimeModel,
+      );
+      const provider = "proxy-fixture";
+      const modelId = "static-chat";
+      const configuredBaseUrl = baseUrl;
+      const config = {
+        ...createEmbeddedAgentRunnerOpenAiConfig([]),
+        models: {
+          providers: {
+            [provider]: {
+              api: "openai-completions" as const,
+              baseUrl: configuredBaseUrl,
+              models: [],
+            },
+          },
+        },
+      };
+      writePersistedAuthProfileStoreRaw(
+        {
+          version: 1,
+          profiles: { "proxy-fixture:stored": { type: "api_key", provider, key: "synthetic-key" } },
+        },
+        agentDir,
+      );
+      clearRuntimeAuthProfileStoreSnapshot(agentDir);
+      const catalog = vi.spyOn(staticCatalog, "resolveBundledStaticCatalogModel").mockReturnValue({
+        provider,
+        id: modelId,
+        name: "Static chat fixture",
+        api: "openai-completions",
+        baseUrl: "https://static.example.test/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_000,
+        maxTokens: 2_048,
+      });
+      const { createEmptyAgentDiscoveryStores } = await vi.importActual<
+        typeof import("./embedded-agent-runner/model.js")
+      >("./embedded-agent-runner/model.js");
+      const stores = createEmptyAgentDiscoveryStores();
+      resolveModelAsyncMock.mockImplementation(
+        (lookupProvider, lookupModelId, lookupAgentDir, lookupConfig, options) =>
+          resolveModelAsyncActual(lookupProvider, lookupModelId, lookupAgentDir, lookupConfig, {
+            ...options,
+            ...stores,
+          }),
+      );
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeEmbeddedRunnerAttempt({
+          assistantTexts: ["ok"],
+          lastAssistant: buildEmbeddedRunnerAssistant({ content: [{ type: "text", text: "ok" }] }),
+        }),
+      );
+      try {
+        await runEmbeddedAgent({
+          sessionId: nextRunId("proxy-profile"),
+          sessionFile: nextSessionCompatibilityKey(),
+          workspaceDir,
+          config,
+          prompt: "hello",
+          provider,
+          model: modelId,
+          authProfileId: "proxy-fixture:stored",
+          authProfileIdSource: "user",
+          timeoutMs: 5_000,
+          agentDir,
+          runId: nextRunId("proxy-profile"),
+          enqueue: immediateEnqueue,
+        });
+        expect(resolveModelAsyncMock.mock.calls.length).toBeGreaterThan(1);
+        expect(firstRunEmbeddedAttemptParams()).toMatchObject({
+          model: { provider, id: modelId, baseUrl: expectedBaseUrl, api: "openai-completions" },
+        });
+      } finally {
+        catalog.mockRestore();
+        materializer.mockImplementation(previousMaterializer);
+        writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, agentDir);
+        clearRuntimeAuthProfileStoreSnapshot(agentDir);
+      }
+    },
+  );
+
   it("resolves a transport-owned Codex model from the bundled static catalog in one resolver pass", async () => {
     const sessionFile = nextSessionCompatibilityKey();
     const baseConfig = createEmbeddedAgentRunnerOpenAiConfig([]);
@@ -836,12 +987,13 @@ describe("runEmbeddedAgent", () => {
   it("lets a locked Codex harness own stale model resolution and context policy", async () => {
     const sessionFile = nextSessionCompatibilityKey();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
+    const nativeSession = await createNativeSessionFixture(cfg, "locked-codex-native-policy");
     const prompt = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
     resolveModelAsyncMock.mockRejectedValueOnce(new Error("stale outer model must not resolve"));
     mockSuccessfulEmbeddedAttempt();
 
     await runEmbeddedAgent({
-      sessionId: "locked-codex-native-policy",
+      ...nativeSession,
       sessionFile,
       workspaceDir,
       config: cfg,
@@ -873,6 +1025,8 @@ describe("runEmbeddedAgent", () => {
 
   it("does not apply outer context-overflow recovery to a locked Codex harness", async () => {
     const sessionFile = nextSessionCompatibilityKey();
+    const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
+    const nativeSession = await createNativeSessionFixture(cfg, "locked-codex-native-overflow");
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({
         terminal: {
@@ -884,10 +1038,10 @@ describe("runEmbeddedAgent", () => {
     );
 
     await runEmbeddedAgent({
-      sessionId: "locked-codex-native-overflow",
+      ...nativeSession,
       sessionFile,
       workspaceDir,
-      config: createEmbeddedAgentRunnerOpenAiConfig([]),
+      config: cfg,
       prompt: "hello",
       provider: "anthropic",
       model: "retired-outer-model",

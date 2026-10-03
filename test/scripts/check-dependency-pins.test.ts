@@ -5,31 +5,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectDependencyPinViolations } from "../../scripts/check-dependency-pins.mts";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
+import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 const itUnix = process.platform === "win32" ? it.skip : it;
 const hangingGitTimeoutMs = 1_000;
-
-const nestedGitEnvKeys = [
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-  "GIT_DIR",
-  "GIT_INDEX_FILE",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_QUARANTINE_PATH",
-  "GIT_WORK_TREE",
-] as const;
-
-function createNestedGitEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-  };
-  for (const key of nestedGitEnvKeys) {
-    delete env[key];
-  }
-  return env;
-}
 
 function git(cwd: string, args: string[]) {
   execFileSync("git", args, {

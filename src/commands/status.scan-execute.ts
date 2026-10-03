@@ -2,28 +2,20 @@
 // Memory and summary collection run in parallel after the common gateway/config scan has completed.
 
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { resolveMemoryPluginStatus, type MemoryPluginStatus } from "../status/memory-plugin.js";
 import type { StatusScanOverviewResult } from "./status.scan-overview.ts";
 import { resolveStatusSummaryFromOverview } from "./status.scan-overview.ts";
-import { buildStatusScanResult, type StatusScanResult } from "./status.scan-result.ts";
-import {
-  resolveMemoryPluginStatus,
-  type MemoryPluginStatus,
-  type MemoryStatusSnapshot,
-} from "./status.scan.shared.js";
+import { buildStatusScanResult } from "./status.scan-result.ts";
+import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 
 /** Builds a full status scan result from an overview scan plus channel/plugin compatibility data. */
 export async function executeStatusScanFromOverview(params: {
   overview: StatusScanOverviewResult;
-  runtime?: RuntimeEnv;
   resolveMemory: (args: {
     cfg: StatusScanOverviewResult["cfg"];
     agentStatus: StatusScanOverviewResult["agentStatus"];
     memoryPlugin: MemoryPluginStatus;
-    runtime?: RuntimeEnv;
   }) => Promise<MemoryStatusSnapshot | null>;
-  channelIssues: StatusScanResult["channelIssues"];
-  channels: StatusScanResult["channels"];
   pluginCompatibility: PluginCompatibilityNotice[];
 }) {
   const memoryPlugin = resolveMemoryPluginStatus(params.overview.cfg);
@@ -33,7 +25,6 @@ export async function executeStatusScanFromOverview(params: {
       cfg: params.overview.cfg,
       agentStatus: params.overview.agentStatus,
       memoryPlugin,
-      ...(params.runtime ? { runtime: params.runtime } : {}),
     }),
     resolveStatusSummaryFromOverview({ overview: params.overview }),
   ]);
@@ -53,9 +44,9 @@ export async function executeStatusScanFromOverview(params: {
       : {}),
     update: params.overview.update,
     gatewaySnapshot: params.overview.gatewaySnapshot,
-    channelIssues: params.channelIssues,
+    channelIssues: params.overview.channelIssues,
     agentStatus: params.overview.agentStatus,
-    channels: params.channels,
+    channels: params.overview.channels,
     summary,
     memory,
     memoryPlugin,

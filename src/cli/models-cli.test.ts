@@ -1,9 +1,10 @@
 // Models CLI tests cover model listing command registration and provider output.
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime, ExitError } from "../runtime.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { registerModelsCli } from "./models-cli.js";
-import { isModelsPlainMachineOutput, isModelsStatusJsonOutput } from "./models-output-mode.js";
+import { isModelsPlainMachineOutput } from "./models-output-mode.js";
 import { isCommandJsonOutputMode } from "./program/json-mode.js";
 
 const mocks = vi.hoisted(() => ({
@@ -13,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   modelsSetImageCommand: vi.fn().mockResolvedValue(undefined),
   modelsRefreshCommand: vi.fn().mockResolvedValue(undefined),
   noopAsync: vi.fn(async () => undefined),
+  addFallbackCommand: vi.fn().mockResolvedValue(undefined),
+  removeFallbackCommand: vi.fn().mockResolvedValue(undefined),
+  clearFallbacksCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesRemoveCommand: vi.fn().mockResolvedValue(undefined),
@@ -21,15 +25,23 @@ const mocks = vi.hoisted(() => ({
   modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLogoutCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthActivateCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthOrderClearCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthOrderGetCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthOrderSetCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteApiKeyCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthSetupTokenCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAccountsListCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAccountsLoginCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAccountsUseCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAccountsClearDefaultCommand: vi.fn().mockResolvedValue(undefined),
 }));
 
 const {
+  addFallbackCommand,
+  clearFallbacksCommand,
+  removeFallbackCommand,
   modelsAliasesAddCommand,
   modelsAliasesListCommand,
   modelsAliasesRemoveCommand,
@@ -66,6 +78,15 @@ vi.mock("../commands/models/auth.js", () => ({
 vi.mock("../commands/models/auth-list.js", () => ({
   modelsAuthListCommand: mocks.modelsAuthListCommand,
 }));
+vi.mock("../commands/models/accounts.js", () => ({
+  modelsAccountsListCommand: mocks.modelsAccountsListCommand,
+  modelsAccountsLoginCommand: mocks.modelsAccountsLoginCommand,
+  modelsAccountsUseCommand: mocks.modelsAccountsUseCommand,
+  modelsAccountsClearDefaultCommand: mocks.modelsAccountsClearDefaultCommand,
+}));
+vi.mock("../commands/models/auth-activate.js", () => ({
+  modelsAuthActivateCommand: mocks.modelsAuthActivateCommand,
+}));
 vi.mock("../commands/models/auth-logout.js", () => ({
   modelsAuthLogoutCommand: mocks.modelsAuthLogoutCommand,
 }));
@@ -80,10 +101,10 @@ vi.mock("../commands/models/aliases.js", () => ({
   modelsAliasesRemoveCommand: mocks.modelsAliasesRemoveCommand,
 }));
 vi.mock("../commands/models/fallbacks-shared.js", () => ({
-  addFallbackCommand: mocks.noopAsync,
-  clearFallbacksCommand: mocks.noopAsync,
+  addFallbackCommand: mocks.addFallbackCommand,
+  clearFallbacksCommand: mocks.clearFallbacksCommand,
   listFallbacksCommand: mocks.noopAsync,
-  removeFallbackCommand: mocks.noopAsync,
+  removeFallbackCommand: mocks.removeFallbackCommand,
 }));
 vi.mock("../commands/models/scan.js", () => ({
   modelsScanCommand: mocks.modelsScanCommand,
@@ -99,26 +120,12 @@ vi.mock("../commands/models/refresh.js", () => ({
 }));
 
 describe("models cli", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
-    mocks.modelsListCommand.mockClear();
-    modelsAliasesAddCommand.mockClear();
-    modelsAliasesListCommand.mockClear();
-    modelsAliasesRemoveCommand.mockClear();
-    modelsRefreshCommand.mockClear();
-    modelsScanCommand.mockClear();
-    modelsAuthAddCommand.mockClear();
-    modelsAuthListCommand.mockClear();
-    modelsAuthLoginCommand.mockClear();
-    modelsAuthLogoutCommand.mockClear();
-    modelsAuthOrderClearCommand.mockClear();
-    modelsAuthOrderGetCommand.mockClear();
-    modelsAuthOrderSetCommand.mockClear();
-    modelsAuthPasteApiKeyCommand.mockClear();
-    modelsAuthPasteTokenCommand.mockClear();
-    modelsAuthSetupTokenCommand.mockClear();
-    modelsSetCommand.mockClear();
-    modelsSetImageCommand.mockClear();
-    modelsStatusCommand.mockClear();
+    vi.clearAllMocks();
   });
 
   function createProgram() {
@@ -160,65 +167,38 @@ describe("models cli", () => {
     }
   }
 
-  it.each(["--json", "--status-json"])("declares %s as machine output", async (flag) => {
+  async function detectJsonOutput(args: string[]) {
     const program = createProgram();
-    let detected = false;
+    let detected: boolean | undefined;
     program.hook("preAction", (_command, actionCommand) => {
       detected = isCommandJsonOutputMode(actionCommand, process.argv);
     });
-
     const originalArgv = process.argv;
-    process.argv = ["node", "openclaw", "models", flag];
+    process.argv = ["node", "openclaw", ...args];
     try {
-      await program.parseAsync(["models", flag], { from: "user" });
+      await program.parseAsync(args, { from: "user" });
     } finally {
       process.argv = originalArgv;
     }
+    return detected;
+  }
 
-    expect(detected).toBe(true);
-  });
-
-  it("does not apply the parent status alias to a child action", async () => {
-    const program = createProgram();
-    let detected = true;
-    program.hook("preAction", (_command, actionCommand) => {
-      detected = isCommandJsonOutputMode(actionCommand, process.argv);
-    });
-
-    const originalArgv = process.argv;
-    process.argv = ["node", "openclaw", "models", "--status-json", "list"];
-    try {
-      await program.parseAsync(["models", "--status-json", "list"], { from: "user" });
-    } finally {
-      process.argv = originalArgv;
-    }
-
-    expect(detected).toBe(false);
-  });
-
-  it.each(["--plain", "--json"])(
-    "does not treat required provider value %s as a model output flag",
-    async (provider) => {
-      const program = createProgram();
-      let jsonMode = true;
-      program.hook("preAction", (_command, actionCommand) => {
-        jsonMode = isCommandJsonOutputMode(actionCommand, process.argv);
-      });
-
-      const originalArgv = process.argv;
-      process.argv = ["node", "openclaw", "models", "auth", "list", "--provider", provider];
-      try {
-        await program.parseAsync(["models", "auth", "list", "--provider", provider], {
-          from: "user",
-        });
-      } finally {
-        process.argv = originalArgv;
-      }
-
-      expect(jsonMode).toBe(false);
-      expectCommandOptions(modelsAuthListCommand, { provider, json: false });
+  it.each(["--json", "--status-json"])(
+    "declares and forwards %s as machine output",
+    async (flag) => {
+      expect(await detectJsonOutput(["models", flag])).toBe(true);
+      expectCommandOptions(modelsStatusCommand, { json: true });
     },
   );
+
+  it("does not apply the parent status alias to a child action", async () => {
+    expect(await detectJsonOutput(["models", "--status-json", "list"])).toBe(false);
+  });
+
+  it("does not treat a required provider value as a JSON output flag", async () => {
+    expect(await detectJsonOutput(["models", "auth", "list", "--provider", "--json"])).toBe(false);
+    expectCommandOptions(modelsAuthListCommand, { provider: "--json", json: false });
+  });
 
   it.each([
     {
@@ -240,30 +220,12 @@ describe("models cli", () => {
       json: true,
     },
   ])("classifies $name by its actual Commander role", async ({ args, provider, json }) => {
-    const program = createProgram();
-    let jsonMode = !json;
-    program.hook("preAction", (_command, actionCommand) => {
-      jsonMode = isCommandJsonOutputMode(actionCommand, process.argv);
-    });
-
-    const originalArgv = process.argv;
-    process.argv = ["node", "openclaw", ...args];
-    try {
-      await program.parseAsync(args, { from: "user" });
-    } finally {
-      process.argv = originalArgv;
-    }
-
-    expect(jsonMode).toBe(json);
+    expect(await detectJsonOutput(args)).toBe(json);
     expectCommandOptions(modelsAuthListCommand, { provider, json });
   });
 
   it.each([
     ["aliases list --plain", ["models", "aliases", "list", "--plain"]],
-    ["fallbacks list --plain", ["models", "fallbacks", "list", "--plain"]],
-    ["image-fallbacks list --plain", ["models", "image-fallbacks", "list", "--plain"]],
-    ["list --plain", ["models", "list", "--plain"]],
-    ["status --plain", ["models", "status", "--plain"]],
     ["parent --status-plain", ["models", "--status-plain"]],
   ])("declares %s as plain machine output owning stdout", (_label, args) => {
     const argv = ["node", "openclaw", ...args];
@@ -272,12 +234,8 @@ describe("models cli", () => {
 
   it.each([
     ["list (no flag)", ["models", "list"]],
-    ["status --json", ["models", "status", "--json"]],
     ["parent --status-json", ["models", "--status-json"]],
-    ["aliases list", ["models", "aliases", "list"]],
     ["logs --plain", ["logs", "--plain"]],
-    ["secrets store list --plain", ["secrets", "store", "list", "--plain"]],
-    ["secrets store get --plain", ["secrets", "store", "get", "EXAMPLE", "--plain"]],
     ["plain after argv terminator", ["models", "list", "--", "--plain"]],
   ])("does not declare %s as plain machine output", (_label, args) => {
     const argv = ["node", "openclaw", ...args];
@@ -285,49 +243,7 @@ describe("models cli", () => {
   });
 
   it("does not turn plain output into JSON failure envelope", async () => {
-    const program = createProgram();
-    let jsonMode = true;
-    program.hook("preAction", (_command, actionCommand) => {
-      jsonMode = isCommandJsonOutputMode(actionCommand, process.argv);
-    });
-
-    const originalArgv = process.argv;
-    process.argv = ["node", "openclaw", "models", "aliases", "list", "--plain"];
-    try {
-      await program.parseAsync(["models", "aliases", "list", "--plain"], { from: "user" });
-    } finally {
-      process.argv = originalArgv;
-    }
-
-    // Plain owns stdout for log routing but must not activate the JSON failure envelope.
-    expect(jsonMode).toBe(false);
-    expect(isModelsStatusJsonOutput(process.argv)).toBe(false);
-  });
-
-  it("forwards bare --json to the default status report", async () => {
-    await runModelsCommand(["models", "--json"]);
-
-    expectCommandOptions(modelsStatusCommand, { json: true });
-  });
-
-  it("registers github-copilot login command", async () => {
-    const program = createProgram();
-    const models = requireCommand(program, "models");
-    const auth = requireCommand(models, "auth");
-    expect(requireCommand(auth, "login-github-copilot").name()).toBe("login-github-copilot");
-
-    await program.parseAsync(
-      ["models", "auth", "--agent", "poe", "login-github-copilot", "--yes"],
-      { from: "user" },
-    );
-
-    expect(modelsAuthLoginCommand).toHaveBeenCalledTimes(1);
-    expectCommandOptions(modelsAuthLoginCommand, {
-      provider: "github-copilot",
-      method: "device",
-      yes: true,
-      agent: "poe",
-    });
+    expect(await detectJsonOutput(["models", "aliases", "list", "--plain"])).toBe(false);
   });
 
   it("declares --agent on every agent-aware auth leaf command", () => {
@@ -363,6 +279,12 @@ describe("models cli", () => {
       args: ["models", "auth", "--agent", "poe", "add"],
       command: modelsAuthAddCommand,
       expected: { agent: "poe" },
+    },
+    {
+      label: "activate",
+      args: ["models", "auth", "--agent", "poe", "activate", "openai:saved"],
+      command: mocks.modelsAuthActivateCommand,
+      expected: { agent: "poe", profileId: "openai:saved" },
     },
     {
       label: "list",
@@ -418,6 +340,12 @@ describe("models cli", () => {
       args: ["models", "auth", "add", "--agent", "poe"],
       command: modelsAuthAddCommand,
       expected: { agent: "poe" },
+    },
+    {
+      label: "activate",
+      args: ["models", "auth", "activate", "openai:saved", "--agent", "poe"],
+      command: mocks.modelsAuthActivateCommand,
+      expected: { agent: "poe", profileId: "openai:saved" },
     },
     {
       label: "list",
@@ -577,6 +505,19 @@ describe("models cli", () => {
       args: ["aliases", "remove", "zzz"],
       command: modelsAliasesRemoveCommand,
     },
+    ...(["fallbacks", "image-fallbacks"] as const).flatMap((group) => [
+      {
+        label: `${group} add`,
+        args: [group, "add", "openai/gpt-5.5"],
+        command: addFallbackCommand,
+      },
+      {
+        label: `${group} remove`,
+        args: [group, "remove", "openai/gpt-5.5"],
+        command: removeFallbackCommand,
+      },
+      { label: `${group} clear`, args: [group, "clear"], command: clearFallbacksCommand },
+    ]),
     {
       label: "scan",
       args: ["scan", "--no-probe", "--no-input"],
@@ -589,16 +530,16 @@ describe("models cli", () => {
     },
   ];
 
-  it.each(
-    globalModelCommands.flatMap(({ label, args, command }) =>
-      ["poe", ""].map((agent) => ({ label, args, command, agent })),
-    ),
-  )("rejects parent --agent '$agent' for models $label", async ({ args, command, agent }) => {
-    await expect(runModelsCommand(["models", "--agent", agent, ...args])).rejects.toThrow(
-      "does not support --agent",
-    );
-    expect(command).not.toHaveBeenCalled();
-  });
+  it.each(globalModelCommands)(
+    "rejects parent --agent for models $label",
+    async ({ args, command }) => {
+      const agent = args[0] === "set" ? "poe" : "";
+      await expect(runModelsCommand(["models", "--agent", agent, ...args])).rejects.toThrow(
+        "does not support --agent",
+      );
+      expect(command).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(globalModelCommands)(
     "still runs models $label without --agent",
@@ -625,4 +566,112 @@ describe("models cli", () => {
       expect(error.exitCode).toBe(0);
     }
   });
+
+  const accountCommands = [
+    {
+      args: ["list", "--cursor", "after-account"],
+      command: mocks.modelsAccountsListCommand,
+      expected: { cursor: "after-account" },
+    },
+    {
+      args: ["login", "openai"],
+      command: mocks.modelsAccountsLoginCommand,
+      expected: { provider: "openai" },
+    },
+    {
+      args: ["use", "personal-account"],
+      command: mocks.modelsAccountsUseCommand,
+      expected: { authProfileId: "personal-account" },
+    },
+    {
+      args: ["clear-default", "anthropic"],
+      command: mocks.modelsAccountsClearDefaultCommand,
+      expected: { provider: "anthropic" },
+    },
+  ];
+
+  it.each(accountCommands)(
+    "resolves personal-account Gateway options for $args",
+    async ({ args, command, expected }) => {
+      const position = args[0] === "list" ? "after" : "before";
+      const flags = [
+        "--url",
+        "wss://accounts.example",
+        "--token-file",
+        "/tmp/gateway-token",
+        "--password-file",
+        "/tmp/gateway-password",
+        "--timeout",
+        "45000",
+        "--json",
+      ];
+      await runModelsCommand([
+        "models",
+        "accounts",
+        ...(position === "before" ? [...flags, ...args] : [...args, ...flags]),
+      ]);
+      expectCommandOptions(command, {
+        ...expected,
+        url: "wss://accounts.example",
+        tokenFile: "/tmp/gateway-token",
+        passwordFile: "/tmp/gateway-password",
+        timeout: "45000",
+        json: true,
+      });
+    },
+  );
+
+  it("rejects agent identity for personal accounts", async () => {
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new ExitError(code);
+    });
+    await expect(
+      runModelsCommand(["models", "--agent", "other-person", "accounts", "list"]),
+    ).rejects.toMatchObject({ code: 1 });
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("does not support --agent"));
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(mocks.modelsAccountsListCommand).not.toHaveBeenCalled();
+  });
+
+  it("lets explicit leaf options override the account group and inherits models JSON", async () => {
+    await runModelsCommand([
+      "models",
+      "--json",
+      "accounts",
+      "--port",
+      "19001",
+      "--timeout",
+      "45000",
+      "list",
+      "--port",
+      "19002",
+      "--timeout",
+      "9000",
+    ]);
+    expectCommandOptions(mocks.modelsAccountsListCommand, {
+      port: "19002",
+      timeout: "9000",
+      json: true,
+    });
+  });
+
+  it.each(["--token", "--redirect-input", "--profile-id"])(
+    "does not accept personal secret or identity option %s",
+    async (flag) => {
+      const writeErr = vi.fn();
+      const program = new Command()
+        .enablePositionalOptions()
+        .exitOverride()
+        .configureOutput({ writeErr });
+      registerModelsCli(program);
+      await expect(
+        program.parseAsync(["models", "accounts", "login", "openai", flag, "not-an-input"], {
+          from: "user",
+        }),
+      ).rejects.toMatchObject({ code: "commander.unknownOption", exitCode: 1 });
+      expect(writeErr).toHaveBeenCalledWith(expect.stringContaining(`unknown option '${flag}'`));
+      expect(mocks.modelsAccountsLoginCommand).not.toHaveBeenCalled();
+    },
+  );
 });

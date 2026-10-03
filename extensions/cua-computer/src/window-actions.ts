@@ -10,7 +10,7 @@ import {
 } from "./action-targets.js";
 import { normalizeModifiers, parseKeyChord } from "./actions.js";
 import { handleBrowserAct } from "./browser-actions.js";
-import { EscalationReason, type CuaDriverSession } from "./driver-client.js";
+import type { CuaDriverSession } from "./driver-client.js";
 import {
   actionEnvelope,
   callWindowTool,
@@ -24,7 +24,6 @@ import {
 import type { CuaExecutionState } from "./execution-state.js";
 import {
   adoptGeneration,
-  resolveAppRef,
   resolveObservation,
   resolveWindowRef,
   verifyGeneration,
@@ -209,8 +208,6 @@ async function handleTargetedAct(
   return JSON.stringify(actionEnvelope(result));
 }
 
-export type { CuaComputerActParams } from "./action-targets.js";
-
 /// Entry point for `computer.act` on the CUA driver. Owns every window- and
 /// element-scoped action (targeted input, discovery, app/window lifecycle) and
 /// hands screen-scoped desktop actions to the injected `handleDesktop`.
@@ -302,7 +299,7 @@ export async function handleWindowAct(
         {
           pid: window.pid,
           window_id: window.windowId,
-          include_screenshot: true,
+          include_screenshot: input.includeScreenshot ?? true,
           max_elements: input.maxElements ?? 2_000,
           ...(input.depth !== undefined ? { max_depth: Math.max(1, input.depth) } : {}),
           ...(input.query ? { query: input.query } : {}),
@@ -314,7 +311,7 @@ export async function handleWindowAct(
     case "launch_app": {
       verifyGeneration(state, driver.generation);
       const appName = input.app!;
-      const app = resolveAppRef(state, appName);
+      const app = state.apps?.get(appName);
       if (!app) {
         throw new Error("COMPUTER_STALE_OBSERVATION: refresh list_apps and retry");
       }
@@ -322,7 +319,7 @@ export async function handleWindowAct(
         driver,
         state,
         "launch_app",
-        app.launchPath
+        platform !== "darwin" && app.launchPath
           ? { launch_path: app.launchPath }
           : app.bundleId
             ? { bundle_id: app.bundleId }
@@ -341,7 +338,7 @@ export async function handleWindowAct(
     case "kill_app": {
       verifyGeneration(state, driver.generation);
       const appName = input.app!;
-      const app = resolveAppRef(state, appName);
+      const app = state.apps?.get(appName);
       if (!app?.pid) {
         throw new Error(
           "COMPUTER_INVALID_REQUEST: kill_app requires a running app reference from list_apps",
@@ -429,14 +426,7 @@ export async function handleWindowAct(
       return JSON.stringify(windowObservation(result, state, ref, { fromZoom: true }));
     }
     case "escalate_scope": {
-      const reason = {
-        ax_tree_pixel_mismatch: EscalationReason.AxTreePixelMismatch,
-        background_delivery_failed: EscalationReason.BackgroundDeliveryFailed,
-        foreground_ineffective: EscalationReason.ForegroundIneffective,
-        no_window_target: EscalationReason.NoWindowTarget,
-        other: EscalationReason.Other,
-      }[input.reason!];
-      const result = await driver.escalateScope(reason, signal);
+      const result = await driver.getSessionState(signal);
       adoptGeneration(state, driver.generation);
       return JSON.stringify({
         ok: true,

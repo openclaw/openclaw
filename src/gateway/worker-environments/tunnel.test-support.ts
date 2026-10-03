@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import {
   runCommandWithTimeout,
@@ -11,18 +11,12 @@ import {
 } from "../../process/exec.js";
 import type { WorkerSshProcess, WorkerSshRunner } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
+import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.test-support.js";
 import type {
   WorkerWorkspaceReconciliationJournal,
   WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-reconcile.js";
 import { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
-
-export function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
 
 type WorkerSshProcessExit = Awaited<WorkerSshProcess["exited"]>;
 
@@ -88,6 +82,15 @@ function rsyncReceiverInvocation(argv: readonly string[]) {
   return { receiverEntryPath, target };
 }
 
+export async function prepareLocalWorkspaceRsyncReceiver(receiverEntry: string): Promise<void> {
+  await fs.mkdir(path.dirname(receiverEntry), { recursive: true });
+  const receiverUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.rsyncReceiver);
+  const source = receiverUrl.pathname.endsWith(".ts")
+    ? `import { tsImport } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))};\nawait tsImport(${JSON.stringify(receiverUrl.href)}, import.meta.url);\n`
+    : `await import(${JSON.stringify(receiverUrl.href)});\n`;
+  await fs.writeFile(receiverEntry, source);
+}
+
 export async function prepareLocalWorkspaceRsyncBoundary(
   remoteHome: string,
   argv: readonly string[],
@@ -97,13 +100,7 @@ export async function prepareLocalWorkspaceRsyncBoundary(
     throw new Error("test rsync transfer is missing its bundled receiver invocation");
   }
   const receiverEntry = path.join(remoteHome, invocation.receiverEntryPath);
-  await fs.mkdir(path.dirname(receiverEntry), { recursive: true });
-  const tsxApi = import.meta.resolve("tsx/esm/api");
-  const sourceEntry = pathToFileURL(path.resolve("src/worker/workspace-rsync-receiver.ts")).href;
-  await fs.writeFile(
-    receiverEntry,
-    `import { tsImport } from ${JSON.stringify(tsxApi)};\nawait tsImport(${JSON.stringify(sourceEntry)}, import.meta.url);\n`,
-  );
+  await prepareLocalWorkspaceRsyncReceiver(receiverEntry);
   const fakeSsh = path.join(remoteHome, ".openclaw-test-ssh");
   await fs.writeFile(
     fakeSsh,
@@ -176,19 +173,19 @@ export function deferred<T>() {
 }
 
 export function memoryWorkspaceJournal(
-  onCommit?: (manifestRef: string) => void,
+  onCommit?: (manifestRef: string) => void | Promise<void>,
 ): WorkerWorkspaceReconciliationJournalAdapter {
   let pending: WorkerWorkspaceReconciliationJournal | undefined;
   return {
-    load: () => pending,
-    begin: (journal) => {
+    load: async () => pending,
+    begin: async (journal) => {
       pending = journal;
     },
-    commit: (manifestRef) => {
-      onCommit?.(manifestRef);
+    commit: async (manifestRef) => {
+      await onCommit?.(manifestRef);
       pending = undefined;
     },
-    abort: () => {
+    abort: async () => {
       pending = undefined;
     },
   };
@@ -200,7 +197,10 @@ class FakeProcess implements WorkerSshProcess {
   readonly ready = this.readyDeferred.promise;
   readonly exited = this.exitDeferred.promise;
   stopCount = 0;
+  private stopPromise?: Promise<void>;
   private stopBarrier: Promise<void> | undefined;
+
+  constructor(private readonly deferStop = false) {}
 
   becomeReady() {
     this.readyDeferred.resolve();
@@ -219,11 +219,18 @@ class FakeProcess implements WorkerSshProcess {
     this.stopBarrier = barrier;
   }
 
-  async stop() {
-    this.stopCount += 1;
-    await this.stopBarrier;
-    this.readyDeferred.reject(new Error("stopped"));
-    this.exitDeferred.resolve({ code: null, signal: "SIGTERM" });
+  stop() {
+    return (this.stopPromise ??= (async () => {
+      if (this.deferStop) {
+        await Promise.resolve();
+      }
+      this.stopCount += 1;
+      if (this.stopBarrier || !this.deferStop) {
+        await this.stopBarrier;
+      }
+      this.readyDeferred.reject(new Error("stopped"));
+      this.exitDeferred.resolve({ code: null, signal: "SIGTERM" });
+    })());
   }
 }
 
@@ -232,18 +239,19 @@ export function fakeRunner(
     argv: string[],
     options: CommandOptions,
   ) => SpawnResult | Promise<SpawnResult | undefined> | undefined,
+  defaults: { defaultStdout?: string; deferStop?: boolean } = {},
 ) {
   const starts: Array<{ argv: string[]; options: CommandOptions; process: FakeProcess }> = [];
   const runs: Array<{ argv: string[]; options: CommandOptions }> = [];
   const runner: WorkerSshRunner = {
     start(argv, options) {
-      const process = new FakeProcess();
+      const process = new FakeProcess(defaults.deferStop);
       starts.push({ argv, options, process });
       return process;
     },
     async run(argv, options) {
       runs.push({ argv, options });
-      return (await onRun?.(argv, options)) ?? success();
+      return (await onRun?.(argv, options)) ?? success(defaults.defaultStdout);
     },
   };
   return { runner, runs, starts };
@@ -349,7 +357,7 @@ export async function git(root: string, ...args: string[]): Promise<string> {
 export const resolveIdentity = async () => ({ kind: "path", path: "/keys/worker" }) as const;
 
 export async function waitForStarts(starts: unknown[], count: number) {
-  await waitForFast(() => expect(starts).toHaveLength(count));
+  await vi.waitFor(() => expect(starts).toHaveLength(count), { interval: 1 });
 }
 
 type TunnelTestFake = Pick<ReturnType<typeof fakeRunner>, "runner">;

@@ -1,18 +1,16 @@
 /**
- * Attach-only Browser tool runtime for a caller-owned loopback Chrome process.
- *
  * The bridge owns only authenticated Browser HTTP ingress. Chrome remains owned
  * by the caller and survives bridge disposal.
  */
 import { randomBytes } from "node:crypto";
 import { chmod, copyFile } from "node:fs/promises";
 import path from "node:path";
+import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { createBrowserTool } from "./browser-tool.js";
 import type { AnyAgentTool } from "./browser-tool.runtime.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./browser/bridge-server.js";
 import { resolveBrowserConfig } from "./browser/config.js";
 import { closePlaywrightBrowserConnection } from "./browser/pw-session.js";
-import { writeExternalFileWithinRoot } from "./sdk-security-runtime.js";
 
 const ATTACHED_PROFILE_NAME = "worker";
 
@@ -49,14 +47,10 @@ async function persistAttachedScreenshot(params: {
 }
 
 function normalizeAttachedCdpUrl(raw: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new Error("Attached Browser CDP URL must be a loopback HTTP URL with an explicit port.");
-  }
-  const port = Number(parsed.port);
+  const parsed = URL.parse(raw);
+  const port = Number(parsed?.port);
   if (
+    !parsed ||
     parsed.protocol !== "http:" ||
     parsed.hostname !== "127.0.0.1" ||
     parsed.username !== "" ||

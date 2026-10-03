@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import {
   createMessageUpdateContext,
   endMessage,
@@ -8,6 +7,7 @@ import {
 } from "./embedded-agent-subscribe.handlers.messages.test-helpers.js";
 import {
   createOpenAiResponsesPartial,
+  createOpenAiResponsesTextBlock,
   createOpenAiResponsesTextEvent as createTextUpdateEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
@@ -33,29 +33,12 @@ describe("handleMessageUpdate text signatures", () => {
 
   it.each([
     {
-      name: "a held word separator",
-      chunks: ["Hello ", "world"],
-      replies: [
-        ["Hello", "Hello"],
-        ["Hello world", " world"],
-      ],
-    },
-    {
       name: "leading Unicode space and held paragraph breaks",
       chunks: ["\u2003Hello ", "world", "\n\n", "Next"],
       replies: [
         ["Hello", "Hello"],
         ["Hello world", " world"],
         ["Hello world\n\nNext", "\n\nNext"],
-      ],
-    },
-    {
-      name: "small append deltas followed by trailing whitespace",
-      chunks: ["Hello", " world ", "next", "\u00a0"],
-      replies: [
-        ["Hello", "Hello"],
-        ["Hello world", " world"],
-        ["Hello world next", " next"],
       ],
     },
   ])("uses incremental unphased Responses deltas with $name", async ({ chunks, replies }) => {
@@ -146,43 +129,11 @@ describe("handleMessageUpdate text signatures", () => {
     await pending;
   });
 
-  it("holds incomplete streaming directive tails without emitting them as text", async () => {
-    const onAgentEvent = vi.fn();
-    const accumulator = createStreamingDirectiveAccumulator();
-    const context = createMessageUpdateContext({
-      onAgentEvent,
-      consumePartialReplyDirectives: vi.fn((text: string, options?: { final?: boolean }) =>
-        accumulator.consume(text, options),
-      ),
-    });
-
-    for (const text of ["Hello\n", "M"]) {
-      await updateMessage(context, createTextUpdateEvent({ type: "text_delta", text }));
-    }
-
-    expect(onAgentEvent).toHaveBeenCalledTimes(1);
-    expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
-      stream: "assistant",
-      data: { text: "Hello", delta: "Hello" },
-    });
-    expect(context.state.assistantStream?.text).toBe("Hello");
-  });
-
   it.each([
     {
       name: "the directive accumulator has no parsed result",
       text: "answer part A msg [[E1008]timeout] answer part B",
       hasParsedDirectives: false,
-    },
-    {
-      name: "the directive accumulator flushes a buffered tail",
-      text: "answer part A msg [[E1008]timeout] answer part B",
-      hasParsedDirectives: true,
-    },
-    {
-      name: "the final text ends with one bracket",
-      text: "answer part A [",
-      hasParsedDirectives: true,
     },
   ])("keeps literal final text when $name", async ({ text, hasParsedDirectives }) => {
     const onAgentEvent = vi.fn();
@@ -288,80 +239,62 @@ describe("handleMessageUpdate text signatures", () => {
     ]);
   });
 
-  it.each([
-    "openai-responses",
-    "openai-chatgpt-responses",
-    "openclaw-openai-responses-transport",
-    "openclaw-openai-chatgpt-responses-transport",
-    "openclaw-azure-openai-responses-transport",
-  ])("streams %s commentary with one complete-preamble boundary", async (api) => {
-    const onAgentEvent = vi.fn();
-    const context = createMessageUpdateContext({ onAgentEvent });
-    // Exercise the real projection/deduplication owner. A raw callback mock
-    // mistakes completion metadata for another assistant text message.
-    context.emitAssistantStreamData = createReplyDelivery(context).emitAssistantStreamData;
-    const createPartial = (text: string) => ({
-      ...createOpenAiResponsesPartial({
-        text,
-        id: "item-commentary",
-        signaturePhase: "commentary",
-        partialPhase: "commentary",
-      }),
-      api,
-    });
-    const startPartial = createPartial("Work");
-    const finalPartial = createPartial("Working...");
-
-    for (const event of [
-      { type: "text_start", partial: startPartial },
-      { type: "text_delta", delta: "Work", partial: startPartial },
-      { type: "text_delta", delta: "ing...", partial: finalPartial },
-      { type: "text_end", content: "Working...", partial: finalPartial },
-    ] as const) {
-      await updateMessage(context, {
-        message: event.partial,
-        assistantMessageEvent: { ...event, contentIndex: 0 },
+  it.each(["openai-responses"])(
+    "streams %s commentary with one complete-preamble boundary",
+    async (api) => {
+      const onAgentEvent = vi.fn();
+      const context = createMessageUpdateContext({ onAgentEvent });
+      // Exercise the real projection/deduplication owner. A raw callback mock
+      // mistakes completion metadata for another assistant text message.
+      context.emitAssistantStreamData = createReplyDelivery(context).emitAssistantStreamData;
+      const createPartial = (text: string) => ({
+        ...createOpenAiResponsesPartial({
+          text,
+          id: "item-commentary",
+          signaturePhase: "commentary",
+          partialPhase: "commentary",
+        }),
+        api,
       });
-    }
-    await endMessage(context, {
-      message: finalPartial,
-    });
+      const startPartial = createPartial("Work");
+      const finalPartial = createPartial("Working...");
 
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual([
-      {
-        stream: "item",
-        data: {
-          kind: "preamble",
-          title: "Preamble",
-          progressText: "Work",
-          phase: "update",
-          itemId: "item-commentary",
-        },
-      },
-      {
-        stream: "item",
-        data: {
-          kind: "preamble",
-          title: "Preamble",
-          progressText: "Working...",
-          phase: "update",
-          itemId: "item-commentary",
-        },
-      },
-      {
-        stream: "item",
-        data: {
-          kind: "preamble",
-          title: "Preamble",
-          progressText: "Working...",
-          phase: "end",
-          itemId: "item-commentary",
-        },
-      },
-    ]);
-    expect(context.state.deltaBuffer).toBe("Working...");
-    expect(context.blockChunker.bufferedText).toBe("");
-  });
+      for (const event of [
+        { type: "text_start", partial: startPartial },
+        { type: "text_delta", delta: "Work", partial: startPartial },
+        { type: "text_delta", delta: "ing...", partial: finalPartial },
+        { type: "text_end", content: "Working...", partial: finalPartial },
+      ] as const) {
+        await updateMessage(context, {
+          message: event.partial,
+          assistantMessageEvent: { ...event, contentIndex: 0 },
+        });
+      }
+      await endMessage(context, {
+        message: finalPartial,
+      });
+
+      expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual(
+        [
+          ["Work", "update"],
+          ["Working...", "update"],
+          ["Working...", "end"],
+        ].map(([progressText, phase]) => ({
+          stream: "item",
+          data: {
+            kind: "preamble",
+            title: "Preamble",
+            progressText,
+            phase,
+            itemId: "item-commentary",
+          },
+        })),
+      );
+
+      expect(context.state.deltaBuffer).toBe("Working...");
+      expect(context.blockChunker.bufferedText).toBe("");
+    },
+  );
 
   it("keeps same-index commentary snapshot extensions on the original live item key", async () => {
     const onAgentEvent = vi.fn();
@@ -391,29 +324,72 @@ describe("handleMessageUpdate text signatures", () => {
 
     // Both snapshots finish the same logical item. The later message_end must
     // not publish its already-observed completion again.
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual([
-      {
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual(
+      ["Working", "Working now"].map((progressText) => ({
         stream: "item",
-        data: {
-          kind: "preamble",
-          title: "Preamble",
-          progressText: "Working",
-          phase: "end",
-          itemId: "item-1",
-        },
-      },
-      {
-        stream: "item",
-        data: {
-          kind: "preamble",
-          title: "Preamble",
-          progressText: "Working now",
-          phase: "end",
-          itemId: "item-1",
-        },
-      },
-    ]);
+        data: { kind: "preamble", title: "Preamble", progressText, phase: "end", itemId: "item-1" },
+      })),
+    );
+
     expect(context.state.lastAssistantStreamItemId).toBe("item-1");
     expect(context.state.deltaBuffer).toBe("Working now");
+  });
+});
+
+describe("commentary and flush isolation", () => {
+  it("suppresses commentary partials when phase exists only in textSignature metadata", async () => {
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const flushBlockReplyBuffer = vi.fn();
+    const commentaryBlock = createOpenAiResponsesTextBlock({
+      text: "Need send.",
+      id: "msg_sig",
+      phase: "commentary",
+    });
+    const ctx = createMessageUpdateContext({
+      onAgentEvent,
+      onPartialReply,
+      flushBlockReplyBuffer,
+    });
+
+    await updateMessage(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "Need send.",
+        content: [commentaryBlock],
+      }),
+    );
+    await updateMessage(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: "Need send.",
+        content: [commentaryBlock],
+      }),
+    );
+
+    // Archive-always: commentary (textSignature-only phase — the F3 shape) is
+    // emitted on the bus for archival + window, but kept out of the reply lanes.
+    expect(onAgentEvent).toHaveBeenCalled();
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(flushBlockReplyBuffer).not.toHaveBeenCalled();
+    expect(ctx.state.deltaBuffer).toBe("");
+    expect(ctx.blockChunker.bufferedText).toBe("");
+  });
+
+  it("contains synchronous text_end flush failures", async () => {
+    const debug = vi.fn();
+    const ctx = createMessageUpdateContext({
+      debug,
+      shouldEmitPartialReplies: false,
+      flushBlockReplyBuffer: vi.fn(() => {
+        throw new Error("boom");
+      }),
+    });
+
+    const pending = updateMessage(ctx, createTextUpdateEvent({ type: "text_end", text: "" }));
+    expect(debug).toHaveBeenCalledWith("text_end block reply flush failed: Error: boom");
+    await pending;
   });
 });

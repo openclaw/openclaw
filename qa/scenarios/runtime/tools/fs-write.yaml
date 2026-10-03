@@ -10,32 +10,31 @@ scenario:
   objective: Verify file write behavior is tracked across OpenClaw and Codex while Codex owns write natively.
   successCriteria:
     - OpenClaw may expose OpenClaw write while Codex app-server mode may omit duplicate OpenClaw dynamic write.
-    - Mock provider write plans are reported as fixture intent, not as actual runtime tool calls.
-    - The row stays report-only until the fixture validates native Codex write behavior directly.
+    - Codex writes through its native command tool and projects a correlated bash receipt.
+    - The fixture validates exact happy-path file bytes, correlates a failed outside-workspace write, and verifies the existing sentinel's exact contents remain unchanged.
   docsRefs:
     - qa/scenarios/index.yaml
   codeRefs:
     - src/agents/agent-tools.workspace-paths.test.ts
+    - extensions/qa-lab/src/native-workspace-behavior.ts
     - extensions/qa-lab/src/runtime-tool-fixture.ts
   execution:
     kind: flow
     summary: Exercise the write runtime tool family.
     config:
       toolName: write
+      nativeWorkspaceBehavior: fs-write
       toolCoverage:
         family: fs.write
         actualTool: write
         bucket: codex-native-workspace
         expectedLayer: codex-native-workspace
-        required: false
+        required: true
         tracking: "#80319"
         codexDefaultImpact: P4
         qaImpact: P1
-        action: split native write behavior from OpenClaw dynamic tool parity
-        reason: Codex app-server intentionally owns write natively; the fixture must not require OpenClaw dynamic write exposure.
-      knownHarnessGap:
-        issue: "#80319"
-        reason: QA tool-defaults currently needs native write behavior coverage instead of OpenClaw dynamic write exposure.
+        action: execute native file-write behavior separately from OpenClaw dynamic tool parity
+        reason: Codex has no dedicated write tool; its native command contract owns file writes without requiring OpenClaw dynamic write exposure.
       promptSnippet: "target=write"
       failurePromptSnippet: "failure target=write"
 

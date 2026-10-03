@@ -2,17 +2,15 @@
 // options, session history, turn source, bindings, and channel route hooks.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import type {
-  ChannelId,
-  ChannelOutboundTargetMode,
-  ChannelPlugin,
-} from "../../channels/plugins/types.public.js";
-import { listRouteBindings } from "../../config/bindings.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelId, ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import { isRouteBinding, listConfiguredBindings } from "../../config/bindings.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
+import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admission.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -67,7 +65,7 @@ function resolveAgentDeliveryPlan(params: {
   const normalizedRequested = requestedRaw ? normalizeMessageChannel(requestedRaw) : undefined;
   const requestedChannel = normalizedRequested || "last";
 
-  const explicitTo = normalizeOptionalString(params.explicitTo) ?? undefined;
+  const explicitTo = normalizeOptionalString(params.explicitTo);
 
   // Resolve turn-source channel for cross-channel safety.
   const normalizedTurnSource = params.turnSourceChannel
@@ -77,7 +75,7 @@ function resolveAgentDeliveryPlan(params: {
     normalizedTurnSource && isDeliverableMessageChannel(normalizedTurnSource)
       ? normalizedTurnSource
       : undefined;
-  const turnSourceTo = normalizeOptionalString(params.turnSourceTo) ?? undefined;
+  const turnSourceTo = normalizeOptionalString(params.turnSourceTo);
   const turnSourceAccountId = normalizeOptionalAccountId(params.turnSourceAccountId);
   const turnSourceThreadId =
     params.turnSourceThreadId != null && params.turnSourceThreadId !== ""
@@ -99,14 +97,7 @@ function resolveAgentDeliveryPlan(params: {
     if (requestedChannel === INTERNAL_MESSAGE_CHANNEL) {
       return INTERNAL_MESSAGE_CHANNEL;
     }
-    if (requestedChannel === "last") {
-      if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
-        return baseDelivery.channel;
-      }
-      return INTERNAL_MESSAGE_CHANNEL;
-    }
-
-    if (isGatewayMessageChannel(requestedChannel)) {
+    if (requestedChannel !== "last" && isGatewayMessageChannel(requestedChannel)) {
       return requestedChannel;
     }
 
@@ -155,6 +146,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     preparedPlugin?: ChannelPlugin;
   },
 ): Promise<AgentDeliveryPlan> {
+  assertAgentDatabaseAdmitted(params.agentId);
   const plan = resolveAgentDeliveryPlan(params);
   const { resolvedChannel } = plan;
   if (!params.wantsDelivery || !isDeliverableMessageChannel(resolvedChannel)) {
@@ -172,11 +164,11 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     return plan;
   }
   const pluginPlan = { ...plan, plugin };
-  const hasPluginSessionRoute = Boolean(plugin?.messaging?.resolveOutboundSessionRoute);
-  const hasPluginTargetResolver = Boolean(plugin?.messaging?.targetResolver);
+  const hasPluginSessionRoute = Boolean(plugin.messaging?.resolveOutboundSessionRoute);
+  const hasPluginTargetResolver = Boolean(plugin.messaging?.targetResolver);
   // Only concrete plugin resolution makes a directory miss authoritative.
   // Heuristic-only resolvers preserve the shipped normalized fallback.
-  const hasPluginConcreteTargetResolver = Boolean(plugin?.messaging?.targetResolver?.resolveTarget);
+  const hasPluginConcreteTargetResolver = Boolean(plugin.messaging?.targetResolver?.resolveTarget);
   if (
     !hasPluginSessionRoute &&
     !hasPluginTargetResolver &&
@@ -237,26 +229,21 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     params.explicitThreadId != null && params.explicitThreadId !== ""
       ? params.explicitThreadId
       : undefined;
-  const route = await (async () => {
-    try {
-      return await resolveOutboundSessionRoute({
-        cfg: params.cfg,
-        channel: resolvedChannel as ChannelId,
-        plugin,
-        agentId: params.agentId,
-        accountId: routedPlan.resolvedAccountId,
-        target: sessionRouteTarget,
-        ...(resolvedSessionRouteTarget ? { resolvedTarget: resolvedSessionRouteTarget } : {}),
-        currentSessionKey: params.currentSessionKey,
-        threadId:
-          routedPlan.deliveryTargetMode === "explicit"
-            ? explicitThreadId
-            : resolvedPlan.resolvedThreadId,
-      });
-    } catch {
-      return null;
-    }
-  })();
+  const requestedThreadId =
+    resolvedPlan.deliveryTargetMode === "explicit"
+      ? explicitThreadId
+      : resolvedPlan.resolvedThreadId;
+  const route = await resolveOutboundSessionRoute({
+    cfg: params.cfg,
+    channel: resolvedChannel as ChannelId,
+    plugin,
+    agentId: params.agentId,
+    accountId: routedPlan.resolvedAccountId,
+    target: sessionRouteTarget,
+    ...(resolvedSessionRouteTarget ? { resolvedTarget: resolvedSessionRouteTarget } : {}),
+    currentSessionKey: params.currentSessionKey,
+    threadId: requestedThreadId,
+  }).catch(() => null);
   const globalDmScope = params.cfg.session?.dmScope ?? "main";
   const knownNonExactRoute =
     params.sessionRouteMode === "allow-fallback" &&
@@ -273,8 +260,9 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     route.sessionKey === route.baseSessionKey &&
     route.sessionKey === canonicalMainSessionKey &&
     globalDmScope === "main" &&
-    !listRouteBindings(params.cfg).some(
+    !listConfiguredBindings(params.cfg).some(
       (binding) =>
+        isRouteBinding(binding) &&
         binding.session?.dmScope !== undefined &&
         binding.session.dmScope !== "main" &&
         normalizeRouteBindingChannelId(binding.match.channel) === resolvedChannel,
@@ -301,10 +289,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
       return {
         ...resolvedPlan,
         resolvedTo: resolvedSessionRouteTarget.to,
-        resolvedThreadId:
-          resolvedPlan.deliveryTargetMode === "explicit"
-            ? explicitThreadId
-            : resolvedPlan.resolvedThreadId,
+        resolvedThreadId: requestedThreadId,
       };
     }
     return resolvedPlan;
@@ -317,11 +302,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     resolvedTo: hasPluginSessionRoute
       ? selectedRoute.to
       : (resolvedSessionRouteTarget?.to ?? sessionRouteTarget),
-    resolvedThreadId:
-      selectedRoute.threadId ??
-      (resolvedPlan.deliveryTargetMode === "explicit"
-        ? explicitThreadId
-        : resolvedPlan.resolvedThreadId),
+    resolvedThreadId: selectedRoute.threadId ?? requestedThreadId,
   };
 }
 
@@ -387,14 +368,10 @@ export function resolveAgentOutboundTarget(params: {
       targetMode,
     };
   }
-  if (!isDeliverableMessageChannel(params.plan.resolvedChannel)) {
-    return {
-      resolvedTarget: null,
-      resolvedTo: params.plan.resolvedTo,
-      targetMode,
-    };
-  }
-  if (params.validateExplicitTarget !== true && params.plan.resolvedTo) {
+  if (
+    !isDeliverableMessageChannel(params.plan.resolvedChannel) ||
+    (params.validateExplicitTarget !== true && params.plan.resolvedTo)
+  ) {
     return {
       resolvedTarget: null,
       resolvedTo: params.plan.resolvedTo,

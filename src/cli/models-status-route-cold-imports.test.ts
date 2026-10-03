@@ -1,4 +1,5 @@
 // The real non-probe models-status route must scope discovery to providers already in use.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,9 +18,6 @@ const testState = vi.hoisted(() => ({
 vi.mock("./command-execution-startup.js", () => ({
   applyCliExecutionStartupPresentation: vi.fn(async () => {}),
   ensureCliExecutionBootstrap: vi.fn(async () => {}),
-  resolveCliExecutionStartupContext: vi.fn(() => ({
-    startupPolicy: { loadPlugins: false, suppressDoctorStdout: true },
-  })),
 }));
 
 vi.mock("../commands/models/load-config.js", () => ({

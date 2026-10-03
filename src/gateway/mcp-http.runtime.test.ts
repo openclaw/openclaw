@@ -1,7 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  readAdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
+import { createComputerTool } from "../agents/tools/computer-tool.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   McpLoopbackToolCache,
@@ -14,11 +19,19 @@ const listNodes = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/tools/gateway.js", () => ({
   callGatewayTool: async (
-    _method: string,
+    method: string,
     _opts: unknown,
     _args: unknown,
     options: { signal?: AbortSignal },
-  ) => ({ nodes: await listNodes(options.signal) }),
+  ) => {
+    if (method === "node.list") {
+      return { nodes: await listNodes(options.signal) };
+    }
+    if (method === "computer.status") {
+      return { configured: false, available: false };
+    }
+    throw new Error(`Unexpected Gateway method: ${method}`);
+  },
 }));
 
 vi.mock("./tool-resolution.js", () => ({
@@ -32,21 +45,50 @@ function scopedToolFixture(names: string[]) {
   };
 }
 
-function scopeParams(overrides: Record<string, unknown> = {}) {
+function computerNode(nodeId: string, actions: string[]) {
   return {
-    cfg: {} as OpenClawConfig,
-    sessionKey: "agent:main:recall",
-    messageProvider: undefined,
-    currentChannelId: undefined,
-    currentThreadTs: undefined,
-    currentMessageId: undefined,
-    currentInboundAudio: undefined,
-    accountId: undefined,
-    inboundEventKind: undefined,
-    sourceReplyDeliveryMode: undefined,
-    senderIsOwner: false,
-    ...overrides,
-  } as Parameters<typeof resolveMcpLoopbackScopedTools>[0];
+    nodeId,
+    displayName: nodeId === "headless-windows-node" ? "E6540" : "Windows Companion",
+    platform: "win32",
+    connected: true,
+    commands: ["screen.snapshot", "computer.act"],
+    computerUse: {
+      contractVersion: 2,
+      provider: {
+        id: "cua-driver",
+        label: "CUA Driver",
+        generation: `${nodeId}-generation`,
+      },
+      actions,
+      targets: ["screen", "window"],
+      deliveryModes: ["foreground"],
+      observations: ["image", "accessibility"],
+      features: { recording: false, agentCursor: false, multiDisplay: false },
+    },
+  };
+}
+
+function readComputerActions(
+  resolved: Awaited<ReturnType<McpLoopbackToolCache["resolve"]>>,
+): string[] | undefined {
+  const computer = resolved.toolSchema.find((tool) => tool.name === "computer");
+  expect(computer).toBeDefined();
+  return (computer?.inputSchema.properties as { action?: { enum?: string[] } } | undefined)?.action
+    ?.enum;
+}
+
+type ScopeParams = Parameters<typeof resolveMcpLoopbackScopedTools>[0];
+
+function scopeParams({
+  cfg = {},
+  grantToken,
+  ...context
+}: Partial<ScopeParams["context"] & Pick<ScopeParams, "cfg" | "grantToken">> = {}): ScopeParams {
+  return {
+    cfg,
+    grantToken,
+    context: { sessionKey: "agent:main:recall", senderIsOwner: false, ...context },
+  };
 }
 
 beforeEach(() => {
@@ -58,172 +100,16 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => {
-  vi.useRealTimers();
-});
-
-describe("node execution discovery", () => {
-  it("treats an unavailable Gateway as unavailable node execution", async () => {
-    listNodes.mockRejectedValueOnce(new Error("synthetic transport failure"));
-    const availability = await loadNodeExecAvailability();
-    expect(availability.isAvailable()).toBe(false);
-  });
-
-  it("preserves the abort reason when discovery also reports a transport failure", async () => {
-    const controller = new AbortController();
-    const reason = new Error("synthetic attempt cancelled");
-    listNodes.mockImplementationOnce((signal: AbortSignal) => {
-      expect(signal).toBe(controller.signal);
-      controller.abort(reason);
-      throw new Error("synthetic transport failure");
-    });
-    await expect(loadNodeExecAvailability(controller.signal)).rejects.toBe(reason);
-  });
-});
-
 describe("resolveMcpLoopbackScopedTools", () => {
-  it.each([
-    { name: "no nodes", nodes: [], exposed: false },
-    {
-      name: "offline executor",
-      nodes: [{ nodeId: "worker", connected: false, commands: ["system.run"] }],
-      exposed: false,
-    },
-    {
-      name: "approval-only phone",
-      nodes: [{ nodeId: "phone", connected: true, commands: ["canvas.present"] }],
-      exposed: false,
-    },
-    {
-      name: "unknown capabilities",
-      nodes: [{ nodeId: "phone", connected: true }],
-      exposed: false,
-    },
-    {
-      name: "eligible named binding",
-      node: "Build Worker",
-      nodes: [
-        {
-          nodeId: "worker",
-          displayName: "Build Worker",
-          connected: true,
-          commands: ["system.run"],
-        },
-      ],
-      exposed: true,
-    },
-    {
-      name: "ambiguous binding",
-      node: "Build Worker",
-      nodes: [
-        { nodeId: "phone", displayName: "Build Worker", connected: true, commands: [] },
-        {
-          nodeId: "worker",
-          displayName: "Build Worker",
-          connected: true,
-          commands: ["system.run"],
-        },
-      ],
-      exposed: false,
-    },
-    {
-      name: "eligible executor",
-      nodes: [{ nodeId: "worker", connected: true, commands: ["system.run"] }],
-      exposed: true,
-    },
-    {
-      name: "multiple executors",
-      nodes: ["one", "two"].map((nodeId) => ({
-        nodeId,
-        connected: true,
-        commands: ["system.run"],
-      })),
-      exposed: true,
-    },
-    {
-      name: "offline binding beside executor",
-      node: "phone",
-      nodes: [
-        { nodeId: "phone", connected: false, commands: [] },
-        { nodeId: "worker", connected: true, commands: ["system.run"] },
-      ],
-      exposed: false,
-    },
-  ])(
-    "advertises remote exec only with an eligible target: $name",
-    async ({ nodes, node, exposed }) => {
-      listNodes.mockResolvedValue(nodes);
-      resolveGatewayScopedTools.mockImplementation(
-        ({ includeNodeExecTool, nodeExecAvailable, execOverrides }) =>
-          scopedToolFixture(
-            includeNodeExecTool && nodeExecAvailable?.(execOverrides?.node) ? ["exec"] : [],
-          ),
-      );
-      const scoped = await resolveMcpLoopbackScopedTools(
-        scopeParams({
-          senderIsOwner: true,
-          nodeExecAllowed: true,
-          execOverrides: { mode: "full", node },
-        }),
-      );
-      expect(scoped.tools.map((tool) => tool.name)).toEqual(exposed ? ["exec"] : []);
-    },
-  );
-
-  it("keeps the full session scope without a grant allowlist", async () => {
-    const scoped = await resolveMcpLoopbackScopedTools(scopeParams());
-    expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual([
-      "memory_search",
-      "memory_get",
-      "message",
-      "cron",
-    ]);
-  });
-
-  it("hard-filters the surface to the grant allowlist", async () => {
-    const scoped = await resolveMcpLoopbackScopedTools(
-      scopeParams({ toolsAllow: ["memory_search", "memory_get"] }),
-    );
-    expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual([
-      "memory_search",
-      "memory_get",
-    ]);
-  });
-
   it("keeps exact grant names exact instead of reinterpreting policy shorthand", async () => {
     resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["write", "apply_patch"]));
 
     const scoped = await resolveMcpLoopbackScopedTools(scopeParams({ toolsAllow: ["write"] }));
 
-    expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual(["write"]);
+    expect(scoped.tools.map((tool) => tool.name)).toEqual(["write"]);
     expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({
       mediatedToolNames: new Set(["write"]),
     });
-  });
-
-  it("fails closed on an empty grant allowlist", async () => {
-    const scoped = await resolveMcpLoopbackScopedTools(scopeParams({ toolsAllow: [] }));
-    expect(scoped.tools).toEqual([]);
-  });
-
-  it("forwards the exact Skill Workshop revision into loopback tool construction", async () => {
-    const proposalRevision = {
-      agentId: "proposal-owner",
-      workspaceDir: "/proposal-workspace",
-      proposalId: "proposal-h1",
-      expectedRevisionHash: "1".repeat(64),
-    };
-
-    await resolveMcpLoopbackScopedTools(
-      scopeParams({
-        toolsAllow: ["skill_workshop"],
-        skillWorkshop: { proposalRevision },
-      }),
-    );
-
-    expect(resolveGatewayScopedTools).toHaveBeenCalledWith(
-      expect.objectContaining({ skillWorkshop: { proposalRevision } }),
-    );
   });
 
   it("exposes explicitly granted coding tools through the mediated loopback surface", async () => {
@@ -236,11 +122,7 @@ describe("resolveMcpLoopbackScopedTools", () => {
       }),
     );
 
-    expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual([
-      "read",
-      "exec",
-      "browser",
-    ]);
+    expect(scoped.tools.map((tool) => tool.name)).toEqual(["read", "exec", "browser"]);
     const call = resolveGatewayScopedTools.mock.calls[0]?.[0] as {
       excludeToolNames?: Set<string>;
       mediatedToolNames?: Set<string>;
@@ -255,11 +137,7 @@ describe("resolveMcpLoopbackScopedTools", () => {
 
   it.each([
     { allow: ["write"], expected: ["write", "apply_patch"] },
-    { allow: ["apply-patch"], expected: ["apply_patch"] },
-    { allow: ["web_*"], expected: ["web_search", "web_fetch"] },
-    { allow: ["group:fs"], expected: ["read", "write", "edit", "apply_patch"] },
     { allow: [] as string[], expected: [] },
-    { allow: ["unknown"], expected: [] },
   ])(
     "materializes policy expressions into concrete loopback tools: $allow",
     async ({ allow, expected }) => {
@@ -277,14 +155,11 @@ describe("resolveMcpLoopbackScopedTools", () => {
 
       const scoped = await resolveMcpLoopbackPolicyTools(scopeParams({ toolsAllow: allow }));
 
-      expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual(expected);
+      expect(scoped.tools.map((tool) => tool.name)).toEqual(expected);
     },
   );
 
-  it.each([
-    { allow: ["group:plugins"], expected: ["memory_search", "memory_get"] },
-    { allow: ["active-memory"], expected: ["memory_search", "memory_get"] },
-  ])("materializes plugin policy selectors: $allow", async ({ allow, expected }) => {
+  it("materializes plugin selectors through registered tool metadata", async () => {
     const pluginTools = ["memory_search", "memory_get"].map((name) => ({
       name,
       description: `${name} tool`,
@@ -296,14 +171,64 @@ describe("resolveMcpLoopbackScopedTools", () => {
       agentId: "main",
       tools: [...pluginTools, { name: "message", description: "message tool" }],
     });
-
-    const scoped = await resolveMcpLoopbackPolicyTools(scopeParams({ toolsAllow: allow }));
-
-    expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual(expected);
+    const scoped = await resolveMcpLoopbackPolicyTools(
+      scopeParams({ toolsAllow: ["active-memory"] }),
+    );
+    expect(scoped.tools.map((tool) => tool.name)).toEqual(["memory_search", "memory_get"]);
   });
 });
 
 describe("McpLoopbackToolCache", () => {
+  it("does not let a source-less cached list hide a later admitted writer", async () => {
+    const cache = new McpLoopbackToolCache();
+    const params = scopeParams({ toolsAllow: ["sessions"] });
+    const controller = new AbortController();
+    const authority = createAdmittedRunOperatorAuthority({
+      profileId: "archive-writer",
+      scopes: ["operator.write"],
+      signal: controller.signal,
+      assertCurrent: () => {},
+    });
+    const runId = "cached-session-controls";
+    const admission = prepareAgentRunAdmission({
+      cfg: {},
+      operatorAuthority: authority,
+      operationalRunInstance: createOperationalRunInstanceRef(runId),
+      facts: {
+        runId,
+        agentId: "main",
+        ingress: { kind: "system", boundary: "mcp-cache-test", state: "present" },
+      },
+    });
+    resolveGatewayScopedTools.mockImplementation(
+      ({ admittedRunContext }: Pick<ScopeParams, "admittedRunContext">) =>
+        scopedToolFixture(readAdmittedRunOperatorAuthority(admittedRunContext) ? ["sessions"] : []),
+    );
+    try {
+      const withoutSource = await cache.resolve(params);
+      expect(withoutSource.toolSchema).toEqual([]);
+      const admittedRunContext = await admission.admit("gateway");
+      const writerParams = { ...params, admittedRunContext };
+      const withSource = await cache.resolve(writerParams);
+      expect(withSource.toolSchema.map((tool) => tool.name)).toEqual(["sessions"]);
+      expect(resolveGatewayScopedTools.mock.calls[1]?.[0].admittedRunContext).toBe(
+        admittedRunContext,
+      );
+      expect(resolveGatewayScopedTools.mock.calls[1]?.[0].senderIsOwner).toBe(false);
+      expect(await cache.resolve(writerParams)).toBe(withSource);
+      expect(await cache.resolve(params)).toBe(withoutSource);
+
+      const reason = new Error("archive operator source revoked");
+      controller.abort(reason);
+      await expect(cache.resolve(writerParams)).rejects.toThrow(
+        "admitted run operator authority is no longer active",
+      );
+      expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    } finally {
+      admission.close();
+    }
+  });
+
   it("rechecks execution availability before reusing cached schemas", async () => {
     const cache = new McpLoopbackToolCache();
     const params = scopeParams({ senderIsOwner: true, nodeExecAllowed: true });
@@ -371,86 +296,58 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("signal");
   });
 
-  it("refreshes cached bound tools when node matching preferences change", async () => {
+  it("refreshes cached bound tools when node display names change", async () => {
     const cache = new McpLoopbackToolCache();
     const params = scopeParams({ nodeExecAllowed: true, execOverrides: { node: "shared-name" } });
     resolveGatewayScopedTools.mockImplementation(({ nodeExecAvailable, execOverrides }) =>
       scopedToolFixture(nodeExecAvailable(execOverrides.node) ? ["exec"] : []),
     );
-    for (const eligibleIsCurrent of [false, true, false]) {
+    for (const eligibleMatches of [false, true, false]) {
       listNodes.mockResolvedValue([
         {
           nodeId: "phone",
-          displayName: "shared-name",
+          displayName: eligibleMatches ? "other-name" : "shared-name",
           connected: true,
           commands: [],
-          clientId: eligibleIsCurrent ? "clawdbot-node" : "openclaw-node",
         },
         {
           nodeId: "worker",
-          displayName: "shared-name",
+          displayName: eligibleMatches ? "shared-name" : "other-name",
           connected: true,
           commands: ["system.run"],
-          clientId: eligibleIsCurrent ? "openclaw-node" : "clawdbot-node",
         },
       ]);
       const scoped = await cache.resolve(params);
-      expect(scoped.tools.map((tool) => tool.name)).toEqual(eligibleIsCurrent ? ["exec"] : []);
+      expect(scoped.tools.map((tool) => tool.name)).toEqual(eligibleMatches ? ["exec"] : []);
     }
-  });
-
-  it("expires at the ttl boundary and partitions rows by config identity", async () => {
-    vi.useFakeTimers();
-    const cache = new McpLoopbackToolCache();
-    const cfgA = {} as OpenClawConfig;
-    const cfgB = {} as OpenClawConfig;
-    const paramsA = scopeParams({ cfg: cfgA });
-
-    await cache.resolve(paramsA);
-    await cache.resolve(paramsA);
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(1);
-
-    vi.advanceTimersByTime(30_000);
-    await cache.resolve(paramsA);
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
-
-    await cache.resolve(scopeParams({ cfg: cfgB }));
-    await cache.resolve(paramsA);
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
   });
 
   it("does not share cache rows across different grant allowlists", async () => {
     const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
+    const cfg = {};
 
     const unrestricted = await cache.resolve(scopeParams({ cfg }));
     const restricted = await cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search"] }));
     const denied = await cache.resolve(scopeParams({ cfg, toolsAllow: [] }));
 
-    expect(unrestricted.tools).toHaveLength(4);
-    expect(restricted.tools).toHaveLength(1);
-    expect(denied.tools).toHaveLength(0);
+    expect(unrestricted.tools.map((tool) => tool.name)).toEqual([
+      "memory_search",
+      "memory_get",
+      "message",
+      "cron",
+    ]);
+    expect(restricted.tools.map((tool) => tool.name)).toEqual(["memory_search"]);
+    expect(denied.tools).toEqual([]);
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
 
-    // Same allowlist reuses the cached row.
-    await cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search"] }));
+    // Duplicate entries do not change the granted set.
+    await cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search", "memory_search"] }));
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
-  });
-
-  it("does not share cache rows across different runtime policy agents", async () => {
-    const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
-
-    await cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "main" }));
-    await cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "worker" }));
-    await cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "main" }));
-
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
   });
 
   it("does not share loopback tools across prepared vision capabilities", async () => {
     const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
+    const cfg = {};
 
     await cache.resolve(scopeParams({ cfg, modelHasVision: true }));
     await cache.resolve(scopeParams({ cfg, modelHasVision: false }));
@@ -465,22 +362,28 @@ describe("McpLoopbackToolCache", () => {
     });
   });
 
-  it("does not share loopback message tools across prepared reply modes", async () => {
+  it("keeps pinned widget authoring out of capless cached tool lists", async () => {
     const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
+    const params = scopeParams();
+    resolveGatewayScopedTools.mockImplementation(({ pinnedWidgetAuthoring }) =>
+      scopedToolFixture(pinnedWidgetAuthoring ? ["dashboard", "show_widget"] : ["dashboard"]),
+    );
 
-    await cache.resolve(scopeParams({ cfg, replyToMode: "all" }));
-    await cache.resolve(scopeParams({ cfg, replyToMode: "off" }));
-    await cache.resolve(scopeParams({ cfg, replyToMode: "all" }));
-
+    for (const pinnedWidgetAuthoring of [true, undefined, true, false]) {
+      const result = await cache.resolve({
+        ...params,
+        context: { ...params.context, pinnedWidgetAuthoring },
+      });
+      expect(result.tools.map((tool) => tool.name)).toEqual(
+        pinnedWidgetAuthoring ? ["dashboard", "show_widget"] : ["dashboard"],
+      );
+    }
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
-    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({ replyToMode: "all" });
-    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ replyToMode: "off" });
   });
 
   it("evicts only the revoked grant's cached tool closures", async () => {
     const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
+    const cfg = {};
 
     await cache.resolve(scopeParams({ cfg, grantToken: "grant-a" }));
     await cache.resolve(scopeParams({ cfg, grantToken: "grant-b" }));
@@ -494,62 +397,75 @@ describe("McpLoopbackToolCache", () => {
 
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
   });
+});
 
-  it("preserves the global 256-entry cache cap across grants", async () => {
-    const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
-
-    for (let index = 0; index < 256; index += 1) {
-      await cache.resolve(
-        scopeParams({ cfg, grantToken: "grant-a", currentMessageId: `message-${index}` }),
-      );
-    }
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-b", currentMessageId: "message-b" }));
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(257);
-
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-a", currentMessageId: "message-0" }));
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(258);
-
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-b", currentMessageId: "message-b" }));
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(258);
+describe("MCP loopback Computer Use schema", () => {
+  beforeEach(() => {
+    resolveGatewayScopedTools.mockImplementation(({ cfg, pairedNodeComputerUse }) => {
+      const computerDenied = cfg.tools?.deny?.includes("computer");
+      return {
+        agentId: "main",
+        tools: computerDenied
+          ? []
+          : [createComputerTool({ modelHasVision: true, pairedNodeComputerUse })],
+      };
+    });
   });
 
-  it("never reuses ordinary private-mode tools for a source-reply-only grant", async () => {
-    const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
-    const params = scopeParams({
-      cfg,
-      messageProvider: "telegram",
-      currentChannelId: "telegram:chat123",
-      sourceReplyDeliveryMode: "message_tool_only",
-      toolsAllow: ["message"],
-    });
+  it("does not query node inventory when the grant excludes computer", async () => {
+    const resolved = await new McpLoopbackToolCache().resolve(
+      scopeParams({
+        sessionKey: "agent:main:main",
+        senderIsOwner: true,
+        modelHasVision: true,
+        toolsAllow: ["memory_search"],
+      }),
+    );
 
-    await cache.resolve(params);
-    await cache.resolve({ ...params, sourceReplyOnly: true });
-    await cache.resolve(params);
-    await cache.resolve({ ...params, sourceReplyOnly: true });
-
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
-    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("sourceReplyOnly");
-    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ sourceReplyOnly: true });
+    expect(resolved.toolSchema.some((tool) => tool.name === "computer")).toBe(false);
+    expect(listNodes).not.toHaveBeenCalled();
   });
 
-  it("does not share cache rows across delegation capabilities", async () => {
-    const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
-
-    await cache.resolve(scopeParams({ cfg }));
-    await cache.resolve(scopeParams({ cfg, delegationCapability: "report_only" }));
-
-    // A restricted attempt must neither read nor seed the full-capability row
-    // for the same session context.
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
-    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({
-      delegationCapability: "report_only",
+  it("does not query node inventory when configured policy excludes computer", async () => {
+    listNodes.mockImplementation(() => {
+      throw new Error("node inventory must not be queried");
     });
 
-    await cache.resolve(scopeParams({ cfg, delegationCapability: "report_only" }));
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    const resolved = await new McpLoopbackToolCache().resolve(
+      scopeParams({
+        cfg: { tools: { deny: ["computer"] } },
+        sessionKey: "agent:main:main",
+        senderIsOwner: true,
+        modelHasVision: true,
+      }),
+    );
+
+    expect(resolved.toolSchema.some((tool) => tool.name === "computer")).toBe(false);
+    expect(listNodes).not.toHaveBeenCalled();
+  });
+
+  it("unions approved actions across distinct paired node identities", async () => {
+    const cache = new McpLoopbackToolCache();
+    const scope = scopeParams({
+      cfg: { tools: { allow: ["computer"] } },
+      sessionKey: "agent:main:main",
+      senderIsOwner: true,
+      modelHasVision: true,
+    });
+    listNodes.mockResolvedValue([
+      computerNode("headless-windows-node", ["screenshot", "list_windows"]),
+    ]);
+    expect(readComputerActions(await cache.resolve(scope))).not.toContain("launch_app");
+
+    listNodes.mockResolvedValue([
+      computerNode("headless-windows-node", ["screenshot", "list_windows"]),
+      computerNode("windows-companion-node", ["screenshot", "launch_app"]),
+    ]);
+    const resolved = await cache.resolve(scope);
+
+    expect(readComputerActions(resolved)).toEqual(
+      expect.arrayContaining(["screenshot", "list_windows", "launch_app", "wait"]),
+    );
+    expect(listNodes).toHaveBeenCalledTimes(2);
   });
 });

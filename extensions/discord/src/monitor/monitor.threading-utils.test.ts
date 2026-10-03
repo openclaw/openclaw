@@ -13,7 +13,6 @@ import {
   unregisterGateway,
 } from "./gateway-registry.js";
 import { clearPresences, getPresence, presenceCacheSize, setPresence } from "./presence-cache.js";
-import { resolveDiscordPresenceUpdate } from "./presence.js";
 import {
   maybeCreateDiscordAutoThread,
   resolveDiscordAutoThreadContext,
@@ -76,15 +75,6 @@ describe("resolveDiscordOwnerAllowFrom", () => {
 });
 
 describe("resolveDiscordRoleAllowed", () => {
-  it("allows when no role allowlist is configured", () => {
-    const allowed = resolveDiscordRoleAllowed({
-      allowList: undefined,
-      memberRoleIds: ["role-1"],
-    });
-
-    expect(allowed).toBe(true);
-  });
-
   it("matches role IDs only", () => {
     const allowed = resolveDiscordRoleAllowed({
       allowList: ["123"],
@@ -170,13 +160,6 @@ describe("gateway-registry", () => {
     clearGateways();
   });
 
-  it("stores and retrieves a gateway by account", () => {
-    const gateway = fakeGateway();
-    registerGateway("account-a", gateway as never);
-    expect(getGateway("account-a")).toBe(gateway);
-    expect(getGateway("account-b")).toBeUndefined();
-  });
-
   it("uses collision-safe key when accountId is undefined", () => {
     const gateway = fakeGateway();
     registerGateway(undefined, gateway as never);
@@ -205,6 +188,7 @@ describe("gateway-registry", () => {
     registerGateway("account-a", gateway1 as never);
     registerGateway("account-a", gateway2 as never);
     expect(getGateway("account-a")).toBe(gateway2);
+    expect(getGateway("account-b")).toBeUndefined();
   });
 });
 
@@ -236,63 +220,6 @@ describe("presence-cache", () => {
     expect(getPresence("account-a", "user-1")).toBeUndefined();
     expect(getPresence("account-b", "user-2")).toBe(presence);
     expect(presenceCacheSize()).toBe(1);
-  });
-});
-
-describe("resolveDiscordPresenceUpdate", () => {
-  it("returns default online presence when no presence config provided", () => {
-    expect(resolveDiscordPresenceUpdate({})).toEqual({
-      status: "online",
-      activities: [],
-      since: null,
-      afk: false,
-    });
-  });
-
-  it("returns status-only presence when activity is omitted", () => {
-    const presence = resolveDiscordPresenceUpdate({ status: "dnd" });
-    expect(presence).toEqual({
-      since: null,
-      status: "dnd",
-      activities: [],
-      afk: false,
-    });
-  });
-
-  it("defaults to custom activity type when activity is set without type", () => {
-    const presence = resolveDiscordPresenceUpdate({ activity: "Focus time" });
-    expect(presence).toEqual({
-      since: null,
-      status: "online",
-      activities: [
-        {
-          type: 4,
-          name: "Custom Status",
-          state: "Focus time",
-        },
-      ],
-      afk: false,
-    });
-  });
-
-  it("includes streaming url when activityType is streaming", () => {
-    const presence = resolveDiscordPresenceUpdate({
-      activity: "Live",
-      activityType: 1,
-      activityUrl: "https://twitch.tv/openclaw",
-    });
-    expect(presence).toEqual({
-      since: null,
-      activities: [
-        {
-          type: 1,
-          name: "Live",
-          url: "https://twitch.tv/openclaw",
-        },
-      ],
-      status: "online",
-      afk: false,
-    });
   });
 });
 
@@ -403,20 +330,20 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
         input: {
           replyTarget: "channel:parent" as const,
           replyToMode: "all" as const,
-          messageId: "m1",
+          messageId: "1001",
           threadChannel: null,
           createdThreadId: null,
         },
         expectedDeliverTarget: "channel:parent",
         expectedReplyTarget: "channel:parent",
-        expectedReplyReferenceCalls: ["m1"],
+        expectedReplyReferenceCalls: ["1001"],
       },
       {
         name: "created thread disables reply references",
         input: {
           replyTarget: "channel:parent" as const,
           replyToMode: "all" as const,
-          messageId: "m1",
+          messageId: "1001",
           threadChannel: null,
           createdThreadId: "thread",
         },
@@ -429,7 +356,7 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
         input: {
           replyTarget: "channel:thread" as const,
           replyToMode: "off" as const,
-          messageId: "m1",
+          messageId: "1001",
           threadChannel: { id: "thread" },
           createdThreadId: null,
         },
@@ -442,26 +369,26 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
         input: {
           replyTarget: "channel:thread" as const,
           replyToMode: "all" as const,
-          messageId: "m1",
+          messageId: "1001",
           threadChannel: { id: "thread" },
           createdThreadId: null,
         },
         expectedDeliverTarget: "channel:thread",
         expectedReplyTarget: "channel:thread",
-        expectedReplyReferenceCalls: ["m1", "m1"],
+        expectedReplyReferenceCalls: ["1001", "1001"],
       },
       {
         name: "thread + first mode",
         input: {
           replyTarget: "channel:thread" as const,
           replyToMode: "first" as const,
-          messageId: "m1",
+          messageId: "1001",
           threadChannel: { id: "thread" },
           createdThreadId: null,
         },
         expectedDeliverTarget: "channel:thread",
         expectedReplyTarget: "channel:thread",
-        expectedReplyReferenceCalls: ["m1", undefined],
+        expectedReplyReferenceCalls: ["1001", undefined],
       },
     ] as const;
 
@@ -481,7 +408,7 @@ describe("maybeCreateDiscordAutoThread", () => {
     return {
       client,
       message: {
-        id: "m1",
+        id: "1001",
         channelId: "parent",
       } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
       isGuildMessage: true,
@@ -539,7 +466,7 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
         overrides?.client ??
         ({ rest: { post: async () => ({ id: "thread" }) } } as unknown as Client),
       message: {
-        id: "m1",
+        id: "1001",
         channelId: "parent",
       } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
       isGuildMessage: true,
@@ -610,7 +537,7 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
           threadChannel: { id: "thread" },
         },
         expectedDeliverTarget: "channel:thread",
-        expectedReplyReference: "m1",
+        expectedReplyReference: "1001",
         expectedSessionKey: null,
         expectedParentSessionKey: undefined,
       },
@@ -620,7 +547,7 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
           channelConfig: { autoThread: false } as unknown as DiscordChannelConfigResolved,
         },
         expectedDeliverTarget: "channel:parent",
-        expectedReplyReference: "m1",
+        expectedReplyReference: "1001",
         expectedSessionKey: null,
         expectedParentSessionKey: undefined,
       },

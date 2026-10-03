@@ -57,31 +57,11 @@ describe("exec authorization planner", () => {
     expect(plannedArgv(plan)).toEqual([["git", "status"], ["npm", "test"], ["pwd"]]);
   });
 
-  it("marks dynamic executable positions as not safe to plan", async () => {
-    const plan = await planShellAuthorization({ command: "$(whoami) --help" });
-
-    expect(plan).toEqual(
-      expect.objectContaining({
-        ok: false,
-        dialect: "posix-shell",
-        reason: "dynamic-executable",
-      }),
-    );
-  });
-
-  it("treats heredocs as unanalyzable shell topology", async () => {
-    const plan = await planShellAuthorization({ command: "cat <<EOF\nhello\nEOF" });
-
-    expect(plan).toEqual(
-      expect.objectContaining({
-        ok: false,
-        dialect: "posix-shell",
-        reason: "heredoc",
-      }),
-    );
-  });
-
   it.each([
+    { command: "$(whoami) --help", reason: "dynamic-executable" },
+    { command: "cat <<EOF\nhello\nEOF", reason: "heredoc" },
+    { command: "sleep 10 & echo done", reason: "background" },
+    { command: "tr x\n\\id", reason: "line-continuation" },
     { command: "echo $(whoami)", reason: "command-substitution" },
     { command: "echo `whoami`", reason: "command-substitution" },
     { command: "cat <(echo ok)", reason: "process-substitution" },
@@ -95,18 +75,6 @@ describe("exec authorization planner", () => {
         ok: false,
         dialect: "posix-shell",
         reason,
-      }),
-    );
-  });
-
-  it("keeps background jobs unplanned until background execution is modeled", async () => {
-    const plan = await planShellAuthorization({ command: "sleep 10 & echo done" });
-
-    expect(plan).toEqual(
-      expect.objectContaining({
-        ok: false,
-        dialect: "posix-shell",
-        reason: "background",
       }),
     );
   });
@@ -227,18 +195,6 @@ describe("exec authorization planner", () => {
         ],
       }),
     ]);
-  });
-
-  it("treats escaped word-boundary newlines as unanalyzable shell topology", async () => {
-    const plan = await planShellAuthorization({ command: "tr x\n\\id" });
-
-    expect(plan).toEqual(
-      expect.objectContaining({
-        ok: false,
-        dialect: "posix-shell",
-        reason: "line-continuation",
-      }),
-    );
   });
 
   it("does not promote path-scoped shell-wrapper payloads into reusable inner candidates", async () => {

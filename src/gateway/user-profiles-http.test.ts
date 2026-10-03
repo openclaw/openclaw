@@ -1,25 +1,43 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { repairMergedGatewayOwnerProfile } from "../state/user-profiles-owner-migration.js";
+import { UserProfileNotFoundError } from "../state/user-profiles-schema.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
-const authorizeScopedUserProfileAvatarHttpRequestOrReply = vi.hoisted(() => vi.fn());
+const authorizeControlUiReadRequestOrReply = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn());
-const getProfileAvatar = vi.hoisted(() => vi.fn());
-const getUserProfileListItem = vi.hoisted(() => vi.fn());
+const avatarFixture = vi.hoisted(() => vi.fn());
+const createProfileAvatarReader = vi.hoisted(() => vi.fn());
+const loadAvatarBytes = vi.hoisted(() => vi.fn());
+const profileFixture = vi.hoisted(() => vi.fn());
+const resolveHostAccountAvatar = vi.hoisted(() => vi.fn());
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterAll(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  });
+});
 
-vi.mock("./http-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./http-utils.js")>()),
-  authorizeScopedUserProfileAvatarHttpRequestOrReply,
+vi.mock("../infra/host-account-avatar.js", () => ({ resolveHostAccountAvatar }));
+
+vi.mock("./http-auth-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-auth-utils.js")>()),
+  authorizeControlUiReadRequestOrReply,
 }));
 vi.mock("../config/io.js", () => ({ getRuntimeConfig }));
-vi.mock("../state/user-profiles.js", () => ({
-  formatUserProfileAvatarEtag: (sha256: string, mime: string) =>
-    `"${sha256}-${mime.slice("image/".length)}"`,
-  getProfileAvatar,
-  getUserProfileListItem,
-  UserProfileNotFoundError: class UserProfileNotFoundError extends Error {},
-}));
+vi.mock("../state/user-profiles-avatar.js", () => ({ createProfileAvatarReader }));
 
 function emailHash(email: string): string {
   return createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
@@ -35,29 +53,61 @@ function response() {
   const writeHead = vi.fn();
   return {
     end,
-    response: { end, setHeader, writeHead } as unknown as ServerResponse,
+    response: Object.assign(new EventEmitter(), {
+      end,
+      setHeader,
+      writeHead,
+      socket: null,
+    }) as unknown as ServerResponse,
     setHeader,
     writeHead,
   };
 }
 
 function request(path: string, headers: Record<string, string> = {}) {
-  return { method: "GET", url: path, headers } as unknown as IncomingMessage;
+  return {
+    method: "GET",
+    url: path,
+    headers,
+    socket: new EventEmitter(),
+  } as unknown as IncomingMessage;
 }
 
 describe("profile avatar HTTP endpoint", () => {
   beforeEach(() => {
-    authorizeScopedUserProfileAvatarHttpRequestOrReply.mockReset();
-    getProfileAvatar.mockReset();
-    getUserProfileListItem.mockReset();
+    authorizeControlUiReadRequestOrReply.mockReset();
+    avatarFixture.mockReset();
+    loadAvatarBytes.mockReset().mockImplementation(async (avatar) => avatar);
+    createProfileAvatarReader.mockReset().mockImplementation((id: string) => ({
+      async inspect() {
+        const avatar = avatarFixture(id);
+        const profile = avatar ? { id, mergedInto: null, emails: [] } : profileFixture(id);
+        return {
+          profile,
+          hasAvatar: Boolean(avatar),
+          avatar: avatar && { ...avatar, bytes: undefined, byteLength: avatar.bytes.byteLength },
+          emails: profile?.emails ?? [],
+          isCurrent: () => true,
+          loadBytes: () => loadAvatarBytes(avatar),
+        };
+      },
+    }));
+    profileFixture.mockReset();
     getRuntimeConfig.mockReset();
-    authorizeScopedUserProfileAvatarHttpRequestOrReply.mockResolvedValue({});
+    resolveHostAccountAvatar.mockReset().mockResolvedValue(null);
+    authorizeControlUiReadRequestOrReply.mockImplementation(({ res }: { res: ServerResponse }) =>
+      bindHttpResponseAuthority({}, res, () => true),
+    );
     getRuntimeConfig.mockReturnValue({
       gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
     });
   });
 
-  it("answers allowed credentialed cross-origin preflights without avatar auth", async () => {
+  it.each([
+    { controlUi: { allowedOrigins: ["https://control.example"] } },
+    { publicOrigin: "https://control.example" },
+  ])("answers credentialed avatar preflights with origin policy %j", async (gateway) => {
+    getRuntimeConfig.mockReturnValue({ gateway });
     const res = response();
     const req = {
       method: "OPTIONS",
@@ -69,7 +119,7 @@ describe("profile avatar HTTP endpoint", () => {
       auth: {} as never,
     });
 
-    expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).not.toHaveBeenCalled();
+    expect(authorizeControlUiReadRequestOrReply).not.toHaveBeenCalled();
     expect(res.setHeader).toHaveBeenCalledWith(
       "Access-Control-Allow-Origin",
       "https://control.example",
@@ -80,7 +130,7 @@ describe("profile avatar HTTP endpoint", () => {
   });
 
   it("serves avatars with their stored MIME type and representation ETag", async () => {
-    getProfileAvatar.mockReturnValue({
+    avatarFixture.mockReturnValue({
       bytes: new Uint8Array([1, 2, 3]),
       mime: "image/webp",
       sha256: "first-hash",
@@ -95,14 +145,70 @@ describe("profile avatar HTTP endpoint", () => {
       { auth: {} as never },
     );
 
-    expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).toHaveBeenCalledWith(
-      expect.objectContaining({ operatorMethod: "users.list" }),
+    expect(authorizeControlUiReadRequestOrReply).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredOperatorMethod: "users.list" }),
     );
     expect(res.writeHead).toHaveBeenCalledWith(
       200,
       expect.objectContaining({ "Content-Type": "image/webp", ETag: '"first-hash-webp"' }),
     );
     expect(res.end).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]));
+  });
+
+  it("uses the host photo only for the owner, after auth and saved-avatar precedence", async () => {
+    const hostAvatar = { bytes: Buffer.from([4, 5, 6]), mime: "image/jpeg", sha256: "host-photo" };
+    resolveHostAccountAvatar.mockResolvedValue(hostAvatar);
+    profileFixture.mockImplementation((id: string) => ({
+      id,
+      mergedInto: null,
+      emails: [],
+    }));
+    const pathname = "/api/users/gateway-owner/avatar";
+    const inferred = response();
+    await handleUserProfileAvatarHttpRequest(request(pathname), inferred.response, pathname, {
+      auth: {} as never,
+    });
+    expect(inferred.writeHead).toHaveBeenCalledWith(
+      200,
+      expect.objectContaining({ "Content-Type": "image/jpeg", ETag: '"host-photo-jpeg"' }),
+    );
+    expect(inferred.end).toHaveBeenCalledWith(hostAvatar.bytes);
+    expect(resolveHostAccountAvatar).toHaveBeenCalledOnce();
+
+    const other = response();
+    profileFixture.mockReturnValueOnce({
+      id: "gateway-owner",
+      mergedInto: null,
+      emails: [],
+    });
+    await handleUserProfileAvatarHttpRequest(
+      request(pathname),
+      other.response,
+      "/api/users/person/avatar",
+      {
+        auth: {} as never,
+      },
+    );
+    expect(other.response.statusCode).toBe(404);
+
+    avatarFixture.mockReturnValue({
+      bytes: Buffer.from([9]),
+      mime: "image/png",
+      sha256: "saved",
+    });
+    const saved = response();
+    await handleUserProfileAvatarHttpRequest(request(pathname), saved.response, pathname, {
+      auth: {} as never,
+    });
+    expect(saved.end).toHaveBeenCalledWith(Buffer.from([9]));
+
+    authorizeControlUiReadRequestOrReply.mockResolvedValue(null);
+    const unauthorized = response();
+    await handleUserProfileAvatarHttpRequest(request(pathname), unauthorized.response, pathname, {
+      auth: {} as never,
+    });
+    expect(unauthorized.end).not.toHaveBeenCalled();
+    expect(resolveHostAccountAvatar).toHaveBeenCalledOnce();
   });
 
   it("rejects mutating methods before avatar authentication", async () => {
@@ -115,9 +221,222 @@ describe("profile avatar HTTP endpoint", () => {
 
     expect(res.response.statusCode).toBe(405);
     expect(res.setHeader).toHaveBeenCalledWith("Allow", "GET, HEAD");
-    expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).not.toHaveBeenCalled();
-    expect(getProfileAvatar).not.toHaveBeenCalled();
+    expect(authorizeControlUiReadRequestOrReply).not.toHaveBeenCalled();
+    expect(avatarFixture).not.toHaveBeenCalled();
   });
+
+  it("does not infer a host avatar for a missing owner profile", async () => {
+    profileFixture.mockImplementation(() => {
+      throw new UserProfileNotFoundError("gateway-owner");
+    });
+    const res = response();
+    const pathname = "/api/users/gateway-owner/avatar";
+    await handleUserProfileAvatarHttpRequest(request(pathname), res.response, pathname, {
+      auth: {} as never,
+    });
+    expect(res.response.statusCode).toBe(404);
+    expect(resolveHostAccountAvatar).not.toHaveBeenCalled();
+  });
+
+  it("does not inherit the host photo through a merged owner before Doctor repair", async () => {
+    const profiles = await vi.importActual<typeof import("../state/user-profiles.js")>(
+      "../state/user-profiles.js",
+    );
+    const options = { path: join(tempDirs.make("openclaw-owner-avatar-"), "openclaw.sqlite") };
+    const owner = profiles.ensureGatewayOwnerProfile("Local Owner", options);
+    const person = profiles.ensureProfileForEmail("person@example.test", options);
+    openOpenClawStateDatabase(options)
+      .db.prepare("UPDATE user_profiles SET merged_into = ? WHERE id = ?")
+      .run(person.id, owner.id);
+    const catalog = await prepareUserProfileCatalog(options);
+    onTestFinished(catalog.release);
+    const { createProfileAvatarReader: createReader } = await vi.importActual<
+      typeof import("../state/user-profiles-avatar.js")
+    >("../state/user-profiles-avatar.js");
+    createProfileAvatarReader.mockImplementation((id: string) => createReader(id, options));
+    const hostAvatar = { bytes: Buffer.from([4, 5, 6]), mime: "image/jpeg", sha256: "host-photo" };
+    resolveHostAccountAvatar.mockResolvedValue(hostAvatar);
+    const pathname = "/api/users/gateway-owner/avatar";
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+    const before = response();
+    await handleUserProfileAvatarHttpRequest(request(pathname), before.response, pathname, {
+      auth: {} as never,
+      fetchImpl,
+    });
+    expect(before.response.statusCode).toBe(404);
+    expect(resolveHostAccountAvatar).not.toHaveBeenCalled();
+
+    expect(repairMergedGatewayOwnerProfile({ ...options, shouldRepair: true }).repaired).toBe(true);
+    const after = response();
+    await handleUserProfileAvatarHttpRequest(request(pathname), after.response, pathname, {
+      auth: {} as never,
+      fetchImpl,
+    });
+    expect(after.writeHead).toHaveBeenCalledWith(200, expect.any(Object));
+    expect(after.end).toHaveBeenCalledWith(hostAvatar.bytes);
+  });
+
+  it("serves warm GET, HEAD, and conditional avatar bursts without worker reads or main-thread SQL", async () => {
+    const profiles = await vi.importActual<typeof import("../state/user-profiles.js")>(
+      "../state/user-profiles.js",
+    );
+    const { setAvatar } = await vi.importActual<
+      typeof import("../state/user-profile-writes.worker.js")
+    >("../state/user-profile-writes.worker.js");
+    const { createProfileAvatarReader: createReader } = await vi.importActual<
+      typeof import("../state/user-profiles-avatar.js")
+    >("../state/user-profiles-avatar.js");
+    const options = { path: join(tempDirs.make("profile-avatar-reader-"), "openclaw.sqlite") };
+    const profile = profiles.ensureProfileForEmail("reader@example.test", options);
+    const bytes = new Uint8Array(1024).fill(7);
+    expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
+    const catalog = await prepareUserProfileCatalog(options);
+    onTestFinished(catalog.release);
+    const reader = createReader(profile.id, options);
+    const warm = await reader.inspect();
+    await warm.loadBytes();
+    const etag = profiles.formatUserProfileAvatarEtag(warm.avatar!.sha256, "image/png");
+    const materialize = vi.fn();
+    createProfileAvatarReader.mockImplementation((id: string) => {
+      const selected = createReader(id, options);
+      return {
+        async inspect() {
+          const prepared = await selected.inspect();
+          return {
+            ...prepared,
+            loadBytes() {
+              materialize();
+              return prepared.loadBytes();
+            },
+          };
+        },
+      };
+    });
+    const sql = observeMainThreadSql();
+    const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    try {
+      for (const [method, headers, code] of [
+        ["HEAD", {}, 200],
+        ["GET", { "if-none-match": etag }, 304],
+        ["GET", {}, 200],
+      ] as const) {
+        await Promise.all(
+          Array.from({ length: 300 }, async () => {
+            const res = response();
+            const req = request("/ignored", headers);
+            req.method = method;
+            await handleUserProfileAvatarHttpRequest(
+              req,
+              res.response,
+              `/api/users/${profile.id}/avatar`,
+              { auth: {} as never },
+            );
+            expect(res.writeHead).toHaveBeenCalledWith(
+              code,
+              expect.objectContaining({ ETag: etag }),
+            );
+            if (code === 200) {
+              expect(res.writeHead).toHaveBeenCalledWith(
+                200,
+                expect.objectContaining({ "Content-Length": bytes.byteLength }),
+              );
+            }
+            if (method === "HEAD" || code === 304) {
+              expect(materialize).not.toHaveBeenCalled();
+            } else {
+              expect(res.end).toHaveBeenCalledWith(bytes);
+            }
+          }),
+        );
+      }
+      expect(materialize).toHaveBeenCalledTimes(300);
+      expect(read).not.toHaveBeenCalled();
+      sql.expectIdle();
+    } finally {
+      read.mockRestore();
+      sql.restore();
+    }
+  });
+
+  it.each(["replacement", "merge"] as const)(
+    "refreshes metadata after %s before materialization",
+    async (change) => {
+      const profiles = await vi.importActual<typeof import("../state/user-profiles.js")>(
+        "../state/user-profiles.js",
+      );
+      const { linkEmail, setAvatar } = await vi.importActual<
+        typeof import("../state/user-profile-writes.worker.js")
+      >("../state/user-profile-writes.worker.js");
+      const { createProfileAvatarReader: createReader } = await vi.importActual<
+        typeof import("../state/user-profiles-avatar.js")
+      >("../state/user-profiles-avatar.js");
+      const options = { path: join(tempDirs.make("profile-avatar-change-"), "openclaw.sqlite") };
+      const original = profiles.ensureProfileForEmail("original@example.test", options);
+      const target = profiles.ensureProfileForEmail("target@example.test", options);
+      const next = new Uint8Array([4, 5, 6]);
+      setAvatar(original.id, new Uint8Array([1]), "image/png", options);
+      setAvatar(target.id, next, "image/webp", options);
+      const catalog = await prepareUserProfileCatalog(options);
+      onTestFinished(catalog.release);
+      const reader = createReader(original.id, options);
+      await (await reader.inspect()).loadBytes();
+      let changed = false;
+      createProfileAvatarReader.mockReturnValue({
+        async inspect() {
+          const prepared = await reader.inspect();
+          return {
+            ...prepared,
+            async loadBytes() {
+              if (!changed) {
+                changed = true;
+                if (change === "merge") {
+                  linkEmail("original@example.test", target.id, options);
+                } else {
+                  setAvatar(original.id, next, "image/webp", options);
+                }
+              }
+              return prepared.loadBytes();
+            },
+          };
+        },
+      });
+      const res = response();
+      await handleUserProfileAvatarHttpRequest(
+        request("/ignored"),
+        res.response,
+        `/api/users/${original.id}/avatar`,
+        { auth: {} as never },
+      );
+      expect(createProfileAvatarReader).toHaveBeenCalledOnce();
+      expect(res.writeHead).toHaveBeenCalledWith(
+        200,
+        expect.objectContaining({
+          "Content-Type": "image/webp",
+          "Content-Length": next.byteLength,
+        }),
+      );
+      expect(res.end).toHaveBeenCalledWith(next);
+    },
+  );
+
+  it.each(["overloaded", "timeout"] as const)(
+    "returns retryable 503 for avatar %s",
+    async (code) => {
+      createProfileAvatarReader.mockReturnValue({
+        inspect: () => Promise.reject(new WorkerTaskError("Avatar pressure", code)),
+      });
+      const res = response();
+      await handleUserProfileAvatarHttpRequest(
+        request("/ignored"),
+        res.response,
+        "/api/users/profile/avatar",
+        { auth: {} as never },
+      );
+      expect(res.response.statusCode).toBe(503);
+      expect(res.setHeader).toHaveBeenCalledWith("Retry-After", "1");
+      expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+    },
+  );
 
   it("authenticates and claims a malformed configured-base avatar route without profile lookup", async () => {
     const res = response();
@@ -131,11 +450,11 @@ describe("profile avatar HTTP endpoint", () => {
     );
 
     expect(handled).toBe(true);
-    expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).toHaveBeenCalledOnce();
+    expect(authorizeControlUiReadRequestOrReply).toHaveBeenCalledOnce();
     expect(res.response.statusCode).toBe(404);
     expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
-    expect(getProfileAvatar).not.toHaveBeenCalled();
-    expect(getUserProfileListItem).not.toHaveBeenCalled();
+    expect(avatarFixture).not.toHaveBeenCalled();
+    expect(profileFixture).not.toHaveBeenCalled();
   });
 
   it("leaves unrelated paths unhandled", async () => {
@@ -150,11 +469,11 @@ describe("profile avatar HTTP endpoint", () => {
 
     expect(handled).toBe(false);
     expect(getRuntimeConfig).not.toHaveBeenCalled();
-    expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).not.toHaveBeenCalled();
+    expect(authorizeControlUiReadRequestOrReply).not.toHaveBeenCalled();
   });
 
   it("answers a matching ETag without a body", async () => {
-    getProfileAvatar.mockReturnValue({
+    avatarFixture.mockReturnValue({
       bytes: new Uint8Array([1]),
       mime: "image/png",
       sha256: "current-hash",
@@ -174,10 +493,11 @@ describe("profile avatar HTTP endpoint", () => {
       "Cache-Control": "private, max-age=0, must-revalidate",
     });
     expect(res.end).toHaveBeenCalledWith();
+    expect(loadAvatarBytes).not.toHaveBeenCalled();
   });
 
   it("decodes profile IDs from the scoped pathname", async () => {
-    getProfileAvatar.mockReturnValue({
+    avatarFixture.mockReturnValue({
       bytes: new Uint8Array([1]),
       mime: "image/png",
       sha256: "current-hash",
@@ -191,11 +511,11 @@ describe("profile avatar HTTP endpoint", () => {
       { auth: {} as never },
     );
 
-    expect(getProfileAvatar).toHaveBeenCalledWith("profile-1");
+    expect(createProfileAvatarReader).toHaveBeenCalledWith("profile-1");
   });
 
   it("serves HEAD as GET without a body", async () => {
-    getProfileAvatar.mockReturnValue({
+    avatarFixture.mockReturnValue({
       bytes: new Uint8Array([1, 2, 3]),
       mime: "image/png",
       sha256: "head-hash",
@@ -215,12 +535,13 @@ describe("profile avatar HTTP endpoint", () => {
       expect.objectContaining({ "Content-Type": "image/png", ETag: '"head-hash-png"' }),
     );
     expect(res.end).toHaveBeenCalledWith(undefined);
+    expect(loadAvatarBytes).not.toHaveBeenCalled();
   });
 
   it.each(['W/"current-hash-png"', '"other", "current-hash-png"', "*"])(
     "revalidates If-None-Match form %s",
     async (header) => {
-      getProfileAvatar.mockReturnValue({
+      avatarFixture.mockReturnValue({
         bytes: new Uint8Array([1]),
         mime: "image/png",
         sha256: "current-hash",
@@ -245,8 +566,8 @@ describe("profile avatar HTTP endpoint", () => {
   it("proxies and caches Gravatar by a profile's normalized email", async () => {
     const profileId = "profile-gravatar-cache";
     const hash = emailHash(" Ada@Example.com ");
-    getProfileAvatar.mockReturnValue(undefined);
-    getUserProfileListItem.mockReturnValue({
+    avatarFixture.mockReturnValue(undefined);
+    profileFixture.mockReturnValue({
       id: profileId,
       emails: [" Ada@Example.com "],
       hasAvatar: false,
@@ -294,8 +615,8 @@ describe("profile avatar HTTP endpoint", () => {
 
   it("negative-caches a Gravatar 404 so the UI can fall back to initials", async () => {
     const profileId = "profile-gravatar-miss";
-    getProfileAvatar.mockReturnValue(undefined);
-    getUserProfileListItem.mockReturnValue({
+    avatarFixture.mockReturnValue(undefined);
+    profileFixture.mockReturnValue({
       id: profileId,
       emails: ["missing-avatar@example.com"],
       hasAvatar: false,
@@ -328,8 +649,8 @@ describe("profile avatar HTTP endpoint", () => {
   it("serves the primary email's Gravatar when several linked emails resolve", async () => {
     const profileId = "profile-multi-email-primary";
     const primaryHash = emailHash("primary@example.com");
-    getProfileAvatar.mockReturnValue(undefined);
-    getUserProfileListItem.mockReturnValue({
+    avatarFixture.mockReturnValue(undefined);
+    profileFixture.mockReturnValue({
       id: profileId,
       emails: ["primary@example.com", "secondary@example.com"],
       hasAvatar: false,
@@ -365,45 +686,55 @@ describe("profile avatar HTTP endpoint", () => {
     );
   });
 
-  it("falls through to a later linked email when the primary has no Gravatar", async () => {
-    const profileId = "profile-multi-email-fallthrough";
-    const primaryHash = emailHash("primary-miss@example.com");
-    getProfileAvatar.mockReturnValue(undefined);
-    getUserProfileListItem.mockReturnValue({
-      id: profileId,
-      emails: ["primary-miss@example.com", "secondary-hit@example.com"],
-      hasAvatar: false,
-    });
-    const fetchImpl = vi.fn(async (input: URL | RequestInfo) =>
-      fetchUrl(input).includes(primaryHash)
-        ? new Response(null, { status: 404 })
-        : new Response(new Uint8Array([2, 2, 2]), {
-            status: 200,
-            headers: { "content-type": "image/png" },
-          }),
-    );
-    const res = response();
+  it.each([404, 503])(
+    "only falls through after a definite Gravatar miss (primary %s)",
+    async (primaryStatus) => {
+      const fixtureId = `${primaryStatus}-${randomUUID()}`;
+      const profileId = `profile-multi-email-${fixtureId}`;
+      const primaryEmail = `primary-${fixtureId}@example.test`;
+      const primaryHash = emailHash(primaryEmail);
+      avatarFixture.mockReturnValue(undefined);
+      profileFixture.mockReturnValue({
+        id: profileId,
+        emails: [primaryEmail, `secondary-${fixtureId}@example.test`],
+        hasAvatar: false,
+      });
+      const fetchImpl = vi.fn(async (input: URL | RequestInfo) =>
+        fetchUrl(input).includes(primaryHash)
+          ? new Response(null, { status: primaryStatus })
+          : new Response(new Uint8Array([2, 2, 2]), {
+              status: 200,
+              headers: { "content-type": "image/png" },
+            }),
+      );
+      const res = response();
 
-    await handleUserProfileAvatarHttpRequest(
-      request("/ignored-by-handler"),
-      res.response,
-      `/api/users/${profileId}/avatar`,
-      { auth: {} as never, fetchImpl },
-    );
+      await handleUserProfileAvatarHttpRequest(
+        request("/ignored-by-handler"),
+        res.response,
+        `/api/users/${profileId}/avatar`,
+        { auth: {} as never, fetchImpl },
+      );
 
-    // A definite miss on the primary lets the request fall through to the
-    // secondary email under the shared deadline; the secondary hit is served.
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(res.end).toHaveBeenCalledWith(new Uint8Array([2, 2, 2]));
-  });
+      expect(fetchImpl).toHaveBeenCalledTimes(primaryStatus === 404 ? 2 : 1);
+      if (primaryStatus === 404) {
+        expect(res.end).toHaveBeenCalledWith(new Uint8Array([2, 2, 2]));
+      } else {
+        expect(res.response.statusCode).toBe(502);
+        expect(res.end).toHaveBeenCalledWith(
+          JSON.stringify({ ok: false, error: { type: "avatar_upstream_unavailable" } }),
+        );
+      }
+    },
+  );
 
   it("caps the Gravatar fan-out so a profile with many linked emails is bounded", async () => {
     const profileId = "profile-many-emails";
     const emails = Array.from({ length: 12 }, (_, index) => `many-${index}@example.com`);
     // Only the last email — beyond the fan-out cap — has a Gravatar.
     const reachableHash = emailHash(emails[emails.length - 1] ?? "");
-    getProfileAvatar.mockReturnValue(undefined);
-    getUserProfileListItem.mockReturnValue({ id: profileId, emails, hasAvatar: false });
+    avatarFixture.mockReturnValue(undefined);
+    profileFixture.mockReturnValue({ id: profileId, emails, hasAvatar: false });
     const fetchImpl = vi.fn(async (input: URL | RequestInfo) =>
       fetchUrl(input).includes(reachableHash)
         ? new Response(new Uint8Array([9, 9, 9]), {
@@ -427,45 +758,75 @@ describe("profile avatar HTTP endpoint", () => {
     expect(res.response.statusCode).toBe(404);
   });
 
-  it("cancels a chunked Gravatar response as soon as it exceeds the byte cap", async () => {
-    const profileId = "profile-gravatar-oversized";
-    getProfileAvatar.mockReturnValue(undefined);
-    getUserProfileListItem.mockReturnValue({
-      id: profileId,
-      emails: ["oversized-avatar@example.com"],
-      hasAvatar: false,
-    });
-    const cancel = vi.fn();
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(600_000));
-        controller.enqueue(new Uint8Array(600_000));
-      },
-      cancel,
-    });
-    const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(body, {
-        status: 200,
-        headers: { "content-type": "image/png" },
-      }),
-    );
-    const res = response();
+  it.each(["resolve", "reject"])(
+    "waits for overflow cancellation to %s before releasing the reader and responding",
+    async (outcome) => {
+      const profileId = `profile-gravatar-oversized-${outcome}`;
+      avatarFixture.mockReturnValue(undefined);
+      profileFixture.mockReturnValue({
+        id: profileId,
+        emails: [`oversized-avatar-${outcome}@example.test`],
+        hasAvatar: false,
+      });
+      const cancellationStarted = createDeferred();
+      const cancellation = createDeferred();
+      const cancel = vi.fn(() => {
+        cancellationStarted.resolve();
+        return cancellation.promise;
+      });
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(600_000));
+          controller.enqueue(new Uint8Array(600_000));
+        },
+        cancel,
+      });
+      const fetchImpl = vi.fn().mockResolvedValue(
+        new Response(body, {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+      );
+      const res = response();
+      const handling = handleUserProfileAvatarHttpRequest(
+        request("/ignored-by-handler"),
+        res.response,
+        `/api/users/${profileId}/avatar`,
+        { auth: {} as never, fetchImpl },
+      );
+      try {
+        await cancellationStarted.promise;
+        // Drain promise work so fire-and-forget cleanup cannot pass by being unobserved.
+        await new Promise<void>((resolve) => {
+          process.nextTick(resolve);
+        });
+        expect(res.end).not.toHaveBeenCalled();
+        expect(body.locked).toBe(true);
+        expect(cancel).toHaveBeenCalledExactlyOnceWith(undefined);
 
-    await handleUserProfileAvatarHttpRequest(
-      request("/ignored-by-handler"),
-      res.response,
-      `/api/users/${profileId}/avatar`,
-      { auth: {} as never, fetchImpl },
-    );
-
-    expect(cancel).toHaveBeenCalledTimes(1);
-    expect(res.response.statusCode).toBe(502);
-  });
+        if (outcome === "resolve") {
+          cancellation.resolve();
+        } else {
+          cancellation.reject(new Error("Gravatar cancellation failed"));
+        }
+        await expect(handling).resolves.toBe(true);
+        expect(res.response.statusCode).toBe(502);
+        expect(res.end).toHaveBeenCalledExactlyOnceWith(
+          JSON.stringify({ ok: false, error: { type: "avatar_upstream_unavailable" } }),
+        );
+        expect(body.locked).toBe(false);
+        expect(cancel).toHaveBeenCalledExactlyOnceWith(undefined);
+      } finally {
+        cancellation.resolve();
+        await handling;
+      }
+    },
+  );
 
   it("cancels a Gravatar response rejected by its declared byte size", async () => {
     const profileId = "profile-gravatar-declared-oversized";
-    getProfileAvatar.mockReturnValue(undefined);
-    getUserProfileListItem.mockReturnValue({
+    avatarFixture.mockReturnValue(undefined);
+    profileFixture.mockReturnValue({
       id: profileId,
       emails: ["declared-oversized-avatar@example.com"],
       hasAvatar: false,
@@ -495,7 +856,7 @@ describe("profile avatar HTTP endpoint", () => {
   });
 
   it("evicts older Gravatar images when the cache reaches its byte budget", async () => {
-    getProfileAvatar.mockReturnValue(undefined);
+    avatarFixture.mockReturnValue(undefined);
     const imageBytes = new Uint8Array(1_000_000);
     const fetchImpl = vi.fn(
       async () =>
@@ -510,7 +871,7 @@ describe("profile avatar HTTP endpoint", () => {
       emails: [email],
       hasAvatar: false,
     }));
-    getUserProfileListItem.mockImplementation((profileId: string) =>
+    profileFixture.mockImplementation((profileId: string) =>
       profiles.find((profile) => profile.id === profileId),
     );
 

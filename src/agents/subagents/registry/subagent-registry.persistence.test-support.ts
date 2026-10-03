@@ -5,7 +5,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import {
@@ -14,10 +14,19 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
-import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../../../process/gateway-work-admission.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
-import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+  type SubagentRegistryHarness,
+} from "../../subagent-test-fixtures.test-helpers.js";
+import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
+import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SessionStore = Record<string, Record<string, unknown>>;
@@ -36,11 +45,11 @@ export function expectDeferredSubagentAnnouncement(
 
 /** Hold the real lazy settlement dependency without replacing its completion policy. */
 export function gateSubagentRequesterSettlement(
-  settle: SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"],
+  settle: typeof maybeWakeRequesterAfterAllChildrenSettled,
 ) {
   const released = createDeferred();
   let pending: Promise<boolean> | undefined;
-  const run = vi.fn<SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"]>((params) => {
+  const calls = observeSubagentRequesterWake((params) => {
     pending = (async () => {
       await released.promise;
       return await settle(params);
@@ -48,7 +57,7 @@ export function gateSubagentRequesterSettlement(
     return pending;
   });
   return {
-    run,
+    ...calls,
     async release() {
       released.resolve();
       await pending;
@@ -56,27 +65,58 @@ export function gateSubagentRequesterSettlement(
   };
 }
 
+/** Observe admission after real worker IO without racing a fake-clock polling deadline. */
+export function observeSubagentRequesterWake(
+  wake: typeof maybeWakeRequesterAfterAllChildrenSettled,
+) {
+  let calls = 0;
+  const admitted = new Map<number, ReturnType<typeof createDeferred<void>>>();
+  return {
+    run: vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>((params) => {
+      admitted.get(++calls)?.resolve();
+      return wake(params);
+    }),
+    waitForCalls(this: void, count: number): Promise<void> {
+      if (calls >= count) {
+        return Promise.resolve();
+      }
+      let waiter = admitted.get(count);
+      if (!waiter) {
+        waiter = createDeferred();
+        admitted.set(count, waiter);
+      }
+      return waiter.promise;
+    },
+  };
+}
+
 /** Gates owned by a test must be released before waiting for imports and detached tails. */
-export async function settleSubagentRegistryPersistenceWork() {
+export async function settleSubagentRegistryPersistenceWork(
+  settleOwnedWork?: () => void | Promise<void>,
+) {
   await vi.dynamicImportSettled();
-  await vi.waitFor(() =>
-    expect(getActiveGatewayRootWorkCount(), "residual registry roots").toBe(0),
-  );
+  await settleOwnedWork?.();
+  await vi.waitFor(() => {
+    const holders = getActiveGatewayRootWorkHolders();
+    expect(
+      getActiveGatewayRootWorkCount(),
+      `residual registry roots: ${holders.join(", ") || "unattributed"}`,
+    ).toBe(0);
+  });
 }
 
 type PersistenceCleanup = {
   stateDir: string;
-  resetRegistry: () => void;
-  resetDeps: () => void;
+  resetRegistry: () => void | Promise<void>;
   closeDatabases?: () => void | Promise<void>;
+  settleOwnedWork?: () => void | Promise<void>;
 };
 
 export async function cleanupSubagentRegistryPersistenceTest(params: PersistenceCleanup) {
-  await settleSubagentRegistryPersistenceWork();
-  params.resetRegistry();
+  await settleSubagentRegistryPersistenceWork(params.settleOwnedWork);
+  await params.resetRegistry();
   await cleanupSessionStateForTest({ stateDir: params.stateDir });
   await params.closeDatabases?.();
-  params.resetDeps();
   await fs.rm(params.stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 }
 
@@ -182,23 +222,274 @@ export async function removeSubagentSessionEntry(params: {
   return storePath;
 }
 
-/** Builds default dependency mocks used by subagent registry persistence tests. */
-export function createSubagentRegistryTestDeps(
-  extra: Record<string, unknown> = {},
-): Record<string, unknown> {
-  return {
-    cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-    captureSubagentCompletionReply: vi.fn(async () => undefined),
-    ensureContextEnginesInitialized: vi.fn(),
-    loadAgentRuntimePluginRegistryHandle: vi.fn(),
-    getRuntimeConfig: vi.fn(() => ({})),
-    resolveAgentTimeoutMs: vi.fn(() => 100),
-    resolveContextEngine: vi.fn(async () => ({
-      info: { id: "test", name: "Test", version: "0.0.1" },
-      ingest: vi.fn(async () => ({ ingested: false })),
-      assemble: vi.fn(async ({ messages }) => ({ messages, estimatedTokens: 0 })),
-      compact: vi.fn(async () => ({ ok: false, compacted: false })),
-    })),
-    ...extra,
-  };
+export function createDeliveredWake(
+  runId: string,
+  requesterSettleWake?: NonNullable<SubagentRunRecord["requesterSettleWake"]>,
+  overrides: Partial<SubagentRunRecordOverrides> = {},
+): SubagentRunRecord {
+  const endedAt = overrides.endedAt ?? Date.now();
+  return createSubagentRunRecord({
+    runId,
+    childSessionKey: `agent:main:subagent:${runId}`,
+    endedAt,
+    outcome: { status: "ok" },
+    expectsCompletionMessage: true,
+    completion: { required: true, resultText: "done", capturedAt: endedAt },
+    delivery: { status: "delivered", deliveredAt: endedAt },
+    cleanupHandled: true,
+    cleanupCompletedAt: endedAt,
+    requesterSettleWake,
+    ...overrides,
+  });
+}
+
+export function writeChildSession(
+  stateDir: string,
+  sessionKey: string,
+  defaultSessionId: string,
+  lifecycleRevision?: string,
+) {
+  return writeSubagentSessionEntry({
+    stateDir,
+    agentId: "main",
+    sessionKey,
+    defaultSessionId,
+    lifecycleRevision,
+  });
+}
+
+export function createOrphanedRequiredDelivery(
+  status: "pending" | "suspended" | "in_progress",
+): SubagentRunRecord {
+  const now = Date.now();
+  const runId = `run-orphan-${status}-delivery`;
+  const childSessionKey = `agent:main:subagent:orphan-${status}-delivery`;
+  const terminalReply = { disposition: "visible" as const, text: "durable final reply" };
+  return createSubagentRunRecord({
+    runId,
+    childSessionKey,
+    task: "deliver after restart",
+    cleanup: "delete",
+    createdAt: now - 100,
+    expectsCompletionMessage: true,
+    cleanupHandled: false,
+    startedAt: now - 50,
+    endedAt: now,
+    outcome: { status: "ok" },
+    completion: {
+      required: true,
+      resultText: "canonical final reply",
+      capturedAt: now,
+      terminalReply,
+    },
+    delivery: {
+      status,
+      ...(status === "suspended" ? { suspendedAt: now, suspendedReason: "expiry" as const } : {}),
+      ...(status === "in_progress"
+        ? { disposition: "session_queued" as const, queueId: "queue-1" }
+        : {}),
+      payload: {
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        childSessionKey,
+        childRunId: runId,
+        task: "deliver after restart",
+        startedAt: now - 50,
+        endedAt: now,
+        outcome: { status: "ok" },
+        expectsCompletionMessage: true,
+        terminalReply,
+      },
+    },
+  });
+}
+
+export function registerSubagentRegistrationPersistenceTests({
+  getRegistry,
+  mocks,
+  mockPendingAgentWait,
+  findRequesterRun,
+}: {
+  getRegistry: () => SubagentRegistryHarness;
+  mocks: Pick<
+    ReturnType<typeof createSubagentRegistryMockState>,
+    "callGateway" | "persistRegistryRows"
+  >;
+  mockPendingAgentWait: () => void;
+  findRequesterRun: (runId: string) => SubagentRunRecord | undefined;
+}) {
+  it("throws and removes the entry when the initial durable registry write fails", async () => {
+    const mod = getRegistry();
+    mocks.persistRegistryRows.mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+
+    await expect(
+      mod.registerSubagentRun({
+        runId: "run-durability-required",
+        task: "must fail closed",
+      }),
+    ).rejects.toThrowError("disk full");
+
+    expect(
+      mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-durability-required"),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { name: "running", queued: false },
+    { name: "queued", queued: true },
+  ])("persists the $name native admission before returning", async ({ queued }) => {
+    const mod = getRegistry();
+    mockPendingAgentWait();
+
+    const runId = `run-single-persist-${queued ? "queued" : "running"}`;
+    await mod.registerSubagentRun({
+      runId,
+      task: "persist one registry snapshot",
+      queued,
+    });
+
+    expect(mocks.persistRegistryRows).toHaveBeenCalledTimes(queued ? 2 : 1);
+    expect(mocks.persistRegistryRows).toHaveBeenCalledWith(expect.any(Map), [runId]);
+  });
+
+  it("restores the source owner when replacement persistence fails", async () => {
+    const mod = getRegistry();
+    mockPendingAgentWait();
+    await mod.registerSubagentRun({
+      runId: "run-replacement-persist-old",
+      childSessionKey: "agent:main:subagent:replacement-persist",
+      task: "keep live successor tracked",
+    });
+    mocks.persistRegistryRows.mockClear();
+    mocks.persistRegistryRows.mockImplementation(() => {
+      throw new Error("disk full");
+    });
+
+    await expect(
+      mod.replaceSubagentRunAfterSteerCore({
+        previousRunId: "run-replacement-persist-old",
+        nextRunId: "run-replacement-persist-new",
+      }),
+    ).rejects.toThrow("disk full");
+
+    const runs = mod.listSubagentRunsForRequester("agent:main:main");
+    expect(runs).toEqual([
+      expect.objectContaining({
+        runId: "run-replacement-persist-old",
+        taskRunId: "run-replacement-persist-old",
+      }),
+    ]);
+    expect(mocks.persistRegistryRows).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the previous row when same-ID registration persistence fails", async () => {
+    const mod = getRegistry();
+    mockPendingAgentWait();
+    const runId = "run-same-id-registration";
+    await mod.registerSubagentRun({ runId, task: "original registration" });
+    const previous = findRequesterRun(runId);
+    expect(previous).toBeDefined();
+    mocks.persistRegistryRows.mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+
+    await expect(mod.registerSubagentRun({ runId, task: "failed successor" })).rejects.toThrow(
+      "disk full",
+    );
+
+    expect(findRequesterRun(runId)).toBe(previous);
+    expect(findRequesterRun(runId)?.task).toBe("original registration");
+  });
+
+  it("rolls back an older kill ownership boundary when registration persistence fails", async () => {
+    const mod = getRegistry();
+    const childSessionKey = "agent:main:subagent:registration-rollback";
+    await mod.addSubagentRunForTests({
+      runId: "run-registration-rollback-old",
+      childSessionKey,
+      task: "preserve old ownership",
+      createdAt: Date.now() - 1_000,
+      endedAt: Date.now() - 500,
+      endedReason: "subagent-killed",
+      suppressAnnounceReason: "killed",
+      killReconciliation: { killedAt: Date.now() - 500 },
+    });
+    mocks.persistRegistryRows.mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+
+    await expect(
+      mod.registerSubagentRun({
+        runId: "run-registration-rollback-new",
+        childSessionKey,
+        task: "new generation",
+      }),
+    ).rejects.toThrowError("disk full");
+
+    const oldRun = findRequesterRun("run-registration-rollback-old");
+    expect(oldRun?.killReconciliation).toEqual({ killedAt: Date.now() - 500 });
+    expect(
+      mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .some((entry) => entry.runId === "run-registration-rollback-new"),
+    ).toBe(false);
+  });
+
+  it("rolls back a killed tombstone when its durable registry write fails", async () => {
+    const mod = getRegistry();
+    mockPendingAgentWait();
+    const runId = "run-kill-persist-failure";
+    await mod.registerSubagentRun({
+      runId,
+      childSessionKey: "agent:main:subagent:kill-persist-failure",
+      task: "keep kill state atomic",
+    });
+    mocks.persistRegistryRows.mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+
+    await expect(
+      mod.markSubagentRunTerminated({ runId, reason: "manual kill" }),
+    ).rejects.toThrowError("disk full");
+
+    const run = findRequesterRun(runId);
+    expect(run?.execution.endedAt).toBeUndefined();
+    expect(run?.endedReason).toBeUndefined();
+  });
+}
+
+export function createRestoredRequesterWakeRuns(params: {
+  activationSettlement: boolean;
+  requesterYielded?: true;
+  endedAt: number;
+}): SubagentRunRecord[] {
+  const { activationSettlement, requesterYielded, endedAt } = params;
+  return Array.from({ length: 3 }, (_, index): SubagentRunRecord => {
+    const runId = `run-restored-wake-${index}`;
+    return createDeliveredWake(
+      runId,
+      requesterYielded ? undefined : { status: "pending", attemptCount: 0 },
+      {
+        childSessionKey: `agent:main:subagent:restored-wake-${index}`,
+        requesterSessionKey: `agent:main:requester-${index}`,
+        requesterDisplayKey: `requester-${index}`,
+        task: "resume a durable requester wake",
+        createdAt: endedAt - 1_000,
+        endedReason: "subagent-complete",
+        startedAt: endedAt - 500,
+        endedAt,
+        ...(activationSettlement
+          ? {
+              requesterTurnRunId: `requester-turn-${index}`,
+              requesterTurnYielded: requesterYielded ?? undefined,
+              taskRunId: runId,
+            }
+          : {}),
+      },
+    );
+  });
 }

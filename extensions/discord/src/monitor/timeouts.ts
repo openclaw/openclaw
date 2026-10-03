@@ -1,4 +1,3 @@
-// Discord plugin module implements timeouts behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 // Compatibility constants for existing imports. Discord no longer enforces
@@ -125,8 +124,9 @@ export async function withAbortTimeout<T>(params: {
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutTimer = setTimeout(() => {
-      controller.abort();
+      // Settle the deadline before synchronous abort listeners can settle the work.
       reject(params.createTimeoutError());
+      controller.abort();
     }, timeoutMs);
     timeoutTimer.unref?.();
   });

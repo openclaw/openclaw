@@ -9,98 +9,11 @@ private enum RuntimeTestAudioCaptureError: Error {
     case inputUnavailable
 }
 
-private struct RuntimeTestTimeout: Error, CustomStringConvertible {
-    let operation: String
-
-    var description: String {
-        "timed out waiting for \(self.operation)"
-    }
-}
-
-private final class RuntimeTestSignal<Value: Sendable>: @unchecked Sendable {
-    private struct Waiter {
-        let id: UUID
-        let continuation: CheckedContinuation<Value, any Error>
-        var deadline: Task<Void, Never>?
-    }
-
-    private let lock = NSLock()
-    private var values: [Value] = []
-    private var waiters: [Waiter] = []
-
-    func send(_ value: Value) {
-        let waiter: Waiter? = self.lock.withLock {
-            guard !self.waiters.isEmpty else {
-                self.values.append(value)
-                return nil
-            }
-            return self.waiters.removeFirst()
-        }
-        self.resume(waiter, with: .success(value))
-    }
-
-    func next(_ operation: String) async throws -> Value {
-        try Task.checkCancellation()
-        let id = UUID()
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                let result: Result<Value, any Error>? = self.lock.withLock {
-                    if Task.isCancelled {
-                        return .failure(CancellationError())
-                    }
-                    if !self.values.isEmpty {
-                        return .success(self.values.removeFirst())
-                    }
-                    self.waiters.append(Waiter(id: id, continuation: continuation))
-                    return nil
-                }
-                if let result {
-                    continuation.resume(with: result)
-                    return
-                }
-                let deadline = Task {
-                    do {
-                        try await Task.sleep(for: .seconds(5))
-                        self.fail(id, with: RuntimeTestTimeout(operation: operation))
-                    } catch {}
-                }
-                let retained = self.lock.withLock {
-                    guard let index = self.waiters.firstIndex(where: { $0.id == id }) else {
-                        return false
-                    }
-                    self.waiters[index].deadline = deadline
-                    return true
-                }
-                if !retained {
-                    deadline.cancel()
-                }
-            }
-        } onCancel: {
-            self.fail(id, with: CancellationError())
-        }
-    }
-
-    private func fail(_ id: UUID, with error: any Error) {
-        let waiter: Waiter? = self.lock.withLock {
-            guard let index = self.waiters.firstIndex(where: { $0.id == id }) else {
-                return nil
-            }
-            return self.waiters.remove(at: index)
-        }
-        self.resume(waiter, with: .failure(error))
-    }
-
-    private func resume(_ waiter: Waiter?, with result: Result<Value, any Error>) {
-        guard let waiter else { return }
-        waiter.deadline?.cancel()
-        waiter.continuation.resume(with: result)
-    }
-}
-
 @MainActor
 private final class RuntimeTestAudioCapture: RealtimeTalkAudioCapturing {
     let suppressesInputDuringOutput = false
     var startError: Error?
+    var onStart: (() -> Void)?
     private(set) var startCount = 0
 
     func start(
@@ -112,6 +25,7 @@ private final class RuntimeTestAudioCapture: RealtimeTalkAudioCapturing {
         if let startError = self.startError {
             throw startError
         }
+        self.onStart?()
     }
 
     func stop() {}
@@ -120,21 +34,21 @@ private final class RuntimeTestAudioCapture: RealtimeTalkAudioCapturing {
 private actor RuntimeTestRelayRequestLog {
     private var methods: [String] = []
     private var sessionIds: [String?] = []
-    private nonisolated let changed = RuntimeTestSignal<Void>()
+    private nonisolated let changed = AsyncTestSignal()
 
     func record(method: String, params: [String: AnyCodable]?) {
         self.methods.append(method)
         self.sessionIds.append(params?["sessionId"]?.stringValue)
-        self.changed.send(())
+        self.changed.notify()
     }
 
     func snapshot() -> (methods: [String], sessionIds: [String?]) {
         (self.methods, self.sessionIds)
     }
 
-    func waitForCount(_ count: Int) async throws {
-        while self.methods.count < count {
-            _ = try await self.changed.next("relay request \(count)")
+    func waitForCount(_ count: Int, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+        try await self.changed.wait("relay request \(count)", sourceLocation: sourceLocation) {
+            self.methods.count >= count
         }
     }
 }
@@ -162,8 +76,11 @@ private func makeRecordingRelaySession(
     return session
 }
 
-private func waitForRelayClose(_ requests: RuntimeTestRelayRequestLog) async throws -> [String] {
-    try await requests.waitForCount(1)
+private func waitForRelayClose(
+    _ requests: RuntimeTestRelayRequestLog,
+    sourceLocation: SourceLocation = #_sourceLocation) async throws -> [String]
+{
+    try await requests.waitForCount(1, sourceLocation: sourceLocation)
     return await requests.snapshot().methods
 }
 
@@ -193,46 +110,47 @@ private final class RuntimeTestPCMPlayer: PCMStreamingAudioPlaying {
 private actor RuntimeContinuationBarrier {
     private var entered = false
     private var released = false
-    private nonisolated let enteredSignal = RuntimeTestSignal<Void>()
-    private nonisolated let releaseSignal = RuntimeTestSignal<Void>()
+    private nonisolated let enteredSignal = AsyncTestGate()
+    private nonisolated let releaseGate = AsyncTestGate()
 
     func wait() async throws {
         self.entered = true
-        self.enteredSignal.send(())
+        self.enteredSignal.open()
         guard !self.released else { return }
-        do {
-            _ = try await self.releaseSignal.next("barrier release")
-        } catch {
+        await self.releaseGate.wait()
+        // Only release() sets this flag; an unreleased wake came from cancellation.
+        guard self.released else {
             self.release()
-            throw error
+            throw CancellationError()
         }
     }
 
-    func waitUntilEntered() async throws {
+    func waitUntilEntered(sourceLocation: SourceLocation = #_sourceLocation) async throws {
         if self.entered { return }
-        _ = try await self.enteredSignal.next("barrier entry")
+        try await self.enteredSignal.wait("barrier entry", sourceLocation: sourceLocation)
     }
 
     func release() {
         guard !self.released else { return }
         self.released = true
-        self.releaseSignal.send(())
+        self.releaseGate.open()
     }
 }
 
 private func waitForRuntimeBarrier(
     _ barrier: RuntimeContinuationBarrier,
-    cleaningUp attempt: Task<Bool, Never>) async throws
+    cleaningUp attempt: Task<Bool, Never>,
+    sourceLocation: SourceLocation = #_sourceLocation) async throws
 {
     do {
-        try await barrier.waitUntilEntered()
+        try await barrier.waitUntilEntered(sourceLocation: sourceLocation)
     } catch {
         attempt.cancel()
         await barrier.release()
-        _ = try? await AsyncTimeout.withTimeout(
-            seconds: 5,
-            onTimeout: { RuntimeTestTimeout(operation: "cancelled runtime attempt") },
-            operation: { await attempt.value })
+        _ = try? await TestWait.value(
+            of: attempt,
+            "cancelled runtime attempt",
+            sourceLocation: sourceLocation)
         throw error
     }
 }
@@ -266,31 +184,6 @@ private enum RuntimeRecognitionStartError: Error {
 
 private enum RuntimeRelayStartError: Error {
     case failed
-}
-
-private struct RuntimeConditionTimeout: Error, CustomStringConvertible {
-    let operation: String
-
-    var description: String {
-        "timed out waiting for \(self.operation)"
-    }
-}
-
-private func waitForRuntimeCondition(
-    _ operation: String,
-    condition: @escaping @Sendable () async -> Bool) async throws
-{
-    try await AsyncTimeout.withTimeout(
-        seconds: 1,
-        onTimeout: { RuntimeConditionTimeout(operation: operation) },
-        operation: {
-            while !Task.isCancelled {
-                if await condition() {
-                    return
-                }
-            }
-            throw CancellationError()
-        })
 }
 
 enum RuntimeRelayStartupPauseOutcome: Equatable {
@@ -344,6 +237,21 @@ private func makeRuntimeTestConfigSnapshot(
         issues: nil)
 }
 
+private func makeRuntimeTestCatalogData() throws -> Data {
+    try JSONEncoder().encode(TalkCatalogResult(
+        modes: [],
+        transports: [],
+        brains: [],
+        speech: [:],
+        transcription: [:],
+        realtime: [
+            "activeProvider": AnyCodable("openai"),
+            "providers": AnyCodable([
+                ["id": AnyCodable("openai"), "supportsBargeIn": AnyCodable(true)],
+            ]),
+        ]))
+}
+
 private func makeRuntimeTestBootstrap(
     requests: RuntimeTestRelayRequestLog = RuntimeTestRelayRequestLog(),
     createBarrier: RuntimeContinuationBarrier? = nil,
@@ -381,6 +289,9 @@ private func makeRuntimeTestBootstrap(
             }
             if method == "talk.session.close" {
                 events.continuation.finish()
+            }
+            if method == "talk.catalog" {
+                return try makeRuntimeTestCatalogData()
             }
             return Data("{\"ok\":true}".utf8)
         },
@@ -423,23 +334,47 @@ private actor RuntimeTestBootstrapSequence {
     }
 }
 
-@Suite(.serialized)
-struct TalkModeRuntimeSpeechTests {
-    @Test func `macOS realtime relay requires local opt in and exact Gateway tuple`() {
-        #expect(!TalkModeRuntime.shouldUseRealtimeRelay(
-            localOptIn: false,
-            hasGatewayRealtimeRelayTuple: false))
-        #expect(!TalkModeRuntime.shouldUseRealtimeRelay(
-            localOptIn: false,
-            hasGatewayRealtimeRelayTuple: true))
-        #expect(!TalkModeRuntime.shouldUseRealtimeRelay(
-            localOptIn: true,
-            hasGatewayRealtimeRelayTuple: false))
-        #expect(TalkModeRuntime.shouldUseRealtimeRelay(
-            localOptIn: true,
-            hasGatewayRealtimeRelayTuple: true))
-    }
+private func runtimeRecoveryState(
+    _ runtime: isolated TalkModeRuntime,
+    _ oldSession: RealtimeTalkRelaySession,
+    _ requests: RuntimeTestRelayRequestLog,
+    _ recoveryRequests: RuntimeTestRelayRequestLog) async -> String
+{
+    let oldRequests = await requests.snapshot()
+    let newRequests = await recoveryRequests.snapshot()
+    let sharedOptIn = await MainActor.run { AppStateStore.shared.talkRealtimeRelayEnabled }
+    return """
+    Post-failure RPC observations before cleanup: old=\(oldRequests), new=\(newRequests)
+    Post-failure runtime: sharedOptIn=\(sharedOptIn), enabled=\(runtime.isEnabled), paused=\(runtime.isPaused), \
+    phase=\(runtime.phase.rawValue), \
+    localOptIn=\(runtime.macOSRealtimeRelayOptIn), gatewayTuple=\(runtime.hasGatewayRealtimeRelayTuple), \
+    lifecycle=\(runtime.lifecycleGeneration), relay=\(runtime.realtimeRelayGeneration), \
+    startingRelay=\(String(describing: runtime.realtimeRelayStartGeneration)), \
+    restart=\(runtime.realtimeRestartGeneration), restartCount=\(runtime.rapidRealtimeRestartCount), \
+    restartPending=\(runtime.realtimeRestartTask != nil), hasSession=\(runtime.realtimeSession != nil), \
+    ownsOldSession=\(runtime.realtimeSession === oldSession)
+    """
+}
 
+private func runtimeTestDependencies(
+    audioCapture: @escaping @MainActor @Sendable () -> any RealtimeTalkAudioCapturing)
+    -> TalkModeRuntime.Dependencies
+{
+    let live = TalkModeRuntime.Dependencies.live
+    return .init(
+        permissions: .init(supported: { true }, granted: { true }, ensure: { _ in true }),
+        audioCapture: audioCapture,
+        pcmPlayer: { RuntimeTestPCMPlayer() },
+        selectedSession: live.selectedSession,
+        stopPCM: live.stopPCM,
+        stopMP3: live.stopMP3,
+        stopBuffered: live.stopBuffered,
+        stopSystem: live.stopSystem,
+        stopMLX: live.stopMLX)
+}
+
+@Suite(.serialized, .testWaitLimit)
+struct TalkModeRuntimeSpeechTests {
     @Test @MainActor func `macOS realtime relay preference defaults off and reads explicit opt in`() async {
         await TestIsolation.withUserDefaultsValues([talkRealtimeRelayEnabledKey: nil]) {
             #expect(!AppState(preview: true).talkRealtimeRelayEnabled)
@@ -452,7 +387,7 @@ struct TalkModeRuntimeSpeechTests {
     @Test func `speech request uses dictation defaults`() {
         let request = SFSpeechAudioBufferRecognitionRequest()
 
-        TalkRecognitionCaptureLifecycle.configure(request)
+        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
 
         #expect(request.shouldReportPartialResults)
         #expect(request.taskHint == .dictation)
@@ -500,77 +435,90 @@ struct TalkModeRuntimeSpeechTests {
             TalkMLXSpeechSynthesizer.SynthesizeError.modelLoadFailed("missing")) == .fallback)
     }
 
-    @Test func `realtime recovery uses the iOS retry budget`() {
-        #expect(TalkModeRuntime.realtimeRestartAttempt(
-            previousRapidRestarts: 1,
-            activeDuration: 5) == 2)
-        #expect(TalkModeRuntime.realtimeRestartAttempt(
-            previousRapidRestarts: 2,
-            activeDuration: 31) == 1)
-        #expect(TalkModeRuntime.realtimeRestartDelayNanoseconds(attempt: 1) == 500_000_000)
-        #expect(TalkModeRuntime.realtimeRestartDelayNanoseconds(attempt: 2) == 2_000_000_000)
-        #expect(TalkModeRuntime.realtimeRestartDelayNanoseconds(attempt: 3) == nil)
-    }
+    @Test(arguments: ["audio failure", "selected microphone", "unpause"])
+    @MainActor
+    func `capture failures close the old relay and start a replacement microphone`(source: String) async throws {
+        try await TestIsolation.withUserDefaultsValues([talkRealtimeRelayEnabledKey: true]) {
+            let previousRelayPreference = AppStateStore.shared.talkRealtimeRelayEnabled
+            AppStateStore.shared.talkRealtimeRelayEnabled = true
+            defer { AppStateStore.shared.talkRealtimeRelayEnabled = previousRelayPreference }
 
-    @Test @MainActor func `ready then audio failure clears relay owner and schedules bounded recovery`() async {
-        let runtime = TalkModeRuntime()
-        let session = RealtimeTalkRelaySession(
-            transport: RealtimeTalkRelayTransport(
-                subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
-                request: { _, _, _ in throw CancellationError() }),
-            options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
-            audioCapture: RuntimeTestAudioCapture(),
-            pcmPlayer: RuntimeTestPCMPlayer(),
-            onStatus: { _ in },
-            onSpeakingChanged: { _ in })
-        let relayGeneration = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
+            let requests = RuntimeTestRelayRequestLog()
+            let recoveryRequests = RuntimeTestRelayRequestLog()
+            let recoveryMilestones = RuntimeCommitProbe()
+            let recoveryStartedAt = ContinuousClock.now
+            let recordRecovery: @Sendable (String) -> Void = { event in
+                recoveryMilestones.record("\(recoveryStartedAt.duration(to: ContinuousClock.now)): \(event)")
+            }
+            let bootstrap = try makeRuntimeTestBootstrap(requests: recoveryRequests)
+            let recoveryStarted = AsyncTestGate()
+            let recoveryCapture = RuntimeTestAudioCapture()
+            recoveryCapture.onStart = {
+                recordRecovery("microphone-started")
+                recoveryStarted.open()
+            }
+            let runtime = TalkModeRuntime(
+                realtimeTalkBootstrapProvider: {
+                    recordRecovery("bootstrap")
+                    return bootstrap
+                },
+                dependencies: runtimeTestDependencies(audioCapture: {
+                    recordRecovery("capture-created")
+                    return recoveryCapture
+                }))
+            let audioCapture = RuntimeTestAudioCapture()
+            let session = makeRecordingRelaySession(requests: requests, audioCapture: audioCapture)
+            defer { session.stop() }
+            let generation = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
 
-        await runtime.handleRealtimeTermination(
-            .remoteClose(reason: "stale"),
-            relayGeneration: relayGeneration &- 1)
-        #expect(await runtime.realtimeSession != nil)
+            do {
+                await runtime.handleRealtimeTermination(.remoteClose(reason: "stale"), relayGeneration: generation &- 1)
+                #expect(await runtime.realtimeSession === session)
+                #expect(await requests.snapshot().methods.isEmpty)
+                audioCapture.startError = RuntimeTestAudioCaptureError.inputUnavailable
+                switch source {
+                case "audio failure":
+                    await runtime.handleRealtimeTermination(
+                        .audioInputFailed(message: "microphone unavailable"), relayGeneration: generation)
+                case "selected microphone":
+                    await runtime.inputDeviceSelectionDidChange()
+                case "unpause":
+                    await runtime.setPaused(true)
+                    await runtime.setPaused(false)
+                default:
+                    Issue.record("unexpected capture failure source")
+                }
 
-        await runtime.handleRealtimeTermination(
-            .audioInputFailed(message: "microphone unavailable"),
-            relayGeneration: relayGeneration)
-
-        #expect(await runtime.realtimeSession == nil)
-        #expect(await runtime.rapidRealtimeRestartCount == 1)
-        #expect(await runtime.realtimeRestartTask != nil)
-
-        await runtime.setEnabled(false)
-        session.stop()
-    }
-
-    @Test @MainActor func `selected microphone restart failure closes relay and schedules recovery`() async throws {
-        let runtime = TalkModeRuntime()
-        let requests = RuntimeTestRelayRequestLog()
-        let session = makeRecordingRelaySession(
-            requests: requests,
-            audioCapture: RuntimeTestAudioCapture())
-        let relayGeneration = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
-
-        await runtime.handleRealtimeInputRestartFailure(
-            "selected microphone unavailable",
-            relayGeneration: relayGeneration)
-
-        #expect(await runtime.realtimeSession == nil)
-        #expect(await runtime.rapidRealtimeRestartCount == 1)
-        #expect(await runtime.realtimeRestartTask != nil)
-
-        // Ownership must not be dropped while the server relay stays live; recovery would then
-        // run a second session against the same gateway lease.
-        let recorded = try await waitForRelayClose(requests)
-        #expect(recorded == ["talk.session.close"])
-        #expect(await requests.snapshot().sessionIds == ["relay-1"])
-
-        await runtime.setEnabled(false)
-        session.stop()
+                // Recovery can consume its scheduled task before this test resumes. Prove that
+                // failed capture closes the old relay and actually starts a fresh microphone.
+                let recorded = try await waitForRelayClose(requests)
+                #expect(recorded == ["talk.session.close"])
+                #expect(await requests.snapshot().sessionIds == ["relay-1"])
+                recordRecovery("awaiting microphone signal")
+                try await recoveryStarted.wait("replacement realtime microphone")
+                #expect(recoveryCapture.startCount == 1)
+                #expect(await runtime.rapidRealtimeRestartCount == 1)
+                #expect(await recoveryRequests.snapshot().methods == ["talk.session.create", "talk.catalog"])
+                let replacement = try #require(await runtime.realtimeSession)
+                #expect(replacement !== session)
+            } catch {
+                recordRecovery("catch; old/new capture starts=\(audioCapture.startCount)/\(recoveryCapture.startCount)")
+                await print(runtimeRecoveryState(runtime, session, requests, recoveryRequests))
+                print("Talk recovery failure (\(source)): \(error); milestones=\(recoveryMilestones.values())")
+                await runtime.setEnabled(false)
+                throw error
+            }
+            await runtime.setEnabled(false)
+            try await recoveryRequests.waitForCount(3)
+            #expect(await recoveryRequests.snapshot().methods == [
+                "talk.session.create", "talk.catalog", "talk.session.close",
+            ])
+        }
     }
 
     @Test func `stale termination and callbacks cannot tear down or project over a successor`() async throws {
         let runtime = TalkModeRuntime()
-        let stopEntered = RuntimeTestSignal<Void>()
+        let stopEntered = AsyncTestGate()
         let releaseStop = DispatchSemaphore(value: 0)
         var released = false
         defer {
@@ -580,7 +528,7 @@ struct TalkModeRuntimeSpeechTests {
         }
         let sessionA = await MainActor.run {
             makeRuntimeTestRealtimeSession(player: RuntimeTestPCMPlayer(onStop: {
-                stopEntered.send(())
+                stopEntered.open()
                 _ = releaseStop.wait(timeout: .now() + 5)
             }))
         }
@@ -593,7 +541,7 @@ struct TalkModeRuntimeSpeechTests {
                 relayGeneration: generationA)
         }
         do {
-            _ = try await stopEntered.next("stale session stop")
+            try await stopEntered.wait("stale session stop")
         } catch {
             released = true
             releaseStop.signal()
@@ -627,8 +575,8 @@ struct TalkModeRuntimeSpeechTests {
 
     @Test func `stale preference cleanup preserves successor session recognition and UI`() async throws {
         let runtime = TalkModeRuntime()
-        let mainActorEntered = RuntimeTestSignal<Void>()
-        let mainActorFinished = RuntimeTestSignal<Void>()
+        let mainActorEntered = AsyncTestGate()
+        let mainActorFinished = AsyncTestGate()
         let releaseMainActor = DispatchSemaphore(value: 0)
         var released = false
         defer {
@@ -654,23 +602,23 @@ struct TalkModeRuntimeSpeechTests {
             TalkModeController.shared.updatePartialTranscript("successor")
         }
         DispatchQueue.main.async {
-            mainActorEntered.send(())
+            mainActorEntered.open()
             _ = releaseMainActor.wait(timeout: .now() + 5)
-            mainActorFinished.send(())
+            mainActorFinished.open()
         }
-        _ = try await mainActorEntered.next("MainActor preference blocker")
+        try await mainActorEntered.wait("MainActor preference blocker")
 
         let stalePreference = Task {
             await runtime.realtimeRelayPreferenceDidChange()
         }
         do {
-            try await waitForRuntimeCondition("preference owner detachment") {
+            try await TestWait.state("preference owner detachment") {
                 await runtime.realtimeSession == nil
             }
         } catch {
             released = true
             releaseMainActor.signal()
-            _ = try? await mainActorFinished.next("MainActor preference cleanup")
+            try? await mainActorFinished.wait("MainActor preference cleanup")
             await stalePreference.value
             throw error
         }
@@ -684,7 +632,7 @@ struct TalkModeRuntimeSpeechTests {
 
         released = true
         releaseMainActor.signal()
-        _ = try await mainActorFinished.next("MainActor preference cleanup")
+        try await mainActorFinished.wait("MainActor preference cleanup")
         await stalePreference.value
 
         #expect(await runtime.realtimeSession === sessionB)
@@ -695,30 +643,6 @@ struct TalkModeRuntimeSpeechTests {
         await runtime._test_setRecognitionCleanupProbe(nil)
         await runtime.setEnabled(false)
         await MainActor.run { sessionB.stop() }
-    }
-
-    @Test @MainActor func `unpause that cannot restart capture closes relay and schedules recovery`() async throws {
-        let runtime = TalkModeRuntime()
-        let requests = RuntimeTestRelayRequestLog()
-        let audioCapture = RuntimeTestAudioCapture()
-        let session = makeRecordingRelaySession(requests: requests, audioCapture: audioCapture)
-        _ = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
-
-        await runtime.setPaused(true)
-        audioCapture.startError = RuntimeTestAudioCaptureError.inputUnavailable
-        await runtime.setPaused(false)
-
-        // Talk must never stay enabled with no microphone and no route back: the failed unpause
-        // has to reach the same bounded recovery / native-speech fallback as any other capture loss.
-        #expect(await runtime.realtimeSession == nil)
-        #expect(await runtime.rapidRealtimeRestartCount == 1)
-        #expect(await runtime.realtimeRestartTask != nil)
-
-        let recorded = try await waitForRelayClose(requests)
-        #expect(recorded == ["talk.session.close"])
-
-        await runtime.setEnabled(false)
-        session.stop()
     }
 
     @Test @MainActor func `paused reenable lets pinned bootstrap refresh realtime selection`() async throws {
@@ -732,9 +656,9 @@ struct TalkModeRuntimeSpeechTests {
             let bootstrap = try makeRuntimeTestBootstrap(
                 requests: requests,
                 realtimeModel: "fresh-model")
-            let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: { bootstrap })
-            await runtime._test_setRealtimeAudioCaptureProvider { RuntimeTestAudioCapture() }
-            await runtime._test_setVoiceWakeReadiness(supported: true, permissionGranted: true)
+            let runtime = TalkModeRuntime(
+                realtimeTalkBootstrapProvider: { bootstrap },
+                dependencies: runtimeTestDependencies(audioCapture: { RuntimeTestAudioCapture() }))
             _ = await runtime._test_prepareEnabledLifecycle()
             await runtime.setPaused(true)
             await runtime.setEnabled(false)
@@ -808,6 +732,9 @@ struct TalkModeRuntimeSpeechTests {
                             seq: nil,
                             stateversion: nil))
                         return resultData
+                    }
+                    if method == "talk.catalog" {
+                        return try makeRuntimeTestCatalogData()
                     }
                     return Data("{\"ok\":true}".utf8)
                 }),
@@ -1013,9 +940,9 @@ struct TalkModeRuntimeSpeechTests {
             let sequence = RuntimeTestBootstrapSequence(
                 bootstraps: [firstBootstrap, retryBootstrap],
                 firstBarrier: barrier)
-            let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: { try await sequence.next() })
-            await runtime._test_setRealtimeAudioCaptureProvider { RuntimeTestAudioCapture() }
-            await runtime._test_setVoiceWakeReadiness(supported: true, permissionGranted: true)
+            let runtime = TalkModeRuntime(
+                realtimeTalkBootstrapProvider: { try await sequence.next() },
+                dependencies: runtimeTestDependencies(audioCapture: { RuntimeTestAudioCapture() }))
             let attempt = Task {
                 await runtime.setEnabled(true)
                 return true
@@ -1029,7 +956,7 @@ struct TalkModeRuntimeSpeechTests {
 
             _ = await attempt.value
             #expect(await sequence.requestCount() == 2)
-            #expect(await requests.snapshot().methods == ["talk.session.create"])
+            #expect(await requests.snapshot().methods == ["talk.session.create", "talk.catalog"])
             #expect(await runtime.realtimeSession != nil)
             #expect(await runtime.realtimeModelId == "fresh-model")
             await runtime.setEnabled(false)
@@ -1103,10 +1030,9 @@ struct TalkModeRuntimeSpeechTests {
         let sequence = RuntimeTestBootstrapSequence(
             bootstraps: [bootstrapA, bootstrapB],
             firstBarrier: barrier)
-        let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: {
-            try await sequence.next()
-        })
-        await runtime._test_setRealtimeAudioCaptureProvider { RuntimeTestAudioCapture() }
+        let runtime = TalkModeRuntime(
+            realtimeTalkBootstrapProvider: { try await sequence.next() },
+            dependencies: runtimeTestDependencies(audioCapture: { RuntimeTestAudioCapture() }))
         let lifecycleA = await runtime._test_prepareEnabledLifecycle()
         await runtime._test_enableRealtimeRelaySelection()
         let attemptA = Task {
@@ -1229,11 +1155,11 @@ struct TalkModeRuntimeSpeechTests {
                 relayGeneration: relayGeneration,
                 status: "stale fallback")
         }
-        try await waitForRuntimeCondition("fallback to enter projection") {
+        try await TestWait.state("fallback to enter projection") {
             await runtime.phase == .listening
         }
         let successor = Task { await runtime.setEnabled(false) }
-        try await waitForRuntimeCondition("successor generation") {
+        try await TestWait.state("successor generation") {
             await runtime.realtimeRelayGeneration != relayGeneration
         }
         didReleaseMainActor = true

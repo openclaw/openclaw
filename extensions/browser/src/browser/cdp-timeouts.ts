@@ -18,6 +18,8 @@ export const PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS = 2000;
 
 export const CHROME_REACHABILITY_TIMEOUT_MS = 500;
 export const CHROME_WS_READY_TIMEOUT_MS = 800;
+// Launch and owned-browser actions must tolerate the same Gateway scheduling delays.
+export const MANAGED_CDP_READY_HTTP_TIMEOUT_MS = 1500;
 export const CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS = 10_000;
 export const CHROME_BOOTSTRAP_PREFS_POLL_MS = 100;
 export const CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS = 5000;
@@ -43,14 +45,6 @@ export function usesFastLoopbackCdpProbeClass(params: {
   return params.profileIsLoopback && params.attachOnly !== true;
 }
 
-function normalizeTimeoutMs(value: number | undefined): number | undefined {
-  return clampTimerTimeoutMs(value);
-}
-
-function maxTimerTimeoutMs(...values: number[]): number {
-  return values.reduce((max, value) => Math.max(max, resolveTimerTimeoutMs(value, 1)), 1);
-}
-
 /** Resolve HTTP and WebSocket reachability timeouts for a CDP profile. */
 export function resolveCdpReachabilityTimeouts(params: {
   profileIsLoopback: boolean;
@@ -59,7 +53,7 @@ export function resolveCdpReachabilityTimeouts(params: {
   remoteHttpTimeoutMs: number;
   remoteHandshakeTimeoutMs: number;
 }): { httpTimeoutMs: number; wsTimeoutMs: number } {
-  const normalized = normalizeTimeoutMs(params.timeoutMs);
+  const normalized = clampTimerTimeoutMs(params.timeoutMs);
   const remoteHttpTimeoutMs = resolveTimerTimeoutMs(
     params.remoteHttpTimeoutMs,
     CDP_HTTP_REQUEST_TIMEOUT_MS,
@@ -89,8 +83,8 @@ export function resolveCdpReachabilityTimeouts(params: {
     // HTTP reachability and WS handshake are separate network operations.
     const requestedWsTimeoutMs = addTimerTimeoutGraceMs(normalized, normalized) ?? normalized;
     return {
-      httpTimeoutMs: maxTimerTimeoutMs(normalized, remoteHttpTimeoutMs),
-      wsTimeoutMs: maxTimerTimeoutMs(requestedWsTimeoutMs, remoteHandshakeTimeoutMs),
+      httpTimeoutMs: Math.max(normalized, remoteHttpTimeoutMs),
+      wsTimeoutMs: Math.max(requestedWsTimeoutMs, remoteHandshakeTimeoutMs),
     };
   }
   return {

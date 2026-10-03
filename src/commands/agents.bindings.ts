@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Pure helpers for parsing, adding, removing, and generating agent route bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
@@ -11,7 +10,7 @@ import { formatUnknownChannelMessage } from "../cli/error-format.js";
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { listManifestChannelContributionIds } from "../plugins/manifest-contribution-ids.js";
+import { listPluginContributionIds } from "../plugins/plugin-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
@@ -35,27 +34,6 @@ function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
   ]);
 }
 
-function canUpgradeBindingAccountScope(params: {
-  existing: AgentRouteBinding;
-  incoming: AgentRouteBinding;
-  normalizedIncomingAgentId: string;
-}): boolean {
-  if (!normalizeOptionalString(params.incoming.match.accountId)) {
-    return false;
-  }
-  if (normalizeOptionalString(params.existing.match.accountId)) {
-    return false;
-  }
-  if (normalizeAgentId(params.existing.agentId) !== params.normalizedIncomingAgentId) {
-    return false;
-  }
-  return (
-    bindingMatchIdentityKey(params.existing.match) ===
-    bindingMatchIdentityKey(params.incoming.match)
-  );
-}
-
-/** Merge new route bindings into config while reporting adds, upgrades, skips, and conflicts. */
 export function applyAgentBindings(
   cfg: OpenClawConfig,
   bindings: AgentRouteBinding[],
@@ -94,13 +72,14 @@ export function applyAgentBindings(
       continue;
     }
 
-    const upgradeIndex = existingRoutes.findIndex((candidate) =>
-      canUpgradeBindingAccountScope({
-        existing: candidate,
-        incoming: binding,
-        normalizedIncomingAgentId: agentId,
-      }),
-    );
+    const upgradeIndex = normalizeOptionalString(binding.match.accountId)
+      ? existingRoutes.findIndex(
+          (candidate) =>
+            !normalizeOptionalString(candidate.match.accountId) &&
+            normalizeAgentId(candidate.agentId) === agentId &&
+            bindingMatchIdentityKey(candidate.match) === bindingMatchIdentityKey(binding.match),
+        )
+      : -1;
     if (upgradeIndex >= 0) {
       const current = existingRoutes[upgradeIndex];
       if (!current) {
@@ -142,7 +121,6 @@ export function applyAgentBindings(
   };
 }
 
-/** Remove matching route bindings from config without disturbing non-route binding entries. */
 export function removeAgentBindings(
   cfg: OpenClawConfig,
   bindings: AgentRouteBinding[],
@@ -164,12 +142,11 @@ export function removeAgentBindings(
     const key = bindingMatchKey(binding.match);
     let matchedIndex = -1;
     let conflictingAgentId: string | null = null;
-    for (let i = 0; i < existingRoutes.length; i += 1) {
+    for (const [i, current] of existingRoutes.entries()) {
       if (removeIndexes.has(i)) {
         continue;
       }
-      const current = existingRoutes[i];
-      if (!current || bindingMatchKey(current.match) !== key) {
+      if (bindingMatchKey(current.match) !== key) {
         continue;
       }
       const currentAgentId = normalizeAgentId(current.agentId);
@@ -211,39 +188,6 @@ export function removeAgentBindings(
   };
 }
 
-function resolveDefaultAccountId(cfg: OpenClawConfig, provider: ChannelId): string {
-  const plugin = getBindingChannelPlugin(provider);
-  if (!plugin) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return resolveChannelDefaultAccountId({ plugin, cfg });
-}
-
-function listManifestChannelIds(config: OpenClawConfig): Set<string> {
-  return new Set(
-    listManifestChannelContributionIds({
-      includeDisabled: true,
-      config,
-      env: process.env,
-    }),
-  );
-}
-
-function normalizeBindingChannelId(
-  raw: string | undefined,
-  config: OpenClawConfig,
-): ChannelId | null {
-  const bundled = normalizeBundledChannelId(raw);
-  if (bundled) {
-    return bundled;
-  }
-  const normalized = normalizeOptionalString(raw)?.toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-  return listManifestChannelIds(config).has(normalized) ? normalized : null;
-}
-
 function getBindingChannelPlugin(channel: ChannelId) {
   return getLoadedChannelPlugin(channel) ?? getBundledChannelSetupPlugin(channel);
 }
@@ -275,7 +219,7 @@ function resolveBindingAccountId(params: {
   }
 
   if (plugin?.meta.forceAccountBinding) {
-    return resolveDefaultAccountId(params.config, params.channel);
+    return resolveChannelDefaultAccountId({ plugin, cfg: params.config });
   }
 
   return undefined;
@@ -314,6 +258,7 @@ export function parseBindingSpecs(params: {
   const errors: string[] = [];
   const specs = params.specs ?? [];
   const agentId = normalizeAgentId(params.agentId);
+  let manifestChannelIds: Set<string> | undefined;
   for (const raw of specs) {
     const trimmed = raw?.trim();
     if (!trimmed) {
@@ -328,7 +273,22 @@ export function parseBindingSpecs(params: {
       );
       continue;
     }
-    const channel = normalizeBindingChannelId(channelRaw, params.config);
+    let channel: ChannelId | null = normalizeBundledChannelId(channelRaw);
+    if (!channel) {
+      const normalized = normalizeOptionalString(channelRaw)?.toLowerCase();
+      if (normalized) {
+        // One parse owns the inventory; blank, extra-colon, and bundled specs never need it.
+        manifestChannelIds ??= new Set(
+          listPluginContributionIds({
+            contribution: "channels",
+            includeDisabled: true,
+            config: params.config,
+            env: process.env,
+          }),
+        );
+        channel = manifestChannelIds.has(normalized) ? normalized : null;
+      }
+    }
     if (!channel) {
       errors.push(
         formatUnknownChannelMessage({

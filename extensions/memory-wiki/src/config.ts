@@ -1,4 +1,3 @@
-// Memory Wiki helper module supports config behavior.
 import os from "node:os";
 import path from "node:path";
 // agent-scope-runtime exports the same resolvers without memory-host-core's
@@ -17,111 +16,19 @@ const WIKI_RENDER_MODES = ["native", "obsidian"] as const;
 export const WIKI_SEARCH_BACKENDS = ["shared", "local"] as const;
 export const WIKI_SEARCH_CORPORA = ["wiki", "memory", "all"] as const;
 
-type WikiVaultMode = (typeof WIKI_VAULT_MODES)[number];
-type WikiVaultScope = (typeof WIKI_VAULT_SCOPES)[number];
-type WikiRenderMode = (typeof WIKI_RENDER_MODES)[number];
 export type WikiSearchBackend = (typeof WIKI_SEARCH_BACKENDS)[number];
 export type WikiSearchCorpus = (typeof WIKI_SEARCH_CORPORA)[number];
 
-export type MemoryWikiPluginConfig = {
-  vaultMode?: WikiVaultMode;
-  vault?: {
-    scope?: WikiVaultScope;
-    path?: string;
-    renderMode?: WikiRenderMode;
-  };
-  obsidian?: {
-    enabled?: boolean;
-    useOfficialCli?: boolean;
-    vaultName?: string;
-    openAfterWrites?: boolean;
-  };
-  bridge?: {
-    enabled?: boolean;
-    readMemoryArtifacts?: boolean;
-    indexDreamReports?: boolean;
-    indexDailyNotes?: boolean;
-    indexMemoryRoot?: boolean;
-    followMemoryEvents?: boolean;
-  };
-  unsafeLocal?: {
-    allowPrivateMemoryCoreAccess?: boolean;
-    paths?: string[];
-  };
-  ingest?: {
-    autoCompile?: boolean;
-    maxConcurrentJobs?: number;
-    allowUrlIngest?: boolean;
-  };
-  search?: {
-    backend?: WikiSearchBackend;
-    corpus?: WikiSearchCorpus;
-  };
-  context?: {
-    includeCompiledDigestPrompt?: boolean;
-  };
-  render?: {
-    preserveHumanBlocks?: boolean;
-    createBacklinks?: boolean;
-    createDashboards?: boolean;
-  };
-};
+export type MemoryWikiPluginConfig = z.infer<typeof MemoryWikiConfigSource>;
 
-export type ResolvedMemoryWikiConfig = {
+export type ResolvedMemoryWikiConfig = ReturnType<typeof resolveMemoryWikiConfig> & {
   agentId?: string;
-  vaultMode: WikiVaultMode;
-  vault: {
-    scope: WikiVaultScope;
-    path: string;
-    renderMode: WikiRenderMode;
-  };
-  obsidian: {
-    enabled: boolean;
-    useOfficialCli: boolean;
-    vaultName?: string;
-    openAfterWrites: boolean;
-  };
-  bridge: {
-    enabled: boolean;
-    readMemoryArtifacts: boolean;
-    indexDreamReports: boolean;
-    indexDailyNotes: boolean;
-    indexMemoryRoot: boolean;
-    followMemoryEvents: boolean;
-  };
-  unsafeLocal: {
-    allowPrivateMemoryCoreAccess: boolean;
-    paths: string[];
-  };
-  ingest: {
-    autoCompile: boolean;
-    maxConcurrentJobs: number;
-    allowUrlIngest: boolean;
-  };
-  search: {
-    backend: WikiSearchBackend;
-    corpus: WikiSearchCorpus;
-  };
-  context: {
-    includeCompiledDigestPrompt: boolean;
-  };
-  render: {
-    preserveHumanBlocks: boolean;
-    createBacklinks: boolean;
-    createDashboards: boolean;
-  };
 };
 
 export type MemoryWikiConfigResolver = (
   agentId?: string,
   appConfig?: OpenClawConfig,
 ) => ResolvedMemoryWikiConfig;
-
-const DEFAULT_WIKI_VAULT_MODE: WikiVaultMode = "isolated";
-const DEFAULT_WIKI_VAULT_SCOPE: WikiVaultScope = "global";
-const DEFAULT_WIKI_RENDER_MODE: WikiRenderMode = "native";
-const DEFAULT_WIKI_SEARCH_BACKEND: WikiSearchBackend = "shared";
-const DEFAULT_WIKI_SEARCH_CORPUS: WikiSearchCorpus = "wiki";
 
 export const MemoryWikiConfigSource = z
   .strictObject({
@@ -213,11 +120,11 @@ function expandHomePath(inputPath: string, homedir: string): string {
 export function resolveMemoryWikiConfig(
   config: MemoryWikiPluginConfig | undefined,
   options?: { homedir?: string; env?: NodeJS.ProcessEnv },
-): ResolvedMemoryWikiConfig {
+) {
   const homedir = options?.homedir ?? os.homedir();
   const parsed = config ? MemoryWikiConfigSource.safeParse(config) : null;
   const safeConfig = parsed?.success ? parsed.data : (config ?? {});
-  const vaultScope = safeConfig.vault?.scope ?? DEFAULT_WIKI_VAULT_SCOPE;
+  const vaultScope = safeConfig.vault?.scope ?? "global";
   const vaultPath =
     safeConfig.vault?.path ??
     path.join(
@@ -227,11 +134,11 @@ export function resolveMemoryWikiConfig(
     );
 
   return {
-    vaultMode: safeConfig.vaultMode ?? DEFAULT_WIKI_VAULT_MODE,
+    vaultMode: safeConfig.vaultMode ?? "isolated",
     vault: {
       scope: vaultScope,
       path: expandHomePath(vaultPath, homedir),
-      renderMode: safeConfig.vault?.renderMode ?? DEFAULT_WIKI_RENDER_MODE,
+      renderMode: safeConfig.vault?.renderMode ?? "native",
     },
     obsidian: {
       enabled: safeConfig.obsidian?.enabled ?? false,
@@ -257,8 +164,8 @@ export function resolveMemoryWikiConfig(
       allowUrlIngest: safeConfig.ingest?.allowUrlIngest ?? true,
     },
     search: {
-      backend: safeConfig.search?.backend ?? DEFAULT_WIKI_SEARCH_BACKEND,
-      corpus: safeConfig.search?.corpus ?? DEFAULT_WIKI_SEARCH_CORPUS,
+      backend: safeConfig.search?.backend ?? "shared",
+      corpus: safeConfig.search?.corpus ?? "wiki",
     },
     context: {
       includeCompiledDigestPrompt: safeConfig.context?.includeCompiledDigestPrompt ?? false,

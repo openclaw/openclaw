@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
 function levelIds(params: {
@@ -14,10 +15,153 @@ function levelIds(params: {
 }
 
 describe("OpenAI thinking route provenance", () => {
+  it.each(["gpt-daybreak-blue-latest", "gpt-daybreak-red-latest"])(
+    "exposes the Daybreak Platform efforts for %s",
+    (modelId) => {
+      for (const agentRuntime of ["openclaw", "codex"]) {
+        const profile = resolveThinkingProfile({ provider: "openai", modelId, agentRuntime });
+        expect(profile?.levels.map(({ id }) => id)).toEqual([
+          ...(modelId.includes("red") && agentRuntime === "openclaw" ? ["off"] : []),
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          ...(agentRuntime === "openclaw" ? ["ultra"] : []),
+        ]);
+        expect(profile?.defaultLevel).toBe("medium");
+      }
+    },
+  );
+
   it.each([
-    { efforts: ["low", "high", "ultra"], expected: ["off", "low", "high", "ultra"] },
-    { efforts: ["low", "high", "max"], expected: ["off", "low", "high", "max"] },
-    { efforts: [], expected: ["off"] },
+    { efforts: ["high"], expected: ["high"] },
+    { efforts: ["low", "xhigh"], expected: ["low", "xhigh"] },
+    { efforts: [], expected: [] },
+  ])(
+    "honors declared alias efforts $efforts instead of name heuristics",
+    ({ efforts, expected }) => {
+      for (const agentRuntime of ["openclaw", "codex"]) {
+        expect(
+          resolveThinkingProfile({
+            provider: "openai",
+            modelId: "configured-alias",
+            agentRuntime,
+            api: "openai-responses",
+            compat: { supportedReasoningEfforts: efforts },
+          })?.levels.map(({ id }) => id),
+        ).toEqual(expected);
+      }
+    },
+  );
+
+  it("keeps Daybreak scalar opt-outs authoritative", () => {
+    for (const compat of [{ supportedReasoningEfforts: [] }, { supportsReasoningEffort: false }]) {
+      expect(
+        resolveThinkingProfile({
+          provider: "openai",
+          modelId: "gpt-daybreak-blue-latest",
+          agentRuntime: "openclaw",
+          compat,
+        })?.levels,
+      ).toEqual([]);
+    }
+    expect(
+      resolveThinkingProfile({
+        provider: "openai",
+        modelId: "gpt-daybreak-blue-latest",
+        agentRuntime: "openclaw",
+        thinkingLevelMap: { max: null },
+      })?.levels.map(({ id }) => id),
+    ).not.toContain("ultra");
+  });
+
+  it("keeps GPT-6.1 Sol reasoning enabled and respects native account efforts", () => {
+    for (const runtime of ["openclaw", "codex", "auto"]) {
+      const profile = resolveUnifiedOpenAIThinkingProfile("gpt-6.1-sol", runtime);
+      expect(profile.defaultLevel).toBe("medium");
+      expect(profile.levels.map((level) => level.id)).toEqual([
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        ...(runtime === "codex" ? [] : ["ultra"]),
+      ]);
+    }
+    const profile = resolveUnifiedOpenAIThinkingProfile("gpt-6.1-sol", "codex", {
+      supportedReasoningEfforts: ["low", "high", "ultra"],
+    });
+    expect(profile.levels.map((level) => level.id)).toEqual(["low", "high", "ultra"]);
+    expect(profile.defaultLevel).toBe("low");
+  });
+
+  it.each(["gpt-6-sol", "gpt-6-luna"])("offers supported reasoning for %s", (modelId) => {
+    for (const runtime of ["openclaw", "codex", "auto"]) {
+      const profile = resolveUnifiedOpenAIThinkingProfile(modelId, runtime);
+      expect(profile.defaultLevel).toBe("medium");
+      expect(profile.levels.map((level) => level.id)).toEqual([
+        ...(runtime === "codex" ? [] : ["off"]),
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        ...(runtime === "codex" ? [] : ["ultra"]),
+      ]);
+    }
+    const accountProfile = resolveUnifiedOpenAIThinkingProfile(modelId, "codex", {
+      supportedReasoningEfforts: ["low", "high"],
+    });
+    expect(accountProfile.levels.map((level) => level.id)).toEqual(["low", "high"]);
+    expect(accountProfile.defaultLevel).toBe("low");
+    const explicitOffProfile = resolveUnifiedOpenAIThinkingProfile(modelId, "codex", {
+      supportedReasoningEfforts: ["none", "low"],
+    });
+    expect(explicitOffProfile.levels.map((level) => level.id)).toEqual(["off", "low"]);
+  });
+
+  it.each(["openclaw", "codex", "auto"])(
+    "offers Astra's supported efforts on the %s runtime",
+    (runtime) => {
+      expect(
+        resolveUnifiedOpenAIThinkingProfile("gpt-6-astra", runtime).levels.map((level) => level.id),
+      ).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    },
+  );
+
+  it.each(["openclaw", "codex", "auto"])(
+    "retains Astra Ultra with scalar API metadata on the %s runtime",
+    (runtime) => {
+      expect(
+        resolveUnifiedOpenAIThinkingProfile(
+          "gpt-6-astra",
+          runtime,
+          { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+          "openai-responses",
+        ).levels.map((level) => level.id),
+      ).toContain("ultra");
+    },
+  );
+
+  it.each([
+    { efforts: [], defaultLevel: undefined },
+    { efforts: ["high"], defaultLevel: undefined },
+    { efforts: ["low", "high"], defaultLevel: "low" },
+    { efforts: ["medium", "high"], defaultLevel: "medium" },
+  ])("retains Astra account efforts $efforts", ({ efforts, defaultLevel }) => {
+    const profile = resolveUnifiedOpenAIThinkingProfile("gpt-6-astra", "codex", {
+      supportedReasoningEfforts: efforts,
+    });
+    expect(profile.levels.map((level) => level.id)).toEqual(efforts);
+    expect(profile.defaultLevel).toBe(defaultLevel);
+  });
+
+  it.each([
+    { efforts: ["low", "high", "ultra"], expected: ["low", "high", "ultra"] },
+    { efforts: ["low", "high", "max"], expected: ["low", "high", "max"] },
+    { efforts: ["none", "low", "high"], expected: ["off", "low", "high"] },
+    { efforts: [], expected: [] },
   ])("uses native account efforts without a host transport: $efforts", ({ efforts, expected }) => {
     expect(
       resolveUnifiedOpenAIThinkingProfile("account-model", "codex", {
@@ -41,6 +185,6 @@ describe("OpenAI thinking route provenance", () => {
         api: "openai-chatgpt-responses",
         efforts: ["low", "high"],
       }),
-    ).toEqual(["off", "low", "medium", "high", "xhigh", "max", "ultra"]);
+    ).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
   });
 });

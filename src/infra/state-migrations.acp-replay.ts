@@ -1,6 +1,6 @@
 // Doctor-only import for the retired ACP replay JSON ledger.
 import { createHash } from "node:crypto";
-import fsSync from "node:fs";
+import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { estimateAcpEventRowBytes, estimateAcpSessionRowBytes } from "../acp/event-ledger-bytes.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { withFileLock } from "./file-lock.js";
@@ -16,6 +17,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { legacyMigrationSourceSnapshotsMatch as sourceIdentityMatches } from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_LEDGER_VERSION = 1;
@@ -31,33 +33,7 @@ const LEGACY_LEDGER_LOCK_OPTIONS = {
   staleRecovery: "fail-closed",
 } as const;
 
-type LegacyAcpReplayEvent = {
-  seq: number;
-  at: number;
-  sessionId: string;
-  sessionKey: string;
-  runId?: string;
-  update: SessionUpdate;
-};
-
-type LegacyAcpReplaySession = {
-  sessionId: string;
-  sessionKey: string;
-  cwd: string;
-  complete: boolean;
-  createdAt: number;
-  updatedAt: number;
-  nextSeq: number;
-  events: LegacyAcpReplayEvent[];
-};
-
-type LegacySourceIdentity = {
-  dev: number | bigint;
-  ino: number | bigint;
-  mtimeMs: number | bigint;
-  sha256: string;
-  size: number | bigint;
-};
+type LegacyAcpReplaySession = ReturnType<typeof parseLegacySession>;
 
 type AcpReplayMigrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -97,10 +73,6 @@ const legacyAcpReplayLedgerSchema = z.looseObject({
   sessions: legacyAcpReplayRecordSchema,
 });
 
-function resolveLegacyAcpReplayLedgerPath(stateDir: string): string {
-  return path.join(stateDir, "acp", "event-ledger.json");
-}
-
 function resolveLegacyAcpReplayClaimPath(sourcePath: string): string {
   return `${sourcePath}.doctor-import`;
 }
@@ -110,7 +82,7 @@ export function detectLegacyAcpReplayLedger(params: {
   stateDir: string;
   doctorOnlyStateMigrations?: boolean;
 }): LegacyStateDetection["acpReplayLedger"] {
-  const sourcePath = resolveLegacyAcpReplayLedgerPath(params.stateDir);
+  const sourcePath = path.join(params.stateDir, "acp", "event-ledger.json");
   const claimPath = resolveLegacyAcpReplayClaimPath(sourcePath);
   return {
     sourcePath,
@@ -120,7 +92,7 @@ export function detectLegacyAcpReplayLedger(params: {
   };
 }
 
-function parseLegacyEvent(raw: unknown, sessionId: string): LegacyAcpReplayEvent {
+function parseLegacyEvent(raw: unknown, sessionId: string) {
   const parsed = legacyAcpReplayEventSchema.safeParse(raw);
   if (!parsed.success || parsed.data.sessionId !== sessionId) {
     throw new Error(`legacy ACP replay session ${sessionId} contains an invalid event`);
@@ -139,7 +111,7 @@ function parseLegacyEvent(raw: unknown, sessionId: string): LegacyAcpReplayEvent
   };
 }
 
-function parseLegacySession(raw: unknown, expectedSessionId: string): LegacyAcpReplaySession {
+function parseLegacySession(raw: unknown, expectedSessionId: string) {
   const parsed = legacyAcpReplaySessionSchema.safeParse(raw);
   if (!parsed.success || parsed.data.sessionId !== expectedSessionId) {
     throw new Error(`legacy ACP replay session ${expectedSessionId} is invalid`);
@@ -173,24 +145,7 @@ function parseLegacyLedger(raw: string): LegacyAcpReplaySession[] {
   );
 }
 
-function estimateSessionBytes(session: LegacyAcpReplaySession): number {
-  return session.sessionId.length + session.sessionKey.length + session.cwd.length + 32;
-}
-
-function estimateEventBytes(event: LegacyAcpReplayEvent, updateJson: string): number {
-  return (
-    event.sessionId.length +
-    event.sessionKey.length +
-    updateJson.length +
-    (event.runId?.length ?? 0) +
-    32
-  );
-}
-
-function sourceIdentity(
-  stat: Awaited<ReturnType<typeof fs.lstat>>,
-  raw: string,
-): LegacySourceIdentity {
+function sourceIdentity(stat: Stats, raw: string) {
   return {
     dev: stat.dev,
     ino: stat.ino,
@@ -198,16 +153,6 @@ function sourceIdentity(
     sha256: createHash("sha256").update(raw).digest("hex"),
     size: stat.size,
   };
-}
-
-function sourceIdentityMatches(left: LegacySourceIdentity, right: LegacySourceIdentity): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeMs === right.mtimeMs &&
-    left.sha256 === right.sha256 &&
-    left.size === right.size
-  );
 }
 
 function reconcileCanonicalSession(db: DatabaseSync, session: LegacyAcpReplaySession): boolean {
@@ -272,7 +217,9 @@ function reconcileCanonicalSession(db: DatabaseSync, session: LegacyAcpReplaySes
     ) {
       return false;
     }
-    expectedEventBytes.push(estimateEventBytes(event, JSON.stringify(event.update)));
+    expectedEventBytes.push(
+      estimateAcpEventRowBytes({ ...event, updateJson: storedEvent.update_json }),
+    );
   }
 
   for (const [index, event] of session.events.entries()) {
@@ -289,7 +236,7 @@ function reconcileCanonicalSession(db: DatabaseSync, session: LegacyAcpReplaySes
     }
   }
   const expectedSessionBytes =
-    estimateSessionBytes(session) + expectedEventBytes.reduce((sum, value) => sum + value, 0);
+    estimateAcpSessionRowBytes(session) + expectedEventBytes.reduce((sum, value) => sum + value, 0);
   if (stored.estimated_bytes !== expectedSessionBytes) {
     executeSqliteQuerySync(
       db,
@@ -369,7 +316,7 @@ export async function migrateLegacyAcpReplayLedger(params: {
               }
 
               for (const session of missingSessions) {
-                let estimatedBytes = estimateSessionBytes(session);
+                let estimatedBytes = estimateAcpSessionRowBytes(session);
                 executeSqliteQuerySync(
                   db,
                   replayDb.insertInto("acp_replay_sessions").values({
@@ -385,7 +332,7 @@ export async function migrateLegacyAcpReplayLedger(params: {
                 );
                 for (const event of session.events) {
                   const updateJson = JSON.stringify(event.update);
-                  const eventBytes = estimateEventBytes(event, updateJson);
+                  const eventBytes = estimateAcpEventRowBytes({ ...event, updateJson });
                   executeSqliteQuerySync(
                     db,
                     replayDb.insertInto("acp_replay_events").values({

@@ -16,16 +16,8 @@ function normalizeClaudeModelId(modelId?: string): string {
 }
 
 export const CLAUDE_FABLE_5_THINKING_PROFILE = {
-  levels: [
-    { id: "minimal" },
-    { id: "low" },
-    { id: "medium" },
-    { id: "high" },
-    { id: "xhigh" },
-    { id: "adaptive" },
-    { id: "max" },
-  ],
-  defaultLevel: "high",
+  levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
+  defaultLevel: "medium",
   preserveWhenCatalogReasoningFalse: true,
 } as const;
 
@@ -47,68 +39,133 @@ export const CLAUDE_SONNET_5_THINKING_PROFILE = {
 // and thinking may still be disabled (at effort <= high), so "off" stays valid.
 export const CLAUDE_OPUS_5_THINKING_PROFILE = CLAUDE_SONNET_5_THINKING_PROFILE;
 
+export const CLAUDE_OPUS_55_THINKING_PROFILE = CLAUDE_FABLE_5_THINKING_PROFILE;
+
+export const CLAUDE_SONNET_55_THINKING_PROFILE = {
+  levels: [
+    { id: "off" },
+    { id: "low" },
+    { id: "medium" },
+    { id: "high" },
+    { id: "xhigh" },
+    { id: "max" },
+  ],
+  defaultLevel: "high",
+} as const;
+
 /** Resolve the canonical normalized Claude model id for one runtime model ref. */
 export function resolveClaudeModelIdentity(ref: ClaudeModelRef): string {
   const configuredCanonicalModelId =
     typeof ref.params?.canonicalModelId === "string" ? ref.params.canonicalModelId : undefined;
   const normalized = normalizeClaudeModelId(configuredCanonicalModelId ?? ref.id);
-  const match = /(?:^|[-/])claude-/.exec(normalized);
-  return match
-    ? normalized.slice((match.index ?? 0) + (match[0].startsWith("claude-") ? 0 : 1))
-    : normalized;
+  // Routing namespaces can themselves start with "Claude"; only the final
+  // path component identifies the backing model.
+  const match = /(?:^|[-/])(claude-[^/]+)$/.exec(normalized);
+  return match?.[1] ?? normalized;
+}
+
+function matchClaudeModelIdentity(normalized: string, pattern: RegExp): string | undefined {
+  const match = pattern.exec(normalized);
+  return match ? normalized.slice(match.index + (match[0].startsWith("-") ? 1 : 0)) : undefined;
 }
 
 /** Resolve Claude Fable 5 through direct ids, cloud ids, or deployment metadata. */
 export function resolveClaudeFable5ModelIdentity(ref: ClaudeModelRef): string | undefined {
-  const normalized = resolveClaudeModelIdentity(ref);
-  const match = /(?:^|-)claude-fable-5(?=$|[^a-z0-9])/.exec(normalized);
-  if (!match) {
-    return undefined;
-  }
-  return normalized.slice((match.index ?? 0) + (match[0].startsWith("-") ? 1 : 0));
+  return matchClaudeModelIdentity(
+    resolveClaudeModelIdentity(ref),
+    /(?:^|-)claude-fable-5(?=$|[^a-z0-9])/,
+  );
 }
 
 /** Resolve Claude Mythos 5 through direct ids, cloud ids, or deployment metadata. */
 export function resolveClaudeMythos5ModelIdentity(ref: ClaudeModelRef): string | undefined {
-  const normalized = resolveClaudeModelIdentity(ref);
-  const match = /(?:^|-)claude-mythos-5(?=$|[^a-z0-9])/.exec(normalized);
-  if (!match) {
-    return undefined;
-  }
-  return normalized.slice((match.index ?? 0) + (match[0].startsWith("-") ? 1 : 0));
+  return matchClaudeModelIdentity(
+    resolveClaudeModelIdentity(ref),
+    /(?:^|-)claude-mythos-5(?=$|[^a-z0-9])/,
+  );
+}
+
+/**
+ * Opus 5.5, Sonnet 5.5, and Fable 5.1 require append-only runtime context.
+ * Extend only with live replay proof (Mythos 5.1 remains unproven).
+ */
+export function bindsClaudeThinkingPrefix(ref: ClaudeModelRef): boolean {
+  return (
+    resolveClaudeOpus55ModelIdentity(ref) !== undefined ||
+    resolveClaudeSonnet55ModelIdentity(ref) !== undefined ||
+    /^claude-fable-5-1(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity(ref))
+  );
+}
+
+/** Return whether Claude accepts operator instructions within conversation history. */
+export function supportsClaudeInHistorySystemMessages(ref: ClaudeModelRef): boolean {
+  return (
+    resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
+    resolveClaudeSonnet5ModelIdentity(ref) !== undefined ||
+    resolveClaudeFable5ModelIdentity(ref) !== undefined ||
+    resolveClaudeMythos5ModelIdentity(ref) !== undefined ||
+    /^claude-opus-4-8(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity(ref))
+  );
 }
 
 /** Return whether a Claude model requires adaptive thinking instead of manual budgets. */
 export function requiresClaudeMandatoryAdaptiveThinking(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
   return (
+    resolveClaudeOpus55ModelIdentity(ref) !== undefined ||
     resolveClaudeFable5ModelIdentity(ref) !== undefined ||
     resolveClaudeMythos5ModelIdentity(ref) !== undefined ||
     /(?:^|-)claude-mythos-preview(?=$|[^a-z0-9])/.test(modelId)
   );
 }
 
-/** Resolve Claude Sonnet 5 through direct ids, cloud ids, or deployment metadata. */
+/** Resolve Claude Sonnet 5 through aliases, direct ids, cloud ids, or deployment metadata. */
 export function resolveClaudeSonnet5ModelIdentity(ref: ClaudeModelRef): string | undefined {
   const normalized = resolveClaudeModelIdentity(ref);
-  const match = /(?:^|-)claude-sonnet-5(?=$|[^a-z0-9])/.exec(normalized);
-  if (!match) {
-    return undefined;
+  const sonnet55Identity = resolveClaudeSonnet55ModelIdentity(ref);
+  if (sonnet55Identity) {
+    return sonnet55Identity;
   }
-  return normalized.slice((match.index ?? 0) + (match[0].startsWith("-") ? 1 : 0));
+  if (normalized === "sonnet-5") {
+    return "claude-sonnet-5";
+  }
+  return matchClaudeModelIdentity(normalized, /(?:^|-)claude-sonnet-5(?=$|[^a-z0-9])/);
+}
+
+/** Resolve the Sonnet 5.5 contract without matching other Sonnet 5 generations. */
+export function resolveClaudeSonnet55ModelIdentity(ref: ClaudeModelRef): string | undefined {
+  const normalized = resolveClaudeModelIdentity(ref);
+  if (normalized === "sonnet" || normalized === "sonnet-5-5") {
+    return "claude-sonnet-5-5";
+  }
+  return /^claude-sonnet-5-5(?=$|[^a-z0-9])/.test(normalized) ? normalized : undefined;
+}
+
+/** Sonnet 5.5 replaces disabled thinking with between-tool progress updates. */
+export function requiresClaudeBetweenToolsThinking(ref: ClaudeModelRef): boolean {
+  return resolveClaudeSonnet55ModelIdentity(ref) !== undefined;
 }
 
 /** Resolve Claude Opus 5 through aliases, direct ids, cloud ids, or deployment metadata. */
 export function resolveClaudeOpus5ModelIdentity(ref: ClaudeModelRef): string | undefined {
   const normalized = resolveClaudeModelIdentity(ref);
+  const opus55Identity = resolveClaudeOpus55ModelIdentity(ref);
+  if (opus55Identity) {
+    return opus55Identity;
+  }
   if (normalized === "opus" || normalized === "opus-5") {
     return "claude-opus-5";
   }
-  const match = /(?:^|-)claude-opus-5(?=$|[^a-z0-9])/.exec(normalized);
-  if (!match) {
-    return undefined;
+  return matchClaudeModelIdentity(normalized, /(?:^|-)claude-opus-5(?=$|[^a-z0-9])/);
+}
+
+/** Resolve the Opus 5.5 contract without matching other Opus 5 generations. */
+export function resolveClaudeOpus55ModelIdentity(ref: ClaudeModelRef): string | undefined {
+  const normalized = resolveClaudeModelIdentity(ref);
+  if (normalized === "opus" || normalized === "opus-5-5") {
+    return "claude-opus-5-5";
   }
-  return normalized.slice((match.index ?? 0) + (match[0].startsWith("-") ? 1 : 0));
+  return /^claude-opus-5-5(?=$|[^a-z0-9])/.test(normalized) ? normalized : undefined;
 }
 
 /** Return whether a Claude model supports adaptive thinking. */
@@ -116,7 +173,8 @@ export function supportsClaudeAdaptiveThinking(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
   return (
     resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
-    /(?:^|-)claude-(?:fable-5|mythos-(?:5|preview)|opus-4-(?:6|7|8)|sonnet-(?:5|4-6))(?=$|[^a-z0-9])/.test(
+    resolveClaudeSonnet5ModelIdentity(ref) !== undefined ||
+    /(?:^|-)claude-(?:fable-5|mythos-(?:5|preview)|opus-4-(?:6|7|8)|sonnet-4-6)(?=$|[^a-z0-9])/.test(
       modelId,
     )
   );
@@ -124,13 +182,8 @@ export function supportsClaudeAdaptiveThinking(ref: ClaudeModelRef): boolean {
 
 /** Return whether a Claude model has a native 1M-token context window. */
 export function supportsClaude1MContext(ref: ClaudeModelRef): boolean {
-  const modelId = resolveClaudeModelIdentity(ref);
-  return (
-    resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
-    /(?:^|-)claude-(?:fable-5|mythos-(?:5|preview)|opus-4-(?:6|7|8)|sonnet-(?:5|4-6))(?=$|[^a-z0-9])/.test(
-      modelId,
-    )
-  );
+  // The supported families currently coincide; split these predicates if either contract changes.
+  return supportsClaudeAdaptiveThinking(ref);
 }
 
 /** Return whether a Claude model supports Anthropic's native fast mode. */
@@ -147,9 +200,8 @@ export function supportsClaudeNativeMaxEffort(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
   return (
     resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
-    /(?:^|-)claude-(?:fable-5|mythos-5|opus-4-(?:6|7|8)|sonnet-(?:5|4-6))(?=$|[^a-z0-9])/.test(
-      modelId,
-    )
+    resolveClaudeSonnet5ModelIdentity(ref) !== undefined ||
+    /(?:^|-)claude-(?:fable-5|mythos-5|opus-4-(?:6|7|8)|sonnet-4-6)(?=$|[^a-z0-9])/.test(modelId)
   );
 }
 
@@ -158,7 +210,8 @@ export function supportsClaudeNativeXhighEffort(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
   return (
     resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
-    /(?:^|-)claude-(?:fable-5|mythos-5|opus-4-(?:7|8)|sonnet-5)(?=$|[^a-z0-9])/.test(modelId)
+    resolveClaudeSonnet5ModelIdentity(ref) !== undefined ||
+    /(?:^|-)claude-(?:fable-5|mythos-5|opus-4-(?:7|8))(?=$|[^a-z0-9])/.test(modelId)
   );
 }
 

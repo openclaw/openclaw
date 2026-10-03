@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
 import { extractHttpResponseBody } from "../../shared/http-error-response.js";
 import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
@@ -6,13 +7,15 @@ import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import {
   inferSignalStatus,
   isExactUnknownNoDetailsError,
+  isReplayInvalidErrorMessage,
 } from "../failover/classification-rules.js";
 import { classifyFailoverReason, classifyFailoverSignal } from "../failover/classify.js";
-import { isContextOverflowErrorFromTables } from "../failover/context-overflow.js";
+import { isContextOverflowErrorFromTables } from "../failover/context-overflow-tables.js";
 import { matchesFormatErrorPattern, isTimeoutErrorMessage } from "../failover/message-patterns.js";
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
 import type { FailoverSignal } from "../failover/signal.js";
 export type ProviderRuntimeFailureKind =
+  | "gateway_storage"
   | "auth_scope"
   | "auth_refresh"
   | "refresh_timeout"
@@ -50,12 +53,11 @@ const PROXY_ERROR_RE =
 const DNS_ERROR_RE = /\benotfound\b|\beai_again\b|\bgetaddrinfo\b|\bno such host\b|\bdns\b/i;
 const INTERRUPTED_NETWORK_ERROR_RE =
   /\beconnrefused\b|\beconnreset\b|\beconnaborted\b|\benetreset\b|\behostunreach\b|\behostdown\b|\benetunreach\b|\bepipe\b|\bsocket hang up\b|\bconnection refused\b|\bconnection reset\b|\bconnection aborted\b|\bnetwork is unreachable\b|\bhost is unreachable\b|\bfetch failed\b|\bconnection error\b|\bnetwork request failed\b/i;
-const REPLAY_INVALID_RE =
-  /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
-const THINKING_SIGNATURE_ERROR_RE =
-  /\b(?:invalid|expired)\b.*\bsignature\b|\bsignature\b.*\b(?:invalid|expired)\b/i;
 const SANDBOX_BLOCKED_RE =
   /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b|\bexec denied\s*\(/i;
+const OAUTH_REFRESH_TIMEOUT_RE = /\boauth refresh call\b.*\bexceeded hard timeout\b/i;
+const OAUTH_CALLBACK_TIMEOUT_RE = /\bcallback_timeout\b/i;
+const OAUTH_CALLBACK_VALIDATION_RE = /\bcallback_validation_failed\b/i;
 function stripErrorPrefix(raw: string): string {
   return raw.replace(/^error:\s*/i, "").trim();
 }
@@ -74,9 +76,6 @@ function isHtmlErrorResponse(raw: string, status?: number): boolean {
   }
   const rest = extractHttpResponseBody(extractLeadingHttpStatus(candidate))?.body ?? candidate;
   return HTML_BODY_RE.test(rest) && HTML_CLOSE_RE.test(rest);
-}
-function isCloudflareChallengeResponse(message: string): boolean {
-  return CLOUDFLARE_CHALLENGE_RE.test(message);
 }
 function isOpenAICodexScopeContext(raw: string, provider?: string): boolean {
   const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
@@ -119,15 +118,6 @@ function isProxyErrorMessage(raw: string, status?: number): boolean {
   }
   return PROXY_ERROR_RE.test(raw);
 }
-function isDnsTransportErrorMessage(raw: string): boolean {
-  return DNS_ERROR_RE.test(raw);
-}
-function isReplayInvalidErrorMessage(raw: string): boolean {
-  return REPLAY_INVALID_RE.test(raw) || isThinkingSignatureReplayInvalidErrorMessage(raw);
-}
-function isThinkingSignatureReplayInvalidErrorMessage(raw: string): boolean {
-  return /\bthinking\b/i.test(raw) && THINKING_SIGNATURE_ERROR_RE.test(raw);
-}
 function isSandboxBlockedErrorMessage(raw: string): boolean {
   return Boolean(formatExecDeniedUserMessage(raw)) || SANDBOX_BLOCKED_RE.test(raw);
 }
@@ -148,16 +138,10 @@ function isTimeoutTransportErrorMessage(raw: string, status?: number): boolean {
   if (isTimeoutErrorMessage(raw) || INTERRUPTED_NETWORK_ERROR_RE.test(raw)) {
     return true;
   }
-  if (
+  return (
     typeof status === "number" &&
     [408, 499, 500, 502, 503, 504, 521, 522, 523, 524, 529].includes(status)
-  ) {
-    return true;
-  }
-  return false;
-}
-function isOAuthRefreshTimeoutMessage(raw: string): boolean {
-  return /\boauth refresh call\b.*\bexceeded hard timeout\b/i.test(raw);
+  );
 }
 function isOAuthRefreshContentionMessage(raw: string): boolean {
   return (
@@ -166,17 +150,14 @@ function isOAuthRefreshContentionMessage(raw: string): boolean {
       /(?:\/|\\|^)(?:oauth-refresh|openclaw-oauth-refresh)[^/\n\\]*?(?:\.lock)?\b/i.test(raw))
   );
 }
-function isOAuthCallbackTimeoutMessage(raw: string): boolean {
-  return /\bcallback_timeout\b/i.test(raw);
-}
-function isOAuthCallbackValidationMessage(raw: string): boolean {
-  return /\bcallback_validation_failed\b/i.test(raw);
-}
 export function classifyProviderRuntimeFailureKind(
   signal: FailoverSignal | string,
   opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
 ): ProviderRuntimeFailureKind {
   const normalizedSignal = typeof signal === "string" ? { message: signal } : signal;
+  if (classifyGatewayStorageFailure(normalizedSignal)) {
+    return "gateway_storage";
+  }
   const message = normalizedSignal.message?.trim() ?? "";
   const status = inferSignalStatus(normalizedSignal);
   const hasStructuredErrorSignal = Boolean(normalizedSignal.code || normalizedSignal.errorType);
@@ -189,13 +170,13 @@ export function classifyProviderRuntimeFailureKind(
   if (message && isOAuthRefreshContentionMessage(message)) {
     return "refresh_contention";
   }
-  if (message && isOAuthRefreshTimeoutMessage(message)) {
+  if (message && OAUTH_REFRESH_TIMEOUT_RE.test(message)) {
     return "refresh_timeout";
   }
-  if (message && isOAuthCallbackTimeoutMessage(message)) {
+  if (message && OAUTH_CALLBACK_TIMEOUT_RE.test(message)) {
     return "callback_timeout";
   }
-  if (message && isOAuthCallbackValidationMessage(message)) {
+  if (message && OAUTH_CALLBACK_VALIDATION_RE.test(message)) {
     return "callback_validation";
   }
   if (message && classifyOAuthRefreshFailure(message)) {
@@ -212,7 +193,7 @@ export function classifyProviderRuntimeFailureKind(
     // These are upstream gateway blocks, not authentication failures — surface
     // the more accurate "upstream_html" message, which already mentions
     // "CDN or gateway (e.g. Cloudflare) blocked the request".
-    if (status === 403 && isCloudflareChallengeResponse(message)) {
+    if (status === 403 && CLOUDFLARE_CHALLENGE_RE.test(message)) {
       return "upstream_html";
     }
     return status === 401 || status === 403 ? "auth_html" : "upstream_html";
@@ -231,7 +212,7 @@ export function classifyProviderRuntimeFailureKind(
     default:
       break;
   }
-  if (message && isDnsTransportErrorMessage(message)) {
+  if (message && DNS_ERROR_RE.test(message)) {
     return "dns";
   }
   if (message && isSandboxBlockedErrorMessage(message)) {

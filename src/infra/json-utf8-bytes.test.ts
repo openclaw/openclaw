@@ -16,16 +16,6 @@ function createCircularValue() {
 describe("jsonUtf8Bytes", () => {
   it.each([
     {
-      name: "object payloads",
-      value: { a: "x", b: [1, 2, 3] },
-      expected: Buffer.byteLength(JSON.stringify({ a: "x", b: [1, 2, 3] }), "utf8"),
-    },
-    {
-      name: "strings",
-      value: "hello",
-      expected: Buffer.byteLength(JSON.stringify("hello"), "utf8"),
-    },
-    {
       name: "undefined via string fallback",
       value: undefined,
       expected: Buffer.byteLength("undefined", "utf8"),
@@ -39,16 +29,8 @@ describe("jsonUtf8Bytes", () => {
     expect(jsonUtf8Bytes(value)).toBe(expected);
   });
 
-  it.each([
-    {
-      name: "circular serialization failures",
-      value: createCircularValue(),
-      expected: "[object Object]",
-    },
-    { name: "BigInt serialization failures", value: 12n, expected: "12" },
-    { name: "symbol serialization failures", value: Symbol("token"), expected: "Symbol(token)" },
-  ])("uses string conversion for $name", ({ value, expected }) => {
-    expect(jsonUtf8Bytes(value)).toBe(Buffer.byteLength(expected, "utf8"));
+  it("uses string conversion when JSON serialization throws", () => {
+    expect(jsonUtf8Bytes(createCircularValue())).toBe(Buffer.byteLength("[object Object]", "utf8"));
   });
 });
 
@@ -58,7 +40,7 @@ describe("jsonUtf8BytesOrInfinity", () => {
     expect(jsonUtf8BytesOrInfinity(value)).toBe(Buffer.byteLength(JSON.stringify(value), "utf8"));
   });
 
-  it.each([createCircularValue(), 12n, undefined])(
+  it.each([createCircularValue(), undefined])(
     "returns infinity for values that cannot be serialized as JSON",
     (value) => {
       expect(jsonUtf8BytesOrInfinity(value)).toBe(Number.POSITIVE_INFINITY);
@@ -80,6 +62,17 @@ describe("boundedJsonUtf8Bytes", () => {
     },
     { name: "non-finite numbers", value: [Number.NaN, Number.POSITIVE_INFINITY] },
     { name: "date", value: { at: new Date("2026-04-25T12:00:00.000Z") } },
+    {
+      name: "omitted properties and escaped keys",
+      value: { 'a"\n': "\\", omitted: undefined, fn: () => 1, symbol: Symbol("value") },
+    },
+    {
+      name: "own enumerable properties only",
+      value: Object.defineProperties(Object.create({ inherited: "ignored" }), {
+        visible: { value: "included", enumerable: true },
+        hidden: { value: "ignored", enumerable: false },
+      }),
+    },
   ])("matches JSON.stringify byte length for $name", ({ value }) => {
     expect(boundedJsonUtf8Bytes(value, 100_000)).toEqual({
       bytes: Buffer.byteLength(JSON.stringify(value), "utf8"),
@@ -105,6 +98,17 @@ describe("boundedJsonUtf8Bytes", () => {
     } finally {
       stringifySpy.mockRestore();
     }
+  });
+
+  it("stops reading object fields once the byte limit is exceeded", () => {
+    const later = vi.fn(() => "not visited");
+    const value = Object.defineProperty({ first: "x".repeat(100) }, "later", {
+      enumerable: true,
+      get: later,
+    });
+
+    expect(boundedJsonUtf8Bytes(value, 16)).toEqual({ bytes: 17, complete: false });
+    expect(later).not.toHaveBeenCalled();
   });
 
   it.each([

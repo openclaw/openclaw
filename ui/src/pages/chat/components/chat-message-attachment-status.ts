@@ -1,16 +1,44 @@
 import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import { renderAttachmentCardIcon } from "./chat-attachment-card.ts";
+import { formatBytes } from "../../../lib/agents/display.ts";
+import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
+import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 
-type AttachmentFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
+type OmittedMediaItem = Extract<MessageContentItem, { type: "omitted_media" }>;
+
+type AttachmentFailureCode = Extract<
+  MessageContentItem,
+  { type: "attachment_error" }
+>["attachment"]["code"];
 
 export function attachmentFailureReason(code: AttachmentFailureCode): string {
   return code === "file-not-found"
     ? t("chat.attachments.failureFileNotFound")
     : code === "unsupported-format"
       ? t("chat.attachments.failureUnsupportedFormat")
-      : t("chat.attachments.failureDeliveryFailed");
+      : code === "invalid-reference"
+        ? t("chat.attachments.failureInvalidReference")
+        : t("chat.attachments.failureDeliveryFailed");
+}
+
+export function renderOmittedMedia(items: OmittedMediaItem[]) {
+  if (items.length === 0) {
+    return nothing;
+  }
+  return html`${items.map((item) => {
+    const reason =
+      item.media.sizeBytes === undefined
+        ? t("chat.attachments.omittedFromHistory")
+        : t("chat.attachments.omittedFromHistoryWithSize", {
+            size: formatBytes(item.media.sizeBytes),
+          });
+    return renderAssistantAttachmentStatusCard({
+      label: t("chat.attachments.image"),
+      badge: t("chat.attachments.history"),
+      reason,
+    });
+  })}`;
 }
 
 export function renderAssistantAttachmentStatusCard(params: {
@@ -19,9 +47,11 @@ export function renderAssistantAttachmentStatusCard(params: {
   badge: string;
   reason?: string;
   onRetry?: () => void;
+  onAllow?: () => void;
+  path?: string;
 }) {
   const unavailable = params.reason !== undefined;
-  const recoverable = unavailable && params.onRetry !== undefined;
+  const recoverable = unavailable && (params.onRetry !== undefined || params.onAllow !== undefined);
   const statusClass = unavailable
     ? recoverable
       ? "chat-assistant-attachment-card--recoverable"
@@ -34,62 +64,75 @@ export function renderAssistantAttachmentStatusCard(params: {
     >
       <div class="chat-assistant-attachment-card__header">
         <div class="chat-assistant-attachment-card__identity">
-          ${renderAttachmentCardIcon({
-            label: params.label,
+          ${renderAttachmentFileIcon({
+            filename: params.label,
             mimeType: params.mimeType,
-            visualMode: "large-placeholder",
+            mode: "large-placeholder",
             unavailable,
           })}
           <span class="chat-assistant-attachment-card__details">
             <span
-              class="chat-assistant-attachment-card__title ${unavailable
-                ? "chat-assistant-attachment-card__title--unavailable"
-                : ""}"
-              title=${params.label}
+              class="chat-assistant-attachment-card__title ${
+                unavailable ? "chat-assistant-attachment-card__title--unavailable" : ""
+              }"
+              title=${params.path ?? params.label}
+              tabindex=${params.path ? "0" : nothing}
               >${params.label}</span
             >
             <span
-              class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta ${unavailable
-                ? ""
-                : "skeleton skeleton-line"}"
+              class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta ${
+                unavailable ? "" : "skeleton skeleton-line"
+              }"
               aria-hidden=${unavailable ? nothing : "true"}
             >
               <span class="chat-assistant-attachment-card__status-badge">${params.badge}</span>
-              ${params.reason
-                ? html`
-                    <span
-                      class="chat-assistant-attachment-card__status-separator"
-                      aria-hidden="true"
-                      >·</span
-                    >
-                    <span class="chat-assistant-attachment-card__status-reason"
-                      >${params.reason}</span
-                    >
-                  `
-                : nothing}
+              ${
+                params.reason
+                  ? html`
+                      <span
+                        class="chat-assistant-attachment-card__status-separator"
+                        aria-hidden="true"
+                        >·</span
+                      >
+                      <span class="chat-assistant-attachment-card__status-reason"
+                        >${params.reason}</span
+                      >
+                    `
+                  : nothing
+              }
             </span>
           </span>
         </div>
-        ${params.onRetry
-          ? html`<button
-              class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled chat-assistant-attachment-card__retry"
-              type="button"
-              @click=${params.onRetry}
-            >
-              ${icons.refresh} ${t("common.retry")}
-            </button>`
-          : unavailable
-            ? nothing
-            : html`<span
-                class="chat-assistant-attachment-card__actions chat-assistant-attachment-card__actions--loading"
-                aria-hidden="true"
-                data-label=${t("chat.attachments.open")}
+        ${
+          params.onAllow
+            ? html`<button
+                class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled"
+                type="button"
+                @click=${params.onAllow}
               >
-                <span
-                  class="chat-assistant-attachment-card__action-skeleton skeleton"
-                  aria-hidden="true"
-                ></span>
-              </span>`}
+                ${t("chat.attachments.allowImage")}
+              </button>`
+            : params.onRetry
+              ? html`<button
+                  class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled chat-assistant-attachment-card__retry"
+                  type="button"
+                  @click=${params.onRetry}
+                >
+                  ${icons.refresh} ${t("common.retry")}
+                </button>`
+              : unavailable
+                ? nothing
+                : html`<span
+                    class="chat-assistant-attachment-card__actions chat-assistant-attachment-card__actions--loading"
+                    aria-hidden="true"
+                    data-label=${t("chat.attachments.open")}
+                  >
+                    <span
+                      class="chat-assistant-attachment-card__action-skeleton skeleton"
+                      aria-hidden="true"
+                    ></span>
+                  </span>`
+        }
       </div>
     </div>
   `;

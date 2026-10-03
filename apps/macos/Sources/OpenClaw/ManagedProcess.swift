@@ -82,12 +82,6 @@ final class ManagedProcess: @unchecked Sendable {
         func finish() {
             self.lock.withLock { self.finished = true }
         }
-
-        static func hasExited(_ processIdentifier: pid_t) -> Bool {
-            var info = siginfo_t()
-            return waitid(P_PID, id_t(processIdentifier), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
-                info.si_pid != 0
-        }
     }
 
     private let state: State
@@ -115,6 +109,7 @@ final class ManagedProcess: @unchecked Sendable {
         error: some ErrorOutputProtocol,
         closeAfterSpawn childHandles: [FileHandle] = [],
         closeStdinForGracefulShutdown stdinHandle: FileHandle? = nil,
+        terminateWhenClosingStdin: Bool = false,
         gracefulShutdownTimeout: Duration = .zero) -> ManagedProcess
     {
         var configuration = configuration
@@ -127,6 +122,7 @@ final class ManagedProcess: @unchecked Sendable {
             of: WakeReason.self,
             bufferingPolicy: .bufferingNewest(1))
         let task = Task.detached(priority: .userInitiated) { () -> TerminationStatus? in
+            defer { state.finish() }
             do {
                 let result = try await Subprocess.run(
                     configuration,
@@ -151,7 +147,7 @@ final class ManagedProcess: @unchecked Sendable {
                     }
                     exitSource.setEventHandler(handler: didExit)
                     exitSource.resume()
-                    if State.hasExited(pid) { didExit() }
+                    if ChildProcessExit.hasExited(pid) { didExit() }
                     var wakeIterator = wakeEvents.makeAsyncIterator()
                     let wakeReason = await wakeIterator.next() ?? .terminate(gracefully: true)
                     exitSource.cancel()
@@ -161,7 +157,7 @@ final class ManagedProcess: @unchecked Sendable {
                         try? await Task.sleep(for: .milliseconds(50))
                     }
 
-                    guard !State.hasExited(pid),
+                    guard !ChildProcessExit.hasExited(pid),
                           case let .terminate(gracefully: graceful) = wakeReason
                     else {
                         // The unreaped leader pins the group identity while descendants are killed.
@@ -170,6 +166,9 @@ final class ManagedProcess: @unchecked Sendable {
                     }
                     if graceful, let stdinHandle {
                         try? stdinHandle.close()
+                        if terminateWhenClosingStdin {
+                            try? execution.send(signal: .terminate, toProcessGroup: true)
+                        }
                         if await self.waitForExit(
                             pid,
                             timeout: gracefulShutdownTimeout,
@@ -184,13 +183,11 @@ final class ManagedProcess: @unchecked Sendable {
                     _ = await self.waitForExit(pid, timeout: .milliseconds(250))
                     await killGroup()
                 }
-                state.finish()
                 return result.terminationStatus
             } catch {
                 state.closeChildHandles()
                 let message = (error as? SubprocessError)?.description ?? error.localizedDescription
                 state.publishStart(.failure(StartFailure(message: message)))
-                state.finish()
                 return nil
             }
         }
@@ -206,6 +203,7 @@ final class ManagedProcess: @unchecked Sendable {
         stdout: FileHandle,
         stderr: FileHandle,
         closeStdinForGracefulShutdown stdinWriter: FileHandle? = nil,
+        terminateWhenClosingStdin: Bool = false,
         gracefulShutdownTimeout: Duration = .zero) -> ManagedProcess
     {
         self.launch(
@@ -215,6 +213,7 @@ final class ManagedProcess: @unchecked Sendable {
             error: .fileDescriptor(.init(rawValue: stderr.fileDescriptor), closeAfterSpawningProcess: false),
             closeAfterSpawn: [stdin, stdout, stderr],
             closeStdinForGracefulShutdown: stdinWriter,
+            terminateWhenClosingStdin: terminateWhenClosingStdin,
             gracefulShutdownTimeout: gracefulShutdownTimeout)
     }
 
@@ -255,7 +254,7 @@ final class ManagedProcess: @unchecked Sendable {
     {
         let deadline = ContinuousClock.now.advanced(by: timeout)
         while ContinuousClock.now < deadline {
-            if State.hasExited(processIdentifier) { return true }
+            if ChildProcessExit.hasExited(processIdentifier) { return true }
             if state?.shouldAbortGracefulTermination == true { return false }
             do {
                 try await Task.sleep(for: .milliseconds(10))
@@ -263,6 +262,6 @@ final class ManagedProcess: @unchecked Sendable {
                 return false
             }
         }
-        return State.hasExited(processIdentifier)
+        return ChildProcessExit.hasExited(processIdentifier)
     }
 }

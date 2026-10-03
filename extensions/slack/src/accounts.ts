@@ -1,4 +1,3 @@
-// Slack plugin module implements accounts behavior.
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
@@ -13,10 +12,7 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import {
-  asOptionalRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasSlackAccountCredentials } from "./account-configured.js";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } from "./token.js";
@@ -61,27 +57,29 @@ export function resolveSlackOperationToken(
   return account.config.userTokenReadOnly === false ? (botToken ?? userToken) : botToken;
 }
 
+export function hasImplicitDefaultSlackAccount(cfg: OpenClawConfig): boolean {
+  const slack = cfg.channels?.slack;
+  const userIdentity = slack?.postAs === "user";
+  return hasSlackAccountCredentials({
+    config: slack ?? {},
+    identityTokenConfigured:
+      hasConfiguredAccountValue(userIdentity ? slack?.userToken : slack?.botToken) ||
+      hasConfiguredAccountValue(
+        userIdentity ? process.env.SLACK_USER_TOKEN : process.env.SLACK_BOT_TOKEN,
+      ),
+    appTokenConfigured:
+      hasConfiguredAccountValue(slack?.appToken) ||
+      hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN),
+  });
+}
+
 const {
   listAccountIds,
   resolveDefaultAccountId,
   resolveAccountConfig: resolveMergedSlackAccountConfig,
 } = createAccountListHelpers<SlackAccountConfig>("slack", {
   nestedObjectKeys: ["botLoopProtection", "presenceEvents", "relay"],
-  hasImplicitDefaultAccount: (cfg) => {
-    const slack = cfg.channels?.slack;
-    const userIdentity = slack?.postAs === "user";
-    return hasSlackAccountCredentials({
-      config: slack ?? {},
-      identityTokenConfigured:
-        hasConfiguredAccountValue(userIdentity ? slack?.userToken : slack?.botToken) ||
-        hasConfiguredAccountValue(
-          userIdentity ? process.env.SLACK_USER_TOKEN : process.env.SLACK_BOT_TOKEN,
-        ),
-      appTokenConfigured:
-        hasConfiguredAccountValue(slack?.appToken) ||
-        hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN),
-    });
-  },
+  hasImplicitDefaultAccount: hasImplicitDefaultSlackAccount,
 });
 export const listSlackAccountIds = listAccountIds;
 export const resolveDefaultSlackAccountId = resolveDefaultAccountId;
@@ -94,30 +92,11 @@ function resolveSlackAccountConfig(
 }
 
 type SlackStreamingConfig = NonNullable<SlackAccountConfig["streaming"]>;
-type SlackStreamingConfigValue = SlackStreamingConfig | boolean | string;
-
-function asStreamingConfigObject(value: unknown): SlackStreamingConfig | undefined {
-  return asOptionalRecord(value) as SlackStreamingConfig | undefined;
-}
-
-function asLegacyStreamingScalar(value: unknown): boolean | string | undefined {
-  return typeof value === "boolean" || typeof value === "string" ? value : undefined;
-}
 
 function mergeSlackStreamingConfig(
-  base: unknown,
-  account: unknown,
-): SlackStreamingConfigValue | undefined {
-  const accountObject = asStreamingConfigObject(account);
-  if (account !== undefined && !accountObject) {
-    return asLegacyStreamingScalar(account);
-  }
-  const baseObject = asStreamingConfigObject(base);
-  if (base !== undefined && !baseObject) {
-    return accountObject ?? asLegacyStreamingScalar(base);
-  }
-  const baseConfig = baseObject;
-  const accountConfig = accountObject;
+  baseConfig: SlackStreamingConfig | undefined,
+  accountConfig: SlackStreamingConfig | undefined,
+): SlackStreamingConfig | undefined {
   if (!baseConfig || !accountConfig) {
     return accountConfig ?? baseConfig;
   }
@@ -156,10 +135,10 @@ export function mergeSlackAccountConfig(
   const accountConfig = resolveSlackAccountConfig(cfg, accountId);
   const merged = resolveMergedSlackAccountConfig(cfg, accountId);
   const streaming = mergeSlackStreamingConfig(
-    (cfg.channels?.slack as Record<string, unknown> | undefined)?.streaming,
-    (accountConfig as Record<string, unknown> | undefined)?.streaming,
+    cfg.channels?.slack?.streaming,
+    accountConfig?.streaming,
   );
-  return streaming !== undefined ? ({ ...merged, streaming } as SlackAccountConfig) : merged;
+  return streaming !== undefined ? { ...merged, streaming } : merged;
 }
 
 export function resolveSlackAccountAllowFrom(params: {

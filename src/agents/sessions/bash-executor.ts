@@ -1,18 +1,6 @@
-/**
- * Bash command execution with streaming support and cancellation.
- *
- * This module provides a unified bash execution implementation used by:
- * - AgentSession.executeBash() for interactive and RPC modes
- * - Direct calls from modes that need bash execution
- */
-
 import { createStreamingBinaryOutputSanitizer } from "../shell-utils.js";
 import type { BashOperations } from "./tools/bash-operations.js";
 import { OutputAccumulator } from "./tools/output-accumulator.js";
-
-// ============================================================================
-// Types
-// ============================================================================
 
 export interface BashExecutorOptions {
   /** Callback for streaming output chunks (already sanitized) */
@@ -33,10 +21,6 @@ export interface BashResult {
   /** Path to temp file containing full output (if output exceeded truncation threshold) */
   fullOutputPath?: string;
 }
-
-// ============================================================================
-// Implementation
-// ============================================================================
 
 /**
  * Execute a bash command using custom BashOperations.

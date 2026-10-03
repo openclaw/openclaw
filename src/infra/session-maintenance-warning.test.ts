@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 
 type DeliveryCall = {
   channel?: string;
@@ -35,7 +36,7 @@ vi.mock("../utils/message-channel.js", () => ({
   normalizeMessageChannel: mocks.normalizeMessageChannel,
   isDeliverableMessageChannel: mocks.isDeliverableMessageChannel,
 }));
-vi.mock("../utils/delivery-context.shared.js", () => ({
+vi.mock("../utils/delivery-context.read.js", () => ({
   deliveryContextFromSession: mocks.deliveryContextFromSession,
 }));
 vi.mock("./outbound/deliver-runtime.js", () => ({
@@ -55,6 +56,7 @@ function createParams(
   const sessionKey = overrides.sessionKey ?? `agent:${randomUUID()}:main`;
   return {
     cfg: {},
+    agentId: parseAgentSessionKey(sessionKey)?.agentId ?? "main",
     sessionKey,
     entry: {} as never,
     warning: {
@@ -69,7 +71,7 @@ function createParams(
   };
 }
 
-function expectedMaintenanceWarning(reasonText: string, outcome = "removed"): string {
+function expectedMaintenanceWarning(reasonText: string, outcome = "archived"): string {
   return (
     `\u26A0\uFE0F Session maintenance warning: this active session would be ${outcome} (${reasonText}). ` +
     `Maintenance is set to warn-only, so nothing was changed. ` +
@@ -195,7 +197,7 @@ describe("deliverSessionMaintenanceWarning", () => {
     await deliverSessionMaintenanceWarning(params);
 
     expect(firstSystemEventCall()).toEqual([
-      expectedMaintenanceWarning("not in the most recent 10 sessions"),
+      expectedMaintenanceWarning("not in the most recent 10 sessions", "removed"),
       { sessionKey: params.sessionKey },
     ]);
   });

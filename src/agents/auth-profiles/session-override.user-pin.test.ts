@@ -1,6 +1,7 @@
 // Focused lifecycle coverage for explicit auth-profile pins.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   authStoreMocks,
   createAuthStoreWithProfiles,
@@ -12,16 +13,8 @@ import {
 function createStore(order: string[]) {
   return createAuthStoreWithProfiles({
     profiles: {
-      [TEST_PRIMARY_PROFILE_ID]: {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-primary",
-      },
-      [TEST_SECONDARY_PROFILE_ID]: {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-secondary",
-      },
+      [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-primary"),
+      [TEST_SECONDARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-secondary"),
     },
     order: { openai: order },
   });
@@ -90,6 +83,28 @@ describe("explicit auth-profile pin lifecycle", () => {
         authProfileOverrideSource: "user",
         authProfileOverrideCompactionCount,
       });
+    },
+  );
+
+  it.each(["user", "user-link", undefined] as const)(
+    "preserves removed explicit profile intent with source %s instead of selecting another account",
+    async (source) => {
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: 1,
+        providerOverride: "openai",
+        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+        ...(source ? { authProfileOverrideSource: source } : {}),
+      };
+      expect(await resolvePinnedSession(sessionEntry, false)).toBe(TEST_PRIMARY_PROFILE_ID);
+      delete authStoreMocks.state.store.profiles[TEST_PRIMARY_PROFILE_ID];
+
+      expect(await resolvePinnedSession(sessionEntry, false)).toBe(TEST_PRIMARY_PROFILE_ID);
+      expect(sessionEntry).toMatchObject({
+        updatedAt: 1,
+        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+      });
+      expect(sessionEntry.authProfileOverrideSource).toBe(source);
     },
   );
 

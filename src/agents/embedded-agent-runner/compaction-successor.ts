@@ -23,12 +23,14 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "../../gateway/active-sessions-shutdown-tracker.js";
+import { createClosedSessionTranscriptSource } from "../../gateway/session-end-transcript-reader.js";
 import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-files.fs.js";
 import { logVerbose } from "../../globals.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
+import { retireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { captureSessionPlacementCompactionSuccessorAssertion } from "../session-placement-admission.js";
 import { log } from "./logger.js";
@@ -173,16 +175,33 @@ export type AcceptedCompactionSuccessor = Awaited<
   previousSessionId?: string;
 };
 
+type CompactionWriterClaim = Readonly<{
+  sessionId: InternalSessionEntry["sessionId"];
+  lifecycleRevision: InternalSessionEntry["lifecycleRevision"];
+  activeWriterRunId: InternalSessionEntry["activeWriterRunId"];
+}>;
+
+export function requireCompactionWriterEntry(
+  entry: InternalSessionEntry | null | undefined,
+  expected: CompactionWriterClaim,
+): InternalSessionEntry {
+  if (
+    !entry ||
+    entry.sessionId !== expected.sessionId ||
+    entry.lifecycleRevision !== expected.lifecycleRevision ||
+    entry.activeWriterRunId !== expected.activeWriterRunId
+  ) {
+    throw new SessionTranscriptWriterClaimReboundError();
+  }
+  return entry;
+}
+
 /** Accepts a declared successor under the predecessor's exact host-owned claim. */
 export async function acceptCompactionSuccessor(params: {
   result: CompactResult;
   currentTarget: SessionTranscriptRuntimeTarget;
   currentSessionFile?: string;
-  expectedEntry: Readonly<{
-    sessionId: InternalSessionEntry["sessionId"];
-    lifecycleRevision: InternalSessionEntry["lifecycleRevision"];
-    activeWriterRunId: InternalSessionEntry["activeWriterRunId"];
-  }>;
+  expectedEntry: CompactionWriterClaim;
   assertActive: () => void;
   config?: OpenClawConfig;
   onCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
@@ -201,22 +220,12 @@ export async function acceptCompactionSuccessor(params: {
     result: params.result,
   });
   params.assertActive();
-  const requireExpectedEntry = (entry: InternalSessionEntry | null | undefined) => {
-    if (
-      !entry ||
-      entry.sessionId !== expected.sessionId ||
-      entry.lifecycleRevision !== expected.lifecycleRevision ||
-      entry.activeWriterRunId !== expected.activeWriterRunId
-    ) {
-      throw new SessionTranscriptWriterClaimReboundError();
-    }
-    return entry;
-  };
-  const previousEntry = requireExpectedEntry(
+  const previousEntry = requireCompactionWriterEntry(
     loadSessionEntry({
       ...currentTarget,
       readConsistency: "latest",
     }),
+    expected,
   );
   if (successor.sessionId === currentTarget.sessionId) {
     return { ...successor, entry: previousEntry };
@@ -234,7 +243,7 @@ export async function acceptCompactionSuccessor(params: {
     await patchSessionEntryCore(
       currentTarget,
       (entry) => {
-        requireExpectedEntry(entry);
+        requireCompactionWriterEntry(entry, expected);
         return { sessionId: successor.sessionId };
       },
       {
@@ -260,6 +269,14 @@ export async function acceptCompactionSuccessor(params: {
     log.warn(`compaction successor committed but publication failed: ${String(error)}`);
     return committed;
   } finally {
+    if (committed) {
+      await retireSessionMcpRuntime({
+        sessionId: currentTarget.sessionId,
+        reason: "compaction-session-end",
+        retainAcrossReuse: true,
+        preserveActiveLeases: true,
+      });
+    }
     if (committed && params.config) {
       try {
         emitCompactionSessionLifecycleHooks({
@@ -333,8 +350,17 @@ function emitCompactionSessionLifecycleHooks(params: {
           : undefined),
       transcriptArchived: transcript.transcriptArchived,
       nextSessionId: params.nextEntry.sessionId,
+      endedTranscript:
+        agentId && storePath
+          ? createClosedSessionTranscriptSource({
+              agentId,
+              sessionId: params.previousEntry.sessionId,
+              sessionKey: params.sessionKey,
+              storePath,
+            })
+          : { available: false, reason: "unsupported-source" },
     });
-    void runWithGatewayIndependentRootWorkContinuation(async () => {
+    void runWithGatewayDetachedWorkContinuation(async () => {
       await hookRunner.runSessionEnd(payload.event, payload.context);
     }, "hooks:session-end").catch((error: unknown) => {
       logVerbose(`session_end hook failed: ${String(error)}`);
@@ -347,7 +373,7 @@ function emitCompactionSessionLifecycleHooks(params: {
       agentId,
       resumedFrom: params.previousEntry.sessionId,
     });
-    void runWithGatewayIndependentRootWorkContinuation(async () => {
+    void runWithGatewayDetachedWorkContinuation(async () => {
       await hookRunner.runSessionStart(payload.event, payload.context);
     }, "hooks:session-start").catch((error: unknown) => {
       logVerbose(`session_start hook failed: ${String(error)}`);

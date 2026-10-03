@@ -9,10 +9,7 @@ const CALLERS = [
   ["extensions/feishu/src/bot.ts", "channelIngress:"],
   ["extensions/feishu/src/comment-handler.ts", "channelIngress:"],
   ["extensions/googlechat/src/monitor.ts", "channelIngress: access.channelIngress"],
-  [
-    "extensions/imessage/src/monitor/inbound-processing.ts",
-    "channelIngress: decision.channelIngress",
-  ],
+  ["extensions/imessage/src/monitor/inbound-processing.ts", "channelIngress,"],
   ["extensions/irc/src/inbound.ts", "channelIngress: access"],
   ["extensions/line/src/bot-message-context.ts", "channelIngress: params.channelIngress"],
   ["extensions/matrix/src/matrix/monitor/handler-context.ts", "channelIngress,"],
@@ -99,7 +96,7 @@ const HOST_BUILDERS = [
     "ctx.buildContext ?? buildChannelInboundEventContext",
   ],
   ["extensions/sms/src/inbound.ts", "params.channelRuntime.inbound.buildContext"],
-  ["extensions/synology-chat/src/inbound-event.ts", "resolved.rt.channel.inbound.buildContext"],
+  ["extensions/synology-chat/src/inbound-event.ts", "rt.channel.inbound.buildContext"],
   [
     "extensions/telegram/src/bot-message-context.session.ts",
     "sessionRuntime.buildChannelInboundEventContext",

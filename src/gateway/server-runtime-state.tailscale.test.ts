@@ -1,8 +1,10 @@
 import { request as httpRequest, type RequestOptions } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { createAuthRateLimiter } from "./auth-rate-limit.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 
 async function requestStatus(options: RequestOptions): Promise<{ status: number; body: string }> {
@@ -79,10 +81,7 @@ describe("managed Tailscale gateway ingress", () => {
   });
 
   it("keeps ordinary ingress closed until the managed route is claimed", async () => {
-    let releaseRouteClaim: () => void = () => {};
-    const routeClaim = new Promise<void>((resolve) => {
-      releaseRouteClaim = resolve;
-    });
+    const { promise: routeClaim, resolve: releaseRouteClaim } = createDeferred();
     const prepareManagedTailscaleIngress = vi.fn(async () => await routeClaim);
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "serve",
@@ -220,12 +219,15 @@ describe("managed Tailscale gateway ingress", () => {
   });
 
   it("isolates protected Funnel auth lockout by the validated source", async () => {
-    const limiter = createAuthRateLimiter({
-      maxAttempts: 1,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-      pruneIntervalMs: 0,
-    });
+    const limiter = createGatewayAuthRateLimiter(
+      {
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        pruneIntervalMs: 0,
+      },
+      { scheduler: createTestGatewayScheduler() },
+    );
     const auth = { mode: "token" as const, token: "secret", allowTailscale: false };
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "funnel",
