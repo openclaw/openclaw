@@ -63,6 +63,7 @@ export function prepareEmbeddedRunTerminal(input: {
   contextRecoveryState: EmbeddedRunContextRecoveryState;
   resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
   terminalState: EmbeddedRunTerminalState;
+  settledTurnFinalizationAnswered?: boolean;
 }): {
   agentMeta: EmbeddedAgentMeta;
   replyDeliveryState: ReplyDeliveryState;
@@ -221,6 +222,7 @@ export function prepareEmbeddedRunTerminal(input: {
     toolResultFormat: input.resolvedToolResultFormat,
     didDeliverSourceReplyViaMessageTool: resolveSourceReplyDelivery(attempt) === "delivered",
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
+    settledTurnFinalizationAnswered: input.settledTurnFinalizationAnswered,
     agentId: runParams.agentId,
     runId: runParams.runId,
     // Owned timeout failures retain produced output; explicit cancellation still suppresses it.
