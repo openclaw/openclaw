@@ -263,12 +263,13 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       "release/2026.9.6",
       "release/2026.9.7",
       "release/2026.9.8",
+      "release/2026.10.1",
     ]) {
       expect(resolveReviewedSourceLayout(current, context)?.id, context).toBe("current");
     }
     expect(resolveReviewedSourceLayout(frozenLegacy, "release/2026.9.1")).toBeUndefined();
     expect(resolveReviewedSourceLayout(current, "release/2099.1.1")).toBeUndefined();
-    expect(resolveReviewedSourceLayout(current, "release/2026.9.9")).toBeUndefined();
+    expect(resolveReviewedSourceLayout(current, "release/2026.10.2")).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy)).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.6.33")?.id).toBe(
       "extended-stable-2026.6.33",
@@ -797,12 +798,14 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
           "extended-stable/2026.7.33",
           "release/2026.9.7",
           "release/2026.9.8",
+          "release/2026.10.1",
         ]) {
           const admitted =
             context === "" ||
             context === "release/2026.9.6" ||
             context === "release/2026.9.7" ||
             context === "release/2026.9.8" ||
+            context === "release/2026.10.1" ||
             (context === "release/2026.9.5" && reviewedIn95);
           const label = `${context || "current"}: ${count ?? "absent"}`;
           const scanned = await scanPublishablePluginPackages([artifact.artifact], context);
@@ -852,7 +855,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     "changed package",
     "removed exec",
     "extra exec",
-  ])("qualifies only the reviewed current native persona fixture: %s", async (variant) => {
+  ])("qualifies only the exact reviewed native persona fixture: %s", async (variant) => {
     const fixturePath = "src/app-server/run-attempt.skills.native.test.ts";
     const source = readFileSync(join(process.cwd(), "extensions/codex", fixturePath), "utf8");
     const packageName = variant === "changed package" ? "@openclaw/other" : "@openclaw/codex";
@@ -893,6 +896,18 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       variant === "exact" ? [key] : [],
     );
     expect(result.unexpectedCriticalFindings).toHaveLength(
+      variant === "exact" || variant === "removed exec" ? 0 : variant === "extra exec" ? 2 : 1,
+    );
+    const release = await scanPublishablePluginPackages([artifact], "release/2026.10.1");
+    expect(release.scanErrors).toEqual([]);
+    const releaseResult = release.packageResults[0]!;
+    expect(releaseResult.expectedReviewedCriticalFindings).toEqual(
+      packageName === "@openclaw/codex" && packedPath === fixturePath ? [key] : [],
+    );
+    expect(releaseResult.reviewedCriticalFindings.filter((finding) => finding === key)).toEqual(
+      variant === "exact" ? [key] : [],
+    );
+    expect(releaseResult.unexpectedCriticalFindings).toHaveLength(
       variant === "exact" || variant === "removed exec" ? 0 : variant === "extra exec" ? 2 : 1,
     );
     if (variant === "removed exec") {
