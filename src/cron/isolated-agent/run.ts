@@ -316,8 +316,10 @@ async function runCronIsolatedAgentTurnInTrace(
           } catch (err) {
             lifecycle.emit("error", err);
             consumeCronNextCheckProposal(runId, params.job.id);
-            const isCronLaneTimeout =
-              isAborted() || isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
+            const laneTimeoutError = isCommandLaneTaskTimeoutError(err, CommandLane.CronNested)
+              ? err
+              : undefined;
+            const isCronLaneTimeout = isAborted() || laneTimeoutError !== undefined;
             const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);
             // Preserve the provider's closed reason before user-facing text replaces the error object.
             const errorReason = resolveCronRunErrorReason(
@@ -362,7 +364,10 @@ async function runCronIsolatedAgentTurnInTrace(
                 prepared.context.preflightDiagnostics,
                 createCronRunDiagnosticsFromError(
                   isCronLaneTimeout ? "cron-setup" : "agent-run",
-                  isCronLaneTimeout ? error : err,
+                  // Operator-facing text stays the stable cron timeout summary, but
+                  // diagnostics keep the lane error so its cause/idle budget explains
+                  // which deadline fired instead of an un-attributed abort.
+                  laneTimeoutError ?? (isCronLaneTimeout ? error : err),
                 ),
               ),
             });
