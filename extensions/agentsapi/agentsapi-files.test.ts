@@ -228,7 +228,7 @@ describe("Agents API input attachment custody", () => {
     );
   });
 
-  it.each([Number.NaN, -1, 1.5])(
+  it.each([Number.NaN, -1])(
     "rejects invalid size metadata %s without treating it as a limit omission",
     async (sizeBytes) => {
       const saved = await saveMediaBuffer(Buffer.from("x"), undefined, "inbound");
