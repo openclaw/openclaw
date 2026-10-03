@@ -36,6 +36,7 @@ import { icons } from "./icons.ts";
 import { renderShortcutHint } from "./kbd.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import { pluginSidebarLabel } from "./plugin-sidebar-label.ts";
 import {
   renderSessionAttentionIcon,
   sessionAttentionTooltipLabel,
@@ -466,9 +467,18 @@ export function renderAppSidebarZoneEntry(
       ? titleForRoute(entry.route)
       : entry.type === "session"
         ? (sessionRows.get(entry.key)?.label ?? entry.key)
-        : (pluginTab?.label ??
-          host.pluginNavigation().find((item) => item.key === entry.key)?.value.label ??
-          entry.key);
+        : pluginTab
+          ? pluginSidebarLabel(pluginTab.pluginId, pluginTab.id, pluginTab.label)
+          : (() => {
+              const navigation = host.pluginNavigation().find((item) => item.key === entry.key);
+              return navigation
+                ? pluginSidebarLabel(
+                    navigation.pluginId,
+                    navigation.value.id,
+                    navigation.value.label,
+                  )
+                : entry.key;
+            })();
   return html`
     <div
       class="sidebar-zone-entry ${dropPosition ? `sidebar-zone-entry--drop-${dropPosition}` : ""} ${

@@ -18,6 +18,7 @@ import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { icons, type IconName } from "./icons.ts";
+import { pluginSidebarLabel } from "./plugin-sidebar-label.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 type SidebarMenuPosition = { x: number; y: number };
@@ -146,7 +147,9 @@ export function renderSidebarPluginTab(params: {
       }}
     >
       <span class="nav-item__icon" aria-hidden="true">${icons[iconName]}</span>
-      <span class="nav-item__text">${params.tab.label}</span>
+      <span class="nav-item__text"
+        >${pluginSidebarLabel(params.tab.pluginId, params.tab.id, params.tab.label)}</span
+      >
     </a>
   `;
 }
@@ -264,7 +267,7 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
         value: `plugin:${entry.key}`,
         entry: `plugin:${entry.key}`,
         icon: "plug" as const,
-        label: entry.value.label,
+        label: pluginSidebarLabel(entry.pluginId, entry.value.id, entry.value.label),
       })),
   ];
   return html`

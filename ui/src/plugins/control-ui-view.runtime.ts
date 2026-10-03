@@ -13,6 +13,7 @@ import type {
 } from "../../../src/plugin-sdk/control-ui.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { icons, type IconName } from "../components/icons.ts";
+import { pluginSidebarLabel } from "../components/plugin-sidebar-label.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
@@ -416,7 +417,9 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
               entry.host.navigation.openPage(entry.value.page);
             }}
             ><span class="nav-item__icon" aria-hidden="true">${icons[icon]}</span
-            ><span class="nav-item__text">${entry.value.label}</span></a
+            ><span class="nav-item__text"
+              >${pluginSidebarLabel(entry.pluginId, entry.value.id, entry.value.label)}</span
+            ></a
           >`;
         });
     }
