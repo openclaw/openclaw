@@ -6,6 +6,7 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { WorkerCredentialRecord } from "./credential.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerEnvironmentAttachmentRecord } from "./session-attachment.js";
+import { isTerminalWorkerEnvironmentState } from "./state.js";
 import {
   digestWorkerEnvironmentAttachmentAuthority,
   digestWorkerEnvironmentAuthority,
@@ -214,12 +215,7 @@ function createWorkerEnvironmentProjection() {
     },
     pendingReconciliations() {
       assertActive();
-      return [...reconciliations].map(([token, recovery]) => ({
-        token,
-        ids: recovery.ids,
-        error: recovery.error,
-        revocationId: recovery.revocationId,
-      }));
+      return [...reconciliations].map(([token, recovery]) => Object.assign({ token }, recovery));
     },
     hasPendingReconciliation: () => reconciliations.size !== 0,
     release(token: object) {
@@ -257,10 +253,10 @@ function createWorkerEnvironmentProjection() {
         credentials.delete(id);
         attachmentAuthorities.delete(id);
         revisions.set(id, revision);
-        for (const [session, attachment] of attachments) {
-          if (attachment.environmentId === id && !retainedSessions.has(session)) {
-            attachments.delete(session);
-          }
+      }
+      for (const [session, attachment] of attachments) {
+        if (changed.has(attachment.environmentId) && !retainedSessions.has(session)) {
+          attachments.delete(session);
         }
       }
       for (const row of facts.environments) {
@@ -343,7 +339,7 @@ function createWorkerEnvironmentProjection() {
         if (
           row.nodeDeviceId === nodeId &&
           row.nodeSetupId !== null &&
-          !["destroyed", "failed", "orphaned"].includes(row.state)
+          !isTerminalWorkerEnvironmentState(row.state)
         ) {
           assertReadable(row.environmentId, "environment");
           return true;
@@ -427,7 +423,7 @@ function createWorkerEnvironmentProjection() {
         return structuredClone(sorted);
       }
       reconcilable ??= sorted
-        .filter((row) => !["destroyed", "failed", "orphaned"].includes(row.state))
+        .filter((row) => !isTerminalWorkerEnvironmentState(row.state))
         .toSorted(
           (a, b) =>
             Buffer.compare(Buffer.from(a.providerId), Buffer.from(b.providerId)) || compare(a, b),
