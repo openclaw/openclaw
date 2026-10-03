@@ -722,7 +722,7 @@ export async function checkTouchedTextModelRefs(params: {
     try {
       await ownedRuntimeResolver?.[Symbol.asyncDispose]();
     } catch (cause) {
-      errors.push(formatFailure(refsToResolve[0], cause));
+      errors.push(formatFailure(refsToResolve[0]!, cause));
     }
   }
   return { refsChecked, refsTotal: refs.length, errors };
