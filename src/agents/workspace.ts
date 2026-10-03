@@ -52,7 +52,6 @@ import {
 import { ensureGitRepo } from "./workspace-git.js";
 import {
   LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
-  LEGACY_WORKSPACE_STATE_DIRNAME,
 } from "./workspace-legacy-state.js";
 import { runWorkspacePreparation } from "./workspace-preparation.js";
 import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
@@ -250,11 +249,7 @@ async function hasSkipBootstrapWorkspaceContentEvidence(dir: string): Promise<bo
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
-      if (
-        entry.name === ".DS_Store" ||
-        entry.name === LEGACY_WORKSPACE_STATE_DIRNAME ||
-        entry.name === LEGACY_WORKSPACE_STATE_CURRENT_FILENAME
-      ) {
+      if (entry.name === ".DS_Store" || entry.name === LEGACY_WORKSPACE_STATE_CURRENT_FILENAME) {
         continue;
       }
       if (entry.name === "skills" && entry.isDirectory()) {
