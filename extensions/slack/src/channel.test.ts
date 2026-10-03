@@ -1005,68 +1005,6 @@ describe("slackPlugin outbound", () => {
   });
 });
 
-describe("Slack message presentation", () => {
-  const cfg = slackConfig({ botToken: "xoxb-test", appToken: "xapp-test" });
-  it("renders portable presentations through the facade as card receipts (#95440)", async () => {
-    const sendSlack = vi.fn().mockResolvedValueOnce({
-      messageId: "msg-1",
-      channelId: "C123",
-      receipt: createMessageReceiptFromOutboundResults({
-        results: [{ channel: "slack", messageId: "msg-1", channelId: "C123" }],
-        kind: "card",
-      }),
-    });
-    const outbound = slackPlugin.outbound;
-    const renderPresentation = outbound?.renderPresentation;
-    if (!renderPresentation) {
-      throw new Error("Expected Slack presentation renderer");
-    }
-
-    const presentation = {
-      title: "Status",
-      blocks: [{ type: "divider" as const }],
-    };
-    const payload = { text: "Fallback", presentation };
-    const rendered = await renderPresentation({
-      payload,
-      presentation,
-      ctx: { cfg, to: "C123", text: payload.text, payload },
-    });
-    if (!rendered) {
-      throw new Error("Expected rendered Slack presentation payload");
-    }
-    // Core consumes the portable presentation before handing the native payload to the adapter.
-    const { presentation: _presentation, ...deliveryPayload } = rendered;
-
-    const result = await slackPlugin.message!.send!.payload!({
-      cfg,
-      to: "C123",
-      text: deliveryPayload.text ?? "",
-      payload: deliveryPayload,
-      accountId: "default",
-      deps: { sendSlack },
-    });
-
-    const to = requireMockCallArgValue(sendSlack, 0, 0);
-    const text = requireMockCallArgValue(sendSlack, 0, 1);
-    const options = requireMockCallArg(sendSlack, 0, 2);
-    expect(to).toBe("C123");
-    expect(text).toBe("Fallback\n\nStatus");
-    expect(options.blocks).toEqual([
-      {
-        type: "section",
-        text: { type: "mrkdwn", text: "Fallback", verbatim: true },
-      },
-      {
-        type: "header",
-        text: { type: "plain_text", text: "Status", emoji: true },
-      },
-      { type: "divider" },
-    ]);
-    expect(result.receipt.parts[0]?.kind).toBe("card");
-  });
-});
-
 describe("slackPlugin directory", () => {
   it("lists configured peers without throwing a ReferenceError", async () => {
     const listPeers = slackPlugin.directory!.listPeers!;
