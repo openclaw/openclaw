@@ -21,6 +21,9 @@ import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 /** Removes queued retired profiles after any config references have been durably repaired. */
 export async function runRetiredAuthProfileCleanup(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.externalConfigRepairsPending) {
+    return;
+  }
   const retiredAuthProfileCleanupPlans = ctx.configResult.retiredAuthProfileCleanupPlans;
   if (!retiredAuthProfileCleanupPlans?.length) {
     return;
@@ -64,6 +67,16 @@ export async function runWriteConfigHealth(
     ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true;
   const shouldWriteConfig =
     configResultWritePending || JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
+  if (resolveIsConfigReadOnly(ctx.env ?? process.env)) {
+    if (shouldWriteConfig) {
+      const { reportDoctorExternalConfigRepairs } = await import("./doctor-external-config.js");
+      await reportDoctorExternalConfigRepairs(ctx);
+      return false;
+    }
+    if (ctx.externalConfigRepairsPending) {
+      return false;
+    }
+  }
   if (shouldWriteConfig) {
     const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
     const { restoreDoctorConfigEnvRefs } =
@@ -559,7 +572,7 @@ export async function collectWriteConfigHealthFindings(
       requirement: "mutable-config-write-path",
       fixHint: isNixMode
         ? "Edit the Nix source for this install and rebuild; do not run doctor --fix against this config file."
-        : "Edit the config in your external deployment source and redeploy; do not run doctor --fix against this config file.",
+        : "Apply reported config edits in your external deployment source and redeploy; doctor --fix still repairs writable runtime state.",
     });
   }
   if (!configPath) {

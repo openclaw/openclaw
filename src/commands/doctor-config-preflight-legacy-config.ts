@@ -62,7 +62,7 @@ export async function migrateLegacyDoctorConfig(params: {
   enabled: boolean;
   measure: ConfigSnapshotReadMeasure;
 }): Promise<void> {
-  if (!params.enabled) {
+  if (!params.enabled || resolveIsConfigReadOnly(process.env)) {
     return;
   }
   const changes = await params.measure("legacy-config-migration", maybeMigrateLegacyConfig);
