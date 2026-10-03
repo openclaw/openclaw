@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type {
   GatewaySuspendHandoffResult,
@@ -333,17 +334,14 @@ export async function withGatewayMaintenanceDrain<T>(
         );
         return await finish();
       }
-      await new Promise<void>((resolve) => {
-        setTimeout(
-          resolve,
-          Math.min(
-            lastObservation && lastObservation.status !== "ready"
-              ? lastObservation.retryAfterMs
-              : 1_000,
-            remaining(),
-          ),
-        );
-      });
+      await sleep(
+        Math.min(
+          lastObservation && lastObservation.status !== "ready"
+            ? lastObservation.retryAfterMs
+            : 1_000,
+          remaining(),
+        ),
+      );
     }
   } finally {
     if (suspensionId && !stopped) {

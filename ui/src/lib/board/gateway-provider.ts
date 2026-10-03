@@ -8,6 +8,7 @@ import type {
   BoardWidget,
   BoardWidgetAppViewResult,
 } from "@openclaw/gateway-protocol";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../format-error.ts";
 import {
@@ -347,7 +348,7 @@ export class GatewayBoardProvider implements BoardProvider {
   }
 
   private async runRefreshLoop(): Promise<void> {
-    const retry = { delayMs: 1_000 };
+    let retryDelayMs = 1_000;
     while (this.refreshRequested) {
       if (this.disposed) {
         this.refreshRequested = false;
@@ -392,7 +393,7 @@ export class GatewayBoardProvider implements BoardProvider {
         // fresh snapshot. A state-generation change above still forces a reread.
         this.refreshRequested = false;
         this.setSnapshot(snapshot, changedWidgets);
-        retry.delayMs = 1_000;
+        retryDelayMs = 1_000;
       } catch (error) {
         if (this.disposed) {
           return;
@@ -422,32 +423,23 @@ export class GatewayBoardProvider implements BoardProvider {
           }
           return;
         }
-        const delayMs = retry.delayMs;
+        const delayMs = retryDelayMs;
         // Carry backoff across failed loop iterations; successful refreshes reset it above.
-        retry.delayMs = Math.min(delayMs * 2, 30_000);
+        retryDelayMs = Math.min(delayMs * 2, 30_000);
         await this.waitForRetry(delayMs);
         continue;
       }
     }
   }
 
-  private waitForRetry(delayMs: number): Promise<void> {
-    return new Promise((resolve) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const finish = () => {
-        if (!timer) {
-          return;
-        }
-        clearTimeout(timer);
-        timer = undefined;
-        if (this.wakeRetryDelay === finish) {
-          this.wakeRetryDelay = undefined;
-        }
-        resolve();
-      };
-      timer = setTimeout(finish, delayMs);
-      this.wakeRetryDelay = finish;
-    });
+  private async waitForRetry(delayMs: number): Promise<void> {
+    const controller = new AbortController();
+    const wake = () => controller.abort();
+    this.wakeRetryDelay = wake;
+    await sleepWithAbort(delayMs, controller.signal).catch(() => undefined);
+    if (this.wakeRetryDelay === wake) {
+      this.wakeRetryDelay = undefined;
+    }
   }
 
   private async mutate(

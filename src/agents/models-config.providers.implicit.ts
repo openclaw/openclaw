@@ -7,6 +7,7 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
+import { raceWithTimeout } from "@openclaw/retry";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isUnresolvedSecretInputError } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -332,7 +333,6 @@ export async function runProviderCatalogWithTimeout(
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
   const timeoutMs = params.timeoutMs ?? undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let active = true;
   const catalogParams = {
     ...params,
@@ -361,18 +361,15 @@ export async function runProviderCatalogWithTimeout(
     const catalogRun = runCatalog();
     // Live discovery should not hang startup; a timeout skips this provider while
     // preserving the rest of the prepared catalog.
-    return await Promise.race([
+    return await raceWithTimeout(
       catalogRun,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          active = false;
-          reject(
-            new Error(`provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`),
-          );
-        }, timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
+      timeoutMs,
+      () => {
+        active = false;
+        throw new Error(`provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`);
+      },
+      { ref: false },
+    );
   } catch (error) {
     if (isUnresolvedSecretInputError(error)) {
       throw error;
@@ -389,9 +386,6 @@ export async function runProviderCatalogWithTimeout(
   } finally {
     // A timed-out hook can still finish; its late reports no longer own this publication.
     active = false;
-    if (timer) {
-      clearTimeout(timer);
-    }
   }
 }
 

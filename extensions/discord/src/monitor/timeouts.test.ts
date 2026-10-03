@@ -11,7 +11,6 @@ import {
 import {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-  raceWithTimeout,
   withAbortTimeout,
 } from "./timeouts.js";
 
@@ -82,23 +81,6 @@ describe("discord monitor timeouts", () => {
     await expect(task).resolves.toBe(true);
     expect(receivedSignal?.aborted).toBe(true);
     expect(onTimeout).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-  });
-
-  it("caps raceWithTimeout timers before arming the watchdog", async () => {
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
-
-    await expect(
-      raceWithTimeout({
-        promise: Promise.resolve("ok"),
-        timeoutMs: Number.MAX_SAFE_INTEGER,
-        onTimeout: () => "timeout",
-      }),
-    ).resolves.toBe("ok");
-
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 

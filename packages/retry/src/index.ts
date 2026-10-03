@@ -1,5 +1,76 @@
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
+export function createAbortError(message: string, options?: ErrorOptions): Error {
+  const error = new Error(message, options);
+  error.name = "AbortError";
+  return error;
+}
+
+export function racePromiseWithAbortSignal<T>(
+  operation: Promise<T> | (() => Promise<T>),
+  signal?: AbortSignal,
+  createError: (signal: AbortSignal) => unknown = (signal) =>
+    createAbortError("Operation aborted", { cause: signal.reason }),
+): Promise<T> {
+  const run = () => {
+    try {
+      return typeof operation === "function" ? operation() : operation;
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  };
+  if (!signal) {
+    return run();
+  }
+  const abortError = () => createError(signal);
+  if (signal.aborted) {
+    // Observe an already-running source while preserving the existing abort's precedence.
+    const aborted = Promise.reject(abortError());
+    return typeof operation === "function" ? aborted : Promise.race([aborted, operation]);
+  }
+  let onAbort!: () => void;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(abortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
+  });
+  return Promise.race([run(), aborted]).finally(() => {
+    signal.removeEventListener("abort", onAbort);
+  });
+}
+
+/** Bounds observation without cancelling work; a factory starts only after the timer is armed. */
+export async function raceWithTimeout<T, F>(
+  operation: Promise<T> | (() => Promise<T>),
+  timeoutMs: number,
+  onTimeout: () => F,
+  options: { ref?: boolean } = {},
+): Promise<T | F> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const deadline = new Promise<F>((resolve, reject) => {
+      timer = setTimeout(() => {
+        try {
+          resolve(onTimeout());
+        } catch (error) {
+          reject(error);
+        }
+      }, timeoutMs);
+      if (options.ref === false) {
+        timer.unref?.();
+      }
+    });
+    return await Promise.race([
+      typeof operation === "function" ? operation() : operation,
+      deadline,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export type BackoffPolicy = {
   initialMs: number;
   maxMs: number;
@@ -47,12 +118,11 @@ export async function sleepWithAbort(
       }
       timer = null;
       cleanup();
-      // This leaf package cannot import the host abort helper; preserve its contract here.
-      const error = new Error("aborted", {
-        cause: abortSignal?.reason ?? new Error("aborted"),
-      });
-      error.name = "AbortError";
-      reject(error);
+      reject(
+        createAbortError("aborted", {
+          cause: abortSignal?.reason ?? new Error("aborted"),
+        }),
+      );
     };
     abortSignal?.addEventListener("abort", onAbort, { once: true });
     if (abortSignal?.aborted) {
@@ -280,23 +350,9 @@ export function createRetryRunner(runtime: RetryRuntime = {}) {
     initialDelayMs = 300,
   ): Promise<T> {
     const attemptErrors: unknown[] = [];
-    if (typeof attemptsOrOptions === "number") {
-      const attempts = resolveAttemptCount(attemptsOrOptions, DEFAULT_RETRY_CONFIG.attempts);
-      for (let index = 0; index < attempts; index += 1) {
-        try {
-          return await fn();
-        } catch (err) {
-          attemptErrors.push(err);
-          if (index === attempts - 1) {
-            break;
-          }
-          await runtimeSleep(resolveRetryDelayMs(initialDelayMs * 2 ** index));
-        }
-      }
-      throw createFailure(attemptErrors);
-    }
-
-    const options = attemptsOrOptions;
+    const numeric = typeof attemptsOrOptions === "number";
+    const options: RetryOptions =
+      typeof attemptsOrOptions === "number" ? { attempts: attemptsOrOptions } : attemptsOrOptions;
     const resolved = resolveRetryConfig(DEFAULT_RETRY_CONFIG, options);
     const maxAttempts = resolved.attempts;
     const minDelayMs = resolved.minDelayMs;
@@ -319,6 +375,10 @@ export function createRetryRunner(runtime: RetryRuntime = {}) {
         attemptErrors.push(err);
         if (attempt >= maxAttempts || !shouldRetry(err, attempt)) {
           break;
+        }
+        if (numeric) {
+          await runtimeSleep(resolveRetryDelayMs(initialDelayMs * 2 ** (attempt - 1)));
+          continue;
         }
 
         const context: RetryDelayContext = {

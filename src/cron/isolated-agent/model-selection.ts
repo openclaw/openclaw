@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "@openclaw/retry";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
@@ -148,22 +149,15 @@ async function resolveCronThinkingCatalog(params: {
   });
   // Native discovery can queue behind catalog renewal for longer than the cron setup watchdog.
   // Discovery keeps running under its owner; this turn uses the admitted catalog meanwhile.
-  hydration.catch(() => undefined);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const refreshed = await Promise.race([
-      hydration.then(normalizeThinkingCatalogProviders),
-      new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => resolve(undefined), CRON_THINKING_HYDRATION_WAIT_MS);
-        timer.unref?.();
-      }),
-    ]);
-    return refreshed && findModelInCatalog(refreshed, params.provider, params.model)
-      ? refreshed
-      : catalog;
-  } finally {
-    clearTimeout(timer);
-  }
+  const refreshed = await raceWithTimeout(
+    hydration.then(normalizeThinkingCatalogProviders),
+    CRON_THINKING_HYDRATION_WAIT_MS,
+    () => undefined,
+    { ref: false },
+  );
+  return refreshed && findModelInCatalog(refreshed, params.provider, params.model)
+    ? refreshed
+    : catalog;
 }
 
 export async function resolveCronThinkingSelection(params: {

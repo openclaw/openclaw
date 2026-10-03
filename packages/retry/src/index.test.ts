@@ -5,6 +5,7 @@ import {
   createRetryRunner,
   type RetryOptions,
   RetrySupervisor,
+  raceWithTimeout,
   retryAsync,
   sleepWithAbort,
 } from "./index.js";
@@ -23,6 +24,81 @@ function createRetryOperation() {
     .mockRejectedValueOnce(new Error("retryable"))
     .mockResolvedValueOnce("ok");
 }
+
+describe("raceWithTimeout", () => {
+  it("arms the deadline before starting work and clears it on a synchronous throw", async () => {
+    vi.useFakeTimers();
+    const failure = new Error("failed to start");
+    await expect(
+      raceWithTimeout(
+        () => {
+          expect(vi.getTimerCount()).toBe(1);
+          throw failure;
+        },
+        1_000,
+        () => "expired",
+      ),
+    ).rejects.toBe(failure);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["fulfilled", "rejected"] as const)(
+    "preserves a %s operation and releases its deadline",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const value = new Error("operation result");
+      const onTimeout = vi.fn(() => "expired");
+      const pending = raceWithTimeout(
+        outcome === "fulfilled" ? Promise.resolve(value) : Promise.reject(value),
+        1_000,
+        onTimeout,
+      );
+      if (outcome === "fulfilled") {
+        await expect(pending).resolves.toBe(value);
+      } else {
+        await expect(pending).rejects.toBe(value);
+      }
+      expect(vi.getTimerCount()).toBe(0);
+      expect(onTimeout).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([0, 25])("returns the timeout result after %i ms without cancelling work", async (ms) => {
+    vi.useFakeTimers();
+    const source = Promise.withResolvers<string>();
+    const onTimeout = vi.fn(() => "expired");
+    const pending = raceWithTimeout(source.promise, ms, onTimeout);
+    expect(onTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(ms);
+    await expect(pending).resolves.toBe("expired");
+    expect(onTimeout).toHaveBeenCalledOnce();
+    source.resolve("late result");
+    await expect(source.promise).resolves.toBe("late result");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("preserves a timeout error and observes a late source rejection", async () => {
+    vi.useFakeTimers();
+    const source = Promise.withResolvers<never>();
+    const timeoutError = new Error("expired");
+    const pending = raceWithTimeout(source.promise, 10, () => {
+      throw timeoutError;
+    });
+    const assertion = expect(pending).rejects.toBe(timeoutError);
+    await vi.advanceTimersByTimeAsync(10);
+    await assertion;
+    source.reject(new Error("late failure"));
+    await Promise.resolve();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([true, false])("preserves timer ref=%s", async (ref) => {
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    const pending = raceWithTimeout(Promise.resolve("done"), 60_000, () => "expired", { ref });
+    expect(scheduled.mock.results.at(-1)?.value.hasRef()).toBe(ref);
+    await expect(pending).resolves.toBe("done");
+  });
+});
 
 describe("RetrySupervisor", () => {
   it("owns attempt counting, overrides, rebasing, and exhaustion", () => {
