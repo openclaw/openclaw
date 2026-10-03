@@ -247,7 +247,6 @@ export type MonitorOptions = {
   recoveryPollDelaysMs?: readonly number[];
   completionDeliveryRetryDelaysMs?: readonly number[];
   completionDeliveryMaxRetries?: number;
-  now?: () => number;
   retainClient?: () => (() => void) | undefined;
   retainParentThread?: (threadId: string) => (() => void) | undefined;
   hasObservationBacking?: (parentThreadId: string, childThreadId: string) => boolean;

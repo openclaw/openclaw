@@ -150,11 +150,6 @@ function normalizeRequirementsApprovalPolicy(
   value: string,
 ): CodexAppServerManagedApprovalPolicy | undefined {
   const normalized = value.trim().toLowerCase();
-  // Codex still accepts this alias in persisted requirements, while its
-  // app-server exposes only the canonical on-request value.
-  if (normalized === "on-failure") {
-    return "on-request";
-  }
   if (normalized === "untrusted") {
     return normalized;
   }

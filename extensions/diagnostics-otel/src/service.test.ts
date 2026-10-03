@@ -2016,7 +2016,6 @@ describe("diagnostics-otel service", () => {
         events.push(event);
       }),
       logger,
-      logsEnabled: true,
       logsToOtlp: true,
       logsToStdout: false,
       resource: {} as never,
@@ -2035,7 +2034,7 @@ describe("diagnostics-otel service", () => {
       seq: number,
       recordAttributes: Record<string, string | number | boolean>,
     ) => {
-      diagnosticsLogs.recordLogRecord?.(
+      diagnosticsLogs.recordLogEvent?.(
         {
           type: "log.record",
           seq,

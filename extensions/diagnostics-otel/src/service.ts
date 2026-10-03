@@ -1,4 +1,4 @@
-import { createNoopMeter, diag, metrics, trace, type SpanContext } from "@opentelemetry/api";
+import { createNoopMeter, diag, metrics, trace } from "@opentelemetry/api";
 import * as otelCore from "@opentelemetry/core";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
@@ -12,7 +12,6 @@ import {
   TraceIdRatioBasedSampler,
 } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
-import type { DiagnosticTraceContext } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { asFiniteNumberInRange } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
@@ -38,6 +37,7 @@ import {
   createPublicExporterHealthEventEmitter,
   observeOtlpExporterHealth,
   type ExporterHealthUpdate,
+  type PublicExporterHealthUpdate,
 } from "./service-exporter-health.js";
 import {
   errorCategory,
@@ -66,8 +66,6 @@ const RESOURCE_DETECTORS = [
   ["process", resources.processDetector],
   ["env", resources.envDetector],
 ] as const;
-type ExporterTransport = "otlp-http-protobuf" | "stdout" | "external-sdk";
-type ExporterEndpointMode = "configured" | "default_endpoint";
 type ExporterRouteState = Pick<ExporterHealthUpdate, "signal" | "status" | "transport">;
 type ExporterHealthReporter = {
   reportExporterHealth?: (update: Omit<ExporterHealthUpdate, "exporter">) => void;
@@ -124,36 +122,11 @@ function resolveResourceDetectors(): resources.ResourceDetector[] {
   });
 }
 
-function resolveSignalProtocol(
-  signal: TelemetryExporterDiagnosticEvent["signal"],
-  configuredProtocol: string | undefined,
-): string {
-  return (
-    configuredProtocol ??
-    readNonBlankString(process.env[OTEL_SIGNAL_PROTOCOL_ENV[signal]]) ??
-    readNonBlankString(process.env[OTEL_EXPORTER_OTLP_PROTOCOL_ENV]) ??
-    OTLP_HTTP_PROTOBUF_PROTOCOL
-  );
-}
-
-function createStartupRollbackError(startupError: unknown, cleanupError: unknown) {
-  return new AggregateError(
-    [startupError, cleanupError],
-    "diagnostics-otel startup failed and rollback cleanup failed",
-    { cause: startupError },
-  );
-}
-
-function publicExporterEventForHealth(
-  event: ExporterHealthUpdate,
-): PublicExporterEvent | undefined {
+function publicExporterEventForHealth(event: PublicExporterHealthUpdate): PublicExporterEvent {
   const base = {
     exporter: event.exporter,
     signal: event.signal,
   };
-  if (event.status === "recovered") {
-    return undefined;
-  }
   if (event.status === "started") {
     return { ...base, status: "started", reason: "configured" };
   }
@@ -166,14 +139,6 @@ function publicExporterEventForHealth(
     status: "failure",
     ...(reason && reason !== "default_endpoint" ? { reason } : {}),
     ...(event.errorCategory ? { errorCategory: event.errorCategory } : {}),
-  };
-}
-
-function diagnosticTraceContextFromSpanContext(spanContext: SpanContext): DiagnosticTraceContext {
-  return {
-    traceId: spanContext.traceId,
-    spanId: spanContext.spanId,
-    traceFlags: spanContext.traceFlags.toString(16).padStart(2, "0"),
   };
 }
 
@@ -267,9 +232,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         | undefined;
       const emitPublicExporterEvent = createPublicExporterHealthEventEmitter((event) => {
         const publicEvent = publicExporterEventForHealth(event);
-        if (!publicEvent) {
-          return;
-        }
         try {
           internalDiagnostics?.emit({
             type: "telemetry.exporter",
@@ -340,7 +302,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       ];
       const supportedOtlpSignals = new Set<TelemetryExporterDiagnosticEvent["signal"]>();
       for (const signal of ownedOtlpSignals) {
-        const protocol = resolveSignalProtocol(signal, otel.protocol);
+        const protocol =
+          otel.protocol ??
+          readNonBlankString(process.env[OTEL_SIGNAL_PROTOCOL_ENV[signal]]) ??
+          readNonBlankString(process.env[OTEL_EXPORTER_OTLP_PROTOCOL_ENV]) ??
+          OTLP_HTTP_PROTOBUF_PROTOCOL;
         if (protocol === OTLP_HTTP_PROTOBUF_PROTOCOL) {
           supportedOtlpSignals.add(signal);
           continue;
@@ -534,7 +500,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             ctx.logger.error(
               `diagnostics-otel: SDK startup rollback cleanup failed: ${formatError(cleanupError)}`,
             );
-            throw createStartupRollbackError(err, cleanupError);
+            throw new AggregateError(
+              [err, cleanupError],
+              "diagnostics-otel startup failed and rollback cleanup failed",
+              { cause: err },
+            );
           }
           throw err;
         }
@@ -560,7 +530,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         flushIntervalMs: otel.flushIntervalMs,
         headers,
         logger: ctx.logger,
-        logsEnabled: logsActive,
         logsToOtlp,
         logsToStdout,
         logHttpAgentOptions,
@@ -569,7 +538,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         serviceName,
       });
       active.logProvider = diagnosticsLogs.logProvider;
-      const { recordLogRecord, recordSecurityEvent } = diagnosticsLogs;
 
       const recorderRuntime = {
         ...diagnosticMetrics,
@@ -589,8 +557,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         createDiagnosticsEventHandler({
           logger: ctx.logger,
           recorders,
-          recordLogRecord,
-          recordSecurityEvent,
+          recordLogEvent: diagnosticsLogs.recordLogEvent,
         }),
         metricsActive
           ? tracesActive
@@ -619,7 +586,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             resolveTraceContext(traceContext) {
               const spanContext =
                 diagnosticsTrace.exportedSpanContextForDiagnosticTraceContext(traceContext);
-              return spanContext ? diagnosticTraceContextFromSpanContext(spanContext) : undefined;
+              return spanContext
+                ? {
+                    traceId: spanContext.traceId,
+                    spanId: spanContext.spanId,
+                    traceFlags: spanContext.traceFlags.toString(16).padStart(2, "0"),
+                  }
+                : undefined;
             },
           }) ?? null;
       }
@@ -641,8 +614,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const emitStarted = (
         signal: TelemetryExporterDiagnosticEvent["signal"],
-        transport: ExporterTransport,
-        endpointMode?: ExporterEndpointMode,
+        transport: ExporterHealthUpdate["transport"],
+        endpointMode?: ExporterHealthUpdate["endpointMode"],
       ) => {
         emitExporterEvent({
           exporter: "diagnostics-otel",
