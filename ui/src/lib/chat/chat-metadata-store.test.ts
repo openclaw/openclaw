@@ -1,7 +1,3 @@
-import {
-  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-  gatewayStartupUnavailableDetails,
-} from "@openclaw/gateway-client/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
@@ -30,16 +26,6 @@ function metadata(name: string): ChatMetadataResult {
   return {
     commands: [{ name, description: name, source: "native", scope: "text", acceptsArgs: false }],
   };
-}
-
-function startupUnavailableError(retryAfterMs = 250): GatewayRequestError {
-  return new GatewayRequestError({
-    code: "UNAVAILABLE",
-    message: "gateway startup sidecars are still initializing",
-    details: gatewayStartupUnavailableDetails(),
-    retryable: true,
-    retryAfterMs,
-  });
 }
 
 afterEach(() => {
@@ -700,51 +686,7 @@ describe("chat metadata store", () => {
     release();
   });
 
-  it("keeps queued startup revalidation within its original retry window", async () => {
-    vi.useFakeTimers();
-    const older = deferred<ChatMetadataResult>();
-    const request = vi.fn().mockReturnValueOnce(older.promise).mockResolvedValue(metadata("late"));
-    const client = clientWith(request);
-    const scope = { agentId: "main" };
-    const first = loadChatMetadata(client, scope);
-    const refresh = revalidateChatMetadata(client, scope, { startupRetryWindowMs: 250 });
-    const expired = expect(refresh).rejects.toThrow("New-session metadata retry deadline elapsed");
-    await vi.advanceTimersByTimeAsync(250);
-    await expired;
-    expect(request).toHaveBeenCalledOnce();
-    older.resolve(metadata("old"));
-    await first;
-    expect(request).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("retries canonical startup unavailability and caches the recovered commands", async () => {
-    vi.useFakeTimers();
-    const result = metadata("recovered-model");
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(startupUnavailableError(250))
-      .mockResolvedValueOnce(result);
-    const client = clientWith(request);
-
-    const refresh = revalidateChatMetadata(
-      client,
-      { agentId: "main" },
-      {
-        startupRetryWindowMs: 60_000,
-      },
-    );
-    await vi.advanceTimersByTimeAsync(249);
-    expect(request).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
-
-    await expect(refresh).resolves.toEqual(result);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(result);
-  });
-
-  it("does not retry unrelated retryable unavailable errors", async () => {
-    vi.useFakeTimers();
+  it("does not retry metadata revalidation failures", async () => {
     const request = vi.fn().mockRejectedValue(
       new GatewayRequestError({
         code: "UNAVAILABLE",
@@ -756,57 +698,9 @@ describe("chat metadata store", () => {
     );
     const client = clientWith(request);
 
-    const refresh = revalidateChatMetadata(
-      client,
-      { agentId: "main" },
-      {
-        startupRetryWindowMs: 60_000,
-      },
+    await expect(revalidateChatMetadata(client, { agentId: "main" })).rejects.toThrow(
+      "database temporarily unavailable",
     );
-    const rejection = expect(refresh).rejects.toThrow("database temporarily unavailable");
-    await vi.advanceTimersByTimeAsync(2_000);
-
-    await rejection;
     expect(request).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("stops startup retries at the configured deadline", async () => {
-    vi.useFakeTimers();
-    const startedAt = Date.UTC(2026, 7, 2);
-    vi.setSystemTime(startedAt);
-    const attemptTimes: number[] = [];
-    const request = vi.fn().mockImplementation(() => {
-      attemptTimes.push(Date.now());
-      return Promise.reject(startupUnavailableError(2_000));
-    });
-    const client = clientWith(request);
-    const refresh = revalidateChatMetadata(
-      client,
-      { agentId: "main" },
-      {
-        startupRetryWindowMs: 60_000,
-      },
-    );
-    const rejection = expect(refresh).rejects.toThrow("gateway startup sidecars");
-
-    await vi.advanceTimersByTimeAsync(60_000);
-    await rejection;
-
-    expect(attemptTimes).toHaveLength(30);
-    expect(attemptTimes[0]).toBe(startedAt);
-    expect(attemptTimes.at(-1)).toBe(startedAt + 58_000);
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "chat.metadata",
-      { agentId: "main" },
-      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
-    );
-    expect(request).toHaveBeenLastCalledWith(
-      "chat.metadata",
-      { agentId: "main" },
-      { timeoutMs: 2_000 },
-    );
-    expect(vi.getTimerCount()).toBe(0);
   });
 });

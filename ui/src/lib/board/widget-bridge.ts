@@ -54,7 +54,7 @@ export class BoardWidgetBridgeController {
   private ticket: string;
   private readonly client: BoardWidgetBridgeGatewayClient;
   private readonly rateKey: string;
-  private readonly confirmPrompt: (text: string) => boolean;
+  private readonly confirmPrompt: (text: string) => boolean | Promise<boolean>;
   private readonly dispatchPrompt: typeof dispatchWidgetPrompt;
   private readonly now: () => number;
   private readonly openUrl: (url: string) => boolean;
@@ -67,7 +67,7 @@ export class BoardWidgetBridgeController {
     ticket: string;
     client: BoardWidgetBridgeGatewayClient;
     rateKey: string;
-    confirmPrompt: (text: string) => boolean;
+    confirmPrompt: (text: string) => boolean | Promise<boolean>;
     dispatchPrompt?: typeof dispatchWidgetPrompt;
     now?: () => number;
     openUrl?: (url: string) => boolean;
@@ -165,11 +165,12 @@ export class BoardWidgetBridgeController {
         if (options.isCurrent?.() === false) {
           throw new Error("widget prompt request is no longer current");
         }
-        const accepted = this.dispatchPrompt(
+        const accepted = await this.dispatchPrompt(
           this.frame,
           text,
           this.rateKey,
           authorization.confirmationRequired === false ? undefined : this.confirmPrompt,
+          options.isCurrent,
         );
         if (!accepted) {
           throw new Error("widget prompt was not accepted");

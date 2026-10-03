@@ -121,7 +121,7 @@ function git(...args: string[]): string {
 
 function requestContext() {
   return {
-    getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     workerRepositoryWorkspaceMutationService: {
       mutate: async <T>(params: {
         assertCurrent: () => void;

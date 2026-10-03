@@ -139,7 +139,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
       await withOpenClawTestState({ prefix: "talk-browser-defaults-" }, async (state) => {
         const cfg: OpenClawConfig = {
           agents: {
-            list: [{ id: "main", agentDir: state.agentDir(), workspace: state.workspaceDir }],
+            entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
           },
           talk: {
             agentId: "main",

@@ -16,7 +16,7 @@ function createTools(config: OpenClawConfig, options: AssemblyOptions = {}) {
   return createOpenClawCodingTools({
     config: {
       ...config,
-      agents: config.agents ?? { entries: { main: { default: true } } },
+      agents: config.agents ?? { entries: { main: {} } },
     },
     sessionKey: "agent:main:main",
     senderIsOwner: true,
@@ -140,7 +140,7 @@ describe("assembled Gateway update capability", () => {
             agents: {
               ownership: "explicit",
               entries: {
-                main: { default: true, tools: { profile: policyProfile } },
+                main: { tools: { profile: policyProfile } },
                 execution: { tools: { profile: policyProfile === "full" ? "coding" : "full" } },
               },
             },

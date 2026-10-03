@@ -420,13 +420,11 @@ describe("models.list configured static entries", () => {
     const config = {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.6-sol" } },
-        list: [
-          {
-            id: "main",
-            default: true,
+        entries: {
+          main: {
             models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
 

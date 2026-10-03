@@ -48,7 +48,7 @@ describe("Git backup command agent selection", () => {
       repositoryPath: "/tmp/repository",
     });
     mocks.getRuntimeConfig.mockReset().mockReturnValue({
-      agents: { list: [{ id: "main" }, { id: "ops-team" }] },
+      agents: { entries: { main: {}, "ops-team": {} } },
     });
     mocks.recordBackupRunOutcome.mockReset();
     mocks.restoreGitBackupRef.mockReset().mockResolvedValue({

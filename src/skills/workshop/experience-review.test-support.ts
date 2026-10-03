@@ -292,7 +292,7 @@ export async function createExperienceReviewCandidate(
         },
       },
       agents: {
-        entries: { main: { default: true } },
+        entries: { main: {} },
         defaults: {
           model: { primary: `openai/${modelId}` },
           models: {

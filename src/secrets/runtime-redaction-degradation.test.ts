@@ -24,7 +24,7 @@ describe("mixed SecretRef failures", () => {
       const firstRef = redactedFirst ? redactedRef : missingRef;
       const secondRef = redactedFirst ? missingRef : redactedRef;
       const config = asConfig({
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         secrets: { providers: { other: { source: "env" } } },
         models: {
           providers: {

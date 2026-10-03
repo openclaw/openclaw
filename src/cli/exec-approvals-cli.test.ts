@@ -357,9 +357,8 @@ describe("exec approvals CLI", () => {
     };
     readBestEffortConfig.mockResolvedValue({
       agents: {
-        list: [
-          {
-            id: "runner",
+        entries: {
+          runner: {
             tools: {
               exec: {
                 security: "full",
@@ -367,7 +366,7 @@ describe("exec approvals CLI", () => {
               },
             },
           },
-        ],
+        },
       },
     });
 
@@ -742,7 +741,7 @@ describe("exec approvals CLI", () => {
         },
       },
       agents: {
-        list: [{ id: "main", default: true }, { id: "runner" }],
+        entries: { main: {}, runner: {} },
       },
     });
 
@@ -793,7 +792,7 @@ describe("exec approvals CLI", () => {
     { label: "for the explicit wildcard", agentArgs: ["--agent", "*"], agentKey: "*" },
     { label: "for a configured agent", agentArgs: ["--agent", "main"], agentKey: "main" },
   ])("adds an allowlist entry $label", async ({ agentArgs, agentKey }) => {
-    readBestEffortConfig.mockResolvedValue({ agents: { list: [{ id: "main" }] } });
+    readBestEffortConfig.mockResolvedValue({ agents: { entries: { main: {} } } });
     const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
     updateExecApprovals.mockClear();
 
@@ -829,7 +828,7 @@ describe("exec approvals CLI", () => {
   });
 
   it("rejects an unknown agent before allowlist add persistence", async () => {
-    readBestEffortConfig.mockResolvedValue({ agents: { list: [{ id: "main" }] } });
+    readBestEffortConfig.mockResolvedValue({ agents: { entries: { main: {} } } });
     const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
     updateExecApprovals.mockClear();
 
@@ -923,7 +922,7 @@ describe("exec approvals CLI", () => {
   });
 
   it("keeps MCP tool grants when removing the last exec allowlist entry", async () => {
-    readBestEffortConfig.mockResolvedValue({ agents: { list: [{ id: "main" }] } });
+    readBestEffortConfig.mockResolvedValue({ agents: { entries: { main: {} } } });
     const grant = createMcpToolGrant();
     localSnapshot.file = {
       version: 1,

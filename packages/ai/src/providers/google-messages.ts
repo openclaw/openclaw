@@ -95,13 +95,14 @@ export function projectGoogleMessages(params: {
       flushToolResultRun();
     }
     if (msg.role === "user") {
-      if (typeof msg.content === "string") {
+      const sourceContent = msg.content;
+      if (typeof sourceContent === "string") {
         contents.push({
           role: "user",
-          parts: [{ text: sanitizeText(msg.content) || " " }],
+          parts: [{ text: sanitizeText(sourceContent) || " " }],
         });
       } else {
-        const parts: GoogleContentPart[] = msg.content.map((item) => {
+        const parts: GoogleContentPart[] = sourceContent.map((item) => {
           if (item.type === "text") {
             return { text: sanitizeText(item.text) || " " };
           }

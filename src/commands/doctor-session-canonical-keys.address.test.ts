@@ -23,7 +23,7 @@ describe("Doctor stored session addresses", () => {
           storePath: store.replace("{agentId}", "main"),
         };
         const cfg: OpenClawConfig = {
-          agents: { entries: { main: { default: true } } },
+          agents: { entries: { main: {} } },
           session: variant === "global" ? { scope: "global", store } : { mainKey: "work", store },
         };
         const literal = "agent:main:main";
@@ -97,7 +97,7 @@ describe("Doctor stored session addresses", () => {
           storePath: store.replace("{agentId}", "ops"),
         };
         const cfg: OpenClawConfig = {
-          agents: { entries: { ops: { default: true } } },
+          agents: { entries: { ops: {} } },
           session: { mainKey: "work", store },
         };
         const sessionKey = `agent:main:${suffix}`;

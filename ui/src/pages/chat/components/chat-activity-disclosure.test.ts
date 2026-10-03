@@ -85,9 +85,9 @@ it.each(["activity", "work"] as const)(
     );
 
     const activity = container.querySelector<HTMLButtonElement>(".chat-activity-group__summary");
-    expect(activity?.textContent).toContain(kind === "work" ? "Worked for 1s" : "2 reads");
+    expect(activity?.textContent).toContain(kind === "work" ? "Worked for 1 second" : "2 reads");
     if (kind === "work") {
-      expect(activity?.textContent).toContain("2 tool calls");
+      expect(activity?.textContent).not.toContain("tool calls");
       expect(activity?.textContent).not.toContain("failed");
     }
     expect(activity?.querySelector("[title], [data-tooltip], openclaw-tooltip")).toBeNull();
@@ -131,10 +131,10 @@ it.each([
   const container = document.createElement("div");
   for (const expanded of [false, true]) {
     const summary = renderSummary([message], kind, { expanded, container });
-    expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1s" : "1 read");
+    expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1 second" : "1 read");
     expect(summary?.textContent?.match(/1 failed/gu)).toHaveLength(1);
     if (kind === "work") {
-      expect(summary?.textContent).toContain("1 tool call");
+      expect(summary?.textContent?.includes("1 tool call")).toBe(expanded);
     }
   }
 });
@@ -170,11 +170,10 @@ it.each(["activity", "work"] as const)("uses current prepared outcomes in %s sum
     },
   );
   const summary = renderSummary([message], kind);
-  expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1s" : "1 read");
+  expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1 second" : "1 read");
   expect(summary?.textContent).not.toContain("failed");
   if (kind === "work") {
-    expect(summary?.textContent).toContain("1 tool call");
-    expect(summary?.textContent).not.toContain("2 tool calls");
+    expect(summary?.textContent).not.toContain("tool call");
   }
   expect(summary?.querySelector(".chat-tool-failure")).toBeNull();
 });
@@ -197,8 +196,8 @@ it.each(["blocked", "skipped", undefined] as const)(
     const container = document.createElement("div");
     for (const expanded of [false, true]) {
       const summary = renderSummary([message], "work", { expanded, container });
-      expect(summary?.textContent).toContain("Worked for 1s");
-      expect(summary?.textContent).toContain("1 tool call");
+      expect(summary?.textContent).toContain("Worked for 1 second");
+      expect(summary?.textContent?.includes("1 tool call")).toBe(expanded);
       expect(summary?.textContent).toContain(`1 ${status ?? "unknown"}`);
       if (status === "skipped") {
         expect(summary?.textContent?.match(/1 skipped/g)).toHaveLength(1);
@@ -208,7 +207,7 @@ it.each(["blocked", "skipped", undefined] as const)(
   },
 );
 
-it.each([0, 10])("shows the total alongside failures without a duration (%i calls)", (total) => {
+it.each([0, 10])("keeps failures visible without a duration (%i calls)", (total) => {
   const groups = prepareHistoryGroups([
     createToolGroup("mixed", [
       createMessageEntry(
@@ -234,11 +233,11 @@ it.each([0, 10])("shows the total alongside failures without a duration (%i call
   );
   const summary = container.querySelector(".chat-activity-group__summary");
   const text = summary?.textContent?.replace(/\s+/gu, " ").trim();
-  expect(text).toBe(total ? "Worked · 10 tool calls · 2 failed" : "Worked");
+  expect(text).toBe(total ? "Worked · 2 failed" : "Worked");
 });
 
 function workSummaryText(messages: Record<string, unknown>[]) {
-  return renderSummary(messages, "work", { durationMs: null })
+  return renderSummary(messages, "work", { durationMs: null, expanded: true })
     ?.textContent?.replace(/\s+/gu, " ")
     .trim();
 }

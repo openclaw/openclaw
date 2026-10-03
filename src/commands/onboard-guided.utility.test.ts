@@ -12,7 +12,7 @@ describe("guided onboarding utility handoff", () => {
       meta: { migrations: { utilityModelSeparation: true } },
       agents: {
         defaults: { utilityModel: "fixture/small", workspace: "/tmp/work" },
-        entries: { main: { default: true, workspace: "/tmp/work" } },
+        entries: { main: { workspace: "/tmp/work" } },
       },
       gateway: { mode: "local" },
       wizard: { securityAcknowledgedAt: "2026-09-16T00:00:00.000Z" },

@@ -621,7 +621,7 @@ describe("buildSkillSnapshot", () => {
     expect(snapshot.prompt.length).toBeLessThan(2000);
   });
 
-  it("uses agents.list[].skills as a full replacement for inherited defaults", async () => {
+  it("uses agents.entries.<id>.skills as a full replacement for inherited defaults", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     await writeWorkspaceSkills(workspaceDir, [
       { name: "github", description: "GitHub" },
@@ -636,7 +636,7 @@ describe("buildSkillSnapshot", () => {
           defaults: {
             skills: ["github", "weather"],
           },
-          list: [{ id: "writer", skills: ["docs-search", "github"] }],
+          entries: { writer: { skills: ["docs-search", "github"] } },
         },
       },
     });

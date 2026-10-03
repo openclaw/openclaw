@@ -41,7 +41,7 @@ describe("memory forget", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     await configureMemoryCoreDreamingStateForTests();
     cfg = {
-      agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main", default: true }] },
+      agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
     } as OpenClawConfig;
   });
 
@@ -80,11 +80,11 @@ describe("memory forget", () => {
       cfg = {
         agents: {
           defaults: { workspace: workspaceDir },
-          list: [
-            { id: "alpha", default: true, workspace: workspaceDir },
-            { id: "gamma", workspace: workspaceDir },
-            { id: "vacant", workspace: workspaceDir },
-          ],
+          entries: {
+            alpha: { workspace: workspaceDir },
+            gamma: { workspace: workspaceDir },
+            vacant: { workspace: workspaceDir },
+          },
         },
       } as OpenClawConfig;
       await upsertSessionEntry({

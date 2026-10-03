@@ -52,7 +52,7 @@ describe("Memory watch configuration", () => {
   function config(): OpenClawConfig {
     return {
       plugins: { enabled: false },
-      agents: { defaults: { workspace: state.workspaceDir }, list: [{ id: "main" }] },
+      agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
       memory: {
         search: {
           provider: "none",

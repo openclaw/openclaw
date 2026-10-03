@@ -130,10 +130,9 @@ export async function setupCommand(
   // diff against snapshot.parsed, never resolved include/env values wholesale.
   let next: OpenClawConfig = snapshot.exists ? resolvedConfig : cfg;
   if (shouldPersistRoster) {
-    const { list: _legacyList, ...agents } = next.agents ?? {};
     next = {
       ...next,
-      agents: { ...agents, entries: toAgentEntriesRecord(listAgentEntries(cfg)) },
+      agents: { ...next.agents, entries: toAgentEntriesRecord(listAgentEntries(cfg)) },
     };
   }
   if (shouldWriteWorkspace && !writeInheritedWorkspaceOverride) {
@@ -148,12 +147,11 @@ export async function setupCommand(
       }
     }
     const entries = roster.length > 0 ? toAgentEntriesRecord(roster) : undefined;
-    const { list: _legacyList, ...agents } = next.agents ?? {};
     next = {
       ...next,
       agents: {
-        ...agents,
-        defaults: { ...agents.defaults, workspace },
+        ...next.agents,
+        defaults: { ...next.agents?.defaults, workspace },
         ...(entries ? { entries } : {}),
       },
     };

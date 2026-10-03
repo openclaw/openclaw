@@ -12,10 +12,39 @@ Managed worktrees give an agent task its own git branch and checkout without pla
 
 ## Sandboxed sessions
 
-Sandboxed project sessions use a private source-only Git checkout for execution,
+Sandboxed project sessions use a private Git checkout for execution,
 while the managed worktree remains the canonical owner of accepted changes.
 Docker and Podman support this local projection. The host repository's shared Git
 metadata and ignored-file provisioning are not mounted or copied into it.
+On Btrfs, APFS, and ReFS, new private checkouts with a committed `pnpm-lock.yaml`
+can reuse installed dependencies. OpenClaw prepares the dependencies once in a
+disposable sandbox, then clones the prepared checkout for each session. The first
+checkout pays the install cost; subsequent checkouts arrive with `node_modules`.
+The private checkout storage must support filesystem acceleration, and
+`worktreeAcceleration: false` disables this preparation too.
+
+Dependency preparation uses the selected sandbox image, network restrictions,
+and guest working directory, without configured credentials, custom bind mounts,
+or setup commands. Git metadata stays read-only during installation. Only
+`node_modules` directories are retained as additional output, regardless of Git
+ignore spelling; generated native protocol files and other setup artifacts are
+not shared. Repository code never
+runs on the host as part of this preparation. Existing permission requirements
+for unsandboxed repository setup are unchanged.
+With `network: "none"`, pnpm uses offline mode so a missing package or metadata
+cache falls back promptly instead of waiting through network retries.
+
+The reusable generation binds the source commit, frozen lockfile, immutable image
+(including its Node and pnpm versions), guest path, and sandbox policy. A changed
+generation prepares a new template; the existing seven-day template cleanup also
+retires interrupted builders. Installation failure or changed tracked source
+records a warning and keeps a source-only template for that generation. Missing
+lockfiles, unsupported filesystems, and unavailable images use source-only
+checkout. The agent can install normally in that private checkout. Dependency
+preparation does not update an already-used session when its lockfile changes.
+Layouts whose pnpm virtual store is outside `node_modules` also use the
+source-only fallback, preserving their ordinary installation contract.
+
 See [Workspace access](/gateway/sandboxing/workspace-access#managed-project-workspaces)
 for write policy, reconciliation, and conflict recovery.
 
@@ -69,7 +98,7 @@ New checkouts with no file data, including empty session workspaces, use normal 
 
 If template cleanup cannot acquire its allocation lease or read its cache, OpenClaw logs a warning and continues ordinary worktree and snapshot cleanup. A later cleanup pass retries template retirement.
 
-Templates contain checked-out source only. `.worktreeinclude` provisioning and `.openclaw/worktree-setup.sh` still run separately for each new worktree, under their existing permissions. Dependencies and setup output are not shared through the template. Copy-on-write snapshots share source storage until files change; their actual savings depend on the repository and subsequent writes.
+Canonical worktree templates contain checked-out source only. `.worktreeinclude` provisioning and `.openclaw/worktree-setup.sh` still run separately for each new worktree, under their existing permissions. Private sandbox dependency templates follow the separate preparation contract above; they never copy ignored files from the host repository. Copy-on-write snapshots share storage until files change; their actual savings depend on the repository and subsequent writes.
 
 The first accelerated worktree includes the cost of preparing a template through Git. Later APFS worktrees clone the whole directory in one native operation. OpenClaw reads shared data-stream identities in bounded native batches before updating Git's cached file metadata, avoiding a content reread for proven unchanged files. Git metadata preparation counts toward the timestamp-safety delay, so finishing it after the clone's timestamp boundary does not add another wait. Git still validates the resulting index and detects subsequent edits; unsupported index formats and unverified files receive ordinary Git validation.
 

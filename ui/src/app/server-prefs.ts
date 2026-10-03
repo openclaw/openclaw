@@ -2,6 +2,7 @@
 // the approval gate and other devices pick them up. The localStorage mirror gives instant boot and
 // stays authoritative when this client cannot write config (viewer scope, offline). Pending local
 // intent shadows server snapshots until the hash-free LWW ack; failed pushes degrade device-local.
+import { sleepWithAbort } from "@openclaw/retry";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ConfigPatchAck } from "../lib/config/config-gateway-operations.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
@@ -624,9 +625,7 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
         break;
       }
       if (result.reason === "conflict" && attempt === 0) {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 250);
-        });
+        await sleepWithAbort(250);
         continue;
       }
       if (result.reason === "conflict") {

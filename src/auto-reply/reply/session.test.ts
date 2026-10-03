@@ -208,7 +208,7 @@ describe("resolveReplySessionPreprocessingState", () => {
     expect(
       await resolveReplySessionPreprocessingState({
         cfg: {
-          agents: { list: [{ id: "ops", default: true }] },
+          agents: { entries: { ops: {} } },
           session: { store: storePath, mainKey: "work" },
         },
         ctx: finalizeInboundContext({
@@ -388,7 +388,7 @@ describe("initSessionState guarded initialization", () => {
         await expect(
           initSessionState({
             cfg: {
-              agents: { list: [{ id: "main", default: true }, { id: agentId }] },
+              agents: { entries: { main: {}, [agentId]: {} } },
               session: { store: path.join(stateDir, "durable", "{agentId}", "sessions.json") },
             } as OpenClawConfig,
             ctx: {

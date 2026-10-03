@@ -67,12 +67,13 @@ export function isWidgetFrameInteractable(frame: HTMLIFrameElement): boolean {
  * Agent-authored frames may submit only user-focused conversational text.
  * The shared event preserves pane routing and prevents privileged shortcuts.
  */
-export function dispatchWidgetPrompt(
+export async function dispatchWidgetPrompt(
   frame: HTMLIFrameElement,
   raw: unknown,
   rateKey: string,
-  confirmPrompt?: (text: string) => boolean,
-): boolean {
+  confirmPrompt?: (text: string) => boolean | Promise<boolean>,
+  isCurrent?: () => boolean,
+): Promise<boolean> {
   const text = typeof raw === "string" ? raw.trim() : "";
   if (
     !text ||
@@ -80,8 +81,14 @@ export function dispatchWidgetPrompt(
     text.startsWith("/") ||
     text.startsWith("!") ||
     !isWidgetFrameInteractable(frame) ||
-    !allowWidgetPrompt(rateKey, Date.now()) ||
-    (confirmPrompt && !confirmPrompt(text))
+    !allowWidgetPrompt(rateKey, Date.now())
+  ) {
+    return false;
+  }
+  if (
+    (confirmPrompt && !(await confirmPrompt(text))) ||
+    isCurrent?.() === false ||
+    !isWidgetFrameInteractable(frame)
   ) {
     return false;
   }
@@ -214,7 +221,8 @@ export async function dispatchMcpAppMessage(
   frame: HTMLIFrameElement,
   binding: { sessionKey: string; viewId: string },
   params: { role: string; content: ContentBlock[]; _meta?: Record<string, unknown> },
-  confirm: (preview: string) => boolean,
+  confirm: (preview: string) => boolean | Promise<boolean>,
+  isCurrent?: () => boolean,
 ): Promise<boolean> {
   const options = params._meta?.["openai/message"];
   const messageOptions = asOptionalRecord(options);
@@ -257,7 +265,7 @@ export async function dispatchMcpAppMessage(
       return block.type;
     })
     .join("\n\n");
-  if (!confirm(preview)) {
+  if (!(await confirm(preview)) || isCurrent?.() === false || !isWidgetFrameInteractable(frame)) {
     return false;
   }
   return new Promise<boolean>((respond) => {

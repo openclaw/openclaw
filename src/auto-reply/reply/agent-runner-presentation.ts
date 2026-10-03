@@ -76,9 +76,16 @@ export function createAgentTurnPresentation(params: {
   };
 
   // Previews are cumulative, so a held lead reappears in the next partial or
-  // the final reply once the text diverges from NO_REPLY.
-  const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } =>
-    payload.text?.trim() === SILENT_REPLY_TOKEN[0] ? { skip: true } : classifyReplyText(payload);
+  // the final reply once the text diverges from NO_REPLY. Leading punctuation
+  // can wrap the complete marker, so hold its unfinished preview too.
+  const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+    const preview = payload.text?.trim();
+    const unwrapped = preview?.replace(/^\p{P}+/u, "").trimStart();
+    return unwrapped === SILENT_REPLY_TOKEN[0] ||
+      (unwrapped !== preview && isSilentReplyPrefixText(unwrapped, SILENT_REPLY_TOKEN))
+      ? { skip: true }
+      : classifyReplyText(payload);
+  };
 
   const sanitizeStreamingText = (
     text: string | undefined,

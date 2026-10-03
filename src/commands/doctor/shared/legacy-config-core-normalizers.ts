@@ -9,6 +9,7 @@ import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveDiscoveredChannelSetupPromotionSurface } from "../../../channels/plugins/setup-promotion-discovery.js";
 import { resolveSingleAccountPromotion } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../../../infra/google-api-base-url.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
@@ -22,6 +23,7 @@ import {
   rewriteModelRefs,
 } from "./legacy-config-migrations.runtime.models.refs.js";
 import { isRecord } from "./legacy-config-record-shared.js";
+import { normalizeLegacyMistralModelCost } from "./legacy-mistral-model-cost.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 import { modelEntryWithRuntimePolicy } from "./legacy-runtime-model-policy.js";
 import { migrateLegacyRuntimeModelRef } from "./legacy-runtime-model-providers.js";
@@ -467,9 +469,9 @@ function normalizeLegacyRuntimeAgentContainer(
 }
 
 function normalizeLegacyCodexCliProviderRuntimePins(
-  cfg: OpenClawConfig,
+  cfg: OpenClawConfigWithLegacyRoster,
   changes: string[],
-): OpenClawConfig {
+): OpenClawConfigWithLegacyRoster {
   return normalizeModelProviders(cfg, (rawProvider, providerId) => {
     let provider = rawProvider;
     const providerRuntime = normalizeLegacyCodexCliAgentRuntimePolicy(rawProvider.agentRuntime);
@@ -496,12 +498,14 @@ function normalizeLegacyCodexCliProviderRuntimePins(
 
 /** Move legacy runtime-tagged model/provider refs onto current agentRuntime policy fields. */
 export function normalizeLegacyRuntimeModelRefs(
-  cfg: OpenClawConfig,
+  cfg: OpenClawConfigWithLegacyRoster,
   changes: string[],
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
-): OpenClawConfig {
+): OpenClawConfigWithLegacyRoster {
   const cfgWithProviders = normalizeLegacyCodexCliProviderRuntimePins(cfg, changes);
-  const rewriteRemainingSlots = (config: OpenClawConfig): OpenClawConfig =>
+  const rewriteRemainingSlots = (
+    config: OpenClawConfigWithLegacyRoster,
+  ): OpenClawConfigWithLegacyRoster =>
     rewriteModelRefs(config, "config", changes, (modelRef) => {
       const migrated = migrateUnblockedLegacyRuntimeModelRef(modelRef, blockedModelIdentities);
       return migrated &&
@@ -510,7 +514,7 @@ export function normalizeLegacyRuntimeModelRefs(
           migrated.legacyProvider === "google-gemini-cli")
         ? migrated.ref
         : null;
-    }).value as OpenClawConfig; // SAFETY: Rewriting model-ref strings and map keys preserves the config's value and container types.
+    }).value as OpenClawConfigWithLegacyRoster; // SAFETY: Rewriting model-ref strings and map keys preserves the config's value and container types.
   const rawAgents = cfgWithProviders.agents;
   if (!isRecord(rawAgents)) {
     return rewriteRemainingSlots(cfgWithProviders);
@@ -532,7 +536,8 @@ export function normalizeLegacyRuntimeModelRefs(
   }
 
   if (Array.isArray(rawAgents.list)) {
-    const nextList = rawAgents.list.map((entry, index) => {
+    const list: unknown[] = rawAgents.list;
+    const nextList = list.map((entry, index) => {
       if (!isRecord(entry)) {
         return entry;
       }
@@ -580,7 +585,7 @@ export function normalizeLegacyRuntimeModelRefs(
   const nextCfg = changed
     ? {
         ...cfgWithProviders,
-        agents: nextAgents as OpenClawConfig["agents"],
+        agents: nextAgents as OpenClawConfigWithLegacyRoster["agents"],
       }
     : cfgWithProviders;
   return rewriteRemainingSlots(nextCfg);
@@ -941,43 +946,6 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
       });
     });
   });
-}
-
-const MISTRAL_MODEL_CACHE_READ_COST_BY_ID: Record<string, number> = {
-  "codestral-latest": 0.03,
-  "devstral-medium-latest": 0.04,
-  "magistral-small": 0.05,
-  "mistral-large-latest": 0.05,
-  "mistral-medium-2508": 0.04,
-  "mistral-medium-3-5": 0.15,
-  "mistral-small-latest": 0.01,
-  "pixtral-large-latest": 0.2,
-};
-
-function normalizeLegacyMistralModelCost<T extends Record<string, unknown>>(params: {
-  providerId: string;
-  model: T;
-  modelId: string;
-  index: number;
-  changes: string[];
-}): T {
-  const cost = params.model.cost;
-  if (!isRecord(cost) || cost.cacheRead !== 0) {
-    return params.model;
-  }
-
-  const normalizedCacheRead = MISTRAL_MODEL_CACHE_READ_COST_BY_ID[params.modelId.toLowerCase()];
-  if (normalizedCacheRead === undefined) {
-    return params.model;
-  }
-
-  params.changes.push(
-    `Normalized models.providers.${sanitizeForLog(params.providerId)}.models[${params.index}].cost.cacheRead (0 → ${normalizedCacheRead}) for Mistral prompt-cache billing.`,
-  );
-  return {
-    ...params.model,
-    cost: { ...cost, cacheRead: normalizedCacheRead },
-  };
 }
 
 /** Normalize stale Mistral model defaults such as prompt-cache read cost. */

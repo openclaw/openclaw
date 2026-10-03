@@ -82,19 +82,18 @@ describe("collectPluginToolAllowlistWarnings", () => {
       cfg: {
         plugins: { allow: ["telegram"] },
         agents: {
-          list: [
-            {
-              id: "agent-a",
+          entries: {
+            "agent-a": {
               tools: { alsoAllow: ["lobster"] },
             },
-          ],
+          },
         },
       },
       manifestRegistry,
     });
 
     expect(warnings).toEqual([
-      '- agents.list[0].tools.alsoAllow references plugin "lobster", but plugins.allow does not include it. Add "lobster" to plugins.allow or remove plugins.allow.',
+      '- agents.entries.agent-a.tools.alsoAllow references plugin "lobster", but plugins.allow does not include it. Add "lobster" to plugins.allow or remove plugins.allow.',
     ]);
   });
 
@@ -174,16 +173,15 @@ describe("collectPluginToolAllowlistWarnings", () => {
   it("does not warn when the agent profile blocks MCP tools before sandbox policy", () => {
     const warnings = mcpWarnings({
       agents: {
-        list: [
-          {
-            id: "worker",
+        entries: {
+          worker: {
             sandbox: { mode: "all" },
             tools: {
               profile: "minimal",
               sandbox: { tools: { alsoAllow: ["web_fetch"] } },
             },
           },
-        ],
+        },
       },
       mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
     });
@@ -243,18 +241,17 @@ describe("collectPluginToolAllowlistWarnings", () => {
     const warnings = mcpWarnings({
       agents: {
         defaults: { sandbox: { mode: "all" } },
-        list: [
-          {
-            id: "worker",
+        entries: {
+          worker: {
             tools: { sandbox: { tools: { alsoAllow: ["web_fetch"] } } },
           },
-        ],
+        },
       },
       tools: { sandbox: { tools: { alsoAllow: ["web_search"] } } },
     });
 
     expect(warnings).toEqual([
-      '- mcp.servers defines 1 MCP server ("outlook"), but agents.list[0].tools.sandbox.tools.alsoAllow, tools.sandbox.tools.alsoAllow do not include "bundle-mcp", "group:plugins", or a matching server-prefixed MCP tool name/glob such as "<server>__*". Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.',
+      '- mcp.servers defines 1 MCP server ("outlook"), but agents.entries.worker.tools.sandbox.tools.alsoAllow, tools.sandbox.tools.alsoAllow do not include "bundle-mcp", "group:plugins", or a matching server-prefixed MCP tool name/glob such as "<server>__*". Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.',
     ]);
   });
 
@@ -270,12 +267,11 @@ describe("collectPluginToolAllowlistWarnings", () => {
     const warnings = mcpWarnings({
       agents: {
         defaults: { sandbox: { mode: "all" } },
-        list: [
-          {
-            id: "worker",
+        entries: {
+          worker: {
             tools: { sandbox: { tools: { alsoAllow: ["web_fetch"] } } },
           },
-        ],
+        },
       },
       tools: { sandbox: { tools: { allow: ["bundle-mcp"] } } },
     });
@@ -287,12 +283,11 @@ describe("collectPluginToolAllowlistWarnings", () => {
     const warnings = mcpWarnings({
       agents: {
         defaults: { sandbox: { mode: "all" } },
-        list: [
-          {
-            id: "worker",
+        entries: {
+          worker: {
             tools: { sandbox: { tools: { deny: ["bundle-mcp"] } } },
           },
-        ],
+        },
       },
       tools: { sandbox: { tools: { alsoAllow: ["web_fetch"] } } },
     });

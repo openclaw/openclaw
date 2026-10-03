@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildAllowedModelSet } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 
 describe("applySystemAgentModelSelection", () => {
@@ -8,6 +9,7 @@ describe("applySystemAgentModelSelection", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
+          systemAgent: { agentId: "main" },
           model: {
             primary: "openai/gpt-5.5@openai:primary",
             fallbacks: ["openai/gpt-5.4@openai:backup"],
@@ -15,7 +17,7 @@ describe("applySystemAgentModelSelection", () => {
           models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
         },
         entries: {
-          main: { default: true, agentDir: "/tmp/main-auth" },
+          main: { agentDir: "/tmp/main-auth" },
           ops: { model: "openai/gpt-5.4" },
         },
       },
@@ -60,7 +62,7 @@ describe("applySystemAgentModelSelection", () => {
           utilityModel: "local-utility/shared",
         },
         entries: {
-          main: { default: true },
+          main: {},
           ops: {
             model: { primary: "openai/gpt-5.4", fallbacks: ["openai/gpt-5.5"] },
             agentDir: "/tmp/ops-auth",
@@ -96,7 +98,6 @@ describe("applySystemAgentModelSelection", () => {
     expect(result.agents?.defaults?.utilityModel).toBe("local-utility/tiny");
     expect(result.agents?.defaults?.model).toBeUndefined();
     expect(result.agents?.entries).toBeUndefined();
-    expect(result.agents?.list).toBeUndefined();
     expect(result.meta?.migrations?.utilityModelSeparation).toBe(true);
   });
 
@@ -114,7 +115,7 @@ describe("applySystemAgentModelSelection", () => {
   });
 
   it("updates the configured system owner without changing the legacy owner", async () => {
-    const config = {
+    const { config } = createCanonicalAgentConfigFixture({
       agents: {
         defaults: { systemAgent: { agentId: "beta" } },
         entries: {
@@ -122,7 +123,7 @@ describe("applySystemAgentModelSelection", () => {
           beta: { model: "openai/gpt-5.6-sol" },
         },
       },
-    } satisfies OpenClawConfig;
+    });
 
     const result = await applySystemAgentModelSelection({ config, model: "openai/gpt-5.6-luna" });
 
@@ -133,7 +134,7 @@ describe("applySystemAgentModelSelection", () => {
   it("rejects an unrepresentable explicit agent instead of updating main", async () => {
     const config = {
       agents: {
-        entries: { main: { default: true }, ops: {} },
+        entries: { main: {}, ops: {} },
       },
     } satisfies OpenClawConfig;
 
@@ -144,7 +145,7 @@ describe("applySystemAgentModelSelection", () => {
         targetAgentId: "агент✨",
       }),
     ).rejects.toThrow('Could not resolve configured agent "агент✨".');
-    expect(config.agents.entries.main).toEqual({ default: true });
+    expect(config.agents.entries.main).toEqual({});
   });
 
   it("clears stale harness pins in both model scopes for a native route", async () => {
@@ -155,7 +156,6 @@ describe("applySystemAgentModelSelection", () => {
         },
         entries: {
           work: {
-            default: true,
             model: "openai/gpt-5.5",
             models: {
               "openai/gpt-5.5": {
@@ -180,7 +180,7 @@ describe("applySystemAgentModelSelection", () => {
       config: {
         agents: {
           defaults: { model: "openai/gpt-5.5" },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       model: "openai/gpt-5.5",

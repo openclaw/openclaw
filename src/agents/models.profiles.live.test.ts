@@ -48,7 +48,7 @@ import { resolveBuiltInModelSuppressionFromManifest } from "./model-suppression.
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import type { StreamFn } from "./runtime/index.js";
 import {
-  appendPrioritizedDynamicLiveModels,
+  appendLiveModelCandidates,
   applyLiveProviderPluginDiscoveryCompat,
   DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
@@ -76,7 +76,10 @@ import {
   shouldSkipLiveModelFileProbe,
   shouldSkipLiveModelImageProbe,
 } from "./test-helpers/live-model-turn-probes.js";
-import { createLiveTargetMatcher } from "./test-helpers/live-target-matcher.js";
+import {
+  createLiveTargetMatcher,
+  findUnmatchedLiveModelSelectors,
+} from "./test-helpers/live-target-matcher.js";
 
 const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
@@ -157,10 +160,6 @@ function parseExplicitLiveModelRefs(
   return refs;
 }
 
-function formatExplicitLiveModelRef(ref: { provider: string; id: string }): string {
-  return `${ref.provider}/${ref.id}`;
-}
-
 function filterLiveModelRefsByProvider(
   refs: readonly { provider: string; id: string }[],
   providerFilter: Set<string> | null,
@@ -172,28 +171,6 @@ function filterLiveModelRefsByProvider(
     [...providerFilter].map((provider) => normalizeProviderId(provider)).filter(Boolean),
   );
   return refs.filter((ref) => normalizedProviders.has(normalizeProviderId(ref.provider)));
-}
-
-function findUnmatchedExplicitLiveModelRefs(params: {
-  refs: readonly { provider: string; id: string }[];
-  models: readonly Pick<Model, "provider" | "id">[];
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): string[] {
-  const unmatched: string[] = [];
-  for (const ref of params.refs) {
-    const matcher = createLiveTargetMatcher({
-      providerFilter: null,
-      modelFilter: new Set([formatExplicitLiveModelRef(ref)]),
-      config: params.config,
-      env: params.env,
-    });
-    const matched = params.models.some((model) => matcher.matchesModel(model.provider, model.id));
-    if (!matched) {
-      unmatched.push(formatExplicitLiveModelRef(ref));
-    }
-  }
-  return unmatched;
 }
 
 function applyLiveProviderDiscoveryPluginCompat(params: {
@@ -1211,17 +1188,18 @@ describe("explicit live model discovery scope", () => {
     });
   });
 
-  it("reports explicit refs that never become runnable candidates", () => {
+  it.each([
+    { label: "all providers", providers: null, missing: ["zai/glm-5.1", "deepseek/"] },
+    { label: "provider allowlist", providers: new Set(["deepseek"]), missing: ["deepseek/"] },
+  ])("reports unresolved raw selectors within $label", ({ providers, missing }) => {
     expect(
-      findUnmatchedExplicitLiveModelRefs({
-        refs: [
-          { provider: "deepseek", id: "deepseek-v4-flash" },
-          { provider: "zai", id: "glm-5.1" },
-        ],
+      findUnmatchedLiveModelSelectors({
+        modelFilter: new Set(["deepseek/deepseek-v4-flash", "zai/glm-5.1", "deepseek/"]),
+        providerFilter: providers,
         models: [{ provider: "deepseek", id: "deepseek-v4-flash" }],
         env: {},
       }),
-    ).toEqual(["zai/glm-5.1"]);
+    ).toEqual(missing);
   });
 });
 
@@ -1669,21 +1647,25 @@ describeLive("live models (profile keys)", () => {
           "[live-models] load model registry",
         );
         const configuredModels = modelRegistry.getAll();
-        const augmented = await appendPrioritizedDynamicLiveModels({
+        const augmented = await appendLiveModelCandidates({
           models: configuredModels,
           config: cfg,
           agentDir,
           env: process.env,
           modelRegistry,
-          ...(explicitRefs.length > 0
-            ? { refs: explicitRefs }
-            : useSmall
-              ? { refs: priorityRefs }
-              : {}),
+          ...(useExplicit
+            ? {
+                resolution: {
+                  kind: "explicit" as const,
+                  getDiscoveryStores: async () => ({ authStorage, modelRegistry }),
+                },
+              }
+            : {}),
+          ...(useExplicit ? { refs: explicitRefs } : useSmall ? { refs: priorityRefs } : {}),
         });
         if (augmented.added.length > 0) {
           logProgress(
-            `[live-models] loaded ${augmented.added.length} prioritized dynamic model refs`,
+            `[live-models] loaded ${augmented.added.length} ${useExplicit ? "explicit" : "prioritized dynamic"} model refs`,
           );
         }
         return augmented.models;
@@ -1712,8 +1694,12 @@ describeLive("live models (profile keys)", () => {
 
       for (const model of models) {
         if (
-          resolveBuiltInModelSuppressionFromManifest({ provider: model.provider, id: model.id })
-            ?.suppress
+          resolveBuiltInModelSuppressionFromManifest({
+            provider: model.provider,
+            id: model.id,
+            baseUrl: model.baseUrl,
+            config: cfg,
+          })?.suppress
         ) {
           continue;
         }
@@ -1789,9 +1775,10 @@ describeLive("live models (profile keys)", () => {
         logProgress(`[live-models] ${reason}; skipping`);
         return;
       }
-      if (useExplicit && explicitRefs.length > 0) {
-        const unmatched = findUnmatchedExplicitLiveModelRefs({
-          refs: explicitRefs,
+      if (useExplicit && filter) {
+        const unmatched = findUnmatchedLiveModelSelectors({
+          modelFilter: filter,
+          providerFilter: providers,
           models: candidates.map((entry) => entry.model),
           config: cfg,
           env: process.env,

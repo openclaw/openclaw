@@ -20,8 +20,6 @@ export type AgentConfig = Omit<
   z.input<typeof AgentEntrySchema>,
   "memory" | "tts" | "sandbox" | "tools"
 > & {
-  /** @deprecated Raw legacy list compatibility only; canonical agents.entries rejects this key. */
-  default?: boolean;
   /**
    * @deprecated Legacy raw config accepted only by doctor/migration repair.
    * Normal schema parsing rejects this key; use per-model agentRuntime instead.
@@ -44,6 +42,4 @@ export type AgentsConfig = {
   ownership?: "explicit";
   defaults?: AgentDefaultsConfig;
   entries?: Record<string, AgentEntryConfig>;
-  /** Internal non-serialized projection materialized by validation for ID-based runtime code. */
-  list?: AgentConfig[];
 };

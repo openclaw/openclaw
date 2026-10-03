@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWikiCli } from "./cli.js";
 import {
@@ -93,7 +94,7 @@ describe("memory-wiki agent-scoped cli", () => {
 
   function createAgentSelectionProgram(params: {
     config: ResolvedMemoryWikiConfig;
-    appConfig: { agents: { entries: Record<string, { default?: boolean }> } };
+    appConfig: OpenClawConfig;
     commandPath: readonly string[];
   }) {
     const resolveConfig = vi.fn((agentId?: string) =>
@@ -122,7 +123,7 @@ describe("memory-wiki agent-scoped cli", () => {
         config: { vault: { scope: "agent" } },
       });
       const appConfig = {
-        agents: { entries: { support: { default: true }, marketing: {} } },
+        agents: { entries: { support: {}, marketing: {} } },
       };
       const { command, program, resolveConfig } = createAgentSelectionProgram({
         config,
@@ -138,12 +139,12 @@ describe("memory-wiki agent-scoped cli", () => {
     },
   );
 
-  it("uses the configured default agent for nested wiki commands", async () => {
+  it("uses the sole configured agent for nested wiki commands", async () => {
     const { rootDir, config } = await createCliVault({
       config: { vault: { scope: "agent" } },
     });
     const appConfig = {
-      agents: { entries: { support: { default: true }, marketing: {} } },
+      agents: { entries: { support: {} } },
     };
     const { program, resolveConfig } = createAgentSelectionProgram({
       config,
@@ -160,10 +161,10 @@ describe("memory-wiki agent-scoped cli", () => {
     expect(resolveConfig.mock.results[0]?.value.vault.path).toBe(path.join(rootDir, "support"));
   });
 
-  it("keeps global-vault search scoped to the configured default agent", async () => {
+  it("keeps global-vault search scoped to the explicitly selected agent", async () => {
     const { config } = await createCliVault();
     const appConfig = {
-      agents: { entries: { support: { default: true }, marketing: {} } },
+      agents: { entries: { support: {}, marketing: {} } },
     };
     const { program, resolveConfig } = createAgentSelectionProgram({
       config,
@@ -171,16 +172,22 @@ describe("memory-wiki agent-scoped cli", () => {
       commandPath: ["search"],
     });
 
-    await program.parseAsync(["wiki", "search", "query"], { from: "user" });
+    await program.parseAsync(["wiki", "search", "query", "--agent", "support"], { from: "user" });
 
     expect(resolveConfig).toHaveBeenCalledWith("support", appConfig);
   });
 
-  it("gives actionable missing-agent guidance for nested wiki commands", async () => {
+  it.each<{
+    label: string;
+    entries: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
+  }>([
+    { label: "empty", entries: {} },
+    { label: "multi-agent", entries: { support: {}, marketing: {} } },
+  ])("gives actionable agent-selection guidance for a $label roster", async ({ entries }) => {
     const { config } = await createCliVault({
       config: { vault: { scope: "agent" } },
     });
-    const appConfig = { agents: { entries: {} } };
+    const appConfig = { agents: { entries } };
     const { program, resolveConfig } = createAgentSelectionProgram({
       config,
       appConfig,
@@ -195,12 +202,12 @@ describe("memory-wiki agent-scoped cli", () => {
     expect(resolveConfig).not.toHaveBeenCalled();
   });
 
-  it("runs wiki doctor against explicit and default agent-scoped vaults", async () => {
+  it("runs wiki doctor against explicitly selected agent-scoped vaults", async () => {
     const { rootDir, config } = await createCliVault({
       config: { vault: { scope: "agent" } },
     });
     const appConfig = {
-      agents: { entries: { support: { default: true }, marketing: {} } },
+      agents: { entries: { support: {}, marketing: {} } },
     };
     const run = async (args: string[]) => {
       stdoutWriteMock.mockClear();
@@ -213,15 +220,15 @@ describe("memory-wiki agent-scoped cli", () => {
 
     await run(["init", "--agent", "marketing"]);
     const explicitOutput = await run(["doctor", "--agent", "marketing"]);
-    await run(["init"]);
-    const defaultOutput = await run(["doctor"]);
+    await run(["init", "--agent", "support"]);
+    const supportOutput = await run(["doctor", "--agent", "support"]);
 
     expect(explicitOutput).toContain("Wiki doctor: healthy");
     expect(explicitOutput).toContain("Vault scope: agent (marketing)");
     expect(explicitOutput).toContain(path.join(rootDir, "marketing"));
-    expect(defaultOutput).toContain("Wiki doctor: healthy");
-    expect(defaultOutput).toContain("Vault scope: agent (support)");
-    expect(defaultOutput).toContain(path.join(rootDir, "support"));
+    expect(supportOutput).toContain("Wiki doctor: healthy");
+    expect(supportOutput).toContain("Vault scope: agent (support)");
+    expect(supportOutput).toContain(path.join(rootDir, "support"));
   });
 
   it("does not require an agent to probe Obsidian CLI availability", async () => {

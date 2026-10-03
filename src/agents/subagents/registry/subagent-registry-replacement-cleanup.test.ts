@@ -61,6 +61,7 @@ it.each(["completed", "failed"] as const)(
     await fixture.settle();
 
     const cleanup = createDeferred();
+    const cleanupFailure = new Error("private transcript cleanup failed");
     const remove = vi
       .spyOn(internalSessionEffects, "removeInternalSessionEffectsSession")
       .mockImplementationOnce(() => cleanup.promise);
@@ -81,11 +82,16 @@ it.each(["completed", "failed"] as const)(
       expect(remove).toHaveBeenCalledWith(transcriptTarget);
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       if (outcome === "failed") {
-        cleanup.reject(new Error("private transcript cleanup failed"));
+        cleanup.reject(cleanupFailure);
+        await expect(fixture.settle()).rejects.toMatchObject({
+          name: "AggregateError",
+          message: "Failed to settle subagent cleanup roots",
+          errors: [cleanupFailure],
+        });
       } else {
         cleanup.resolve();
+        await fixture.settle();
       }
-      await fixture.settle();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
       cleanup.resolve();

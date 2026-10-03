@@ -729,11 +729,6 @@ export function stageDefaultAgentConfigEntry(state: RuntimeConfigState, agentId:
     if (!entries) {
       return;
     }
-    for (const entry of Object.values(entries)) {
-      if (isRecord(entry)) {
-        delete entry.default;
-      }
-    }
     if (Object.keys(entries).length > 1) {
       setPathValue(draft, ["agents", "ownership"], "explicit");
     }

@@ -425,7 +425,9 @@ describe("tool-cards", () => {
       const container = mountCard(card, { ...options, expanded: false });
 
       const summary = container.querySelector("button.chat-tool-msg-summary");
-      expect(summary?.textContent).not.toContain("Message");
+      expect(textOf(container, ".chat-tool-msg-summary__label")).toBe(
+        shape === "serialized" ? "Message" : undefined,
+      );
       expect(
         summary?.querySelector(".chat-tool-msg-summary__icon")?.getAttribute("aria-label"),
       ).toBe("message");

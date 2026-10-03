@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
@@ -87,7 +88,7 @@ describe("configured profile workspace preservation", () => {
       if (alias) {
         fs.symlinkSync(configured, workspace, process.platform === "win32" ? "junction" : "dir");
       }
-      const agents: OpenClawConfig["agents"] =
+      const agents: OpenClawConfigWithLegacyRoster["agents"] =
         roster === "defaults"
           ? { defaults: { workspace } }
           : roster === "entries"

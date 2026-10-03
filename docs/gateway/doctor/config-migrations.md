@@ -43,6 +43,16 @@ through before retrying. Retirement must leave persisted source data untouched.
 Legacy normalization belongs to Doctor and migration owners, with the existing
 backup and verification flow. Runtime readers consume canonical state.
 
+### Workspace setup
+
+The nested `<workspace>/.openclaw/workspace-state.json` layout is retired. Its
+last stable writer was `2026.6.8`, published to npm on June 16, 2026. Later
+preservation rewrites wrote `<workspace>/openclaw-workspace-state.json` instead.
+Upgrade through `2026.9.7` and run `openclaw doctor --fix` before updating to
+import the nested file. Current Doctor leaves it untouched.
+The root-level setup file and workspace attestations remain supported migration
+inputs because July releases still wrote them.
+
 ### Session settings
 
 Global and project `settings.json` readers refuse retired settings before

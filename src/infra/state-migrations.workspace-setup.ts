@@ -5,7 +5,6 @@ import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
 import {
   LEGACY_WORKSPACE_ATTESTATION_DIRNAME,
-  LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
   WORKSPACE_DOCTOR_CLAIM_SUFFIX,
   legacyWorkspaceSiblingAttestationMayExist,
   resolveLegacyWorkspaceSourcePaths,
@@ -132,9 +131,7 @@ function addLegacyWorkspaceSources(params: {
           createLegacySource({
             kind,
             rootDir:
-              kind === "setup" && sourcePath.endsWith(LEGACY_WORKSPACE_STATE_CURRENT_FILENAME)
-                ? path.dirname(sourcePath)
-                : path.dirname(path.dirname(sourcePath)),
+              kind === "setup" ? path.dirname(sourcePath) : path.dirname(path.dirname(sourcePath)),
             sourcePath,
             workspaceKey: identity.workspaceKey,
             workspaceDir: identity.workspacePath,
