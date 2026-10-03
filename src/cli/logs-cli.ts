@@ -61,12 +61,6 @@ type LogsTailPayload = {
 
 type LogsCliRuntimeModule = typeof import("./logs-cli.runtime.js");
 
-type LogCursorState = {
-  gateway?: number;
-  journal?: string;
-  journalSince?: string;
-};
-
 type GatewayRecoveryResult =
   | { ok: true; payload: LogsTailPayload; startedAt: string }
   | { ok: false; error: unknown };
@@ -157,47 +151,6 @@ async function fetchGatewayLogs(
     throw new Error("Unexpected logs.tail response");
   }
   return payload as LogsTailPayload;
-}
-
-async function fetchLogs(
-  opts: LogsRequestOptions,
-  cursors: LogCursorState,
-  showProgress: boolean,
-  params: { limit: number; maxBytes: number },
-): Promise<LogsTailPayload> {
-  const { limit, maxBytes } = params;
-  if (opts.localConfigUnavailable) {
-    return {
-      ...(await readConfiguredLogTail({ cursor: cursors.gateway, limit, maxBytes })),
-      sourceKind: "file",
-      localFallback: true,
-    };
-  }
-  try {
-    return await fetchGatewayLogs(opts, cursors.gateway, showProgress, params);
-  } catch (error) {
-    if (!shouldUseLocalLogsFallback(opts, error)) {
-      throw error;
-    }
-    if (opts.follow) {
-      const journalPayload = await readSystemdJournalFallback({
-        cursor: cursors.journal,
-        since: cursors.journalSince,
-        limit,
-        maxBytes,
-      });
-      if (journalPayload) {
-        return journalPayload;
-      }
-      throw error;
-    }
-    // Match the Gateway logs.tail source when implicit local RPC is unavailable.
-    return {
-      ...(await readConfiguredLogTail({ cursor: cursors.gateway, limit, maxBytes })),
-      sourceKind: "file",
-      localFallback: true,
-    };
-  }
 }
 
 function shouldUseLocalLogsFallback(opts: LogsRequestOptions, error: unknown): boolean {
@@ -594,18 +547,47 @@ export function registerLogsCli(program: Command) {
       const showProgress = first && !opts.follow;
       let gatewayPollStartedAt = new Date().toISOString();
       try {
-        if (preferJournal) {
+        if (opts.localConfigUnavailable) {
+          payload = {
+            ...(await readConfiguredLogTail({ cursor: gatewayCursor, limit, maxBytes })),
+            sourceKind: "file",
+            localFallback: true,
+          };
+        } else if (preferJournal) {
           startGatewayRecoveryProbe();
           const result = await readJournalWhileProbingRecovery();
           payload = result.payload;
           gatewayPollStartedAt = result.gatewayPollStartedAt ?? gatewayPollStartedAt;
         } else {
-          payload = await fetchLogs(
-            opts,
-            { gateway: gatewayCursor, journal: journalCursor, journalSince },
-            showProgress,
-            { limit, maxBytes },
-          );
+          try {
+            payload = await fetchGatewayLogs(opts, gatewayCursor, showProgress, {
+              limit,
+              maxBytes,
+            });
+          } catch (error) {
+            if (!shouldUseLocalLogsFallback(opts, error)) {
+              throw error;
+            }
+            if (opts.follow) {
+              const journalPayload = await readSystemdJournalFallback({
+                cursor: journalCursor,
+                since: journalSince,
+                limit,
+                maxBytes,
+              });
+              if (!journalPayload) {
+                throw error;
+              }
+              payload = journalPayload;
+            } else {
+              // Match the Gateway logs.tail source when implicit local RPC is unavailable.
+              payload = {
+                ...(await readConfiguredLogTail({ cursor: gatewayCursor, limit, maxBytes })),
+                sourceKind: "file",
+                localFallback: true,
+              };
+            }
+          }
         }
       } catch (err) {
         if (opts.follow && followRetryAttempt < MAX_FOLLOW_RETRIES && isTransientFollowError(err)) {

@@ -101,42 +101,16 @@ function isOpenAICompatibleMemoryProvider(providerId: string, cfg: OpenClawConfi
   return !api && Boolean(normalizeOptionalString(providerConfig.baseUrl));
 }
 
-function resolveOpenAICompatibleMemoryBaseUrl(
-  providerId: string,
-  cfg: OpenClawConfig,
-  remoteBaseUrl: string | undefined,
-): string | undefined {
-  return (
-    normalizeOptionalString(remoteBaseUrl) ??
-    normalizeOptionalString(findNormalizedProviderValue(cfg.models?.providers, providerId)?.baseUrl)
-  );
-}
-
-function isKeyOptionalMemoryProvider(providerId: string, cfg: OpenClawConfig): boolean {
-  return (
-    providerId === "local" ||
-    providerId === "ollama" ||
-    providerId === "lmstudio" ||
-    isOpenAICompatibleMemoryProvider(providerId, cfg)
-  );
-}
-
 function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
   const plugins = normalizePluginsConfig(cfg.plugins);
-  if (!plugins.enabled) {
-    return false;
-  }
   const memorySlot = plugins.slots.memory;
-  if (typeof memorySlot !== "string" || memorySlot.length === 0) {
-    return false;
-  }
-  if (memorySlot === defaultSlotIdForKey("memory")) {
-    return false;
-  }
-  if (plugins.deny.includes(memorySlot)) {
-    return false;
-  }
-  if (!Object.hasOwn(plugins.entries, memorySlot)) {
+  if (
+    !plugins.enabled ||
+    !memorySlot ||
+    memorySlot === defaultSlotIdForKey("memory") ||
+    plugins.deny.includes(memorySlot) ||
+    !Object.hasOwn(plugins.entries, memorySlot)
+  ) {
     return false;
   }
   const entry = plugins.entries[memorySlot];
@@ -527,9 +501,13 @@ async function inspectMemorySearchHealthForAgent(
     return;
   }
 
+  const openAICompatible = isOpenAICompatibleMemoryProvider(provider, cfg);
   if (
-    isOpenAICompatibleMemoryProvider(provider, cfg) &&
-    !resolveOpenAICompatibleMemoryBaseUrl(provider, cfg, resolved.remote?.baseUrl)
+    openAICompatible &&
+    !(
+      normalizeOptionalString(resolved.remote?.baseUrl) ??
+      normalizeOptionalString(findNormalizedProviderValue(cfg.models?.providers, provider)?.baseUrl)
+    )
   ) {
     report(
       [
@@ -546,7 +524,7 @@ async function inspectMemorySearchHealthForAgent(
     return;
   }
 
-  if (isOpenAICompatibleMemoryProvider(provider, cfg) && !normalizeOptionalString(resolved.model)) {
+  if (openAICompatible && !normalizeOptionalString(resolved.model)) {
     report(
       [
         `Memory search provider is set to "${provider}" but no OpenAI-compatible embedding model was configured.`,
@@ -562,7 +540,7 @@ async function inspectMemorySearchHealthForAgent(
     return;
   }
 
-  if (isKeyOptionalMemoryProvider(provider, cfg)) {
+  if (provider === "ollama" || provider === "lmstudio" || openAICompatible) {
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       return;
     }

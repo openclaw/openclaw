@@ -34,12 +34,7 @@ import {
   createServiceLifecycleMutationAudit,
 } from "./lifecycle-audit.js";
 import { createServiceRestartIntent } from "./lifecycle-restart-intent.js";
-import {
-  buildDaemonServiceSnapshot,
-  createDaemonActionContext,
-  emitDaemonAlreadyRunning,
-  emitDaemonScheduledRestart,
-} from "./response.js";
+import { buildDaemonServiceSnapshot, createDaemonActionContext } from "./response.js";
 import { filterContainerGenericHints, resolveDaemonInstallBlockMessage } from "./shared.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
@@ -91,14 +86,6 @@ async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
     ...hints,
     ...renderSystemdUnavailableHints({ wsl: await isWSL(), kind: "generic_unavailable" }),
   ];
-}
-
-function mergeWarnings(
-  captured: readonly string[],
-  reported?: readonly string[],
-): string[] | undefined {
-  const combined = [...captured, ...(reported ?? [])];
-  return combined.length > 0 ? combined : undefined;
 }
 
 async function failServiceNotLoaded(params: {
@@ -258,11 +245,12 @@ export async function runServiceStart(params: {
     reportedWarnings?: readonly string[];
   }) => {
     await params.postStartCheck?.({ json, stdout, warnings, warn, fail });
+    const combinedWarnings = [...warnings, ...(result.reportedWarnings ?? [])];
     emitMessage({
       ok: true,
       result: "started",
       message: result.message,
-      warnings: mergeWarnings(warnings, result.reportedWarnings),
+      warnings: combinedWarnings.length ? combinedWarnings : undefined,
       service: buildDaemonServiceSnapshot(params.service, result.loaded),
     });
   };
@@ -328,12 +316,13 @@ export async function runServiceStart(params: {
           defaultRuntime.log(warning);
         }
       }
-      emitDaemonAlreadyRunning({
-        serviceNoun: params.serviceNoun,
-        service: params.service,
-        pid: startResult.state.runtime?.pid,
-        warnings,
-        emitMessage,
+      const pid = startResult.state.runtime?.pid;
+      emitMessage({
+        ok: true,
+        result: "already-running",
+        message: `${params.serviceNoun} service already running${pid === undefined ? "" : ` (pid ${pid})`}.`,
+        service: buildDaemonServiceSnapshot(params.service, true),
+        warnings: warnings.length ? warnings : undefined,
       });
       return;
     }
@@ -499,15 +488,15 @@ export async function runServiceRestart(params: {
   const emitScheduledRestart = (
     restartStatus: ReturnType<typeof describeGatewayServiceRestart>,
     serviceLoaded: boolean,
-  ) => {
-    return emitDaemonScheduledRestart({
-      emitMessage,
+  ): true => {
+    emitMessage({
+      ok: true,
       result: restartStatus.daemonActionResult,
       message: restartStatus.message,
-      service: params.service,
-      loaded: serviceLoaded,
-      warnings,
+      service: buildDaemonServiceSnapshot(params.service, serviceLoaded),
+      warnings: warnings.length ? warnings : undefined,
     });
+    return true;
   };
 
   const loaded = await resolveServiceLoadedOrFail({

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readNonBlankString,
@@ -150,33 +151,30 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
   if (parsed.length === 0) {
     throw new Error(`${sourceLabel} must contain at least one config update.`);
   }
-  const out: ConfigSetBatchEntry[] = [];
-  for (const [index, entry] of parsed.entries()) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+  return parsed.map((entry, index) => {
+    if (!isRecord(entry)) {
       throw new Error(`${sourceLabel}[${index}] must be an object.`);
     }
-    const typed = entry as Record<string, unknown>;
-    const path = normalizeOptionalString(typed.path) ?? "";
+    const path = normalizeOptionalString(entry.path);
     if (!path) {
       throw new Error(`${sourceLabel}[${index}].path is required.`);
     }
-    const hasValue = Object.hasOwn(typed, "value");
-    const hasRef = Object.hasOwn(typed, "ref");
-    const hasProvider = Object.hasOwn(typed, "provider");
+    const hasValue = Object.hasOwn(entry, "value");
+    const hasRef = Object.hasOwn(entry, "ref");
+    const hasProvider = Object.hasOwn(entry, "provider");
     const modeCount = Number(hasValue) + Number(hasRef) + Number(hasProvider);
     if (modeCount !== 1) {
       throw new Error(
         `${sourceLabel}[${index}] must include exactly one of: value, ref, provider.`,
       );
     }
-    out.push({
+    return {
       path,
-      ...(hasValue ? { value: typed.value } : {}),
-      ...(hasRef ? { ref: typed.ref } : {}),
-      ...(hasProvider ? { provider: typed.provider } : {}),
-    });
-  }
-  return out;
+      ...(hasValue ? { value: entry.value } : {}),
+      ...(hasRef ? { ref: entry.ref } : {}),
+      ...(hasProvider ? { provider: entry.provider } : {}),
+    };
+  });
 }
 
 export function parseConfigSetCurrentExpectation(
