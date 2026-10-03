@@ -180,7 +180,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
     route: { id: "gateway-status" },
   },
-  ...["call", "restart", "suspend", "resume"].map((subcommand): CliCommandCatalogEntry => ({
+  ...["call", "suspend", "resume"].map((subcommand): CliCommandCatalogEntry => ({
     commandPath: ["gateway", subcommand],
     exact: true,
     policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
@@ -206,12 +206,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   { commandPath: ["gateway", "start"], exact: true, policy: { networkProxy: "bypass" } },
-  {
-    commandPath: ["gateway", "stop"],
+  ...["stop", "restart", "uninstall"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["gateway", subcommand],
     exact: true,
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
-  },
-  { commandPath: ["gateway", "uninstall"], exact: true, policy: { networkProxy: "bypass" } },
+  })),
   {
     commandPath: ["gateway", "usage-cost"],
     exact: true,
@@ -322,6 +321,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["cron"], policy: { configGuard: "skip", networkProxy: "bypass" } },
   { commandPath: ["dashboard"], policy: { networkProxy: "bypass" } },
   { commandPath: ["daemon"], policy: { networkProxy: "bypass" } },
+  ...["status", "stop", "restart", "uninstall"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["daemon", subcommand],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  })),
   {
     commandPath: ["devices"],
     // Every devices subcommand either dispatches to the Gateway or uses the

@@ -11,8 +11,10 @@ import {
   resolveUpdateAvailability,
 } from "../../commands/status.update.js";
 import { readSourceConfigBestEffort } from "../../config/config.js";
+import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { isDefaultInstallIdentity, resolveIsNixMode } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { validateConfigObjectRaw } from "../../config/validation-core.js";
 import {
   auditGatewayServiceConfig,
   type ServiceDefinitionDrift,
@@ -162,6 +164,13 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   const safeMessage = (message: string) =>
     sanitizeTerminalText(redactSensitiveText(message, { mode: "tools" }));
+  const configValidation = validateConfigObjectRaw(config);
+  const configWarnings = configValidation.ok
+    ? []
+    : [
+        ...formatConfigIssueLines(configValidation.issues, "", { normalizeRoot: true }),
+        "Run openclaw doctor --fix to repair the configuration.",
+      ].map(safeMessage);
   const replacement =
     config.gateway?.mode === "remote" ? undefined : readGatewayLastInstallationReplacement();
   const lastGatewayInstallationReplacement = replacement
@@ -254,6 +263,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       ...(packageActivation ? { packageActivation } : {}),
       ...(packageActivationError ? { packageActivationError } : {}),
       ...recoveryStatus,
+      ...(configWarnings.length > 0 ? { configWarnings } : {}),
     });
     return;
   }
@@ -430,5 +440,8 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const updateHint = activeRun ? null : formatUpdateAvailableHint(update);
   if (updateHint) {
     defaultRuntime.log(theme.warn(updateHint));
+  }
+  for (const warning of configWarnings) {
+    defaultRuntime.log(theme.warn(`Warning: ${warning}`));
   }
 }
