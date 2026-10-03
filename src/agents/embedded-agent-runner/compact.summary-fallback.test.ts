@@ -31,7 +31,11 @@ beforeAll(async () => {
     });
     req.on("end", () => {
       summaryRequests.push(body);
-      const mode = body.includes('"model":"fallback-model"') ? "ok" : summaryMode;
+      const mode: SummaryMode = body.includes('"model":"fallback-model"')
+        ? "ok"
+        : body.includes('"model":"rejecting-model"')
+          ? "error"
+          : summaryMode;
       if (mode === "stall") {
         res.writeHead(200, { "content-type": "text/event-stream" });
         return;
@@ -121,7 +125,7 @@ function appendToolTurns(fixture: Fixture, first: number, count: number): string
 
 async function withSession(
   run: (fixture: Fixture) => Promise<void>,
-  options: { modelFallback?: boolean; safeguard?: boolean } = {},
+  options: { fallbackModel?: "fallback-model" | "rejecting-model"; safeguard?: boolean } = {},
 ) {
   const state = await createOpenClawTestState({ prefix: "openclaw-summary-fallback-" });
   try {
@@ -140,7 +144,7 @@ async function withSession(
           workspace: state.workspaceDir,
           model: {
             primary: "fixture/model",
-            ...(options.modelFallback ? { fallbacks: ["fixture/fallback-model"] } : {}),
+            ...(options.fallbackModel ? { fallbacks: [`fixture/${options.fallbackModel}`] } : {}),
           },
           compaction: {
             timeoutSeconds: 5,
@@ -155,7 +159,7 @@ async function withSession(
             api: "openai-completions",
             apiKey: "synthetic-fixture",
             baseUrl,
-            models: [model("model"), model("fallback-model")],
+            models: [model("model"), model("fallback-model"), model("rejecting-model")],
           },
         },
       },
@@ -260,7 +264,28 @@ describe("automatic compaction summary failure", () => {
             .map((entry) => entry.summary),
         ).toEqual([expect.stringContaining("Model summary after recovery.")]);
       },
-      { modelFallback: true },
+      { fallbackModel: "fallback-model" },
+    );
+  });
+
+  it("commits the reduction when the fallback model also fails after a timeout", async () => {
+    await withSession(
+      async (fixture) => {
+        appendToolTurns(fixture, 0, 8);
+        summaryMode = "stall";
+
+        expect(await compactSession(fixture)).toMatchObject({ ok: true, compacted: true });
+        expect(summaryRequests.some((body) => body.includes('"model":"rejecting-model"'))).toBe(
+          true,
+        );
+        expect(
+          openSession(fixture)
+            .getBranch()
+            .filter((entry) => entry.type === "compaction")
+            .map((entry) => entry.summary),
+        ).toEqual([expect.stringContaining("removed without a summary")]);
+      },
+      { fallbackModel: "rejecting-model" },
     );
   });
 

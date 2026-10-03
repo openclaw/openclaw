@@ -501,60 +501,85 @@ export async function compactEmbeddedAgentSessionDirect(
         })[0];
         const fallbackSessionKey =
           params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
-        const fallbackResult = await runWithModelFallback<EmbeddedAgentCompactResult>({
-          cfg: params.config,
-          manifestPlugins: preparedModelRuntime.metadataSnapshot,
-          provider: primaryProvider,
-          model: primaryModel,
-          requestedRouteResolution: "resolved",
-          runId: params.runId ?? params.sessionId,
-          agentDir: params.agentDir,
-          agentId: fallbackAgentId,
-          sessionId: params.sessionId,
-          sessionKey: fallbackSessionKey,
-          userLockedAuthProfileId:
-            params.authProfileIdSource === "user" ? params.authProfileId : undefined,
-          abortSignal: params.abortSignal,
-          prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
-            await ensureSelectedAgentHarnessPlugin({
-              config: params.config,
-              provider,
-              modelId: model,
-              agentId: fallbackAgentId,
-              sessionKey: fallbackSessionKey,
-              agentHarnessRuntimeOverride,
-              workspaceDir: params.workspaceDir,
-              pluginRegistry: preparedModelRuntime.pluginRegistry!,
-            });
-          },
-          fallbacksOverride,
-          classifyResult: ({ result, provider, model }) =>
-            classifyCompactionFallbackResult(result, provider, model),
-          run: async (provider, model, options) => {
-            const isPrimaryCandidate =
-              provider === resolvedPrimaryCandidate?.provider &&
-              model === resolvedPrimaryCandidate.model;
-            const preservesPrimaryAuth =
-              isPrimaryCandidate || primaryAuthProviders.has(resolveAuthProvider(provider));
-            const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
-            return await compactEmbeddedAgentSessionDirectOnce({
-              ...params,
+        let deferredSummaryTimeout = false;
+        let chainResult: EmbeddedAgentCompactResult | undefined;
+        let chainError: unknown;
+        try {
+          const fallbackResult = await runWithModelFallback<EmbeddedAgentCompactResult>({
+            cfg: params.config,
+            manifestPlugins: preparedModelRuntime.metadataSnapshot,
+            provider: primaryProvider,
+            model: primaryModel,
+            requestedRouteResolution: "resolved",
+            runId: params.runId ?? params.sessionId,
+            agentDir: params.agentDir,
+            agentId: fallbackAgentId,
+            sessionId: params.sessionId,
+            sessionKey: fallbackSessionKey,
+            userLockedAuthProfileId:
+              params.authProfileIdSource === "user" ? params.authProfileId : undefined,
+            abortSignal: params.abortSignal,
+            prepareAgentHarnessRuntime: async ({
               provider,
               model,
-              requestedRouteResolution: isPrimaryCandidate ? undefined : "resolved",
-              authProfileId,
-              authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
-              // The primary attempt retains its already prepared atomic plan. An
-              // actual fallback may change route/auth class and must rebuild it.
-              runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,
-              runtimePlan: isPrimaryCandidate ? params.runtimePlan : undefined,
-              ...(options?.isFinalFallbackAttempt === false
-                ? { summaryFailoverPending: true as const }
-                : {}),
-            });
-          },
-        });
-        return fallbackResult.result;
+              agentHarnessRuntimeOverride,
+            }) => {
+              await ensureSelectedAgentHarnessPlugin({
+                config: params.config,
+                provider,
+                modelId: model,
+                agentId: fallbackAgentId,
+                sessionKey: fallbackSessionKey,
+                agentHarnessRuntimeOverride,
+                workspaceDir: params.workspaceDir,
+                pluginRegistry: preparedModelRuntime.pluginRegistry!,
+              });
+            },
+            fallbacksOverride,
+            classifyResult: ({ result, provider, model }) =>
+              classifyCompactionFallbackResult(result, provider, model),
+            run: async (provider, model, options) => {
+              const isPrimaryCandidate =
+                provider === resolvedPrimaryCandidate?.provider &&
+                model === resolvedPrimaryCandidate.model;
+              const preservesPrimaryAuth =
+                isPrimaryCandidate || primaryAuthProviders.has(resolveAuthProvider(provider));
+              const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
+              const result = await compactEmbeddedAgentSessionDirectOnce({
+                ...params,
+                provider,
+                model,
+                requestedRouteResolution: isPrimaryCandidate ? undefined : "resolved",
+                authProfileId,
+                authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
+                // The primary attempt retains its already prepared atomic plan. An
+                // actual fallback may change route/auth class and must rebuild it.
+                runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,
+                runtimePlan: isPrimaryCandidate ? params.runtimePlan : undefined,
+                ...(options?.isFinalFallbackAttempt === false
+                  ? { summaryFailoverPending: true as const }
+                  : {}),
+              });
+              deferredSummaryTimeout ||=
+                options?.isFinalFallbackAttempt === false && result.failure?.reason === "timeout";
+              return result;
+            },
+          });
+          chainResult = fallbackResult.result;
+        } catch (error) {
+          chainError = error;
+        }
+        // The candidates after a deferred summary timeout were skipped or failed too (#164220).
+        if (deferredSummaryTimeout && !chainResult?.ok && !params.abortSignal?.aborted) {
+          return await compactEmbeddedAgentSessionDirectOnce({
+            ...params,
+            commitWithoutSummary: true,
+          });
+        }
+        if (!chainResult) {
+          throw chainError;
+        }
+        return chainResult;
       };
       return await withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
         context = AsyncLocalStorage.snapshot();

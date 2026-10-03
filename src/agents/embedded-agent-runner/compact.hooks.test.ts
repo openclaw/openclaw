@@ -1119,7 +1119,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       ["provider timeout", "request timed out", "fallback"],
       ["provider rate limit", "429 rate limit exceeded", "fallback"],
       ["intentional quality rejection", undefined, "cancel"],
-      ["explicit model timeout", "request timed out", "cancel"],
+      // An explicit compaction model has no fallback chain; its timeout commits without a summary.
+      ["explicit model timeout", "request timed out", "reduce"],
       [
         "reasoning-mandatory rejection",
         "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
@@ -1260,7 +1261,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           fallback ? [primary, backup] : [primary],
         );
         expect(config).toEqual(configBefore);
-        if (outcome !== "cancel") {
+        if (outcome === "reduce") {
+          expect(result).toMatchObject({ ok: true, compacted: true });
+          expect(
+            sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
+          ).toMatchObject({ summary: expect.stringContaining("removed without a summary") });
+        } else if (outcome !== "cancel") {
           if (outcome === "thinking") {
             expect([...new Set(requestedThinking)]).toEqual(["off", "minimal"]);
           }
@@ -1282,7 +1288,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           });
         } else {
           expect(result).toMatchObject({ ok: false, compacted: false });
-          expect(result.reason).toMatch(explicitModel ? /timed out/i : /quality/i);
+          expect(result.reason).toMatch(/quality/i);
           expect(sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(
             false,
           );

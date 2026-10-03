@@ -999,6 +999,7 @@ describe("split-turn compaction", () => {
 
 describe("compactWithoutSummary", () => {
   const lossNotice = "2 earlier message(s) were removed without a summary";
+  const sourceAsk = `${"Context for the split request. ".repeat(14)}Constraint: keep SOURCE-ASK-TAIL.`;
   it.each([
     { name: "a capped previous summary", summaryTokenBudget: undefined },
     { name: "a constrained foreground budget", summaryTokenBudget: 200 },
@@ -1006,7 +1007,7 @@ describe("compactWithoutSummary", () => {
     const result = compactWithoutSummary({
       firstKeptEntryId: "kept-entry",
       messagesToSummarize: [{ role: "user", content: "history", timestamp: 1 }],
-      turnPrefixMessages: [{ role: "user", content: "original split ask", timestamp: 2 }],
+      turnPrefixMessages: [{ role: "user", content: sourceAsk, timestamp: 2 }],
       isSplitTurn: true,
       latestUnresolvedUserRequest: "finish the review",
       previousSummary: "p".repeat(MAX_COMPACTION_SUMMARY_CHARS),
@@ -1021,7 +1022,7 @@ describe("compactWithoutSummary", () => {
     expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
     expect(summary).toContain(lossNotice);
     expect(summary).toContain('"finish the review"');
-    expect(summary).toContain('"original split ask"');
+    expect(summary).toContain(JSON.stringify(sourceAsk));
     expect(result.ok && result.value.firstKeptEntryId).toBe("kept-entry");
   });
 });

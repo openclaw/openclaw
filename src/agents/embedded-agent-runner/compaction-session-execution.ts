@@ -454,28 +454,29 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             compactionKind: "server-endpoint",
           });
         };
-        const serverResult = params.transcriptBytePreflightAuthority
-          ? undefined
-          : await attemptServerEndpointCompaction({
-              trigger,
-              streamFn: session.agent.streamFn,
-              model: effectiveModel,
-              context: { systemPrompt: systemPromptText, messages: session.messages },
-              sessionManager,
-              extraParams: effectiveExtraParams,
-              customInstructions: params.customInstructions,
-              config: params.config,
-              onUsage: recordUsage,
-              onCompactionCommitted: recordServerCompaction,
-              assertActive,
-              requestOptions: {
-                apiKey: transportApiKey,
-                sessionId: params.sessionId,
-                authProfileId: runtimePlan.auth.forwardedAuthProfileId,
-                timeoutMs: compactionTimeoutMs,
-                signal: params.abortSignal,
-              },
-            });
+        const serverResult =
+          params.transcriptBytePreflightAuthority || params.commitWithoutSummary
+            ? undefined
+            : await attemptServerEndpointCompaction({
+                trigger,
+                streamFn: session.agent.streamFn,
+                model: effectiveModel,
+                context: { systemPrompt: systemPromptText, messages: session.messages },
+                sessionManager,
+                extraParams: effectiveExtraParams,
+                customInstructions: params.customInstructions,
+                config: params.config,
+                onUsage: recordUsage,
+                onCompactionCommitted: recordServerCompaction,
+                assertActive,
+                requestOptions: {
+                  apiKey: transportApiKey,
+                  sessionId: params.sessionId,
+                  authProfileId: runtimePlan.auth.forwardedAuthProfileId,
+                  timeoutMs: compactionTimeoutMs,
+                  signal: params.abortSignal,
+                },
+              });
         const activeSession = session;
         let clientResult: Awaited<ReturnType<typeof activeSession.compact>> | undefined;
         let summaryTimedOut = false;
@@ -510,43 +511,50 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 onCancel: () => activeSession.abortCompaction(),
               },
             );
+          // The same summary would time out again next turn (#164220): commit the prepared
+          // cut without one.
+          const commitWithoutSummary = () => {
+            summaryTimedOut = true;
+            log.warn(
+              `[compaction-diag] fallback runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+                `reason=timeout summary=deterministic`,
+            );
+            return compactClient("deterministic");
+          };
           try {
             // The client watchdog starts here; refresh the delegated host watchdog with it.
             params.compactionTimeoutReset?.();
-            const outcome = await compactClient(
-              resolveEffectiveCompactionMode(params.config) === "default" ? undefined : "none",
-            ).catch(async (error: unknown) => {
-              // Caller Stop, run timeout, and the outer host deadline abort params.abortSignal
-              // (#133260, #159105, #130993); manual /compact reports its own failure.
-              if (trigger === "manual" || params.abortSignal?.aborted) {
-                throw error;
-              }
-              const failure = resolveCompactionFailure({
-                error,
-                safeguardCancellation: getCompactionSafeguardRuntime(sessionManager)?.cancellation,
-                abortSignal: params.abortSignal,
-              });
-              // Classify the underlying error: safeguard display reasons mention "guard".
-              // Other summary failures are fast and keep their owners' outcomes.
-              if (resolveFailoverReasonFromError(failure.error, provider) !== "timeout") {
-                throw error;
-              }
-              // The timed-out request consumed the delegated window too. Rearm it synchronously,
-              // before its same-window timer fires, for the next model candidate or the commit.
-              params.compactionTimeoutReset?.();
-              if (params.summaryFailoverPending) {
-                throw error;
-              }
-              // The same summary would time out again next turn (#164220): commit the
-              // prepared cut without one.
-              summaryTimedOut = true;
-              log.warn(
-                `[compaction-diag] fallback runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
-                  `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
-                  `reason=timeout summary=deterministic`,
-              );
-              return await compactClient("deterministic");
-            });
+            const outcome = await (params.commitWithoutSummary
+              ? commitWithoutSummary()
+              : compactClient(
+                  resolveEffectiveCompactionMode(params.config) === "default" ? undefined : "none",
+                ).catch(async (error: unknown) => {
+                  // Caller Stop, run timeout, and the outer host deadline abort params.abortSignal
+                  // (#133260, #159105, #130993); manual /compact reports its own failure.
+                  if (trigger === "manual" || params.abortSignal?.aborted) {
+                    throw error;
+                  }
+                  const failure = resolveCompactionFailure({
+                    error,
+                    safeguardCancellation:
+                      getCompactionSafeguardRuntime(sessionManager)?.cancellation,
+                    abortSignal: params.abortSignal,
+                  });
+                  // Classify the underlying error: safeguard display reasons mention "guard".
+                  // Other summary failures are fast and keep their owners' outcomes.
+                  if (resolveFailoverReasonFromError(failure.error, provider) !== "timeout") {
+                    throw error;
+                  }
+                  // The timed-out request consumed the delegated window too. Rearm it
+                  // synchronously, before its same-window timer fires, for the next model
+                  // candidate or the commit.
+                  params.compactionTimeoutReset?.();
+                  if (params.summaryFailoverPending) {
+                    throw error;
+                  }
+                  return await commitWithoutSummary();
+                }));
             if (outcome.status === "skipped") {
               assertActive();
               return { ok: true, compacted: false, reason: outcome.reason };

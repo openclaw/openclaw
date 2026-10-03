@@ -949,15 +949,19 @@ export function compactWithoutSummary(
 ): Result<CompactionResult, CompactionError> {
   const droppedCount =
     preparation.messagesToSummarize.length + preparation.turnPrefixMessages.length;
-  const lossNotice = `[${droppedCount} earlier message(s) were removed without a summary because summarization failed. The messages after this summary are verbatim; ask the user if older details matter.]\n\n`;
   const sourceAsk = preparation.isSplitTurn
     ? extractLatestUserRequest(preparation.turnPrefixMessages)
     : undefined;
+  // The notice and the already-bounded split-turn source ask are required; only the
+  // carried summary shrinks to fit.
+  const requiredContext =
+    `[${droppedCount} earlier message(s) were removed without a summary because summarization failed. The messages after this summary are verbatim; ask the user if older details matter.]\n\n` +
+    (sourceAsk ? `## Original request of the current turn\n${JSON.stringify(sourceAsk)}\n\n` : "");
   return finalizeCompaction(
     preparation,
     previousSummaryWithoutFileOperations(preparation) ?? "",
-    sourceAsk ? `${TURN_CONTEXT_PREFIX}## Original Request\n${JSON.stringify(sourceAsk)}` : "",
-    lossNotice,
+    "",
+    requiredContext,
   );
 }
 
@@ -978,12 +982,12 @@ function finalizeCompaction(
   preparation: CompactionPreparation,
   historySummary: string,
   latestContext: string,
-  lossNotice = "",
+  requiredContext = "",
 ): Result<CompactionResult, CompactionError> {
   const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
   const fileOperations = formatFileOperations(readFiles, modifiedFiles);
   // Required prefix content survives fitting; only the history and split-turn context shrink.
-  const requiredPrefix = `${lossNotice}${
+  const requiredPrefix = `${requiredContext}${
     preparation.latestUnresolvedUserRequest
       ? `## Latest unresolved user request\n${JSON.stringify(preparation.latestUnresolvedUserRequest)}\n\n`
       : ""
