@@ -5,6 +5,7 @@ import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { McpAppPanel } from "./mcp-app-panel.ts";
 import {
   MCP_APP_VIEW_EXPIRED_EVENT,
@@ -354,7 +355,7 @@ describe("mcp-app-view localization", () => {
         details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED },
       });
     });
-    const client = { request };
+    const client = createTestGatewayClient(request);
     const context = {
       gateway: {
         snapshot: { client, phase: "connected" },
@@ -369,7 +370,7 @@ describe("mcp-app-view localization", () => {
     const expired = deferred();
     panel.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, () => expired.resolve(), { once: true });
     panel.launch = {
-      owner: client as NonNullable<typeof panel.launch>["owner"],
+      owner: client,
       sessionKey: "agent:main:main",
       agentId: "main",
       serverName: "parts",
