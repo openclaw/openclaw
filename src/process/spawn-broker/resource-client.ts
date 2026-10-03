@@ -147,14 +147,29 @@ export function attachBrokerNativeResource(
       throw failure;
     }
   };
-  // Keep the target's original port queue until the factory has installed its real receiver.
+  // Collect target input from the first tick. A listener attached only after the factory
+  // admits ownership depends on the port still holding its queue, which any other consumer
+  // of this port, or an explicit start(), drains first.
+  const admitTarget = (value: unknown) => {
+    void transmit({ type: "resource-target", id: attachment.id, value }).catch((error: unknown) =>
+      lose(toErrorObject(error, "Native resource input delivery failed")),
+    );
+  };
+  const deferredTargetInput: unknown[] = [];
+  let admittingTarget = false;
+  target.on("message", (value: unknown) => {
+    if (!admittingTarget) {
+      deferredTargetInput.push(value);
+      return;
+    }
+    admitTarget(value);
+  });
   void initialized.promise.then(
     () => {
-      target.on("message", (value: unknown) => {
-        void transmit({ type: "resource-target", id: attachment.id, value }).catch(
-          (error: unknown) => lose(toErrorObject(error, "Native resource input delivery failed")),
-        );
-      });
+      admittingTarget = true;
+      for (const value of deferredTargetInput.splice(0)) {
+        admitTarget(value);
+      }
     },
     () => {},
   );
