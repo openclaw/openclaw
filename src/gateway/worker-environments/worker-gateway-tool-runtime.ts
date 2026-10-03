@@ -114,11 +114,10 @@ export function createWorkerGatewayToolRuntime(params: {
           contextTokenBudget: surface.policy.modelContextWindowTokens,
         });
         try {
+          const execute: AnyAgentTool["execute"] = () =>
+            Promise.reject(new Error("Schema projection cannot execute tools"));
           const tools = surface.tools.map(({ definition, plugin }) => {
-            const tool: AnyAgentTool = {
-              ...definition,
-              execute: () => Promise.reject(new Error("Schema projection cannot execute tools")),
-            };
+            const tool: AnyAgentTool = Object.assign({ execute }, definition);
             if (plugin) {
               setPluginToolMeta(tool, plugin);
             }

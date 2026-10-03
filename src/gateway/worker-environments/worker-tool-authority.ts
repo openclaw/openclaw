@@ -23,7 +23,7 @@ export function resolveWorkerToolAuthority(params: {
   turn: SessionPlacementTurnParams;
   model?: AgentToolSurfacePlanParams["model"];
   placement: Pick<WorkerSessionPlacementIdentity, "agentId" | "sessionKey">;
-  assertCurrent(): void;
+  assertCurrent(this: void): void;
   computerAvailable?: boolean;
 }) {
   const turn = params.turn;

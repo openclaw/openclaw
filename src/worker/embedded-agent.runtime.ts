@@ -144,7 +144,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         throw new Error(`Worker tool surface exceeds launch authority: ${entry.definition.name}`);
       }
     }
-    const activeToolNames = toolSurface.tools.map((entry) => entry.definition.name);
+    const activeToolNames = new Set(toolSurface.tools.map(({ definition }) => definition.name));
     const coreTools = projectMemoryFlushTools(
       createWorkerPlacementTools({
         ...params,
@@ -160,7 +160,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         : undefined,
     );
     const browserRuntime =
-      params.browser && activeToolNames.includes("browser")
+      params.browser && activeToolNames.has("browser")
         ? await createWorkerBrowserToolRuntime({
             descriptor: params.browser,
             sessionKey: params.sessionKey,
@@ -202,7 +202,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     const { session } = await (async () => {
       try {
         const computerTool =
-          params.computer && activeToolNames.includes("computer")
+          params.computer && activeToolNames.has("computer")
             ? createWorkerComputerTool({
                 ...params.computer,
                 runId: params.runId,

@@ -38,7 +38,7 @@ type PreparedToolSurface = Pick<
 > & { preserveToolNames: Iterable<string> };
 
 export function createAgentHarnessToolSurfaceRuntimeCore(
-  params: Omit<
+  input: Omit<
     AgentToolSurfacePlanParams,
     "forceDirectMessageTool" | "toolsEnabled" | "isRawModelRun"
   > & {
@@ -60,13 +60,13 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     sourceReplyDeliveryMode?: string;
   },
 ) {
-  const presentation = params.presentation;
-  if (presentation) {
-    params = {
-      ...params,
-      config: { tools: { codeMode: presentation.codeMode, toolSearch: presentation.toolSearch } },
-    };
-  }
+  const presentation = input.presentation;
+  const params = presentation
+    ? {
+        ...input,
+        config: { tools: { codeMode: presentation.codeMode, toolSearch: presentation.toolSearch } },
+      }
+    : input;
   const forceDirectMessageTool =
     presentation?.forceDirectMessageTool ?? messageToolOwnsVisibleReply(params);
   const plan = presentation

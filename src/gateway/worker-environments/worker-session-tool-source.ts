@@ -82,8 +82,8 @@ export function createWorkerSessionToolSourceRunner(params: {
     };
     request: WorkerToolRequest;
   }): Promise<AgentToolResult<unknown>> => {
-    const args = operation.request.request.arguments;
-    if (!isRecord(args)) {
+    const startArgs = operation.request.request.arguments;
+    if (!isRecord(startArgs)) {
       throw new Error("Worker tool arguments must be an object");
     }
     const capability = getWorkerTurnExecutionIdentityCapability(
@@ -213,7 +213,7 @@ export function createWorkerSessionToolSourceRunner(params: {
                   agentId: owner.agentId,
                   sessionKey: owner.sessionKey,
                   sessionId: operation.source.sessionId,
-                  startArgs: args,
+                  startArgs,
                   result,
                   error: errorMessage,
                   startedAt,
