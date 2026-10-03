@@ -13,6 +13,10 @@ const existingAgentLeaseSchema = ["schema_meta", "state_leases", "agent_database
     }),
   )
   .join("\n");
+// Maintenance drains leases in databases this release has not written yet.
+const existingAgentLeaseSchemaCompatibility = {
+  allowedMissingColumns: ["agent_database_leases.owner_boot_id"],
+} as const;
 
 export function withExistingAgentLeaseWrite<T>(
   maintenance: OpenClawStateLeaseContext,
@@ -30,6 +34,7 @@ export function withExistingAgentLeaseWrite<T>(
     {
       operationLabel: "agent.database.maintenance.admission",
       schemaSql: existingAgentLeaseSchema,
+      schemaCompatibility: existingAgentLeaseSchemaCompatibility,
     },
   );
 }

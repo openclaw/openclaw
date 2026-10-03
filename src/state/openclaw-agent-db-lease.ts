@@ -15,12 +15,18 @@ import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-sour
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
+import { readBootId } from "../shared/boot-id.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   assertAgentDeletionPathFence,
   prepareAgentDeletionPathFence,
 } from "./agent-deletion-journal.js";
 import { withExistingAgentLeaseWrite } from "./openclaw-agent-db-existing-write.js";
+import {
+  agentDatabaseLeaseStaleReason,
+  readAgentDatabaseLease,
+  readAgentDatabaseLeases,
+} from "./openclaw-agent-db-lease-rows.js";
 import type { OpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   readOpenClawAgentIntegrityVerification,
@@ -218,6 +224,7 @@ function claimAgentDatabaseLeaseInDatabase(
         staleReason,
         ownerPid: held.owner_pid,
         ownerStartTime: held.owner_start_time,
+        ownerBootId: held.owner_boot_id,
       });
       clearAgentDatabaseLeaseVerifications(database.db, held.path, env);
       invalidated = true;
@@ -249,6 +256,8 @@ function claimAgentDatabaseLeaseInDatabase(
       path: owner.path,
       owner_pid: owner.ownerPid,
       owner_start_time: owner.ownerStartTime,
+      // The claim always runs in the owning process, so record its boot here.
+      owner_boot_id: readBootId(),
       opened_at: Date.now(),
     }),
   );
@@ -563,41 +572,6 @@ export function releaseExitedOpenClawAgentDatabaseLeaseInDatabase(
     database,
     db.deleteFrom("agent_database_leases").where("lease_id", "=", receipt.leaseId),
   );
-}
-
-function readAgentDatabaseLease(database: DatabaseSync, leaseId: string) {
-  return executeSqliteQueryTakeFirstSync(
-    database,
-    getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database)
-      .selectFrom("agent_database_leases")
-      .select(["agent_id", "path", "owner_pid", "owner_start_time"])
-      .where("lease_id", "=", leaseId),
-  );
-}
-
-function readAgentDatabaseLeases(database: DatabaseSync) {
-  const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
-  return executeSqliteQuerySync(
-    database,
-    db
-      .selectFrom("agent_database_leases")
-      .select(["agent_id", "lease_id", "owner_pid", "owner_start_time", "path"]),
-  ).rows;
-}
-
-function agentDatabaseLeaseStaleReason(row: {
-  owner_pid: number;
-  owner_start_time: number | null;
-}): "owner-pid-dead" | "owner-start-time-changed" | undefined {
-  if (isPidDefinitelyDead(row.owner_pid)) {
-    return "owner-pid-dead";
-  }
-  const currentStartTime = getFileLockProcessStartTime(row.owner_pid);
-  return row.owner_start_time !== null &&
-    currentStartTime !== null &&
-    row.owner_start_time !== currentStartTime
-    ? "owner-start-time-changed"
-    : undefined;
 }
 
 /** Read-only diagnostic observation; an empty result never grants maintenance authority. */

@@ -163,7 +163,11 @@ An ordinary healthy Gateway still follows the parent's activation policy;
 Unavailable service inspection becomes a warning and grants no service-control
 authority. Doctor still checks Gateway/state coordinators, agent-database leases,
 and the temporary-file lock used by older Gateways such as 2026.6.33 before
-repair. A live or unverifiable legacy lock owner blocks repair and names its PID
+repair. An agent-database lease is stale once its owner process has exited or its
+PID was reused; on Linux a lease recorded under a different kernel boot ID is also
+stale, so hosts that hide other processes (Android, `hidepid` procfs, systemd
+`ProtectProc=`) still release leases left by a previous boot. A live or
+unverifiable legacy lock owner blocks repair and names its PID
 and lock path; stop that Gateway through its service owner, then run
 `openclaw doctor --fix` from an independent shell. An unmatched service that can
 still run also blocks maintenance; inspect it with `openclaw gateway status --deep`.

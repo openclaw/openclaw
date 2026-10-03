@@ -11,6 +11,7 @@ import {
   assertSqliteSchemaContains,
   getCanonicalSqliteTableNames,
   readSqliteSchemaCookie,
+  type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
@@ -42,6 +43,8 @@ type ExistingWriteContract = {
   schemaSql: string;
   operationLabel: string;
   busyTimeoutMs?: number;
+  /** Additive shapes the caller tolerates in an existing database it cannot migrate. */
+  schemaCompatibility?: SqliteSchemaCompatibility;
 };
 type OneShotWriteContract = ExistingWriteContract & {
   initializeAdditiveSchema?: boolean;
@@ -77,11 +80,12 @@ function assertExistingOpenClawStateSchema(
   db: DatabaseSync,
   pathname: string,
   schemaSql: string,
+  compatibility?: SqliteSchemaCompatibility,
 ): number {
   const version = assertSupportedStateSchemaVersion(db, pathname);
   assertExistingOpenClawStateSchemaMetadata(db, pathname, version);
   assertSqliteIntegrity(db, pathname);
-  assertSqliteSchemaContains(db, pathname, schemaSql);
+  assertSqliteSchemaContains(db, pathname, schemaSql, compatibility);
   return version;
 }
 
@@ -211,6 +215,7 @@ function createExistingOpenClawStateWriter(
               db,
               pathname,
               !admitted && contract.initializeAdditiveSchema ? "" : contract.schemaSql,
+              contract.schemaCompatibility,
             );
           let version: number;
           let recoveryChanges: string[] = [];

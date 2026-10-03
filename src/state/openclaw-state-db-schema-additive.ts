@@ -126,6 +126,8 @@ export function reconstructAgentDeletionJournalSchema(
 
 export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
   ensureTable(database, "agent_database_leases");
+  // Leases predating boot identity stay readable; the column arrives on first lease write.
+  ensureColumn(database, "agent_database_leases", "owner_boot_id TEXT");
 }
 
 /**

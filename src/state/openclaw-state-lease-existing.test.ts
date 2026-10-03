@@ -189,6 +189,41 @@ it("waits through transient state contention before admitting existing-schema ma
   expect(inspect(f.pathname).leases).toEqual([]);
 });
 
+it("drains a dead lease from a database that predates boot identity without migrating", async () => {
+  const f = source();
+  const db = openNodeSqliteDatabase(f.pathname);
+  try {
+    db.exec("ALTER TABLE agent_database_leases DROP COLUMN owner_boot_id");
+    db.prepare(
+      "INSERT INTO agent_database_leases (lease_id, agent_id, path, owner_pid, owner_start_time, opened_at) VALUES (?, ?, ?, ?, NULL, ?)",
+    ).run("stale", "worker", path.join(f.root, "agents", "worker", "agent.sqlite"), 2 ** 30, 1);
+  } finally {
+    db.close();
+  }
+  const before = inspect(f.pathname);
+  expect(before.schema).not.toContainEqual(
+    expect.objectContaining({
+      name: "agent_database_leases",
+      sql: expect.stringContaining("owner_boot_id"),
+    }),
+  );
+  await withOpenClawStateLease(
+    { ...f.lease, ...AGENT_DATABASE_MAINTENANCE_LEASE, heartbeat: "worker" },
+    async (maintenance) => {
+      assertNoOpenClawAgentDatabaseLeases(maintenance, f.options);
+    },
+  );
+  const after = inspect(f.pathname);
+  expect(after.version).toEqual({ user_version: 15 });
+  expect(after.schema).toEqual(before.schema);
+  const remaining = openNodeSqliteDatabase(f.pathname, { readOnly: true });
+  try {
+    expect(remaining.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([]);
+  } finally {
+    remaining.close();
+  }
+});
+
 it("drains cached agent handles from another profile using their own lease database", async () => {
   const target = source(true);
   const otherRoot = dirs.make("state-lease-other-profile-");

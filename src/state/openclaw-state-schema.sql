@@ -1278,6 +1278,7 @@ CREATE TABLE IF NOT EXISTS agent_database_leases (
   path TEXT NOT NULL,
   owner_pid INTEGER NOT NULL,
   owner_start_time INTEGER,
+  owner_boot_id TEXT,
   opened_at INTEGER NOT NULL
 ) STRICT;
 

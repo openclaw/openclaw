@@ -33,6 +33,7 @@ const lazyColumns = [
   ["worktrees", "run_end_cleanup_json", "TEXT"],
   ["worktrees", "gc_protection_json", "TEXT"],
   ["device_bootstrap_tokens", "setup_id", "TEXT", true],
+  ["agent_database_leases", "owner_boot_id", "TEXT", true],
   ["session_groups", "cwd", "TEXT", true],
   ["session_groups", "worktree", "INTEGER", true],
   ["secret_store_entries", "allowed_hosts", "TEXT"],

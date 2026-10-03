@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { readBootId } from "../shared/boot-id.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
@@ -78,13 +79,16 @@ it.each(["DELETE", "WAL"])(
     insert.run("main", path.relative(source, canonical));
     const now = Date.now();
     registry
-      .prepare("INSERT INTO agent_database_leases VALUES (?, ?, ?, ?, ?, ?)")
+      .prepare(
+        "INSERT INTO agent_database_leases (lease_id, agent_id, path, owner_pid, owner_start_time, owner_boot_id, opened_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
       .run(
         "live-main",
         "main",
         canonical,
         process.pid,
         getFileLockProcessStartTime(process.pid),
+        readBootId(),
         now,
       );
     registry
