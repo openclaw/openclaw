@@ -1,3 +1,4 @@
+import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, vi } from "vitest";
 import type { CodexComputerUseRequest } from "./computer-use-readiness.js";
@@ -48,6 +49,8 @@ export function createComputerUseRequest(params: {
   pluginName?: string;
   mcpServerName?: string;
   mcpTools?: readonly string[];
+  pluginMcpServers?: readonly string[];
+  marketplaceName?: string;
   nativePluginsEnabled?: boolean | "absent";
   marketplaceAvailableAfterListCalls?: number;
   liveTestFailures?: number;
@@ -70,7 +73,8 @@ export function createComputerUseRequest(params: {
   const pluginName = params.pluginName ?? "computer-use";
   const mcpServerName = params.mcpServerName ?? "computer-use";
   const mcpTools = params.mcpTools ?? ["list_apps"];
-  const marketplaceName = params.remoteMarketplace?.name ?? "desktop-tools";
+  const marketplaceName =
+    params.remoteMarketplace?.name ?? params.marketplaceName ?? "desktop-tools";
   const marketplacePath = params.remoteMarketplace
     ? null
     : `/marketplaces/${marketplaceName}/.agents/plugins/marketplace.json`;
@@ -145,7 +149,7 @@ export function createComputerUseRequest(params: {
           description: "Control desktop apps.",
           skills: [],
           apps: [],
-          mcpServers: [mcpServerName],
+          mcpServers: params.pluginMcpServers ?? [mcpServerName],
         },
       };
     }
@@ -241,7 +245,7 @@ function marketplaceEntry(marketplaceName: string, installed: boolean) {
   };
 }
 
-export function pluginSummary(
+function pluginSummary(
   installed: boolean,
   marketplaceName = "desktop-tools",
   enabled = installed,
@@ -263,4 +267,187 @@ export function pluginSummary(
     authPolicy: "ON_INSTALL",
     interface: null,
   };
+}
+
+export function createAmbiguousComputerUseRequest(): CodexComputerUseRequest {
+  return vi.fn(async (method: string) => {
+    if (method === "plugin/list") {
+      return {
+        marketplaces: [
+          {
+            name: "desktop-tools",
+            path: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+            interface: null,
+            plugins: [pluginSummary(true, "desktop-tools")],
+          },
+          {
+            name: "other-tools",
+            path: "/marketplaces/other-tools/.agents/plugins/marketplace.json",
+            interface: null,
+            plugins: [pluginSummary(true, "other-tools")],
+          },
+        ],
+        marketplaceLoadErrors: [],
+        featuredPluginIds: [],
+      };
+    }
+    throw new Error(`unexpected request ${method}`);
+  }) as CodexComputerUseRequest;
+}
+
+export function createEmptyMarketplaceComputerUseRequest(): CodexComputerUseRequest {
+  return vi.fn(async (method: string) => {
+    if (method === "plugin/list") {
+      return {
+        marketplaces: [],
+        marketplaceLoadErrors: [],
+        featuredPluginIds: [],
+      };
+    }
+    throw new Error(`unexpected request ${method}`);
+  }) as CodexComputerUseRequest;
+}
+
+export function createBundledMarketplaceComputerUseRequest(
+  bundledMarketplacePath: string,
+  options: {
+    configuredSource?: string;
+    configuredSourceOrigin?: "system" | "user";
+    configuredSourceProfile?: string;
+  } = {},
+): CodexComputerUseRequest {
+  const codexHome = path.resolve(bundledMarketplacePath, "../../..");
+  let configuredSource = options.configuredSource;
+  let registered = configuredSource === bundledMarketplacePath;
+  let installed = false;
+  let threadStartCalls = 0;
+  return vi.fn(async (method: string, requestParams?: unknown) => {
+    if (method === "experimentalFeature/enablement/set") {
+      return { enablement: { plugins: true } };
+    }
+    if (method === "config/read") {
+      return {
+        config: configuredSource
+          ? {
+              marketplaces: {
+                "openai-bundled": { source_type: "local", source: configuredSource },
+              },
+            }
+          : {},
+        origins: configuredSource
+          ? {
+              "marketplaces.openai-bundled.source": {
+                name:
+                  options.configuredSourceOrigin === "system"
+                    ? { type: "system", file: "/etc/codex/config.toml" }
+                    : {
+                        type: "user",
+                        file: options.configuredSourceProfile
+                          ? path.join(codexHome, `${options.configuredSourceProfile}.config.toml`)
+                          : path.join(codexHome, "config.toml"),
+                        profile: options.configuredSourceProfile ?? null,
+                      },
+                version: "legacy-config",
+              },
+            }
+          : {},
+        layers: null,
+      };
+    }
+    if (method === "marketplace/remove") {
+      expect(requestParams).toEqual({ marketplaceName: "openai-bundled" });
+      configuredSource = undefined;
+      registered = false;
+      return { marketplaceName: "openai-bundled", installedRoot: null };
+    }
+    if (method === "marketplace/add") {
+      expect(requestParams).toEqual({
+        source: bundledMarketplacePath,
+      });
+      if (configuredSource && configuredSource !== bundledMarketplacePath) {
+        throw new Error(
+          "marketplace 'openai-bundled' is already added from a different source; remove it before adding this source | -32600",
+        );
+      }
+      configuredSource = bundledMarketplacePath;
+      registered = true;
+      return {
+        marketplaceName: "openai-bundled",
+        installedRoot: bundledMarketplacePath,
+        alreadyAdded: false,
+      };
+    }
+    if (method === "plugin/list") {
+      return {
+        marketplaces: registered
+          ? [
+              {
+                name: "openai-bundled",
+                path: `${bundledMarketplacePath}/.agents/plugins/marketplace.json`,
+                interface: null,
+                plugins: [pluginSummary(installed, "openai-bundled")],
+              },
+            ]
+          : [],
+        marketplaceLoadErrors: [],
+        featuredPluginIds: [],
+      };
+    }
+    if (method === "plugin/read") {
+      return {
+        plugin: {
+          marketplaceName: "openai-bundled",
+          marketplacePath: `${bundledMarketplacePath}/.agents/plugins/marketplace.json`,
+          summary: pluginSummary(installed, "openai-bundled"),
+          description: "Control desktop apps.",
+          skills: [],
+          apps: [],
+          mcpServers: ["computer-use"],
+        },
+      };
+    }
+    if (method === "plugin/install") {
+      installed = true;
+      return { authPolicy: "ON_INSTALL", appsNeedingAuth: [] };
+    }
+    if (method === "config/mcpServer/reload") {
+      return undefined;
+    }
+    if (method === "mcpServerStatus/list") {
+      return {
+        data: installed
+          ? [
+              {
+                name: "computer-use",
+                tools: {
+                  list_apps: {
+                    name: "list_apps",
+                    inputSchema: { type: "object" },
+                  },
+                },
+                resources: [],
+                resourceTemplates: [],
+                authStatus: "unsupported",
+              },
+            ]
+          : [],
+        nextCursor: null,
+      };
+    }
+    if (method === "thread/start") {
+      threadStartCalls += 1;
+      return {
+        thread: { id: `bundled-marketplace-probe-thread-${threadStartCalls}` },
+        model: "gpt-5.1",
+        modelProvider: "openai",
+      };
+    }
+    if (method === "mcpServer/tool/call") {
+      return { content: [{ type: "text", text: "[]" }] };
+    }
+    if (method === "thread/unsubscribe") {
+      return undefined;
+    }
+    throw new Error(`unexpected request ${method}`);
+  }) as CodexComputerUseRequest;
 }

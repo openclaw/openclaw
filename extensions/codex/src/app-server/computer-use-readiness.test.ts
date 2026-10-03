@@ -33,8 +33,71 @@ function readinessConfig(computerUse: CodexComputerUseConfig = {}) {
 }
 
 describe("Codex Computer Use readiness", () => {
+  it.each(["config", "environment", "override"])(
+    "preserves a custom node_repl route selected by %s",
+    async (selection) => {
+      if (selection === "environment") {
+        vi.stubEnv("OPENCLAW_CODEX_COMPUTER_USE_MCP_SERVER_NAME", "node_repl");
+      }
+      const request = createComputerUseRequest({
+        installed: true,
+        marketplaceName: "openai-bundled",
+        mcpServerName: "node_repl",
+        mcpTools: ["list_apps"],
+        pluginMcpServers: [],
+      });
+      const status = await readCodexComputerUseStatus({
+        request,
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            strictReadiness: true,
+            ...(selection === "config" ? { mcpServerName: "node_repl" } : {}),
+          },
+        },
+        ...(selection === "override" ? { overrides: { mcpServerName: "node_repl" } } : {}),
+      });
+      expectStatusFields(status, { ready: true, mcpServerName: "node_repl" });
+      expect(request).toHaveBeenCalledWith(
+        "mcpServer/tool/call",
+        {
+          threadId: "computer-use-probe-thread-1",
+          server: "node_repl",
+          tool: "list_apps",
+          arguments: {},
+        },
+        { timeoutMs: 60_000 },
+      );
+      expect(
+        requestCalls(request).filter(([method]) => method === "thread/unsubscribe"),
+      ).toHaveLength(1);
+      expectRequestMethodNotCalled(request, "config/read");
+      expectRequestMethodNotCalled(request, "config/mcpServer/reload");
+    },
+  );
+
+  it("does not substitute an unrelated node_repl server for a custom plugin", async () => {
+    const request = createComputerUseRequest({
+      installed: true,
+      mcpServerName: "node_repl",
+      mcpTools: ["js"],
+      pluginMcpServers: [],
+    });
+    await expectSetupErrorStatus(
+      ensureCodexComputerUse({
+        request,
+        pluginConfig: {
+          computerUse: { enabled: true, autoInstall: false, marketplaceName: "desktop-tools" },
+        },
+      }),
+      { reason: "mcp_missing", ready: false },
+    );
+    expectRequestMethodNotCalled(request, "mcpServer/tool/call");
+  });
+
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockReset();
     sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
   });

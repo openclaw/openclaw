@@ -69,7 +69,7 @@ import { reconcileManagedCodexComputerUseCache } from "./computer-use-unified.js
 import type { CodexAppServerHomeScope, CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexComputerUseConfig } from "./config-runtime.js";
 import {
-  resolveMacOSDesktopCodexAppPathCandidates,
+  resolveMacOSDesktopCodexAppPathCandidatesForCommand,
   type MacOSDesktopCodexAppPathCandidate,
 } from "./desktop-app-paths.js";
 import type { CodexDesktopGeneration } from "./desktop-generation-owner.js";
@@ -524,11 +524,8 @@ async function reconcileCodexComputerUseStartArtifactsOnce(
   } else {
     await fs.mkdir(codexHome, { recursive: true });
   }
-  const desktopCandidates = resolveMacOSDesktopCodexAppPathCandidates();
-  const exactDesktopCandidate = desktopCandidates.find(
-    (candidate) =>
-      path.resolve(candidate.appServerCommandPath) === path.resolve(params.startOptions.command),
-  );
+  const { desktopCandidates, exactDesktopCandidate } =
+    resolveMacOSDesktopCodexAppPathCandidatesForCommand(params.startOptions.command);
   const usesManagedBundledMarketplace =
     !computerUseConfig.marketplaceSource &&
     !computerUseConfig.marketplacePath &&

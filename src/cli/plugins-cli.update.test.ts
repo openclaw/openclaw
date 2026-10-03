@@ -33,9 +33,16 @@ import {
 } from "./plugins-cli-test-helpers.js";
 import {
   expectInstallRecordsWrittenWithLease,
+  expectOfflineNoticeLogged,
+  registerRuntimeMaintenanceUpdateTests,
   writtenIndexCustody,
 } from "./plugins-cli.update.test-support.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
+
+const runtimeMaintenance = vi.hoisted(() => vi.fn(async () => [] as string[]));
+vi.mock("../plugins/runtime-maintenance.js", () => ({
+  runPluginRuntimeMaintenance: runtimeMaintenance,
+}));
 
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 const { set: setTty, restore: restoreTty } = createCliTtyMock();
@@ -92,12 +99,6 @@ function createCapabilityConsentReview(): PluginCapabilityConsentReview {
     trust: { disposition: "review-recommended", reasons: ["Community maintained"] },
     reviewToken: "reviewed-alpha-surface",
   };
-}
-
-function expectOfflineNoticeLogged() {
-  expect(pluginsCliRuntimeLogs).toContain(
-    "Updates saved; they will load on the next Gateway start.",
-  );
 }
 
 function expectSingleCallParams(mockFn: ReturnType<typeof vi.fn>) {
@@ -217,6 +218,7 @@ function primeBravePluginRecordUpdate(config: OpenClawConfig) {
 describe("plugins cli update", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+    runtimeMaintenance.mockReset().mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -228,15 +230,10 @@ describe("plugins cli update", () => {
     }
   });
 
-  it("refuses plugin updates in Nix mode before package-manager work", async () => {
-    process.env.OPENCLAW_NIX_MODE = "1";
-    await expect(runPluginsCommand(["plugins", "update", "--all"])).rejects.toThrow(
-      "OPENCLAW_NIX_MODE=1",
-    );
-
-    expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
-    expect(updateNpmInstalledHookPacksMock).not.toHaveBeenCalled();
-    expect(configWriteMock).not.toHaveBeenCalled();
+  registerRuntimeMaintenanceUpdateTests({
+    runtimeMaintenance,
+    primeUpdateConfigSnapshot,
+    primePluginUpdate,
   });
 
   it("previews plugin updates in Nix mode without acquiring a lease or writing state", async () => {

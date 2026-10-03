@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, existsSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,20 +7,22 @@ import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { sha256File } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   resolveMacOSDesktopCodexAppPathCandidates,
+  resolveSelectedMacOSDesktopCodexAppPathCandidates,
   type MacOSDesktopCodexAppPathCandidate,
 } from "./desktop-app-paths.js";
+import { resolveCodexManagedRuntimeRoot } from "./managed-runtime-installation.js";
 
 const MAX_COMPUTER_USE_PLUGIN_TREE_ENTRIES = 4_096;
 
 /** Fingerprints every desktop candidate that can own a managed fallback artifact. */
 export async function readMacOSDesktopGenerationFingerprint(
-  candidates: readonly MacOSDesktopCodexAppPathCandidate[] = resolveMacOSDesktopCodexAppPathCandidates(
-    "darwin",
-  ),
+  candidates?: readonly MacOSDesktopCodexAppPathCandidate[],
 ): Promise<string> {
+  const selectedCandidates =
+    candidates ?? (await resolveSelectedMacOSDesktopCodexAppPathCandidates("darwin"));
   const entries: string[] = [];
   const bundles = new Set<string>();
-  for (const candidate of candidates) {
+  for (const candidate of selectedCandidates) {
     const command = await statFingerprint(candidate.appServerCommandPath);
     entries.push(`candidate:${candidate.appName}:${candidate.appServerCommandPath}:${command}`);
     // Executable layouts share one bundle's Computer Use assets.
@@ -86,8 +88,16 @@ export function resolveMacOSDesktopGenerationWatchPaths(
   candidates: readonly MacOSDesktopCodexAppPathCandidate[] = resolveMacOSDesktopCodexAppPathCandidates(
     "darwin",
   ),
+  managedRoot = resolveCodexManagedRuntimeRoot(),
 ): string[] {
   const watched = new Set<string>(["/Applications"]);
+  // Observe resource changes, not SQLite commits. Unpinned acquisitions refresh
+  // the selection through the worker; no database files are watched.
+  let managedWatchRoot = managedRoot;
+  while (!existsSync(managedWatchRoot) && path.dirname(managedWatchRoot) !== managedWatchRoot) {
+    managedWatchRoot = path.dirname(managedWatchRoot);
+  }
+  watched.add(managedWatchRoot);
   for (const candidate of candidates) {
     watched.add(candidate.appBundlePath);
   }

@@ -1,5 +1,4 @@
 // Openai tests cover openai provider plugin behavior.
-import fs from "node:fs";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
@@ -12,9 +11,10 @@ import { OPENAI_API_BASE_URL, OPENAI_CODEX_RESPONSES_BASE_URL } from "./base-url
 import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { registerOpenAIServiceTierCatalogTests } from "./test-support/model-service-tiers.test-support.js";
+import { registerOpenAIModelCatalogTests } from "./test-support/model-catalog.test-support.js";
 
 const mocks = vi.hoisted(() => ({
+  resolveRuntimeVersion: vi.fn(),
   resolveApiKeyForProvider: vi.fn(),
   resolveProviderAuthProfileMetadata: vi.fn(),
 }));
@@ -62,6 +62,7 @@ async function runCatalogWithFetchGuard(params: {
   });
   try {
     const result = await buildOpenAIProvider().catalog?.run({
+      resolveRuntimeVersion: mocks.resolveRuntimeVersion,
       resolveProviderAuth: () => params.auth,
       resolveProviderApiKey: () => ({
         apiKey: params.auth.apiKey,
@@ -106,18 +107,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveProviderAuthProfileMetadata: mocks.resolveProviderAuthProfileMetadata,
 }));
 
-const OPENAI_CODEX_MODELS_URL = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${readPinnedCodexClientVersion()}`;
-
-function readPinnedCodexClientVersion(): string {
-  const packageJson = JSON.parse(
-    fs.readFileSync(new URL("../codex/package.json", import.meta.url), "utf8"),
-  ) as { dependencies?: Record<string, unknown> };
-  const version = packageJson.dependencies?.["@openai/codex"];
-  if (typeof version !== "string") {
-    throw new Error("expected an exact @openai/codex dependency");
-  }
-  return version;
-}
+const OPENAI_CODEX_MODELS_URL = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=99.1.0`;
 
 async function runWrappedPayloadCase(params: {
   wrap: NonNullable<ReturnType<typeof buildOpenAIProvider>["wrapStreamFn"]>;
@@ -192,11 +182,13 @@ function expectNoCatalogEntry(entries: unknown, id: string): void {
 describe("buildOpenAIProvider", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
+    mocks.resolveRuntimeVersion.mockReset().mockResolvedValue("99.1.0");
     mocks.resolveApiKeyForProvider.mockReset();
     mocks.resolveProviderAuthProfileMetadata.mockReset();
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
 
@@ -394,6 +386,7 @@ describe("buildOpenAIProvider", () => {
 
     try {
       const result = await provider.catalog?.run({
+        resolveRuntimeVersion: mocks.resolveRuntimeVersion,
         providerIds: ["openai"],
         resolveProviderAuth: () => ({
           mode: "api_key",
@@ -439,6 +432,7 @@ describe("buildOpenAIProvider", () => {
       try {
         await expect(
           provider.catalog?.run({
+            resolveRuntimeVersion: mocks.resolveRuntimeVersion,
             providerIds: [providerId],
             resolveProviderAuth,
             resolveProviderApiKey,
@@ -471,6 +465,7 @@ describe("buildOpenAIProvider", () => {
 
     try {
       const result = await provider.catalog?.run({
+        resolveRuntimeVersion: mocks.resolveRuntimeVersion,
         resolveProviderAuth: () => ({
           mode: "oauth",
           apiKey: "stale-oauth-token",
@@ -514,6 +509,7 @@ describe("buildOpenAIProvider", () => {
 
     try {
       const result = await buildOpenAIProvider().catalog?.run({
+        resolveRuntimeVersion: mocks.resolveRuntimeVersion,
         resolveProviderAuth: () => ({
           mode: "api_key",
           apiKey: "secretref-managed",
@@ -547,6 +543,7 @@ describe("buildOpenAIProvider", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
 
     const result = await buildOpenAIProvider().catalog?.run({
+      resolveRuntimeVersion: mocks.resolveRuntimeVersion,
       resolveProviderAuth: () => ({
         mode: "api_key",
         apiKey: "secretref-managed",
@@ -664,6 +661,7 @@ describe("buildOpenAIProvider", () => {
 
     try {
       const result = await provider.catalog?.run({
+        resolveRuntimeVersion: mocks.resolveRuntimeVersion,
         resolveProviderAuth: () => ({
           mode: "oauth",
           apiKey: "stale-oauth-token",
@@ -770,6 +768,7 @@ describe("buildOpenAIProvider", () => {
 
     try {
       const result = await provider.catalog?.run({
+        resolveRuntimeVersion: mocks.resolveRuntimeVersion,
         resolveProviderAuth: () => ({
           mode: "none",
           apiKey: undefined,
@@ -859,42 +858,8 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it("keeps an explicit empty Codex reasoning catalog authoritative", async () => {
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
-      response: Response.json({
-        models: [
-          {
-            slug: "gpt-5.6-sol",
-            display_name: "GPT-5.6 Sol",
-            visibility: "list",
-            supported_reasoning_levels: [],
-          },
-        ],
-      }),
-      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
-      release: async () => undefined,
-    }));
-
-    const provider = await buildOpenAICodexLiveProviderConfig({
-      discoveryApiKey: "empty-reasoning-oauth-token",
-      fetchGuard,
-    });
-    const sol = provider.models.find((model) => model.id === "gpt-5.6-sol");
-
-    expect(sol?.compat?.supportedReasoningEfforts).toEqual([]);
-    expect(sol?.thinkingLevelMap).toEqual({ off: null });
-    expect(
-      buildOpenAIProvider().resolveThinkingProfile?.({
-        provider: "openai",
-        modelId: "gpt-5.6-sol",
-        agentRuntime: "codex",
-        api: "openai-chatgpt-responses",
-        compat: sol?.compat,
-      } as never)?.levels,
-    ).not.toContainEqual({ id: "ultra" });
-  });
-
-  registerOpenAIServiceTierCatalogTests({
+  registerOpenAIModelCatalogTests({
+    resolveRuntimeVersion: mocks.resolveRuntimeVersion,
     modelsUrl: OPENAI_CODEX_MODELS_URL,
     runCatalogWithFetchGuard,
     buildOpenAICodexLiveProviderConfig,

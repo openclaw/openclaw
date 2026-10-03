@@ -28,3 +28,4 @@ export {
   listHealthChecks,
   registerHealthCheck,
 } from "../flows/health-check-registry.js";
+export type { PluginRuntimeMaintenanceContextV1 } from "../plugins/runtime-maintenance-types.js";

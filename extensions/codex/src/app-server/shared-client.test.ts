@@ -20,6 +20,7 @@ import {
 } from "./shared-client-acquisition-diagnostics.test-support.js";
 import { registerSharedClientCompactionRetentionTests } from "./shared-client-compaction-retention.test-support.js";
 import { registerSharedClientConnectionArtifactTests } from "./shared-client-connection-artifact.test-support.js";
+import { registerSharedClientDesktopStartupTests } from "./shared-client-desktop-startup.test-support.js";
 import { registerSharedClientInferenceTests } from "./shared-client-inference.test-support.js";
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./shared-client-lifecycle.js";
 import { registerSharedClientLifetimeTests } from "./shared-client-lifetime.test-support.js";
@@ -77,6 +78,9 @@ const mocks = vi.hoisted(() => ({
   desktopGeneration: undefined as { epoch: number; fingerprint: string } | undefined,
   desktopGenerationCurrent: true,
   waitForCodexDesktopGeneration: vi.fn(),
+  readCodexDesktopGenerationCandidates: vi.fn<
+    () => readonly import("./desktop-app-paths.js").MacOSDesktopCodexAppPathCandidate[] | undefined
+  >(() => []),
 }));
 mocks.waitForCodexDesktopGeneration.mockImplementation(async () => mocks.desktopGeneration);
 
@@ -115,6 +119,7 @@ vi.mock("./desktop-generation.js", () => ({
     generation.epoch === mocks.desktopGeneration?.epoch &&
     generation.fingerprint === mocks.desktopGeneration?.fingerprint,
   waitForCodexDesktopGeneration: mocks.waitForCodexDesktopGeneration,
+  readCodexDesktopGenerationCandidates: mocks.readCodexDesktopGenerationCandidates,
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-harness-registration", async (importOriginal) => ({
@@ -318,6 +323,8 @@ describe("shared Codex app-server client", () => {
     );
     mocks.desktopGeneration = undefined;
     mocks.desktopGenerationCurrent = true;
+    mocks.readCodexDesktopGenerationCandidates.mockReset();
+    mocks.readCodexDesktopGenerationCandidates.mockReturnValue([]);
     mocks.waitForCodexDesktopGeneration.mockReset();
     mocks.waitForCodexDesktopGeneration.mockImplementation(async () => mocks.desktopGeneration);
     mocks.resolveManagedCodexNativeCommand.mockClear();
@@ -2321,45 +2328,11 @@ describe("shared Codex app-server client", () => {
     },
   );
 
-  it("waits for a dirty desktop generation before reusing a warm managed client", async () => {
-    const generation = { epoch: 1, fingerprint: "desktop-x" };
-    mocks.desktopGeneration = generation;
-    mocks.resolveManagedCodexAppServerStartOptions.mockImplementation(async (startOptions) => ({
-      ...startOptions,
-      command: "/Applications/ChatGPT.app/Contents/Resources/codex",
-      commandSource: "resolved-managed" as const,
-    }));
-    const harness = createClientHarness();
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
-    const config = {};
-    const startOptions: CodexAppServerStartOptions = createStartOptions({
-      homeScope: "agent",
-      commandSource: "managed",
-      managedCommandOrder: "desktop-first",
-    });
-    const options = { config, startOptions, agentDir: "/tmp/openclaw-agent" };
-
-    const firstAcquire = getLeasedSharedCodexAppServerClient(options);
-    await sendInitializeResult(harness, "openclaw/0.149.0 (macOS; test)");
-    const first = await firstAcquire;
-    const dirty = createDeferred<typeof generation>();
-    mocks.desktopGenerationCurrent = false;
-    mocks.waitForCodexDesktopGeneration.mockReturnValue(dirty.promise);
-    let settled = false;
-    const secondAcquire = getLeasedSharedCodexAppServerClient(options).then((client) => {
-      settled = true;
-      return client;
-    });
-
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    expect(startSpy).toHaveBeenCalledOnce();
-    mocks.desktopGenerationCurrent = true;
-    dirty.resolve(generation);
-    await expect(secondAcquire).resolves.toBe(first);
-    expect(startSpy).toHaveBeenCalledOnce();
-    expect(releaseLeasedSharedCodexAppServerClient(first)).toBe(true);
-    expect(releaseLeasedSharedCodexAppServerClient(first)).toBe(true);
+  registerSharedClientDesktopStartupTests({
+    mocks,
+    createInitializingClientHarness,
+    createStartOptions,
+    sendInitializeResult,
   });
 
   it("bounds a dirty desktop generation wait by the acquisition abort signal", async () => {

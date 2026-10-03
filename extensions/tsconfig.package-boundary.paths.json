@@ -969,6 +969,9 @@
       ],
       "openclaw/plugin-sdk/memory-host-search": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-host-search.d.ts"
+      ],
+      "openclaw/plugin-sdk/package-install-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/package-install-runtime.d.ts"
       ]
     }
   }

@@ -36,6 +36,8 @@ export async function installFromValidatedNpmSpecArchive<
   timeoutMs: number;
   workTimeoutMs?: number | null;
   tempDirPrefix: string;
+  /** Borrowed private acquisition directory; its caller owns cleanup after process settlement. */
+  workspaceDir?: string;
   expectedIntegrity?: string;
   onIntegrityDrift?: (payload: NpmIntegrityDriftPayload) => boolean | Promise<boolean>;
   warn?: (message: string) => void;
@@ -47,7 +49,7 @@ export async function installFromValidatedNpmSpecArchive<
   if (!parsedSpec.ok) {
     return parsedSpec;
   }
-  const flowResult = await withInstallWorkspace(params.tempDirPrefix, async (tmpDir) => {
+  const acquire = async (tmpDir: string) => {
     // Check prerelease policy against the version the registry actually resolved.
     const packedResult = await packNpmSpecToArchive({
       spec,
@@ -107,7 +109,10 @@ export async function installFromValidatedNpmSpecArchive<
       npmResolution,
       integrityDrift: driftResult.integrityDrift,
     };
-  });
+  };
+  const flowResult = params.workspaceDir
+    ? await acquire(params.workspaceDir)
+    : await withInstallWorkspace(params.tempDirPrefix, acquire);
 
   // Preserve callback results and transaction symbols only after workspace cleanup settles.
   if (!flowResult.ok) {

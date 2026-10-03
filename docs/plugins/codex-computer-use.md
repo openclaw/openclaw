@@ -22,6 +22,10 @@ server that exposes `js` instead is probed with one `await cua.listApps();`
 call. Both probes check native app control without inventorying browser surfaces.
 An MCP response with `isError: true` fails readiness instead of counting as a
 successful response.
+Current desktop distributions expose the official Computer Use skill through their
+bundled `node_repl` MCP bridge. OpenClaw supplies that distribution's Node, module,
+and native-service paths as process-local configuration and verifies it with a
+read-only `sky.list_apps()` call. Existing custom `node_repl` configuration is not replaced.
 
 Use this page when OpenClaw is already using the native Codex harness. For the
 runtime setup itself, see [Codex harness](/plugins/codex-harness).
@@ -175,7 +179,8 @@ runtime through its normal policy checks.
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
 
-On macOS, managed startup for Computer Use prefers `ChatGPT.app`, then
+On macOS, managed startup for Computer Use prefers a verified plugin-managed
+desktop distribution when selected by maintenance, then `ChatGPT.app`, then
 `Codex.app` for standalone installs. Within each app's `Contents/Resources`,
 it checks `codex-cli/CodexCLI.app/Contents/MacOS/codex` before the older `codex`
 layout. Computer Use dependencies stay rooted in that app's `Contents/Resources`
@@ -197,9 +202,11 @@ part of that fence. After changing native Codex plugin config outside the
 Gateway, restart the Gateway and start a new chat before relying on the new
 selection.
 
-The Gateway watches all standard ChatGPT and Codex desktop candidates that can
-supply the app-server or Computer Use artifacts. It does not poll the request
-path. After a detected update settles, existing turns continue on their current
+The Gateway reads retained runtime selection through the plugin-state worker
+before an unpinned client acquisition. It watches standard ChatGPT and Codex
+desktop candidates and the selected managed bundle for artifact changes. An
+unchanged selection does not trigger another bundle fingerprint or download.
+After a detected update settles, existing turns continue on their current
 app-server generation and new acquisitions stop using it. For each eligible
 isolated home, OpenClaw waits for the last old-generation turn to release its
 client before refreshing the signed Computer Use service, shared cache, and
@@ -220,6 +227,11 @@ or an unsupported out-of-band path can still require a Gateway restart.
 marketplace provisioning. `autoRepair` controls only the one-time stale MCP
 child repair after a failed readiness probe; it does not control desktop
 generation convergence.
+
+Automatic managed-runtime checks and explicit OpenClaw/plugin updates verify the CLI, selected model metadata, and
+Computer Use together before selecting a new immutable distribution. They preserve
+the previous distribution and do not modify the installed desktop application.
+See [managed runtime updates](/plugins/codex-harness#selected-desktop-runtime-updates).
 
 ## Commands
 

@@ -128,7 +128,7 @@ export async function resolveCodexUnifiedComputerUseRuntime(
 
 export async function publishCodexUnifiedComputerUsePlugin(
   target: string,
-  runtime: CodexUnifiedComputerUseRuntime,
+  runtime: Pick<CodexUnifiedComputerUseRuntime, "pluginRoot" | "mcp">,
 ): Promise<void> {
   // The signed desktop template can be read-only; the managed home owns its generated copy.
   const templatePath = path.join(runtime.pluginRoot, ".mcp.json");

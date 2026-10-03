@@ -376,26 +376,29 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
         ...options,
         load: async () => {
           assertCurrent();
-          const provider = params.pluginRegistry?.providers.find(
+          const registry = params.pluginRegistry;
+          const provider = registry?.providers.find(
             ({ provider: candidate }) => normalizeProviderId(candidate.id) === providerId,
           )?.provider;
-          if (!provider?.catalog) {
+          if (!registry || !provider?.catalog) {
             return [];
           }
           const { loadSelectedProviderAccountCatalog } =
             await import("./models-config.providers.catalog-context.js");
           assertCurrent();
-          return loadSelectedProviderAccountCatalog({
-            provider,
-            providerId,
-            profileId,
-            authStore,
-            config: params.cfg,
-            agentDir: params.agentDir ?? resolveAgentDir(params.cfg, params.agentId),
-            workspaceDir,
-            isCurrent,
-            assertCurrent,
-          });
+          return withPluginRuntimeRegistryScope(registry, () =>
+            loadSelectedProviderAccountCatalog({
+              provider,
+              providerId,
+              profileId,
+              authStore,
+              config: params.cfg,
+              agentDir: params.agentDir ?? resolveAgentDir(params.cfg, params.agentId),
+              workspaceDir,
+              isCurrent,
+              assertCurrent,
+            }),
+          );
         },
       });
       assertCurrent();

@@ -455,7 +455,8 @@
     "!dist/plugin-sdk/secret-egress-runtime.d.ts",
     "!dist/plugin-sdk/compiled-subprocess-testing.d.ts",
     "!dist/plugin-sdk/compiled-subprocess-testing.js",
-    "!dist/plugin-sdk/memory-host-search.d.ts"
+    "!dist/plugin-sdk/memory-host-search.d.ts",
+    "!dist/plugin-sdk/package-install-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -493,6 +494,9 @@
     },
     "./plugin-sdk/doctor-repair-runtime": {
       "default": "./dist/plugin-sdk/doctor-repair-runtime.js"
+    },
+    "./plugin-sdk/package-install-runtime": {
+      "default": "./dist/plugin-sdk/package-install-runtime.js"
     },
     "./plugin-sdk/model-ref-parse": {
       "default": "./dist/plugin-sdk/model-ref-parse.js"

@@ -9,6 +9,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it as baseIt, vi } from "vitest";
+import { registerAuthBridgeDesktopTests } from "./auth-bridge-desktop.test-support.js";
 import {
   applyCodexAppServerAuthProfile as applyAuth,
   bridgeCodexAppServerStartOptions as bridgeStart,
@@ -240,6 +241,10 @@ vi.mock("./desktop-app-paths.js", async (importOriginal) => {
     ...actual,
     resolveMacOSDesktopCodexAppPathCandidates: (platform?: NodeJS.Platform) =>
       actual.resolveMacOSDesktopCodexAppPathCandidates(platform ?? "darwin"),
+    resolveMacOSDesktopCodexAppPathCandidatesForCommand: (
+      command: string,
+      platform?: NodeJS.Platform,
+    ) => actual.resolveMacOSDesktopCodexAppPathCandidatesForCommand(command, platform ?? "darwin"),
   };
 });
 
@@ -460,205 +465,9 @@ describe("Codex auth bridge", () => {
     expectApiKeyLogin(request, "platform-api-key", true);
   });
 
-  baseIt.each(["marketplace", "service"] as const)(
-    "rejects a desktop candidate whose exact %s is unavailable",
-    async (missingArtifact) => {
-      await withTempDir("openclaw-codex-", async (agentDir) => {
-        if (missingArtifact === "marketplace") {
-          desktop.marketplaceSource.mockResolvedValueOnce(undefined);
-        } else {
-          desktop.serviceSource.mockResolvedValueOnce(undefined);
-        }
-
-        await expect(
-          reconcileArtifacts({
-            startOptions: createStartOptions({
-              command: "/Applications/ChatGPT.app/Contents/Resources/codex",
-            }),
-            agentDir,
-            pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
-          }),
-        ).rejects.toMatchObject({
-          code: "CODEX_COMPUTER_USE_CANDIDATE_ARTIFACTS_UNAVAILABLE",
-        });
-        expect(desktop.service).not.toHaveBeenCalled();
-        expect(desktop.marketplace).not.toHaveBeenCalled();
-      });
-    },
-  );
-
-  baseIt.each([
-    { marketplaceSource: "file:///tmp/custom-marketplace" },
-    { marketplacePath: "/tmp/custom-marketplace/marketplace.json" },
-    { marketplaceName: "custom-marketplace" },
-  ])("keeps an exact desktop candidate with configured marketplace selection", async (selector) => {
-    await withTempDir("openclaw-codex-computer-use-custom-source-", async (agentDir) => {
-      await expect(
-        reconcileArtifacts({
-          startOptions: createStartOptions({
-            command: "/Applications/ChatGPT.app/Contents/Resources/codex",
-          }),
-          agentDir,
-          pluginConfig: {
-            computerUse: { enabled: true, autoInstall: true, ...selector },
-          },
-        }),
-      ).resolves.toBeUndefined();
-      expect(desktop.marketplace).not.toHaveBeenCalled();
-      expect(desktop.service).toHaveBeenCalledOnce();
-    });
-  });
-
-  it("keeps package fallback artifacts on one complete desktop owner", async ({ agentDir }) => {
-    const candidates = resolveMacOSDesktopCodexAppPathCandidates("darwin");
-    const codexCandidate = candidates.find((candidate) => candidate.appName === "Codex.app");
-    if (!codexCandidate) {
-      throw new Error("expected Codex.app candidate");
-    }
-    desktop.serviceSource.mockImplementation(
-      async (params: { sourceAppCandidates?: readonly string[] }) => {
-        const source = params.sourceAppCandidates?.[0];
-        return source?.includes("ChatGPT.app") ? undefined : source;
-      },
-    );
-    desktop.marketplace.mockResolvedValueOnce("/managed/openai-bundled");
-
-    await reconcileArtifacts({
-      startOptions: createStartOptions({ command: "/cache/openclaw/codex" }),
-      agentDir,
-      pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
-    });
-
-    expect(desktop.marketplace).toHaveBeenCalledWith(
-      expect.objectContaining({
-        candidates: [codexCandidate],
-        appServerCommand: codexCandidate.appServerCommandPath,
-      }),
-    );
-    expect(desktop.service).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sourceAppCandidates: codexCandidate.computerUseServiceAppPaths,
-        appServerCommand: codexCandidate.appServerCommandPath,
-      }),
-    );
-    expect(desktop.cache).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bundledMarketplacePath: "/managed/openai-bundled",
-      }),
-    );
-  });
-
-  it("classifies native client provisioning failures as harness preflight", async () => {
-    desktop.marketplace.mockResolvedValueOnce("/managed/openai-bundled");
-    desktop.service.mockRejectedValueOnce(new Error("copy failed"));
-
-    await expect(
-      reconcileArtifacts({
-        startOptions: createStartOptions(),
-        agentDir: "/tmp/openclaw-codex-computer-use-failed",
-        pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
-      }),
-    ).rejects.toMatchObject({ name: "AgentHarnessPreflightError", scope: "harness" });
-  });
-
-  it("refreshes shared cache once per selected desktop source generation", async ({ agentDir }) => {
-    desktop.cache.mockResolvedValue(true);
-    const startOptions = createStartOptions({
-      command: "/Applications/ChatGPT.app/Contents/Resources/codex",
-    });
-    const pluginConfig = {
-      computerUse: {
-        enabled: true,
-        autoInstall: false,
-        pluginCacheMode: "shared" as const,
-      },
-    };
-
-    await reconcileArtifacts({
-      startOptions,
-      agentDir,
-      pluginConfig,
-      desktopGeneration: { epoch: 1, fingerprint: "desktop-x" },
-    });
-    await reconcileArtifacts({
-      startOptions,
-      agentDir,
-      pluginConfig,
-      desktopGeneration: { epoch: 1, fingerprint: "desktop-x" },
-    });
-    await reconcileArtifacts({
-      startOptions,
-      agentDir,
-      pluginConfig,
-      desktopGeneration: { epoch: 2, fingerprint: "desktop-y" },
-    });
-
-    expect(desktop.cache.mock.calls.map(([params]) => params.forceRefresh)).toEqual([
-      true,
-      false,
-      true,
-    ]);
-    expect(desktop.service).not.toHaveBeenCalled();
-    expect(desktop.marketplace).not.toHaveBeenCalled();
-  });
-
-  it("does not let a stale desktop generation publish artifacts after its successor", async ({
-    agentDir,
-  }) => {
-    const firstMarketplaceStarted = createDeferred<void>();
-    const releaseFirstMarketplace = createDeferred<void>();
-    let activeMarketplaceCalls = 0;
-    let maxActiveMarketplaceCalls = 0;
-    desktop.marketplace
-      .mockImplementationOnce(async () => {
-        activeMarketplaceCalls += 1;
-        maxActiveMarketplaceCalls = Math.max(maxActiveMarketplaceCalls, activeMarketplaceCalls);
-        firstMarketplaceStarted.resolve();
-        try {
-          await releaseFirstMarketplace.promise;
-          return "/managed/openai-bundled";
-        } finally {
-          activeMarketplaceCalls -= 1;
-        }
-      })
-      .mockImplementationOnce(async () => {
-        activeMarketplaceCalls += 1;
-        maxActiveMarketplaceCalls = Math.max(maxActiveMarketplaceCalls, activeMarketplaceCalls);
-        activeMarketplaceCalls -= 1;
-        return "/managed/openai-bundled";
-      });
-    let currentEpoch = 1;
-    const startOptions = createStartOptions();
-    const first = reconcileArtifacts({
-      startOptions,
-      agentDir,
-      pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
-      desktopGeneration: { epoch: 1, fingerprint: "desktop-x" },
-      assertCurrent: () => {
-        if (currentEpoch !== 1) {
-          throw new Error("desktop generation X is stale");
-        }
-      },
-    });
-    await firstMarketplaceStarted.promise;
-    currentEpoch = 2;
-    const second = reconcileArtifacts({
-      startOptions,
-      agentDir,
-      pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
-      desktopGeneration: { epoch: 2, fingerprint: "desktop-y" },
-      assertCurrent: () => {
-        if (currentEpoch !== 2) {
-          throw new Error("desktop generation Y is stale");
-        }
-      },
-    });
-    releaseFirstMarketplace.resolve();
-
-    await expect(first).rejects.toThrow("desktop generation X is stale");
-    await expect(second).resolves.toBeUndefined();
-    expect(maxActiveMarketplaceCalls).toBe(1);
-    expect(desktop.service).toHaveBeenCalledTimes(1);
+  // These macOS fixtures use POSIX paths and executable modes; account/CLI auth stays cross-platform.
+  describe.runIf(process.platform !== "win32")("Desktop artifact reconciliation", () => {
+    registerAuthBridgeDesktopTests({ desktop, it, createStartOptions });
   });
 
   it("uses the native user Codex home for coexistence mode", async ({ agentDir: root }) => {

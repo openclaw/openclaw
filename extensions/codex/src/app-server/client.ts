@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
+import { commandProcessCleanup } from "openclaw/plugin-sdk/process-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 import {
@@ -34,7 +35,6 @@ import {
 } from "./client-notifications.js";
 import { dispatchCodexAppServerResponse } from "./client-response.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import {
   type CodexAppServerRequestMethod,
   type CodexAppServerRequestParams,
@@ -56,9 +56,8 @@ import {
   CodexAppServerLocalRequestCancellationError,
 } from "./rpc-error.js";
 import { CodexServerRequests, type CodexServerRequestHandler } from "./server-requests.js";
+import { createCodexAppServerTransport } from "./transport-create.js";
 import { getCodexAppServerRegisteredTransportIdentity } from "./transport-process-registration.js";
-import { createStdioTransport } from "./transport-stdio.js";
-import { createWebSocketTransport } from "./transport-websocket.js";
 import {
   closeCodexAppServerTransport,
   closeCodexAppServerTransportAndWait,
@@ -251,28 +250,25 @@ export class CodexAppServerClient {
   static async start(
     options?: Partial<CodexAppServerStartOptions>,
     assertCurrent?: () => void,
+    processScope?: { signal: AbortSignal; ownership: "retained-tree" },
   ): Promise<CodexAppServerClient> {
-    const defaults = resolveCodexAppServerRuntimeOptions().start;
-    const startOptions = {
-      ...defaults,
-      ...options,
-      headers: options?.headers ?? defaults.headers,
-    };
-    if (startOptions.transport === "stdio" && startOptions.commandSource === "managed") {
-      throw new Error("Managed Codex app-server start options must be resolved before spawn.");
-    }
-    if (startOptions.transport === "websocket" || startOptions.transport === "unix") {
-      return new CodexAppServerClient(createWebSocketTransport(startOptions));
-    }
-    // The spawn callback runs synchronously before registration; initialization
-    // stays blocked until registration finishes, without losing startup errors.
+    // Register the protocol reader before startup can deliver errors or frames.
     let client!: CodexAppServerClient;
     try {
-      await createStdioTransport(startOptions, process.env, assertCurrent, (child) => {
-        client = new CodexAppServerClient(child);
-      });
+      await createCodexAppServerTransport(
+        options,
+        assertCurrent,
+        (child) => {
+          client = new CodexAppServerClient(child);
+        },
+        processScope,
+      );
       return client;
     } catch (error) {
+      // Unconfirmed cleanup must retain the candidate even after authority expires.
+      if (commandProcessCleanup.isUncertain(error)) {
+        throw error;
+      }
       assertCurrent?.();
       if (client?.transportExited && hasCodexAppServerNaturalExit(client.child)) {
         throw (

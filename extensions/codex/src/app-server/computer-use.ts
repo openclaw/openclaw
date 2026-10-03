@@ -18,14 +18,13 @@ import {
 import {
   createComputerUseRequest,
   runCodexComputerUseLiveTest,
-  skippedLiveTestStatus,
   type CodexComputerUseRequest,
 } from "./computer-use-readiness.js";
 import { assertNotSymlink } from "./computer-use-service-path.js";
 import {
   unavailableStatus,
   type CodexComputerUseStatus,
-  type CodexComputerUseStatusReason,
+  statusFromPlugin,
 } from "./computer-use-status.js";
 import {
   hasLegacyCodexComputerUseMcpPolicy,
@@ -615,27 +614,28 @@ async function readComputerUseTools(params: {
   installPlugin: boolean;
   releaseNativeConfigFence?: () => void;
 }): Promise<CodexComputerUseStatus> {
-  let server = await readMcpServerStatus(params.request, params.config.mcpServerName);
+  const config = params.config;
+  let server = await readMcpServerStatus(params.request, config.mcpServerName);
   let tools = Object.keys(server?.tools ?? {}).toSorted();
   if ((!server || tools.length === 0) && params.installPlugin) {
     await params.request("config/mcpServer/reload", undefined);
-    server = await readMcpServerStatus(params.request, params.config.mcpServerName);
+    server = await readMcpServerStatus(params.request, config.mcpServerName);
     tools = Object.keys(server?.tools ?? {}).toSorted();
   }
   if (!server || tools.length === 0) {
     return statusFromPlugin({
-      config: params.config,
+      config,
       plugin: params.plugin,
       tools,
       reason: "mcp_missing",
       message: server
-        ? `Computer Use is installed, but the ${params.config.mcpServerName} MCP server exposes no tools.`
-        : `Computer Use is installed, but the ${params.config.mcpServerName} MCP server is not available.`,
+        ? `Computer Use is installed, but the ${config.mcpServerName} MCP server exposes no tools.`
+        : `Computer Use is installed, but the ${config.mcpServerName} MCP server is not available.`,
     });
   }
 
   const status = statusFromPlugin({
-    config: params.config,
+    config,
     plugin: params.plugin,
     tools,
     reason: "ready",
@@ -652,10 +652,10 @@ async function readComputerUseTools(params: {
     request: params.request,
     client: params.client,
     signal: params.signal,
-    config: params.config,
+    config,
     tools,
   });
-  const compatibilityStartupAllowed = !liveTest.ok && !params.config.strictReadiness;
+  const compatibilityStartupAllowed = !liveTest.ok && !config.strictReadiness;
   return {
     ...status,
     ready: liveTest.ok,
@@ -930,55 +930,6 @@ function pluginRequestParams(marketplace: MarketplaceRef, pluginName: string) {
         remoteMarketplaceName: marketplace.name,
         pluginName: marketplace.remotePluginId,
       };
-}
-
-function statusFromPlugin(params: {
-  config: ResolvedCodexComputerUseConfig;
-  plugin: CodexPluginDetail;
-  tools: string[];
-  reason: CodexComputerUseStatusReason;
-  message: string;
-}): CodexComputerUseStatus {
-  const { config, plugin, tools, reason, message } = params;
-  const installed = plugin.summary.installed && plugin.summary.enabled;
-  const available = tools.length > 0;
-  return {
-    enabled: true,
-    ready: installed && available,
-    reason,
-    installed: plugin.summary.installed,
-    pluginEnabled: plugin.summary.enabled,
-    mcpServerAvailable: available,
-    pluginName: config.pluginName,
-    mcpServerName: config.mcpServerName,
-    marketplaceName: plugin.marketplaceName,
-    ...(plugin.marketplacePath ? { marketplacePath: plugin.marketplacePath } : {}),
-    tools,
-    installation: {
-      status: !plugin.summary.installed
-        ? "not_installed"
-        : installed
-          ? "installed"
-          : "installed_disabled",
-      ok: installed,
-      message: installed ? "Computer Use plugin is installed and enabled." : message,
-    },
-    exposure: {
-      status: available ? "available" : "missing",
-      ok: available,
-      message: available
-        ? `Computer Use MCP server ${config.mcpServerName} exposes ${tools.length} tools.`
-        : `Computer Use MCP server ${config.mcpServerName} is not exposed.`,
-    },
-    liveTest: skippedLiveTestStatus(config, "Computer Use live test was not run."),
-    warnings:
-      plugin.summary.source?.type === "remote"
-        ? [
-            "Computer Use plugin is resolved from a remote marketplace; live local bundles are preferred.",
-          ]
-        : [],
-    message,
-  };
 }
 
 function resolveComputerUseConfig(

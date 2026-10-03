@@ -4,6 +4,7 @@ import {
   type CodexComputerUseRepairStatus,
 } from "./computer-use-readiness.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
+import type { CodexPluginDetail } from "./protocol.js";
 
 export type CodexComputerUseStatusReason =
   | "disabled"
@@ -99,6 +100,55 @@ export function unavailableStatus(
         : "Computer Use live test was not run because installation is not ready.",
     ),
     warnings: [],
+    message,
+  };
+}
+
+export function statusFromPlugin(params: {
+  config: ResolvedCodexComputerUseConfig;
+  plugin: CodexPluginDetail;
+  tools: string[];
+  reason: CodexComputerUseStatusReason;
+  message: string;
+}): CodexComputerUseStatus {
+  const { config, plugin, tools, reason, message } = params;
+  const installed = plugin.summary.installed && plugin.summary.enabled;
+  const available = tools.length > 0;
+  return {
+    enabled: true,
+    ready: installed && available,
+    reason,
+    installed: plugin.summary.installed,
+    pluginEnabled: plugin.summary.enabled,
+    mcpServerAvailable: available,
+    pluginName: config.pluginName,
+    mcpServerName: config.mcpServerName,
+    marketplaceName: plugin.marketplaceName,
+    ...(plugin.marketplacePath ? { marketplacePath: plugin.marketplacePath } : {}),
+    tools,
+    installation: {
+      status: !plugin.summary.installed
+        ? "not_installed"
+        : installed
+          ? "installed"
+          : "installed_disabled",
+      ok: installed,
+      message: installed ? "Computer Use plugin is installed and enabled." : message,
+    },
+    exposure: {
+      status: available ? "available" : "missing",
+      ok: available,
+      message: available
+        ? `Computer Use MCP server ${config.mcpServerName} exposes ${tools.length} tools.`
+        : `Computer Use MCP server ${config.mcpServerName} is not exposed.`,
+    },
+    liveTest: skippedLiveTestStatus(config, "Computer Use live test was not run."),
+    warnings:
+      plugin.summary.source?.type === "remote"
+        ? [
+            "Computer Use plugin is resolved from a remote marketplace; live local bundles are preferred.",
+          ]
+        : [],
     message,
   };
 }

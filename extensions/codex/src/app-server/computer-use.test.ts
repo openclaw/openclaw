@@ -4,16 +4,21 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createComputerUseRequest,
+  createAmbiguousComputerUseRequest,
+  createEmptyMarketplaceComputerUseRequest,
+  createBundledMarketplaceComputerUseRequest,
   expectRequestMethodNotCalled,
   expectSetupErrorStatus,
   expectStatusFields,
-  pluginSummary,
   requestCalls,
 } from "./computer-use.test-support.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { resolveCodexNativeConfigFenceKey } from "./shared-client.js";
-import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
+import {
+  createClientHarness as createBaseClientHarness,
+  useAutoCleanupTempDirTracker,
+} from "./test-support.js";
 
 const sharedClientMocks = vi.hoisted(() => ({
   assertCodexAppServerClientStartSelectionCurrent: vi.fn(),
@@ -66,6 +71,10 @@ vi.mock("./desktop-app-paths.js", async (importOriginal) => {
     ...actual,
     resolveMacOSDesktopCodexAppPathCandidates: (platform?: NodeJS.Platform) =>
       actual.resolveMacOSDesktopCodexAppPathCandidates(platform ?? "darwin"),
+    resolveMacOSDesktopCodexAppPathCandidatesForCommand: (
+      command: string,
+      platform?: NodeJS.Platform,
+    ) => actual.resolveMacOSDesktopCodexAppPathCandidatesForCommand(command, platform ?? "darwin"),
     resolveMacOSDesktopCodexBundledMarketplaceCandidates: (platform?: NodeJS.Platform) =>
       actual.resolveMacOSDesktopCodexBundledMarketplaceCandidates(platform ?? "darwin"),
   };
@@ -77,18 +86,24 @@ import {
   readCodexComputerUseStatus,
 } from "./computer-use.js";
 
-type CodexComputerUseRequest = NonNullable<
-  NonNullable<Parameters<typeof ensureCodexComputerUse>[0]>["request"]
->;
-
 const REMOTE_COMPUTER_USE_MARKETPLACE_NAME = "openai-curated-remote";
 const REMOTE_COMPUTER_USE_PLUGIN_ID = "plugins~Plugin_00000000000000000000000000000000";
+
+const clients = new Set<ReturnType<typeof createBaseClientHarness>["client"]>();
+function createClientHarness() {
+  const harness = createBaseClientHarness();
+  clients.add(harness.client);
+  return harness;
+}
 
 describe("Codex Computer Use setup", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
+    await Promise.all([...clients].map((client) => client.closeAndWait()));
+    clients.clear();
+    vi.restoreAllMocks();
     sharedClientMocks.assertCodexAppServerClientStartSelectionCurrent.mockReset();
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockReset();
     sharedClientMocks.readCodexAppServerClientDesktopGeneration.mockReset();
@@ -138,7 +153,7 @@ describe("Codex Computer Use setup", () => {
       new Error("captured start options"),
     );
     const config = { agents: { entries: { worker: {} } } };
-    const agentDir = "/tmp/openclaw-worker-agent";
+    const agentDir = tempDirs.make("openclaw-worker-agent-");
 
     await expect(installCodexComputerUse({ pluginConfig: {}, config, agentDir })).rejects.toThrow(
       "captured start options",
@@ -156,7 +171,7 @@ describe("Codex Computer Use setup", () => {
   });
 
   it("holds the Codex-home fence until an install request settles", async () => {
-    const agentDir = "/tmp/openclaw-computer-use-fence-agent";
+    const agentDir = tempDirs.make("openclaw-computer-use-fence-");
     let rejectInstallRequest: (error: Error) => void = () => undefined;
     const request = vi.fn(
       async () =>
@@ -198,7 +213,7 @@ describe("Codex Computer Use setup", () => {
   });
 
   it("releases the install mutation fence before the guarded readiness thread", async () => {
-    const agentDir = "/tmp/openclaw-computer-use-guarded-install-agent";
+    const agentDir = tempDirs.make("openclaw-computer-use-guarded-install-");
     const pluginConfig = {
       computerUse: { marketplaceName: "desktop-tools", liveTestTimeoutMs: 150 },
     };
@@ -269,7 +284,7 @@ describe("Codex Computer Use setup", () => {
     async (mode) => {
       const harness = createClientHarness();
       sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValueOnce(harness.client);
-      const agentDir = `/tmp/openclaw-computer-use-${mode}-agent`;
+      const agentDir = tempDirs.make(`openclaw-computer-use-${mode}-`);
       const abortController = new AbortController();
       const install = installCodexComputerUse({
         pluginConfig: {},
@@ -1071,189 +1086,6 @@ describe("Codex Computer Use setup", () => {
     ).toHaveLength(1);
   });
 });
-
-function createAmbiguousComputerUseRequest(): CodexComputerUseRequest {
-  return vi.fn(async (method: string) => {
-    if (method === "plugin/list") {
-      return {
-        marketplaces: [
-          {
-            name: "desktop-tools",
-            path: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
-            interface: null,
-            plugins: [pluginSummary(true, "desktop-tools")],
-          },
-          {
-            name: "other-tools",
-            path: "/marketplaces/other-tools/.agents/plugins/marketplace.json",
-            interface: null,
-            plugins: [pluginSummary(true, "other-tools")],
-          },
-        ],
-        marketplaceLoadErrors: [],
-        featuredPluginIds: [],
-      };
-    }
-    throw new Error(`unexpected request ${method}`);
-  }) as CodexComputerUseRequest;
-}
-
-function createEmptyMarketplaceComputerUseRequest(): CodexComputerUseRequest {
-  return vi.fn(async (method: string) => {
-    if (method === "plugin/list") {
-      return {
-        marketplaces: [],
-        marketplaceLoadErrors: [],
-        featuredPluginIds: [],
-      };
-    }
-    throw new Error(`unexpected request ${method}`);
-  }) as CodexComputerUseRequest;
-}
-
-function createBundledMarketplaceComputerUseRequest(
-  bundledMarketplacePath: string,
-  options: {
-    configuredSource?: string;
-    configuredSourceOrigin?: "system" | "user";
-    configuredSourceProfile?: string;
-  } = {},
-): CodexComputerUseRequest {
-  const codexHome = path.resolve(bundledMarketplacePath, "../../..");
-  let configuredSource = options.configuredSource;
-  let registered = configuredSource === bundledMarketplacePath;
-  let installed = false;
-  let threadStartCalls = 0;
-  return vi.fn(async (method: string, requestParams?: unknown) => {
-    if (method === "experimentalFeature/enablement/set") {
-      return { enablement: { plugins: true } };
-    }
-    if (method === "config/read") {
-      return {
-        config: configuredSource
-          ? {
-              marketplaces: {
-                "openai-bundled": { source_type: "local", source: configuredSource },
-              },
-            }
-          : {},
-        origins: configuredSource
-          ? {
-              "marketplaces.openai-bundled.source": {
-                name:
-                  options.configuredSourceOrigin === "system"
-                    ? { type: "system", file: "/etc/codex/config.toml" }
-                    : {
-                        type: "user",
-                        file: options.configuredSourceProfile
-                          ? path.join(codexHome, `${options.configuredSourceProfile}.config.toml`)
-                          : path.join(codexHome, "config.toml"),
-                        profile: options.configuredSourceProfile ?? null,
-                      },
-                version: "legacy-config",
-              },
-            }
-          : {},
-        layers: null,
-      };
-    }
-    if (method === "marketplace/remove") {
-      expect(requestParams).toEqual({ marketplaceName: "openai-bundled" });
-      configuredSource = undefined;
-      registered = false;
-      return { marketplaceName: "openai-bundled", installedRoot: null };
-    }
-    if (method === "marketplace/add") {
-      expect(requestParams).toEqual({
-        source: bundledMarketplacePath,
-      });
-      if (configuredSource && configuredSource !== bundledMarketplacePath) {
-        throw new Error(
-          "marketplace 'openai-bundled' is already added from a different source; remove it before adding this source | -32600",
-        );
-      }
-      configuredSource = bundledMarketplacePath;
-      registered = true;
-      return {
-        marketplaceName: "openai-bundled",
-        installedRoot: bundledMarketplacePath,
-        alreadyAdded: false,
-      };
-    }
-    if (method === "plugin/list") {
-      return {
-        marketplaces: registered
-          ? [
-              {
-                name: "openai-bundled",
-                path: `${bundledMarketplacePath}/.agents/plugins/marketplace.json`,
-                interface: null,
-                plugins: [pluginSummary(installed, "openai-bundled")],
-              },
-            ]
-          : [],
-        marketplaceLoadErrors: [],
-        featuredPluginIds: [],
-      };
-    }
-    if (method === "plugin/read") {
-      return {
-        plugin: {
-          marketplaceName: "openai-bundled",
-          marketplacePath: `${bundledMarketplacePath}/.agents/plugins/marketplace.json`,
-          summary: pluginSummary(installed, "openai-bundled"),
-          description: "Control desktop apps.",
-          skills: [],
-          apps: [],
-          mcpServers: ["computer-use"],
-        },
-      };
-    }
-    if (method === "plugin/install") {
-      installed = true;
-      return { authPolicy: "ON_INSTALL", appsNeedingAuth: [] };
-    }
-    if (method === "config/mcpServer/reload") {
-      return undefined;
-    }
-    if (method === "mcpServerStatus/list") {
-      return {
-        data: installed
-          ? [
-              {
-                name: "computer-use",
-                tools: {
-                  list_apps: {
-                    name: "list_apps",
-                    inputSchema: { type: "object" },
-                  },
-                },
-                resources: [],
-                resourceTemplates: [],
-                authStatus: "unsupported",
-              },
-            ]
-          : [],
-        nextCursor: null,
-      };
-    }
-    if (method === "thread/start") {
-      threadStartCalls += 1;
-      return {
-        thread: { id: `bundled-marketplace-probe-thread-${threadStartCalls}` },
-        model: "gpt-5.1",
-        modelProvider: "openai",
-      };
-    }
-    if (method === "mcpServer/tool/call") {
-      return { content: [{ type: "text", text: "[]" }] };
-    }
-    if (method === "thread/unsubscribe") {
-      return undefined;
-    }
-    throw new Error(`unexpected request ${method}`);
-  }) as CodexComputerUseRequest;
-}
 
 function createDesktopInstallClient(root: string, commandSource = "config") {
   const agentDir = path.join(root, "agent");

@@ -10,6 +10,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "./native-tool-policy.js";
@@ -78,6 +79,7 @@ const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
 ] as const satisfies readonly ContextEngineHostCapability[];
 
 type CodexAppServerAgentHarnessOptions = {
+  getCatalogScheduler?: () => PluginServiceSchedulerV1 | undefined;
   id?: string;
   label?: string;
   providerIds?: Iterable<string>;
@@ -234,9 +236,16 @@ export function createCodexAppServerAgentHarness(
       if (disposed) {
         return { entries: [] };
       }
-      modelCatalog ??= createCodexAppServerModelCatalog(harnessRuntimeId);
+      modelCatalog ??= createCodexAppServerModelCatalog(
+        harnessRuntimeId,
+        options.getCatalogScheduler,
+      );
       return {
         entries: await modelCatalog.load(params, resolveAttemptPluginConfig(params.config)),
+        runtimeVersion: modelCatalog.readRuntimeVersion(
+          params,
+          resolveAttemptPluginConfig(params.config),
+        ),
       };
     },
     readModelCatalogReadiness: (params) =>
@@ -540,7 +549,7 @@ export function createCodexAppServerAgentHarness(
     },
     dispose: async () => {
       disposed = true;
-      modelCatalog?.dispose();
+      await modelCatalog?.dispose();
       await disposeSharedCodexAppServerClients();
     },
   };

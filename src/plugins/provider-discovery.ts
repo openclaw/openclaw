@@ -144,15 +144,54 @@ export async function runProviderCatalog(params: {
   if (!hook) {
     return undefined;
   }
-  const result = await hook.run({
-    config: params.config,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    ...(params.providerIds !== undefined ? { providerIds: params.providerIds } : {}),
-    resolveProviderApiKey: params.resolveProviderApiKey,
-    resolveProviderAuth: params.resolveProviderAuth,
-  });
+  let active = true;
+  const isActive = () => active && params.isActive?.() !== false;
+  let result: Awaited<ReturnType<typeof hook.run>>;
+  try {
+    result = await hook.run({
+      config: params.config,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      ...(params.providerIds !== undefined ? { providerIds: params.providerIds } : {}),
+      resolveProviderApiKey: params.resolveProviderApiKey,
+      resolveProviderAuth: params.resolveProviderAuth,
+      resolveRuntimeVersion: async (runtimeId, options) => {
+        if (!isActive()) {
+          return undefined;
+        }
+        const [
+          { getRegisteredAgentHarness },
+          { resolveDefaultAgentId, resolveAgentDir, resolveAgentWorkspaceDir },
+        ] = await Promise.all([
+          import("../agents/harness/registry.js"),
+          import("../agents/agent-scope.js"),
+        ]);
+        const harness = getRegisteredAgentHarness(runtimeId)?.harness;
+        if (!harness?.loadModelCatalog || !isActive()) {
+          return undefined;
+        }
+        const agentId = resolveDefaultAgentId(params.config);
+        const catalog = await harness.loadModelCatalog({
+          authProfileId: options?.authProfileId,
+          config: params.config,
+          agentId,
+          agentDir: params.agentDir ?? resolveAgentDir(params.config, agentId, params.env),
+          workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDir(params.config, agentId),
+        });
+        if (
+          !isActive() ||
+          getRegisteredAgentHarness(runtimeId)?.harness !== harness ||
+          Array.isArray(catalog)
+        ) {
+          return undefined;
+        }
+        return "runtimeVersion" in catalog ? catalog.runtimeVersion : undefined;
+      },
+    });
+  } finally {
+    active = false;
+  }
   if (params.isActive?.() === false) {
     return undefined;
   }

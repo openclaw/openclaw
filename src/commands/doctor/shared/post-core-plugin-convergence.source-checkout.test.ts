@@ -294,7 +294,11 @@ describe("post-core convergence on source checkouts", () => {
               opts: { all: flow === "cli all", dryRun: true },
             });
             expect(mocks.error).not.toHaveBeenCalled();
-            expect(mocks.log.mock.calls.flat().join("\n")).toContain('Kept bundled plugin "codex"');
+            expect(mocks.log.mock.calls.flat().join("\n")).toContain(
+              flow === "cli named"
+                ? 'Would check and qualify the managed runtime for bundled plugin "codex"; no download or selection change.'
+                : 'Kept bundled plugin "codex"',
+            );
           } else if (flow === "stable") {
             const cohort = await convergePluginReleaseCohort({
               config: { ...cfg, plugins: { ...cfg.plugins, installs: records } },

@@ -61,6 +61,7 @@ import {
   createCodexNodeExecServerCommand,
   createCodexNodeExecServerInvokePolicy,
 } from "./src/node-exec-server.js";
+import { createCodexRuntimeMaintenanceService } from "./src/runtime-maintenance-service.js";
 import {
   CODEX_CATALOG_STATE_NAMESPACE,
   type StoredCodexCatalogEntry,
@@ -133,6 +134,11 @@ export default definePluginEntry({
       }),
     );
     api.registerService(createCodexAppServerProcessReaperService());
+    const runtimeMaintenance = createCodexRuntimeMaintenanceService({
+      pluginRoot: api.rootDir,
+      getConfig: () => resolveCurrentConfig() ?? api.config,
+    });
+    api.registerService(runtimeMaintenance);
     if (appServerConfig?.transport === "websocket") {
       api.registerService(
         createCodexAppServerConnectionHealthService({
@@ -269,6 +275,7 @@ export default definePluginEntry({
       );
     }
     const agentHarnessOptions = {
+      getCatalogScheduler: runtimeMaintenance.getScheduler,
       bindingStore,
       sessionCatalogControlFactory,
       resolveConfig: resolveCurrentConfig,

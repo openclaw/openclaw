@@ -5,6 +5,10 @@ import type { HealthCheck, OpenClawConfig } from "openclaw/plugin-sdk/health";
 import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveCodexManagedRuntimeAppPath,
+  resolveCodexManagedRuntimeRoot,
+} from "./app-server/managed-runtime-installation.js";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import {
   CODEX_MANAGED_APP_SERVER_CHECK_ID,
@@ -95,6 +99,7 @@ function createCheck(deps: Parameters<typeof registerCodexManagedAppServerDoctor
 
 describe("managed Codex doctor check", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(() => vi.restoreAllMocks());
   it.each([
     { code: "Unknown system error -86", errno: -86, syscall: "spawn" },
     { code: "Unknown system error -86" },
@@ -199,6 +204,57 @@ describe("managed Codex doctor check", () => {
     expect(cfg).toEqual(before);
   });
 
+  it.each(["matching", "mismatch", "invalid manifest"] as const)(
+    "validates the retained CLI generation rather than the bootstrap pin (%s)",
+    async (scenario) => {
+      const home = tempDirs.make("openclaw-codex-doctor-retained-");
+      vi.spyOn(os, "homedir").mockReturnValue(home);
+      const generation = resolveCodexManagedRuntimeAppPath(
+        {
+          version: 1,
+          appName: "cli",
+          generation: "independent-stable",
+          runtimeVersion: "99.2.0",
+        },
+        resolveCodexManagedRuntimeRoot("cli"),
+      );
+      const command = path.join(generation, "bin/codex.js");
+      await fs.mkdir(path.dirname(command), { recursive: true });
+      await fs.writeFile(command, "// fixture launcher", { mode: 0o700 });
+      await fs.writeFile(
+        path.join(generation, "package.json"),
+        JSON.stringify({
+          name: "@openai/codex",
+          version: scenario === "invalid manifest" ? "not-a-version" : "99.2.0",
+        }),
+      );
+      const deps = managedDeps(scenario === "mismatch" ? "99.1.0" : "99.2.0");
+      deps.resolveStartOptions.mockImplementation(async (start) => ({
+        ...start,
+        command,
+        commandSource: "resolved-managed",
+      }));
+      const findings = await createCheck(deps).detect(
+        context(config({ managedCommandOrder: "package-only" })),
+      );
+      if (scenario === "matching") {
+        expect(findings).toEqual([]);
+      } else {
+        expect(findings).toEqual([
+          expect.objectContaining({
+            severity: "error",
+            message: expect.stringContaining(
+              scenario === "mismatch"
+                ? "expected 99.2.0, detected 99.1.0"
+                : "invalid managed Codex package manifest",
+            ),
+          }),
+        ]);
+      }
+      expect(deps.runVersionCommand).toHaveBeenCalledTimes(scenario === "invalid manifest" ? 0 : 1);
+    },
+  );
+
   it("reports a version mismatch as a warning during update finalization", async () => {
     const check = createCheck(managedDeps("0.146.0"));
     await expect(
@@ -274,6 +330,13 @@ console.log("codex-cli ${CODEX_APP_SERVER_VERSION}");
         const orphanPid = Number(await fs.readFile(pidPath, "utf8").catch(() => ""));
         if (orphanPid > 0) {
           killProcessTree(orphanPid, { force: true, detached: true });
+          await vi.waitFor(
+            () =>
+              expect(() => process.kill(orphanPid, 0)).toThrow(
+                expect.objectContaining({ code: "ESRCH" }),
+              ),
+            { timeout: 3000 },
+          );
         }
         await fs.rm(directory, { recursive: true, force: true });
       }
@@ -348,6 +411,13 @@ setInterval(() => {}, 1000);
         const probePid = Number(await fs.readFile(pidPath, "utf8").catch(() => ""));
         if (probePid > 0) {
           killProcessTree(probePid, { force: true });
+          await vi.waitFor(
+            () =>
+              expect(() => process.kill(probePid, 0)).toThrow(
+                expect.objectContaining({ code: "ESRCH" }),
+              ),
+            { timeout: 3000 },
+          );
         }
         await fs.rm(directory, { recursive: true, force: true });
       }

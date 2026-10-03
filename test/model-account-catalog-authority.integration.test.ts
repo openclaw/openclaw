@@ -24,6 +24,7 @@ import {
 import { fetchWithSsrFGuard } from "../src/infra/net/fetch-guard.js";
 import { clearLiveCatalogCacheForTests } from "../src/plugin-sdk/provider-catalog-shared.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../src/plugins/runtime/gateway-request-scope.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../src/state/openclaw-state-db-readonly.js";
 import {
   connectUserModelAccount,
@@ -81,18 +82,38 @@ function assertCurrent() {
   }
 }
 
+function selectedRuntimeHarness() {
+  return {
+    id: "codex",
+    label: "Synthetic selected Codex runtime",
+    supports: () => ({ supported: true }),
+    runAttempt: async () => {
+      throw new Error("Discovery must not run inference");
+    },
+    loadModelCatalog: async () => ({ entries: [], runtimeVersion: "99.2.0" }),
+  };
+}
+
 function load() {
-  return loadSelectedProviderAccountCatalog({
-    provider: buildOpenAIProvider(),
-    providerId: "openai",
-    profileId,
-    authStore: { version: 1, profiles: { [profileId]: credential } },
-    config: {},
-    agentDir: "/unused/catalog-authority-agent",
-    workspaceDir: "/unused/catalog-authority-workspace",
-    isCurrent: () => generationCurrent,
-    assertCurrent,
+  const registry = createEmptyPluginRegistry();
+  registry.agentHarnesses.push({
+    pluginId: "codex",
+    source: "fixture",
+    harness: selectedRuntimeHarness(),
   });
+  return withPluginRuntimeRegistryScope(registry, () =>
+    loadSelectedProviderAccountCatalog({
+      provider: buildOpenAIProvider(),
+      providerId: "openai",
+      profileId,
+      authStore: { version: 1, profiles: { [profileId]: credential } },
+      config: {},
+      agentDir: "/unused/catalog-authority-agent",
+      workspaceDir: "/unused/catalog-authority-workspace",
+      isCurrent: () => generationCurrent,
+      assertCurrent,
+    }),
+  );
 }
 
 beforeAll(async () => {
@@ -249,12 +270,7 @@ describe("Gateway automatic account dispatch authority", () => {
           registry.agentHarnesses.push({
             pluginId: "codex",
             source: "fixture",
-            harness: {
-              id: "codex",
-              label: "Codex",
-              supports: () => ({ supported: true }),
-              runAttempt: vi.fn(),
-            },
+            harness: selectedRuntimeHarness(),
           });
           const modelContext = createModelsListTestContext({
             cfg,

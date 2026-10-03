@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { clampThinkingLevel } from "openclaw/plugin-sdk/llm";
 import {
   clearLiveCatalogCacheForTests,
@@ -12,10 +11,8 @@ const mocks = vi.hoisted(() => ({
   resolveProviderAuthProfileMetadata: vi.fn(),
 }));
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => mocks);
-const codexPackage = JSON.parse(
-  fs.readFileSync(new URL("../codex/package.json", import.meta.url), "utf8"),
-);
-const modelsUrl = `https://chatgpt.com/backend-api/codex/models?client_version=${codexPackage.dependencies["@openai/codex"]}`;
+const runtimeVersion = "99.2.0";
+const modelsUrl = `https://chatgpt.com/backend-api/codex/models?client_version=${runtimeVersion}`;
 
 async function discoverCodexModels(params: {
   discoveryApiKey: string;
@@ -51,6 +48,7 @@ async function discoverCodexModels(params: {
       apiKey: params.discoveryApiKey,
       discoveryApiKey: params.discoveryApiKey,
     }),
+    resolveRuntimeVersion: async () => runtimeVersion,
     config: { auth: { profiles: {} } },
     agentDir: "/tmp/openai-agent",
     workspaceDir: "/tmp/openai-workspace",
@@ -95,7 +93,7 @@ describe("OpenAI discovered subscription models", () => {
             },
           ],
         }),
-        finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+        finalUrl: modelsUrl,
         release,
       }));
 

@@ -41,6 +41,7 @@ import {
   withCodexAppServerAcquireDeadline,
 } from "./client-startup-retry.js";
 import { CodexAppServerClient, isUnsupportedCodexAppServerVersionError } from "./client.js";
+import { shouldTrackDesktopGeneration } from "./computer-use-start-options.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import {
   codexAppServerStartOptionsKey,
@@ -51,6 +52,7 @@ import {
 import type { CodexDesktopGeneration } from "./desktop-generation-owner.js";
 import {
   isCodexDesktopGenerationCurrent,
+  readCodexDesktopGenerationCandidates,
   waitForCodexDesktopGeneration,
 } from "./desktop-generation.js";
 import { ownCodexInferenceClient } from "./inference-routing.js";
@@ -59,6 +61,7 @@ import {
   isManagedCodexDesktopCommand,
   resolveManagedCodexAppServerStartOptions,
   resolveManagedCodexNativeCommand,
+  resolveManagedFallbackStartOptions,
 } from "./managed-binary.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
@@ -322,6 +325,12 @@ async function resolveCodexAppServerClientStartContext(options?: CodexAppServerC
   )
     ? await waitForCodexDesktopGeneration()
     : undefined;
+  const desktopCandidates = desktopGeneration
+    ? readCodexDesktopGenerationCandidates(desktopGeneration)
+    : undefined;
+  if (desktopGeneration && !desktopCandidates) {
+    throw new CodexAppServerStartSelectionChangedError();
+  }
   const preparedAuth = options?.preparedAuth;
   const preparedApiKey = preparedAuth?.kind === "api-key" ? preparedAuth.apiKey.trim() : undefined;
   if (preparedAuth && options?.authProfileId !== undefined) {
@@ -421,7 +430,10 @@ async function resolveCodexAppServerClientStartContext(options?: CodexAppServerC
     startOptions: requestedStartOptions,
     agentDir,
   });
-  const managedStartOptions = await resolveManagedCodexAppServerStartOptions(agentStartOptions);
+  const managedStartOptions = await resolveManagedCodexAppServerStartOptions(
+    agentStartOptions,
+    desktopCandidates ? { desktopCandidates } : {},
+  );
   // Preserve ordinary profile environment policy; only explicitly prepared
   // handoffs clear all inherited auth variables before spawning.
   const startOptions = await bridgeCodexAppServerStartOptions({
@@ -449,27 +461,6 @@ async function resolveCodexAppServerClientStartContext(options?: CodexAppServerC
     ...(options?.pluginConfig !== undefined ? { pluginConfig: options.pluginConfig } : {}),
     ...(desktopGeneration ? { desktopGeneration } : {}),
   };
-}
-
-function shouldTrackDesktopGeneration(
-  startOptions: CodexAppServerStartOptions,
-  pluginConfig: unknown,
-): boolean {
-  if (startOptions.transport !== "stdio") {
-    return false;
-  }
-  // A managed package process can publish desktop-owned Computer Use artifacts,
-  // so both share one generation. Custom operator commands remain independent.
-  if (
-    resolveCodexComputerUseConfig({ pluginConfig }).enabled &&
-    (startOptions.commandSource === "managed" || startOptions.commandSource === "resolved-managed")
-  ) {
-    return true;
-  }
-  return (
-    startOptions.commandSource === "managed" &&
-    (startOptions.managedCommandOrder ?? "package-first") === "desktop-first"
-  );
 }
 
 /** Gets or starts a shared Codex app-server client without retaining a lease. */
@@ -900,7 +891,8 @@ async function startInitializedCodexAppServerClientOnce(
     );
   };
   const startOptionsCandidates = resolveManagedFallbackStartOptions(params.startOptions);
-  for (const [index, startOptions] of startOptionsCandidates.entries()) {
+  for (const [index, candidateStartOptions] of startOptionsCandidates.entries()) {
+    const startOptions = candidateStartOptions;
     params.assertCurrent?.();
     observeAcquire(params, { boundary: "prestart-artifact-drain" });
     const desktopCommand = isManagedCodexDesktopCommand(startOptions.command);
@@ -946,6 +938,7 @@ async function startInitializedCodexAppServerClientOnce(
         assertCurrent: assertStartupCurrent,
         ownsIsolatedCodexHome,
       });
+      assertStartupCurrent();
     } catch (error) {
       if (isCodexComputerUseCandidateArtifactsUnavailableError(error)) {
         if (index + 1 < startOptionsCandidates.length) {
@@ -1174,27 +1167,6 @@ function isCodexComputerUseCandidateArtifactsUnavailableError(error: unknown): b
     "code" in error &&
     error.code === "CODEX_COMPUTER_USE_CANDIDATE_ARTIFACTS_UNAVAILABLE"
   );
-}
-
-function resolveManagedFallbackStartOptions(
-  startOptions: CodexAppServerStartOptions,
-): CodexAppServerStartOptions[] {
-  const commands = [startOptions.command, ...(startOptions.managedFallbackCommandPaths ?? [])];
-  const candidates: CodexAppServerStartOptions[] = [];
-  for (const [index, command] of commands.entries()) {
-    const managedFallbackCommandPaths = commands.slice(index + 1);
-    const candidate = {
-      ...startOptions,
-      command,
-    };
-    if (managedFallbackCommandPaths.length === 0) {
-      delete candidate.managedFallbackCommandPaths;
-    } else {
-      candidate.managedFallbackCommandPaths = managedFallbackCommandPaths;
-    }
-    candidates.push(candidate);
-  }
-  return candidates;
 }
 
 export function resetSharedCodexAppServerClientForTests(): void {

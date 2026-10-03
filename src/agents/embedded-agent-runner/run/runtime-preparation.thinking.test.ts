@@ -172,6 +172,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
     const catalog = await provider.catalog!.run({
       config: {},
       env: {},
+      resolveRuntimeVersion: async () => "99.2.0",
       resolveProviderAuth: () => ({ apiKey: "fixture-token", mode: "token", source: "profile" }),
       resolveProviderApiKey: () => ({ apiKey: undefined }),
     });

@@ -643,9 +643,66 @@ openclaw doctor --lint --only codex/managed-app-server --json
 ```
 
 For an effective Codex route using the managed stdio app-server, this
-default-disabled check resolves the platform-native executable and requires the
-exact Codex version pinned by OpenClaw. It does not execute custom, remote, or
+default-disabled check resolves the platform-native executable and requires it
+to match the retained managed package's version, or OpenClaw's exact bootstrap
+pin when using the bundled package. It does not execute custom, remote, or
 macOS desktop-owned app-servers.
+
+<a id="selected-desktop-runtime-updates" />
+
+### Managed runtime updates
+
+Managed Codex runtimes update independently of OpenClaw and plugin releases.
+The Codex plugin checks the official stable distribution one minute after its
+Gateway service starts, then daily. Failures retain the working selection and
+retry after 30 minutes, with exponential backoff up to a day. The service owns
+and joins this work; conversation startup and messages never check for releases
+or download runtimes. `OPENCLAW_NO_AUTO_UPDATE=1` and Nix environments disable
+automatic checks.
+
+To check immediately, run `openclaw plugins update codex`. Explicit plugin
+installation and `openclaw update` also maintain selected runtimes, even when
+the plugin package is unchanged. `--dry-run` does not download or change runtime
+selection. Update rehearsals do not change the host's runtime.
+
+Package-only routes acquire stable `@openai/codex` from npm through OpenClaw's
+script-disabled package installer and verify registry integrity. The package
+bundled with OpenClaw remains the bootstrap fallback, not an update ceiling.
+On macOS, desktop-selected routes acquire the official signed distribution and
+verify its Apple/OpenAI signatures. The updater does not replace
+`/Applications/ChatGPT.app` or `/Applications/Codex.app` or downgrade a newer
+selected version.
+
+Before activation, OpenClaw checks the candidate protocol, selected model
+metadata, and required Computer Use bridge in a disposable Codex home.
+Validation does not copy credentials, submit model turns, or perform desktop
+input. An incompatible candidate leaves the previous selection intact and
+produces an actionable warning. A new upstream protocol or integration that
+OpenClaw does not support can still require an OpenClaw code update.
+
+Verified distributions live in immutable generation directories. The retained
+Codex plugin state in OpenClaw's SQLite database selects the concrete runtime;
+compare-and-set prevents a competing update from overwriting a newer selection.
+On macOS, generations live under
+`~/Library/Application Support/OpenClaw/Codex` (`cli/versions` for package-only
+routes). Existing conversations keep their executable and files; new clients
+resolve the verified selection. Previous generations are not automatically
+deleted.
+
+Model discovery uses the selected runtime's `model/list` and initialize version,
+scoped to its account and runtime. Cached reads return immediately. A live
+plugin service shares a bounded stale refresh after five minutes, coalesces
+concurrent requests, and backs off failures. HTTP discovery uses that same
+runtime version rather than a compiled client-version constant; if no runtime
+version is available, it retains static hints without guessing a version.
+
+Custom executables, pinned commands, remote servers, and custom native Computer
+Use integrations remain operator-owned. `autoInstall: false` does not authorize
+writes to native service or marketplace state. If the retained native
+marketplace differs from the candidate plugin, the update keeps the previous
+runtime and reports that manual validation is required. Package-only Computer
+Use candidates without a qualified desktop distribution are rejected rather
+than selected with an unverified bridge.
 
 `/status` reports the resolved OpenClaw Fast policy (`on`, `off`, or `auto`)
 and the selected runtime. It does not report the upstream service tier actually

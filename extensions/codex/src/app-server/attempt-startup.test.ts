@@ -55,12 +55,21 @@ const computerUseReadinessFailure = vi.hoisted(() => ({
   next: undefined as Error | undefined,
 }));
 
-vi.mock("./desktop-generation.js", () => ({
-  isCodexDesktopGenerationCurrent: (candidate: { epoch: number; fingerprint: string }) =>
-    candidate.epoch === desktopGeneration.current?.epoch &&
-    candidate.fingerprint === desktopGeneration.current?.fingerprint,
-  waitForCodexDesktopGeneration: async () => desktopGeneration.current,
-}));
+vi.mock("./desktop-generation.js", () => {
+  const isCurrent = (candidate: { epoch: number; fingerprint: string } | undefined) =>
+    Boolean(
+      candidate &&
+      candidate.epoch === desktopGeneration.current?.epoch &&
+      candidate.fingerprint === desktopGeneration.current?.fingerprint,
+    );
+  return {
+    isCodexDesktopGenerationCurrent: isCurrent,
+    waitForCodexDesktopGeneration: async () => desktopGeneration.current,
+    // This fixture admits only the managed package fallback, not host desktop apps.
+    readCodexDesktopGenerationCandidates: (candidate: { epoch: number; fingerprint: string }) =>
+      isCurrent(candidate) ? [] : undefined,
+  };
+});
 
 vi.mock("./computer-use.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./computer-use.js")>();

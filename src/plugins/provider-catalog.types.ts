@@ -12,6 +12,11 @@ export type { ProviderCatalogOutcome } from "./provider-catalog-outcome.js";
 export type ProviderCatalogOrder = "simple" | "profile" | "paired" | "late";
 
 export type ProviderCatalogContext = {
+  /** Reuses a registered native harness catalog and its selected-runtime handshake. */
+  resolveRuntimeVersion?: (
+    runtimeId: string,
+    options?: { authProfileId?: string },
+  ) => Promise<string | undefined>;
   /** Acquisition lifetime; release awaited work and join its cleanup when aborted. */
   signal?: AbortSignal;
   config: OpenClawConfig;

@@ -406,6 +406,7 @@ export async function createFullModelCatalogAccess(
   const acquireNativeCatalog = (
     providerIds?: readonly string[],
     selection?: PreparedNativeModelSelection,
+    refresh?: boolean,
   ): Promise<ModelCatalogSnapshot> => {
     const selectionReady = () => {
       assertCurrent();
@@ -440,6 +441,7 @@ export async function createFullModelCatalogAccess(
       const startupProviders = new Set(params.agentFacts.providerIds.map(normalizeProvider));
       attempt.setPending([], "native");
       const rawCatalog = await augmentPreparedModelCatalogWithAgentHarness({
+        refresh,
         input: params.agentFacts.input,
         nativeSelection: selection,
         snapshot: published.inventory?.catalog ?? params.catalogFacts.modelCatalog,
@@ -639,7 +641,11 @@ export async function createFullModelCatalogAccess(
         );
       }
       if (includeNative) {
-        return await acquireNativeCatalog(options.providerIds ? requestedProviders : undefined);
+        return await acquireNativeCatalog(
+          options.providerIds ? requestedProviders : undefined,
+          undefined,
+          options.refresh,
+        );
       }
       return published.catalog ?? staticCatalog;
     })().finally(() => {

@@ -12,3 +12,8 @@ export {
 } from "@openclaw/model-catalog-core/provider-model-id-normalize";
 export { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 export { parseModelRef } from "../agents/model-selection-normalize.js";
+
+export {
+  collectConfiguredModelRefs,
+  type ConfiguredModelRef,
+} from "@openclaw/model-catalog-core/configured-model-refs";

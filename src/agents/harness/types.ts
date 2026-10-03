@@ -435,6 +435,10 @@ type AgentHarnessMcpCatalogParams = {
 };
 
 export type AgentHarnessModelCatalogParams = {
+  /** Explicit inventory refresh; ordinary reads may use a current cached observation. */
+  refresh?: boolean;
+  /** Keep native discovery bound to an explicitly selected provider account. */
+  authProfileId?: string;
   config: OpenClawConfig;
   agentId: string;
   agentDir: string;
@@ -446,6 +450,8 @@ export type AgentHarnessModelCatalogResult =
   | readonly import("../model-catalog.types.js").ModelCatalogEntry[]
   | {
       entries: readonly import("../model-catalog.types.js").ModelCatalogEntry[];
+      /** Version from the same selected runtime that produced this catalog. */
+      runtimeVersion?: string;
       outcomes?: readonly import("../../plugins/provider-catalog-outcome.js").ProviderCatalogOutcome[];
     };
 

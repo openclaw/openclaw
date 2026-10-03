@@ -8,6 +8,7 @@
   "runtime",
   "health",
   "doctor-repair-runtime",
+  "package-install-runtime",
   "model-ref-parse",
   "model-catalog-pricing",
   "outbound-echo-runtime",

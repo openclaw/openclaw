@@ -190,8 +190,72 @@ describe("managed plugin installation", () => {
     );
   });
 
-  it("never falls back after npm security refusal", async () => {
-    const failure = { code: "security_scan_blocked", error: "untrusted package" };
+  it.each([false, true])(
+    "uses npm first and ClawHub only when npm is absent (%s)",
+    async (absent) => {
+      mocks.readConfig.mockResolvedValue(configSnapshot());
+      mockHostedOfficialCatalog([
+        {
+          name: "@openclaw/diffs",
+          openclaw: {
+            plugin: { id: "diffs" },
+            install: {
+              npmSpec: "@openclaw/diffs",
+              clawhubSpec: "clawhub:@openclaw/diffs",
+              defaultChoice: "clawhub",
+              expectedIntegrity: "sha512-npmpin",
+            },
+          },
+        },
+      ]);
+      mocks.npmInstall.mockResolvedValue(
+        absent
+          ? { ok: false, code: "npm_package_not_found", error: "package absent" }
+          : { ok: true, pluginId: "diffs", targetDir: "/tmp/npm/diffs", extensions: ["index.js"] },
+      );
+      mockClawHubInstall("diffs", "@openclaw/diffs");
+      mocks.persistInstall.mockResolvedValue({});
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
+      );
+
+      await installManagedPlugin({
+        request: {
+          source: "official",
+          pluginId: "diffs",
+          acknowledgeCapabilities: emptyArtifactAcknowledgment,
+        },
+        env: {},
+      });
+
+      expect(mocks.npmInstall).toHaveBeenCalledTimes(1);
+      expect(mocks.npmInstall).toHaveBeenCalledWith(
+        expect.objectContaining({ expectedIntegrity: "sha512-npmpin" }),
+      );
+      expect(mocks.clawhubInstall).toHaveBeenCalledTimes(absent ? 1 : 0);
+      if (absent) {
+        expect(mocks.clawhubInstall.mock.calls[0]?.[0].expectedIntegrity).toBeUndefined();
+      }
+      expect(mocks.persistInstall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          install: expect.objectContaining({ source: absent ? "clawhub" : "npm" }),
+          runtimeMaintenance: {
+            operation: "install",
+            signal: expect.any(AbortSignal),
+            assertCurrent: expect.any(Function),
+          },
+        }),
+      );
+    },
+  );
+
+  it.each([
+    { code: "incompatible_plugin_api", error: "incompatible artifact" },
+    { code: "security_scan_blocked", error: "untrusted package" },
+    { code: "security_scan_failed", error: "policy failed" },
+    { error: "integrity mismatch" },
+  ])("never falls back after npm refusal ($error)", async (failure) => {
+    mocks.readConfig.mockResolvedValue(configSnapshot());
     mockHostedOfficialCatalog([
       {
         name: "@openclaw/diffs",
@@ -207,14 +271,18 @@ describe("managed plugin installation", () => {
       env: {},
     }).catch((error: unknown) => error);
     expect(rejected).toMatchObject({ message: failure.error });
-    expect(pluginLifecycleError(rejected, { entered: true })).toMatchObject({
+    const serialized = pluginLifecycleError(rejected, { entered: true });
+    expect(serialized).toMatchObject({
       message: failure.error,
       details: {
         pluginInstallRejected: true,
-        pluginInstallCode: failure.code,
+        ...(failure.code ? { pluginInstallCode: failure.code } : {}),
         pluginInstallSource: { source: "npm" },
       },
     });
+    if (!failure.code) {
+      expect(serialized.details).not.toHaveProperty("pluginInstallCode");
+    }
     expect(mocks.clawhubInstall).not.toHaveBeenCalled();
     expect(mocks.persistInstall).not.toHaveBeenCalled();
   });
@@ -447,15 +515,20 @@ describe("managed plugin installation", () => {
       },
       env: {},
     });
-    await vi.waitFor(() => expect(mocks.persistInstall).toHaveBeenCalledTimes(1));
-    const enable = setManagedPluginEnabled({ pluginId: "workboard", enabled: true, env: {} });
-    await Promise.resolve();
-
-    expect(mocks.readConfig).toHaveBeenCalledTimes(1);
-    releasePersist?.({});
-    await install;
-    await enable;
-    expect(mocks.readConfig).toHaveBeenCalledTimes(2);
+    let enable: Promise<unknown> | undefined;
+    try {
+      await vi.waitFor(() => expect(mocks.persistInstall).toHaveBeenCalledTimes(1));
+      enable = setManagedPluginEnabled({ pluginId: "workboard", enabled: true, env: {} });
+      await Promise.resolve();
+      expect(mocks.readConfig).toHaveBeenCalledTimes(1);
+      releasePersist?.({});
+      await install;
+      await enable;
+      expect(mocks.readConfig).toHaveBeenCalledTimes(2);
+    } finally {
+      releasePersist?.({});
+      await Promise.allSettled([install, enable]);
+    }
   });
 
   it("classifies unavailable ClawHub security checks", async () => {

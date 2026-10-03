@@ -91,6 +91,19 @@ function createCatalogProviderRegistry(providers = discovery.providers) {
     provider,
     source: "test",
   }));
+  registry.agentHarnesses.push({
+    pluginId: "codex",
+    source: "test",
+    harness: {
+      id: "codex",
+      label: "Synthetic selected Codex runtime",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("Discovery must not run inference");
+      },
+      loadModelCatalog: async () => ({ entries: [], runtimeVersion: "99.2.0" }),
+    },
+  });
   return registry;
 }
 
@@ -409,7 +422,7 @@ describe("Provider model discovery auth preparation", () => {
           origin: "https://chatgpt.com",
           pathname: "/backend-api/codex/models",
           authorization: `Bearer ${accessToken}`,
-          version: expect.any(String),
+          version: "99.2.0",
         },
       ]);
       expect(outcomes).toEqual([{ provider: "openai", status: "ready" }]);

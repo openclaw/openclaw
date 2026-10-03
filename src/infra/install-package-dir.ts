@@ -9,6 +9,10 @@ import {
   type MovePathPublicationReceipt,
 } from "@openclaw/fs-safe/atomic";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import { isRemovalIoError, removePathWithinRoot } from "./fs-safe-remove.js";
@@ -405,6 +409,11 @@ export async function installPackageDir<
     published.install = null;
   };
   const fail = async (error: string, cause?: unknown) => {
+    // The process owner could not settle its writer. Keep its exact stage and
+    // preserve the canonical error so the enclosing install retains custody.
+    if (hasCommandProcessCleanupError(cause)) {
+      throw cause;
+    }
     const installBaseChanged = isInstallBaseChangedError(cause);
     let restoreError: string | undefined;
     if (installBaseChanged) {
@@ -507,6 +516,7 @@ export async function installPackageDir<
 
   if (params.hasDeps) {
     const dependencyDir = stageDir;
+    let cleanupUncertain = false;
     try {
       const restoreManifest = await sanitizeManifestForNpmInstall(
         stageDir,
@@ -521,7 +531,7 @@ export async function installPackageDir<
           "dependencies",
           async () => {
             try {
-              return await runCommandWithTimeout(
+              const result = await runCommandWithTimeout(
                 // Plugins install into isolated directories, so omitting peer deps can strip
                 // runtime requirements that npm would otherwise materialize for the package.
                 // Verified on Blacksmith Ubuntu/Node 24/npm 11: `--silent` can make npm fail
@@ -546,8 +556,17 @@ export async function installPackageDir<
                   }),
                 },
               );
+              if (result.cleanup === "uncertain") {
+                throw new CommandProcessCleanupError();
+              }
+              return result;
+            } catch (error) {
+              cleanupUncertain = hasCommandProcessCleanupError(error);
+              throw error;
             } finally {
-              await restoreProjectNpmConfigAfterInstall(hiddenProjectNpmConfig);
+              if (!cleanupUncertain) {
+                await restoreProjectNpmConfigAfterInstall(hiddenProjectNpmConfig);
+              }
             }
           },
           (result) => result.code === 0,
@@ -556,7 +575,9 @@ export async function installPackageDir<
           npmFailure = `npm install failed: ${formatNpmCommandFailureOutput(npmRes)}`;
         }
       } finally {
-        await restoreManifest();
+        if (!cleanupUncertain) {
+          await restoreManifest();
+        }
       }
       if (npmFailure) {
         return await fail(npmFailure);

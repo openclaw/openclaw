@@ -61,7 +61,11 @@ describe("Codex process registration", () => {
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-process-registration-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    // POSIX process inspection is mocked, but real database workers must observe
+    // the host's Linux boot/PID namespace when registering the child.
+    if (process.platform === "win32") {
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    }
     store = openStore();
     vi.mocked(readCodexAppServerProcessSnapshot).mockResolvedValue([
       observer,

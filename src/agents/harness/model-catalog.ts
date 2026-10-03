@@ -63,6 +63,7 @@ function replaceRuntimeScope<T>(
 }
 
 export async function augmentModelCatalogWithAgentHarness(params: {
+  refresh?: boolean;
   cfg: OpenClawConfig;
   agentId: string;
   agentDir: string;
@@ -209,6 +210,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     let outcomes: readonly ProviderCatalogOutcome[] = [];
     try {
       const loaded = await harness.loadModelCatalog({
+        refresh: params.refresh,
         config: params.observationConfig ?? params.cfg,
         agentId: params.agentId,
         agentDir: params.agentDir,
@@ -371,6 +373,7 @@ export function isPreparedNativeModelCatalogReady(params: {
 }
 
 export function augmentPreparedModelCatalogWithAgentHarness(params: {
+  refresh?: boolean;
   input: PreparedModelRuntimeInput;
   nativeSelection?: PreparedNativeModelSelection;
   snapshot: ModelCatalogSnapshot;

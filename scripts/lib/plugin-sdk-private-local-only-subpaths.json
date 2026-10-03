@@ -107,6 +107,7 @@
   "number-runtime",
   "outbound-echo-runtime",
   "outbound-media",
+  "package-install-runtime",
   "pair-loop-guard-runtime",
   "plugin-state-runtime",
   "plugin-state-store-runtime",

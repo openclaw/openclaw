@@ -4,7 +4,10 @@ import { listAllCodexAppServerModels } from "./models.js";
 
 const transport = vi.hoisted(() => ({ request: vi.fn(), release: vi.fn() }));
 vi.mock("./shared-client.js", () => ({
-  getLeasedSharedCodexAppServerClient: async () => ({ request: transport.request }),
+  getLeasedSharedCodexAppServerClient: async () => ({
+    request: transport.request,
+    getServerVersion: () => "99.1.0",
+  }),
   createIsolatedCodexAppServerClient: vi.fn(),
   captureSharedCodexAppServerCatalogLifetime: () => () => true,
   releaseLeasedSharedCodexAppServerClient: transport.release,
