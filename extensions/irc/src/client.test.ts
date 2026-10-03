@@ -244,9 +244,15 @@ async function collectPrivmsgBodies(
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
-function maxLineBytes(bodies: string[]): number {
+// The line recipients get: the server puts our `:nick!user@host ` in front, and 512 bytes bounds
+// that relayed line too, so measure it with the longest user@host a server can give us.
+const RELAY_PREFIX = `:bot!${"u".repeat(11)}@${"h".repeat(63)} `;
+
+function maxRelayedLineBytes(bodies: string[]): number {
   return Math.max(
-    ...bodies.map((body) => Buffer.byteLength(`PRIVMSG #general :${body}\r\n`, "utf8")),
+    ...bodies.map((body) =>
+      Buffer.byteLength(`${RELAY_PREFIX}PRIVMSG #general :${body}\r\n`, "utf8"),
+    ),
   );
 }
 
@@ -309,8 +315,18 @@ describe("irc client PRIVMSG chunking on the wire", () => {
       name: "nearby word boundary",
       text: "alpha beta gamma",
       limit: 10,
-      bodies: ["alpha beta", "gamma"],
-      separator: " ",
+      bodies: ["alpha beta", " gamma"],
+    },
+    {
+      name: "whitespace-only chunks and interior space runs",
+      text: "a  b",
+      limit: 1,
+      bodies: ["a", "  b"],
+    },
+    {
+      name: "interior runs of spaces when chunking long text",
+      text: "aaaa bbbb  cccc dddd",
+      limit: 8,
     },
   ])(
     "preserves $name",
@@ -319,7 +335,7 @@ describe("irc client PRIVMSG chunking on the wire", () => {
       try {
         const bodies = await collectPrivmsgBodies(server, text, limit);
         expect(bodies.length).toBeGreaterThan(1);
-        expect(maxLineBytes(bodies)).toBeLessThanOrEqual(512);
+        expect(maxRelayedLineBytes(bodies)).toBeLessThanOrEqual(512);
         expect(bodies.some((body) => LONE_SURROGATE.test(body))).toBe(false);
         expect(bodies.join(separator)).toBe(text);
         if (lengths) {
@@ -333,4 +349,30 @@ describe("irc client PRIVMSG chunking on the wire", () => {
       }
     },
   );
+
+  it("keeps a space run longer than one chunk within the 512-byte line budget", async () => {
+    const server = await startLoopbackIrcServer();
+    try {
+      const text = `a${" ".repeat(600)}b`;
+      const bodies = await collectPrivmsgBodies(server, text);
+      expect(bodies.length).toBeGreaterThan(1);
+      expect(maxRelayedLineBytes(bodies)).toBeLessThanOrEqual(512);
+      expect(bodies.join("")).toBe(text);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps mixed whitespace in its original order when overflow is chunked", async () => {
+    const server = await startLoopbackIrcServer();
+    try {
+      const text = `a\u00a0${" ".repeat(600)}b`;
+      const bodies = await collectPrivmsgBodies(server, text);
+      expect(bodies.length).toBeGreaterThan(1);
+      expect(maxRelayedLineBytes(bodies)).toBeLessThanOrEqual(512);
+      expect(bodies.join("")).toBe(text);
+    } finally {
+      await server.close();
+    }
+  });
 });
