@@ -148,10 +148,10 @@ export function enqueueFollowupRun(
   const lifecycle = run.turnAdoptionLifecycle;
   if (signal && lifecycle && runFollowup) {
     const onAbort = () => {
-      const queue = getExistingFollowupQueue(key);
-      if (queue) {
+      const currentQueue = getExistingFollowupQueue(key);
+      if (currentQueue) {
         // Cancellation must release pending ownership even while normal draining is dormant.
-        void dropAbortedFollowups(queue, runFollowup).catch((error: unknown) => {
+        void dropAbortedFollowups(currentQueue, runFollowup).catch((error: unknown) => {
           defaultRuntime.error?.(`followup queue cancellation failed: ${String(error)}`);
         });
       }

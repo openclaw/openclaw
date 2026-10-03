@@ -376,12 +376,12 @@ export async function tryDispatchAcpReplyCore(
 
   const acpDispatchStartedAt = Date.now();
   const finishAttempt = (
-    queuedFinal: boolean,
+    finalQueued: boolean,
     error?: AcpRuntimeError,
   ): AcpDispatchAttemptResult => {
     const counts = params.dispatcher.getQueuedCounts();
     delivery.applyRoutedCounts(counts);
-    const hasQueuedDelivery = counts.tool + counts.block + counts.final > 0 || queuedFinal;
+    const hasQueuedDelivery = counts.tool + counts.block + counts.final > 0 || finalQueued;
     const suppressionReason = hasQueuedDelivery
       ? undefined
       : delivery.getDeliverySuppressionReason();
@@ -395,7 +395,7 @@ export async function tryDispatchAcpReplyCore(
         : (suppressionReason ?? "acp_dispatch"),
     });
     params.markIdle("message_completed");
-    return { queuedFinal, counts };
+    return { queuedFinal: finalQueued, counts };
   };
   const requestId = resolveAcpRequestId(params.ctx);
   const existingRunId = normalizeOptionalString(params.runId);

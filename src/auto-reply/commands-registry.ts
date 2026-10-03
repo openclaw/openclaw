@@ -194,7 +194,7 @@ export function findCommandByNativeName(
       command.scope !== "text" &&
       supportsNativeProvider(command, provider) &&
       mapNativeCommandNames(command).some(
-        (name) => normalizeOptionalLowercaseString(name) === normalized,
+        (nativeName) => normalizeOptionalLowercaseString(nativeName) === normalized,
       ),
   );
 }
@@ -404,7 +404,7 @@ export function resolveCommandArgMenu(
     argSpec === "auto"
       ? command.args.find((arg) => resolveChoices(arg).length > 0)?.name
       : argSpec.arg;
-  const arg = command.args.find((arg) => arg.name === argName);
+  const arg = command.args.find((entry) => entry.name === argName);
   if (!argName || !arg || args?.values?.[argName] != null) {
     return null;
   }

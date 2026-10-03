@@ -202,7 +202,7 @@ export async function stageSandboxMedia(params: {
         }
       } else {
         const root = await fsRoot(effectiveWorkspaceDir);
-        const source = await readLocalFileSafely({
+        const { buffer } = await readLocalFileSafely({
           filePath: sourcePath,
           maxBytes: SANDBOX_MEDIA_MAX_BYTES,
         });
@@ -210,7 +210,7 @@ export async function stageSandboxMedia(params: {
         abortSignal?.throwIfAborted();
         await prepareDestination();
         abortSignal?.throwIfAborted();
-        await root.create(relativeDest, source.buffer);
+        await root.create(relativeDest, buffer);
       }
     };
 

@@ -106,7 +106,7 @@ export function resolveStableMessageToolAvailability(params: {
       ctx.AccountId ??
       (sessionEntry ? deliveryContextFromSession(sessionEntry)?.accountId : undefined),
   });
-  return resolveMessageToolAvailability({
+  return resolveReplyMessageToolAvailability({
     ...params,
     groupPolicy,
     prefersMessageToolDelivery: true,
@@ -114,7 +114,7 @@ export function resolveStableMessageToolAvailability(params: {
 }
 
 /** Applies the same profile, account, group, and delegation layers to every reply turn. */
-export function resolveMessageToolAvailability(params: {
+export function resolveReplyMessageToolAvailability(params: {
   cfg: OpenClawConfig;
   sessionAgentId: string;
   sessionKey?: string;

@@ -1618,7 +1618,6 @@ src/audit/execution-identity-context-build.ts	3
 src/auto-reply/chunk.ts	1
 src/auto-reply/command-auth.ts	3
 src/auto-reply/command-turn-context.ts	1
-src/auto-reply/commands-registry.ts	1
 src/auto-reply/heartbeat-filter.ts	2
 src/auto-reply/heartbeat-tool-response.ts	2
 src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts	1
@@ -1670,7 +1669,7 @@ src/auto-reply/reply/reply-operation-run-state.ts	1
 src/auto-reply/reply/reply-run-registry.registry.ts	1
 src/auto-reply/reply/reply-threading.ts	2
 src/auto-reply/reply/reply-timing-tracker.ts	2
-src/auto-reply/reply/restart-recovery-claim.ts	3
+src/auto-reply/reply/restart-recovery-claim.ts	2
 src/auto-reply/reply/session-delivery.ts	1
 src/auto-reply/reply/session.ts	2
 src/auto-reply/reply/source-reply-delivery-runtime.ts	2

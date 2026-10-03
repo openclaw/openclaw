@@ -30,7 +30,7 @@ import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
 import { resolveDispatchConversationBinding } from "./session-conversation-binding.js";
 import {
-  resolveMessageToolAvailability,
+  resolveReplyMessageToolAvailability,
   resolveStableMessageToolAvailability,
 } from "./session-stable-reply-mode.js";
 import {
@@ -213,7 +213,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     senderUsername: normalizeOptionalString(ctx.SenderUsername),
     senderE164: normalizeOptionalString(ctx.SenderE164),
   });
-  const messageToolAvailable = resolveMessageToolAvailability({
+  const messageToolAvailable = resolveReplyMessageToolAvailability({
     cfg,
     sessionAgentId,
     sessionKey: acpDispatchSessionKey,
