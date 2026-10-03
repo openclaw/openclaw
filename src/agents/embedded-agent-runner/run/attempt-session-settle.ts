@@ -1,11 +1,13 @@
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { clearToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
+import type { retainEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import type { UserTranscriptContext } from "./attempt-history.js";
 import type { EmitDiagnosticRunCompleted } from "./attempt-setup.js";
@@ -60,6 +62,7 @@ type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 type DisposableRuntime = { dispose(): Promise<void> | void };
 
 export type EmbeddedAttemptSessionResources = {
+  promptStateLease?: ReturnType<typeof retainEmbeddedSessionPromptState>;
   session?: AgentSession;
   getUserTranscriptContexts?: () => readonly UserTranscriptContext[] | undefined;
   sessionManager?: ReturnType<typeof guardSessionManager>;
@@ -68,9 +71,41 @@ export type EmbeddedAttemptSessionResources = {
   buildAbortSettlePromise: () => Promise<void> | null;
 };
 
+/** Keep retained review callbacks outside the attempt's tool-execution closure scope. */
+export function createEmbeddedAttemptSessionResources(
+  config: EmbeddedRunAttemptParams["config"],
+  signal: AbortSignal,
+) {
+  const resources: EmbeddedAttemptSessionResources = {
+    trajectoryRecorder: null,
+    buildAbortSettlePromise: () => null,
+  };
+  let live: EmbeddedAttemptSessionResources | undefined = resources;
+  return {
+    resources,
+    reviewTranscript: () => {
+      if (!live?.session || signal.aborted) {
+        return undefined;
+      }
+      return buildExecAutoReviewTranscript({
+        config,
+        messages: live.session.messages,
+        userTurnOrigins: new Map(
+          live
+            .getUserTranscriptContexts?.()
+            ?.map(({ runtimeMessage, transcriptMessage }) => [runtimeMessage, transcriptMessage]),
+        ),
+      });
+    },
+    releaseReview: () => {
+      live = undefined;
+    },
+  };
+}
+
 type CleanupEmbeddedAttemptSessionInput = EmbeddedAttemptSessionResources & {
-  attempt: EmbeddedRunAttemptParams;
-  transcriptLifecycle: AttemptTranscriptLifecycle;
+  attempt: Pick<EmbeddedRunAttemptParams, "runId" | "sessionId" | "abortSignal">;
+  transcriptLifecycle: Pick<AttemptTranscriptLifecycle, "beginCleanup" | "dispose">;
   bundleMcpRuntime?: DisposableRuntime;
   bundleLspRuntime?: DisposableRuntime;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
@@ -85,6 +120,7 @@ type CleanupEmbeddedAttemptSessionInput = EmbeddedAttemptSessionResources & {
 export async function cleanupEmbeddedAttemptSessionPhase(
   input: CleanupEmbeddedAttemptSessionInput,
 ): Promise<void> {
+  using _promptState = input.promptStateLease;
   const { attempt } = input;
   const initialState = projectAgentRunAttemptTerminal(input.state.terminal);
   if (input.trajectoryRecorder && !input.trajectoryEndRecorded) {

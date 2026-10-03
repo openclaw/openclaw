@@ -112,10 +112,10 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           sourceReplyTranscriptOwner: true,
         });
         expect(messages.map(readNestedToolActivity).filter(Boolean)).toEqual(
-          harness.nestedToolActivities,
+          await harness.readNestedActivities(),
         );
-        expect(harness.nestedToolActivities).toHaveLength(1);
-        expect(harness.nestedToolActivities[0]?.details).toMatchObject({
+        expect(await harness.readNestedActivities()).toHaveLength(1);
+        expect((await harness.readNestedActivities())[0]?.details).toMatchObject({
           toolName: "message",
           isError: false,
         });
@@ -251,7 +251,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
         const activities = messages.filter((message) => message.role === "custom");
         expect(activities).toHaveLength(3);
-        expect(harness.nestedToolActivities.map(({ details }) => details.runId)).toEqual([
+        expect((await harness.readNestedActivities()).map(({ details }) => details.runId)).toEqual([
           harness.runId,
           harness.runId,
           harness.runId,
@@ -306,11 +306,9 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         });
         await harness.subscription.waitForPendingEvents();
         expect(harness.subscription.toolMetas).toEqual([]);
-        expect(harness.nestedToolActivities.map(({ details }) => details.toolName)).toEqual([
-          "read",
-          "read",
-          "read",
-        ]);
+        expect(
+          (await harness.readNestedActivities()).map(({ details }) => details.toolName),
+        ).toEqual(["read", "read", "read"]);
         const other = createSubscribedCodeModeHarness({
           name: "reused-child",
           sessionManager: manager,

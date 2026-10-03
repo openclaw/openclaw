@@ -8,6 +8,7 @@ import {
   getEmbeddedSessionPromptState,
   prepareSessionSystemPrompt,
   persistSessionSystemPrompt,
+  retainEmbeddedSessionPromptState,
 } from "./session-prompt-state.js";
 
 const sessionIds = new Set<string>();
@@ -20,6 +21,49 @@ function prepare(sessionId: string, projectKey: string | null): readonly string[
 afterEach(() => {
   clearEmbeddedSessionPromptStates(sessionIds);
   sessionIds.clear();
+});
+
+it("unloads prompt payloads after the last attempt while retaining recent projects", () => {
+  const sessionId = "idle-prompt-state";
+  prepare(sessionId, "project-one");
+  const first = retainEmbeddedSessionPromptState(sessionId);
+  const overlapping = retainEmbeddedSessionPromptState(sessionId);
+  first.state.toolResults.frozen.add("sent-result");
+  first[Symbol.dispose]();
+  first[Symbol.dispose]();
+  expect(getEmbeddedSessionPromptState(sessionId)).toBe(overlapping.state);
+  expect(overlapping.state.toolResults.frozen.has("sent-result")).toBe(true);
+  overlapping[Symbol.dispose]();
+  expect(getEmbeddedSessionPromptState(sessionId)).not.toBe(first.state);
+  expect(prepare(sessionId, null)).toEqual(["project-one"]);
+
+  const retired = retainEmbeddedSessionPromptState(sessionId);
+  clearEmbeddedSessionPromptStates([sessionId]);
+  const replacement = retainEmbeddedSessionPromptState(sessionId);
+  retired[Symbol.dispose]();
+  expect(getEmbeddedSessionPromptState(sessionId)).toBe(replacement.state);
+  expect(prepare(sessionId, null)).toEqual([]);
+  replacement[Symbol.dispose]();
+});
+
+it("keeps active attempts canonical when concurrency exceeds the idle cache", () => {
+  const leases = Array.from({ length: 70 }, (_, index) => {
+    const id = `concurrent-prompt-${index}`;
+    sessionIds.add(id);
+    return { id, lease: retainEmbeddedSessionPromptState(id) };
+  });
+  try {
+    for (const { id, lease } of leases) {
+      expect(getEmbeddedSessionPromptState(id)).toBe(lease.state);
+    }
+  } finally {
+    for (const { lease } of leases) {
+      lease[Symbol.dispose]();
+    }
+  }
+  for (const { id, lease } of leases) {
+    expect(getEmbeddedSessionPromptState(id)).not.toBe(lease.state);
+  }
 });
 
 describe("system prompt series", () => {
@@ -266,6 +310,8 @@ describe("system prompt series", () => {
       expect(resumed.update).toBeUndefined();
       expect(resumed.systemPrompt).toBe(first.systemPrompt);
       if (!mismatch) {
+        await persist(entries);
+        expect(entries).toHaveLength(2);
         expect(project(base, entries).update?.content).toContain("## Changed\nOld.");
       }
     },

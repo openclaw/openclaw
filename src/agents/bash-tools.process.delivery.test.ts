@@ -223,18 +223,20 @@ test.each(["blocked", "error"] as const)(
       expect(first, boundCodeModeError(JSON.stringify(first), 1_024)).toMatchObject({
         status: "completed",
       });
-      expect(h.nestedToolActivities).toHaveLength(1);
-      expect(h.nestedToolActivities[0]?.details.result.content).toContainEqual(output);
+      expect(await h.readNestedActivities()).toHaveLength(1);
+      expect((await h.readNestedActivities())[0]?.details.result.content).toContainEqual(output);
       if (mode === "error") {
-        expect(h.nestedToolActivities[0]?.details.isError).toBe(true);
+        expect((await h.readNestedActivities())[0]?.details.isError).toBe(true);
       }
       expect(await poll("nested-next-turn")).toMatchObject({ status: "completed" });
-      expect(h.nestedToolActivities).toHaveLength(2);
+      expect(await h.readNestedActivities()).toHaveLength(2);
       if (mode === "blocked") {
-        expect(h.nestedToolActivities[1]?.details.result.content).toContainEqual(output);
+        expect((await h.readNestedActivities())[1]?.details.result.content).toContainEqual(output);
         expect(await poll("nested-after-retry")).toMatchObject({ status: "completed" });
       }
-      expect(h.nestedToolActivities.at(-1)?.details.result.content).not.toContainEqual(output);
+      expect((await h.readNestedActivities()).at(-1)?.details.result.content).not.toContainEqual(
+        output,
+      );
       expect(
         h.sessionManager
           .getEntries()

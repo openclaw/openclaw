@@ -447,6 +447,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-execution-settle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-stream-prepare.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-nested-tool-activity.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-stream-settle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-yield-handoff.test.ts",
   "src/agents/embedded-agent-runner/run-entry.test.ts",
