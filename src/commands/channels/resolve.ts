@@ -8,7 +8,7 @@ import type {
   ChannelResolveKind,
   ChannelResolveResult,
 } from "../../channels/plugins/types.adapters.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
