@@ -435,7 +435,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.resetSessionSuggestions();
       this.resetSessionReactions();
       this.clearTypingActors();
-      this.sessionDiscussionStates.clear();
+      this.sessionDiscussionInfos.clear();
       this.sessionDiscussionOpenUrls.clear();
       this.sessionDiscussionPanels.clear();
       this.sessionParticipationTracker.reset();

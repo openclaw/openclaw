@@ -4,7 +4,7 @@ import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/
 import type {
   SessionCatalogHost,
   SessionCatalogSession,
-  SessionDiscussionState,
+  SessionDiscussionInfo,
   SessionSharingRole,
   SessionSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -484,7 +484,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     pendingRoute?: boolean;
   };
   protected swarmHydrator: SwarmRosterHydrator | null = null;
-  protected readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
+  protected readonly sessionDiscussionInfos = new Map<string, SessionDiscussionInfo>();
   protected readonly sessionDiscussionOpenUrls = new Map<string, string | null>();
   protected readonly pendingPanelToggleRequests = new Map<
     SessionPanelToggleSlot,

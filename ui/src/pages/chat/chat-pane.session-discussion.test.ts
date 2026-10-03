@@ -85,9 +85,42 @@ describe("chat pane session discussion", () => {
     await pane.probeSessionDiscussion(SESSION_KEY);
     pane
       .buildSessionDiscussionPanel(state, SESSION_KEY)
-      ?.onStateChange(SESSION_KEY, "open", openUrl);
+      ?.onStateChange(SESSION_KEY, { state: "open", openUrl }, openUrl);
 
     expect(pane.buildSessionDiscussionPanel(state, SESSION_KEY)?.openUrl).toBe(openUrl);
+  });
+
+  it("reuses the probed room and records its open result without another info request", async () => {
+    const { pane, state, request } = createDiscussionPane({ info: { state: "available" } });
+    await pane.probeSessionDiscussion(SESSION_KEY);
+    const panel = pane.buildSessionDiscussionPanel(state, SESSION_KEY)!;
+
+    await expect(panel.loadInfo(SESSION_KEY)).resolves.toEqual({ state: "available" });
+    const opened = { state: "open" as const, embedUrl: "https://clack.example/embed/c1" };
+    panel.onStateChange(SESSION_KEY, opened, null);
+    await expect(panel.loadInfo(SESSION_KEY)).resolves.toEqual(opened);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    state.connected = false;
+    await expect(panel.loadInfo(SESSION_KEY)).rejects.toThrow("disconnected");
+  });
+
+  it("does not replace a panel result with an older availability probe", async () => {
+    let finishProbe: ((value: SessionDiscussionInfo) => void) | undefined;
+    const { pane, state, request } = createDiscussionPane({
+      info: new Promise<SessionDiscussionInfo>((resolve) => {
+        finishProbe = resolve;
+      }),
+    });
+    const probe = pane.probeSessionDiscussion(SESSION_KEY);
+    const panel = pane.buildSessionDiscussionPanel(state, SESSION_KEY)!;
+    const opened = { state: "open" as const, embedUrl: "https://clack.example/embed/c1" };
+    panel.onStateChange(SESSION_KEY, opened, null);
+    finishProbe?.({ state: "available" });
+    await probe;
+
+    await expect(panel.loadInfo(SESSION_KEY)).resolves.toEqual(opened);
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("does not reload discussion info when the pane renders unchanged config twice", async () => {
@@ -177,7 +210,7 @@ describe("chat pane session discussion", () => {
     state.sessionKey = "agent:main:other";
     state.sidebarLayout = openSlot({ columns: [] }, "discussion");
 
-    stalePanel?.onStateChange(SESSION_KEY, "none", null);
+    stalePanel?.onStateChange(SESSION_KEY, { state: "none" }, null);
 
     expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("discussion");
   });

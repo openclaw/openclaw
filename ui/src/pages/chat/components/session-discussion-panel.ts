@@ -1,10 +1,7 @@
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
-import type {
-  SessionDiscussionInfo,
-  SessionDiscussionState,
-} from "../../../../../packages/gateway-protocol/src/index.js";
+import type { SessionDiscussionInfo } from "../../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../../components/icons.ts";
 import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
@@ -16,7 +13,7 @@ import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 type SessionDiscussionInfoLoader = (sessionKey: string) => Promise<SessionDiscussionInfo>;
 type SessionDiscussionStateListener = (
   sessionKey: string,
-  discussionState: SessionDiscussionState,
+  info: SessionDiscussionInfo,
   openUrl: string | null,
 ) => void;
 
@@ -197,7 +194,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
     if (requestKey !== this.sessionKey.trim()) {
       return;
     }
-    this.onStateChange?.(requestKey, info.state, resolveDiscussionUrl(info.openUrl));
+    this.onStateChange?.(requestKey, info, resolveDiscussionUrl(info.openUrl));
   }
 
   // The iframe sandbox must include allow-same-origin: without it the frame

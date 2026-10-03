@@ -14,7 +14,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     if (
       !state?.connected ||
       !state.client ||
-      this.sessionDiscussionStates.has(sessionKey) ||
+      this.sessionDiscussionInfos.has(sessionKey) ||
       // One in-flight probe per key: a rapid A→B→A switch must not start a
       // second probe whose slower twin could later overwrite the fresh result.
       this.sessionDiscussionProbes.has(sessionKey) ||
@@ -38,7 +38,11 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
       if (generation !== this.connectionGeneration) {
         return;
       }
-      this.sessionDiscussionStates.set(sessionKey, info.state);
+      // Keep the authoritative probe result: rendering the known room must
+      // not wait for another provider reconciliation after the operator opens it.
+      if (!this.sessionDiscussionInfos.has(sessionKey)) {
+        this.sessionDiscussionInfos.set(sessionKey, info);
+      }
       this.requestUpdate();
     } catch {
       // Leave unprobed: the action stays hidden and a later switch retries.
@@ -49,7 +53,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
       if (
         generation !== this.connectionGeneration &&
         this.state?.sessionKey === sessionKey &&
-        !this.sessionDiscussionStates.has(sessionKey)
+        !this.sessionDiscussionInfos.has(sessionKey)
       ) {
         void this.probeSessionDiscussion(sessionKey);
       }
@@ -99,6 +103,12 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
       ) {
         throw new Error(t("chat.sessionDiscussion.disconnected"));
       }
+      if (method === "session.discussion.info") {
+        const known = this.sessionDiscussionInfos.get(key);
+        if (known) {
+          return known;
+        }
+      }
       return state.client.request<SessionDiscussionInfo>(method, {
         sessionKey: key,
         agentId: resolveChatAgentId(state),
@@ -110,21 +120,21 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
       openUrl: this.sessionDiscussionOpenUrls.get(sessionKey) ?? null,
       loadInfo: (key) => request("session.discussion.info", key),
       openDiscussion: (key) => request("session.discussion.open", key),
-      onStateChange: (key, discussionState, openUrl) => {
+      onStateChange: (key, info, openUrl) => {
         // Panels created under a previous connection may report late; their
         // state belongs to the old provider and must not touch the new cache.
         if (contentGeneration !== this.connectionGeneration) {
           return;
         }
-        this.sessionDiscussionStates.set(key, discussionState);
+        this.sessionDiscussionInfos.set(key, info);
         const isCurrentSession = state.sessionKey.trim() === key;
         if (isCurrentSession) {
           this.sessionDiscussionOpenUrls.set(key, openUrl);
         }
-        if (discussionState === "none") {
+        if (info.state === "none") {
           this.sessionDiscussionOpenUrls.delete(key);
         }
-        if (discussionState === "none" && isCurrentSession) {
+        if (info.state === "none" && isCurrentSession) {
           state.updateSidebarLayout(closeSlot(state.sidebarLayout, "discussion"));
           return;
         }
@@ -162,7 +172,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
   } | null {
     const state = this.state;
     const sessionKey = state?.sessionKey.trim() ?? "";
-    const known = sessionKey ? this.sessionDiscussionStates.get(sessionKey) : undefined;
+    const known = sessionKey ? this.sessionDiscussionInfos.get(sessionKey)?.state : undefined;
     if (
       !state?.connected ||
       !state.client ||
