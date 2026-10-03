@@ -1,4 +1,8 @@
-import { setReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
+import {
+  addReplyPayloadMediaFailures,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import { parseReplyDirectives } from "./reply-directives.js";
 
 export function prepareCliReplyPayload(
@@ -15,9 +19,7 @@ export function prepareCliReplyPayload(
     ...(parsed.replyToTag ? { replyToTag: true } : {}),
     audioAsVoice: parsed.audioAsVoice,
   };
-  if (parsed.mediaFailures?.length) {
-    setReplyPayloadMetadata(reply, { assistantMediaFailures: parsed.mediaFailures });
-  }
+  addReplyPayloadMediaFailures(reply, parsed.mediaFailures);
   if (assistantMessageIndex !== undefined) {
     setReplyPayloadMetadata(reply, { assistantMessageIndex });
   }

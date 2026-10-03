@@ -6,6 +6,7 @@ import {
 } from "../../../auto-reply/heartbeat-tool-response.js";
 import { buildProviderLoginRecovery } from "../../../auto-reply/provider-login-recovery.js";
 import {
+  addReplyPayloadMediaFailures,
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   hasReplyPayloadSpeechContent,
@@ -329,9 +330,7 @@ export function buildEmbeddedRunPayloads(params: {
             ? { replyToCurrent: delivery.replyToCurrent }
             : {}),
         };
-        if (mediaFailures?.length) {
-          setReplyPayloadMetadata(replyPayload, { assistantMediaFailures: mediaFailures });
-        }
+        addReplyPayloadMediaFailures(replyPayload, mediaFailures);
         if (assistantMessageIndex !== undefined) {
           setReplyPayloadMetadata(replyPayload, { assistantMessageIndex });
         }

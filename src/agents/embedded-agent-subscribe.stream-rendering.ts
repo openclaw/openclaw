@@ -6,7 +6,11 @@ import {
   createInlineCodeState,
 } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
-import { appendReplyMediaFailures, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import {
+  addReplyPayloadMediaFailures,
+  appendReplyMediaFailures,
+  setReplyPayloadMetadata,
+} from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -526,9 +530,7 @@ export function createStreamRendering({
       replyToTag,
       replyToCurrent,
     };
-    if (mediaFailures?.length) {
-      setReplyPayloadMetadata(payload, { assistantMediaFailures: mediaFailures });
-    }
+    addReplyPayloadMediaFailures(payload, mediaFailures);
     if (splitResult.isSilent) {
       setReplyPayloadMetadata(payload, { silentReply: true });
     }

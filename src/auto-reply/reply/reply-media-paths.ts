@@ -23,10 +23,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
-import {
-  resolveOutboundMediaMaxBytes,
-  WEBCHAT_LOCAL_MEDIA_MAX_BYTES,
-} from "../../media/configured-max-bytes.js";
+import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
@@ -148,6 +145,8 @@ export function createReplyMediaSourcePreparer(params: {
   workspaceMediaAccess?: OutboundMediaAccess;
   /** Physical remote alias of the captured logical workspace. */
   workspaceMediaRoot?: string;
+  /** Streams local audio/video up to this size instead of the channel cap. */
+  localMediaMaxBytes?: number;
 }): (sources: readonly string[]) => Promise<PreparedReplyMedia> {
   // Prefer an explicit agentId so callers without a resolved sessionKey (e.g.
   // `openclaw agent --deliver` with `--reply-channel/--reply-to`) still get
@@ -223,9 +222,7 @@ export function createReplyMediaSourcePreparer(params: {
       return await cached;
     }
     const persistPromise = resolveOutboundAttachmentFromUrl(media, maxBytes, {
-      ...(params.messageProvider === "webchat"
-        ? { localMediaMaxBytes: WEBCHAT_LOCAL_MEDIA_MAX_BYTES }
-        : {}),
+      localMediaMaxBytes: params.localMediaMaxBytes,
       mediaAccess: resolveAgentScopedOutboundMediaAccess({
         cfg: params.cfg,
         agentId,

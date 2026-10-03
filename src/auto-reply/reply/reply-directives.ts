@@ -57,22 +57,25 @@ export function parseReplyDirectives(
 
   const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
   const isSilent = isSilentReplyPayloadText(text, silentToken);
-  const mediaFailures = split.rejectedMedia?.map((): ReplyMediaFailure => ({
-    code: "invalid-reference",
-    kind: "document",
-    label: "Media not attached",
-  }));
+  const mediaFailures = Array.from(
+    { length: split.rejectedMediaCount ?? 0 },
+    (): ReplyMediaFailure => ({
+      code: "invalid-reference",
+      kind: "document",
+      label: "Media not attached",
+    }),
+  );
 
   return {
     // Silent payloads must not leak the control token into channel delivery.
-    text: appendReplyMediaFailures(isSilent ? "" : text, mediaFailures ?? []) ?? "",
+    text: appendReplyMediaFailures(isSilent ? "" : text, mediaFailures) ?? "",
     // Keep native path conversion outside the browser-shared parser and before reply policy.
     mediaUrls: split.mediaUrls?.map((source) => trySafeFileURLToPath(source) ?? source),
-    ...(mediaFailures?.length ? { mediaFailures } : {}),
+    ...(mediaFailures.length ? { mediaFailures } : {}),
     replyToId: replyParsed?.replyToId,
     replyToCurrent: replyParsed?.replyToCurrent || undefined,
     replyToTag: replyParsed?.hasReplyTag ?? false,
     audioAsVoice: split.audioAsVoice,
-    isSilent: isSilent && !mediaFailures?.length,
+    isSilent: isSilent && !mediaFailures.length,
   };
 }

@@ -51,7 +51,7 @@ describe("splitMediaFromOutput", () => {
 
   function expectPolicyRejectedMediaUrlCase(input: string) {
     expectParsedMediaOutputCase(input, { mediaUrls: undefined, text: "" });
-    expect(splitMediaFromOutput(input).rejectedMedia).toHaveLength(1);
+    expect(splitMediaFromOutput(input).rejectedMediaCount).toBe(1);
   }
 
   it.each([
