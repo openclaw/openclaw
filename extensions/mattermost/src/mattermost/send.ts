@@ -11,7 +11,6 @@ import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -272,7 +271,7 @@ async function resolveMattermostSendContext(
   const client = createMattermostClient({
     baseUrl,
     botToken: token,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+    allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
     assertRequestCurrent: opts.assertDirectAdapterHandoff,
   });
   const dmRetryOptions = mergeDmRetryOptions(account.config.dmChannelRetry, opts.dmRetryOptions);

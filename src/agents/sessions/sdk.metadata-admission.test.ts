@@ -1,4 +1,3 @@
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import {
@@ -21,8 +20,8 @@ import { createEventBus } from "./event-bus.js";
 import { loadExtensionFromFactory } from "./extensions/loader.js";
 import type { ExtensionAPI } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
-import { DefaultResourceLoader } from "./resource-loader.js";
 import { createAgentSession } from "./sdk.js";
+import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import type { ModelChangeEntry, ThinkingLevelChangeEntry } from "./session-manager-types.js";
 import * as writeAdmission from "./session-manager-write-admission.js";
@@ -66,6 +65,7 @@ it("restores prepared session context without waiting for an unrelated database 
       cwd: state.workspaceDir,
       agentDir: state.agentDir("main"),
       model: testModel,
+      thinkingLevel: "medium" as const,
       noTools: "all",
       authStorage,
       modelRegistry: ModelRegistry.inMemory(authStorage),
@@ -90,7 +90,7 @@ it("restores prepared session context without waiting for an unrelated database 
   });
 });
 
-it.each(["model", "thinking", "resource loading"] as const)(
+it.each(["model", "thinking", "context loading"] as const)(
   "rejects SDK exposure after retargeting during %s initialization",
   async (after) => {
     await withOpenClawTestState({ label: `sdk-metadata-${after}` }, async (state) => {
@@ -114,11 +114,6 @@ it.each(["model", "thinking", "resource loading"] as const)(
       });
       const replacementBefore = await loadTranscriptEvents(replacement);
       const originalBefore = await loadTranscriptEvents(original);
-      const contextPath = path.join(state.workspaceDir, "AGENTS.md");
-      const contextContent = "Synthetic default-loader admission fixture";
-      if (after === "resource loading") {
-        await writeFile(contextPath, contextContent);
-      }
       const manager = SessionManager.open(original, state.workspaceDir);
       const completed: {
         entry?: ModelChangeEntry | ThinkingLevelChangeEntry;
@@ -139,9 +134,7 @@ it.each(["model", "thinking", "resource loading"] as const)(
       };
       const appendModel = manager.appendModelChange.bind(manager);
       const appendThinking = manager.appendThinkingLevelChange.bind(manager);
-      // Preserve the real method and invoke it with each actual loader receiver below.
-      // oxlint-disable-next-line typescript/unbound-method
-      const reload = DefaultResourceLoader.prototype.reload;
+      const readInitialContext = manager[sessionManagerReadInitialContext].bind(manager);
       const intercepted =
         after === "model"
           ? vi
@@ -153,16 +146,11 @@ it.each(["model", "thinking", "resource loading"] as const)(
             ? vi
                 .spyOn(manager, "appendThinkingLevelChange")
                 .mockImplementation((level) => retargetAfterAppend(() => appendThinking(level)))
-            : vi
-                .spyOn(DefaultResourceLoader.prototype, "reload")
-                .mockImplementation(async function (this: DefaultResourceLoader) {
-                  await reload.call(this);
-                  expect(this.getAgentsFiles().agentsFiles).toContainEqual({
-                    path: contextPath,
-                    content: contextContent,
-                  });
-                  manager.setSessionTarget(replacement);
-                });
+            : vi.spyOn(manager, sessionManagerReadInitialContext).mockImplementation(async () => {
+                const context = await readInitialContext();
+                manager.setSessionTarget(replacement);
+                return context;
+              });
       const model = {
         ...testModel,
         id: "sdk-metadata-fixture",
@@ -193,14 +181,14 @@ it.each(["model", "thinking", "resource loading"] as const)(
           compaction: { enabled: false },
           retry: { enabled: false },
         }),
-        ...(after === "resource loading" ? {} : { resourceLoader: createResourceLoader() }),
+        resourceLoader: createResourceLoader(),
       }).then(
         (value) => ({ status: "fulfilled" as const, value }),
         (error: unknown) => ({ status: "rejected" as const, error }),
       );
       try {
         expect(intercepted).toHaveBeenCalledOnce();
-        if (after === "resource loading") {
+        if (after === "context loading") {
           expect(await loadTranscriptEvents(original)).toEqual(originalBefore);
           expect.soft(await loadTranscriptEvents(replacement)).toEqual(replacementBefore);
           expect.soft(outcome.status).toBe("rejected");
@@ -362,6 +350,7 @@ async function createPersistenceExtensionSession(
     cwd,
     agentDir,
     model: testModel,
+    thinkingLevel: "medium" as const,
     noTools: "all",
     authStorage,
     modelRegistry: ModelRegistry.inMemory(authStorage),

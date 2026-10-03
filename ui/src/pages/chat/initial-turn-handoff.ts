@@ -1,3 +1,4 @@
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { outboxPayloadMatchesOwner } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
@@ -27,10 +28,7 @@ let pending: InitialTurnHandoff | null = null;
 const listeners = new Set<() => void>();
 
 export function subscribeInitialTurnHandoff(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  return registerListener(listeners, listener);
 }
 
 function clearPending(releaseAttachments: boolean): void {

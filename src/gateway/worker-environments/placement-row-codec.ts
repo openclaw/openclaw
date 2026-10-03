@@ -333,6 +333,7 @@ export function updateTransition(
   to: WorkerSessionPlacementState,
   patch: WorkerSessionPlacementTransitionPatch,
   nowMs: number,
+  onEnvironmentActivated?: (environmentId: string, lastActivatedAtMs: number) => void,
 ): WorkerSessionPlacementRecord {
   const values = transitionValues(current, to, patch, nowMs);
   const result = executeSqliteQuerySync(
@@ -371,14 +372,16 @@ export function updateTransition(
         .where("attached_session_ids_json", "=", JSON.stringify([updated.sessionId]))
         .returning("last_activated_at_ms"),
     );
-    if (activated.rows.length !== 1) {
+    const lastActivatedAtMs = activated.rows[0]?.last_activated_at_ms;
+    if (activated.rows.length !== 1 || lastActivatedAtMs == null) {
       throw new Error(
         `Worker session placement ${current.sessionId} lost its attached environment`,
       );
     }
     publishWorkerEnvironmentNativeMutation(db, updated.environmentId!, {
-      lastActivatedAtMs: activated.rows[0]!.last_activated_at_ms,
+      lastActivatedAtMs,
     });
+    onEnvironmentActivated?.(updated.environmentId!, lastActivatedAtMs);
   }
   publishPlacementTurnClaimState(db, updated);
   return updated;

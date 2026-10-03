@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import type { AgentsListResult } from "../api/types.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import type { UiPreferences } from "./settings.ts";
@@ -331,10 +332,7 @@ export function createAgentSelectionCapability(
       const scopeId = agentId?.trim() ? normalizeAgentId(agentId) : null;
       publish({ ...state, scopeId });
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       stopPreferences?.();
       stopGateway();

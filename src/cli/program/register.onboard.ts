@@ -61,7 +61,7 @@ async function validateRecommendationParentOptions(
   );
 }
 
-const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({ includeSkip: true });
+const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli();
 const RECOMMENDATION_READ_PARENT_OPTIONS = new Set(["json"]);
 const RECOMMENDATION_MUTATION_PARENT_OPTIONS = new Set(["agent"]);
 

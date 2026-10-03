@@ -7,9 +7,16 @@ import {
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { selectHasMultipleSessionSharingIdentities } from "../../state/user-profile-identity.read.js";
-import { SkillLibraryError } from "./errors.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import type { SkillLibraryWorkerAuthority } from "./read.contract.js";
+import { skillLibraryReceipt } from "./receipt.js";
 import {
+  assertSkillLibraryNameAvailable,
+  assertSkillLibraryRevision,
+  recordSkillLibraryEvent,
+  requireSkillLibraryProfile,
+  requireSkillLibraryUploadMetadata,
+  selectSkillLibraryRevisionMetadata,
   projectSkillLibraryEntry,
   requireSkillLibraryEntry,
   resolveSkillLibraryActor,
@@ -18,6 +25,7 @@ import {
   skillLibraryDb,
   type SkillLibraryAuthority,
 } from "./store.js";
+import type { SkillLibraryPublishInput, SkillLibraryMutateInput } from "./store.worker-contract.js";
 
 export function hydrateSkillLibraryWorkerAuthority(
   input: SkillLibraryWorkerAuthority,
@@ -154,4 +162,162 @@ export function readSkillLibraryMetadataInDatabase(
             .orderBy("created_at", "desc"),
         ).rows.map((row) => ({ revision: row.revision, createdAt: row.created_at })),
   };
+}
+
+export function publishSkillLibraryInDatabase(db: DatabaseSync, input: SkillLibraryPublishInput) {
+  const { params, skillId, bundle, uploadId } = input;
+  const authority = hydrateSkillLibraryWorkerAuthority(input.authority);
+  const actor = requireSkillLibraryProfile(db, authority);
+  if (uploadId) {
+    const upload = requireSkillLibraryUploadMetadata(db, uploadId, authority);
+    if (upload.slug !== params.slug) {
+      throw new SkillLibraryError("NOT_FOUND", "Upload slug changed; start the import again.");
+    }
+    if (upload.published_skill_id) {
+      return skillLibraryReceipt(
+        requireSkillLibraryEntry(db, upload.published_skill_id, authority),
+        "unchanged",
+      );
+    }
+  }
+  const current = params.skillId
+    ? requireSkillLibraryEntry(db, skillId, authority, true)
+    : undefined;
+  if (current) {
+    assertSkillLibraryRevision(current, params.expectedRevision);
+  }
+  const owner = current ? current.ownerProfileId : actor;
+  assertSkillLibraryNameAvailable(db, owner, params.slug, skillId);
+  if (current?.revision === bundle.revision && current.slug === params.slug) {
+    return skillLibraryReceipt(current, "unchanged");
+  }
+  const now = Date.now();
+  const kysely = skillLibraryDb(db);
+  executeSqliteQuerySync(
+    db,
+    kysely
+      .insertInto("skill_library_revisions")
+      .values({
+        skill_id: skillId,
+        revision: bundle.revision,
+        description: bundle.description,
+        files_json: bundle.filesJson,
+        created_at: now,
+      })
+      .onConflict((conflict) => conflict.columns(["skill_id", "revision"]).doNothing()),
+  );
+  if (current) {
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .updateTable("skill_library_entries")
+        .set({ slug: params.slug, current_revision: bundle.revision, updated_at: now })
+        .where("skill_id", "=", skillId),
+    );
+  } else {
+    executeSqliteQuerySync(
+      db,
+      kysely.insertInto("skill_library_entries").values({
+        skill_id: skillId,
+        owner_profile_id: actor,
+        author_profile_id: actor,
+        slug: params.slug,
+        current_revision: bundle.revision,
+        shared: 0,
+        enabled: 1,
+        removed: 0,
+        created_at: now,
+        updated_at: now,
+      }),
+    );
+  }
+  recordSkillLibraryEvent(db, skillId, bundle.revision, current ? "save" : "create", actor);
+  if (uploadId) {
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .updateTable("skill_library_uploads")
+        .set({ published_skill_id: skillId })
+        .where("upload_id", "=", uploadId),
+    );
+  }
+  return skillLibraryReceipt(requireSkillLibraryEntry(db, skillId, authority));
+}
+
+export function mutateSkillLibraryInDatabase(db: DatabaseSync, input: SkillLibraryMutateInput) {
+  const { params } = input;
+  const authority = hydrateSkillLibraryWorkerAuthority(input.authority);
+  if (!tableExists(db, "skill_library_entries")) {
+    throw new SkillLibraryError("NOT_FOUND", "Skill not found.");
+  }
+  const current = requireSkillLibraryEntry(db, params.skillId, authority, true);
+  const actor = requireSkillLibraryProfile(db, authority);
+  assertSkillLibraryRevision(current, params.expectedRevision);
+  const changes: {
+    shared?: number;
+    owner_profile_id?: null;
+    enabled?: number;
+    removed?: number;
+    current_revision?: string;
+  } = {};
+  switch (params.action) {
+    case "share":
+    case "unshare":
+      if (params.action === "unshare" && current.ownerProfileId === null) {
+        throw new SkillLibraryError(
+          "FORBIDDEN",
+          "Team-owned skills cannot become personal through unshare.",
+        );
+      }
+      changes.shared = Number(params.action === "share");
+      break;
+    case "transfer":
+      if (!resolveSkillLibraryActor(db, authority).admin) {
+        throw new SkillLibraryError(
+          "FORBIDDEN",
+          "Transfer to team ownership requires a Gateway administrator.",
+        );
+      }
+      assertSkillLibraryNameAvailable(db, null, current.slug, current.skillId);
+      changes.owner_profile_id = null;
+      changes.shared = 1;
+      break;
+    case "enable":
+    case "disable":
+      changes.enabled = Number(params.action === "enable");
+      break;
+    case "remove":
+      changes.removed = 1;
+      break;
+    case "rollback":
+      if (
+        !params.revision ||
+        !selectSkillLibraryRevisionMetadata(db, current.skillId, params.revision)
+      ) {
+        throw new SkillLibraryError(
+          "NOT_FOUND",
+          "Choose a published revision from this skill's history.",
+        );
+      }
+      changes.current_revision = params.revision;
+      break;
+  }
+  executeSqliteQuerySync(
+    db,
+    skillLibraryDb(db)
+      .updateTable("skill_library_entries")
+      .set({ ...changes, updated_at: Date.now() })
+      .where("skill_id", "=", current.skillId),
+  );
+  recordSkillLibraryEvent(
+    db,
+    current.skillId,
+    changes.current_revision ?? current.revision,
+    params.action,
+    actor,
+  );
+  return skillLibraryReceipt(
+    requireSkillLibraryEntry(db, current.skillId, authority),
+    params.action === "remove" ? "removed" : "published",
+  );
 }

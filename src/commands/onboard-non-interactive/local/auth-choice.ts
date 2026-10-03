@@ -153,7 +153,6 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   const validAuthChoices = formatAuthChoiceChoicesForCli({
-    includeSkip: true,
     config: nextConfig,
     workspaceDir: params.target.workspaceDir,
     env: process.env,

@@ -211,7 +211,6 @@ async function validateResetAuthChoice(params: {
   }
   const availableChoices = new Set(
     formatAuthChoiceChoicesForCli({
-      includeSkip: true,
       config: params.baseConfig,
       workspaceDir: params.workspaceDir,
       env: process.env,

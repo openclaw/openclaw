@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDefaultCronStaggerMs } from "../cron/stagger.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
@@ -242,14 +243,6 @@ function collectInstallFindings(
     }
   }
   return findings;
-}
-
-function tableExists(db: DatabaseSync, name: string): boolean {
-  return Boolean(
-    db /* sqlite-allow-raw: read-only Claw doctor table-existence probe with bound table name. */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get(name),
-  );
 }
 
 function orphanedAgentIds(options: OpenClawStateDatabaseOptions): string[] {

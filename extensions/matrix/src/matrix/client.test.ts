@@ -248,7 +248,7 @@ describe("resolveMatrixAuth", () => {
       channels: {
         matrix: {
           homeserver: "http://127.0.0.1:8008",
-          allowPrivateNetwork: true,
+          network: { dangerouslyAllowPrivateNetwork: true },
           userId: "@bot:example.org",
           accessToken: "tok-123",
           deviceId: "DEVICE123",

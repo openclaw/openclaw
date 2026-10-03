@@ -440,7 +440,13 @@ export async function runNodeCommand(
     cwd: tmp,
     args: ["status"],
     ...overrides,
-    env: { ...process.env, OPENCLAW_RUNNER_LOG: "0", ...env },
+    // Each fixture selects its CLI runtime independently of the Vitest worker.
+    env: {
+      ...process.env,
+      OPENCLAW_RUNNER_LOG: "0",
+      OPENCLAW_VITEST_RUNTIME: undefined,
+      ...env,
+    },
     execPath: process.execPath,
     platform: options.platform ?? process.platform,
   } as RunNodeTestOptions);

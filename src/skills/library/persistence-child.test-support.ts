@@ -105,7 +105,7 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
           options,
         );
         if (ownership === "team") {
-          service.mutateSkillLibrary(
+          await service.mutateSkillLibrary(
             authority,
             {
               skillId: result.entry.skillId,
@@ -175,7 +175,7 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
           },
           options,
         );
-        service.mutateSkillLibrary(
+        await service.mutateSkillLibrary(
           authority,
           { skillId: pin.skillId, expectedRevision: saved.entry.revision, action: "remove" },
           options,
@@ -231,7 +231,7 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
     }
     return { kind: "complete" };
   } finally {
-    agent?.closeOpenClawAgentDatabases();
+    await agent?.closeOpenClawAgentDatabasesAsync();
     await state.closeOpenClawStateDatabaseAsync();
   }
 }

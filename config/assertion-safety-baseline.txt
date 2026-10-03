@@ -187,7 +187,7 @@ extensions/copilot/src/attempt-prepare.ts	4
 extensions/copilot/src/attempt-transcript-journal.ts	22
 extensions/copilot/src/byok-proxy.ts	1
 extensions/copilot/src/event-bridge-transcript.ts	4
-extensions/copilot/src/event-bridge.ts	2
+extensions/copilot/src/event-bridge.ts	1
 extensions/copilot/src/hooks-bridge.ts	7
 extensions/copilot/src/isolated-completion.ts	1
 extensions/copilot/src/provider-bridge.ts	1
@@ -984,7 +984,7 @@ extensions/tlon/src/monitor/index.ts	5
 extensions/tlon/src/settings.ts	7
 extensions/tlon/src/setup-core.ts	3
 extensions/tlon/src/tlon-api.ts	2
-extensions/tlon/src/types.ts	3
+extensions/tlon/src/types.ts	1
 extensions/tlon/src/urbit/sse-client.ts	4
 extensions/tokenjuice/tool-result-middleware.ts	1
 extensions/twitch/src/config.ts	6
@@ -1351,7 +1351,6 @@ src/agents/embedded-agent-runner/openrouter-model-capabilities.ts	2
 src/agents/embedded-agent-runner/replay-history.ts	19
 src/agents/embedded-agent-runner/run-entry.ts	2
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	4
-src/agents/embedded-agent-runner/run/attempt-before-agent-run.ts	2
 src/agents/embedded-agent-runner/run/attempt-client-tools.ts	2
 src/agents/embedded-agent-runner/run/attempt-context-summary.ts	2
 src/agents/embedded-agent-runner/run/attempt-execution-phase.ts	1
@@ -1504,7 +1503,7 @@ src/agents/sessions/keybindings.ts	2
 src/agents/sessions/model-registry.ts	9
 src/agents/sessions/package-manager.ts	2
 src/agents/sessions/resolve-config-value.ts	1
-src/agents/sessions/sdk.ts	2
+src/agents/sessions/sdk.ts	1
 src/agents/sessions/session-manager-codec.ts	5
 src/agents/sessions/session-manager-core.ts	1
 src/agents/sessions/session-manager-entries.ts	2

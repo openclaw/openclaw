@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@openclaw/agent-core";
 import type {
   SessionTranscriptBoundedActiveContext,
   SessionTranscriptContextVersion,
@@ -39,6 +40,12 @@ export type SessionTranscriptModelContext = {
 export type SessionTranscriptReadSnapshot = {
   events: TranscriptEvent[];
   version: SessionTranscriptContextVersion;
+};
+
+export type SessionTranscriptContextSnapshot = {
+  messages: AgentMessage[];
+  header: unknown;
+  version?: SessionTranscriptContextVersion;
 };
 
 export type PreparedSessionTranscriptHydration =

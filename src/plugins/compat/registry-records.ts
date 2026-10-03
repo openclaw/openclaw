@@ -6,6 +6,7 @@ import {
 } from "./plugin-sdk-subpath-records.js";
 import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
 import type { PluginCompatRecord } from "./types.js";
+import { WATCHED_SESSIONS_COMPAT_RECORD } from "./watched-sessions.js";
 import { WORKSPACE_MUTATION_GUARD_COMPAT_RECORD } from "./workspace-mutation-guard.js";
 
 const ACTIVATION_HINT_METADATA = {
@@ -20,6 +21,7 @@ const ACTIVATION_HINT_METADATA = {
 export const PLUGIN_COMPAT_RECORDS = [
   WORKSPACE_MUTATION_GUARD_COMPAT_RECORD,
   ...SESSION_PERSISTENCE_COMPAT_RECORDS,
+  WATCHED_SESSIONS_COMPAT_RECORD,
   {
     code: "gateway-placement-sync-results",
     status: "deprecated",

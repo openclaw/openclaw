@@ -23,6 +23,7 @@ import {
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveGatewayModelSupportsImages } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
@@ -34,7 +35,6 @@ import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 function isPdfOffloadedRef(ref: OffloadedRef): boolean {

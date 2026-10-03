@@ -168,90 +168,74 @@ describe("audit writer async settlement", () => {
     }
   });
 
-  it("does not replay an unknown transport outcome with SQLite busy fields", async () => {
-    const submitted = createDeferred();
-    const firstResult = createDeferred<AuditWriterResult>();
-    const requests = mockEventRequests(async (sourceId) => {
-      if (sourceId === "unknown-outcome") {
-        submitted.resolve();
-        return await firstResult.promise;
-      }
-      return { status: "settled" };
-    });
-    const errors: string[] = [];
-    const writer = createAuditEventWriter({
-      scheduler: createTestGatewayScheduler(),
-      stateDir: tempDirs.make("audit-writer-unknown-outcome-"),
-      onError: (error) => errors.push(error),
-    });
-    try {
-      await advanceDispatch();
-      await writer.ready;
-      expect(writer.record(event("unknown-outcome"))).toBe(true);
-      expect(writer.record(event("next"))).toBe(true);
-      await advanceDispatch();
-      await submitted.promise;
-      expect(requests).toEqual(["unknown-outcome"]);
-      const stopping = writer.stop();
-      const failure = Object.assign(
-        new SqliteWorkerError(
-          "Audit write outcome is unknown: database is locked",
-          "outcome-unknown",
-        ),
-        { errcode: 5, errstr: "SQLITE_BUSY" },
-      );
-      firstResult.reject(failure);
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
-      expect(errors).toEqual([failure.message]);
-      expect(requests).toEqual(["unknown-outcome", "next"]);
-      await vi.advanceTimersByTimeAsync(60 * 60_000);
-      expect(errors).toEqual([failure.message]);
-      expect(requests).toEqual(["unknown-outcome", "next"]);
-    } finally {
-      firstResult.resolve({ status: "settled" });
-      const stopping = writer.stop();
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
-    }
-  });
-  it("releases settled capacity before notifying the error observer", async () => {
-    const requests = mockEventRequests(async (sourceId) => {
-      if (sourceId === "unknown-outcome") {
-        throw new SqliteWorkerError("Audit write outcome is unknown", "outcome-unknown");
-      }
-      return { status: "settled" };
-    });
-    const errors: string[] = [];
-    let offered = false;
-    let followUpAccepted: boolean | undefined;
-    const writer = createAuditEventWriter({
-      scheduler: createTestGatewayScheduler(),
-      stateDir: tempDirs.make("audit-writer-error-notification-"),
-      maxPending: 1,
-      onError: (error) => {
-        errors.push(error);
-        if (!offered) {
-          offered = true;
-          followUpAccepted = writer.record(event("from-error-observer"));
+  it.each(["queued", "error observer"] as const)(
+    "settles an unknown transport outcome before processing the %s follow-up",
+    async (followUp) => {
+      const submitted = createDeferred();
+      const firstResult = createDeferred<AuditWriterResult>();
+      const fromObserver = followUp === "error observer";
+      const next = fromObserver ? "from-error-observer" : "next";
+      const requests = mockEventRequests(async (sourceId) => {
+        if (sourceId === "unknown-outcome") {
+          submitted.resolve();
+          return await firstResult.promise;
         }
-      },
-    });
-    try {
-      await advanceDispatch();
-      await writer.ready;
-      expect(writer.record(event("unknown-outcome"))).toBe(true);
-      await advanceDispatch();
-      const stopping = writer.stop();
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
-      expect(followUpAccepted).toBe(true);
-      expect(errors).toEqual(["Audit write outcome is unknown"]);
-      expect(requests).toEqual(["unknown-outcome", "from-error-observer"]);
-    } finally {
-      const stopping = writer.stop();
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
-    }
-  });
+        return { status: "settled" };
+      });
+      const errors: string[] = [];
+      let offered = false;
+      let followUpAccepted: boolean | undefined;
+      const writer = createAuditEventWriter({
+        scheduler: createTestGatewayScheduler(),
+        stateDir: tempDirs.make("audit-writer-unknown-outcome-"),
+        maxPending: fromObserver ? 1 : undefined,
+        onError: (error) => {
+          errors.push(error);
+          if (fromObserver && !offered) {
+            offered = true;
+            followUpAccepted = writer.record(event(next));
+          }
+        },
+      });
+      try {
+        await advanceDispatch();
+        await writer.ready;
+        expect(writer.record(event("unknown-outcome"))).toBe(true);
+        if (!fromObserver) {
+          expect(writer.record(event(next))).toBe(true);
+        }
+        await advanceDispatch();
+        await submitted.promise;
+        expect(requests).toEqual(["unknown-outcome"]);
+        const stopping = fromObserver ? undefined : writer.stop();
+        const failure = Object.assign(
+          new SqliteWorkerError(
+            fromObserver
+              ? "Audit write outcome is unknown"
+              : "Audit write outcome is unknown: database is locked",
+            "outcome-unknown",
+          ),
+          fromObserver ? {} : { errcode: 5, errstr: "SQLITE_BUSY" },
+        );
+        firstResult.reject(failure);
+        if (fromObserver) {
+          await advanceDispatch();
+          expect(followUpAccepted).toBe(true);
+        }
+        const stopped = stopping ?? writer.stop();
+        await vi.advanceTimersByTimeAsync(10_000);
+        await stopped;
+        expect(errors).toEqual([failure.message]);
+        expect(requests).toEqual(["unknown-outcome", next]);
+        await vi.advanceTimersByTimeAsync(60 * 60_000);
+        expect(errors).toEqual([failure.message]);
+        expect(requests).toEqual(["unknown-outcome", next]);
+      } finally {
+        firstResult.resolve({ status: "settled" });
+        const stopping = writer.stop();
+        await vi.advanceTimersByTimeAsync(10_000);
+        await stopping;
+      }
+    },
+  );
 });

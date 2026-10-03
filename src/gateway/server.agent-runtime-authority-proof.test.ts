@@ -758,6 +758,7 @@ describe("agent RPC real delegated-authority effects", () => {
             cfg: f.context.getRuntimeConfig(),
             resolvedSessionKey: f.sessionKey,
             getAdmittedSessionId: () => f.sessionId,
+            hasGatewayAdmissionOutcome: admission.hasOutcome,
             respondToGatewayAdmissionOutcome: admission.respondToOutcome,
           };
           await createAgentRunAdmissionRevalidator({

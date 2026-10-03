@@ -624,7 +624,7 @@ describe("worker turn launcher local placement", () => {
         if (placement?.state !== "active") {
           throw new Error("expected an active placement");
         }
-        placements.startDrain({
+        await placements.startDrain({
           sessionId: SESSION_ID,
           environmentId: placement.environmentId,
           ownerEpoch: placement.activeOwnerEpoch,

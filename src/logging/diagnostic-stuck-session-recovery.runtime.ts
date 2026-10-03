@@ -161,10 +161,21 @@ export async function recoverStuckDiagnosticSession(
       };
     }
     const terminalWorkerError = params.sessionId
-      ? recoverTerminalSessionPlacementTurn({
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-        })
+      ? await recoverTerminalSessionPlacementTurn(
+          { sessionId: params.sessionId, sessionKey: params.sessionKey },
+          () => {
+            if (
+              !isDiagnosticSessionStateCurrent({
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                generation: params.stateGeneration,
+                state: params.expectedState ?? "processing",
+              })
+            ) {
+              throw new Error("Diagnostic session state changed before terminal worker recovery");
+            }
+          },
+        )
       : undefined;
     if (terminalWorkerError !== undefined) {
       // The placement owner already recorded failure and released its cleanup wait.
@@ -177,6 +188,22 @@ export async function recoverStuckDiagnosticSession(
         sessionKey: params.sessionKey,
         error: terminalWorkerError,
       });
+    }
+    if (
+      !isDiagnosticSessionStateCurrent({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        generation: params.stateGeneration,
+        state: params.expectedState ?? "processing",
+      })
+    ) {
+      return {
+        status: "skipped",
+        action: "observe_only",
+        reason: "stale_session_state",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      };
     }
     const fallbackActiveSessionId =
       params.sessionId && isEmbeddedAgentRunHandleActive(params.sessionId)

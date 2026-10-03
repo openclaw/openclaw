@@ -3,7 +3,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isCrablineServerChannel, OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { parseBooleanValue, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildQaAgenticParityComparison,
@@ -68,6 +67,7 @@ import {
   removeQaCredentialSet,
   type QaCredentialRecord,
 } from "./qa-credentials-admin.runtime.js";
+import { parseQaCredentialPositiveIntegerEnv } from "./qa-credentials-common.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
 import {
   normalizeQaTransportId,
@@ -545,20 +545,12 @@ async function runInterruptibleServer(label: string, server: InterruptibleServer
   await new Promise(() => {});
 }
 
-function resolveQaCredentialPayloadFileMaxBytes(env: NodeJS.ProcessEnv = process.env) {
-  const raw = env[QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV]?.trim();
-  if (!raw) {
-    return DEFAULT_QA_CREDENTIAL_PAYLOAD_MAX_BYTES;
-  }
-  const parsed = parseStrictPositiveInteger(raw);
-  if (parsed === undefined) {
-    throw new Error(`${QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV} must be a positive integer.`);
-  }
-  return parsed;
-}
-
 async function readQaCredentialPayloadFile(filePath: string) {
-  const maxBytes = resolveQaCredentialPayloadFileMaxBytes();
+  const maxBytes = parseQaCredentialPositiveIntegerEnv({
+    env: process.env,
+    key: QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV,
+    fallback: DEFAULT_QA_CREDENTIAL_PAYLOAD_MAX_BYTES,
+  });
   const stat = await fs.stat(filePath);
   if (!stat.isFile()) {
     throw new Error("Payload file must be a regular JSON file.");

@@ -25,6 +25,12 @@ session hosting with the same node-local setting:
 Only enable session hosting on a machine you trust as shared Gateway infrastructure. Hosting consent applies to the device, not to an individual person's ownership of it. Existing session authorization still controls who may dispatch work.
 </Warning>
 
+The Gateway applies plugin `before_agent_run` policies to OpenClaw node turns
+before persisting input or launching the worker. Blocked turns retain only the
+redacted block message and leave the node available for the next turn. The hook
+sees the Gateway input and history; node-local system context is assembled later
+and is not included. See [hook boundaries](/plugins/hooks#choose-a-hook).
+
 Restart the app or node host after enabling this setting. The macOS app owns
 one paired node identity and uses the shared node runtime for session hosting;
 do not start a second CLI node for the same Mac. Its native camera, screen, and

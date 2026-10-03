@@ -7,7 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import { SkillLibraryError } from "./errors.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import type {
   SkillLibraryReadInput,
   SkillLibraryReadOutput,
@@ -22,6 +22,8 @@ import {
 import {
   projectSkillLibraryEntry,
   requireSkillLibraryEntry,
+  requireSkillLibraryProfile,
+  requireSkillLibraryUpload,
   selectSkillLibraryRevisionMetadata,
   selectSkillLibraryRow,
   type SkillLibraryAuthority,
@@ -92,6 +94,13 @@ const readers = {
     resolveSkillLibraryPresentationInDatabase(db, a),
   list: (db: DatabaseSync, a: SkillLibraryAuthority, input: SkillsLibraryListParams) =>
     listSkillLibraryInDatabase(db, a, input),
+  profile: (db: DatabaseSync, a: SkillLibraryAuthority, _input: undefined) =>
+    requireSkillLibraryProfile(db, a),
+  entry: (
+    db: DatabaseSync,
+    a: SkillLibraryAuthority,
+    input: { skillId: string; write?: boolean },
+  ) => requireSkillLibraryEntry(db, input.skillId, a, input.write),
   read: (
     db: DatabaseSync,
     a: SkillLibraryAuthority,
@@ -104,6 +113,8 @@ const readers = {
       input.revision,
       input.selectedRevision,
     ),
+  upload: (db: DatabaseSync, a: SkillLibraryAuthority, input: { uploadId: string }) =>
+    requireSkillLibraryUpload(db, input.uploadId, a),
   seed: (db: DatabaseSync, a: SkillLibraryAuthority, _input: undefined) => seed(db, a),
   change: (
     db: DatabaseSync,
@@ -146,6 +157,7 @@ export const skillLibraryReadOperations = {
     ) => SkillLibraryReadOutput["value"];
     const value = runSqliteDeferredTransactionSync(db, () => {
       if (
+        input.kind !== "profile" &&
         input.kind !== "presentation" &&
         input.kind !== "list" &&
         input.kind !== "seed" &&

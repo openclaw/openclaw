@@ -1,12 +1,12 @@
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
-} from "../../config/sessions/session-entry-provenance.js";
-import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import type { AgentRuntimeSessionSpawnContext } from "../agent-runtime-session-spawn-context.js";
+} from "../config/sessions/session-entry-provenance.js";
+import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
+import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
 
 export type TrustedSessionCreation = Partial<AgentRuntimeSessionSpawnContext> & {
-  skillLibrarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
+  skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
   via: SessionCreatedVia;
   actor?: SessionCreatedActor;
   /** Creator-owned isolation requirement resolved only by the trusted Gateway boundary. */

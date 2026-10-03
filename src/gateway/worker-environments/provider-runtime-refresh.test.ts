@@ -391,7 +391,7 @@ describe("worker environment runtime upgrades", () => {
         releasedReceipt,
         targetReceipt,
       );
-      h.placements.startDrain({
+      await h.placements.startDrain({
         sessionId: REQUEST.sessionId,
         environmentId: h.environment.environmentId,
         ownerEpoch: h.environment.ownerEpoch,

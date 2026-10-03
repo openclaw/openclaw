@@ -282,8 +282,13 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         // Eligibility ends at this operation's drain, unlike caller authority during teardown.
         beforeDrain?.();
         resolved.assertCurrent(getRuntimeConfig());
-        const placement = begin();
-        const reclaimedPlacement = await reclaim(resolved.workspace, placement, authorize);
+        const assertDrainCurrent = () => {
+          assertBindingCurrent?.();
+          resolved.assertCurrent(getRuntimeConfig());
+        };
+        const placement = await begin(assertDrainCurrent);
+        assertDrainCurrent();
+        const reclaimedPlacement = await reclaim(resolved.workspace, placement, assertDrainCurrent);
         params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
         return reclaimedPlacement;
       },

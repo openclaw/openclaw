@@ -338,7 +338,7 @@ describe("worker placement dispatch reclaim", () => {
         if (draining?.state !== "draining") {
           throw new Error("move source did not enter draining state");
         }
-        const reconciling = placementStore.startReconcile({
+        const reconciling = await placementStore.startReconcile({
           sessionId: draining.sessionId,
           environmentId: draining.environmentId,
           ownerEpoch: draining.activeOwnerEpoch,
@@ -470,7 +470,7 @@ describe("worker placement dispatch reclaim", () => {
     async (coordinated) => {
       const harness = createHarness(database, placementStore);
       const requested = await placementStore.startDispatch(REQUEST);
-      const failed = placementStore.fail({
+      const failed = await placementStore.fail({
         sessionId: REQUEST.sessionId,
         expectedGeneration: requested.generation,
         recoveryError: "device worker is offline",
@@ -503,7 +503,7 @@ describe("worker placement dispatch reclaim", () => {
         await harness.service.dispatch(REQUEST);
       } else {
         const requested = await placementStore.startDispatch(REQUEST);
-        placementStore.fail({
+        await placementStore.fail({
           sessionId: REQUEST.sessionId,
           expectedGeneration: requested.generation,
           recoveryError: "dispatch failed",
@@ -617,7 +617,7 @@ describe("worker placement dispatch reclaim", () => {
     expect(placementStore.get(REQUEST.sessionId)).toBeUndefined();
 
     const requested = await placementStore.startDispatch(REQUEST);
-    const failed = placementStore.fail({
+    const failed = await placementStore.fail({
       sessionId: REQUEST.sessionId,
       expectedGeneration: requested.generation,
       recoveryError: "dispatch failed",
@@ -680,19 +680,19 @@ describe("worker placement dispatch reclaim", () => {
         basePack,
       },
     );
-    const draining = placementStore.startDrain({
+    const draining = await placementStore.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: active.generation,
     });
-    const reconciling = placementStore.startReconcile({
+    const reconciling = await placementStore.startReconcile({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: draining.generation,
     });
-    const reclaimed = placementStore.transition({
+    const reclaimed = await placementStore.transition({
       sessionId: active.sessionId,
       from: "reconciling",
       to: "reclaimed",
@@ -800,7 +800,7 @@ describe("worker placement dispatch reclaim", () => {
         await resume.promise;
         authorize?.();
         beforeDrain?.();
-        const placement = begin();
+        const placement = await begin(authorize);
         return placement.state === "reclaimed"
           ? placement
           : await reclaim({ kind: "local", path: "/gateway/workspace" }, placement, authorize);
@@ -1023,7 +1023,7 @@ describe("worker placement dispatch reclaim", () => {
           run: async () => {
             authorize?.();
             beforeDrain?.();
-            const placement = begin();
+            const placement = await begin(authorize);
             return placement.state === "reclaimed"
               ? placement
               : await reclaim({ kind: "local", path: root }, placement, authorize);

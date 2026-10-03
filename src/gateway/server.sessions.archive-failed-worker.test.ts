@@ -27,14 +27,14 @@ const execFileAsync = promisify(execFile);
 async function pendingWorkerCleanup(sessionId: string, key: string) {
   const placements = createWorkerSessionPlacementStore();
   const requested = await placements.startDispatch({ sessionId, sessionKey: key, agentId: "main" });
-  const provisioning = placements.transition({
+  const provisioning = await placements.transition({
     sessionId,
     from: "requested",
     to: "provisioning",
     expectedGeneration: requested.generation,
     patch: { environmentId: "worker-cleanup-pending" },
   });
-  const failed = placements.fail({
+  const failed = await placements.fail({
     sessionId,
     expectedGeneration: provisioning.generation,
     recoveryError: "provider cleanup pending",
@@ -131,7 +131,7 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
   await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
   expect(await patch(true)).toMatchObject({ ok: true });
   environment.state = "destroyed";
-  placements.transition({
+  await placements.transition({
     sessionId,
     from: "failed",
     to: "local",

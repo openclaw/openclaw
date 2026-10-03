@@ -14,6 +14,7 @@ import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lif
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { recordSessionStatusModelPatchOutcome } from "../session-model-patch-origin.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
@@ -24,7 +25,6 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import * as sessionUnreadAck from "./session-unread-ack.js";
 import {
   prepareSessionPatchArchive,

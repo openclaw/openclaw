@@ -32,6 +32,9 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
     ((input.command.type === "deliveryQueue.outbound" &&
       (input.command.id === undefined || typeof input.command.id === "string") &&
       (input.command.mode === "pending" || input.command.mode === "unfinished")) ||
+      (input.command.type === "sessionState.ambientTargets" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.watcherSessionKey === "string") ||
       (input.command.type === "sessionState.versions" &&
         Array.isArray(input.command.input) &&
         input.command.input.every(
@@ -187,9 +190,17 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       (input.command.type === "skillLibrary.read" &&
         isRecord(input.command.input) &&
         typeof input.command.input.kind === "string" &&
-        ["presentation", "list", "read", "seed", "change", "pins"].includes(
-          input.command.input.kind,
-        ) &&
+        [
+          "presentation",
+          "list",
+          "read",
+          "seed",
+          "change",
+          "pins",
+          "profile",
+          "entry",
+          "upload",
+        ].includes(input.command.input.kind) &&
         isRecord(input.command.input.authority) &&
         isStringArray(input.command.input.authority.scopes) &&
         isRecord(input.command.input.authority.config)) ||
