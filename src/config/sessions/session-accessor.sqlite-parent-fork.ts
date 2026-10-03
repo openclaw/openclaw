@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
+import { stripCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import { derivePromptTokens, normalizeUsage } from "../../agents/usage.js";
 import { projectModelContextMessages } from "../../shared/model-context-message.js";
 import type {

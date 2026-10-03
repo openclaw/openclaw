@@ -832,6 +832,8 @@ ${overflowTable}`,
             root: "/workspace",
             sessionKey: sourceKey,
             file: {
+              previewKind: "text",
+              contentEncoding: "utf8",
               content: "// Workspace file\nexport const ready = true;\n",
               kind: "read",
               missing: false,

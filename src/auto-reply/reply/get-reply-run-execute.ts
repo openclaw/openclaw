@@ -45,11 +45,11 @@ import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { PreparedReplyRunAdmission } from "./get-reply-run-admission.js";
 import {
   buildPersistedMediaImageLayout,
-  normalizeMessageTimestampMs,
   suppressUnresolvedPromptMedia,
   updateRoomEventAmbientTranscriptWatermark,
 } from "./get-reply-run-helpers.js";
 import { hasInboundAudio } from "./inbound-media.js";
+import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -153,11 +153,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     (normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
       normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride)),
   );
-  const runHasLegacyAutoFallbackWithoutOrigin =
-    runHasStoredSessionModelOverride &&
-    hasLegacyAutoFallbackWithoutOrigin(preparedSessionState.sessionEntry);
   const runHasSessionModelOverride =
-    runHasStoredSessionModelOverride && !runHasLegacyAutoFallbackWithoutOrigin;
+    runHasStoredSessionModelOverride &&
+    !hasLegacyAutoFallbackWithoutOrigin(preparedSessionState.sessionEntry);
   const runModelOverrideSource = runHasSessionModelOverride
     ? preparedSessionState.sessionEntry?.modelOverrideSource === "default"
       ? undefined
@@ -287,9 +285,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       : resolvePersistedUserTurnText(transcriptBody);
   const conversationIdentity = conversationIdentityFromMsgContext({ ctx: sessionCtx });
   const conversationRef = conversationIdentity?.conversationRef;
-  const transportMessageId =
-    normalizeOptionalString(sessionCtx.MessageSidFull) ??
-    normalizeOptionalString(sessionCtx.MessageSid);
   const transportReplyToId =
     normalizeOptionalString(sessionCtx.ReplyToIdFull) ??
     normalizeOptionalString(sessionCtx.ReplyToId);
@@ -303,14 +298,14 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     normalizeOptionalString(sessionCtx.Provider);
   const transport =
     conversationRef ||
-    transportMessageId ||
+    sourceMessageId ||
     transportReplyToId ||
     transportThreadId ||
     transportChannel
       ? {
           ...(transportChannel ? { channel: transportChannel } : {}),
           ...(conversationRef ? { conversationRef } : {}),
-          ...(transportMessageId ? { messageId: transportMessageId } : {}),
+          ...(sourceMessageId ? { messageId: sourceMessageId } : {}),
           ...(transportReplyToId ? { replyToId: transportReplyToId } : {}),
           ...(transportThreadId ? { threadId: transportThreadId } : {}),
         }
@@ -432,7 +427,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     imageOrder: currentTurnImages.imageOrder,
     mediaImageLayout: promptMediaImageLayout,
     media: promptMediaForRun,
-    // Originating channel for reply routing.
     originatingChannel: replyRoute.channel,
     originatingTo: replyRoute.to,
     originatingAccountId: replyRoute.accountId,

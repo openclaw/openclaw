@@ -7,6 +7,7 @@ import type {
 import { resolveVisibleHistoryEventCount } from "../config/sessions/session-accessor.sqlite-history-projection.js";
 import {
   readRecentSessionTranscriptHistoryEventsFromProjection,
+  readOffPathSessionTranscriptEventsFromProjection,
   readSessionTranscriptHistoryEventByIdFromProjection,
   readSessionTranscriptHistoryEventLookupFromProjection,
   readSessionTranscriptHistoryEventPageFromProjection,
@@ -23,6 +24,7 @@ import {
   resolveVisibleMessagePositions,
 } from "../config/sessions/session-accessor.sqlite-reset-window.js";
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import type {
   TranscriptRecentReadLimits,
   TranscriptAnchorPageOptions,
@@ -39,6 +41,10 @@ import {
 } from "./session-transcript-archive-reader.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
 import type { ResolvedTranscriptReadTarget } from "./session-transcript-read-target.js";
+import {
+  prepareSessionTranscriptSummaryReader,
+  type SessionTranscriptSummaryQuery,
+} from "./session-transcript-summary.js";
 
 export type { SessionTranscriptReadScope };
 export type SessionTranscriptReadAccess = {
@@ -102,6 +108,28 @@ function projectSqliteHistoryEvents(entries: readonly SessionTranscriptMessageEv
   return messages;
 }
 
+function capAnchorEventsByBytes(
+  events: SessionTranscriptMessageEvent[],
+  maxBytes: number | undefined,
+): SessionTranscriptMessageEvent[] {
+  if (maxBytes === undefined) {
+    return events;
+  }
+  const limit = Math.max(1_024, Math.floor(maxBytes));
+  let bytes = 2;
+  let start = events.length;
+  while (start > 0) {
+    const eventBytes = jsonUtf8Bytes(events[start - 1]);
+    const separatorBytes = start === events.length ? 0 : 1;
+    if (bytes + separatorBytes + eventBytes > limit) {
+      break;
+    }
+    bytes += separatorBytes + eventBytes;
+    start -= 1;
+  }
+  return events.slice(start);
+}
+
 function normalizeRecentSqliteReadOptions(
   opts?: Partial<ReadRecentSessionMessagesOptions> &
     TranscriptReadWindowOptions & { readOnly?: boolean },
@@ -149,6 +177,22 @@ export type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult 
   offset: number;
 };
 
+function visitProjectionMessages(
+  projection: CurrentTranscriptProjection,
+  visit: (message: unknown, seq: number) => void,
+): number {
+  let count = 0;
+  const visible = resolveVisibleMessagePositions(projection);
+  for (const entry of iterateVisibleMessageRange(projection, 0, visible.total)) {
+    const message = asOptionalRecord(entry.event)?.message;
+    if (message !== undefined) {
+      visit(message, entry.seq);
+      count += 1;
+    }
+  }
+  return count;
+}
+
 /** Share pagination and archive policy while the caller owns acquisition and restoration. */
 export function createSessionTranscriptReader(access: SessionTranscriptReadAccess) {
   async function visitSessionMessagesAsync(
@@ -156,19 +200,22 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     visit: (message: unknown, seq: number) => void,
   ): Promise<number> {
     const target = await access.resolveTarget(scope);
-    return access.readSnapshot(target, (projection) => {
-      let count = 0;
-      const visible = resolveVisibleMessagePositions(projection);
-      for (const entry of iterateVisibleMessageRange(projection, 0, visible.total)) {
-        const message = asOptionalRecord(entry.event)?.message;
-        if (message !== undefined) {
-          visit(message, entry.seq);
-          count += 1;
-        }
-      }
-      return count;
-    });
+    return access.readSnapshot(target, (projection) => visitProjectionMessages(projection, visit));
   }
+
+  async function readSessionTranscriptSummaryAsync(
+    scope: SessionTranscriptReadScope,
+    query: SessionTranscriptSummaryQuery,
+  ) {
+    const select = await prepareSessionTranscriptSummaryReader(query);
+    const target = await access.resolveTarget(scope);
+    return access.readSnapshot(target, (projection) =>
+      select((visit) => {
+        visitProjectionMessages(projection, visit);
+      }),
+    );
+  }
+
   async function readSnapshotIfPresent<T>(
     target: ResolvedTranscriptReadTarget,
     read: (projection: CurrentTranscriptProjection) => T,
@@ -208,24 +255,32 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     opts: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
   ): Promise<ReadSessionMessagesResult> {
     const target = await access.resolveTarget(scope);
-    const messages =
-      (await readSnapshotIfPresent(
-        target,
-        (projection) =>
+    const snapshot = (await readSnapshotIfPresent(
+      target,
+      (projection) => ({
+        messages:
           opts.mode === "recent"
             ? readRecentSqliteMessageRecords(projection, opts).messages
             : projectSqliteHistoryEvents(
                 readSessionTranscriptHistoryEventsFromProjection(projection),
               ),
-        opts,
-      )) ?? [];
-    if (messages.length === 0 && opts.allowResetArchiveFallback === true) {
-      return await archivedTranscriptReader(target).read(opts);
-    }
-    return {
-      messages,
-      transcriptPath: target.sessionFile,
-    };
+        ...(opts.mode === "full" && opts.includeOffPathMessages
+          ? {
+              offPathMessages: projectSqliteHistoryEvents(
+                readOffPathSessionTranscriptEventsFromProjection(projection),
+              ),
+            }
+          : {}),
+      }),
+      opts,
+    )) ?? { messages: [], offPathMessages: [] };
+    const result =
+      snapshot.messages.length === 0 && opts.allowResetArchiveFallback === true
+        ? await archivedTranscriptReader(target).read(opts)
+        : { messages: snapshot.messages, transcriptPath: target.sessionFile };
+    return snapshot.offPathMessages
+      ? { ...result, messages: [...result.messages, ...snapshot.offPathMessages] }
+      : result;
   }
 
   async function readSessionMessageByIdAsync(
@@ -387,7 +442,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       ...(page.readWindow ? { readWindow: page.readWindow } : {}),
       displaySource: page.displaySource,
       hasOverreadContext: page.hasOverreadContext,
-      messages: page.events
+      messages: capAnchorEventsByBytes(page.events, opts.maxBytes)
         .map(sqliteMessageEventWithSeq)
         .filter((message) => message !== undefined),
       offset: page.offset,
@@ -398,6 +453,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
 
   return {
     visitSessionMessagesAsync,
+    readSessionTranscriptSummaryAsync,
     readSessionMessageCountAsync,
     readSessionMessagesAsync,
     readSessionMessagesWithSourceAsync,
@@ -408,6 +464,9 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     readSessionMessagesAroundIdWithStatsAsync,
   };
 }
-export type SessionTranscriptReader = ReturnType<typeof createSessionTranscriptReader> & {
+export type SessionTranscriptReader = Omit<
+  ReturnType<typeof createSessionTranscriptReader>,
+  "visitSessionMessagesAsync" | "readSessionTranscriptSummaryAsync"
+> & {
   subagentCoordination?: SubagentCoordinationDisplayResolver;
 };

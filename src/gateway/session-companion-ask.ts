@@ -15,6 +15,7 @@ import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
+import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Message, ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -209,7 +210,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     );
     params.signal.throwIfAborted();
     params.assertSourceCurrent?.();
-    await withSessionManagerWrite(sessionManager, () => {
+    const assertSeedCurrent = () => {
       abortSignal.throwIfAborted();
       params.assertSourceCurrent?.();
       const currentEntry = loadExactSessionEntry(target)?.entry;
@@ -221,10 +222,16 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       ) {
         throw new Error("Session companion identity changed before history persistence");
       }
-      for (const message of params.messages.slice(0, -1)) {
-        sessionManager.appendMessage(toRunnerHistoryMessage(message, selectedModel));
-      }
-    });
+    };
+    await withSessionTranscriptWriteAssertion(target, assertSeedCurrent, () =>
+      withSessionManagerWrite(sessionManager, async () => {
+        assertSeedCurrent();
+        for (const message of params.messages.slice(0, -1)) {
+          assertSeedCurrent();
+          await sessionManager.appendMessageAsync(toRunnerHistoryMessage(message, selectedModel));
+        }
+      }),
+    );
     abortSignal.throwIfAborted();
     params.assertInputCurrent?.();
     executionStarted = true;

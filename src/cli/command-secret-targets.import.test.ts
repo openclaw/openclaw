@@ -1,5 +1,6 @@
 // Command secret target import tests cover lazy import safety for secret target metadata.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 function secretTarget(
   id: string,

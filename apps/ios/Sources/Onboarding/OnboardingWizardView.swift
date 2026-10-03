@@ -28,9 +28,7 @@ struct OnboardingWizardView: View {
     @State private var manualPortText: String = "18789"
     @State private var manualTLS: Bool = true
     @State private var manualContextPath: String?
-    @State private var gatewayToken: String = ""
-    @State private var gatewayPassword: String = ""
-    @State private var gatewayCredentialFieldStableID: String?
+    @State private var gatewayAuthFields = GatewayConnectionController.ManualAuthOverride.Fields()
     @State private var connectMessage: String?
     @State private var localConnectionFailure: String?
     @State private var statusLine: String = ""
@@ -47,7 +45,6 @@ struct OnboardingWizardView: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showGatewayProblemDetails: Bool = false
     @State private var lastPairingAutoResumeAttemptAt: Date?
-    @State private var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State private var setupLinkStaging = GatewaySetupLinkStaging()
     @State private var qrCodeCompletion = OnboardingQRCodeCompletion()
     @State private var setupCode: String = ""
@@ -1011,10 +1008,10 @@ extension OnboardingWizardView {
         self.manualPortText = String(link.port)
         self.manualTLS = link.tls
         self.manualContextPath = link.contextPath
-        self.gatewayCredentialFieldStableID = setupAuth.targetStableID
-        self.gatewayToken = setupAuth.token
-        self.gatewayPassword = setupAuth.password
-        self.pendingManualAuthOverride = setupAuth.manualAuthOverride
+        self.gatewayAuthFields.targetStableID = setupAuth.targetStableID
+        self.gatewayAuthFields.token = setupAuth.token
+        self.gatewayAuthFields.password = setupAuth.password
+        self.gatewayAuthFields.pendingOverride = setupAuth.manualAuthOverride
         let instanceId = GatewaySettingsStore.currentInstanceID()
         if !instanceId.isEmpty {
             GatewaySettingsStore.saveGatewayCredentials(
@@ -1267,23 +1264,14 @@ extension OnboardingWizardView {
         if !trimmedInstanceId.isEmpty,
            let stableID = self.currentManualGatewayStableID
         {
-            let credentials = GatewaySettingsStore.loadGatewayCredentials(
+            self.gatewayAuthFields.load(
                 instanceId: trimmedInstanceId,
-                gatewayStableID: stableID)
-            let ownsFields = credentials.hasCredentials || credentials.suppressStoredDeviceAuth
-            self.gatewayCredentialFieldStableID = ownsFields ? stableID : nil
-            self.gatewayToken = credentials.token ?? ""
-            self.gatewayPassword = credentials.password ?? ""
-            self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
-                current: self.pendingManualAuthOverride,
-                instanceId: trimmedInstanceId,
-                targetStableID: stableID,
-                allowManualOverride: true)
+                targetStableID: stableID)
         }
 
         let hasSavedGateway = GatewaySettingsStore.activeGatewayEntry() != nil
-        let hasToken = !self.gatewayToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let hasPassword = !self.gatewayPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasToken = !self.gatewayAuthFields.token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasPassword = !self.gatewayAuthFields.password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if !hasSavedGateway, !hasToken, !hasPassword {
             self.statusLine = ""
         }
@@ -1310,7 +1298,7 @@ extension OnboardingWizardView {
     private var gatewayCredentialTargetStableID: String? {
         // Auth fields follow the selected route. Otherwise a discovered-gateway retry can save
         // credentials under the unrelated manual endpoint and immediately reload an empty bundle.
-        self.gatewayCredentialFieldStableID ?? self.currentManualGatewayStableID
+        self.gatewayAuthFields.targetStableID ?? self.currentManualGatewayStableID
     }
 
     private func resolvedManualPort(host: String) -> Int? {
@@ -1322,19 +1310,23 @@ extension OnboardingWizardView {
 
     private var gatewayTokenBinding: Binding<String> {
         Binding(
-            get: { self.gatewayToken },
+            get: { self.gatewayAuthFields.token },
             set: { value in
-                self.gatewayToken = value
-                self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
+                self.gatewayAuthFields.token = value
+                self.gatewayAuthFields.persist(
+                    instanceId: GatewaySettingsStore.currentInstanceID(),
+                    targetStableID: self.gatewayCredentialTargetStableID)
             })
     }
 
     private var gatewayPasswordBinding: Binding<String> {
         Binding(
-            get: { self.gatewayPassword },
+            get: { self.gatewayAuthFields.password },
             set: { value in
-                self.gatewayPassword = value
-                self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
+                self.gatewayAuthFields.password = value
+                self.gatewayAuthFields.persist(
+                    instanceId: GatewaySettingsStore.currentInstanceID(),
+                    targetStableID: self.gatewayCredentialTargetStableID)
             })
     }
 
@@ -1348,7 +1340,7 @@ extension OnboardingWizardView {
                 if GatewayStableIdentifier.key(previousStableID) !=
                     GatewayStableIdentifier.key(self.currentManualGatewayStableID)
                 {
-                    self.clearManualCredentialFields()
+                    self.gatewayAuthFields = .init()
                 }
             })
     }
@@ -1365,64 +1357,17 @@ extension OnboardingWizardView {
                 if GatewayStableIdentifier.key(previousStableID) !=
                     GatewayStableIdentifier.key(self.currentManualGatewayStableID)
                 {
-                    self.clearManualCredentialFields()
+                    self.gatewayAuthFields = .init()
                 }
             })
     }
 
-    private func persistGatewayCredentials(for stableID: String?) {
-        let instanceId = GatewaySettingsStore.currentInstanceID()
-        guard !instanceId.isEmpty, let stableID else { return }
-        self.gatewayCredentialFieldStableID = stableID
-        let saved = GatewaySettingsStore.updateGatewayCredentials(
-            token: self.gatewayToken,
-            password: self.gatewayPassword,
-            gatewayStableID: stableID,
-            instanceId: instanceId)
-        self.pendingManualAuthOverride = saved
-            ? GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
-                current: self.pendingManualAuthOverride,
-                instanceId: instanceId,
-                targetStableID: stableID,
-                allowManualOverride: true)
-            : nil
-    }
-
-    private func clearManualCredentialFields() {
-        self.gatewayToken = ""
-        self.gatewayPassword = ""
-        self.gatewayCredentialFieldStableID = nil
-        self.pendingManualAuthOverride = nil
-    }
-
-    private func selectGatewayCredentialTarget(_ stableID: String, allowManualOverride: Bool) {
-        let instanceId = GatewaySettingsStore.currentInstanceID()
-        if !GatewayStableIdentifier.matches(self.gatewayCredentialFieldStableID, stableID) {
-            let credentials = GatewaySettingsStore.loadGatewayCredentials(
-                instanceId: instanceId,
-                gatewayStableID: stableID)
-            self.gatewayCredentialFieldStableID = stableID
-            self.gatewayToken = credentials.token ?? ""
-            self.gatewayPassword = credentials.password ?? ""
-        } else if let fields = self.pendingManualAuthOverride?.refreshedFieldsAfterHandoff(
-            token: self.gatewayToken,
-            password: self.gatewayPassword,
-            instanceId: instanceId,
-            targetStableID: stableID)
-        {
-            self.gatewayToken = fields.token
-            self.gatewayPassword = fields.password
-        }
-        self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
-            current: self.pendingManualAuthOverride,
-            instanceId: instanceId,
-            targetStableID: stableID,
-            allowManualOverride: allowManualOverride)
-    }
-
     private func connectDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
         self.qrCodeCompletion.cancel()
-        self.selectGatewayCredentialTarget(gateway.stableID, allowManualOverride: false)
+        self.gatewayAuthFields.selectTarget(
+            gateway.stableID,
+            instanceId: GatewaySettingsStore.currentInstanceID(),
+            allowManualOverride: false)
         self.connectingGateway = .gateway(gateway.id)
         self.localConnectionFailure = nil
         self.issue = .none
@@ -1446,7 +1391,7 @@ extension OnboardingWizardView {
             if GatewayStableIdentifier.key(previousStableID) !=
                 GatewayStableIdentifier.key(self.currentManualGatewayStableID)
             {
-                self.clearManualCredentialFields()
+                self.gatewayAuthFields = .init()
             }
         }
         let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -1487,32 +1432,15 @@ extension OnboardingWizardView {
             host: host,
             port: port,
             contextPath: self.manualContextPath)
-        self.selectGatewayCredentialTarget(stableID, allowManualOverride: true)
+        self.gatewayAuthFields.selectTarget(
+            stableID,
+            instanceId: GatewaySettingsStore.currentInstanceID(),
+            allowManualOverride: true)
         self.manualConnectGeneration &+= 1
         let generation = self.manualConnectGeneration
-        let fieldsMatchTarget = GatewayStableIdentifier.matches(
-            self.gatewayCredentialFieldStableID,
-            stableID)
-        let pendingOverride = GatewayStableIdentifier.matches(
-            self.pendingManualAuthOverride?.targetStableID,
-            stableID)
-            ? self.pendingManualAuthOverride
-            : nil
-        let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
-            token: fieldsMatchTarget ? self.gatewayToken : nil,
-            pendingOverride: pendingOverride,
-            password: fieldsMatchTarget ? self.gatewayPassword : nil,
+        let authOverride = self.gatewayAuthFields.prepareManualConnection(
+            instanceId: GatewaySettingsStore.currentInstanceID(),
             targetStableID: stableID)
-        let instanceId = GatewaySettingsStore.currentInstanceID()
-        if !instanceId.isEmpty, fieldsMatchTarget || pendingOverride != nil {
-            GatewaySettingsStore.saveGatewayCredentials(
-                token: authOverride?.token,
-                bootstrapToken: authOverride?.bootstrapToken,
-                password: authOverride?.password,
-                gatewayStableID: stableID,
-                suppressStoredDeviceAuth: authOverride?.suppressStoredDeviceAuth == true,
-                instanceId: instanceId)
-        }
         let result = await self.gatewayController.connectManual(
             host: host,
             port: port,
@@ -1524,7 +1452,7 @@ extension OnboardingWizardView {
               generation == self.manualConnectGeneration,
               GatewayStableIdentifier.matches(self.currentManualGatewayStableID, stableID)
         else { return }
-        self.pendingManualAuthOverride = authOverride?.unconsumed
+        self.gatewayAuthFields.pendingOverride = authOverride?.unconsumed
         if case let .failed(message) = result,
            !self.appModel.hasGatewayPreconnectProblem(for: stableID)
         {
@@ -1575,7 +1503,7 @@ extension OnboardingWizardView {
     private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
         if problem.suggestsOnboardingReset {
             await GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
-            self.clearManualCredentialFields()
+            self.gatewayAuthFields = .init()
             self.connectingGateway = nil
             self.connectMessage = nil
             self.issue = .none

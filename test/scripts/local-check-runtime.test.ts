@@ -226,6 +226,25 @@ describe("local-check-runtime", () => {
     expect(env.GOMEMLIMIT).toBe("5GiB");
   });
 
+  it("enables opt-in profiling on ordinary local machines without a throttled mode", () => {
+    const { args, env } = applyLocalTsgoPolicy(
+      ["-p", "tsconfig.ui.json"],
+      { OPENCLAW_TSGO_PPROF_DIR: ".artifacts/profiles" },
+      ROOMY_HOST,
+    );
+    expect(args).toEqual([
+      "-p",
+      "tsconfig.ui.json",
+      "--declaration",
+      "false",
+      "--pprofDir",
+      ".artifacts/profiles",
+    ]);
+    expect(env.OPENCLAW_LOCAL_CHECK_MODE).toBeUndefined();
+    expect(env.GOMAXPROCS).toBeUndefined();
+    expect(env.GOMEMLIMIT).toBeUndefined();
+  });
+
   it("keeps explicit tsgo declaration flags intact", () => {
     const env = makeEnv({ OPENCLAW_LOCAL_CHECK_MODE: "full" });
     const longFlag = applyLocalTsgoPolicy(["--declaration"], env, ROOMY_HOST);
@@ -521,6 +540,8 @@ describe("local-check-runtime", () => {
     "keeps prep and oxlint resource policies separate with $name",
     ({ goEnv, prepGoEnv, lintGoEnv }) => {
       const cwd = createTempDir("openclaw-oxlint-go-limit-");
+      // Keep artifact ownership inside this fixture when its temp directory has a checkout ancestor.
+      fs.mkdirSync(path.join(cwd, ".git"));
       const binDir = path.join(cwd, "node_modules", ".bin");
       const scriptsDir = path.join(cwd, "scripts");
       const capturePath = path.join(cwd, "children.jsonl");

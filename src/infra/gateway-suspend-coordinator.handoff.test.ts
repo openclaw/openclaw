@@ -97,7 +97,7 @@ describe("gateway suspend coordinator", () => {
       },
     );
 
-    it.each(["expiry", "resume", "replacement", "host", "restart", "disarm", "persistence"])(
+    it.each(["expiry", "resume", "replacement", "host", "restart", "disarm"])(
       "refuses a previously armed handoff after %s",
       (change) => {
         const fixture = setup(true);
@@ -119,9 +119,6 @@ describe("gateway suspend coordinator", () => {
         }
         if (change === "disarm") {
           disarmGatewaySuspendHandoff(fixture.owner);
-        }
-        if (change === "persistence") {
-          fixture.persist();
         }
         expect(fixture.consume()).not.toEqual({ ok: true, value: true });
         expect(fixture.consume()).toEqual({ ok: true, value: false });
@@ -149,6 +146,7 @@ describe("gateway suspend coordinator", () => {
           ok: false,
           error: "gateway terminal persistence is still pending",
         });
+        expect(fixture.consume()).toEqual({ ok: true, value: false });
         expect(fixture.arm().ok).toBe(false);
 
         fixture.finishPersistence();

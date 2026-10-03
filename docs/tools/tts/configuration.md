@@ -50,7 +50,7 @@ or blank, it keeps the base TTS voice.
     providers: {
       elevenlabs: {
         apiKey: "${ELEVENLABS_API_KEY}",
-        model: "eleven_multilingual_v2",
+        modelId: "eleven_multilingual_v2",
         speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
       },
     },
@@ -204,7 +204,7 @@ or blank, it keeps the base TTS voice.
       },
       elevenlabs: {
         apiKey: "${ELEVENLABS_API_KEY}",
-        model: "eleven_multilingual_v2",
+        modelId: "eleven_multilingual_v2",
         speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
         voiceSettings: { stability: 0.5, similarityBoost: 0.75, style: 0.0, useSpeakerBoost: true, speed: 1.0 },
         applyTextNormalization: "auto",
@@ -453,13 +453,12 @@ voice, model, persona, or auto-TTS mode. The agent block deep-merges over
     auto: "always",
     provider: "elevenlabs",
     providers: {
-      elevenlabs: { apiKey: "${ELEVENLABS_API_KEY}", model: "eleven_multilingual_v2" },
+      elevenlabs: { apiKey: "${ELEVENLABS_API_KEY}", modelId: "eleven_multilingual_v2" },
     },
   },
   agents: {
     entries: {
       reader: {
-        default: true,
         tts: {
           providers: {
             elevenlabs: { speakerVoiceId: "EXAVITQu4vr4xnSDxMaL" },

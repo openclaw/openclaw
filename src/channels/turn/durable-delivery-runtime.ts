@@ -4,6 +4,7 @@ import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-
 import {
   getPluginRegistryGatewayChannelRegistration,
   getPluginRegistryGatewayOwner,
+  isPluginRegistryGatewayViewOf,
 } from "../../plugins/registry-lifecycle.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -41,8 +42,12 @@ export function withDurableDeliveryRuntime<T>(
       reject("The reply delivery runtime changed before sending.");
     }
   };
-  if (current === registry) {
-    return deliver(input.cfg, assertCurrent);
+  if (current === registry || isPluginRegistryGatewayViewOf(registry, current)) {
+    // A filtered agent registry is still this publication, not a reload handoff.
+    // The completed model turn must not select or own the final transport.
+    return runOutsidePluginRuntimeGenerationScope(() =>
+      withPluginRuntimeRegistryScope(current, () => deliver(input.cfg, assertCurrent)),
+    );
   }
   const cfg = getPluginRuntimeLoadContext(current)?.rawConfig;
   const channel = current.channels.find((entry) => entry.plugin.id === input.channel);

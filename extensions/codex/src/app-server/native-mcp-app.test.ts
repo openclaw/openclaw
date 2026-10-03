@@ -2,9 +2,10 @@ import {
   prepareHarnessNativeMcpAppPreview,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
+import { retainSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
   const original =
@@ -14,6 +15,21 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
     prepareHarnessNativeMcpAppPreview: vi.fn(original.prepareHarnessNativeMcpAppPreview),
   };
 });
+
+const ownedClients = vi.hoisted(() => new WeakMap<object, () => void>());
+vi.mock("./shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared-client.js")>()),
+  retainSharedCodexAppServerClientIfCurrent: vi.fn((client: object | undefined) =>
+    client ? ownedClients.get(client) : undefined,
+  ),
+}));
+beforeEach(() => vi.mocked(retainSharedCodexAppServerClientIfCurrent).mockClear());
+
+/** These transport stubs represent clients already admitted by the native connection owner. */
+function registeredClient<T extends object>(client: T): T {
+  ownedClients.set(client, vi.fn());
+  return client;
+}
 
 function createAttempt(enabled = true): EmbeddedRunAttemptParams {
   return {
@@ -58,8 +74,12 @@ describe("Codex native MCP Apps", () => {
       }
       throw new Error(`unexpected request: ${method}`);
     });
+    const client = registeredClient({
+      request,
+      getInstanceId: () => "client-1",
+    } as unknown as CodexAppServerClient);
     const prepare = createCodexNativeMcpAppResultDetailsPreparer({
-      client: { request, getInstanceId: () => "client-1" } as unknown as CodexAppServerClient,
+      client,
       threadId: "thread-1",
       attempt: createAttempt(),
     });
@@ -78,6 +98,7 @@ describe("Codex native MCP Apps", () => {
         _meta: null,
       },
     } as never);
+    expect(vi.mocked(retainSharedCodexAppServerClientIfCurrent).mock.lastCall?.[0]).toBe(client);
     expect(details).toMatchObject({
       mcpAppPreview: {
         kind: "canvas",
@@ -91,16 +112,24 @@ describe("Codex native MCP Apps", () => {
         },
       },
     });
-    expect(request).toHaveBeenCalledWith("mcpServerStatus/list", {
-      threadId: "thread-1",
-      detail: "full",
-    });
-    expect(request).toHaveBeenCalledWith("mcpServer/resource/read", {
-      threadId: "thread-1",
-      server: "sample",
-      uri: "ui://sample/options.html",
-      connectorId: "sample",
-    });
+    expect(request).toHaveBeenCalledWith(
+      "mcpServerStatus/list",
+      {
+        threadId: "thread-1",
+        detail: "full",
+      },
+      { assertCurrent: undefined },
+    );
+    expect(request).toHaveBeenCalledWith(
+      "mcpServer/resource/read",
+      {
+        threadId: "thread-1",
+        server: "sample",
+        uri: "ui://sample/options.html",
+        connectorId: "sample",
+      },
+      { assertCurrent: undefined },
+    );
     expect(
       vi.mocked(prepareHarnessNativeMcpAppPreview).mock.lastCall?.[0].allowedAppToolNames,
     ).toEqual(new Set(["show_options", "show_menu"]));
@@ -145,7 +174,10 @@ describe("Codex native MCP Apps", () => {
         throw new Error(`unexpected request: ${method}`);
       });
       const prepare = createCodexNativeMcpAppResultDetailsPreparer({
-        client: { request, getInstanceId: () => "client-1" } as unknown as CodexAppServerClient,
+        client: registeredClient({
+          request,
+          getInstanceId: () => "client-1",
+        } as unknown as CodexAppServerClient),
         threadId: "thread-1",
         attempt: createAttempt(),
       });
@@ -162,13 +194,17 @@ describe("Codex native MCP Apps", () => {
           result: { content: [{ type: "text", text: "Found options." }] },
         } as never),
       ).resolves.toBeUndefined();
-      expect(request).toHaveBeenCalledWith("mcpServer/resource/read", {
-        threadId: "thread-1",
-        originCallId: "call-options",
-        server: "codex_apps",
-        uri: "ui://sample/options.html",
-        connectorId: "sample",
-      });
+      expect(request).toHaveBeenCalledWith(
+        "mcpServer/resource/read",
+        {
+          threadId: "thread-1",
+          originCallId: "call-options",
+          server: "codex_apps",
+          uri: "ui://sample/options.html",
+          connectorId: "sample",
+        },
+        { assertCurrent: undefined },
+      );
     },
   );
 
@@ -230,7 +266,10 @@ describe("Codex native MCP Apps", () => {
       throw new Error(`unexpected request: ${method}`);
     });
     const prepare = createCodexNativeMcpAppResultDetailsPreparer({
-      client: { request, getInstanceId: () => "client-hosted" } as unknown as CodexAppServerClient,
+      client: registeredClient({
+        request,
+        getInstanceId: () => "client-hosted",
+      } as unknown as CodexAppServerClient),
       threadId: "thread-hosted",
       attempt: createAttempt(),
     });

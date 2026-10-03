@@ -1,5 +1,4 @@
 import type { z } from "zod";
-// Defines gateway runtime and networking configuration types.
 import type { SecretInput } from "./types.secrets.js";
 import type { GatewayConfigSchema } from "./zod-schema.gateway.js";
 import type { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
@@ -14,7 +13,6 @@ export type GatewayBindMode = NonNullable<GatewayConfigInput["bind"]>;
 export type GatewayTlsConfig = NonNullable<GatewayConfigInput["tls"]>;
 
 export type DiscoveryConfig = NonNullable<z.input<typeof OpenClawSchemaShape.discovery>>;
-export type WideAreaDiscoveryConfig = NonNullable<DiscoveryConfig["wideArea"]>;
 export type MdnsDiscoveryConfig = NonNullable<DiscoveryConfig["mdns"]>;
 export type MdnsDiscoveryMode = NonNullable<MdnsDiscoveryConfig["mode"]>;
 
@@ -87,21 +85,6 @@ export type GatewayPortalIngressConfig = NonNullable<
 
 export type GatewayRemoteConfig = NonNullable<GatewayConfigInput["remote"]>;
 
-/**
- * Operator terminal surface served to Control UI and mobile clients.
- *
- * The terminal opens a PTY-backed shell on the gateway host, gated to
- * admin-scope operator sessions. It starts in the target agent's workspace; if
- * that agent is fully sandboxed (`sandbox.mode: "all"`) the terminal is refused
- * rather than handed an unconfined host shell (workspace isolation is
- * fail-closed). Under "non-main" the agent's main session runs on the host, so a
- * host terminal is allowed.
- */
-export type GatewayTerminalConfig = NonNullable<GatewayConfigInput["terminal"]>;
-
-/** External CLI session targets in the Control UI. */
-export type GatewayCliAgentsConfig = NonNullable<GatewayConfigInput["cliAgents"]>;
-
 /** Gateway config reload strategy for managed installs. */
 export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
 
@@ -116,29 +99,8 @@ type GatewayHttpEndpointsConfigInput = NonNullable<GatewayHttpConfigInput["endpo
 export type GatewayHttpChatCompletionsConfig = NonNullable<
   GatewayHttpEndpointsConfigInput["chatCompletions"]
 >;
-export type GatewayHttpChatCompletionsImagesConfig = NonNullable<
-  GatewayHttpChatCompletionsConfig["images"]
->;
 
 export type GatewayHttpResponsesConfig = NonNullable<GatewayHttpEndpointsConfigInput["responses"]>;
-
-export type GatewayHttpResponsesFilesConfig = NonNullable<GatewayHttpResponsesConfig["files"]>;
-
-export type GatewayHttpResponsesPdfConfig = NonNullable<GatewayHttpResponsesFilesConfig["pdf"]>;
-
-export type GatewayHttpResponsesImagesConfig = NonNullable<GatewayHttpResponsesConfig["images"]>;
-
-export type GatewayHttpEndpointsConfig = GatewayHttpEndpointsConfigInput;
-
-export type GatewayHttpSecurityHeadersConfig = NonNullable<
-  GatewayHttpConfigInput["securityHeaders"]
->;
-
-export type GatewayHttpConfig = GatewayHttpConfigInput;
-
-export type GatewayPushConfig = NonNullable<GatewayConfigInput["push"]>;
-export type GatewayPushApnsConfig = NonNullable<GatewayPushConfig["apns"]>;
-export type GatewayPushApnsRelayConfig = NonNullable<GatewayPushApnsConfig["relay"]>;
 
 export type GatewayNodePairingConfig = NonNullable<
   NonNullable<GatewayConfigInput["nodes"]>["pairing"]
@@ -152,8 +114,6 @@ export type GatewayNodesConfig = NonNullable<GatewayConfigInput["nodes"]> & {
   /** @deprecated Doctor-only legacy input. */
   denyCommands?: string[];
 };
-
-export type GatewayToolsConfig = NonNullable<GatewayConfigInput["tools"]>;
 
 /** Closed session, sandbox, agent, model, and operator-scope policy for one named team role. */
 export type GatewayOperatorRoleDefinition = NonNullable<

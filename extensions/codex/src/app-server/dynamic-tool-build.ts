@@ -32,6 +32,7 @@ import {
   readCodexPluginConfig,
   type CodexPluginConfig,
 } from "./config.js";
+import { resolveCodexToolConstructionPlan } from "./dynamic-tool-construction-plan.js";
 import {
   filterCodexDynamicTools,
   filterCodexDynamicToolsForDisabledNativeSurface,
@@ -86,34 +87,6 @@ const CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS = new Set([
   CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
   CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
 ]);
-
-/** Keeps node filesystem and process ownership on its native exec-server. */
-function resolveCodexNodePlacementToolConstructionPlan(
-  sandbox: OpenClawSandboxContext | undefined,
-  nativeToolSurfaceEnabled: boolean | undefined,
-): OpenClawCodingToolsOptions["toolConstructionPlan"] {
-  if (
-    !isCodexRemoteExecPlacementSandbox(sandbox) ||
-    sandbox?.backendId !== "node" ||
-    !("placementNodeId" in sandbox) ||
-    typeof sandbox.placementNodeId !== "string" ||
-    !sandbox.placementNodeId
-  ) {
-    return undefined;
-  }
-  if (!nativeToolSurfaceEnabled) {
-    throw new Error(
-      "Codex node execution requires its native exec-server tool surface; adjust the session tool policy and start a fresh attempt.",
-    );
-  }
-  return {
-    includeBaseCodingTools: false,
-    includeShellTools: false,
-    includeChannelTools: true,
-    includeOpenClawTools: true,
-    includePluginTools: true,
-  };
-}
 
 function preserveRingZeroSystemAgentTool<T extends { name: string; catalogMode?: string }>(
   allTools: T[],
@@ -233,9 +206,10 @@ export async function buildDynamicTools(
   });
   const messageToolProvider = resolveCodexMessageToolProvider(params);
   const webFetchHostnameAllowlistRef: { value?: string[] } = {};
-  const toolConstructionPlan = resolveCodexNodePlacementToolConstructionPlan(
+  const toolConstructionPlan = resolveCodexToolConstructionPlan(
     input.sandbox,
     input.nativeToolSurfaceEnabled,
+    params.requireWorkspaceOnly,
   );
   const options: OpenClawCodingToolsOptions = {
     agentId: input.sessionAgentId,
@@ -252,6 +226,7 @@ export async function buildDynamicTools(
       ? { mode: input.sessionPermissionPolicy.mode, root: input.sessionPermissionPolicy.root }
       : undefined,
     sandbox: input.sandbox,
+    requireWorkspaceOnly: params.requireWorkspaceOnly,
     ...(toolConstructionPlan ? { toolConstructionPlan } : {}),
     messageProvider: messageToolProvider,
     toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
@@ -517,6 +492,7 @@ export function shouldEnableCodexAppServerNativeToolSurface(
 ): boolean {
   if (
     isCodexResponsesOAuthRun(params) ||
+    params.requireWorkspaceOnly === true ||
     params.pluginHarnessToolPolicyRestricted === true ||
     isCodexMemoryFlushRun(params) ||
     params.disableTools
@@ -533,14 +509,12 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     return false;
   }
   const toolsAllow = params.toolsAllow;
-  if (toolsAllow === undefined) {
-    return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
-  }
   // Codex native code mode exposes its shell/file surface as one app-server
   // capability, so narrow OpenClaw allowlists must fail closed rather than
   // widening `message` or `web_search` into shell access.
   return (
-    hasWildcardCodexToolsAllow(toolsAllow) &&
+    (toolsAllow === undefined ||
+      toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*")) &&
     canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options)
   );
 }
@@ -574,23 +548,15 @@ function canCodexAppServerNativeToolSurfaceHonorSandbox(
   if (!sandbox?.enabled) {
     return true;
   }
-  if (
-    options.sandboxExecServerEnabled === true &&
-    (sandbox.backend || isCodexRemoteExecPlacementSandbox(sandbox)) &&
-    canSandboxToolPolicyExposeCodexNativeToolSurface(sandbox)
-  ) {
-    return true;
-  }
   // Codex app-server native shell, filesystem, and user MCP execution are owned
   // by the app-server process. Without the explicit exec-server integration,
   // active OpenClaw sandboxing must disable the native surface and route shell
   // access through sandbox-backed dynamic tools instead.
-  return false;
-}
-function canSandboxToolPolicyExposeCodexNativeToolSurface(sandbox: {
-  tools: Parameters<typeof isToolAllowed>[0];
-}): boolean {
-  return CODEX_NATIVE_TOOL_REQUIREMENTS.every((toolName) => isToolAllowed(sandbox.tools, toolName));
+  return (
+    options.sandboxExecServerEnabled === true &&
+    (sandbox.backend || isCodexRemoteExecPlacementSandbox(sandbox)) &&
+    CODEX_NATIVE_TOOL_REQUIREMENTS.every((toolName) => isToolAllowed(sandbox.tools, toolName))
+  );
 }
 function isCodexMemoryFlushRun(
   params?: Pick<EmbeddedRunAttemptParams, "trigger" | "memoryFlushWritePath">,
@@ -810,9 +776,6 @@ function filterCodexDynamicToolsForAllowlist<T extends OpenClawDynamicTool>(
           : [];
     },
   });
-}
-function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {
-  return toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*");
 }
 function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
   return (

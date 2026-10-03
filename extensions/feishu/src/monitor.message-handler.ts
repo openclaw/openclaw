@@ -216,12 +216,6 @@ export function createFeishuMessageReceiveHandler({
     await enqueue(sequentialKey, task);
   };
 
-  const resolveSenderDebounceId = (event: FeishuMessageEvent): string | undefined => {
-    const senderId =
-      event.sender.sender_id.open_id?.trim() || event.sender.sender_id.user_id?.trim();
-    return senderId || undefined;
-  };
-
   const resolveDebounceText = (event: FeishuMessageEvent): string => {
     return resolveText({
       event,
@@ -254,7 +248,8 @@ export function createFeishuMessageReceiveHandler({
       resolveDebounceMs,
       buildKey: ({ event }) => {
         const chatId = event.message.chat_id?.trim();
-        const senderId = resolveSenderDebounceId(event);
+        const senderId =
+          event.sender.sender_id.open_id?.trim() || event.sender.sender_id.user_id?.trim();
         if (!chatId || !senderId) {
           return null;
         }
@@ -418,7 +413,8 @@ export function createFeishuMessageReceiveHandler({
       event.message.message_type.trim() === "post" &&
       messageDedupeKey !== messageId &&
       (await hasProcessedMessage(messageId, accountId, log)) &&
-      parsePostContent(event.message.content).attachments.length === 0
+      parsePostContent(event.message.content, { includeTopLevelFiles: false }).attachments
+        .length === 0
     ) {
       log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
       await completeSuppressedIngress();
@@ -456,12 +452,9 @@ export function createFeishuMessageReceiveHandler({
         claim.handle.release({ error: new Error("feishu-ingress-abandoned-before-flush") });
       });
     }
-    const processMessage = async () => {
-      await inboundDebouncer.enqueue(debounceEntry);
-    };
     if (turnAdoptionLifecycle) {
       try {
-        await processMessage();
+        await inboundDebouncer.enqueue(debounceEntry);
         return { kind: "deferred" };
       } catch (err) {
         if (claim.kind === "claimed") {
@@ -470,7 +463,7 @@ export function createFeishuMessageReceiveHandler({
         return { kind: "failed-retryable", error: err };
       }
     }
-    const processing = processMessage().catch((err: unknown) => {
+    const processing = inboundDebouncer.enqueue(debounceEntry).catch((err: unknown) => {
       if (claim.kind === "claimed") {
         claim.handle.release({ error: err });
       }

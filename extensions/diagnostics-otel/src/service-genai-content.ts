@@ -8,6 +8,10 @@ import {
   ATTR_GEN_AI_TOOL_DEFINITIONS,
   GEN_AI_OPERATION_NAME_VALUE_EXECUTE_TOOL,
 } from "@opentelemetry/semantic-conventions/incubating";
+import type {
+  DiagnosticEventPrivateData,
+  DiagnosticModelCallContent,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   MAX_OTEL_CONTENT_ARRAY_ITEMS,
@@ -16,18 +20,6 @@ import {
   safeJsonString,
   type OtelContentCapturePolicy,
 } from "./service-content-normalization.js";
-
-export type OtelModelCallContent = {
-  inputMessages?: unknown;
-  outputMessages?: unknown;
-  systemPrompt?: string;
-  toolDefinitions?: unknown;
-};
-
-export type OtelToolCallContent = {
-  toolInput?: unknown;
-  toolOutput?: unknown;
-};
 
 function textPart(content: string): Record<string, unknown> {
   return { type: "text", content };
@@ -292,7 +284,7 @@ function assignJsonAttribute(
 
 function assignGenAiModelContentAttributes(
   attributes: Record<string, string | number | boolean>,
-  content: OtelModelCallContent | undefined,
+  content: DiagnosticModelCallContent | undefined,
   policy: OtelContentCapturePolicy,
 ): void {
   if (policy.systemPrompt && typeof content?.systemPrompt === "string") {
@@ -350,7 +342,7 @@ export function assignOtelToolIdentityAttributes(
 
 export function assignOtelModelContentAttributes(
   attributes: Record<string, string | number | boolean>,
-  content: OtelModelCallContent | undefined,
+  content: DiagnosticModelCallContent | undefined,
   policy: OtelContentCapturePolicy,
 ): void {
   // Provider-native thinking blocks are not user-visible model output. Keep only
@@ -392,7 +384,7 @@ export function assignOtelModelContentAttributes(
 
 export function assignOtelToolContentAttributes(
   attributes: Record<string, string | number | boolean>,
-  content: OtelToolCallContent | undefined,
+  content: DiagnosticEventPrivateData["toolContent"],
   policy: OtelContentCapturePolicy,
 ): void {
   // Mirror captured content onto the semconv keys next to the shipped

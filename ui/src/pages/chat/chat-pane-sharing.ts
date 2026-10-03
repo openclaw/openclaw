@@ -18,8 +18,8 @@ import {
   scopedSessionArtifactKey,
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
+import { ChatPaneReactions } from "./chat-pane-reactions.ts";
 import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
-import { ChatPaneSharingActions } from "./chat-pane-sharing-actions.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   typingActorIdForSessionMessage,
@@ -36,7 +36,7 @@ const TYPING_DRAFT_IDLE_MS = 30_000;
 const TYPING_DRAFT_EXIT_MS = 300;
 const TYPING_PREVIEW_INTERVAL_MS = 250;
 
-export abstract class ChatPaneSharing extends ChatPaneSharingActions {
+export abstract class ChatPaneSharing extends ChatPaneReactions {
   // The existing actor/timer owner also owns this bounded presentation cache.
   // Every mutation below refreshes it; reconnect, route, and teardown clear it.
   private readonly typingActiveIds = new Set<string>();

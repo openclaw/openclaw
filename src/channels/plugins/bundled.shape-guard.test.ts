@@ -1113,7 +1113,6 @@ describe("bundled channel entry shape guards", () => {
   it("keeps bundled doctor surfaces off the broad runtime barrel", () => {
     const offenders = [
       "extensions/discord/src/doctor.ts",
-      "extensions/matrix/src/doctor.ts",
       "extensions/slack/src/doctor.ts",
       "extensions/telegram/src/doctor.ts",
       "extensions/zalouser/src/doctor.ts",

@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -990,14 +991,55 @@ describe("gateway server cron", () => {
     expect((disabledRuns.payload as { entries?: unknown[] }).entries).toEqual([]);
   });
 
-  test("returns already-running without starting background work", async () => {
-    let resolveRun: ((result: { status: "ok"; summary: string }) => void) | undefined;
-    cronIsolatedRun.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveRun = resolve;
-        }),
+  test("cron.run waitTimeoutMs returns the finished run, or only its runId when the wait ends first", async () => {
+    const runnerEntered = createDeferred();
+    const slowResult = createDeferred<{ status: "ok"; summary: string }>();
+    cronIsolatedRun.mockImplementationOnce(() => {
+      runnerEntered.resolve();
+      return slowResult.promise;
+    });
+    await setupCronTestRun();
+    const ws = await startCronClient();
+    const jobId = await addWebhookCronJob({
+      ws,
+      name: "waited job",
+      sessionTarget: "isolated",
+      payloadText: "report",
+      delivery: { mode: "none" },
+    });
+
+    const pending = await rpcReq(ws, "cron.run", { id: jobId, waitTimeoutMs: 50 }, 5_000);
+    expect(pending.ok).toBe(true);
+    expect(pending.payload).toEqual({
+      ok: true,
+      enqueued: true,
+      runId: expect.any(String),
+      processInstanceId: getGatewayProcessInstanceId(),
+    });
+    await runnerEntered.promise;
+    const slowFinished = waitForCronEvent(
+      ws,
+      (payload) => payload?.jobId === jobId && payload?.action === "finished",
     );
+    slowResult.resolve({ status: "ok", summary: "late report" });
+    await slowFinished;
+
+    cronIsolatedRun.mockResolvedValueOnce({ status: "ok", summary: "waited report" });
+    const done = await rpcReq(ws, "cron.run", { id: jobId, waitTimeoutMs: 10_000 }, 15_000);
+    expect(done.ok).toBe(true);
+    const runId = expectEnqueuedRunPayload(done.payload);
+    expect(done.payload).toMatchObject({
+      run: { runId, status: "ok", completionStatus: "succeeded", summary: "waited report" },
+    });
+  });
+
+  test("returns already-running without starting background work", async () => {
+    const runnerEntered = createDeferred();
+    const runResult = createDeferred<{ status: "ok"; summary: string }>();
+    cronIsolatedRun.mockImplementationOnce(() => {
+      runnerEntered.resolve();
+      return runResult.promise;
+    });
 
     await setupCronTestRun();
 
@@ -1017,7 +1059,7 @@ describe("gateway server cron", () => {
     const firstRunRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 1_000);
     expect(firstRunRes.ok).toBe(true);
     expectEnqueuedRunPayload(firstRunRes.payload);
-    await startedRun;
+    await Promise.all([startedRun, runnerEntered.promise]);
     expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
     const secondRunRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 1_000);
@@ -1034,7 +1076,7 @@ describe("gateway server cron", () => {
       ws,
       (payload) => payload?.jobId === jobId && payload?.action === "finished",
     );
-    resolveRun?.({ status: "ok", summary: "busy done" });
+    runResult.resolve({ status: "ok", summary: "busy done" });
     await finishedRun;
   });
 

@@ -105,7 +105,6 @@ import { prepareHostChannelContextAdmissionEvidence } from "openclaw/plugin-sdk/
 import { registerChannelAdmissionEvidenceOwner } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import type { buildModelsProviderData, buildPreparedModelsProviderData, ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
-import type { buildModelsProviderData as buildCommandAuthModelsProviderData } from "openclaw/plugin-sdk/command-auth";
 import type { ClientRequestArgs } from "node:http";
 import type { ClientOptions as PublishedClientOptions, WebSocket as PublishedWebSocket } from "ws";
 import { WebSocket, type ClientOptions } from "openclaw/plugin-sdk/websocket-runtime";
@@ -180,9 +179,8 @@ const legacyModelsData = {
 };
 const modelsData: ModelsProviderData = legacyModelsData;
 const modelsAdapter: typeof buildModelsProviderData = async () => legacyModelsData;
-const commandAuthModelsAdapter: typeof buildCommandAuthModelsProviderData = modelsAdapter;
 void modelsData;
-void commandAuthModelsAdapter;
+void modelsAdapter;
 declare const preparedModelsData: Awaited<ReturnType<typeof buildPreparedModelsProviderData>>;
 const preparedCatalog: { id: string; provider: string; contextWindow?: number }[] = preparedModelsData.modelCatalog;
 void preparedCatalog;

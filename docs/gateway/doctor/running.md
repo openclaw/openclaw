@@ -89,6 +89,8 @@ openclaw doctor
   </Tab>
 </Tabs>
 
+With `OPENCLAW_GATEWAY_STARTUP_TRACE=1`, Doctor prints per-phase timings (`doctor.*` and `cli.bootstrap.*` lines) to stderr.
+
 To review changes before writing, open the config file first:
 
 ```bash

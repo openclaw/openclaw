@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   runCommandWithTimeout: vi.fn(),
   killProcessTree: vi.fn(),
   spawn: vi.fn(),
-  log: { debug: vi.fn(), error: vi.fn(), warn: vi.fn(), info: vi.fn() },
+  log: { debug: vi.fn(), trace: vi.fn(), error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   defaultRuntime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -338,19 +338,21 @@ describe("runGmailService", () => {
     },
   );
 
-  it("halts restarts after a split bind error on the replacement child", async () => {
+  it("bounds retries after split bind errors while continuing watch renewal", async () => {
     await runGmailService({});
     exitChild(children[0]!);
     await vi.advanceTimersByTimeAsync(5_000);
     const countBeforeBind = children.length;
-    const child = children.at(-1)!;
-    child.stderr.emit("data", Buffer.from("address alre"));
-    child.alive = false;
-    child.emit("exit", 1, null);
-    child.stderr.emit("data", Buffer.from("ady in use\n"));
-    child.emit("close", 1, null);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(children).toHaveLength(countBeforeBind);
+    for (const delayMs of [5_000, 10_000, 20_000, 60_000]) {
+      const child = children.at(-1)!;
+      child.stderr.emit("data", Buffer.from("address alre"));
+      child.alive = false;
+      child.emit("exit", 1, null);
+      child.stderr.emit("data", Buffer.from("ady in use\n"));
+      child.emit("close", 1, null);
+      await vi.advanceTimersByTimeAsync(delayMs);
+    }
+    expect(children).toHaveLength(countBeforeBind + 3);
     expect(children.filter((candidate) => candidate.alive)).toHaveLength(0);
     // Another watcher can own forwarding, so watch renewal must remain active.
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);

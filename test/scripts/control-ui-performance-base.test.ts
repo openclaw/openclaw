@@ -57,9 +57,18 @@ it("compares real UI builds with canonical compression and keeps artifacts after
       "lib/repo-root.mjs",
       "lib/output-root-guard.mjs",
       "lib/record-shared.mjs",
+      "lib/regexp.mjs",
     ]) {
       fs.copyFileSync(path.join(repoRoot, "scripts", script), path.join(root, "scripts", script));
     }
+    write(
+      "src/gateway/control-ui-route-preloads.ts",
+      fs.readFileSync(path.join(repoRoot, "src/gateway/control-ui-route-preloads.ts"), "utf8"),
+    );
+    write(
+      "src/gateway/control-ui-asset-manifest.ts",
+      fs.readFileSync(path.join(repoRoot, "src/gateway/control-ui-asset-manifest.ts"), "utf8"),
+    );
     write("scripts/tsx.mjs", `await import(${JSON.stringify(tsxImport)});\n`);
     write(".gitignore", "node_modules\ndist/\n");
     write(
@@ -112,10 +121,12 @@ it("compares real UI builds with canonical compression and keeps artifacts after
     );
     const config = `
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { brotliCompressSync } from "node:zlib";
 import { gzip } from "pako";
+import { CONTROL_UI_ASSET_MANIFEST_FILENAME, CONTROL_UI_ASSET_MANIFEST_VERSION, hashControlUiAssetManifestEntries } from "../src/gateway/control-ui-asset-manifest.ts";
 const outDir = path.resolve(import.meta.dirname, "../dist/control-ui");
 function recordBuildIdentity(bundle) {
   const identityCapture = process.env.OPENCLAW_TEST_BUILD_IDENTITY_CAPTURE;
@@ -143,6 +154,17 @@ export default {
         fs.writeFileSync(path.join(outDir, variant.fileName), variant.source);
       }
     }
+    const assets = fs.readdirSync(path.join(outDir, "assets"), { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => {
+        const file = path.join(entry.parentPath, entry.name);
+        const source = fs.readFileSync(file);
+        return { path: path.relative(outDir, file).split(path.sep).join("/"), size: source.byteLength, sha256: createHash("sha256").update(source).digest("hex") };
+      })
+      .sort((left, right) => left.path.localeCompare(right.path));
+    fs.writeFileSync(path.join(outDir, CONTROL_UI_ASSET_MANIFEST_FILENAME), JSON.stringify({
+      version: CONTROL_UI_ASSET_MANIFEST_VERSION, generation: hashControlUiAssetManifestEntries(assets), assets,
+    }));
   } }],
 };
 `;
@@ -321,7 +343,7 @@ export default { plugins: [{ name: "signal", buildStart() { process.kill(process
     const signaledBaseOutput = `${signaledBaseResult.stdout}${signaledBaseResult.stderr}`;
     expect(fs.readFileSync(signalMarker, "utf8")).toBe("loaded");
     expect(signaledBaseResult.status, signaledBaseOutput).toBe(1);
-    expect(signaledBaseOutput).toContain("node failed (SIGTERM)");
+    expect(signaledBaseOutput).toContain(`${path.basename(process.execPath)} failed (SIGTERM)`);
     expect(signaledBaseOutput).not.toContain(
       "Base Control UI source does not build with the candidate toolchain",
     );

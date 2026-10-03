@@ -265,10 +265,7 @@ export async function verifyPendingServiceCleanupRetry(
   }
 }
 
-export async function verifyGatewayCleanupRefusal(
-  createRecoveryFixture: RecoveryFixtureFactory,
-  withChannels: boolean,
-) {
+export async function verifyGatewayCleanupRefusal(createRecoveryFixture: RecoveryFixtureFactory) {
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const hookStart = vi.fn();
@@ -285,33 +282,29 @@ export async function verifyGatewayCleanupRefusal(
         api.on("gateway_start", hookStart);
         api.on("gateway_stop", hookStop);
       }
-      if (withChannels) {
-        api.registerChannel({
-          plugin: {
-            ...createChannelTestPluginBase({ id: channelIds[owner] }),
-            gateway: {
-              startAccount: async ({ abortSignal }) => {
-                signals[owner].push(abortSignal);
-                await new Promise<void>((resolve) => {
-                  abortSignal.addEventListener("abort", () => resolve(), { once: true });
-                });
-              },
+      api.registerChannel({
+        plugin: {
+          ...createChannelTestPluginBase({ id: channelIds[owner] }),
+          gateway: {
+            startAccount: async ({ abortSignal }) => {
+              signals[owner].push(abortSignal);
+              await new Promise<void>((resolve) => {
+                abortSignal.addEventListener("abort", () => resolve(), { once: true });
+              });
             },
           },
-        });
-      }
+        },
+      });
     },
   });
   const manager = createRecoveryChannelManager(fixture);
-  if (withChannels) {
-    fixture.runtime.channelManager = manager;
-    await manager.startChannel(channelIds.first);
-    await manager.startChannel(channelIds.sibling);
-    await vi.waitFor(() => {
-      expect(signals.first).toHaveLength(1);
-      expect(signals.sibling).toHaveLength(1);
-    });
-  }
+  fixture.runtime.channelManager = manager;
+  await manager.startChannel(channelIds.first);
+  await manager.startChannel(channelIds.sibling);
+  await vi.waitFor(() => {
+    expect(signals.first).toHaveLength(1);
+    expect(signals.sibling).toHaveLength(1);
+  });
   const instance = getPluginInstance(fixture.previousRegistry.plugins[0]!);
   assert(instance);
   vi.useFakeTimers();
@@ -331,23 +324,17 @@ export async function verifyGatewayCleanupRefusal(
     expect(fixture.candidates).toHaveLength(0);
     expect(instance.lifecycle.signal.aborted).toBe(true);
     expect(() => instance.run(() => "closed")).toThrow("reloaded or disabled");
-    if (withChannels) {
-      expect(signals.first).toHaveLength(1);
-      expect(signals.first[0]?.aborted).toBe(true);
-      expect(signals.sibling).toHaveLength(1);
-      expect(signals.sibling[0]?.aborted).toBe(false);
-    }
+    expect(signals.first).toHaveLength(1);
+    expect(signals.first[0]?.aborted).toBe(true);
+    expect(signals.sibling).toHaveLength(1);
+    expect(signals.sibling[0]?.aborted).toBe(false);
     expect(hookStop).toHaveBeenCalledOnce();
   } finally {
     release.resolve();
-    if (withChannels) {
-      await manager.stopChannel(channelIds.first);
-    }
+    await manager.stopChannel(channelIds.first);
     await reloading;
-    if (withChannels) {
-      await manager.stopChannel(channelIds.first);
-      await manager.stopChannel(channelIds.sibling);
-    }
+    await manager.stopChannel(channelIds.first);
+    await manager.stopChannel(channelIds.sibling);
     vi.useRealTimers();
   }
 }

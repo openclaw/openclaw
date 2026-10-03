@@ -326,14 +326,20 @@ it can be spawned but cannot start swarms from its own top-level sessions:
 {
   tools: { swarm: { enabled: true, defaultAgentId: "worker" } },
   agents: {
+    ownership: "explicit",
+    defaults: {
+      heartbeat: { agentId: "main" },
+      systemAgent: { agentId: "main" },
+    },
     entries: {
       main: {
-        default: true,
+        workspace: "~/.openclaw/workspace",
         subagents: { allowAgents: ["worker"] },
       },
       worker: { tools: { swarm: false } },
     },
   },
+  talk: { agentId: "main" },
 }
 ```
 
@@ -548,7 +554,15 @@ failures. A rejected launch or failed child must not discard results from other
 accepted children. Keep the returned run IDs for recovery. Do not repeat
 successful launches or automatically rerun failed work.
 
-Each `agents_wait` call accepts 1–1000 run ids. It returns:
+Each `agents_wait` call accepts 1–1000 run ids. Use `required: true` to keep
+collection owned until **all** authorized requested collectors settle, without
+an observer polling timeout. It is mutually exclusive with `timeoutSeconds`;
+child and agent-run deadlines, tool watchdogs, cancellation, and ownership
+checks still apply. In OpenClaw Code Mode this also makes the enclosing cell
+required, so the runtime—not repeated model calls—waits for registry completion
+events. An ordinary call keeps its existing first-completion and timeout behavior.
+
+It returns:
 
 ```typescript
 type AgentsWaitResult = {

@@ -14,11 +14,8 @@ import {
 } from "./call-events.js";
 import type { FaceTimeCallRegistry } from "./call-lifecycle.js";
 import type { FaceTimeConfig } from "./config.js";
-import {
-  projectFaceTimeNativeAction,
-  type FaceTimeHelperPeer,
-  type FaceTimeHelperSocketServer,
-} from "./helper-rpc.js";
+import { projectFaceTimeNativeAction } from "./helper-results.js";
+import type { FaceTimeHelperPeer, FaceTimeHelperSocketServer } from "./helper-rpc.js";
 import {
   doesFaceTimeCallMatchPendingDial,
   retainFaceTimeDialCallUUID,

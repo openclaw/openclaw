@@ -40,6 +40,18 @@ export function useBrowserDashboardTestHarness(
     browserInstance: "browser-one",
     browserRunning: true,
     readBoard: vi.fn(),
+    get gateway(): PluginRuntime["gateway"] {
+      return {
+        isAvailable: async () => true,
+        request: fixture.readBoard,
+        async readSessionFacts() {
+          throw new Error("Unexpected session facts request");
+        },
+        async openPluginPanel() {
+          throw new Error("Unexpected plugin panel request");
+        },
+      };
+    },
     installRuntime,
     openedTab,
   };
@@ -49,10 +61,7 @@ export function useBrowserDashboardTestHarness(
       state: {
         openKeyedStore: (options) => createPluginStateKeyedStoreForTests("browser", options),
       },
-      gateway: {
-        isAvailable: async () => true,
-        request: fixture.readBoard,
-      } as PluginRuntime["gateway"],
+      gateway: fixture.gateway,
     });
     await ensureBrowserSessionTabStoreReady(runtime);
   }

@@ -5,7 +5,10 @@ import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-re
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateKeyedStore,
+  PluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN } from "./config-contracts.js";
@@ -100,10 +103,7 @@ const contextEngineSchema = z
     projection: contextEngineProjectionSchema.optional().catch(undefined),
   })
   .strict();
-const destructiveApprovalModeSchema = z
-  .enum(["allow", "deny", "auto", "ask"])
-  .optional()
-  .catch(undefined);
+const destructiveApprovalModeSchema = z.enum(["allow", "deny", "auto", "ask"]).optional();
 // Account-connected apps are admitted without a plugin package; both entry
 // shapes must round-trip or stored policy context silently drops on read.
 const accountAppPolicyEntrySchema = z
@@ -112,7 +112,7 @@ const accountAppPolicyEntrySchema = z
     appName: z.string(),
     allowDestructiveActions: z.boolean(),
     allowOpenWorld: z.boolean().optional(),
-    destructiveApprovalMode: destructiveApprovalModeSchema,
+    destructiveApprovalMode: destructiveApprovalModeSchema.catch(undefined),
     mcpServerNames: z.array(z.string()),
   })
   .strict();
@@ -124,7 +124,7 @@ const pluginAppPolicyEntrySchema = z
     pluginName: z.string(),
     allowDestructiveActions: z.boolean(),
     allowOpenWorld: z.boolean().optional(),
-    destructiveApprovalMode: destructiveApprovalModeSchema,
+    destructiveApprovalMode: destructiveApprovalModeSchema.catch(undefined),
     mcpServerNames: z.array(z.string()),
   })
   .strict();
@@ -136,8 +136,12 @@ const pluginAppPolicyContextSchema = z
   })
   .strict();
 const legacyAppPolicyEntrySchema = z.union([
-  accountAppPolicyEntrySchema.strip(),
-  pluginAppPolicyEntrySchema.strip(),
+  accountAppPolicyEntrySchema
+    .extend({ destructiveApprovalMode: destructiveApprovalModeSchema })
+    .strip(),
+  pluginAppPolicyEntrySchema
+    .extend({ destructiveApprovalMode: destructiveApprovalModeSchema })
+    .strip(),
 ]);
 const threadBindingSchema = z
   .object({
@@ -466,33 +470,38 @@ function decodeCurrentCodexAppServerBinding(
     : undefined;
 }
 
-/** Consume synchronously so each list phase acquires fresh binding authority. */
-export function* readCurrentCodexAppServerBindings(
-  state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup" | "lookupMany">,
+/** Acquire fresh rows off-thread; decode lazily to preserve caller failure ordering. */
+export async function* readCurrentCodexAppServerBindings(
+  state: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding>, "lookup" | "lookupMany">,
   identities: readonly CodexAppServerBindingIdentity[],
-): Generator<CodexAppServerThreadBinding | undefined, undefined, void> {
-  let keys: string[] | undefined;
-  if (state.lookupMany && identities.length > 1 && identities.length <= 10_000) {
-    try {
-      keys = identities.map(bindingStoreKey);
-    } catch {
-      // A later invalid identity must not precede an earlier row's validation.
+): AsyncGenerator<CodexAppServerThreadBinding | undefined, undefined, void> {
+  const lookupMany = state.lookupMany?.bind(state);
+  for (let offset = 0; offset < identities.length; offset += 10_000) {
+    const batch = identities.slice(offset, offset + 10_000);
+    let keys: string[] | undefined;
+    if (lookupMany) {
+      try {
+        keys = batch.map(bindingStoreKey);
+      } catch {
+        // A later invalid identity must not precede an earlier row's validation.
+      }
     }
-  }
-  if (!keys || !state.lookupMany) {
-    for (const identity of identities) {
-      yield readCurrentCodexAppServerBinding(state, identity);
+    if (!keys || !lookupMany) {
+      for (const identity of batch) {
+        const key = bindingStoreKey(identity);
+        yield decodeCurrentCodexAppServerBinding(key, await state.lookup(key), identity);
+      }
+      continue;
     }
-    return;
-  }
-  // Query failures retain the storage owner's terminal handling; never retry the read.
-  const values = state.lookupMany(keys);
-  for (let index = 0; index < identities.length; index++) {
-    const value = values[index]!;
-    if (!value.ok) {
-      throw value.error;
+    // Query failures retain the storage owner's terminal handling; never retry the read.
+    const values = await lookupMany(keys);
+    for (let index = 0; index < batch.length; index++) {
+      const value = values[index]!;
+      if (!value.ok) {
+        throw value.error;
+      }
+      yield decodeCurrentCodexAppServerBinding(keys[index]!, value.value, batch[index]!);
     }
-    yield decodeCurrentCodexAppServerBinding(keys[index]!, value.value, identities[index]!);
   }
 }
 
@@ -614,10 +623,7 @@ export function assertCodexBindingMayBeReplaced(
   }
 }
 
-export function readPluginAppPolicyContext(
-  value: unknown,
-  bindingSchemaVersion: 1 | 2,
-): PluginAppPolicyContext | undefined {
+export function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | undefined {
   const record = asOptionalRecord(value);
   if (!record || typeof record.fingerprint !== "string") {
     return undefined;
@@ -629,21 +635,15 @@ export function readPluginAppPolicyContext(
   const parsedApps: PluginAppPolicyContext["apps"] = {};
   for (const [appId, rawEntry] of Object.entries(apps)) {
     const entry = asOptionalRecord(rawEntry);
-    if (!entry) {
+    if (!entry || "appId" in entry) {
       return undefined;
     }
-    const destructiveApprovalMode = readDestructiveApprovalMode(
-      entry.destructiveApprovalMode,
-      bindingSchemaVersion,
-    );
-    if ("appId" in entry || destructiveApprovalMode === "invalid") {
-      return undefined;
-    }
-    const parsed = legacyAppPolicyEntrySchema.safeParse({ ...entry, destructiveApprovalMode });
+    const parsed = legacyAppPolicyEntrySchema.safeParse(entry);
     if (!parsed.success) {
       return undefined;
     }
     const validated = parsed.data;
+    const { destructiveApprovalMode } = validated;
     const policy = {
       allowDestructiveActions: validated.allowDestructiveActions,
       ...(validated.allowOpenWorld !== undefined
@@ -680,26 +680,4 @@ export function readPluginAppPolicyContext(
     apps: parsedApps,
     pluginAppIds: parsedPluginAppIds,
   };
-}
-
-function readDestructiveApprovalMode(
-  value: unknown,
-  bindingSchemaVersion: 1 | 2,
-): PluginAppPolicyContext["apps"][string]["destructiveApprovalMode"] | undefined | "invalid" {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (value === "allow" || value === "deny") {
-    return value;
-  }
-  if (value === "auto") {
-    return bindingSchemaVersion === 1 ? "allow" : "auto";
-  }
-  if (value === "ask" && bindingSchemaVersion === 2) {
-    return "ask";
-  }
-  if (value === "on-request" && bindingSchemaVersion === 1) {
-    return "auto";
-  }
-  return "invalid";
 }

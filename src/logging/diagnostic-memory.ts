@@ -27,7 +27,8 @@ const DEFAULT_GROWTH_WINDOW_MS = 10 * 60 * 1000;
 const DEFAULT_PRESSURE_REPEAT_MS = 5 * 60 * 1000;
 const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
 
-const DEFAULT_HEAP_SIZE_LIMIT_BYTES = getHeapStatistics().heap_size_limit;
+// Bun's compatibility probe walks the heap; importing diagnostics should not trigger it.
+let defaultHeapSizeLimitBytes: number | undefined;
 const DEFAULT_PROCESS_MEMORY_LIMIT_BYTES = process.constrainedMemory();
 const DEFAULT_PHYSICAL_MEMORY_BYTES = totalmem();
 const DEFAULT_IS_BUN_RUNTIME = typeof process.versions.bun === "string";
@@ -88,7 +89,6 @@ const state: DiagnosticMemoryState = {
   lastPressureAtByKey: new Map(),
 };
 
-// Convert Node's runtime shape into the diagnostic event contract.
 function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage {
   return {
     rssBytes: memory.rss,
@@ -404,7 +404,8 @@ export function emitDiagnosticMemorySample(options?: {
   const current = { ts: now, memory };
   const thresholds = resolveThresholds(
     options?.thresholds,
-    options?.heapSizeLimitBytes ?? DEFAULT_HEAP_SIZE_LIMIT_BYTES,
+    options?.heapSizeLimitBytes ??
+      (defaultHeapSizeLimitBytes ??= getHeapStatistics().heap_size_limit),
     options?.processMemoryLimitBytes ?? DEFAULT_PROCESS_MEMORY_LIMIT_BYTES,
     options?.physicalMemoryBytes ?? DEFAULT_PHYSICAL_MEMORY_BYTES,
     options?.isBunRuntime ?? DEFAULT_IS_BUN_RUNTIME,
@@ -434,7 +435,6 @@ export function emitDiagnosticMemorySample(options?: {
   return memory;
 }
 
-/** Clears process-local memory diagnostic state for isolated tests. */
 export function resetDiagnosticMemoryForTest(): void {
   state.growth = null;
   state.lastPressureAtByKey.clear();

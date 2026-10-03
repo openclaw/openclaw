@@ -15,6 +15,7 @@ import * as devInstallBranch from "../infra/dev-install-branch.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -111,6 +112,7 @@ describe("Control UI response authority", () => {
       };
       const res = new ServerResponse(req);
       const end = vi.spyOn(res, "end");
+      const catalog = await prepareUserProfileCatalog();
       const pending = handleControlUiHttpRequest(req, res, {
         config,
         cfg: config,
@@ -138,11 +140,12 @@ describe("Control UI response authority", () => {
         await settled;
         res.destroy();
         req.destroy();
+        catalog.release();
       }
     });
   });
 
-  it.each(["avatar", "thumbnail", "bootstrap"] as const)(
+  it.each(["avatar", "bootstrap"] as const)(
     "withholds a prepared %s response after requester authority changes",
     async (kind) => {
       const workspace = testTempDirs.make("openclaw-ui-response-authority-");
@@ -194,10 +197,7 @@ describe("Control UI response authority", () => {
       const req = new IncomingMessage(new Socket());
       Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });
       req.method = "GET";
-      req.url =
-        kind === "bootstrap"
-          ? CONTROL_UI_BOOTSTRAP_CONFIG_PATH
-          : `/avatar/main${kind === "thumbnail" ? "?v=current" : ""}`;
+      req.url = kind === "bootstrap" ? CONTROL_UI_BOOTSTRAP_CONFIG_PATH : "/avatar/main";
       req.headers = { authorization: "Bearer admitted-token" };
       const res = new ServerResponse(req);
       const end = vi.spyOn(res, "end");

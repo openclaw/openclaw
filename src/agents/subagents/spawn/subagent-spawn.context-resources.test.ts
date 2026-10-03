@@ -242,6 +242,7 @@ describe("spawn context-engine resource custody", () => {
       canLaunch: () => false,
       canCleanupSession: () => true,
       canAcceptLaunch: () => true,
+      canAbortAcceptedRun: () => true,
       canRetireReservation: () => false,
       settleFailedLaunch,
     } satisfies SubagentRegistrationScope;

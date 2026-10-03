@@ -222,7 +222,7 @@ export async function prepareOutboxPayload(
     reference.recoveryScope,
     scope,
     host.settings?.gatewayUrl,
-    host.client?.recoveryScope,
+    observeOutboxRecoveryOwner(host),
     purpose,
     item.attachments?.map(({ mimeType, fileName, sizeBytes, origin }) => [
       mimeType,

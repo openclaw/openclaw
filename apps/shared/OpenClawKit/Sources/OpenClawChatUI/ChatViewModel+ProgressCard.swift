@@ -179,21 +179,10 @@ extension OpenClawChatViewModel {
     }
 
     static func parseLegacyProgressCardSteps(_ value: AnyCodable?) -> [ProgressCardStep] {
-        guard let value else { return [] }
-        let rawItems: [Any]
-        switch value.value {
-        case let items as [AnyCodable]:
-            rawItems = items.map(\.value)
-        case let items as [Any]:
-            rawItems = items
-        case let items as NSArray:
-            rawItems = items.map(\.self)
-        default:
-            return []
-        }
+        guard let rawItems = value?.arrayValue else { return [] }
         var hasInProgressStep = false
         return rawItems.compactMap { rawItem in
-            guard let step = Self.parseLegacyProgressCardStep(rawItem) else { return nil }
+            guard let step = Self.parseLegacyProgressCardStep(rawItem.value) else { return nil }
             if case .inProgress = step.status {
                 guard !hasInProgressStep else { return nil }
                 hasInProgressStep = true

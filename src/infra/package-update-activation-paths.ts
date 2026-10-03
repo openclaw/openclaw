@@ -1,9 +1,32 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { resolveExecutablePath } from "./executable-path.js";
 import type { PackageActivationRecord } from "./package-update-activation-schema.js";
+import type { PackageActivationRuntime } from "./package-update-swap-contract.js";
 
 const PACKAGE_ACTIVATION_PREFIX = ".openclaw.package-activation-";
+
+export function packageActivationRuntimeIdentity(file: string): string {
+  const stat = fs.lstatSync(file, { bigint: true });
+  // System runtimes may be root-owned even when the installation is user-owned.
+  if (!stat.isFile() || stat.ino === 0n) {
+    throw new Error("Package recovery requires a regular external runtime executable.");
+  }
+  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+}
+
+export function capturePackageActivationRuntime(
+  kind: PackageActivationRuntime["kind"],
+  executable: string,
+): PackageActivationRuntime {
+  const resolved = resolveExecutablePath(executable, { useCache: false });
+  if (!resolved) {
+    throw new Error("The selected package recovery executable could not be resolved.");
+  }
+  const runtimePath = fs.realpathSync(resolved);
+  return { kind, path: runtimePath, identity: packageActivationRuntimeIdentity(runtimePath) };
+}
 
 export function resolvePackageActivationAnchor(installKey: string): string {
   const key = createHash("sha256").update(installKey).digest("hex").slice(0, 24);

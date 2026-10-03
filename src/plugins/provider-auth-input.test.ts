@@ -1,4 +1,5 @@
 // Covers provider auth input collection and credential handling.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";

@@ -264,7 +264,11 @@ public enum DeviceAuthStore {
         if case .invalid = legacy {
             try self.quarantineInvalidLegacyFile(legacyURL)
         }
-        let database = try self.openDatabase(stateDirectoryURL: stateDirectoryURL)
+        let database = try Database(
+            databaseURL: stateDirectoryURL
+                .appendingPathComponent("state", isDirectory: true)
+                .appendingPathComponent("openclaw.sqlite", isDirectory: false),
+            busyTimeoutMilliseconds: self.busyTimeoutMilliseconds)
         if case let .valid(store) = legacy {
             try database.withImmediateTransaction {
                 try database.ensureCanonicalTable(.deviceAuthTokens)
@@ -277,14 +281,6 @@ public enum DeviceAuthStore {
             try database.ensureCanonicalTable(.deviceAuthTokens)
             return try body(database)
         }
-    }
-
-    private static func openDatabase(stateDirectoryURL: URL) throws -> Database {
-        try Database(
-            databaseURL: stateDirectoryURL
-                .appendingPathComponent("state", isDirectory: true)
-                .appendingPathComponent("openclaw.sqlite", isDirectory: false),
-            busyTimeoutMilliseconds: self.busyTimeoutMilliseconds)
     }
 
     private static func importLegacyStore(

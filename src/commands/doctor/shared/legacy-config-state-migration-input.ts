@@ -5,6 +5,7 @@ import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 type StateMigrationConfigInput = {
   cfg?: OpenClawConfig;
   pluginDoctorConfig?: OpenClawConfig;
+  sourceConfigBeforeMigrations?: OpenClawConfig;
 };
 
 export function resolveStateMigrationConfigInput(params: {
@@ -16,16 +17,19 @@ export function resolveStateMigrationConfigInput(params: {
   const pluginDoctorConfig = (params.snapshot.sourceConfig ??
     params.snapshot.config ??
     params.snapshot.parsed) as OpenClawConfig | undefined;
+  const sourceConfigBeforeMigrations =
+    params.snapshot.sourceConfigBeforeMigrations ?? pluginDoctorConfig;
   if (params.postConvergenceConfig) {
     return {
       cfg: params.postConvergenceConfig,
+      sourceConfigBeforeMigrations,
       ...(pluginDoctorConfig ? { pluginDoctorConfig } : {}),
     };
   }
   if (params.snapshot.valid) {
     return params.snapshot.legacyIssues.length > 0 && pluginDoctorConfig !== undefined
-      ? { cfg: params.baseConfig, pluginDoctorConfig }
-      : { cfg: params.baseConfig };
+      ? { cfg: params.baseConfig, pluginDoctorConfig, sourceConfigBeforeMigrations }
+      : { cfg: params.baseConfig, sourceConfigBeforeMigrations };
   }
   const migrationSource = pluginDoctorConfig ?? params.snapshot.parsed;
   if (params.snapshot.legacyIssues.length === 0 || migrationSource === undefined) {
@@ -43,6 +47,7 @@ export function resolveStateMigrationConfigInput(params: {
   }
   return {
     cfg: migrated.config,
+    sourceConfigBeforeMigrations,
     ...(pluginDoctorConfig ? { pluginDoctorConfig } : {}),
   };
 }

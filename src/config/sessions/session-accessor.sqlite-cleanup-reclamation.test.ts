@@ -12,6 +12,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
@@ -23,7 +24,12 @@ import {
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import { readArtifactPreparationLogs } from "./session-accessor.sqlite-diagnostics.test-support.js";
-import * as reclamation from "./session-accessor.sqlite-reclamation.js";
+import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
+import type {
+  SqliteSessionReclamationPlan,
+  SqliteSessionReclamationResult,
+} from "./session-accessor.sqlite-lifecycle-types.js";
+import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
@@ -94,33 +100,8 @@ describe("SQLite lifecycle cleanup reclamation", () => {
     closeOpenClawAgentDatabasesForTest();
   }
 
-  it("uses one worker for empty startup archive planning without changing the session", async () => {
-    const now = Date.now();
-    const current = scope("current");
-    const entry = { sessionId: current.sessionId, updatedAt: now };
-    await replaceSessionEntry(current, entry);
-    await closeOpenClawAgentDatabaseByPathAsync(database().path);
-    database();
-    let workersStarted = 0;
-    const onWorker = () => {
-      workersStarted += 1;
-    };
-    const workers = channel("worker_threads");
-    workers.subscribe(onWorker);
-    try {
-      await expect(cleanup(now)).resolves.toEqual({
-        removedEntries: 0,
-        archivedTranscriptArtifacts: 0,
-      });
-    } finally {
-      workers.unsubscribe(onWorker);
-    }
-    expect(workersStarted).toBe(1);
-    expect(loadSessionEntry(current)).toMatchObject(entry);
-  });
-
   it.each(["replace", "delete"] as const)(
-    "rejects a stale entry plan before dispatching reclamation after an awaited %s",
+    "rejects a stale entry plan before mutation after an awaited %s",
     async (mutation) => {
       const current = scope("queued-entry-deletion");
       const entry = { sessionId: current.sessionId, updatedAt: Date.now() };
@@ -130,7 +111,32 @@ describe("SQLite lifecycle cleanup reclamation", () => {
       const target = { canonicalKey: current.sessionKey, storeKeys: [current.sessionKey] };
       const entered = createDeferred();
       const prepared = createDeferred();
-      const reclaim = vi.spyOn(reclamation, "runSqliteSessionReclamation");
+      let preparedTargetSnapshot: SqliteLifecycleTargetSnapshot | undefined;
+      const prepare = reclamation.runSessionDeletionPlanning;
+      vi.spyOn(reclamation, "runSessionDeletionPlanning").mockImplementationOnce(
+        async (...args) => {
+          const result = await prepare(...args);
+          if (result.operation !== "entry" || result.value.kind !== "ready") {
+            throw new Error("Expected the original entry to finish deletion planning");
+          }
+          preparedTargetSnapshot = result.value.value.targetSnapshot;
+          expect(preparedTargetSnapshot).toMatchObject([{ sessionKey: current.sessionKey, entry }]);
+          prepared.resolve();
+          return result;
+        },
+      );
+      const entryReclamations: Array<{
+        plan: Extract<SqliteSessionReclamationPlan, { kind: "entry" }>;
+        result: SqliteSessionReclamationResult;
+      }> = [];
+      const reclaim = reclamation.runSqliteSessionReclamation;
+      vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation(async (params) => {
+        const result = await reclaim(params);
+        if (params.plan.kind === "entry") {
+          entryReclamations.push({ plan: params.plan, result });
+        }
+        return result;
+      });
       const previous = runExclusiveSessionLifecycleMutation({
         scope: storePath,
         identities: [current.sessionKey, current.sessionId],
@@ -155,37 +161,41 @@ describe("SQLite lifecycle cleanup reclamation", () => {
         await entered.promise;
         deletion = deleteSessionEntryLifecycle({
           archiveTranscript: false,
-          commitGuard: () => prepared.resolve(),
           storePath,
           target,
         });
         // Preparation observes the old row while the preceding lifecycle owner is held.
-        await previous;
+        await Promise.race([
+          previous,
+          deletion.then(() => {
+            throw new Error("Deletion completed without waiting for the preceding lifecycle owner");
+          }),
+        ]);
         await expect(deletion).resolves.toEqual({
           archivedTranscripts: [],
           deleted: false,
           expectedEntryMismatch: true,
         });
-        const plans = reclaim.mock.calls
-          .map(([{ plan }]) => plan)
-          .filter(
-            (plan) =>
-              !plan.kind.startsWith("maintenance-") && !plan.kind.startsWith("archive-publish-"),
-          );
-        expect(plans).toMatchObject(
-          mutation === "delete"
-            ? [
-                {
-                  kind: "entry",
-                  databaseOptions: { path: databasePath },
-                  deleteParams: { target },
-                  preparedTargetSnapshot: [
-                    { sessionKey: current.sessionKey, entry: { sessionId: current.sessionId } },
-                  ],
-                },
-              ]
-            : [],
-        );
+        expect(preparedTargetSnapshot).toBeDefined();
+        expect(entryReclamations).toHaveLength(mutation === "delete" ? 2 : 1);
+        for (const { plan } of entryReclamations) {
+          expect(plan).toMatchObject({
+            kind: "entry",
+            databaseOptions: { path: databasePath },
+            deleteParams: { target },
+          });
+          expect(plan.preparedTargetSnapshot).toEqual(preparedTargetSnapshot);
+        }
+        expect(entryReclamations.at(-1)?.result).toEqual({
+          kind: "entry",
+          value: { archivedTranscripts: [], deleted: false, expectedEntryMismatch: true },
+        });
+        if (mutation === "delete") {
+          expect(entryReclamations[0]?.result).toMatchObject({
+            kind: "entry",
+            value: { deleted: true, deletedSessionId: current.sessionId },
+          });
+        }
         if (mutation === "replace") {
           expect(loadSessionEntry(current)).toMatchObject({
             ...entry,
@@ -204,12 +214,13 @@ describe("SQLite lifecycle cleanup reclamation", () => {
   it("keeps published history when the entry changes during final materialization", async () => {
     const current = scope("entry-materialization-run");
     const history = { ...current, sessionId: "entry-materialization-history" };
+    const updatedAt = Date.now();
     const events = [{ type: "session", id: current.sessionId, content: "original transcript" }];
-    await replaceSessionEntry(history, { sessionId: history.sessionId, updatedAt: 1 });
+    await replaceSessionEntry(history, { sessionId: history.sessionId, updatedAt });
     await replaceTranscriptEvents(history, [
       { type: "session", id: history.sessionId, content: "already published history" },
     ]);
-    await replaceSessionEntry(current, { sessionId: current.sessionId, updatedAt: 1 });
+    await replaceSessionEntry(current, { sessionId: current.sessionId, updatedAt });
     await replaceTranscriptEvents(current, events);
     const expectedEntry = loadSessionEntry(current);
     if (!expectedEntry) {
@@ -239,8 +250,10 @@ describe("SQLite lifecycle cleanup reclamation", () => {
   });
 
   it.each([false, true])(
-    "reuses the warm archive reader while preserving marker phases and native failure=%s",
+    "preserves native incognito marker phases and late read failure=%s",
     async (fail) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("incognito-cleanup-"));
+      storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
       const history = scope("marker-scan-history");
       const events = [
         { type: "metadata", runId: fail ? "cleanup-race-marker" : "ordinary-row" },
@@ -253,7 +266,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
         updatedAt: Date.now(),
       });
       const before = structuredClone(loadSessionEntry(history));
-      await closeOpenClawAgentDatabaseByPathAsync(database().path);
+      await closeOpenClawStateDatabaseAsync();
       const db = database();
       const failure = new Error("late native transcript read failure");
       const observed: unknown[] = [];
@@ -303,7 +316,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
         } else {
           await expect(run()).resolves.toEqual(empty);
         }
-        expect(workersStarted).toBe(fail ? 0 : 1);
+        expect(workersStarted).toBe(0);
         const records = await readArtifactPreparationLogs(logPath);
         expect(records).toHaveLength(1);
         expect(records[0]?.message).toBe(
@@ -335,7 +348,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
         channel("worker_threads").unsubscribe(onWorker);
         db.db.exec("DROP VIEW temp.transcript_events");
       }
-      expect(workersStarted).toBe(fail ? 0 : 1);
+      expect(workersStarted).toBe(0);
       expect(loadSessionEntry(history)).toEqual(before);
       await expect(loadTranscriptEvents(history)).resolves.toEqual(events);
     },

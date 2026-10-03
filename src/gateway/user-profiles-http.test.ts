@@ -278,13 +278,16 @@ describe("profile avatar HTTP endpoint", () => {
     const profiles = await vi.importActual<typeof import("../state/user-profiles.js")>(
       "../state/user-profiles.js",
     );
+    const { setAvatar } = await vi.importActual<
+      typeof import("../state/user-profile-writes.worker.js")
+    >("../state/user-profile-writes.worker.js");
     const { createProfileAvatarReader: createReader } = await vi.importActual<
       typeof import("../state/user-profiles-avatar.js")
     >("../state/user-profiles-avatar.js");
     const options = { path: join(tempDirs.make("profile-avatar-reader-"), "openclaw.sqlite") };
     const profile = profiles.ensureProfileForEmail("reader@example.test", options);
     const bytes = new Uint8Array(1024).fill(7);
-    expect(profiles.setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
+    expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
     const release = retainUserProfileCatalog(options);
     const reader = createReader(profile.id, options);
     const warm = await reader.inspect();
@@ -359,6 +362,9 @@ describe("profile avatar HTTP endpoint", () => {
       const profiles = await vi.importActual<typeof import("../state/user-profiles.js")>(
         "../state/user-profiles.js",
       );
+      const { linkEmail, setAvatar } = await vi.importActual<
+        typeof import("../state/user-profile-writes.worker.js")
+      >("../state/user-profile-writes.worker.js");
       const { createProfileAvatarReader: createReader } = await vi.importActual<
         typeof import("../state/user-profiles-avatar.js")
       >("../state/user-profiles-avatar.js");
@@ -366,8 +372,8 @@ describe("profile avatar HTTP endpoint", () => {
       const original = profiles.ensureProfileForEmail("original@example.test", options);
       const target = profiles.ensureProfileForEmail("target@example.test", options);
       const next = new Uint8Array([4, 5, 6]);
-      profiles.setAvatar(original.id, new Uint8Array([1]), "image/png", options);
-      profiles.setAvatar(target.id, next, "image/webp", options);
+      setAvatar(original.id, new Uint8Array([1]), "image/png", options);
+      setAvatar(target.id, next, "image/webp", options);
       const release = retainUserProfileCatalog(options);
       const reader = createReader(original.id, options);
       await (await reader.inspect()).loadBytes();
@@ -381,9 +387,9 @@ describe("profile avatar HTTP endpoint", () => {
               if (!changed) {
                 changed = true;
                 if (change === "merge") {
-                  profiles.linkEmail("original@example.test", target.id, options);
+                  linkEmail("original@example.test", target.id, options);
                 } else {
-                  profiles.setAvatar(original.id, next, "image/webp", options);
+                  setAvatar(original.id, next, "image/webp", options);
                 }
               }
               return prepared.loadBytes();

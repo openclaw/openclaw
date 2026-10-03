@@ -1,11 +1,7 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  isPositiveIMessageChatMatch,
-  resolveIMessageChatMatch,
-  type IMessageChatContext,
-} from "./chat-context.js";
+import { resolveIMessageChatMatch, type IMessageChatContext } from "./chat-context.js";
 import { getIMessageRuntime } from "./runtime.js";
 import {
   IMESSAGE_REPLY_CACHE_NAMESPACE,
@@ -203,11 +199,6 @@ function buildReplyCacheEntry(
   };
 }
 
-function generateShortId(): string {
-  imessageShortIdCounter += 1;
-  return String(imessageShortIdCounter);
-}
-
 export async function rememberIMessageReplyCache(
   entry: Omit<IMessageReplyCacheEntry, "shortId">,
 ): Promise<IMessageReplyCacheEntry> {
@@ -220,7 +211,7 @@ export async function rememberIMessageReplyCache(
   let shortId = imessageReplyCacheByMessageId.get(messageId)?.shortId;
   const isNewMessage = !shortId;
   if (!shortId) {
-    shortId = generateShortId();
+    shortId = String(++imessageShortIdCounter);
     imessageShortIdToUuid.set(shortId, messageId);
   }
 
@@ -479,7 +470,7 @@ export function findLatestIMessageEntryForChat(
     if (entry.timestamp < cutoff) {
       continue;
     }
-    if (!isPositiveIMessageChatMatch(entry, ctx)) {
+    if (resolveIMessageChatMatch(entry, ctx) !== "match") {
       continue;
     }
     if (!best || entry.timestamp > best.timestamp) {

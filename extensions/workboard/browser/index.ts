@@ -1,6 +1,5 @@
 import { defineControlUiPlugin } from "openclaw/plugin-sdk/control-ui";
-import { createWorkboardClient } from "./api/gateway.ts";
-import { createWorkboardCatalogRuntime } from "./catalog.ts";
+import { WorkboardCatalog } from "./catalog.ts";
 import { bindWorkboardHost } from "./host.ts";
 import { workboardBoardLabel } from "./lib/workboard/board-presentation.ts";
 import { createWorkboardCapability } from "./lib/workboard/capability.ts";
@@ -17,9 +16,9 @@ export default defineControlUiPlugin({
   activate(host) {
     const unbind = bindWorkboardHost(host);
     const workboard = createWorkboardCapability();
-    const client = createWorkboardClient(host);
+    const client = host;
     const navigation = new Map<string, { signature: string; dispose: () => void }>();
-    const catalog = createWorkboardCatalogRuntime(({ boards }) => {
+    const catalog = new WorkboardCatalog(({ boards }) => {
       const currentIds = new Set(boards.map((board) => board.id));
       for (const [id, entry] of navigation) {
         if (!currentIds.has(id)) {

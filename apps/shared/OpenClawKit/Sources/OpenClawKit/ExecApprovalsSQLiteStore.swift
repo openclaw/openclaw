@@ -226,7 +226,9 @@ public enum ExecApprovalsSQLiteStore {
         _ body: (ExecApprovalsSQLiteRecord?) throws -> ExecApprovalsSQLiteMutation<Value>) throws -> Value
     {
         try ExecApprovalsLegacyMigrationGate.assertReady(stateDirectoryURL: stateDirectoryURL)
-        let database = try self.openDatabase(stateDirectoryURL: stateDirectoryURL)
+        let database = try OpenClawNativeStateSQLite(
+            databaseURL: self.databaseURL(stateDirectoryURL: stateDirectoryURL),
+            busyTimeoutMilliseconds: self.busyTimeoutMilliseconds)
         return try database.withImmediateTransaction {
             try database.ensureCanonicalTable(.execApprovalsConfig)
             let current = try self.readRecord(database)
@@ -270,12 +272,6 @@ public enum ExecApprovalsSQLiteStore {
         let persisted = rawJSON + "\n"
         _ = try self.decode(persisted)
         return persisted
-    }
-
-    private static func openDatabase(stateDirectoryURL: URL) throws -> OpenClawNativeStateSQLite {
-        try OpenClawNativeStateSQLite(
-            databaseURL: self.databaseURL(stateDirectoryURL: stateDirectoryURL),
-            busyTimeoutMilliseconds: self.busyTimeoutMilliseconds)
     }
 
     private static func readRecord(

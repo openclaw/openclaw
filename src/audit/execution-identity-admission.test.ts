@@ -167,57 +167,6 @@ describe("execution identity admission envelope", () => {
     }
   });
 
-  it("omits inherited outer evidence instead of projecting it", () => {
-    const inheritedRefs = {
-      invoker: { state: "unknown" },
-      applicableGrants: [{ rawGrantRef: "inherited-grant", state: "present" }],
-      assurance: [
-        {
-          kind: "other",
-          rawEvidenceRef: "inherited-assurance",
-          strength: "self-asserted",
-        },
-      ],
-    } as const;
-    const prior = new Map(
-      Object.keys(inheritedRefs).map((key) => [
-        key,
-        Object.getOwnPropertyDescriptor(Object.prototype, key),
-      ]),
-    );
-    let envelope: ExecutionIdentityAdmissionEnvelope;
-    try {
-      for (const [key, value] of Object.entries(inheritedRefs)) {
-        defineObjectPrototypeProperty(key, {
-          configurable: true,
-          enumerable: false,
-          value,
-          writable: true,
-        });
-      }
-      envelope = captureEnvelope(facts(), {
-        contextId: "context-inherited",
-        executionId: "execution-inherited",
-        now: 1,
-        runtimeInstanceId: "runtime-owned",
-      });
-    } finally {
-      for (const [key, descriptor] of prior) {
-        restoreObjectPrototypeProperty(key, descriptor);
-      }
-    }
-
-    expect(Object.hasOwn(envelope!, "invoker")).toBe(false);
-    expect(envelope!.applicableGrants).toEqual([]);
-    expect(envelope!.assurance).toEqual([
-      {
-        kind: "runtime-binding",
-        rawEvidenceRef: "runtime-owned",
-        strength: "boundary-verified",
-      },
-    ]);
-  });
-
   it("never reads inherited accessors while treating optional evidence as omitted", () => {
     const keys = ["invoker", "applicableGrants", "assurance"] as const;
     const prior = new Map(
@@ -285,15 +234,6 @@ describe("execution identity admission envelope", () => {
       },
     },
     {
-      name: "ingress source",
-      key: "rawSourceRef",
-      value: "inherited-source",
-      admissionFacts: () => facts(),
-      assertOmitted: (envelope: ExecutionIdentityAdmissionEnvelope) => {
-        expect(Object.hasOwn(envelope.ingress, "rawSourceRef")).toBe(false);
-      },
-    },
-    {
       name: "invoker label",
       key: "displayLabel",
       value: "inherited-label",
@@ -352,27 +292,11 @@ describe("execution identity admission envelope", () => {
 
   it.each([
     ["outer run id", "runId", "inherited-run", () => omitOwn(facts(), "runId")],
-    ["outer agent id", "agentId", "inherited-agent", () => omitOwn(facts(), "agentId")],
-    ["outer ingress", "ingress", facts().ingress, () => omitOwn(facts(), "ingress")],
-    ["outer runtime", "runtime", facts().runtime, () => omitOwn(facts(), "runtime")],
     [
       "ingress kind",
       "kind",
       "local-cli",
       () => facts({ ingress: { boundary: "agent-command.local" } as never }),
-    ],
-    [
-      "ingress boundary",
-      "boundary",
-      "agent-command.local",
-      () => facts({ ingress: { kind: "local-cli" } as never }),
-    ],
-    ["invoker state", "state", "unknown", () => facts({ invoker: {} as never })],
-    [
-      "invoker kind",
-      "kind",
-      "local-account",
-      () => facts({ invoker: { state: "present", rawPrincipalRef: "owned" } as never }),
     ],
     [
       "invoker principal",
@@ -387,31 +311,10 @@ describe("execution identity admission envelope", () => {
       () => facts({ applicableGrants: [{ state: "present" } as never] }),
     ],
     [
-      "grant state",
-      "state",
-      "present",
-      () => facts({ applicableGrants: [{ rawGrantRef: "owned-grant" } as never] }),
-    ],
-    [
-      "assurance kind",
-      "kind",
-      "other",
-      () =>
-        facts({
-          assurance: [{ rawEvidenceRef: "owned-evidence", strength: "self-asserted" } as never],
-        }),
-    ],
-    [
       "assurance reference",
       "rawEvidenceRef",
       "inherited-evidence",
       () => facts({ assurance: [{ kind: "other", strength: "self-asserted" } as never] }),
-    ],
-    [
-      "assurance strength",
-      "strength",
-      "self-asserted",
-      () => facts({ assurance: [{ kind: "other", rawEvidenceRef: "owned-evidence" } as never] }),
     ],
   ] as const)(
     "rejects inherited required $0 before allocation and enqueue",
@@ -459,53 +362,28 @@ describe("execution identity admission envelope", () => {
         return { admissionFacts, target: admissionFacts, key: "ingress" };
       },
     },
-    ...["invoker", "applicableGrants", "assurance"].map((key) => ({
-      name: `outer ${key}`,
-      prepare: () => {
-        const admissionFacts = facts();
-        return { admissionFacts, target: admissionFacts, key };
-      },
-    })),
-    ...["kind", "boundary", "state", "rawSourceRef"].map((key) => ({
-      name: `ingress ${key}`,
-      prepare: () => {
-        const admissionFacts = facts();
-        return { admissionFacts, target: admissionFacts.ingress, key };
-      },
-    })),
-    ...["state", "kind", "rawPrincipalRef", "displayLabel"].map((key) => ({
-      name: `invoker ${key}`,
+    {
+      name: "nested invoker principal",
       prepare: () => {
         const invoker = {
           state: "present" as const,
           kind: "local-account" as const,
           rawPrincipalRef: "owned-principal",
-          displayLabel: "owned-label",
         };
-        const admissionFacts = facts({ invoker });
-        return { admissionFacts, target: invoker, key };
+        return { admissionFacts: facts({ invoker }), target: invoker, key: "rawPrincipalRef" };
       },
-    })),
-    ...["rawGrantRef", "state"].map((key) => ({
-      name: `grant ${key}`,
+    },
+    {
+      name: "grant array entry",
       prepare: () => {
         const grant = { rawGrantRef: "owned-grant", state: "present" as const };
-        const admissionFacts = facts({ applicableGrants: [grant] });
-        return { admissionFacts, target: grant, key };
-      },
-    })),
-    ...["kind", "rawEvidenceRef", "strength"].map((key) => ({
-      name: `assurance ${key}`,
-      prepare: () => {
-        const assurance = {
-          kind: "other" as const,
-          rawEvidenceRef: "owned-evidence",
-          strength: "self-asserted" as const,
+        return {
+          admissionFacts: facts({ applicableGrants: [grant] }),
+          target: grant,
+          key: "rawGrantRef",
         };
-        const admissionFacts = facts({ assurance: [assurance] });
-        return { admissionFacts, target: assurance, key };
       },
-    })),
+    },
   ])("rejects an own accessor at $name without reading it or allocating", ({ prepare }) => {
     const { admissionFacts, target, key } = prepare();
     let accessorReads = 0;

@@ -100,3 +100,16 @@ can affect bundled plugins and third-party plugins.
   and the most direct provider/plugin tests for the behavior you are
   centralizing.
 - Breaking removals or renames are major-version work, not drive-by cleanup.
+
+## Choose The Capability Surface
+
+For new capability, use the first path that expresses the actual requirement:
+
+1. Extend the existing owner or use an existing command, skill, plugin, or supported integration.
+2. Use an existing plugin contract. Prefer bundle plugins for skills, MCP servers, and configuration; use code plugins when runtime hooks, providers, channels, or tools are needed. Keep vendor behavior with its vendor plugin and feature behavior with its feature owner.
+3. If the contract is missing, define a narrow generic core/SDK capability and move existing bundled implementations and callers onto it together. Repeated independent requests for the same capability trigger this contract review, not another parallel manager or hook.
+4. Add universal core surface only when the need is fundamental and existing extension points cannot express it. Explain the gap and ongoing cost; a new hook needs a concrete consumer.
+
+For example, a new channel action should first use the shared message action
+contract. A setup screen needing plugin metadata should use the manifest or
+lightweight artifact, not load the plugin's execution runtime.

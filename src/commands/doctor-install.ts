@@ -1,12 +1,17 @@
-/** Doctor warnings for source checkout installs with missing pnpm runtime state. */
 import fs from "node:fs";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseDocument } from "yaml";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
 
-export function noteSourceInstallIssues(root: string | null) {
+export async function noteSourceInstallIssues(root: string | null) {
   if (!root) {
+    return;
+  }
+  const installOwner = await readInstallOwner(root);
+  if (installOwner) {
+    note(formatInstallOwnerMessage(installOwner), "Install");
     return;
   }
 

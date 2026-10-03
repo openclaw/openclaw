@@ -262,7 +262,7 @@ describe("Codex Computer Use readiness", () => {
         threadId: "computer-use-probe-thread-1",
         server: "cua_repl",
         tool: "js",
-        arguments: { code: "await cua.getState();" },
+        arguments: { code: "await cua.listApps();" },
       },
       { timeoutMs: 60_000 },
     );

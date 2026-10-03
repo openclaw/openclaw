@@ -90,7 +90,7 @@ describe("recoverEmbeddedRunOverflow transcript ownership", () => {
           runParams,
           state,
           usageAccumulator: createUsageAccumulator(),
-          prepareRecoverySession: () => {
+          prepareRecoverySession: async () => {
             throw new Error("unexpected transcript rewrite");
           },
           contextEngine,

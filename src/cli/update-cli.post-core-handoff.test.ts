@@ -5,11 +5,13 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as configIo from "../config/io.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { gatewayHealthResponse } from "../gateway/health-response.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { VERSION } from "../version.js";
 import {
   commandCalls,
@@ -67,6 +69,7 @@ import {
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
+  const nodeExecutable = resolveTestNodeExecPath();
   const {
     baseConfig,
     baseSnapshot,
@@ -111,7 +114,7 @@ describe("update-cli", () => {
         telegram: { source: "npm", spec: "@openclaw/telegram@beta" },
       } satisfies Record<string, PluginInstallRecord>;
       primeServiceCommand(
-        ["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"],
+        [nodeExecutable, path.join(process.cwd(), "dist", "index.js"), "gateway", "run"],
         {
           OPENCLAW_PROFILE: "work",
           OPENCLAW_STATE_DIR: managedState,
@@ -122,9 +125,17 @@ describe("update-cli", () => {
           [GATEWAY_SERVICE_RUNTIME_PID_ENV]: String(unrelatedGatewayFixturePid),
         },
       );
-      vi.mocked(readConfigFileSnapshot).mockImplementation(async () =>
-        process.env.OPENCLAW_PROFILE === "work" ? managedSnapshot : baseSnapshot,
-      );
+      const snapshotForEnv = (env: NodeJS.ProcessEnv = process.env) =>
+        env.OPENCLAW_PROFILE === "work" ? managedSnapshot : baseSnapshot;
+      vi.mocked(readConfigFileSnapshot).mockImplementation(async () => snapshotForEnv());
+      const createConfigIO = configIo.createConfigIO;
+      vi.spyOn(configIo, "createConfigIO").mockImplementation((options) => ({
+        ...createConfigIO(options),
+        readConfigFileSnapshotForWrite: async () => ({
+          snapshot: snapshotForEnv(options?.env),
+          writeOptions: {},
+        }),
+      }));
       loadInstalledPluginIndexInstallRecords.mockImplementation(async (options = {}) =>
         options.env?.OPENCLAW_PROFILE === "work" ? managedRecords : {},
       );
@@ -166,7 +177,7 @@ describe("update-cli", () => {
           env: handoffEnv,
         })?.trigger,
       ).toBe("cli");
-      expect(handoff?.[0]).toMatch(/node/);
+      expect(handoff?.[0]).toBe(process.execPath);
       expect(handoff?.[1]).toEqual([updatedEntrypoint, "update", "--yes", "--timeout", "1800"]);
       expect(handoff?.[2]?.stdio).toBe("inherit");
       expect(handoff?.[2]?.env).toMatchObject({
@@ -216,7 +227,7 @@ describe("update-cli", () => {
       }),
     );
     serviceReadCommand.mockResolvedValue({
-      programArguments: ["node", foreignEntrypoint, "gateway", "run"],
+      programArguments: [nodeExecutable, foreignEntrypoint, "gateway", "run"],
       environment: {
         OPENCLAW_PROFILE: "foreign",
         OPENCLAW_STATE_DIR: profileStateDir("foreign"),
@@ -257,12 +268,15 @@ describe("update-cli", () => {
     const updatedEntrypoint = await setupManagedGitRootRefresh();
     const managedState = profileStateDir("work");
     initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: managedState });
-    primeServiceCommand(["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"], {
-      OPENCLAW_PROFILE: "work",
-      OPENCLAW_STATE_DIR: managedState,
-      OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
-      OPENCLAW_GATEWAY_PORT: "19222",
-    });
+    primeServiceCommand(
+      [nodeExecutable, path.join(process.cwd(), "dist", "index.js"), "gateway", "run"],
+      {
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_STATE_DIR: managedState,
+        OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
+        OPENCLAW_GATEWAY_PORT: "19222",
+      },
+    );
     // Only the resume attempt misses; Doctor and service refresh resolve the real target.
     let resumeAttempted = false;
     vi.mocked(resolveGatewayInstallEntrypoint)
@@ -434,7 +448,7 @@ describe("update-cli", () => {
       vi.mocked(resolveGatewayInstallEntrypoint).mockReset().mockResolvedValue(entryPath);
       serviceLoaded.mockResolvedValue(true);
       primeServiceCommand(
-        ["node", entryPath, "gateway", "run"],
+        [nodeExecutable, entryPath, "gateway", "run"],
         undefined,
         resolveGatewayTaskScriptPath(process.env),
       );

@@ -12,6 +12,10 @@ import { activateSecretsRuntimeSnapshotState } from "../../secrets/runtime-state
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import {
+  withCanonicalAuthProfileCredentialObserver,
+  type CanonicalAuthProfileCredentialObservation,
+} from "./credential-observation.js";
+import {
   assertAuthProfileMigrationReady,
   AuthProfileMigrationRequiredError,
   markAuthProfileMigrationRequired,
@@ -23,6 +27,7 @@ import {
 import { createOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
 import {
+  clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
@@ -52,6 +57,71 @@ const { tempDirs, saveOptions, apiKey, store, snapshotAt, unreadableOuter, seedR
   createAuthOwnerTestFixtures();
 
 describe("auth publication owner receipts", () => {
+  it.each(["cold", "cached", "activated", "admitted"] as const)(
+    "observes exact shared and local credential owners through a %s read",
+    async (mode) => {
+      const owner = await seedRoot("observed");
+      if (mode === "cold") {
+        clearRuntimeAuthProfileStoreSnapshots();
+      } else if (mode === "activated") {
+        withEnv(owner.env, () => {
+          const prepared = prepareSecretsRuntimeFastPathSnapshot({
+            config: {},
+            env: owner.env,
+            agentDirs: [owner.agentDir],
+            loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
+          });
+          expect(prepared).not.toBeNull();
+          activateSecretsRuntimeSnapshotState({
+            snapshot: prepared!.snapshot,
+            refreshContext: prepared!.refreshContext,
+            refreshHandler: null,
+          });
+        });
+      } else if (mode === "admitted") {
+        const { prepareSecretsRuntimeSnapshot } = await import("../../secrets/runtime.js");
+        await withEnvAsync(owner.env, async () => {
+          const snapshot = await prepareSecretsRuntimeSnapshot({
+            config: {},
+            env: owner.env,
+            agentDirs: [owner.agentDir],
+            includeConfigRefs: false,
+            loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
+          });
+          activateSecretsRuntimeSnapshotState({
+            snapshot,
+            refreshContext: null,
+            refreshHandler: null,
+          });
+        });
+      }
+      const observations: CanonicalAuthProfileCredentialObservation[] = [];
+      await withEnvAsync(owner.env, () =>
+        withCanonicalAuthProfileCredentialObserver(
+          (value) => observations.push(value),
+          async () => {
+            const selected = ensureAuthProfileStoreWithoutExternalProfiles(owner.agentDir);
+            expect(selected.profiles).toEqual({
+              shared: apiKey("observed"),
+              local: apiKey("observed-local"),
+            });
+          },
+        ),
+      );
+      expect(observations).toEqual(
+        expect.arrayContaining([
+          { databasePath: owner.sharedPath, profiles: { shared: apiKey("observed") } },
+          { databasePath: owner.agentPath, profiles: { local: apiKey("observed-local") } },
+        ]),
+      );
+      expect(
+        observations.some(
+          (value) => value.databasePath === owner.agentPath && value.profiles.shared !== undefined,
+        ),
+      ).toBe(false);
+    },
+  );
+
   it.each(["prepare", "activate"] as const)(
     "requires a recorded migration diagnosis discovered at %s before empty-owner activation",
     async (discoveredAt) => {

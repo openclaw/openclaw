@@ -161,25 +161,15 @@ export class MockProvider implements VoiceCallProvider {
     };
   }
 
-  async hangupCall(_input: HangupCallInput): Promise<void> {
-    // No-op for mock
-  }
+  async hangupCall(_input: HangupCallInput): Promise<void> {}
 
-  async playTts(_input: PlayTtsInput): Promise<void> {
-    // No-op for mock
-  }
+  async playTts(_input: PlayTtsInput): Promise<void> {}
 
-  async sendDtmf(_input: SendDtmfInput): Promise<void> {
-    // No-op for mock
-  }
+  async sendDtmf(_input: SendDtmfInput): Promise<void> {}
 
-  async startListening(_input: StartListeningInput): Promise<void> {
-    // No-op for mock
-  }
+  async startListening(_input: StartListeningInput): Promise<void> {}
 
-  async stopListening(_input: StopListeningInput): Promise<void> {
-    // No-op for mock
-  }
+  async stopListening(_input: StopListeningInput): Promise<void> {}
 
   async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
     const id = normalizeLowercaseStringOrEmpty(input.providerCallId);

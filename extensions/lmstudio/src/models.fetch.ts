@@ -1,14 +1,15 @@
-import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   readProviderJsonArrayFieldResponse,
   readProviderJsonResponse,
+  redactProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
   mapLmstudioWireModels,
@@ -23,20 +24,13 @@ const log = createSubsystemLogger("extensions/lmstudio/models");
 const LMSTUDIO_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 function redactLmstudioLoadError(value: string, headers: Record<string, string> | undefined) {
-  const credentials = Object.entries(headers ?? {})
-    .filter(([name]) => name.toLowerCase() !== "content-type")
-    .flatMap(([name, header]) => {
-      const normalized = header.trim();
-      if (!normalized) {
-        return [];
-      }
-      return name.toLowerCase() === "authorization"
-        ? [normalized, normalized.replace(/^\S+\s+/u, "")]
-        : [normalized];
-    })
-    .toSorted((left, right) => right.length - left.length);
-  return redactToolPayloadText(
-    credentials.reduce((redacted, credential) => redacted.replaceAll(credential, "***"), value),
+  return redactProviderResponseErrorText(
+    value,
+    Object.fromEntries(
+      Object.entries(headers ?? {})
+        .filter(([name]) => name.toLowerCase() !== "content-type")
+        .map(([name, header]) => [name, header.trim()]),
+    ),
   );
 }
 
@@ -167,10 +161,7 @@ export async function fetchLmstudioModels(params: {
         "LM Studio model list",
         "models",
       );
-      const validModels = models.filter(
-        (model): model is LmstudioModelWire =>
-          typeof model === "object" && model !== null && !Array.isArray(model),
-      );
+      const validModels = models.filter(isRecord);
       if (models.length > 0 && validModels.length === 0) {
         throw new Error("LM Studio model list: malformed JSON response");
       }

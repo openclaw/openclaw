@@ -78,6 +78,8 @@ export type SessionEntryReadOnlyWorkerScope = SessionEntryReadScope & {
 export type SessionEntryListScope = Partial<Omit<SessionEntryReadScope, "sessionKey">> & {
   /** Select exact persisted keys after validating the complete listing snapshot. */
   sessionKeys?: readonly string[];
+  /** Retain full cron-run entries for deletion guards, and only metadata for ordinary sessions. */
+  cronRetention?: true;
   /** Validate the complete listing, retaining full expired cron rows only for this logical owner. */
   expiredCronRuns?: { agentId: string; updatedBefore: number };
 };
@@ -193,6 +195,8 @@ export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "se
   expectedWriterRunId?: string;
   /** Optional lifecycle fence paired with sessionId for run-owned writes. */
   expectedLifecycleRevision?: string;
+  /** Exact owner facts, including absent fields, checked inside the write transaction. */
+  expectedOwner?: Pick<SessionEntry, "lifecycleRevision" | "activeWriterRunId">;
 };
 
 export type SessionEntrySummary = {

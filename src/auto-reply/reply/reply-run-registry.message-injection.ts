@@ -30,6 +30,7 @@ import {
   type ReplyMessageInjectionResolution,
   type ReplyMessageInjectionTarget,
   type ReplyOperation,
+  type ReplyTurnParticipants,
 } from "./reply-run-registry.contracts.js";
 import {
   getAttachedBackend,
@@ -137,13 +138,10 @@ function resolveReplyBackendMessageInjection(
     claimPendingUserInputAnswer: backend.claimPendingUserInputAnswer?.bind(backend),
     cancelPendingUserInput: backend.cancelPendingUserInput?.bind(backend),
     isAvailable: () => {
-      if (backend.isStopped) {
-        return !backend.isStopped();
-      }
       // Legacy handles already expose the only capability that matters here:
       // queueMessage. Let the runtime accept or reject instead of guessing from
       // unrelated token-stream state.
-      return true;
+      return !backend.isStopped?.();
     },
     queueMessage: (text, options) =>
       options ? backend.queueMessage!(text, options) : backend.queueMessage!(text),
@@ -153,6 +151,7 @@ function resolveReplyBackendMessageInjection(
 export function resolveReplyMessageInjectionRejection(params: {
   operation: ReplyOperation | undefined;
   options?: ReplyBackendQueueMessageOptions;
+  personalToolParticipant?: ReplyMessageInjectionOptions["personalToolParticipant"];
   allowPendingUserInputAnswer?: false;
   assertCurrent?: () => void;
 }): ReplyMessageInjectionResolution {
@@ -167,20 +166,18 @@ export function resolveReplyMessageInjectionRejection(params: {
     return { reason: "stale_run" };
   }
   const backend = getAttachedBackend(operation);
-  const canInject = () => {
-    return (
-      replyRunState.activeRunsByKey.get(operation.key) === operation &&
-      !operation.result &&
-      operation.phase === "running" &&
-      getAttachedBackend(operation) === backend
-    );
-  };
+  const canInject = () =>
+    replyRunState.activeRunsByKey.get(operation.key) === operation &&
+    !operation.result &&
+    operation.phase === "running" &&
+    getAttachedBackend(operation) === backend;
   return resolveReplyBackendMessageInjectionRejection({
     ...params,
     sessionId: operation.sessionId,
     backend,
     canInject,
     toolAuthorityFingerprint: operation.toolAuthorityFingerprint,
+    personalToolParticipants: operation.personalToolParticipants,
   });
 }
 
@@ -191,6 +188,8 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
   canInject: () => boolean;
   toolAuthorityFingerprint?: string;
   options?: ReplyBackendQueueMessageOptions;
+  personalToolParticipant?: ReplyMessageInjectionOptions["personalToolParticipant"];
+  personalToolParticipants?: ReplyTurnParticipants;
   allowPendingUserInputAnswer?: false;
   assertCurrent?: () => void;
 }): ReplyMessageInjectionResolution {
@@ -212,6 +211,17 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
     }
   } catch (error) {
     return { reason: "injection_unavailable", errorMessage: String(error) };
+  }
+  if (
+    backend.supportsCrossProfileSteering === false &&
+    params.options?.isInboundUserMessage === true &&
+    params.personalToolParticipant?.operatorAuthority &&
+    params.personalToolParticipant.operatorAuthority.profileId !==
+      params.personalToolParticipants?.resolve(undefined, { allowTurnOwner: () => true })?.profileId
+  ) {
+    // Question answers through injection also record participants. Leave another
+    // profile's input with followup custody before any question-only bypass.
+    return { reason: "tool_authority_mismatch", backend };
   }
   const mismatch = resolveReplyBackendQueueMessageMismatch(backend, params.options, params);
   const activeFingerprint = normalizeOptionalString(
@@ -345,6 +355,7 @@ export function beginReplyMessageInjectionTarget(
     : undefined;
   const resolved = owner.resolve({
     options: queueOptions,
+    personalToolParticipant: toolAuthorityOverlay ?? personalToolParticipant,
     inboundAudio,
     allowPendingUserInputAnswer,
     assertCurrent,

@@ -66,21 +66,20 @@ export function isOllamaCompatProvider(model: {
   if (!model.baseUrl) {
     return false;
   }
-  try {
-    const parsed = new URL(model.baseUrl);
-    if (isLoopbackHost(parsed.hostname) && parsed.port === "11434") {
-      return true;
-    }
-
-    // Allow remote/LAN Ollama OpenAI-compatible endpoints when the provider id
-    // itself indicates Ollama usage (for example "my-ollama").
-    const providerHintsOllama = providerId.includes("ollama");
-    const isOllamaPort = parsed.port === "11434";
-    const isOllamaCompatPath = parsed.pathname === "/" || /^\/v1\/?$/i.test(parsed.pathname);
-    return providerHintsOllama && isOllamaPort && isOllamaCompatPath;
-  } catch {
+  const parsed = URL.parse(model.baseUrl);
+  if (!parsed) {
     return false;
   }
+  if (isLoopbackHost(parsed.hostname) && parsed.port === "11434") {
+    return true;
+  }
+
+  // Allow remote/LAN Ollama OpenAI-compatible endpoints when the provider id
+  // itself indicates Ollama usage (for example "my-ollama").
+  const providerHintsOllama = providerId.includes("ollama");
+  const isOllamaPort = parsed.port === "11434";
+  const isOllamaCompatPath = parsed.pathname === "/" || /^\/v1\/?$/i.test(parsed.pathname);
+  return providerHintsOllama && isOllamaPort && isOllamaCompatPath;
 }
 
 export function resolveOllamaCompatNumCtxEnabled(params: {
@@ -113,15 +112,6 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
       payload.options = {};
     }
     (payload.options as Record<string, unknown>).num_ctx = numCtx;
-  });
-}
-
-function createOllamaThinkingWrapper(
-  baseFn: StreamFn | undefined,
-  think: OllamaThinkValue,
-): StreamFn {
-  return createLazyPayloadPatchStreamWrapper(baseFn, ({ payload }) => {
-    payload.think = think;
   });
 }
 
@@ -236,7 +226,9 @@ export function createConfiguredOllamaCompatStreamWrapper(
       ? undefined
       : runtimeThinkValue;
   if (ollamaThinkValue !== undefined && shouldForwardNativeOllamaThink(model, ollamaThinkValue)) {
-    streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
+    streamFn = createLazyPayloadPatchStreamWrapper(streamFn, ({ payload }) => {
+      payload.think = ollamaThinkValue;
+    });
   }
 
   if (normalizeProviderId(ctx.provider) === "ollama" && isOllamaCloudKimiModelRef(ctx.modelId)) {

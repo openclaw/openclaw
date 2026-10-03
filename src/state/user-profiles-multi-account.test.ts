@@ -10,17 +10,18 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import {
-  getUserPreferences,
-  setCanonicalUserPreferences,
-  setUserPreferences,
-} from "./user-preferences.js";
+import { setCanonicalUserPreferences } from "./user-preferences.js";
+import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import {
   prepareUserProfileGitHubAttribution,
   resolveUserProfileGitHubAttribution,
 } from "./user-profile-github-identity.js";
 import { listUserProfilesSync } from "./user-profile-identity.read.js";
-import { resolveCanonicalCachedGitHubIdentity } from "./user-profile-reads.js";
+import {
+  readUserProfileDirectory,
+  resolveCanonicalCachedGitHubIdentity,
+} from "./user-profile-reads.js";
+import { linkEmail, setAvatar, syncGitHubIdentity } from "./user-profile-writes.worker.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import {
@@ -28,11 +29,8 @@ import {
   ensureProfileForTailscaleIdentity,
   getUserProfileDisplay,
   getUserProfileListItem,
-  linkEmail,
-  setAvatar,
-  syncGitHubIdentity,
 } from "./user-profiles.js";
-import { executeUserProfileCommand } from "./user-profiles.worker.js";
+import { userProfileOperations } from "./user-profiles.worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -84,13 +82,12 @@ function syncEmailGitHubProfile(
 }
 
 describe("multi-account people", () => {
-  it("bounds directory materialization while preserving merged-profile filtering and account order", () => {
+  it("bounds directory materialization while preserving merged-profile filtering and account order", async () => {
     const options = stateOptions();
     const database = openOpenClawStateDatabase(options);
     ensureUserProfilesSchema(options, database);
-    const directory = (limit: number) =>
-      executeUserProfileCommand({ type: "userProfiles.directory", input: { limit } }, options);
-    expect(directory(2)).toEqual({ profiles: [], truncated: false });
+    const directory = (limit: number) => readUserProfileDirectory(limit, options);
+    expect(await directory(2)).toEqual({ profiles: [], truncated: false });
 
     const insertProfile = database.db.prepare(
       "INSERT INTO user_profiles (id, merged_into, created_at, updated_at) VALUES (?, ?, ?, 1)",
@@ -124,7 +121,15 @@ describe("multi-account people", () => {
       return rows;
     });
     try {
-      expect(directory(2)).toEqual({
+      expect(
+        userProfileOperations["userProfiles.directory"](
+          { limit: 2 },
+          {
+            open: () => database,
+            stateOptions: () => ({ ...options, env: process.env }),
+          },
+        ),
+      ).toEqual({
         profiles: [
           { id: "a", logins: ["person", "person-work"] },
           { id: "b", logins: [] },
@@ -136,8 +141,8 @@ describe("multi-account people", () => {
     } finally {
       reads.mockRestore();
     }
-    expect(directory(0)).toEqual({ profiles: [], truncated: true });
-    expect(directory(4)).toEqual({
+    expect(await directory(0)).toEqual({ profiles: [], truncated: true });
+    expect(await directory(4)).toEqual({
       profiles: [
         { id: "a", logins: ["person", "person-work"] },
         { id: "b", logins: [] },
@@ -284,9 +289,7 @@ describe("multi-account people", () => {
     expect(
       listUserProfilesSync(options).filter((profile) => profile.mergedInto === null),
     ).toHaveLength(1);
-    expect(
-      executeUserProfileCommand({ type: "userProfiles.directory", input: { limit: 10 } }, options),
-    ).toEqual({
+    expect(await readUserProfileDirectory(10, options)).toEqual({
       profiles: [{ id: person.id, logins: ["person", "person-work"] }],
       truncated: false,
     });
@@ -346,7 +349,7 @@ describe("multi-account people", () => {
     ).toBe(version);
   });
 
-  it("keeps an inherited primary through repeated merges regardless of account age", () => {
+  it("keeps an inherited primary through repeated merges regardless of account age", async () => {
     const options = stateOptions();
     const older = syncEmailGitHubProfile(
       { accountId: 80, canonicalLogin: "older-work", email: "older@example.test" },
@@ -367,9 +370,7 @@ describe("multi-account people", () => {
       githubIdentity: { login: "primary-person" },
     });
     expect(getProfileAvatar(older.id, options)?.bytes).toEqual(new Uint8Array([4, 5]));
-    expect(
-      executeUserProfileCommand({ type: "userProfiles.directory", input: { limit: 10 } }, options),
-    ).toEqual({
+    expect(await readUserProfileDirectory(10, options)).toEqual({
       profiles: [{ id: target.id, logins: ["older-work", "primary-person"] }],
       truncated: false,
     });

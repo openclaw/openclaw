@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 
 export function registerSubagentDismissedRetentionCases({
   getRegistry,
@@ -39,7 +39,7 @@ export function registerSubagentDismissedRetentionCases({
         });
         saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
 
-        mod.initSubagentRegistry();
+        await mod.initSubagentRegistry();
         await mod.testing.sweepOnceForTests();
 
         expect(announceSpy).not.toHaveBeenCalled();

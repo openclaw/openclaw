@@ -112,12 +112,8 @@ export function createServiceRuntimeInspectionFailure(
 const SYSTEMD_TASKS_CURRENT_WARNING_THRESHOLD = 200;
 const SYSTEMD_MEMORY_CURRENT_WARNING_BYTES = 2 * 1024 * 1024 * 1024;
 
-// EX_CONFIG (78) from sysexits.h. The generated systemd unit pins
-// RestartPreventExitStatus=78 (see systemd-unit.ts) so the gateway's
-// config-error / duplicate-lock exit (gateway-cli run) deliberately stops
-// without a restart. A last exit of 78 therefore means systemd gave up on
-// purpose, not that it exhausted StartLimitBurst, so any accumulated NRestarts
-// is stale from earlier crashes and must not drive start-limit detection.
+// EX_CONFIG deliberately stops through systemd's RestartPreventExitStatus=78;
+// accumulated NRestarts from earlier crashes must not imply start-limit exhaustion.
 const SYSTEMD_NO_RESTART_EXIT_STATUS = 78;
 
 export function getSystemdCgroupHygieneSummary(
@@ -154,26 +150,9 @@ export function isSystemdCgroupHygieneRisk(runtime?: GatewayServiceSystemdRuntim
   return getSystemdCgroupHygieneSummary(runtime) !== null;
 }
 
-/**
- * True when systemd has stopped auto-restarting the gateway because it crashed
- * faster than StartLimitBurst/StartLimitIntervalSec allows. Unlike an ordinary
- * stopped/exited unit, this terminal latch needs an explicit `reset-failed` +
- * restart to recover, so status/doctor must surface it instead of the generic
- * "exited immediately" message.
- *
- * Detection: the unit is `failed` and either systemd reported the give-up
- * directly (Result=start-limit-hit, the start-was-refused-before-exec case) or
- * the restart counter reached the configured burst. The counter path is the
- * common one: once the gateway process has actually run and exited non-zero,
- * systemd keeps Result=exit-code and never overwrites it with start-limit-hit
- * (verified against systemd 249), so Result alone misses real crash loops.
- *
- * The counter path is guarded against the deliberate no-restart exit: a last
- * exit of 78 (EX_CONFIG, held back by RestartPreventExitStatus=78) means
- * systemd stopped on purpose, so a stale NRestarts left over from earlier
- * crashes must not be mistaken for start-limit exhaustion. The explicit
- * Result=start-limit-hit signal stays authoritative regardless of exit status.
- */
+/** Start-limit latches need reset-failed + restart. systemd 249 retains Result=exit-code
+ * after real crashes, so detection also needs the restart counter; an explicit
+ * Result=start-limit-hit remains authoritative even after EX_CONFIG. */
 export function isSystemdStartLimitHit(runtime?: GatewayServiceRuntime): boolean {
   if (!runtime || normalizeLowercaseStringOrEmpty(runtime.state) !== "failed") {
     return false;

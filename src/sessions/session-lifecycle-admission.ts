@@ -322,10 +322,7 @@ export async function runExclusiveSessionLifecycleMutation<T>(
     "activation",
     "mutation",
   );
-  if (!signal) {
-    return await mutation;
-  }
-  if (mutationActivated) {
+  if (!signal || mutationActivated) {
     return await mutation;
   }
   const aborted = new Promise<never>((_, reject) => {

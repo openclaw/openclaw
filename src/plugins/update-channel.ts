@@ -294,6 +294,9 @@ async function syncPluginsForUpdateChannelWithLease(
                   ...options,
                   expectedIntegrity,
                   trustedSourceLinkedOfficialInstall,
+                  npmMetadata: channelNpmSpecs?.npmResolution
+                    ? { spec: channelNpmSpecs.installSpec, metadata: channelNpmSpecs.npmResolution }
+                    : undefined,
                 });
           retainPluginInstallTransaction(params, result);
         } catch (error) {

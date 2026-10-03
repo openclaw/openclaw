@@ -25,7 +25,7 @@ scenario:
     - Exact worker NO_REPLY stays private while required parent completion represents missing child output visibly exactly once.
     - Gateway restart does not replay prior terminal payloads or synthesize interruption notices for already-settled handoffs, and a post-restart completion is delivered exactly once.
     - Direct fallback strips protected internal metadata before one channel delivery.
-    - A private parent consumes a child-only nonce and media reference, spawns a second child with messaging denied, remains silent, and does not replay either result after restart.
+    - A private parent consumes a child-only nonce and media reference, spawns a second child with messaging denied, records its reviewed outcome internally, and does not send or replay either result on the channel.
   docsRefs:
     - docs/tools/subagents.md
     - docs/help/testing.md
@@ -327,7 +327,7 @@ flow:
                   senderId:
                     ref: privateConversationId
                   senderName: QA Private Completion Operator
-                  text: "Subagent terminal reply QA check: private. Review the first child internally, use its result to start a second child, and remain silent after each completion."
+                  text: "Subagent terminal reply QA check: private. Review the first child internally, use its result to start a second child, and keep both completion reports private."
                 saveAs: privateIngress
               - call: waitForCondition
                 saveAs: privateRuns

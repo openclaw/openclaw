@@ -17,7 +17,7 @@ import {
   hasResolvedRosterBeforeMigrations,
 } from "../config/agent-roster-provenance.js";
 import { getConfigValueAtPath } from "../config/config-paths.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
+import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -68,7 +68,7 @@ export async function setupCommand(
     !snapshot.exists ||
     (!hasResolvedRosterBeforeMigrations(snapshot) && !configIncludeOwnsAgentRoster(snapshot));
   const cfg = shouldPersistRoster
-    ? (migratePersistedImplicitMainRoster(snapshot.sourceConfig).config as OpenClawConfig)
+    ? (applyImplicitAgentRosterDefaults(snapshot.sourceConfig) as OpenClawConfig)
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;

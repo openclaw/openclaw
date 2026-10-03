@@ -231,9 +231,7 @@ export function collectSmallModelRiskFindings(params: {
   env: NodeJS.ProcessEnv;
 }): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const models = collectAuditModelRefs(params.cfg).filter(
-    (entry) => !entry.source.includes("imageModel"),
-  );
+  const models = collectAuditModelRefs(params.cfg);
   if (models.length === 0) {
     return findings;
   }

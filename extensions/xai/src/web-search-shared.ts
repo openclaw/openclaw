@@ -13,13 +13,6 @@ export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
 const XAI_WEB_SEARCH_MAX_CONTENT_CHARS = 20_000;
 
-type XaiWebSearchResult = {
-  content: string;
-  citations: string[];
-  inlineCitations?: XaiWebSearchResponse["inline_citations"];
-  truncated?: true;
-};
-
 export function buildXaiWebSearchPayload(params: {
   query: string;
   provider: string;
@@ -94,7 +87,7 @@ export async function requestXaiWebSearch(params: {
   timeoutSeconds: number;
   inlineCitations: boolean;
   signal?: AbortSignal;
-}): Promise<XaiWebSearchResult> {
+}) {
   params.signal?.throwIfAborted();
   return await requestXaiResponsesTool(
     {

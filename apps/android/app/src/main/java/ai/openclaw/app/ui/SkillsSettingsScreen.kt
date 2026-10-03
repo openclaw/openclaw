@@ -45,7 +45,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -616,9 +615,12 @@ private fun ClawHubInstallReviewDialog(
   onDismiss: () -> Unit,
   onInstall: () -> Unit,
 ) {
-  AppAlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text(text = nativeString("Review ClawHub skill")) },
+  AppConfirmationDialog(
+    title = nativeString("Review ClawHub skill"),
+    confirmLabel = nativeString("Verify and install"),
+    onConfirm = onInstall,
+    onDismiss = onDismiss,
+    confirmEnabled = canInstall,
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = review.displayName, style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -632,16 +634,6 @@ private fun ClawHubInstallReviewDialog(
           style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
         )
-      }
-    },
-    confirmButton = {
-      TextButton(onClick = onInstall, enabled = canInstall) {
-        Text(text = nativeString("Verify and install"))
-      }
-    },
-    dismissButton = {
-      TextButton(onClick = onDismiss) {
-        Text(text = nativeString("Cancel"))
       }
     },
   )

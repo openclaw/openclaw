@@ -190,13 +190,39 @@ export const responsesPromptObserver = {
   },
 };
 
-export type OpenAIResponsesReplayContext = {
-  provider: string;
-  api: Api;
-  model: string;
-  baseUrlHash?: string;
-  sessionHash?: string;
-  authProfileHash?: string;
+const SERVICE_TIER_OBSERVER = Symbol("openaiResponsesServiceTierObserver");
+export type ResponsesServiceTierObservation = {
+  requestedTier: string;
+  responseTier: string;
+};
+type ResponsesServiceTierObserver = (observation: ResponsesServiceTierObservation) => void;
+
+export const responsesServiceTierObserver = {
+  set(options: object, observer: ResponsesServiceTierObserver): void {
+    Reflect.set(options, SERVICE_TIER_OBSERVER, observer);
+  },
+  get(options: object) {
+    // SAFETY: Only set() writes this private symbol, with a typed service-tier observer.
+    return Reflect.get(options, SERVICE_TIER_OBSERVER) as ResponsesServiceTierObserver | undefined;
+  },
+  copy(source: object | undefined, target: object): void {
+    const observer = source && responsesServiceTierObserver.get(source);
+    if (observer) {
+      responsesServiceTierObserver.set(target, observer);
+    }
+  },
+  observe(options: object | undefined, requestedTier: unknown, responseTier: unknown): void {
+    const observer = options && responsesServiceTierObserver.get(options);
+    if (
+      observer &&
+      typeof requestedTier === "string" &&
+      /^[a-z0-9_-]{1,64}$/i.test(requestedTier) &&
+      typeof responseTier === "string" &&
+      /^[a-z0-9_-]{1,64}$/i.test(responseTier)
+    ) {
+      observer({ requestedTier, responseTier });
+    }
+  },
 };
 
 export type OpenAIResponsesRequestParams = {

@@ -203,7 +203,7 @@ export function baseParams(
 }
 
 export function mainAgentModelConfig(model = "openai/gpt-5.5"): OpenClawConfig {
-  return { agents: { defaults: { model }, entries: { main: { default: true } } } };
+  return { agents: { defaults: { model }, entries: { main: {} } } };
 }
 
 export function setSetupCommitState(config: OpenClawConfig, initialSnapshot: ConfigSnapshot): void {
@@ -218,7 +218,7 @@ export function resetSetupApplyMocks(): void {
   const config: OpenClawConfig = {
     agents: {
       defaults: { model: { primary: "openai/gpt-5.5" } },
-      entries: { main: { default: true } },
+      entries: { main: {} },
     },
   };
   setSetupCommitState(structuredClone(config), snapshot("probe", config));
@@ -244,7 +244,6 @@ export function resetSetupApplyMocks(): void {
             createdAgentIds.map((agentId) => [
               agentId,
               {
-                ...(!team ? { default: true } : {}),
                 workspace: team ? path.join(workspace, agentId) : workspace,
                 agentDir: `/agents/${agentId}`,
                 ...(team

@@ -102,12 +102,6 @@ export type OriginalManagedServiceRuntime = {
   nodeIdentity: string;
 };
 
-export type PackageRuntimePreflight = {
-  nodeRunner?: string;
-  replacedNodeRunner?: string;
-  targetVersion?: string;
-};
-
 export type ManagedServiceRootRedirect = {
   root: string;
   previousRoot: string;

@@ -773,6 +773,75 @@ describe("renderModelProviders", () => {
     },
   );
 
+  function utilityOption(container: HTMLElement, value: string) {
+    const option = container
+      .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+      ?.querySelector(`[role="option"][data-value="${value}"]`);
+    return {
+      label: text(option?.querySelector(".picker-select__label") ?? null),
+      detail: text(option?.querySelector(".picker-select__description") ?? null),
+    };
+  }
+  const utilityModels = [
+    { id: "claude-opus", provider: "anthropic", name: "Claude Opus", available: true },
+    { id: "claude-haiku-4-5", provider: "anthropic", name: "Claude Haiku 4.5", available: true },
+  ];
+
+  it.each([
+    [
+      { id: "claude-cli", kind: "cli", label: "Claude CLI" },
+      "Claude CLI · native",
+      "Runs through Claude CLI using its own login.",
+    ],
+    [
+      { id: "openclaw", kind: "api", label: "OpenClaw Default" },
+      "API · OpenClaw",
+      "Uses the provider's API connection",
+    ],
+  ] as const)(
+    "shows the automatic utility model's route in its detail line (%o)",
+    async (runtime, route, billing) => {
+      const container = mount(
+        props({
+          configuredModels: utilityModels,
+          defaultModels: { primary: "anthropic/claude-opus", fallbacks: [], utilityModel: null },
+          automaticUtilityModel: "anthropic/claude-haiku-4-5",
+          utilityRuntime: runtime,
+        }),
+      );
+      await updatePickers(container);
+      const automatic = utilityOption(container, "__openclaw_automatic_utility__");
+      expect(automatic.label).toBe("Auto · Claude Haiku 4.5");
+      expect(automatic.detail).toContain(route);
+      const trigger = container
+        .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+        ?.querySelector<HTMLButtonElement>("button[aria-haspopup]");
+      expect(trigger?.title).toContain(billing);
+    },
+  );
+
+  it("shows the route on an explicitly chosen utility model, not on Auto", async () => {
+    const container = mount(
+      props({
+        configuredModels: utilityModels,
+        defaultModels: {
+          primary: "anthropic/claude-opus",
+          fallbacks: [],
+          utilityModel: "anthropic/claude-haiku-4-5",
+        },
+        automaticUtilityModel: "anthropic/claude-haiku-4-5",
+        utilityRuntime: { id: "claude-cli", kind: "cli", label: "Claude CLI" },
+      }),
+    );
+    await updatePickers(container);
+    const chosen = utilityOption(container, "anthropic/claude-haiku-4-5");
+    expect(chosen.label).toBe("Claude Haiku 4.5");
+    expect(chosen.detail).toContain("Claude CLI · native");
+    expect(utilityOption(container, "__openclaw_automatic_utility__").detail).not.toContain(
+      "Claude CLI",
+    );
+  });
+
   it("disables probing when the gateway does not advertise the method", () => {
     const onProbe = vi.fn();
     const container = mount(props({ probeAvailable: false, onProbe }));

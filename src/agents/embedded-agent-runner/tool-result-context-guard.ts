@@ -82,11 +82,7 @@ function restoreTranscriptPromptText(
   } else if (Array.isArray(content)) {
     let restored = false;
     const nextContent = content.map((block) => {
-      if (restored || !block || typeof block !== "object") {
-        return block;
-      }
-      const textBlock = block as { type?: unknown; text?: unknown };
-      if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
+      if (restored || !isToolResultTextBlock(block) || block.type !== "text") {
         return block;
       }
       restored = true;
@@ -136,10 +132,6 @@ function replaceToolResultContent(
   } as AgentMessage;
   Reflect.deleteProperty(result, "details");
   return result;
-}
-
-function estimateBudgetToRawChars(maxChars: number): number {
-  return Math.max(0, Math.floor(maxChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE));
 }
 
 function truncateToolResultToChars(
@@ -222,7 +214,9 @@ function truncateToolResultToChars(
       content.filter(isText),
       imageCount > 0
         ? omissionNotice(0)
-        : formatContextLimitTruncationNotice(Math.max(1, estimateBudgetToRawChars(omittedChars))),
+        : formatContextLimitTruncationNotice(
+            Math.max(1, Math.floor(omittedChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE)),
+          ),
     );
   }
 
@@ -231,22 +225,6 @@ function truncateToolResultToChars(
     minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   });
   return replaceToolResultContent(msg, truncatedText);
-}
-
-function toMidTurnPrecheckRequest(
-  result: ReturnType<typeof shouldPreemptivelyCompactBeforePrompt>,
-): MidTurnPrecheckRequest | null {
-  if (result.route === "fits") {
-    return null;
-  }
-  return {
-    route: result.route,
-    estimatedPromptTokens: result.estimatedPromptTokens,
-    promptBudgetBeforeReserve: result.promptBudgetBeforeReserve,
-    overflowTokens: result.overflowTokens,
-    toolResultReducibleChars: result.toolResultReducibleChars,
-    effectiveReserveTokens: result.effectiveReserveTokens,
-  };
 }
 
 /**
@@ -463,7 +441,6 @@ export function installToolResultContextGuard(params: {
           reserveTokens: params.midTurnPrecheck.reserveTokens(),
           toolResultMaxChars: params.midTurnPrecheck.toolResultMaxChars,
         });
-        const request = toMidTurnPrecheckRequest(precheck);
         log.debug(
           `[context-overflow-midturn-precheck] tool-result-guard check route=${precheck.route} ` +
             `messages=${contextMessages.length} prePromptMessageCount=${prePromptMessageCount} ` +
@@ -471,7 +448,15 @@ export function installToolResultContextGuard(params: {
             `promptBudgetBeforeReserve=${precheck.promptBudgetBeforeReserve} ` +
             `overflowTokens=${precheck.overflowTokens}`,
         );
-        if (request) {
+        if (precheck.route !== "fits") {
+          const request: MidTurnPrecheckRequest = {
+            route: precheck.route,
+            estimatedPromptTokens: precheck.estimatedPromptTokens,
+            promptBudgetBeforeReserve: precheck.promptBudgetBeforeReserve,
+            overflowTokens: precheck.overflowTokens,
+            toolResultReducibleChars: precheck.toolResultReducibleChars,
+            effectiveReserveTokens: precheck.effectiveReserveTokens,
+          };
           params.midTurnPrecheck.onMidTurnPrecheck?.(request);
           throw new MidTurnPrecheckSignal(request);
         }

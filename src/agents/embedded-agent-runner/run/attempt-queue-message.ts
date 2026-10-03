@@ -139,19 +139,22 @@ async function cancelQueuedSteeringMessage(
 async function steerWithTranscriptLifecycle(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
-  timeoutMs: number,
-  waitForTranscriptCommit: boolean,
-  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-  images?: ImageContent[],
-  media?: MediaFact[],
-  imageOrder?: PromptImageOrderEntry[],
-  queueIdentity: string = crypto.randomUUID(),
-  abortSignal?: AbortSignal,
-  onQueueAccepted?: (accepted: boolean) => void,
+  options: EmbeddedAgentQueueMessageOptions,
   canInject?: () => boolean,
-  currentInboundContext?: CurrentInboundPromptContext,
-  onQueueSettled?: () => void,
 ): Promise<void> {
+  const {
+    abortSignal,
+    onQueueAccepted,
+    onQueueSettled,
+    waitForTranscriptCommit,
+    images,
+    userTurnTranscriptRecorder,
+    media,
+    imageOrder,
+    currentInboundContext,
+    queueIdentity = crypto.randomUUID(),
+  } = options;
+  const timeoutMs = options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS;
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     let accepted = false;
@@ -270,7 +273,7 @@ async function steerWithTranscriptLifecycle(
         reportAcceptance(true);
         if (abortRequested) {
           rejectAfterCancellation("queued steering message was cancelled before delivery");
-        } else if (!waitForTranscriptCommit && acceptanceOpen) {
+        } else if (waitForTranscriptCommit !== true && acceptanceOpen) {
           // The caller now owns an admission receipt. Only the receiving run
           // owns later consumption or withdrawal; do not retain a global failure
           // listener or the completed caller's abort signal after this point.
@@ -375,22 +378,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     return;
   }
   try {
-    await steerWithTranscriptLifecycle(
-      activeSession,
-      text,
-      options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
-      options.waitForTranscriptCommit === true,
-      options.userTurnTranscriptRecorder,
-      options.images,
-      options.media,
-      options.imageOrder,
-      options.queueIdentity,
-      options.abortSignal,
-      options.onQueueAccepted,
-      canInject,
-      options.currentInboundContext,
-      options.onQueueSettled,
-    );
+    await steerWithTranscriptLifecycle(activeSession, text, options, canInject);
   } catch (error) {
     if (error instanceof EmbeddedSteeringAcceptedUnconfirmedError) {
       return { transcriptCommit: "unconfirmed", errorMessage: error.message };

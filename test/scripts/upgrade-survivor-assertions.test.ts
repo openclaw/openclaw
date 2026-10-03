@@ -16,6 +16,7 @@ import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { UPGRADE_SURVIVOR_ASSERTION_SCENARIOS } from "../../scripts/lib/upgrade-survivor-policy.mjs";
+import { readLegacySessionStoreEntries } from "../../src/config/sessions/legacy-store-inspection.js";
 import type { PluginInstallRecord } from "../../src/config/types.plugins.js";
 import type { PluginUpdateOutcome } from "../../src/plugins/update.js";
 import { withEnv } from "../../src/test-utils/env.js";
@@ -1082,6 +1083,7 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
 
 function assertConfig(params: {
   acceptedIntents: string[];
+  baselineVersion?: string;
   config: unknown;
   scenario: string;
   stage?: "baseline" | "survival";
@@ -1094,6 +1096,7 @@ function assertConfig(params: {
     writeJson(configPath, params.config);
     writeJson(coveragePath, {
       acceptedIntents: params.acceptedIntents,
+      baselineVersion: params.baselineVersion,
     });
 
     execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "assert-config"], {
@@ -1713,16 +1716,40 @@ process.stdout.write(sessionDir + "\\n");
     },
   );
 
-  it("requires the authored Tool Search config to migrate without disabling it", () => {
-    const run = (toolSearch: unknown, stage: "baseline" | "survival" = "survival") =>
+  it.each([
+    { baselineVersion: undefined, legacy: true },
+    { baselineVersion: "2026.9.6", legacy: true },
+    { baselineVersion: "2026.9.7", legacy: false },
+  ])(
+    "validates Tool Search at baseline $baselineVersion and after upgrade",
+    ({ baselineVersion, legacy }) => {
+      const run = (toolSearch: unknown, stage: "baseline" | "survival" = "survival") =>
+        assertConfig({
+          acceptedIntents: ["tool-search"],
+          baselineVersion,
+          config: { tools: { toolSearch } },
+          scenario: "base",
+          stage,
+        });
+      const baselineValue = legacy ? { mode: "code", codeTimeoutMs: 5000 } : { mode: "tools" };
+      const wrongBaselineValue = legacy ? { mode: "tools" } : { mode: "code", codeTimeoutMs: 5000 };
+      expect(() => run(baselineValue, "baseline")).not.toThrow();
+      expect(() => run(wrongBaselineValue, "baseline")).toThrow(/Tool Search mode/);
+      expect(() => run({ mode: "tools", codeTimeoutMs: 5000 }, "baseline")).toThrow(
+        legacy ? /Tool Search mode/ : /legacy timeout/,
+      );
+      expect(() => run({ mode: "tools" })).not.toThrow();
+    },
+  );
+
+  it("requires migrated Tool Search unless the intent was not accepted", () => {
+    // Survival validation is independent of the published baseline version.
+    const run = (toolSearch: unknown) =>
       assertConfig({
         acceptedIntents: ["tool-search"],
         config: { tools: { toolSearch } },
         scenario: "base",
-        stage,
       });
-    expect(() => run({ mode: "code", codeTimeoutMs: 5000 }, "baseline")).not.toThrow();
-    expect(() => run({ mode: "tools" })).not.toThrow();
     expect(() => run({ mode: "code", codeTimeoutMs: 5000 })).toThrow(/Tool Search mode/);
     expect(() => run({ mode: "tools", codeTimeoutMs: 5000 })).toThrow(/legacy timeout/);
     expect(() => run({ mode: "tools", enabled: false })).toThrow(/disabled/);
@@ -1860,7 +1887,7 @@ process.stdout.write(sessionDir + "\\n");
     }
   });
 
-  it.each(["base", "sqlite-volume"])(
+  it.each(["base", "configured-plugin-installs", "sqlite-volume"])(
     "seeds recent ordered session timestamps for %s",
     (scenario) => {
       const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-seed-"));
@@ -1882,24 +1909,29 @@ process.stdout.write(sessionDir + "\\n");
         });
         const afterSeed = Date.now();
 
-        const sessionsDir = join(
-          stateDir,
-          scenario === "sqlite-volume" ? "agents/main/sessions" : "sessions",
-        );
-        const otherStore = join(
-          stateDir,
-          scenario === "sqlite-volume" ? "sessions" : "agents/main/sessions",
-          "sessions.json",
-        );
+        const sessionsDir = join(stateDir, "agents", "main", "sessions");
+        const otherStore = join(stateDir, "sessions", "sessions.json");
         expect(() => readFileSync(otherStore)).toThrow(/ENOENT/);
-        const sessions = JSON.parse(
-          readFileSync(join(sessionsDir, "sessions.json"), "utf8"),
-        ) as Record<string, { sessionId?: unknown; sessionFile?: unknown; updatedAt?: unknown }>;
-        const keys =
-          scenario === "sqlite-volume"
-            ? ["agent:main:main", "agent:main:+15551234567", "agent:main:slack:channel:cupgrade"]
-            : ["main", "+15551234567", "slack:channel:CUPGRADE"];
+        const storePath = join(sessionsDir, "sessions.json");
+        const original = readFileSync(storePath, "utf8");
+        const sessions = JSON.parse(original) as Record<
+          string,
+          { sessionId?: unknown; sessionFile?: unknown; updatedAt?: unknown }
+        >;
+        const keys = [
+          "agent:main:main",
+          "agent:main:+15551234567",
+          "agent:main:slack:channel:cupgrade",
+        ];
         expect(Object.keys(sessions)).toEqual(keys);
+        const issues: Parameters<typeof readLegacySessionStoreEntries>[1] = [];
+        const admitted = readLegacySessionStoreEntries({ storePath }, issues);
+        expect(issues).toEqual([]);
+        expect(admitted.entries.map(({ sessionKey }) => sessionKey)).toEqual(keys);
+        for (const { entry } of admitted.entries) {
+          expect(entry).toMatchObject({ modelProvider: "openai", model: "gpt-5.5" });
+        }
+        expect(readFileSync(storePath, "utf8")).toBe(original);
         const seededRows = keys.map((key) => sessions[key]);
         expect(seededRows.map((row) => row?.sessionId)).toEqual([
           "upgrade-main-session",
@@ -1968,6 +2000,7 @@ process.stdout.write(sessionDir + "\\n");
         expect(existsSync(join(workspace, ".openclaw", "workspace-state.json"))).toBe(true);
         for (const relative of [
           "sessions/sessions.json",
+          "agents/main/sessions/sessions.json",
           "agents/main/sessions/legacy-session.json",
           "exec-approvals.json",
           "plugin-runtime-deps",
@@ -2041,8 +2074,10 @@ process.stdout.write(sessionDir + "\\n");
         },
         stdio: "pipe",
       });
-      const seeded = JSON.parse(readFileSync(join(stateDir, "sessions", "sessions.json"), "utf8"));
-      const acp = seeded["slack:channel:CUPGRADE"].acp;
+      const seeded = JSON.parse(
+        readFileSync(join(stateDir, "agents", "main", "sessions", "sessions.json"), "utf8"),
+      );
+      const acp = seeded["agent:main:slack:channel:cupgrade"].acp;
       expect(acp).toMatchObject({
         backend: "acpx",
         identity: {
@@ -2426,18 +2461,19 @@ process.stdout.write(sessionDir + "\\n");
   );
 
   it.each([false, true])(
-    "artifact-only base/manual validates legacy-source cleanup without a missing-path seed (retained=%s)",
-    (retained) => {
+    "artifact-only base/manual rejects retired global sources without a missing-path seed (recreated=%s)",
+    (recreated) => {
       const verify = () =>
         runSessionStateAssertion((stateDir) => {
           const env = seedSessionSourceFixture(stateDir);
           writeMigratedSessionState(stateDir);
-          if (!retained) {
-            rmSync(join(stateDir, "sessions"), { recursive: true });
+          if (recreated) {
+            mkdirSync(join(stateDir, "sessions"), { recursive: true });
+            writeJson(join(stateDir, "sessions", "sessions.json"), {});
           }
           return env;
         });
-      if (retained) {
+      if (recreated) {
         expect(verify).toThrow(/legacy sessions.json survived migration/);
       } else {
         expect(verify).not.toThrow();
@@ -2482,7 +2518,7 @@ process.stdout.write(sessionDir + "\\n");
               );
             } else if (corruption === "source") {
               writeFileSync(
-                join(stateDir, "sessions", "upgrade-main-session.jsonl"),
+                join(stateDir, "agents", "main", "sessions", "upgrade-main-session.jsonl"),
                 "changed source",
               );
             } else if (corruption === "sqlite-row") {

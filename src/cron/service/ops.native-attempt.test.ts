@@ -185,10 +185,13 @@ describe("native attempt queued automation admission", () => {
                   createDefaultEmbeddedSession({
                     prompt: async () => {
                       const submittedTool = tool;
+                      // The cron lane stays blocked until after this reply, so the
+                      // run cannot finish within the call; return its queued ack.
                       const ack = await submittedTool.execute("queued-automation", {
                         action: "run",
                         jobId: job.id,
                         runMode: "force",
+                        timeoutMs: 1,
                       });
                       expect(ack.details).toMatchObject({ ok: true, enqueued: true });
                       if (outcome === "permission change") {

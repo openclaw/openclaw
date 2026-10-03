@@ -14,9 +14,10 @@ import {
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
+import { saveSubagentRegistryToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import { registerSubagentOrphanTaskCases } from "./subagent-registry.persistence.orphan.test-support.js";
 import type { SubagentRunFixture } from "./subagent-registry.persistence.test-support.js";
@@ -29,10 +30,7 @@ import {
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
-import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryToSqlite,
-} from "./subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   activateSubagentRegistry,
   addSubagentRunForTests,
@@ -45,13 +43,6 @@ import {
   testing,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-
-vi.mock("./subagent-registry-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-registry-state.js")>();
-  const { saveSubagentRegistryToSqlite: saveRegistryToSqlite } =
-    await import("./subagent-registry.store.sqlite.js");
-  return { ...actual, persistSubagentRunsToDisk: saveRegistryToSqlite };
-});
 
 function makeRun(runId: string, overrides: Partial<SubagentRunFixture> = {}): SubagentRunRecord {
   return createCanonicalSubagentRunFixture({
@@ -143,12 +134,12 @@ describe("subagent registry persistence", () => {
     });
   };
 
-  const restartRegistry = () => {
-    resetSubagentRegistryForTests({ persist: false });
-    initSubagentRegistry();
+  const restartRegistry = async () => {
+    await resetSubagentRegistryForTests({ persist: false });
+    await initSubagentRegistry();
     const recoveryRuntime = createSubagentPersistenceRuntime(callGateway);
     const gateway = { recoveryRuntime, resolveGatewayContext: () => gateway as never };
-    activateSubagentRegistry(() => gateway as never);
+    await activateSubagentRegistry(() => gateway as never);
   };
 
   it("persists completed subagent timing into the child session entry", async () => {
@@ -354,7 +345,7 @@ describe("subagent registry persistence", () => {
       updatedAt: run.execution.endedAt,
     });
 
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const restored = loadSubagentRegistryFromSqlite().get(run.runId);
 
     expect(restored).toMatchObject({
@@ -372,7 +363,7 @@ describe("subagent registry persistence", () => {
       },
     });
 
-    restartRegistry();
+    await restartRegistry();
     const wait = createAgentsWaitTool({
       agentSessionKey: "agent:main:main",
       agentId: "main",
@@ -425,7 +416,7 @@ describe("subagent registry persistence", () => {
     let retryReady = false;
     let readiness: Promise<void> | undefined;
     try {
-      restartRegistry();
+      await restartRegistry();
       await vi.waitFor(
         () => expect(announceSpy, "first announcement admitted").toHaveBeenCalledOnce(),
         {
@@ -448,7 +439,7 @@ describe("subagent registry persistence", () => {
       expect(held?.cleanupHandled, "serialized lock is not retry readiness").toBe(false);
       expect(
         getSubagentRunByChildSessionKey(childSessionKey)?.cleanupHandled,
-        "announcement still owns cleanup",
+        "acknowledged runtime lock remains held; decoded durable row is restart-ready",
       ).toBe(true);
       expect(
         held?.delivery?.attemptCount,
@@ -466,7 +457,7 @@ describe("subagent registry persistence", () => {
 
       announceSpy.mockResolvedValueOnce("delivered");
       const beforeRetry = Date.now();
-      restartRegistry();
+      await restartRegistry();
       await vi.waitFor(
         () => expect(settlement.run, "retry reached requester settlement").toHaveBeenCalledOnce(),
         {
@@ -507,7 +498,7 @@ describe("subagent registry persistence", () => {
   it("settles orphaned restored runs through canonical completion", async () => {
     const runId = "run-orphan-restore";
     await persistRuns([endedRun(runId)], false);
-    restartRegistry();
+    await restartRegistry();
     await waitForRegistryWork(() => readPersistedRun(runId)?.cleanupCompletedAt !== undefined);
     expect(readPersistedRun(runId)?.execution).toMatchObject({
       status: "terminal",
@@ -535,7 +526,7 @@ describe("subagent registry persistence", () => {
       false,
     );
 
-    restartRegistry();
+    await restartRegistry();
     await flushQueuedRegistryWork();
 
     expect(announceSpy).not.toHaveBeenCalled();
@@ -566,7 +557,7 @@ describe("subagent registry persistence", () => {
       false,
     );
 
-    restartRegistry();
+    await restartRegistry();
     await flushQueuedRegistryWork();
 
     expect(callGateway).not.toHaveBeenCalled();
@@ -605,7 +596,7 @@ describe("subagent registry persistence", () => {
       abortedLastRun: true,
     });
 
-    restartRegistry();
+    await restartRegistry();
     await flushQueuedRegistryWork();
     await testing.sweepOnceForTests();
 
@@ -628,7 +619,7 @@ describe("subagent registry persistence", () => {
       sessionId: "sess-resume-guard",
       updatedAt: now,
     });
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId,
       childSessionKey,
       requesterSessionKey: "agent:main:main",

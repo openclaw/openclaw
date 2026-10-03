@@ -111,7 +111,7 @@ enum CostUsageRequest {
         guard let data = try? JSONSerialization.data(withJSONObject: params, options: [.sortedKeys]) else {
             return #"{"days":31,"mode":"gateway"}"#
         }
-        return String(bytes: data, encoding: .utf8) ?? #"{"days":31,"mode":"gateway"}"#
+        return String(bytes: data, encoding: .utf8)!
     }
 }
 

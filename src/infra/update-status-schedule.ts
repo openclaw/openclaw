@@ -30,7 +30,7 @@ export function getGatewayUpdateSchedule(
     (schedule.channel === channel || (campaign && schedule.campaign?.id === campaign.id))
       ? cachedFacts
       : { channel };
-  return {
+  const result = {
     ...facts,
     autoEnabled:
       Boolean(cfg.update?.auto?.enabled) &&
@@ -38,6 +38,10 @@ export function getGatewayUpdateSchedule(
       !isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE),
     ...(campaign ? { campaign } : {}),
   };
+  const install = currentUpdateCheckLifecycle().installStatus;
+  return install?.status.error?.timeoutMs
+    ? withUpdateInstallStatus(result, install.status, true, install.installReceipt, install.root)
+    : result;
 }
 
 /** Refreshes the read-only Dev checkout comparison used by update.status. */
@@ -73,6 +77,11 @@ export function refreshGatewayUpdateStatus(cfg: OpenClawConfig): Promise<void> {
       const { root, status, installReceipt } = await resolveStartupInstallStatus(true, signal);
       if (!isCurrent()) {
         return;
+      }
+      // An explicit successful refresh repairs the lifecycle's failed discovery,
+      // so later automatic checks can resume without another cold probe.
+      if (lifecycle.installStatus?.status.error && !status.error) {
+        lifecycle.installStatus = { root, status, installReceipt };
       }
       const schedule = getUpdateSchedule();
       const current =

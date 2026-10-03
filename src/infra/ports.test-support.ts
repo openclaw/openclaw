@@ -3,8 +3,11 @@ import { once } from "node:events";
 import net from "node:net";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { expect, type TestContext } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 
 export async function listenServer(
   skip: TestContext["skip"],
@@ -37,7 +40,7 @@ export async function listenServer(
 }
 
 export async function withNativeSsConnection(
-  skip: TestContext["skip"],
+  { skip, signal }: Pick<TestContext, "skip" | "signal">,
   inspect: (fixture: {
     port: number;
     clientPort: number;
@@ -52,8 +55,8 @@ export async function withNativeSsConnection(
     socket.once("close", () => sockets.delete(socket));
     accepted.resolve(socket);
   });
-  const readiness = new AbortController();
   let child: ReturnType<typeof spawn> | undefined;
+  let closed: Promise<unknown[]> | undefined;
   try {
     const { port } = await listenServer(skip, server, 0, "127.0.0.1");
     child = spawn(
@@ -74,25 +77,26 @@ export async function withNativeSsConnection(
       `,
         String(port),
       ],
-      { stdio: ["ignore", "ignore", "inherit", "ipc"], timeout: 20_000, killSignal: "SIGKILL" },
+      { stdio: ["ignore", "ignore", "inherit", "ipc"] },
     );
-    const [message]: unknown[] = await withTestTimeout(
-      Promise.race([
-        once(child, "message", { signal: readiness.signal }),
-        once(child, "exit", { signal: readiness.signal }).then(([code, signal]) => {
-          throw new Error(`TCP fixture exited before readiness: ${code}/${signal}`);
-        }),
-      ]),
-      5_000,
-      "TCP fixture did not report readiness",
+    closed = once(child, "close");
+    const [message]: unknown[] = await withinTest(
+      awaitGateBeforeSettlement(
+        once(child, "message"),
+        closed,
+        "TCP fixture did not report readiness",
+      ),
+      signal,
     );
-    readiness.abort();
     if (message !== "ready") {
       throw Object.assign(new Error(`TCP fixture connection failed: ${String(message)}`), {
         code: message,
       });
     }
-    const socket = await withTestTimeout(accepted.promise, 5_000, "TCP fixture was not accepted");
+    const socket = await withinTest(
+      awaitGateBeforeSettlement(accepted.promise, closed, "TCP fixture was not accepted"),
+      signal,
+    );
     const clientPort = socket.remotePort;
     const pid = child.pid;
     if (clientPort === undefined || pid === undefined) {
@@ -129,7 +133,7 @@ export async function withNativeSsConnection(
     }
     expect(clientRow).toMatch(new RegExp(`users:\\(\\("node worker:1",pid=${pid},fd=\\d+\\)`));
 
-    await inspect({ port, clientPort, pid, stdout: captured.stdout });
+    await withinTest(inspect({ port, clientPort, pid, stdout: captured.stdout }), signal);
   } catch (error) {
     const code = extractErrorCode(error);
     if (code && ["ENOENT", "EACCES", "EPERM", "EADDRNOTAVAIL"].includes(code)) {
@@ -137,10 +141,10 @@ export async function withNativeSsConnection(
     }
     throw error;
   } finally {
-    readiness.abort();
     try {
       if (child?.pid !== undefined) {
-        await stopChildProcess(child, 5_000);
+        child.kill("SIGTERM");
+        await closed;
       }
     } finally {
       for (const socket of sockets) {

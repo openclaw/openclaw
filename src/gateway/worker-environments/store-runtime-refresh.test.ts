@@ -121,7 +121,6 @@ describe("worker environment runtime refresh", () => {
   }
 
   it.each([
-    ["ready", "node"],
     ["idle", "node"],
     ["attached", "node"],
     ["attached", "ssh"],

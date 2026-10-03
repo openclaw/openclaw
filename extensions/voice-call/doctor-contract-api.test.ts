@@ -217,6 +217,7 @@ describe("voice-call doctor state migration", () => {
         call,
       },
     ]);
+    const originalBytes = await fs.readFile(sourcePath);
 
     const migration = expectDefined(stateMigrations[0], "voice-call state migration");
     const config = {
@@ -254,15 +255,23 @@ describe("voice-call doctor state migration", () => {
       expect.stringContaining("Archived Voice Call call-log legacy source"),
     ]);
     await expect(fs.access(sourcePath)).rejects.toThrow();
-    await fs.access(`${sourcePath}.migrated`);
+    expect(await fs.readFile(`${sourcePath}.migrated`)).toEqual(originalBytes);
 
     const restored = await loadActiveCallsFromStore(storePath);
     expect(restored.activeCalls.get("call-doctor")?.providerCallId).toBe("provider-doctor");
     expect(restored.processedEventIds.has("evt-doctor")).toBe(true);
 
-    const history = await getCallHistoryFromStore(storePath);
-    expect(history).toHaveLength(1);
-    expect(history[0]?.callId).toBe("call-doctor");
+    await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([call]);
+    await expect(
+      migration.migrateLegacyState({
+        config,
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        context: createDoctorContext(env),
+      }),
+    ).resolves.toEqual({ changes: [], warnings: [] });
+    await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([call]);
   });
 
   it("honors OPENCLAW_STATE_DIR for the default store", async () => {

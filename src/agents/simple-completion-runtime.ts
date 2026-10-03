@@ -76,12 +76,20 @@ import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
 
+type PreparedStreamCompletionModel =
+  | (Extract<PreparedSimpleCompletionModel, { model: Model }> & {
+      recordServiceTierObservation?: ReturnType<
+        NonNullable<PreparedModelRuntimeSnapshot["accountCatalog"]>["prepareServiceTierObserver"]
+      >;
+    })
+  | Extract<PreparedSimpleCompletionModel, { error: string }>;
+
 type SimpleCompletionSelectionParams = {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir?: string;
   modelRef?: string;
-  useUtilityModel?: boolean;
+  useUtilityModel?: boolean | "required";
   manifestPlugins?:
     | PluginMetadataSnapshot["plugins"]
     | Pick<PluginMetadataSnapshot, "plugins" | "owners">;
@@ -101,7 +109,7 @@ function resolveSimpleCompletionSelectionRequest(
     manifestPlugins: params.manifestPlugins,
   });
   // Utility routing derives a provider-declared small model when unset and
-  // treats an explicit empty utilityModel as "use the primary" (disabled).
+  // optional routing treats an empty utilityModel as "use the primary" (disabled).
   const modelRef =
     params.modelRef?.trim() ||
     (params.useUtilityModel
@@ -119,7 +127,9 @@ function resolveSimpleCompletionSelectionRequest(
             : {}),
         })
       : undefined) ||
-    resolveNativeModelPrimary(params.cfg, params.agentId);
+    (params.useUtilityModel === "required"
+      ? undefined
+      : resolveNativeModelPrimary(params.cfg, params.agentId));
   const split = modelRef ? splitTrailingAuthProfile(modelRef) : null;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -137,6 +147,9 @@ function resolveSimpleCompletionSelectionRequest(
         manifestPlugins: params.manifestPlugins,
       })
     : null;
+  if (params.useUtilityModel === "required" && !resolved) {
+    return null;
+  }
   const provider = resolved?.ref.provider ?? fallbackRef.provider;
   const modelId = resolved?.ref.model ?? fallbackRef.model;
   if (!provider || !modelId) {
@@ -178,6 +191,8 @@ export type PrepareSimpleCompletionModelParams = {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   workspaceDir?: string;
   agentRuntimeId?: string;
+  /** Internal stream callers own provider transport construction and embedded policy. */
+  transport?: "simple-completion" | "provider-stream";
 };
 
 /** Prepares a model within the exact generation already held by its caller. */
@@ -186,7 +201,7 @@ export async function prepareSimpleCompletionModel(
     preparedModelRuntime: PreparedModelRuntimeSnapshot;
   },
   assertCurrent?: () => void,
-): Promise<PreparedSimpleCompletionModel> {
+): Promise<PreparedStreamCompletionModel> {
   params.signal?.throwIfAborted();
   const config = params.cfg ?? {};
   const preparedModelRuntime = params.preparedModelRuntime;
@@ -214,7 +229,7 @@ async function prepareSimpleCompletionModelCore(
   params: PrepareSimpleCompletionModelParams,
   context: PreparedSimpleCompletionResolverContext,
   assertCurrent?: () => void,
-): Promise<PreparedSimpleCompletionModel> {
+): Promise<PreparedStreamCompletionModel> {
   const { modelResolver, workspaceDir } = context;
   const resolved = await modelResolver(
     params.provider,
@@ -457,23 +472,39 @@ async function prepareSimpleCompletionModelCore(
     pluginMetadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
   });
   const preparedModel = attachModelProviderRuntimePluginHandle(model, providerRuntimeHandle);
-  // Capture this generation's transport hooks while keeping the logical model API
-  // visible to callers that build prompts before dispatch.
-  const completionTransport = attachModelProviderRuntimePluginHandle(
-    prepareModelForSimpleCompletion({
-      apiRegistry: modelRuntime.apiRegistry,
-      model: preparedModel,
-      cfg: params.cfg,
-      auth: { mode: resolvedAuth.mode, authFlow: resolvedAuth.authFlow },
-      agentId: params.agentId,
-    }),
-    providerRuntimeHandle,
-  );
+  // Direct completions retain this generation's transport. Embedded stream callers
+  // construct their own transport and must not run direct-completion factories.
+  const completionTransport =
+    params.transport === "provider-stream"
+      ? undefined
+      : attachModelProviderRuntimePluginHandle(
+          prepareModelForSimpleCompletion({
+            apiRegistry: modelRuntime.apiRegistry,
+            model: preparedModel,
+            cfg: params.cfg,
+            auth: { mode: resolvedAuth.mode, authFlow: resolvedAuth.authFlow },
+            agentId: params.agentId,
+          }),
+          providerRuntimeHandle,
+        );
+  const selectedCredential = auth.profileId ? authStore?.profiles[auth.profileId] : undefined;
+  const recordServiceTierObservation =
+    params.transport === "provider-stream" &&
+    auth.profileId &&
+    selectedCredential?.type === "api_key" &&
+    model.provider === "openai" &&
+    model.api === "openai-responses"
+      ? context.preparedModelRuntime.accountCatalog?.prepareServiceTierObserver({
+          profileId: auth.profileId,
+          credential: selectedCredential,
+        })
+      : undefined;
 
   return {
     model: bindModelLlmRuntime(preparedModel, modelRuntime.llmRuntime, completionTransport),
     auth: resolvedAuth,
     ...(sourceAuthFingerprint ? { sourceAuthFingerprint } : {}),
+    ...(recordServiceTierObservation ? { recordServiceTierObservation } : {}),
   };
 }
 
@@ -625,6 +656,7 @@ export async function acquireSimpleCompletionModelWithSelection(
       prepareSimpleCompletionModelCore(
         {
           ...params,
+          transport: "simple-completion",
           provider: selection.provider,
           modelId: selection.modelId,
           modelIdSource: "selected",

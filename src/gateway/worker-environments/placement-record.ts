@@ -34,13 +34,6 @@ export type WorkerSessionPlacementDispatchIdentity = WorkerSessionPlacementIdent
   >;
 };
 
-export type WorkerPlacementDispatchStoreOperations = {
-  "workerPlacements.startDispatch": {
-    input: { placement: WorkerSessionPlacementDispatchIdentity; nowMs: number };
-    output: WorkerSessionPlacementRecord;
-  };
-};
-
 export type WorkerSessionTurnOwner =
   | { kind: "local"; environmentId?: string; ownerEpoch?: number }
   | { kind: "worker"; environmentId: string; ownerEpoch: number };
@@ -102,21 +95,11 @@ export function placementTurnOwner(placement: {
   };
 }
 
-export type PersistedTurnClaim =
-  | {
-      owner: "local";
-      claimId: string;
-      runId: string;
-      generation: number;
-      ownerEpoch: null;
-    }
-  | {
-      owner: "worker";
-      claimId: string;
-      runId: string;
-      generation: number;
-      ownerEpoch: number;
-    };
+export type PersistedTurnClaim = {
+  claimId: string;
+  runId: string;
+  generation: number;
+} & ({ owner: "local"; ownerEpoch: null } | { owner: "worker"; ownerEpoch: number });
 
 type PersistedLocalTurnClaim = Extract<PersistedTurnClaim, { owner: "local" }>;
 

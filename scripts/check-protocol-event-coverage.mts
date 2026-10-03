@@ -19,6 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { upperCamel } from "./lib/protocol-codegen-names.mts";
 // Dependency-light seam by design: preflight runs this script without
 // installed dependencies (the dependency-free manifest contract), so the
 // canonical @openclaw/normalization-core import cannot resolve here.
@@ -725,7 +726,16 @@ function collectProtocolEventCoverageErrors(params: { rootDir?: string; fs?: FsI
         roots: [ANDROID_SCAN_ROOT],
         extension: ".kt",
         extract: extractKotlinHandledEvents,
-        buildExtractContext: (sources) => collectStringConstants(sources, "Kotlin"),
+        // GatewayEvent is generated in Gradle's build directory. Source-only
+        // coverage uses the same catalog/name owner without requiring a build.
+        buildExtractContext: (sources) =>
+          new Map([
+            ...collectStringConstants(sources, "Kotlin"),
+            ...serverEvents.map((event): [string, string] => [
+              `GatewayEvent.${upperCamel(event)}`,
+              event,
+            ]),
+          ]),
         sentinels: ANDROID_SENTINEL_FILES,
         fsImpl,
       }),

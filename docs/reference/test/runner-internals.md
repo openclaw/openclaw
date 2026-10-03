@@ -41,6 +41,15 @@ Runtime-consuming tests prepare checkout artifacts through the explicit build ow
 not by launching the CLI with `--version`. Preparation reuses source-runner freshness
 checks and checkout artifact ownership, without updater service or database-maintenance
 custody. Current artifacts need no writable checkout or service inspection.
+`build-all` fingerprints production inputs in the existing stamps. Test preparation
+can reuse a coherent runtime after a source refresh or test-only correction,
+including a new private transport commit. Ordinary CLI and immutable deployment
+HEAD checks remain strict; UI E2E preparation also keeps its current-head checks.
+Changed production inputs, build configuration, dependencies, compiler identity,
+or required missing outputs still require preparation. Partial postbuilds that skip
+static assets cannot satisfy readers requiring those assets. A full build before E2E
+checks should use `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build`; scope that flag to the
+build command so its artifacts satisfy the strongest test prerequisite.
 
 Before writing, automatic preparation requires verified artifact separation or an
 observed offline managed Gateway. On Linux it reads the loaded command location without reading service
@@ -177,6 +186,12 @@ Gateway port claims remain in the common temporary directory outside all enclosi
 Vitest namespaces, found through their explicit resource owners. Parallel invocations
 therefore share port ownership while a fixture hands its reserved socket to a child;
 removing one invocation's files cannot remove another fixture's port claim.
+
+A fixture that binds a Gateway, in-process or spawned, on a shared pool port holds
+that port's claim from selection until the Gateway closes. A Gateway retries a busy
+port while starting, so an unclaimed fixture can take another fixture's port during
+its handoff. `getDeterministicFreePortBlock` is a probe, not a lease; in-process
+Gateway E2E fixtures use `acquireGatewayE2ePortBlock` with `startClaimedGateway`.
 
 Live-aware setup still loads the original profile and stages live state when
 requested. A bounded invocation artifact carries the original home to that setup;

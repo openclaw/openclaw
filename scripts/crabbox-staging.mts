@@ -4,7 +4,6 @@ import {
   closeSync,
   constants,
   fstatSync,
-  fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -26,6 +25,8 @@ import { z } from "zod";
 import {
   crabboxArtifactEvidenceSchema,
   crabboxArtifactIdentitySchema,
+  flushDescriptor as syncFile,
+  flushDirectory as syncDirectory,
   preserveCrabboxArtifacts,
   verifyPreservedCrabboxArtifacts,
   type CrabboxArtifactEvidence,
@@ -238,49 +239,6 @@ function readBounded(path: string, limit: number) {
     return bytes;
   } finally {
     closeSync(fd);
-  }
-}
-
-function syncDirectory(path: string) {
-  // Windows does not expose a directory flush through this Node API. Such
-  // receipts remain useful for inspection, but never authorize orphan removal.
-  if (process.platform === "win32") {
-    return false;
-  }
-  let fd: number | undefined;
-  try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
-    fsyncSync(fd);
-    return true;
-  } catch (error) {
-    if (
-      ["EINVAL", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"].includes(
-        (error as NodeJS.ErrnoException).code ?? "",
-      )
-    ) {
-      return false;
-    }
-    throw error;
-  } finally {
-    if (fd !== undefined) {
-      closeSync(fd);
-    }
-  }
-}
-
-function syncFile(fd: number) {
-  try {
-    fsyncSync(fd);
-    return true;
-  } catch (error) {
-    if (
-      ["EINVAL", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"].includes(
-        (error as NodeJS.ErrnoException).code ?? "",
-      )
-    ) {
-      return false;
-    }
-    throw error;
   }
 }
 

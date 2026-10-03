@@ -8,7 +8,7 @@ import { compareChannelPlugins } from "./registry-loaded.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
-function dedupeSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
+function sortChannelSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
   const seen = new Set<string>();
   const resolved: ChannelPlugin[] = [];
   for (const plugin of plugins) {
@@ -19,11 +19,7 @@ function dedupeSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] 
     seen.add(id);
     resolved.push(plugin);
   }
-  return resolved;
-}
-
-function sortChannelSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
-  return dedupeSetupPlugins(plugins).toSorted(compareChannelPlugins);
+  return resolved.toSorted(compareChannelPlugins);
 }
 
 export function listChannelSetupPlugins(): ChannelPlugin[] {

@@ -453,12 +453,9 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       });
       expect(decisionWork).toHaveLength(5);
       expect(decisionWork.map((work) => work.receipt)).toMatchObject([
-        ...Array.from({ length: 4 }, (_, attempt) => ({
+        ...Array.from({ length: 4 }, () => ({
           action: { summary: "Requested openai/mock-1; selected openai/mock-1." },
-          decision: {
-            reasonCode:
-              attempt === 0 ? "model_route_selected" : "model_route_selected_after_fallback",
-          },
+          decision: { reasonCode: "model_route_selected" },
         })),
         {
           action: { summary: "Requested openai/mock-1; selected groq/mock-2." },
@@ -505,9 +502,9 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           reason: work.receipt.decision.reasonCode,
         })),
       ).toEqual(
-        Array.from({ length: 4 }, (_, attempt) => ({
+        Array.from({ length: 4 }, () => ({
           target: JSON.stringify(["openai", "mock-1"]),
-          reason: attempt === 0 ? "model_route_selected" : "model_route_selected_after_fallback",
+          reason: "model_route_selected",
         })),
       );
     });

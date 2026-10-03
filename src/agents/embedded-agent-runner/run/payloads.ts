@@ -27,6 +27,7 @@ import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-
 import { trimTextPreservingCode } from "../../../shared/text/text-projection.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
+  classifyAssistantFailoverReason,
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
   normalizeTextForComparison,
@@ -200,7 +201,23 @@ export function buildEmbeddedRunPayloads(params: {
         isError: true,
         ...(providerLoginRecovery ? { presentation: providerLoginRecovery.presentation } : {}),
       };
-      replyItems.push(setReplyPayloadMetadata(errorPayload, { terminalProviderError: true }));
+      replyItems.push(
+        setReplyPayloadMetadata(errorPayload, {
+          terminalProviderError: true,
+          ...(assistantForPayload &&
+          (rawErrorMessage ||
+            assistantForPayload.errorCode ||
+            assistantForPayload.errorType ||
+            assistantForPayload.errorBody)
+            ? {
+                providerFailure: {
+                  reason: classifyAssistantFailoverReason(assistantForPayload, errorContext),
+                  rawError: rawErrorMessage,
+                },
+              }
+            : {}),
+        }),
+      );
     }
     const reasoningText =
       suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
@@ -477,18 +494,9 @@ export function buildEmbeddedRunPayloads(params: {
         }
       }
       if (payload.text && isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN)) {
-        const silentText = payload.text;
         payload.text = undefined;
-        if (hasReplyPayloadContent(payload) || hasReplyPayloadSpeechContent(payload)) {
-          return payload;
-        }
-        payload.text = silentText;
       }
       return payload;
     })
-    .filter(
-      (p) =>
-        (hasReplyPayloadContent(p) || hasReplyPayloadSpeechContent(p)) &&
-        !(p.text && isSilentReplyPayloadText(p.text, SILENT_REPLY_TOKEN)),
-    );
+    .filter((payload) => hasReplyPayloadContent(payload) || hasReplyPayloadSpeechContent(payload));
 }

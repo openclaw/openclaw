@@ -21,36 +21,55 @@ import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js"
 
 const dirs = createTempDirTracker();
 
-it("records a Doctor refusal before reporting standalone finalization", async () => {
-  const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
-  lifecycle.attachLedger();
-  const message =
-    "Doctor could not enter maintenance. Error: The update parent owns Gateway activation.";
-  const privatePath = "/home/example/private-doctor-input";
-  await expect(
-    lifecycle.run("doctor", async () => {
-      throw new UpdateDoctorError(`${message} ${privatePath}`, [
-        { check: "doctor", code: "doctor-failed", message },
-      ]);
-    }),
-  ).rejects.toThrow(message);
-  lifecycle.fail();
-  expect(vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n")).not.toContain(privatePath);
-  closeOpenClawStateDatabaseForTest();
-  const run = listUpdateRuns()[0]!;
-  expect(run).toMatchObject({
-    status: "failed",
-    reason: "doctor-failed",
-  });
-  const report = await prepareUpdateFailureReport({
-    attemptId: run.runId,
-    recordedRun: run,
-    result: { status: "error", mode: "unknown", steps: [], durationMs: 1 },
-  });
-  expect(report.body).toContain("Reason code: doctor-failed");
-  expect(report.body).toContain(`Failed phase finalize-doctor: ${message}`);
-  expect(report.body).not.toContain("Failed phase finalize-doctor: exit unknown");
-});
+it.each([false, true])(
+  "records a Doctor refusal before reporting standalone finalization (nested=%s)",
+  async (nested) => {
+    const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
+    lifecycle.attachLedger();
+    const message =
+      "Doctor could not enter maintenance. Error: The update parent owns Gateway activation.";
+    const privatePath = "/home/example/private-doctor-input";
+    await expect(
+      lifecycle.run("doctor", async () => {
+        const refusal = new UpdateDoctorError(
+          `${message} ${privatePath}`,
+          [{ check: "doctor", code: "doctor-failed", message }],
+          { exitCode: 23 },
+        );
+        const recording = new Error("Warning output failed");
+        throw nested
+          ? new AggregateError([refusal, recording], "Doctor result recording failed", {
+              cause: recording,
+            })
+          : refusal;
+      }),
+    ).rejects.toThrow(nested ? "Doctor result recording failed" : message);
+    lifecycle.fail();
+    expect(vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n")).not.toContain(privatePath);
+    closeOpenClawStateDatabaseForTest();
+    const run = listUpdateRuns()[0]!;
+    expect(run).toMatchObject({
+      status: "failed",
+      reason: "doctor-failed",
+    });
+    expect(run.steps).toContainEqual(
+      expect.objectContaining({
+        step: "finalize:doctor",
+        status: "failed",
+        exitCode: 23,
+        failureFacts: [{ check: "doctor", code: "doctor-failed", message }],
+      }),
+    );
+    const report = await prepareUpdateFailureReport({
+      attemptId: run.runId,
+      recordedRun: run,
+      result: { status: "error", mode: "unknown", steps: [], durationMs: 1 },
+    });
+    expect(report.body).toContain("Reason code: doctor-failed");
+    expect(report.body).toContain(`Failed phase finalize-doctor: exit 23 (${message})`);
+    expect(report.body).not.toContain("Failed phase finalize-doctor: exit unknown");
+  },
+);
 
 it.each([
   "preflight",

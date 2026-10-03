@@ -229,44 +229,24 @@ function collectDryRunStaticErrorsForSkippedExecRefs(params: {
   refs: SecretRef[];
   config: OpenClawConfig;
 }): ConfigSetDryRunError[] {
-  const failures: ConfigSetDryRunError[] = [];
-  for (const ref of params.refs) {
+  return params.refs.flatMap((ref): ConfigSetDryRunError[] => {
     const id = ref.id.trim();
     const refLabel = `${ref.source}:${ref.provider}:${id}`;
+    let message: string | undefined;
     if (!id) {
-      failures.push({
-        kind: "resolvability",
-        message: "Error: Secret reference id is empty.",
-        ref: refLabel,
-      });
-      continue;
+      message = "Error: Secret reference id is empty.";
+    } else if (!isValidExecSecretRefId(id)) {
+      message = `Error: ${formatExecSecretRefIdValidationMessage()} (ref: ${refLabel}).`;
+    } else {
+      const providerConfig = params.config.secrets?.providers?.[ref.provider];
+      if (!providerConfig) {
+        message = `Error: Secret provider "${ref.provider}" is not configured (ref: ${refLabel}).`;
+      } else if (providerConfig.source !== ref.source) {
+        message = `Error: Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`;
+      }
     }
-    if (!isValidExecSecretRefId(id)) {
-      failures.push({
-        kind: "resolvability",
-        message: `Error: ${formatExecSecretRefIdValidationMessage()} (ref: ${refLabel}).`,
-        ref: refLabel,
-      });
-      continue;
-    }
-    const providerConfig = params.config.secrets?.providers?.[ref.provider];
-    if (!providerConfig) {
-      failures.push({
-        kind: "resolvability",
-        message: `Error: Secret provider "${ref.provider}" is not configured (ref: ${refLabel}).`,
-        ref: refLabel,
-      });
-      continue;
-    }
-    if (providerConfig.source !== ref.source) {
-      failures.push({
-        kind: "resolvability",
-        message: `Error: Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`,
-        ref: refLabel,
-      });
-    }
-  }
-  return failures;
+    return message ? [{ kind: "resolvability", message, ref: refLabel }] : [];
+  });
 }
 
 function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInDryRun: boolean }): {

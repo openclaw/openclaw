@@ -5,7 +5,7 @@ import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-p
 import { i18n } from "../i18n/index.ts";
 import { de } from "../i18n/locales/de.ts";
 import { NativeLinkMenu, type NativeLinkMenuAction } from "./native-link-menu.runtime.ts";
-import "./tooltip.ts";
+import { settleTooltip } from "./tooltip.test-support.ts";
 
 const NATIVE_LINK_MENU_ELEMENT_NAME = `test-openclaw-native-link-menu-${crypto.randomUUID()}`;
 const containers: HTMLElement[] = [];
@@ -140,6 +140,7 @@ describe("native link menu", () => {
     menu.append(tooltip);
     await tooltip.updateComplete;
     tooltip.anchor.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+    await settleTooltip(tooltip);
     const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
     await popup.updateComplete;
     expect(popup.open).toBe(true);

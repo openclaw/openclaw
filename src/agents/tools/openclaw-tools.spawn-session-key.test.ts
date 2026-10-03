@@ -48,10 +48,6 @@ vi.mock("../openclaw-tools.media-factory-plan.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../openclaw-tools.nodes-workspace-guard.js", () => ({
-  applyNodesToolWorkspaceGuard: (tool: AnyAgentTool) => tool,
-}));
-
 vi.mock("./agents-list-tool.js", () => ({
   createAgentsListTool: () => mocks.stubTool("agents_list"),
 }));

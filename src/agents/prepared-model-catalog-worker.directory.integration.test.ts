@@ -26,7 +26,7 @@ describe("catalog worker captured directory ownership", () => {
   it.each(["Gateway", "standalone"])(
     "%s isolates custom-directory agents and releases ownership after successful and failed requests",
     async (owner) => {
-      const fixture = createCatalogFixture(makeTempDir, 0);
+      const fixture = await createCatalogFixture(makeTempDir, 0);
       vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
       vi.stubEnv("OPENCLAW_STATE_DIR", fixture.env.OPENCLAW_STATE_DIR);
       const observations = path.join(fixture.root, "directory-catalog.jsonl");

@@ -6,7 +6,6 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import { fileExists } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
-import { migratePersistentDedupeLegacyJsonFile } from "openclaw/plugin-sdk/persistent-dedupe";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   isNextcloudTalkAccountConfigured,
@@ -18,12 +17,6 @@ import {
   legacyConfigRules as NEXTCLOUD_TALK_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeNextcloudTalkCompatibilityConfig,
 } from "./doctor-contract.js";
-import {
-  NEXTCLOUD_TALK_PLUGIN_ID,
-  NEXTCLOUD_TALK_REPLAY_DEDUPE_MAX_ENTRIES,
-  NEXTCLOUD_TALK_REPLAY_DEDUPE_NAMESPACE_PREFIX,
-  NEXTCLOUD_TALK_REPLAY_DEDUPE_TTL_MS,
-} from "./replay-migration-contract.js";
 import type { CoreConfig } from "./types.js";
 import {
   DEFAULT_NEXTCLOUD_TALK_WEBHOOK_PATH,
@@ -89,55 +82,11 @@ async function collectNextcloudTalkBotResponseWarnings(params: {
       account,
       timeoutMs: 5_000,
     });
-    if (
-      result.code === "missing_response_feature" ||
-      result.code === "bot_not_found" ||
-      result.code === "api_error" ||
-      result.code === "request_failed"
-    ) {
+    if (!result.ok) {
       warnings.push(`- channels.nextcloud-talk.${account.accountId}: ${result.message}`);
     }
   }
   return warnings;
-}
-
-async function repairNextcloudTalkReplayDedupeState(params: {
-  cfg: CoreConfig;
-  env?: NodeJS.ProcessEnv;
-}): Promise<{ changes: string[]; warnings: string[] }> {
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const env = params.env ?? process.env;
-  const stateDir = resolveStateDir(env, os.homedir);
-  const replayDir = path.join(stateDir, "nextcloud-talk", "replay-dedupe");
-
-  for (const accountId of listNextcloudTalkAccountIds(params.cfg)) {
-    const legacyPath = path.join(replayDir, `${sanitizeLegacyReplaySegment(accountId)}.json`);
-    if (!fileExists(legacyPath)) {
-      continue;
-    }
-    try {
-      const result = await migratePersistentDedupeLegacyJsonFile({
-        filePath: legacyPath,
-        namespace: accountId,
-        ttlMs: NEXTCLOUD_TALK_REPLAY_DEDUPE_TTL_MS,
-        memoryMaxSize: 0,
-        pluginId: NEXTCLOUD_TALK_PLUGIN_ID,
-        namespacePrefix: NEXTCLOUD_TALK_REPLAY_DEDUPE_NAMESPACE_PREFIX,
-        stateMaxEntries: NEXTCLOUD_TALK_REPLAY_DEDUPE_MAX_ENTRIES,
-        env,
-      });
-      changes.push(
-        `Migrated Nextcloud Talk replay dedupe cache for account "${accountId}" to SQLite (${result.imported} imported, ${result.skippedExpired} expired, ${result.skippedExisting} already current).`,
-      );
-    } catch (error) {
-      warnings.push(
-        `Skipped Nextcloud Talk replay dedupe cache for account "${accountId}": ${String(error)}`,
-      );
-    }
-  }
-
-  return { changes, warnings };
 }
 
 export const nextcloudTalkDoctor: ChannelDoctorAdapter = {
@@ -145,15 +94,20 @@ export const nextcloudTalkDoctor: ChannelDoctorAdapter = {
   normalizeCompatibilityConfig: normalizeNextcloudTalkCompatibilityConfig,
   runConfigSequence: runNextcloudTalkDoctorSequence,
   collectPreviewWarnings: collectNextcloudTalkBotResponseWarnings,
-  repairConfig: async ({ cfg, env }) => {
-    const repair = await repairNextcloudTalkReplayDedupeState({
-      cfg,
-      ...(env ? { env } : {}),
-    });
-    return {
-      config: cfg,
-      changes: repair.changes,
-      warnings: repair.warnings,
-    };
+  repairConfig: ({ cfg, doctorFixCommand, env = process.env }) => {
+    const replayDir = path.join(
+      resolveStateDir(env, os.homedir),
+      "nextcloud-talk",
+      "replay-dedupe",
+    );
+    for (const accountId of listNextcloudTalkAccountIds(cfg)) {
+      const legacyPath = path.join(replayDir, `${sanitizeLegacyReplaySegment(accountId)}.json`);
+      if (fileExists(legacyPath)) {
+        throw new Error(
+          `Retired pre-July Nextcloud Talk replay state at ${legacyPath} was left unchanged. Install OpenClaw 2026.9.5, run "${doctorFixCommand}", then upgrade to latest. See https://docs.openclaw.ai/install/updating#upgrading-very-old-versions.`,
+        );
+      }
+    }
+    return { config: cfg, changes: [] };
   },
 };

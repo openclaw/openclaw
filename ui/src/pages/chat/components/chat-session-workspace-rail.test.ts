@@ -11,7 +11,6 @@ import {
 
 function createWorkspace(overrides: Partial<SessionWorkspaceProps> = {}): SessionWorkspaceProps {
   return {
-    collapsed: false,
     sessionKey: "agent:main:workspace",
     list: null,
     loading: false,
@@ -20,7 +19,6 @@ function createWorkspace(overrides: Partial<SessionWorkspaceProps> = {}): Sessio
     filter: "all",
     browserPath: "",
     browserSearch: "",
-    onToggleCollapsed: vi.fn(),
     onRefresh: vi.fn(),
     onBrowsePath: vi.fn(),
     onOpenFile: vi.fn(),
@@ -79,7 +77,10 @@ describe("session workspace path actions", () => {
       sidebarContent: null,
       sessions: {
         listFiles: vi.fn().mockResolvedValue(result),
-        getFile: vi.fn().mockResolvedValue({ ...result, file: { ...file, content: "# Readme" } }),
+        getFile: vi.fn().mockResolvedValue({
+          ...result,
+          file: { ...file, previewKind: "text", contentEncoding: "utf8", content: "# Readme" },
+        }),
       },
     } as unknown as SessionWorkspaceHost;
     createSessionWorkspaceProps(state, { expanded: true });

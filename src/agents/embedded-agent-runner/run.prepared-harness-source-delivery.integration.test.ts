@@ -84,6 +84,8 @@ describe("prepared harness source delivery", () => {
   let state: OpenClawTestState;
   let restoreSynthesis: (() => void) | undefined;
   async function loadSourceDeliveryHarness() {
+    // This integration constructs the real tool surface; dispatch mocks only readiness.
+    vi.doUnmock("../tools/ask-user-tool.js");
     // The runner resets modules; keep its private payload metadata shared with dispatch.
     vi.doMock("../../auto-reply/reply-payload.js", () => replyPayloadRuntime);
     const loaded = await loadRunOverflowCompactionHarness();
@@ -476,6 +478,8 @@ describe("prepared harness source delivery", () => {
       replyOptions: { onPartialReply },
     });
     await settleReplyDispatcher({ dispatcher });
+    // Dispatch catches resolver errors; retain their original failure at this boundary.
+    await expect(replyResolver.mock.results[0]?.value).resolves.toBeDefined();
 
     if (genuineTtsDelivery) {
       expect(retainedHost).toBeDefined();
@@ -614,6 +618,7 @@ describe("prepared harness source delivery", () => {
     const workspaceDir = state.workspaceDir;
     const pluginRegistry = createEmptyPluginRegistry();
     const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
+      config,
       agentId: "main",
       agentDir: state.agentDir(),
       workspaceDir,
@@ -624,6 +629,7 @@ describe("prepared harness source delivery", () => {
       workspaceDir,
     };
     const admittedGeneration: PreparedModelRuntimePluginGeneration = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: admittedMetadataSnapshot,
@@ -664,6 +670,7 @@ describe("prepared harness source delivery", () => {
         servedMetadataSnapshot = borrowed.metadataSnapshot;
         return {
           ...baseLease,
+          pluginGeneration: admittedGeneration,
           snapshot: borrowed as typeof baseLease.snapshot,
           [Symbol.asyncDispose]: release,
         };
@@ -705,11 +712,13 @@ describe("prepared harness source delivery", () => {
       const config = {};
       const workspaceDir = state.workspaceDir;
       const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
+        config,
         agentId: "openclaw",
         agentDir: state.agentDir("openclaw"),
         workspaceDir,
       });
       const admittedGeneration: PreparedModelRuntimePluginGeneration = {
+        remoteCatalog: null,
         configuredCatalogEntries: [],
         inlineProviderModels: [],
         pluginMetadataSnapshot: {
@@ -740,6 +749,10 @@ describe("prepared harness source delivery", () => {
           signal?.throwIfAborted();
           return {
             ...baseLease,
+            pluginGeneration: {
+              ...baseLease.pluginGeneration,
+              pluginMetadataSnapshot: isolatedMetadataSnapshot,
+            },
             snapshot: {
               ...baseLease.snapshot,
               config,

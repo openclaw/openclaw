@@ -206,15 +206,11 @@ function isGitHubApiRedirect(status: number): boolean {
 }
 
 function safeGitHubApiUrl(raw: string, base?: URL): URL | null {
-  try {
-    const url = new URL(raw, base);
-    if (url.origin !== GITHUB_API_ORIGIN || url.username || url.password || url.port) {
-      return null;
-    }
-    return url;
-  } catch {
+  const url = URL.parse(raw, base);
+  if (!url || url.origin !== GITHUB_API_ORIGIN || url.username || url.password || url.port) {
     return null;
   }
+  return url;
 }
 
 export async function fetchGitHubApi(

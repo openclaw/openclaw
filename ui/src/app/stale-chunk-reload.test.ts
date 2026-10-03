@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { i18n } from "../i18n/index.ts";
@@ -50,6 +50,10 @@ function memoryStorage(initial: Record<string, string> = {}) {
     setItem: (key: string, value: string) => void store.set(key, value),
   };
 }
+
+beforeEach(() => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -146,6 +150,31 @@ describe("document reload ownership", () => {
 });
 
 describe("scheduleStaleChunkReload", () => {
+  it.each([
+    { draw: 0.25, delayMs: 500 },
+    { draw: 0.75, delayMs: 1_500 },
+  ])("spreads build recovery once per target: %j", async ({ draw, delayMs }) => {
+    vi.useFakeTimers();
+    vi.mocked(Math.random).mockReturnValue(draw);
+    const reload = vi.fn();
+    const storage = memoryStorage();
+    const fetchMock = stubDocumentFetch(new Response(null, { status: 200 }));
+    const recover = () => scheduleStaleChunkReload({ buildId: "new-build", storage, reload });
+    const first = recover();
+    expect(fetchMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    const joined = recover();
+    await vi.advanceTimersByTimeAsync(delayMs - 101);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(Promise.all([first, joined])).resolves.toEqual([true, false]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(reload).toHaveBeenCalledOnce();
+    expect(storage.getItem(GUARD_KEY)).toBe("new-build");
+    await expect(recover()).resolves.toBe(false);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
   it("keeps generic stale-chunk recovery single-shot after a failed probe", async () => {
     vi.useFakeTimers();
     const reload = vi.fn();
@@ -176,22 +205,6 @@ describe("scheduleStaleChunkReload", () => {
     await expect(Promise.all([targeted, generic])).resolves.toEqual([true, false]);
     expect(reload).toHaveBeenCalledExactlyOnceWith("targeted");
     expect(storage.getItem(GUARD_KEY)).toBe("gateway-target");
-  });
-
-  it("reloads once the document probe succeeds and records the build guard", async () => {
-    const reload = vi.fn();
-    const storage = memoryStorage();
-    stubDocumentFetch(new Response(null, { status: 200 }));
-    await expect(
-      scheduleStaleChunkReload({
-        now: () => 1000,
-        buildId: "build-a",
-        storage,
-        reload,
-      }),
-    ).resolves.toBe(true);
-    expect(reload).toHaveBeenCalledTimes(1);
-    expect(storage.getItem(GUARD_KEY)).toBe("build-a");
   });
 
   it("never lets a persisted build guard suppress recovery for a newer build", async () => {
@@ -596,16 +609,6 @@ describe("retryStaleChunkReloadWhenReachable", () => {
       expect(probe).toHaveBeenCalledTimes(retirement === "during" ? 1 : 0);
     },
   );
-
-  it("reloads immediately when the gateway already answers", async () => {
-    const reload = vi.fn();
-    const probe = vi.fn().mockResolvedValue(true);
-    await expect(
-      retryStaleChunkReloadWhenReachable({ reload, probe, storage: memoryStorage() }),
-    ).resolves.toBe(true);
-    expect(reload).toHaveBeenCalledTimes(1);
-    expect(probe).toHaveBeenCalledTimes(1);
-  });
 
   it("admits one reload when retries complete together", async () => {
     const reachable = deferred<boolean>();

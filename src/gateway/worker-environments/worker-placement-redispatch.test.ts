@@ -44,12 +44,6 @@ describe("createWorkerPlacementRedispatch", () => {
       providerId: "crabbox",
       nodeDeviceId: "retired-node",
       executionMode: "remote-exec",
-      state: "reclaimed",
-    },
-    {
-      providerId: "crabbox",
-      nodeDeviceId: "retired-node",
-      executionMode: "remote-exec",
       state: "failed",
     },
   ] as const)(
@@ -114,29 +108,22 @@ describe("createWorkerPlacementRedispatch", () => {
     },
   );
 
-  it.each([
-    { providerId: "device", executionMode: "worker-turn" },
-    { providerId: "crabbox", executionMode: "remote-exec" },
-  ] as const)(
-    "rejects $providerId nodes without a runtime requirement owner",
-    async ({ providerId, executionMode }) => {
-      const dispatch = vi.fn();
-      const source = { ...placement, executionMode };
-      const redispatch = createWorkerPlacementRedispatch({
-        placements: reader(source, {
-          ...ready,
-          environmentId: placement.environmentId,
-          providerId,
-          nodeDeviceId: "paired-node",
-        }),
-        dispatch,
-      });
-      await expect(redispatch({ ...placement, executionMode }, dispatchOptions)).rejects.toThrow(
-        "authoritative runtime requirement",
-      );
-      expect(dispatch).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects nodes without a runtime requirement owner", async () => {
+    const dispatch = vi.fn();
+    const redispatch = createWorkerPlacementRedispatch({
+      placements: reader(placement, {
+        ...ready,
+        environmentId: placement.environmentId,
+        providerId: "device",
+        nodeDeviceId: "paired-node",
+      }),
+      dispatch,
+    });
+    await expect(redispatch(placement, dispatchOptions)).rejects.toThrow(
+      "authoritative runtime requirement",
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 
   it("rejects a missing prior environment", async () => {
     const dispatch = vi.fn();

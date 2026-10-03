@@ -186,47 +186,43 @@ export default definePluginEntry({
       resolveConfig,
       resolveSourceSyncSignal: () => sourceSyncAbortController?.signal,
     });
-    api.registerTool(
-      (ctx) => {
-        const resolved = resolveToolContext(ctx.agentId);
-        return resolved
-          ? createWikiStatusTool(resolved.config, resolved.appConfig, {
-              agentId: resolved.config.agentId ?? ctx.agentId,
-              ...(resolved.signal ? { signal: resolved.signal } : {}),
-            })
-          : null;
-      },
-      { name: "wiki_status" },
-    );
     for (const [name, createTool] of [
+      ["wiki_status", createWikiStatusTool],
       ["wiki_lint", createWikiLintTool],
       ["wiki_apply", createWikiApplyTool],
-    ] as const) {
-      api.registerTool(
-        (ctx) => {
-          const resolved = resolveToolContext(ctx.agentId);
-          return resolved ? createTool(resolved.config, resolved.appConfig, resolved.signal) : null;
-        },
-        { name },
-      );
-    }
-    for (const [name, createTool] of [
       ["wiki_search", createWikiSearchTool],
       ["wiki_get", createWikiGetTool],
     ] as const) {
       api.registerTool(
-        (ctx) => {
-          const resolved = resolveToolContext(ctx.agentId);
-          if (!resolved) {
-            return null;
-          }
-          return createTool(resolved.config, resolved.appConfig, {
-            agentId: resolved.config.agentId ?? ctx.agentId,
-            agentSessionKey: ctx.sessionKey,
-            sandboxed: ctx.sandboxed,
-            conversationRecall: ctx.conversationRecall,
-            ...(resolved.signal ? { signal: resolved.signal } : {}),
-          });
+        {
+          contextVersion: 2,
+          create: (ctx) => {
+            const resolved = resolveToolContext(ctx.agentId);
+            if (!resolved) {
+              return null;
+            }
+            return createTool(resolved.config, resolved.appConfig, {
+              agentId: resolved.config.agentId ?? ctx.agentId,
+              agentSessionKey: ctx.sessionKey,
+              sandboxed: ctx.sandboxed,
+              conversationRecall: ctx.conversationRecall,
+              memoryContext: {
+                authority: ctx.sessionKey
+                  ? {
+                      kind: "session",
+                      conversationRecall: ctx.conversationRecall,
+                      sessionKey: ctx.sessionKey,
+                      sessionId: ctx.sessionId,
+                      sandboxed: ctx.sandboxed === true,
+                      senderIsOwner: ctx.senderIsOwner,
+                    }
+                  : { kind: "host", operation: "memory-wiki.tool" },
+                assertCurrent: ctx.assertInvocationCurrent,
+                ...(resolved.signal ? { signal: resolved.signal } : {}),
+              },
+              ...(resolved.signal ? { signal: resolved.signal } : {}),
+            });
+          },
         },
         { name },
       );

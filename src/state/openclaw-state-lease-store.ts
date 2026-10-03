@@ -11,11 +11,11 @@ import {
   type StateLeaseProcessOwner,
 } from "../infra/state-lease-process-owner.js";
 import type { DB } from "./openclaw-state-db.generated.js";
+import type {
+  OpenClawStateLeaseIdentity,
+  OpenClawStateLeaseAcquisition,
+} from "./openclaw-state-lease.types.js";
 
-export type OpenClawStateLeaseIdentity = { scope: string; key: string; owner: string };
-export type OpenClawStateLeaseAcquisition =
-  | { kind: "acquired"; expiresAt: number }
-  | { kind: "held"; holder: { owner: string; epoch: number; expiresAt: number | null } };
 type LeaseDatabase = Pick<DB, "state_leases">;
 
 /** The caller owns the write transaction; only absent or expired leases can be acquired. */
@@ -24,10 +24,11 @@ export function acquireOpenClawStateLeaseInTransaction(
   identity: OpenClawStateLeaseIdentity,
   leaseMs: number,
   payloadJson: string | null = null,
+  nowMs?: number,
 ): OpenClawStateLeaseAcquisition {
-  // BEGIN IMMEDIATE may wait on SQLite. Sample only after admission so a
-  // successful insert never commits an already-expired lease.
-  const now = Date.now();
+  // Unless the caller owns a captured clock, sample after transaction admission:
+  // BEGIN IMMEDIATE may wait long enough to exhaust a lease sampled beforehand.
+  const now = nowMs ?? Date.now();
   const kysely = getNodeSqliteKysely<LeaseDatabase>(db);
   executeSqliteQuerySync(
     db,
@@ -106,6 +107,7 @@ export function reclaimDeadOpenClawStateLeaseInTransaction(
 export function readOpenClawStateLeaseExpiry(
   db: DatabaseSync,
   identity: OpenClawStateLeaseIdentity,
+  nowMs?: number,
 ): number | undefined {
   return executeSqliteQueryTakeFirstSync(
     db,
@@ -115,7 +117,7 @@ export function readOpenClawStateLeaseExpiry(
       .where("scope", "=", identity.scope)
       .where("lease_key", "=", identity.key)
       .where("owner", "=", identity.owner)
-      .where("expires_at", ">", Date.now())
+      .where("expires_at", ">", nowMs ?? Date.now())
       .$narrowType<{ expires_at: number }>(),
   )?.expires_at;
 }
@@ -155,8 +157,9 @@ export function renewOpenClawStateLeaseInTransaction(
   identity: OpenClawStateLeaseIdentity,
   leaseMs: number,
   processOwner?: StateLeaseProcessOwner,
+  nowMs?: number,
 ): number | undefined {
-  const now = Date.now();
+  const now = nowMs ?? Date.now();
   const expiresAt = now + leaseMs;
   const payloadJson = repairMissingProcessStartTime(db, identity, processOwner);
   const result = executeSqliteQuerySync(

@@ -275,6 +275,8 @@ export type ChannelCapabilities = {
   chatTypes: Array<ChatType | "thread">;
   polls?: boolean;
   reactions?: boolean;
+  /** Bot reactions per message; omitted means multiple independent emoji. */
+  reactionSlots?: "single" | "multiple";
   edit?: boolean;
   unsend?: boolean;
   reply?: boolean;

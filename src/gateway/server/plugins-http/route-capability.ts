@@ -1,4 +1,3 @@
-// Plugin HTTP route capability helpers discover node-authorized route surfaces from plugin registrations.
 import type { PluginRegistry } from "../../../plugins/registry.js";
 import {
   resolvePluginNodeCapabilityTtlMs,
@@ -7,12 +6,8 @@ import {
 import type { PluginRoutePathContext } from "./path-context.js";
 import { findMatchingPluginHttpRoutes } from "./route-match.js";
 
-/**
- * Node-capability route discovery for plugin HTTP routes.
- */
 type PluginHttpRouteEntry = NonNullable<PluginRegistry["httpRoutes"]>[number];
 
-/** Registered plugin route enriched with its node capability surface. */
 export type PluginNodeCapabilityRoute = PluginHttpRouteEntry & {
   nodeCapability: PluginNodeCapabilitySurface;
 };
@@ -33,26 +28,15 @@ function resolvePluginNodeCapabilityRouteSurface(
   };
 }
 
-/** Lists all node-capability routes matching the already canonicalized path context. */
-function findMatchingPluginNodeCapabilityRoutes(
-  registry: PluginRegistry,
-  context: PluginRoutePathContext,
-): PluginNodeCapabilityRoute[] {
-  return findMatchingPluginHttpRoutes(registry, context)
-    .filter(hasNodeCapabilityRoute)
-    .map((route) =>
-      Object.assign({}, route, {
-        nodeCapability: resolvePluginNodeCapabilityRouteSurface(route),
-      }),
-    );
-}
-
 /** Returns the highest-priority node-capability route for a plugin HTTP path. */
 export function findMatchingPluginNodeCapabilityRoute(
   registry: PluginRegistry,
   context: PluginRoutePathContext,
 ): PluginNodeCapabilityRoute | undefined {
-  return findMatchingPluginNodeCapabilityRoutes(registry, context)[0];
+  const route = findMatchingPluginHttpRoutes(registry, context).find(hasNodeCapabilityRoute);
+  return route
+    ? { ...route, nodeCapability: resolvePluginNodeCapabilityRouteSurface(route) }
+    : undefined;
 }
 
 /** Lists unique node-capability surfaces, preferring the shortest TTL per surface. */
@@ -61,15 +45,14 @@ export function listPluginNodeCapabilities(
 ): PluginNodeCapabilitySurface[] {
   const surfaces = new Map<string, PluginNodeCapabilitySurface>();
   for (const route of registry.httpRoutes ?? []) {
-    const surface = route.nodeCapability?.surface?.trim();
-    if (surface) {
-      const next = resolvePluginNodeCapabilityRouteSurface(route as PluginNodeCapabilityRoute);
-      const existing = surfaces.get(surface);
+    if (hasNodeCapabilityRoute(route)) {
+      const next = resolvePluginNodeCapabilityRouteSurface(route);
+      const existing = surfaces.get(next.surface);
       if (
         !existing ||
         resolvePluginNodeCapabilityTtlMs(next) < resolvePluginNodeCapabilityTtlMs(existing)
       ) {
-        surfaces.set(surface, next);
+        surfaces.set(next.surface, next);
       }
     }
   }

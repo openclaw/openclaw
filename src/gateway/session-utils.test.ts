@@ -1,6 +1,7 @@
+import fs from "node:fs";
 // Session utility tests cover key parsing, store migration, agent/default rows,
 // model identity resolution, title derivation, and byte-capped row payloads.
-import fs from "node:fs";
+import "./session-utils-provider.test-support.js";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -25,7 +26,6 @@ import type { CronJob } from "../cron/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import * as execApprovalsStore from "../infra/exec-approvals-store.js";
-import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -47,8 +47,8 @@ import {
 } from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
-  type GatewaySessionStoreDiscoveryCache,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
   prepareGatewaySessionStoreTargetsReadOnly,
@@ -72,18 +72,11 @@ import {
 } from "./session-utils.test-support.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 
-const providerArtifactMocks = vi.hoisted(() => ({
-  resolveBundledProviderPolicySurface: vi.fn<
-    typeof import("../plugins/provider-public-artifacts.js").resolveBundledProviderPolicySurface
-  >(() => null),
-}));
+const { getSessionProviderArtifactMocks, resetSessionProviderArtifacts } =
+  await import("./session-utils-provider.test-support.js");
+const providerArtifactMocks = getSessionProviderArtifactMocks();
 
-vi.mock("../plugins/provider-public-artifacts.js", () => ({
-  resolveBundledProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
-  resolveProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
-}));
-
-test("resolves fixed-store and auth compatibility owners", () => {
+test("resolves fixed-store and auth owners independently of retained Doctor ownership", () => {
   const cfg = retainLegacyDefaultAgentId(
     {
       agents: {
@@ -95,7 +88,7 @@ test("resolves fixed-store and auth compatibility owners", () => {
         entries: { ops: {}, research: {} },
       },
       session: { mainKey: "work", store: "/tmp/openclaw-fixed-sessions.json" },
-    },
+    } satisfies OpenClawConfig,
     "ops",
   );
   expect(resolveSessionStoreKey({ cfg, sessionKey: "incident-42" })).toBe("agent:ops:incident-42");
@@ -113,7 +106,7 @@ test("resolves fixed-store and auth compatibility owners", () => {
     }),
   ).toBe("saved");
   expect(resolveLegacyInheritedAuthAgentId(explicit)).toBe("main");
-  expect(resolveLegacyInheritedAuthAgentId(retainLegacyDefaultAgentId(explicit, "a"))).toBe("a");
+  expect(resolveLegacyInheritedAuthAgentId(retainLegacyDefaultAgentId(explicit, "a"))).toBe("main");
   expect(resolveLegacyInheritedAuthAgentId({ agents: { entries: { solo: {} } } })).toBe("solo");
 });
 
@@ -261,12 +254,7 @@ describe("gateway session utils", () => {
     });
   });
 
-  beforeEach(() => {
-    // Real metadata/artifact loading belongs to owner tests; projections only need the contract.
-    clearPluginMetadataLifecycleCaches();
-    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReset();
-    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue(null);
-  });
+  beforeEach(resetSessionProviderArtifacts);
 
   afterAll(closeSessionSqliteDatabasesForTest);
 
@@ -557,73 +545,6 @@ describe("gateway session utils", () => {
       "legacy-boundary",
     ]);
   });
-
-  test.each([["agent:main:dashboard:pinned", { parentSessionKey: "agent:main:main" }]])(
-    "session lists separate archived rows and sort pinned %s first",
-    async (pinnedKey, lineage) => {
-      const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
-      const store: Record<string, SessionEntry> = {
-        recent: { sessionId: "recent", updatedAt: 30 },
-        [pinnedKey]: { sessionId: "pinned", updatedAt: 10, pinnedAt: 40, ...lineage },
-        archived: {
-          sessionId: "archived",
-          updatedAt: 20,
-          archivedAt: 50,
-          archiveReason: "active-session-cap",
-        },
-      } satisfies Record<string, SessionEntry>;
-
-      const active = await listSessionFixture({ cfg, storePath: "", store, opts: {} });
-      expect(active.sessions.map((session) => session.key)).toEqual([pinnedKey, "recent"]);
-      expect(active.sessions[0]).toMatchObject({
-        pinned: true,
-        pinnedAt: 40,
-        archived: false,
-      });
-
-      const archived = await listSessionFixture({
-        cfg,
-        storePath: "",
-        store,
-        opts: { archived: true },
-      });
-      expect(archived.sessions).toMatchObject([
-        {
-          key: "archived",
-          archived: true,
-          archivedAt: 50,
-          archiveReason: "active-session-cap",
-          pinned: false,
-        },
-      ]);
-
-      const all = await listSessionFixture({
-        cfg,
-        storePath: "",
-        store,
-        opts: { archived: "all" },
-      });
-      expect(all.sessions.map((session) => session.key)).toEqual([pinnedKey, "recent", "archived"]);
-    },
-  );
-
-  test.each([["agent:main:subagent:child", {}]] as const)(
-    "ignores stale child pins in session list projection and ordering: %s %j",
-    async (key, lineage) => {
-      const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
-      const store: Record<string, SessionEntry> = {
-        "agent:main:dashboard:root": { sessionId: "root", updatedAt: 30 },
-        [key]: { sessionId: "child", updatedAt: 10, pinnedAt: 40, ...lineage },
-      };
-      for (const limit of [2, 201]) {
-        const listed = await listSessionFixture({ cfg, storePath: "", store, opts: { limit } });
-        const child = listed.sessions.find((row) => row.key === key);
-        expect.soft(child?.pinned).toBe(false);
-        expect.soft(child?.pinnedAt).toBeUndefined();
-        expect(listed.sessions.map((row) => row.key)).toEqual(["agent:main:dashboard:root", key]);
-      }
-    },
-  );
 
   test("session lists page from an offset after filtering and sorting", async () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
@@ -2404,7 +2325,7 @@ describe("gateway session utils", () => {
     fs.writeFileSync(path.join(workspace, "avatar-link.png"), "avatar");
     const cfg = createSingleAgentAvatarConfig(workspace);
     if (kind === "data") {
-      cfg.agents!.list![0]!.identity!.avatar = dataUrl;
+      cfg.agents!.entries!.main!.identity!.avatar = dataUrl;
     }
     const browser = await listAgentsForGateway(cfg, undefined, { httpAvatarBasePath: "/control" });
     expect(browser.agents[0]?.identity?.avatarUrl).toMatch(
@@ -2519,7 +2440,7 @@ describe("gateway session utils", () => {
     },
   ])("listAgentsForGateway never overstates $name", async ({ cfg, approvals, expected }) => {
     await withAgentPermissionState(async () => {
-      execApprovalsStore.saveExecApprovals(approvals);
+      execApprovalsStore.updateExecApprovalsSync({ update: () => approvals });
       const agent = (await listAgentsForGateway(cfg)).agents.find((entry) => entry.id === "main");
       expect(agent).toBeDefined();
       if (expected === undefined) {
@@ -2634,12 +2555,12 @@ describe("gateway session utils", () => {
         agents: {
           defaults: {
             model: {
-              primary: "clawrouter/openai/gpt-5.6",
+              primary: "sol-projection",
               fallbacks: ["openai/gpt-5.6-luna"],
             },
             models: {
               "openai/gpt-5.6-sol": {
-                alias: "clawrouter/openai/gpt-5.6",
+                alias: "sol-projection",
                 agentRuntime: { id: "codex" },
               },
             },

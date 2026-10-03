@@ -49,7 +49,7 @@ type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
   content?: string;
   /** Side-effect action the caller should perform after displaying the result. */
-  action?: "refresh" | "new-session" | "reset" | "stop" | "clear" | "navigate-usage";
+  action?: "refresh";
   /** Model-dependent tools need refreshing after a confirmed selection. */
   modelChanged?: boolean;
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
@@ -102,18 +102,20 @@ async function patchSession(
   context: SlashCommandContext,
   sessionKey: string,
   patch: Parameters<typeof patchChatCommandSessionSettings>[2],
+  success: () => Pick<SlashCommandResult, "content" | "modelChanged">,
+  failureKey: string,
   options?: Parameters<typeof patchChatCommandSessionSettings>[3],
-) {
-  const params = {
-    key: sessionKey,
-    ...selectedGlobalScope(sessionKey, context),
-    ...patch,
-  };
-  requireSessionMutationAccess(context, {
-    method: "sessions.patch",
-    params,
-  });
-  return await patchChatCommandSessionSettings(context, sessionKey, patch, options);
+): Promise<SlashCommandResult> {
+  try {
+    requireSessionMutationAccess(context, {
+      method: "sessions.patch",
+      params: { key: sessionKey, ...selectedGlobalScope(sessionKey, context), ...patch },
+    });
+    await patchChatCommandSessionSettings(context, sessionKey, patch, options);
+    return { ...success(), action: "refresh" };
+  } catch (err) {
+    return commandFailure(failureKey, err);
+  }
 }
 
 export async function executeSlashCommand(
@@ -126,14 +128,6 @@ export async function executeSlashCommand(
   switch (commandName) {
     case "help":
       return executeHelp();
-    case "new":
-      return { content: t("chat.commandResults.startingNewThread"), action: "new-session" };
-    case "reset":
-      return { content: t("chat.commandResults.resettingThread"), action: "reset" };
-    case "stop":
-      return { content: t("chat.commandResults.stoppingCurrentRun"), action: "stop" };
-    case "clear":
-      return { content: t("chat.commandResults.chatHistoryCleared"), action: "clear" };
     case "compact":
       return await executeCompact(sessionKey, context);
     case "model":
@@ -257,26 +251,18 @@ async function executeModel(
     }
   }
 
-  try {
-    const requestedModel = args.trim();
-    await patchSession(
-      context,
-      sessionKey,
-      {
-        model: requestedModel,
-      },
-      {
-        ownsModelOverride: context.ownsModelOverride,
-      },
-    );
-    return {
+  const requestedModel = args.trim();
+  return patchSession(
+    context,
+    sessionKey,
+    { model: requestedModel },
+    () => ({
       content: t("chat.commandResults.model.set", { model: `\`${requestedModel}\`` }),
-      action: "refresh",
       modelChanged: true,
-    };
-  } catch (err) {
-    return commandFailure("chat.commandResults.model.setFailed", err);
-  }
+    }),
+    "chat.commandResults.model.setFailed",
+    { ownsModelOverride: context.ownsModelOverride },
+  );
 }
 
 async function executeThink(
@@ -308,17 +294,13 @@ async function executeThink(
   }
 
   if (isSessionDefaultDirectiveValue(rawLevel)) {
-    try {
-      await patchSession(context, sessionKey, {
-        thinkingLevel: null,
-      });
-      return {
-        content: t("chat.commandResults.thinking.reset"),
-        action: "refresh",
-      };
-    } catch (err) {
-      return commandFailure("chat.commandResults.thinking.resetFailed", err);
-    }
+    return patchSession(
+      context,
+      sessionKey,
+      { thinkingLevel: null },
+      () => ({ content: t("chat.commandResults.thinking.reset") }),
+      "chat.commandResults.thinking.resetFailed",
+    );
   }
 
   try {
@@ -341,13 +323,13 @@ async function executeThink(
         }),
       };
     }
-    await patchSession(context, sessionKey, {
-      thinkingLevel: level,
-    });
-    return {
-      content: t("chat.commandResults.thinking.set", { level: `**${level}**` }),
-      action: "refresh",
-    };
+    return patchSession(
+      context,
+      sessionKey,
+      { thinkingLevel: level },
+      () => ({ content: t("chat.commandResults.thinking.set", { level: `**${level}**` }) }),
+      "chat.commandResults.thinking.setFailed",
+    );
   } catch (err) {
     return commandFailure("chat.commandResults.thinking.setFailed", err);
   }
@@ -383,23 +365,13 @@ async function executeVerbose(
     };
   }
 
-  try {
-    await patchSession(context, sessionKey, {
-      verboseLevel: level,
-    });
-    return {
-      content: t("chat.commandResults.verbose.set", { level: `**${level}**` }),
-      action: "refresh",
-    };
-  } catch (err) {
-    return commandFailure("chat.commandResults.verbose.setFailed", err);
-  }
-}
-
-function formatFastModeOptions(session: GatewaySessionRow | undefined): string {
-  return t("chat.commandResults.fast.options", {
-    seconds: String(session?.fastAutoOnSeconds ?? 60),
-  });
+  return patchSession(
+    context,
+    sessionKey,
+    { verboseLevel: level },
+    () => ({ content: t("chat.commandResults.verbose.set", { level: `**${level}**` }) }),
+    "chat.commandResults.verbose.setFailed",
+  );
 }
 
 async function executeFast(
@@ -415,7 +387,9 @@ async function executeFast(
       return {
         content: formatDirectiveOptions(
           resolveChatFastModeStatus(session),
-          formatFastModeOptions(session),
+          t("chat.commandResults.fast.options", {
+            seconds: String(session?.fastAutoOnSeconds ?? 60),
+          }),
         ),
       };
     } catch (err) {
@@ -424,17 +398,13 @@ async function executeFast(
   }
 
   if (isSessionDefaultDirectiveValue(rawMode)) {
-    try {
-      await patchSession(context, sessionKey, {
-        fastMode: null,
-      });
-      return {
-        content: t("chat.commandResults.fast.reset"),
-        action: "refresh",
-      };
-    } catch (err) {
-      return commandFailure("chat.commandResults.fast.resetFailed", err);
-    }
+    return patchSession(
+      context,
+      sessionKey,
+      { fastMode: null },
+      () => ({ content: t("chat.commandResults.fast.reset") }),
+      "chat.commandResults.fast.resetFailed",
+    );
   }
 
   const nextMode = normalizeChatFastModeInput(rawMode);
@@ -444,20 +414,18 @@ async function executeFast(
     };
   }
 
-  try {
-    await patchSession(context, sessionKey, {
-      fastMode: nextMode,
-    });
-    return {
+  return patchSession(
+    context,
+    sessionKey,
+    { fastMode: nextMode },
+    () => ({
       content:
         nextMode === "auto"
           ? t("chat.commandResults.fast.setAuto")
           : t(nextMode ? "chat.commandResults.fast.enabled" : "chat.commandResults.fast.disabled"),
-      action: "refresh",
-    };
-  } catch (err) {
-    return commandFailure("chat.commandResults.fast.setFailed", err);
-  }
+    }),
+    "chat.commandResults.fast.setFailed",
+  );
 }
 
 async function executeUsage(

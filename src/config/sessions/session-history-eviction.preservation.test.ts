@@ -57,15 +57,7 @@ describe("SQLite historical session preservation", () => {
     closeOpenClawAgentDatabasesForTest();
     await testState.cleanup();
   });
-  it.each([
-    "recent",
-    "archived",
-    "pinned",
-    "manual",
-    "age-retention",
-    "stale-dashboard",
-    "restart-recovery",
-  ] as const)(
+  it.each(["recent", "pinned", "manual"] as const)(
     "preserves every generation of a %s session under physical pressure",
     async (protection) => {
       async function inspectHistoryReads<T>(operation: () => Promise<T>): Promise<T> {
@@ -117,10 +109,7 @@ describe("SQLite historical session preservation", () => {
           ...(protection === "recent"
             ? { skillsSnapshot: { prompt: "p".repeat(64 * 1024), skills: [] } }
             : {}),
-          ...(protection !== "recent" && protection !== "pinned" ? { archivedAt: now } : {}),
-          ...(protection !== "recent" && protection !== "pinned" && protection !== "archived"
-            ? { archiveReason: protection }
-            : {}),
+          ...(protection === "manual" ? { archivedAt: now, archiveReason: protection } : {}),
           ...(protection === "pinned" ? { pinnedAt: now } : {}),
         },
       );

@@ -5,11 +5,12 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { isMainThread } from "node:worker_threads";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
 import { onSqliteWalCheckpoint } from "../infra/sqlite-wal-checkpoint.js";
+import { observeSqliteWalPeriodicWork } from "../infra/sqlite-wal-scheduler.test-support.js";
 import * as walAdmission from "../infra/sqlite-wal-write-admission.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
@@ -42,18 +43,12 @@ beforeAll(() => {
 });
 
 function openWithPeriodicMaintenance(databasePath: string) {
-  const intervals = vi.spyOn(globalThis, "setInterval");
+  const scheduled = observeSqliteWalPeriodicWork();
   try {
     const database = openOpenClawStateDatabase({ path: databasePath });
-    const timers = intervals.mock.calls.filter(([, delay]) => delay === 30 * 60 * 1000);
-    expect(timers).toHaveLength(1);
-    const periodic = timers[0]?.[0];
-    if (typeof periodic !== "function") {
-      throw new Error("Shared-state open did not register periodic WAL maintenance");
-    }
-    return { database, periodic };
+    return { database, periodic: scheduled.periodic };
   } finally {
-    intervals.mockRestore();
+    scheduled.restore();
   }
 }
 
@@ -70,7 +65,7 @@ function observeCheckpoints(pathname: string) {
   return {
     observations,
     stop,
-    wait: () => withTestTimeout(first.promise, 5_000, "WAL checkpoint observation timed out"),
+    wait: (signal: AbortSignal) => withinTest(first.promise, signal),
   };
 }
 
@@ -88,7 +83,9 @@ function sqliteBytes(databasePath: string) {
   );
 }
 
-it("keeps periodic WAL work off the host before and after a competing SQLite writer releases", async () => {
+it("keeps periodic WAL work off the host before and after a competing SQLite writer releases", async ({
+  signal,
+}) => {
   const { database, periodic } = openWithPeriodicMaintenance(
     path.join(tempDirs.make("state-wal-native-writer-"), "openclaw.sqlite"),
   );
@@ -96,13 +93,14 @@ it("keeps periodic WAL work off the host before and after a competing SQLite wri
   const { observations, wait, stop } = observeCheckpoints(database.path);
   const prepare = vi.spyOn(database.db, "prepare");
   const execute = vi.spyOn(database.db, "exec");
+  let periodicWork: Promise<unknown> | undefined;
   try {
     writer.exec("BEGIN IMMEDIATE");
     const nextTurn = setImmediate();
-    periodic();
+    periodicWork = Promise.resolve(periodic());
     expect(observations).toEqual([]);
     await nextTurn;
-    await wait();
+    await wait(signal);
     expect(writer.isTransaction).toBe(true);
     expect(observations.every((state) => state === "complete" || state === "blocked")).toBe(true);
     expect(prepare).not.toHaveBeenCalled();
@@ -113,109 +111,110 @@ it("keeps periodic WAL work off the host before and after a competing SQLite wri
       writer.exec("ROLLBACK");
     }
     writer.close();
+    await periodicWork;
   }
-  // Join the prior scheduler continuation before admitting a new timer tick.
-  await setImmediate();
   const afterRelease = observeCheckpoints(database.path);
   try {
-    periodic();
-    await afterRelease.wait();
+    periodicWork = Promise.resolve(periodic());
+    await afterRelease.wait(signal);
+    await periodicWork;
     expect(afterRelease.observations[0]).toBe("complete");
     expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
     expect(prepare).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
   } finally {
+    await periodicWork;
     prepare.mockRestore();
     execute.mockRestore();
     afterRelease.stop();
   }
 });
 
-it.each([false, true])(
-  "joins private maintenance timer cancellation before retiring its native handle (publisher failure: %s)",
-  async (publisherFailure) => {
-    const databasePath = path.join(tempDirs.make("state-wal-private-owner-"), "openclaw.sqlite");
-    const owner = acquireGatewayStateOwner({ databasePath });
-    const maintenance = createOpenClawDatabaseMaintenanceScope({
-      schemaMaintenance: true,
-      assertOwnerCurrent: owner.assertCurrent,
-      assertDatabaseAccess: owner.assertDatabaseAccess,
-    });
-    let periodicMaintenance: Promise<walAdmission.SqliteWalPeriodicResult | undefined> | undefined;
-    let periodicSettled = false;
-    const register = walAdmission.registerSqliteWalWorkerMaintenance;
-    const registration = vi
-      .spyOn(walAdmission, "registerSqliteWalWorkerMaintenance")
-      .mockImplementation((database, execute, cancel) =>
-        register(
-          database,
-          (request) =>
-            (periodicMaintenance = execute(request).then((result) => {
-              periodicSettled = true;
-              return result;
-            })),
-          cancel,
-        ),
-      );
-    let database: ReturnType<typeof openOpenClawStateDatabase> | undefined;
-    const failure = new Error("publisher failed after durable bind");
+it("joins private maintenance timer cancellation before retiring its native handle (publisher failure: true)", async () => {
+  const databasePath = path.join(tempDirs.make("state-wal-private-owner-"), "openclaw.sqlite");
+  const owner = acquireGatewayStateOwner({ databasePath });
+  const maintenance = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent: owner.assertCurrent,
+    assertDatabaseAccess: owner.assertDatabaseAccess,
+  });
+  let periodicMaintenance: Promise<walAdmission.SqliteWalPeriodicResult | undefined> | undefined;
+  let scheduledWork: Promise<unknown> | undefined;
+  let periodicSettled = false;
+  const register = walAdmission.registerSqliteWalWorkerMaintenance;
+  const registration = vi
+    .spyOn(walAdmission, "registerSqliteWalWorkerMaintenance")
+    .mockImplementation((database, execute, cancel) =>
+      register(
+        database,
+        (request) =>
+          (periodicMaintenance = execute(request).then((result) => {
+            periodicSettled = true;
+            return result;
+          })),
+        cancel,
+      ),
+    );
+  let database: ReturnType<typeof openOpenClawStateDatabase> | undefined;
+  const failure = new Error("publisher failed after durable bind");
+  try {
+    const publish = () =>
+      maintenance.run(() => {
+        const opened = openWithPeriodicMaintenance(databasePath);
+        database = opened.database;
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            db.exec(
+              "INSERT INTO config_machine_state(state_key,value_json,updated_at_ms) VALUES ('test:capture-bind','true',1)",
+            );
+          },
+          { database, path: databasePath },
+        );
+        const prepare = vi.spyOn(database.db, "prepare");
+        const execute = vi.spyOn(database.db, "exec");
+        try {
+          scheduledWork = Promise.resolve(opened.periodic());
+          expect(prepare).not.toHaveBeenCalled();
+          expect(execute).not.toHaveBeenCalled();
+        } finally {
+          prepare.mockRestore();
+          execute.mockRestore();
+        }
+
+        throw failure;
+      });
+
+    expect(publish).toThrow(failure);
+
+    await maintenance.close();
+    await scheduledWork;
+    expect(periodicMaintenance).toBeDefined();
+    expect(periodicSettled).toBe(true);
+    await expect(periodicMaintenance).resolves.toBeUndefined();
+    expect(database?.db.isOpen).toBe(false);
+  } finally {
+    registration.mockRestore();
     try {
-      const publish = () =>
-        maintenance.run(() => {
-          const opened = openWithPeriodicMaintenance(databasePath);
-          database = opened.database;
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              db.exec(
-                "INSERT INTO config_machine_state(state_key,value_json,updated_at_ms) VALUES ('test:capture-bind','true',1)",
-              );
-            },
-            { database, path: databasePath },
-          );
-          const prepare = vi.spyOn(database.db, "prepare");
-          const execute = vi.spyOn(database.db, "exec");
-          try {
-            opened.periodic();
-            expect(prepare).not.toHaveBeenCalled();
-            expect(execute).not.toHaveBeenCalled();
-          } finally {
-            prepare.mockRestore();
-            execute.mockRestore();
-          }
-          if (publisherFailure) {
-            throw failure;
-          }
-        });
-      if (publisherFailure) {
-        expect(publish).toThrow(failure);
-      } else {
-        publish();
-      }
       await maintenance.close();
-      expect(periodicMaintenance).toBeDefined();
-      expect(periodicSettled).toBe(true);
-      await expect(periodicMaintenance).resolves.toBeUndefined();
-      expect(database?.db.isOpen).toBe(false);
     } finally {
-      registration.mockRestore();
       try {
-        await maintenance.close();
+        await scheduledWork;
       } finally {
         owner.release();
       }
     }
-    const reopened = openOpenClawStateDatabase({ path: databasePath });
-    expect(
-      reopened.db
-        .prepare("SELECT value_json FROM config_machine_state WHERE state_key='test:capture-bind'")
-        .get(),
-    ).toEqual({ value_json: "true" });
-  },
-);
+  }
+  const reopened = openOpenClawStateDatabase({ path: databasePath });
+  expect(
+    reopened.db
+      .prepare("SELECT value_json FROM config_machine_state WHERE state_key='test:capture-bind'")
+      .get(),
+  ).toEqual({ value_json: "true" });
+});
 
-it.each(["parent", "independent"] as const)(
+it.for(["parent", "independent"] as const)(
   "keeps periodic maintenance after a %s caller adopts its cached handle",
-  async (adopter) => {
+  async (adopter, { signal }) => {
     const databasePath = path.join(tempDirs.make("state-wal-adopted-owner-"), "openclaw.sqlite");
     const parent = createOpenClawDatabaseMaintenanceScope();
     const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
@@ -223,6 +222,7 @@ it.each(["parent", "independent"] as const)(
     const prepare = vi.spyOn(database.db, "prepare");
     const execute = vi.spyOn(database.db, "exec");
     const observed = observeCheckpoints(database.path);
+    let periodicWork: Promise<unknown> | undefined;
     try {
       const adopt = () => openOpenClawStateDatabase({ path: databasePath });
       expect(adopter === "parent" ? parent.run(adopt) : adopt()).toBe(database);
@@ -230,12 +230,14 @@ it.each(["parent", "independent"] as const)(
       expect(database.db.isOpen).toBe(true);
       prepare.mockClear();
       execute.mockClear();
-      periodic();
-      await observed.wait();
+      periodicWork = Promise.resolve(periodic());
+      await observed.wait(signal);
+      await periodicWork;
       expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
       expect(prepare).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();
     } finally {
+      await periodicWork;
       observed.stop();
       prepare.mockRestore();
       execute.mockRestore();
@@ -246,62 +248,59 @@ it.each(["parent", "independent"] as const)(
   },
 );
 
-it.each(["parent", "independent"] as const)(
-  "refuses %s adoption after its cached handle starts closing",
-  async (adopter) => {
-    const databasePath = path.join(tempDirs.make("state-wal-closing-owner-"), "openclaw.sqlite");
-    const parent = createOpenClawDatabaseMaintenanceScope();
-    const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
-    const { database } = child.run(() => openWithPeriodicMaintenance(databasePath));
-    const entered = createDeferred();
-    const released = createDeferred();
-    const adopt = () => {
-      const open = () => openOpenClawStateDatabase({ path: databasePath });
-      return adopter === "parent"
-        ? parent.run(open)
-        : runOutsideOpenClawDatabaseMaintenanceScope(open);
-    };
-    let synchronousAdmission: unknown;
-    let inspected = false;
-    const cancel = walAdmission.cancelSqliteWalWriteAdmission;
-    const cancellation = vi
-      .spyOn(walAdmission, "cancelSqliteWalWriteAdmission")
-      .mockImplementation(async (target) => {
-        if (target === database.db) {
-          if (!inspected) {
-            inspected = true;
-            try {
-              synchronousAdmission = adopt();
-            } catch (error) {
-              synchronousAdmission = error;
-            }
+it("refuses independent adoption after its cached handle starts closing", async () => {
+  const databasePath = path.join(tempDirs.make("state-wal-closing-owner-"), "openclaw.sqlite");
+  const parent = createOpenClawDatabaseMaintenanceScope();
+  const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
+  const { database } = child.run(() => openWithPeriodicMaintenance(databasePath));
+  const entered = createDeferred();
+  const released = createDeferred();
+  const adopt = () => {
+    const open = () => openOpenClawStateDatabase({ path: databasePath });
+    return runOutsideOpenClawDatabaseMaintenanceScope(open);
+  };
+  let synchronousAdmission: unknown;
+  let inspected = false;
+  const cancel = walAdmission.cancelSqliteWalWriteAdmission;
+  const cancellation = vi
+    .spyOn(walAdmission, "cancelSqliteWalWriteAdmission")
+    .mockImplementation(async (target) => {
+      if (target === database.db) {
+        if (!inspected) {
+          inspected = true;
+          try {
+            synchronousAdmission = adopt();
+          } catch (error) {
+            synchronousAdmission = error;
           }
-          entered.resolve();
-          await released.promise;
         }
-        await cancel(target);
-      });
-    const closing = child.close();
-    try {
-      await entered.promise;
-      expect(synchronousAdmission).toMatchObject({
-        message: expect.stringMatching(/maintenance.*closed/i),
-      });
-      expect(adopt).toThrow(/maintenance.*closed/i);
-      released.resolve();
-      await closing;
-      expect(database.db.isOpen).toBe(false);
-      expect(openOpenClawStateDatabase({ path: databasePath }).db.isOpen).toBe(true);
-    } finally {
-      released.resolve();
-      await closing;
-      cancellation.mockRestore();
-      await parent.close();
-    }
-  },
-);
+        entered.resolve();
+        await released.promise;
+      }
+      await cancel(target);
+    });
+  const closing = child.close();
+  try {
+    await entered.promise;
+    expect(synchronousAdmission).toMatchObject({
+      message: expect.stringMatching(/maintenance.*closed/i),
+    });
+    expect(adopt).toThrow(/maintenance.*closed/i);
+    released.resolve();
+    await closing;
+    expect(database.db.isOpen).toBe(false);
+    expect(openOpenClawStateDatabase({ path: databasePath }).db.isOpen).toBe(true);
+  } finally {
+    released.resolve();
+    await closing;
+    cancellation.mockRestore();
+    await parent.close();
+  }
+});
 
-it("refuses checkpoints without borrowing the timer caller's maintenance authority", async () => {
+it("refuses checkpoints without borrowing the timer caller's maintenance authority", async ({
+  signal,
+}) => {
   const { database, periodic } = openWithPeriodicMaintenance(
     path.join(tempDirs.make("state-wal-maintenance-authority-"), "openclaw.sqlite"),
   );
@@ -314,9 +313,10 @@ it("refuses checkpoints without borrowing the timer caller's maintenance authori
   const before = sqliteBytes(database.path);
   const { observations, wait, stop } = observeCheckpoints(database.path);
   const prepare = vi.spyOn(database.db, "prepare");
+  let periodicWork: Promise<unknown> | undefined;
   try {
-    maintenance.run(() => periodic());
-    await wait();
+    periodicWork = Promise.resolve(maintenance.run(() => periodic()));
+    await wait(signal);
     expect(observations).toEqual(["error"]);
     expect(database.walMaintenance.health?.error).toContain("offline maintenance");
     expect(prepare).not.toHaveBeenCalled();
@@ -331,16 +331,21 @@ it("refuses checkpoints without borrowing the timer caller's maintenance authori
     try {
       await maintenance.close();
     } finally {
-      owner.release();
+      try {
+        await periodicWork;
+      } finally {
+        owner.release();
+      }
     }
   }
-  await setImmediate();
   const afterRelease = observeCheckpoints(database.path);
   try {
-    periodic();
-    await afterRelease.wait();
+    periodicWork = Promise.resolve(periodic());
+    await afterRelease.wait(signal);
+    await periodicWork;
     expect(afterRelease.observations[0]).toBe("complete");
   } finally {
+    await periodicWork;
     afterRelease.stop();
   }
 });
@@ -348,7 +353,7 @@ it("refuses checkpoints without borrowing the timer caller's maintenance authori
 // Windows cannot rename a directory while SQLite retains its native files.
 it.runIf(process.platform !== "win32")(
   "refuses a physically replaced database after periodic admission yields",
-  async () => {
+  async ({ signal }) => {
     const root = tempDirs.make("state-wal-replacement-");
     const originalDirectory = path.join(root, "original");
     const replacementDirectory = path.join(root, "replacement");
@@ -369,14 +374,16 @@ it.runIf(process.platform !== "win32")(
     const { observations, wait, stop } = observeCheckpoints(database.path);
     let originalMoved = false;
     let replacementInstalled = false;
+    let periodicWork: Promise<unknown> | undefined;
     try {
-      periodic();
+      periodicWork = Promise.resolve(periodic());
       expect(observations).toEqual([]);
       fs.renameSync(originalDirectory, displacedDirectory);
       originalMoved = true;
       fs.renameSync(replacementDirectory, originalDirectory);
       replacementInstalled = true;
-      await wait();
+      await wait(signal);
+      await periodicWork;
       expect(database.walMaintenance.health).toMatchObject({
         state: "error",
         error: expect.stringContaining(
@@ -386,6 +393,7 @@ it.runIf(process.platform !== "win32")(
       expect(observations).toEqual(["error"]);
       expect(sqliteBytes(database.path)).toEqual(replacementBytes);
     } finally {
+      await periodicWork;
       stop();
       // Restore each SQLite file family before closing the old native connection.
       if (replacementInstalled) {
@@ -411,9 +419,10 @@ it.each(["synchronous", "asynchronous"] as const)(
       )
       .run("maintenance-close", "preserved", "{}", 1);
     const { observations, stop } = observeCheckpoints(database.path);
+    const periodicWork: Promise<unknown>[] = [];
     try {
-      periodic();
-      periodic();
+      periodicWork.push(Promise.resolve(periodic()));
+      periodicWork.push(Promise.resolve(periodic()));
       expect(observations).toEqual([]);
       const closed =
         mode === "synchronous"
@@ -422,8 +431,8 @@ it.each(["synchronous", "asynchronous"] as const)(
       expect(closed).toBe(true);
       expect(database.db.isOpen).toBe(false);
       expect(observations).toEqual(["complete"]);
-      periodic();
-      await setImmediate();
+      periodicWork.push(Promise.resolve(periodic()));
+      await Promise.all(periodicWork);
       expect(observations).toEqual(["complete"]);
       const reopened = openOpenClawStateDatabase({ path: database.path });
       expect(
@@ -433,7 +442,11 @@ it.each(["synchronous", "asynchronous"] as const)(
       ).toEqual([{ event_key: "preserved" }]);
     } finally {
       stop();
-      await closeOpenClawStateDatabaseByPathAsync(database.path);
+      try {
+        await closeOpenClawStateDatabaseByPathAsync(database.path);
+      } finally {
+        await Promise.all(periodicWork);
+      }
     }
   },
 );

@@ -2,6 +2,7 @@ import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateSchemaReadAdmission,
 } from "../state/openclaw-state-db-contract.js";
+import { createOpenClawStateCurrentWarmReader } from "../state/openclaw-state-db-current-reader.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   executeExistingOpenClawStateRead,
@@ -10,6 +11,7 @@ import {
 } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
+import type { OpenClawStateReadOptions } from "../state/openclaw-state-read.types.js";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
   decodeRun,
@@ -77,12 +79,31 @@ export async function getUpdateRunAsync(
   runId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<UpdateRunRecord | undefined> {
-  const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(
-      options,
-      { type: "updateRuns.get", runId },
-      { preferIndependentWarmRead: true },
-    ),
+  return await withArtifactPreservingStateReads(() =>
+    readUpdateRunAsync(runId, options, { preferIndependentWarmRead: true }),
+  );
+}
+
+/** The active updater already writes this ledger, so SQLite sidecars need no private copy.
+ * Canonical state closure drains the retained worker before database replacement.
+ */
+export function getUpdateRunForProgressAsync(
+  runId: string,
+  options: OpenClawStateDatabaseOptions = {},
+  signal?: AbortSignal,
+): Promise<UpdateRunRecord | undefined> {
+  return readUpdateRunAsync(runId, options, { live: true, signal });
+}
+
+async function readUpdateRunAsync(
+  runId: string,
+  options: OpenClawStateDatabaseOptions,
+  readOptions: OpenClawStateReadOptions,
+): Promise<UpdateRunRecord | undefined> {
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type: "updateRuns.get", runId },
+    readOptions,
   );
   if (!reply) {
     return undefined;
@@ -107,9 +128,8 @@ export function listUpdateRuns(
   );
 }
 
-/** Reuse decoded rows only after a fresh observation of every authoritative source byte.
+/** Read current rows on an independent warm owner; cold reads preserve every source byte.
  * The caller still evaluates admission on every invocation; no grant is cached.
- * This closure owns only rows, never a native handle, child, or temporary snapshot.
  */
 export function createUpdateRunAdmissionReader(
   input: UpdateRunListInput,
@@ -117,8 +137,18 @@ export function createUpdateRunAdmissionReader(
   openStateSchemaReadAdmission: OpenClawStateSchemaReadAdmission,
 ): () => UpdateRunRecord[] {
   const query = { ...input };
+  const readWarm = createOpenClawStateCurrentWarmReader(
+    ({ db }) => readUpdateRuns(db, query),
+    options,
+    openStateSchemaReadAdmission,
+  );
   let previous: { version: string; runs: UpdateRunRecord[] } | undefined;
   return () => {
+    const warm = readWarm();
+    if (warm.available) {
+      previous = undefined;
+      return warm.value;
+    }
     const version = readCurrentOpenClawStateDatabaseContentVersion(options);
     if (version !== undefined && previous?.version === version) {
       return structuredClone(previous.runs);

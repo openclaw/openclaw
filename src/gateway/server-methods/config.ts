@@ -1,4 +1,3 @@
-// Config gateway methods: validation, redaction, secrets, reload planning.
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -321,14 +320,11 @@ function arrayPreservesBaseEntries(base: unknown[], merged: unknown[]): boolean 
 }
 
 function collectDestructiveIdKeyedArrayEntryPatchPaths(params: {
-  base: unknown[];
+  base: Array<Record<string, unknown> & { id: string }>;
   patch: unknown[];
   merged: unknown[];
   path: string;
 }): string[] {
-  if (!isConfigPatchIdKeyedArray(params.base)) {
-    return [];
-  }
   const baseById = new Map(params.base.map((entry) => [entry.id, entry]));
   const mergedById = new Map(
     params.merged.filter(isConfigPatchObjectWithStringId).map((entry) => [entry.id, entry]),
@@ -532,7 +528,6 @@ function rejectDroppedAgentRosterEntries(params: {
   return true;
 }
 
-/** Shared normalize -> raw-validate -> plugin-validate pipeline for submitted configs; responds on failure. */
 function validateSubmittedConfigOrRespond(params: {
   candidate: unknown;
   modelIdNormalizationPolicies: Parameters<typeof normalizeSubmittedConfigModelRefs>[1];
@@ -609,28 +604,20 @@ async function ensureResolvableSecretRefsOrRespond(params: {
   }
 }
 
-function listPreparedSecretDegradations(snapshot: PreparedSecretsRuntimeSnapshot) {
-  return (snapshot.degradedOwners ?? []).map((owner) => ({
+function preparedSecretDegradationPayload(snapshot: PreparedSecretsRuntimeSnapshot) {
+  const degradedSecretOwners = (snapshot.degradedOwners ?? []).map((owner) => ({
     ownerKind: owner.ownerKind,
     ownerId: owner.ownerId,
     state: owner.degradationState ?? "cold",
     paths: [...owner.paths],
     reason: redactSecretDegradationReason(owner.reason),
   }));
-}
-
-function preparedSecretDegradationPayload(snapshot: PreparedSecretsRuntimeSnapshot) {
-  const degradedSecretOwners = listPreparedSecretDegradations(snapshot);
   return degradedSecretOwners.length > 0 ? { degradedSecretOwners } : {};
 }
 
 export function clearConfigSchemaResponseCacheForTests() {
   configSchemaResponseCache = null;
   invalidateConfigGetResponseCache();
-}
-
-function clearConfigSchemaResponseCache() {
-  configSchemaResponseCache = null;
 }
 
 async function commitConfigRestartWrite(params: {
@@ -655,12 +642,13 @@ async function commitConfigRestartWrite(params: {
     `${params.mode} write ${formatControlPlaneActor(params.actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=${params.mode}`,
   );
   // Compare before the write so successful publication invalidates the previous shared secret.
-  const disconnectSharedAuthClients = shouldDisconnectSharedAuthClientsForConfigWrite({
-    prevConfig: snapshot.config,
-    prevSourceConfig: snapshot.sourceConfig,
-    nextConfig: params.nextConfig,
-    preparedSecretsSnapshot: params.preparedSecretsSnapshot,
-  });
+  const disconnectSharedAuthClients =
+    didSharedGatewayAuthChange(snapshot.config, params.nextConfig) ||
+    didActiveSharedGatewayAuthChange({
+      fallbackPrev: snapshot.config,
+      fallbackSource: snapshot.sourceConfig,
+      next: params.preparedSecretsSnapshot.config,
+    });
   const writeResult = await commitGatewayConfigWriteOrRespond({
     snapshot,
     writeOptions,
@@ -703,7 +691,7 @@ async function commitConfigRestartWrite(params: {
       return;
     }
   }
-  clearConfigSchemaResponseCache();
+  configSchemaResponseCache = null;
   const { payload, sentinelPersisted, restart } = await resolveGatewayConfigRestartWriteResult({
     requestParams: params.requestParams,
     kind: params.mode === "config.patch" ? "config-patch" : "config-apply",
@@ -734,46 +722,6 @@ async function commitConfigRestartWrite(params: {
     undefined,
   );
   writeResult.queueFollowUp();
-}
-
-function shouldDisconnectSharedAuthClientsForConfigWrite(params: {
-  prevConfig: OpenClawConfig;
-  prevSourceConfig: OpenClawConfig;
-  nextConfig: OpenClawConfig;
-  preparedSecretsSnapshot: PreparedSecretsRuntimeSnapshot;
-}): boolean {
-  return (
-    didSharedGatewayAuthChange(params.prevConfig, params.nextConfig) ||
-    didActiveSharedGatewayAuthChange({
-      fallbackPrev: params.prevConfig,
-      fallbackSource: params.prevSourceConfig,
-      next: params.preparedSecretsSnapshot.config,
-    })
-  );
-}
-
-function respondConfigPatchNoop(params: {
-  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-  config: OpenClawConfig;
-  uiHints: ConfigRedactionHints;
-  actor: ReturnType<typeof resolveControlPlaneActor>;
-  context: GatewayRequestContext | undefined;
-  respond: RespondFn;
-}): void {
-  params.context?.logGateway?.info(
-    `config.patch noop ${formatControlPlaneActor(params.actor)} (no changed paths)`,
-  );
-  params.respond(
-    true,
-    {
-      ok: true,
-      noop: true,
-      changedPaths: [],
-      path: resolveGatewayConfigPath(params.snapshot),
-      config: redactConfigObject(params.config, params.uiHints),
-    },
-    undefined,
-  );
 }
 
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
@@ -1002,7 +950,7 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!writeResult) {
       return;
     }
-    clearConfigSchemaResponseCache();
+    configSchemaResponseCache = null;
     respond(
       true,
       {
@@ -1053,11 +1001,7 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
       return;
     }
-    if (
-      !parsedRes.parsed ||
-      typeof parsedRes.parsed !== "object" ||
-      Array.isArray(parsedRes.parsed)
-    ) {
+    if (!isRecord(parsedRes.parsed)) {
       respond(
         false,
         undefined,
@@ -1145,14 +1089,20 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const actor = resolveControlPlaneActor(client);
     if (restoredChangedPaths.length === 0) {
-      respondConfigPatchNoop({
-        snapshot,
-        config: snapshot.config,
-        uiHints: schemaPatch.uiHints,
-        actor,
-        context,
-        respond,
-      });
+      context?.logGateway?.info(
+        `config.patch noop ${formatControlPlaneActor(actor)} (no changed paths)`,
+      );
+      respond(
+        true,
+        {
+          ok: true,
+          noop: true,
+          changedPaths: [],
+          path: resolveGatewayConfigPath(snapshot),
+          config: redactConfigObject(snapshot.config, schemaPatch.uiHints),
+        },
+        undefined,
+      );
       return;
     }
     const validatedSubmission = validateSubmittedConfigOrRespond({

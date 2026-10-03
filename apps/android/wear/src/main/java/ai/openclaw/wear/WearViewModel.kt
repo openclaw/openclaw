@@ -490,13 +490,13 @@ internal class WearViewModel(
   fun setAgentPulseVisible(visible: Boolean) {
     if (agentPulseVisible == visible) {
       if (visible && agentPulsePollJob?.isActive != true) {
-        restartAgentPulsePolling(forceLoading = true)
+        restartAgentPulsePolling()
       }
       return
     }
     agentPulseVisible = visible
     if (visible) {
-      restartAgentPulsePolling(forceLoading = true)
+      restartAgentPulsePolling()
     } else {
       invalidateAgentPulse(clearSnapshot = true)
     }
@@ -504,7 +504,7 @@ internal class WearViewModel(
 
   fun refreshAgentPulse() {
     if (!agentPulseVisible) return
-    restartAgentPulsePolling(forceLoading = true)
+    restartAgentPulsePolling()
   }
 
   fun openSession(session: WearSession) {
@@ -522,7 +522,7 @@ internal class WearViewModel(
     mutableState.update { it.switchSessionContext(session) }
     loadModels(session)
     loadHistory(session)
-    restartAgentPulsePolling(forceLoading = true)
+    restartAgentPulsePolling()
   }
 
   fun searchSessions(query: String) {
@@ -1100,7 +1100,7 @@ internal class WearViewModel(
           if (status.connected && selectedSession != null) {
             loadHistory(selectedSession)
           } else {
-            restartAgentPulsePolling(forceLoading = true)
+            restartAgentPulsePolling()
           }
         } catch (err: CancellationException) {
           throw err
@@ -1203,7 +1203,7 @@ internal class WearViewModel(
               ).reconcileReplyHistory(transcript)
           }
           pendingEvents.forEach(::handleEvent)
-          restartAgentPulsePolling(forceLoading = true)
+          restartAgentPulsePolling()
           if (catalogScopeChanged) loadModels(loadedSession)
         } catch (err: CancellationException) {
           throw err
@@ -1219,7 +1219,7 @@ internal class WearViewModel(
           }
           if (currentLoad && mutableState.value.selectedSession?.key == session.key) {
             recordFailure(err, loading = false)
-            restartAgentPulsePolling(forceLoading = true)
+            restartAgentPulsePolling()
           }
         }
       }
@@ -1568,7 +1568,7 @@ internal class WearViewModel(
     eventSequenceTracker.invalidateResponseRequests()
   }
 
-  private fun restartAgentPulsePolling(forceLoading: Boolean = false) {
+  private fun restartAgentPulsePolling() {
     invalidateAgentPulse(clearSnapshot = false)
     val initialState = mutableState.value
     if (!shouldPollAgentPulse(initialState, agentPulseVisible)) {
@@ -1601,7 +1601,7 @@ internal class WearViewModel(
       )
     agentPulsePollJob =
       viewModelScope.launch {
-        var showForcedLoading = forceLoading
+        var showForcedLoading = true
         try {
           while (isCurrent()) {
             mutableState.update { state ->
@@ -1885,10 +1885,8 @@ internal fun wearSessionRequestIsCurrent(
   currentSession: WearSession?,
   responsePhoneNodeId: String,
 ): Boolean =
-  currentSession?.key == requestedSession.key &&
-    currentSession.phoneNodeId == requestedSession.phoneNodeId &&
-    responsePhoneNodeId == requestedSession.phoneNodeId &&
-    currentSession.modelRef == requestedSession.modelRef
+  wearTranscriptRequestIsCurrent(requestedSession, currentSession, responsePhoneNodeId) &&
+    currentSession?.modelRef == requestedSession.modelRef
 
 internal fun wearTranscriptRequestIsCurrent(
   requestedSession: WearSession,
@@ -2048,16 +2046,16 @@ internal fun reconcileWearStreamSnapshot(
   if (live.isNullOrEmpty()) return snapshot
   if (snapshot.isNullOrEmpty()) return live
   val merged =
-    if (liveComplete) {
-      when {
-        live.startsWith(snapshot) -> live
-        snapshot.startsWith(live) -> snapshot
-        else -> live
-      }
-    } else {
-      if (snapshot.startsWith(live)) {
+    when {
+      snapshot.startsWith(live) -> {
         snapshot
-      } else {
+      }
+
+      liveComplete -> {
+        live
+      }
+
+      else -> {
         val maxOverlap = minOf(snapshot.length, live.length)
         val overlap =
           (maxOverlap downTo 1).firstOrNull { count ->

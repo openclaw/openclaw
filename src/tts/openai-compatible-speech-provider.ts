@@ -1,4 +1,3 @@
-// OpenAI-compatible speech provider sends speech synthesis requests to OpenAI-style APIs.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {

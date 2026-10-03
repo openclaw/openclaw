@@ -137,12 +137,8 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
     if (HEARTBEAT_TRAILING_TOKEN_RE.test(next)) {
       const idx = next.lastIndexOf(token);
       const before = next.slice(0, idx).trimEnd();
-      if (!before) {
-        text = "";
-      } else {
-        const after = next.slice(idx + token.length).trimStart();
-        text = `${before}${after}`.trimEnd();
-      }
+      const after = next.slice(idx + token.length).trimStart();
+      text = `${before}${after}`.trimEnd();
       didStrip = true;
     } else {
       break;
@@ -158,10 +154,7 @@ export function stripHeartbeatToken(
   raw?: string,
   opts: { mode?: StripHeartbeatMode; maxAckChars?: number } = {},
 ) {
-  if (!raw) {
-    return { shouldSkip: true, text: "", didStrip: false };
-  }
-  const trimmed = raw.trim();
+  const trimmed = raw?.trim();
   if (!trimmed) {
     return { shouldSkip: true, text: "", didStrip: false };
   }
@@ -185,11 +178,8 @@ export function stripHeartbeatToken(
   // (e.g., <b>HEARTBEAT_OK</b> or **HEARTBEAT_OK**) still strips.
   const stripMarkup = (text: string) =>
     text
-      // Drop HTML tags.
       .replace(/<[^>]*>/g, " ")
-      // Decode common nbsp variant.
       .replace(/&nbsp;/gi, " ")
-      // Remove markdown-ish wrappers at the edges.
       .replace(/^[*`~_]+/, "")
       .replace(/[*`~_]+$/, "");
 

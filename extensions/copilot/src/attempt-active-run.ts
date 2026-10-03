@@ -43,7 +43,7 @@ export function registerCopilotActiveRun(params: {
     if (options?.isInboundUserMessage !== true || options.images?.length) {
       return false;
     }
-    const claimed = await claimPendingAgentQuestionAnswer({
+    return await claimPendingAgentQuestionAnswer({
       sessionKey: params.input.sessionKey ?? params.input.sessionId,
       text,
       persist: options.userTurnTranscriptRecorder
@@ -52,7 +52,6 @@ export function registerCopilotActiveRun(params: {
           }
         : undefined,
     });
-    return claimed;
   };
   const queueMessage = async (text: string, options?: CopilotQueueMessageOptions) => {
     let acceptanceReported = false;

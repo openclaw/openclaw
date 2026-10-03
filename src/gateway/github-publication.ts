@@ -19,7 +19,7 @@ import {
   assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
   resolveGitHubPublicationWorktreeOwner,
-  resolveGitHubPublicationWorkspaceOwner,
+  prepareGitHubPublicationWorkspaceOwner,
 } from "./github-publication-availability.js";
 import {
   createGitHubPublicationCoordinatorMethods,
@@ -462,7 +462,7 @@ export function createGitHubPublicationCoordinator(params: {
 
   const prepareClaimWorkspace = async (claim: WorkerSessionTurnClaim): Promise<void> => {
     ensureSchema();
-    params.placements.closeWorkerTurnToolAdmission(claim);
+    await params.placements.closeWorkerTurnToolAdmission(claim);
     const rows = listGitHubPublicationsForClaim(claim, { pendingOnly: true });
     if (rows.length === 0) {
       return;
@@ -537,12 +537,14 @@ export function createGitHubPublicationCoordinator(params: {
   return {
     ...methods,
     ...personal,
-    requestForClaim: (request: GitHubPublicationClaimRequest) =>
-      resolveGitHubPublicationWorkspaceOwner({
-        sessionId: request.claim.sessionId,
-        sessionKey: request.sessionKey,
-        agentId: request.agentId,
-      }).kind === "repository"
+    requestForClaim: async (request: GitHubPublicationClaimRequest) =>
+      (
+        await prepareGitHubPublicationWorkspaceOwner({
+          sessionId: request.claim.sessionId,
+          sessionKey: request.sessionKey,
+          agentId: request.agentId,
+        })
+      )().kind === "repository"
         ? repository.requestForClaim(request)
         : requestForClaim(request),
     async prepareClaimWorkspace(claim: WorkerSessionTurnClaim) {
@@ -559,21 +561,24 @@ export function createGitHubPublicationCoordinator(params: {
         ? repository.requestForSession(input)
         : methods.requestForSession(input);
     },
-    requestPersonalForSession(...args: Parameters<typeof personal.requestPersonalForSession>) {
-      return resolveGitHubPublicationWorkspaceOwner(args[1]).kind === "repository"
+    async requestPersonalForSession(
+      ...args: Parameters<typeof personal.requestPersonalForSession>
+    ) {
+      return (await prepareGitHubPublicationWorkspaceOwner(args[1]))().kind === "repository"
         ? repository.requestPersonalForSession(...args)
         : personal.requestPersonalForSession(...args);
     },
-    sharedStatus(...args: Parameters<typeof methods.sharedStatus>) {
-      return repository.sharedStatus(...args) ?? methods.sharedStatus(...args);
+    async sharedStatus(...args: Parameters<typeof methods.sharedStatus>) {
+      return (await repository.sharedStatus(...args)) ?? (await methods.sharedStatus(...args));
     },
-    latestShared(...args: Parameters<typeof methods.latestShared>) {
-      return repository.latestShared(...args) ?? methods.latestShared(...args);
+    async latestShared(...args: Parameters<typeof methods.latestShared>) {
+      return (await repository.latestShared(...args)) ?? (await methods.latestShared(...args));
     },
-    personalStatus(...args: Parameters<typeof personal.personalStatus>) {
+    preparePersonalStatus: repository.preparePersonalStatus,
+    personalStatus(...args: Parameters<typeof repository.personalStatus>) {
       return repository.hasRequest(args[2])
         ? repository.personalStatus(...args)!
-        : personal.personalStatus(...args);
+        : personal.personalStatus(args[0], args[1], args[2]);
     },
     async personalPending(...args: Parameters<typeof personal.personalPending>) {
       return (await repository.personalPending(...args)) ?? personal.personalPending(...args);

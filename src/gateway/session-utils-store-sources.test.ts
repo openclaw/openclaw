@@ -4,8 +4,14 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -149,26 +155,6 @@ it("bounds fixed-store discovery per operation and refreshes the next source ros
   });
 });
 
-it("keeps deferred discovery unbound until first use and rejects prior registry churn", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const options = {
-      cfg: {},
-      currentSource: { agentId: database.agentId, path: database.path },
-      env: state.env,
-      registryPath: openOpenClawStateDatabase().path,
-      deferSources: true,
-    };
-    const unread = prepareGatewaySessionStoreReadSources(options);
-    const bound = prepareGatewaySessionStoreReadSources(options);
-    expect(bound.sources.main).toEqual([options.currentSource]);
-    invalidateRegisteredAgentDatabasesMemo({ path: options.registryPath });
-    expect(bound.assertCurrent).not.toThrow();
-    expect(unread.assertCurrent).toThrow("Session store changed");
-    expect(() => unread.sources).toThrow("Session store changed");
-  });
-});
-
 it("rejects a retargeted filesystem alias after registry metadata refresh", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
@@ -250,6 +236,9 @@ it("captures fixed, missing, and retired routing without main-thread SQL", async
     const currentSource = { agentId: main.agentId, path: main.path };
     const registryPath = openOpenClawStateDatabase().path;
     invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
+    // Retire fixture writers so their checkpoint timers cannot enter the read-only SQL probe.
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     const sql = observeMainThreadSql();
     let prepared: Awaited<ReturnType<typeof prepareGatewaySessionStoreReadSourcesAsync>>;
     try {

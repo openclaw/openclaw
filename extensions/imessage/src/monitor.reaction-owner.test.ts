@@ -6,10 +6,8 @@ import {
   registerSessionBindingAdapter,
   testing as sessionBindingTesting,
 } from "openclaw/plugin-sdk/session-binding-runtime";
-import {
-  peekSystemEventEntries,
-  resetSystemEventsForTest,
-} from "openclaw/plugin-sdk/system-event-runtime";
+import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
+import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { IMessageRpcClient, type createIMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";

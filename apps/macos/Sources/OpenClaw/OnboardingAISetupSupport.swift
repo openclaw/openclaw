@@ -490,15 +490,16 @@ extension OnboardingAISetupModel {
         return !self.isBusy || (self.phase == .testing && self.selectedKind != kind)
     }
 
-    func continueProviderAuth() {
-        guard let step = authStep, wizardStepExecutor(step) != "gateway" else { return }
+    @discardableResult
+    func continueProviderAuth() -> Task<Void, Never>? {
+        guard let step = authStep, wizardStepExecutor(step) != "gateway" else { return nil }
         let value: AnyCodable? = switch wizardStepType(step) {
         case "text": AnyCodable(self.authText)
         case "select": self.selectedAuthWizardOption?.value
         case "confirm": AnyCodable(self.authConfirmation)
         default: nil
         }
-        self.advanceProviderAuth(stepID: step.id, value: value)
+        return self.advanceProviderAuth(stepID: step.id, value: value)
     }
 
     func startProviderPrepare(_ option: PrepareOption) {

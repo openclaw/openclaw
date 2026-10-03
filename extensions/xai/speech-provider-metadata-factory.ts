@@ -2,6 +2,7 @@ import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
+  SpeechDirectiveTokenParseResult,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
@@ -26,12 +27,6 @@ type XaiTtsProviderConfig = {
   language?: string;
   speed?: number;
   responseFormat?: XaiSpeechResponseFormat;
-};
-
-type XaiTtsProviderOverrides = {
-  voiceId?: string;
-  language?: string;
-  speed?: number;
 };
 
 export const XAI_TTS_FALLBACK_VOICES = ["ara", "eve", "leo", "rex", "sal"] as const;
@@ -85,18 +80,9 @@ export function resolveXaiSpeechResponseFormat(
 export function xaiSpeechResponseFormatToFileExtension(
   format: XaiSpeechResponseFormat,
 ): ".mp3" | ".pcm" | ".wav" | ".mulaw" | ".alaw" {
-  switch (format) {
-    case "wav":
-      return ".wav";
-    case "pcm":
-      return ".pcm";
-    case "mulaw":
-      return ".mulaw";
-    case "alaw":
-      return ".alaw";
-    default:
-      return ".mp3";
-  }
+  return format === "wav" || format === "pcm" || format === "mulaw" || format === "alaw"
+    ? `.${format}`
+    : ".mp3";
 }
 
 function normalizeXaiSpeechProviderConfig(
@@ -124,20 +110,18 @@ function normalizeXaiSpeechProviderConfig(
 export function readXaiSpeechProviderConfig(config: SpeechProviderConfig): XaiTtsProviderConfig {
   const normalized = normalizeXaiSpeechProviderConfig({});
   return {
-    apiKey: normalizeOptionalString(config.apiKey) ?? normalized.apiKey,
+    apiKey: normalizeOptionalString(config.apiKey),
     baseUrl: normalizeOptionalString(config.baseUrl) ?? normalized.baseUrl,
     voiceId: normalizeOptionalString(config.voiceId ?? config.voice) ?? normalized.voiceId,
-    language:
-      normalizeXaiLanguageCode(config.language ?? config.languageCode) ?? normalized.language,
-    speed: normalizeXaiSpeechSpeed(config.speed) ?? normalized.speed,
-    responseFormat:
-      normalizeXaiSpeechResponseFormat(config.responseFormat) ?? normalized.responseFormat,
+    language: normalizeXaiLanguageCode(config.language ?? config.languageCode),
+    speed: normalizeXaiSpeechSpeed(config.speed),
+    responseFormat: normalizeXaiSpeechResponseFormat(config.responseFormat),
   };
 }
 
 export function readXaiSpeechOverrides(
   overrides: SpeechProviderOverrides | undefined,
-): XaiTtsProviderOverrides {
+): Partial<Pick<XaiTtsProviderConfig, "voiceId" | "language" | "speed">> {
   if (!overrides) {
     return {};
   }
@@ -152,11 +136,9 @@ export function resolveDirectXaiAudioApiKey(configApiKey?: string): string | und
   return normalizeOptionalString(configApiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);
 }
 
-function parseXaiSpeechDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: SpeechProviderOverrides;
-  warnings?: string[];
-} {
+function parseXaiSpeechDirectiveToken(
+  ctx: SpeechDirectiveTokenParseContext,
+): SpeechDirectiveTokenParseResult {
   switch (ctx.key) {
     case "voice":
     case "voice_id":

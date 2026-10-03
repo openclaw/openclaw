@@ -26,6 +26,7 @@ import {
 } from "../../sessions/input-provenance.js";
 import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import {
   resolveExpectedExistingSessionConstraint,
   type ExpectedExistingSessionConstraint,
@@ -34,7 +35,6 @@ import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
 import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
-import { clientHasAdminScope } from "./agent-handler-helpers.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export type AgentRequestPreflight = {
@@ -104,7 +104,7 @@ export function prepareAgentRequestPreflight(params: {
     ]);
     return undefined;
   }
-  const collectorSession = findSwarmCollectorSession(requestSessionKey);
+  const collectorSession = findSwarmCollectorSession(requestSessionKey, selectedAgentId);
   let swarmExecutionLane: CommandLaneConfiguration | undefined;
   // Collector children always use subagent session keys, so ordinary traffic
   // must never pay the persisted-store read. The store fallback only covers a
@@ -135,6 +135,7 @@ export function prepareAgentRequestPreflight(params: {
     }
     const registeredCollector = findAuthorizedSwarmCollectorRequest({
       childSessionKey: request.sessionKey,
+      childAgentId: selectedAgentId,
       idempotencyKey: request.idempotencyKey,
       outputSchema: request.swarmOutputSchema,
     });
@@ -177,7 +178,7 @@ export function prepareAgentRequestPreflight(params: {
     return rejectInvalidRequest("cwd is reserved for plugin-owned subagent runs");
   }
   const allowModelOverride =
-    clientHasAdminScope(params.client) || params.client?.internal?.allowModelOverride === true;
+    hasGatewayAdminScope(params.client) || params.client?.internal?.allowModelOverride === true;
   const canUseCronRunContinuation = params.client?.internal?.cronRunContinuation === true;
   const expectedSessionResult = resolveExpectedExistingSessionConstraint({
     canUseInternalRuntimeHandoff,

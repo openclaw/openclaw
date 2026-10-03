@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { reconcileCodexComputerUseStartArtifacts } from "./auth-bridge.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { describeControlFailure } from "./capabilities.js";
@@ -242,9 +243,10 @@ async function inspectCodexComputerUse(
     managedCommandOrder: "desktop-first",
   });
   const operationTimeoutMs = params.timeoutMs ?? resolvedRuntime.requestTimeoutMs;
-  const deadline = operationTimeoutMs > 0 ? Date.now() + operationTimeoutMs : undefined;
+  // Match the client's monotonic clock so wall-clock changes cannot distort the budget.
+  const deadline = operationTimeoutMs > 0 ? performance.now() + operationTimeoutMs : undefined;
   const remainingTimeoutMs = () =>
-    deadline === undefined ? operationTimeoutMs : Math.max(1, deadline - Date.now());
+    deadline === undefined ? operationTimeoutMs : Math.max(1, deadline - performance.now());
   const clientOptions = {
     startOptions: resolvedRuntime.start,
     pluginConfig: params.pluginConfig,
@@ -703,12 +705,7 @@ async function resolveMarketplaceRef(params: {
     !params.config.marketplaceSource &&
     !params.config.marketplacePath &&
     !params.config.marketplaceName;
-  if (
-    candidates.length === 0 &&
-    bundledMarketplacePath &&
-    discoverDefaultMarketplace &&
-    resolveBundledComputerUseMarketplacePath(params)
-  ) {
+  if (candidates.length === 0 && bundledMarketplacePath && discoverDefaultMarketplace) {
     if (params.managedCodexHome) {
       await migrateLegacyBundledMarketplaceSource({
         request: params.request,
@@ -890,26 +887,16 @@ function chooseKnownComputerUseMarketplace(
 }
 
 async function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) {
-    throw abortError(signal);
+  try {
+    await sleepWithAbort(Math.max(1, ms), signal);
+  } catch (error) {
+    if (!signal?.aborted) {
+      throw error;
+    }
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error("Computer Use setup was aborted.");
   }
-  await new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      reject(abortError(signal));
-    };
-    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-function abortError(signal?: AbortSignal): Error {
-  const reason = signal?.reason;
-  return reason instanceof Error ? reason : new Error("Computer Use setup was aborted.");
 }
 
 async function readComputerUsePlugin(

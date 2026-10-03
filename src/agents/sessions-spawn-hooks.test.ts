@@ -220,8 +220,8 @@ beforeAll(async () => {
 });
 
 describe("sessions_spawn subagent lifecycle hooks", () => {
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
     hoisted.updateSessionStoreMock.mockReset();
     hookRunnerMocks.hasSubagentEndedHook = true;
@@ -284,9 +284,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     });
   });
 
-  afterEach(() => {
-    resetSubagentRegistryForTests();
-  });
+  afterEach(() => resetSubagentRegistryForTests());
 
   it("binds the subagent thread in core and emits subagent_spawned with requester metadata", async () => {
     const result = await spawn({

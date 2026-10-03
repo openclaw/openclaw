@@ -1,6 +1,5 @@
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
-// Feishu plugin module implements reasoning preview behavior.
 import { resolveFeishuConfigReasoningDefault } from "./agent-config.js";
 
 export function resolveFeishuReasoningPreviewEnabled(params: {

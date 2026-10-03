@@ -6,10 +6,16 @@ import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
 import { createConfigIO } from "../../config/io.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { resolveCronJobsStorePathFromConfig } from "../../cron/store/paths.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
+import { listRetiredCronStateFiles } from "../../infra/state-migrations.retired-cron-files.js";
+import {
+  assertNoRetiredStateFiles,
+  RetiredStateFormatError,
+} from "../../infra/state-migrations.retired-files.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
   parseUpdateAdmissionContext,
@@ -148,6 +154,28 @@ async function inspectUpdateAdmission(
       };
       if (databaseContext) {
         schemasAccepted = await checkDatabaseSchemas(databaseContext);
+        if (schemasAccepted) {
+          const snapshot = databaseContext.configSnapshot;
+          try {
+            // The saved partition reads SQLite; admit its schema before inspecting live files
+            // that published updaters omit from their later rehearsal snapshots.
+            assertNoRetiredStateFiles(
+              "Cron state",
+              await listRetiredCronStateFiles(
+                resolveCronJobsStorePathFromConfig(
+                  snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
+                  databaseContext.env,
+                ),
+              ),
+            );
+          } catch (error) {
+            if (!(error instanceof RetiredStateFormatError)) {
+              throw error;
+            }
+            refuse("state-format", "retired-state-format", error.message);
+            schemasAccepted = false;
+          }
+        }
       }
       // Plugin metadata reads require compatible stores; never let them mask a schema refusal.
       if (databaseContext && schemasAccepted && !databaseContext.legacyConfigPlan) {

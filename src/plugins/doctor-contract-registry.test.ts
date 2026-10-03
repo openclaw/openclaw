@@ -221,6 +221,26 @@ describe("doctor-contract-registry module loader", () => {
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
   });
 
+  it("retains warning-only repairs without publishing their candidate", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => () => ({
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: Record<string, unknown> }) => {
+        cfg.unreported = true;
+        return { config: cfg, changes: [], warnings: ["Repair requires operator input."] };
+      },
+    }));
+    mockDoctorPlugins({ id: "warning-only", rootDir: pluginRoot });
+
+    const config = {};
+    expect(applyPluginDoctorCompatibilityMigrations(config, { env: {} })).toEqual({
+      config,
+      changes: [],
+      warnings: ["Repair requires operator input."],
+    });
+    expect(config).toEqual({});
+  });
+
   it("records doctor contract load failures with plugin and artifact context", () => {
     const pluginRoot = makeTempDir();
     const contractSource = path.join(pluginRoot, "doctor-contract-api.ts");

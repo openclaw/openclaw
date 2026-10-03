@@ -3,17 +3,57 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createMeetingNodeBrowserFixture } from "../plugin-sdk/test-helpers/meeting-browser.js";
+import { defineMeetingChromeCleanupTests } from "../plugin-sdk/test-helpers/meeting-chrome-contract.js";
+import { useMeetingTestState } from "../plugin-sdk/test-helpers/meeting-state.js";
+import { createOpenClawTestState } from "../plugin-sdk/test-state.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { TranscriptsStore } from "../transcripts/store.js";
+import { loadBrowserMeetingPlugins } from "./browser-plugin.test-support.js";
 import { createMeetingSession } from "./session-factory.js";
 import {
+  createTestRealtimeEngine,
   createTestRuntime,
   type TestSession,
   type TestJoinContext,
 } from "./session-runtime.test-support.js";
+
+const engineMocks = vi.hoisted(() => ({
+  localDispose: vi.fn(async () => {}),
+  nodeDispose: vi.fn(async () => {}),
+  speak: vi.fn(),
+  startAgent: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
+  const original = await importOriginal<typeof import("openclaw/plugin-sdk/meeting-runtime")>();
+  const adapter = original.MeetingPlatformAdapter;
+  const transport = (dispose: () => Promise<void>) => ({
+    clearOutput: vi.fn(async () => {}),
+    dispose,
+    onFatal: vi.fn(),
+    startInput: vi.fn(),
+    stop: dispose,
+    writeOutput: vi.fn(async () => {}),
+  });
+  const defineBrowserMeetingPlugin: typeof adapter.defineBrowserMeetingPlugin = (spec) =>
+    adapter.defineBrowserMeetingPlugin({
+      ...spec,
+      chromeRuntime: {
+        ...adapter.createChromeRuntimeBindings(),
+        createLocalAudioTransport: () => transport(engineMocks.localDispose),
+        createNodeAudioTransport: () => transport(engineMocks.nodeDispose),
+        startAgentRealtimeEngine: engineMocks.startAgent,
+      },
+    });
+  return { ...original, MeetingPlatformAdapter: { ...adapter, defineBrowserMeetingPlugin } };
+});
+
+const { zoomMeetingsPlugin, teamsMeetingsPlugin, slackHuddlesPlugin } =
+  await loadBrowserMeetingPlugins();
 
 describe("createMeetingSession", () => {
   it.each([
@@ -875,5 +915,136 @@ describe("MeetingSessionRuntime speech readiness", () => {
 
     session.browser!.health = { ...session.browser?.health, micMuted: false };
     expect(runtime.refreshSpeechReadiness(session)).toEqual({ ready: true });
+  });
+});
+
+describe.each([
+  {
+    title: "Zoom",
+    plugin: zoomMeetingsPlugin,
+    url: "https://zoom.us/j/12345678903?pwd=node",
+    tabId: "zoom-tab",
+    nodeCommand: "zoommeetings.chrome",
+    admissionReason: "zoom-admission-required",
+    preserveTrackedBrowser: true,
+  },
+  {
+    title: "Teams",
+    plugin: teamsMeetingsPlugin,
+    url: "https://teams.microsoft.com/l/meetup-join/19%3ameeting_node_resume%40thread.v2/0",
+    tabId: "teams-tab",
+    nodeCommand: "teamsmeetings.chrome",
+    admissionReason: "teams-admission-required",
+    preserveTrackedBrowser: false,
+  },
+  {
+    title: "Slack",
+    plugin: slackHuddlesPlugin,
+    url: "https://app.slack.com/huddle/T0123ABCD/C0123ABCD",
+    tabId: "slack-tab",
+    nodeCommand: "slackhuddles.chrome",
+    admissionReason: "slack-admission-required",
+    preserveTrackedBrowser: true,
+  },
+])("$title browser meeting audio", (entry) => {
+  const { plugin } = entry;
+  describe("startup cleanup", () => {
+    defineMeetingChromeCleanupTests({
+      ...entry,
+      resolveConfig: plugin.config.resolveConfig,
+      launchInChrome: plugin.chrome.launchInChrome,
+      launchOnNode: plugin.chrome.launchOnNode,
+      engineMocks,
+    });
+  });
+
+  describe("node realtime recovery", () => {
+    const testState = useMeetingTestState(createOpenClawTestState);
+
+    it("starts the node bridge after manual admission becomes route-ready", async () => {
+      const engines: Array<{ getHealth(): { bridgeClosed: boolean }; stop(): Promise<void> }> = [];
+      engineMocks.speak.mockReset();
+      engineMocks.startAgent
+        .mockReset()
+        .mockImplementation(async ({ transport }: { transport: { stop(): Promise<void> } }) => {
+          const engine = createTestRealtimeEngine(transport, engineMocks.speak);
+          engines.push(engine);
+          return engine;
+        });
+      const harness = createMeetingNodeBrowserFixture({
+        ...entry,
+        status: (state) =>
+          state.inCall
+            ? {
+                audioInputRouted: true,
+                audioOutputRouted: true,
+                inCall: true,
+                micMuted: false,
+                url: state.tabUrl,
+              }
+            : {
+                inCall: false,
+                manualAction: { reason: entry.admissionReason, message: "Waiting for admission" },
+                url: state.tabUrl,
+              },
+      });
+      harness.state.inCall = false;
+      const logger = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
+      const isZoom = plugin === zoomMeetingsPlugin;
+      const runtime = new plugin.Runtime({
+        config: plugin.config.resolveConfig({
+          chrome: { waitForInCallMs: 1 },
+          chromeNode: { node: "node-1" },
+          ...(isZoom ? { realtime: { agentId: "consult" } } : {}),
+        }),
+        fullConfig: {},
+        logger,
+        runtime: harness.runtime,
+      });
+      testState.track(runtime, { readWarnings: () => logger.warn.mock.calls });
+
+      const joined = await runtime.join({
+        ...(isZoom ? { agentId: "support" } : {}),
+        mode: "agent",
+        requesterSessionKey: "agent:support:session:caller",
+        transport: "chrome-node",
+        url: entry.url,
+      });
+      expect(joined.session.chrome?.audioBridge).toBeUndefined();
+      harness.state.inCall = true;
+
+      expect((await runtime.speak(joined.session.id, "hello")).spoken).toBe(true);
+      expect(engineMocks.startAgent).toHaveBeenCalledTimes(1);
+      expect(engineMocks.startAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ requesterSessionKey: "agent:support:session:caller" }),
+      );
+      expect(engineMocks.speak).toHaveBeenCalledWith("hello");
+      expect(joined.session.chrome?.audioBridge).toMatchObject({ type: "node-command-pair" });
+
+      if (isZoom) {
+        expect(joined.session.agentId).toBe("support");
+        expect(engineMocks.startAgent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            config: expect.objectContaining({
+              realtime: expect.objectContaining({ agentId: "support" }),
+            }),
+          }),
+        );
+        const firstEngine = engines[0];
+        if (!firstEngine) {
+          throw new Error("Expected the initial meeting engine");
+        }
+        await firstEngine.stop();
+        firstEngine.getHealth().bridgeClosed = true;
+        await runtime.status(joined.session.id);
+        expect((await runtime.speak(joined.session.id, "again")).spoken).toBe(true);
+        expect(engineMocks.startAgent).toHaveBeenCalledTimes(2);
+        expect(engineMocks.speak).toHaveBeenCalledWith("again");
+        expect(joined.session.chrome?.health?.bridgeClosed).toBe(false);
+      }
+      expect(harness.state.audioCaptureId).toEqual(expect.any(String));
+      await runtime.leave(joined.session.id);
+      expect(harness.state.audioCaptureId).toBeUndefined();
+    });
   });
 });

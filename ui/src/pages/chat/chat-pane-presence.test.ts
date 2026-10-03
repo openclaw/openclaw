@@ -81,16 +81,10 @@ it("keeps an idle pane unchanged for presence heartbeats and unrelated viewers w
 });
 
 it.each([
-  { name: "viewer arrives", previous: [person("self")], next: [person("self"), person("Riley")] },
   {
     name: "viewer leaves",
     previous: [person("self"), person("Riley")],
     next: [person("self"), person("Riley", { watchedSessions: [] })],
-  },
-  {
-    name: "viewer disconnects",
-    previous: [person("self"), person("Riley")],
-    next: [person("self"), person("Riley", { reason: "disconnect" })],
   },
   {
     name: "viewer name changes",

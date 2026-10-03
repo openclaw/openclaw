@@ -216,6 +216,7 @@ export async function withDoctorSqliteMaintenanceLock<T>(
           if (!active) {
             throw new Error("Doctor SQLite maintenance authority has expired.");
           }
+          lock.assertCurrent();
         },
       });
     });

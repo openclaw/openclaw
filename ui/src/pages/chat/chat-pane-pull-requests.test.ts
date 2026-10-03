@@ -14,6 +14,7 @@ import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
+import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-controller.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
@@ -55,6 +56,7 @@ function createPullRequestPane(sessions: SessionCapability) {
     sessions: sessionCapability,
   });
   harness.pane.context.gateway.snapshot.hello = {
+    auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
     features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
   } as never;
   return { ...harness, request };
@@ -81,15 +83,29 @@ function emitSnapshot(
   });
 }
 
-function createPublicationPane(scope?: "global" | "per-sender") {
+function createPublicationPane(
+  scope?: "global" | "per-sender",
+  operatorScopes = ["operator.read", "operator.write"],
+) {
   const agentId = scope ? "research" : "main";
   const sessionKey = scope ? "global" : "agent:main:publication";
-  const shared = { source: "system-configured", accountId: 1, login: "system-bot" };
+  const shared: NonNullable<GitHubPublicationOptions["shared"]> = {
+    source: "system-configured",
+    accountId: 1,
+    login: "system-bot",
+  };
   const account = { accountId: 2, login: "alice-tools" };
   const generation = "bdca439a-e787-4f9f-b5f3-a878c662cc76";
-  const options = {
+  const options: GitHubPublicationOptions = {
     shared,
-    personal: { state: "connected", generation, account },
+    personal: {
+      state: "connected",
+      generation,
+      account,
+      accessExpiresAtMs: null,
+      refreshState: "available",
+      pending: null,
+    },
     pendingPersonal: null,
     latestShared: null,
   };
@@ -112,8 +128,13 @@ function createPublicationPane(scope?: "global" | "per-sender") {
   const initial = createInitializationContext();
   const eventListeners = new Set<GatewayEventListener>();
   const hello = gatewayHelloForMethods(
-    ["sessions.github.publish", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, "projects.list"],
-    ["operator.read", "operator.write"],
+    [
+      "sessions.github.publish",
+      "sessions.github.options",
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      "projects.list",
+    ],
+    operatorScopes,
   );
   if (scope) {
     hello.snapshot = {
@@ -179,6 +200,11 @@ function createPublicationPane(scope?: "global" | "per-sender") {
       {
         key: sessionKey,
         sessionId: "publication",
+        worktree: {
+          id: "worktree-publication",
+          branch: "feature/publication",
+          repoRoot: "/synthetic/repository",
+        },
         kind: scope ? "global" : "direct",
         updatedAt: 1,
       },
@@ -211,6 +237,12 @@ function createPublicationPane(scope?: "global" | "per-sender") {
 }
 
 describe("chat pane pushed pull request state", () => {
+  it("does not attach the publication card from an advertised method without read access", () => {
+    const { pane, request } = createPublicationPane(undefined, []);
+    pane.render();
+    expect(pane.chatProps?.githubPublication).toBeUndefined();
+    expect(request.mock.calls.some(([method]) => method === "sessions.github.options")).toBe(false);
+  });
   it("keeps the pane quiet for unrelated PR snapshots while publishing its own changes", () => {
     const { pane, state, emitGatewayEvent } = createPullRequestPane({
       capturePullRequestEpoch: vi.fn(() => ({})),
@@ -426,12 +458,12 @@ describe("chat pane pushed pull request state", () => {
   it.each(["shared", "personal"] as const)(
     "retains an unknown %s publication across a retained-pane navigation",
     async (source) => {
-      const { pane, state, request, shared, account, generation, settled } =
+      const { pane, state, request, options, shared, account, generation, settled } =
         createPublicationPane();
       (await settled()).onSelect?.(source);
       pane.render();
       pane.chatProps!.githubPublication!.onPublish?.();
-      const unknown = await settled();
+      let unknown = await settled();
       expect(unknown.locked).toBe(true);
       const first = request.mock.calls.find(([method]) => method === "sessions.github.publish");
       expect(first?.[1]).toEqual({
@@ -441,6 +473,12 @@ describe("chat pane pushed pull request state", () => {
         selection:
           source === "shared" ? { source, expected: shared } : { source, generation, account },
       });
+      if (source === "shared") {
+        options.shared = null;
+        unknown.onRefresh();
+        unknown = await settled();
+        expect(unknown.onPublish).toBeTypeOf("function");
+      }
 
       pane.presented = false;
       pane.render();
@@ -665,6 +703,76 @@ describe("chat pane pushed pull request state", () => {
     );
   });
 });
+
+it.each(["worktree", "repository"] as const)(
+  "derives guest shared publication for an owned %s workspace",
+  async (workspace) => {
+    const { pane, state, context, request, shared, settled } = createPublicationPane(undefined, [
+      "operator.sessions.write",
+    ]);
+    const row = state.sessionsResult!.sessions[0]!;
+    row.sharingRole = "owner";
+    if (workspace === "repository") {
+      delete row.worktree;
+      row.repositoryWorkspaceId = "repository-publication";
+      row.repository = {
+        url: "https://github.com/synthetic/visitor-demo",
+        branch: "feature/publication",
+      };
+    }
+    const guest = await settled();
+    expect(guest.onPublish).toBeTypeOf("function");
+    expect(guest.onSelect).toBeUndefined();
+    expect(guest.onConfirm).toBeUndefined();
+    guest.onPublish?.();
+    await settled();
+    expect(request).toHaveBeenLastCalledWith("sessions.github.publish", {
+      sessionKey: state.sessionKey,
+      agentId: "main",
+      idempotencyKey: expect.any(String),
+      selection: { source: "shared", expected: shared },
+    });
+    const previous = pane.chatProps!.githubPublication!;
+    context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["sessions.github.publish", "sessions.github.options"],
+      ["operator.sessions.read"],
+    );
+    previous.onPublish?.();
+    expect(
+      request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
+    ).toHaveLength(1);
+    expect((await settled()).onPublish).toBeUndefined();
+  },
+);
+
+it("does not fall back to a personal account for a session-only publisher", async () => {
+  const { state, options, request, settled } = createPublicationPane(undefined, [
+    "operator.sessions.write",
+  ]);
+  state.sessionsResult!.sessions[0]!.sharingRole = "owner";
+  options.shared = null;
+  const view = await settled();
+  expect(view.onPublish).toBeUndefined();
+  expect(view.onSelect).toBeUndefined();
+  expect(request.mock.calls.some(([method]) => method === "sessions.github.publish")).toBe(false);
+});
+
+it.each(["viewer", "member", "unknown", "archived"] as const)(
+  "keeps narrow publication nonmutating for a %s session",
+  async (access) => {
+    const { state, request, settled } = createPublicationPane(undefined, [
+      "operator.sessions.write",
+    ]);
+    const row = state.sessionsResult!.sessions[0]!;
+    row.sharingRole = access === "archived" ? "owner" : access === "unknown" ? undefined : access;
+    row.archived = access === "archived";
+    const view = await settled();
+    expect(view.onPublish).toBeUndefined();
+    expect(view.onSelect).toBeUndefined();
+    expect(view.onConfirm).toBeUndefined();
+    expect(request.mock.calls.every(([method]) => method !== "sessions.github.publish")).toBe(true);
+  },
+);
 
 it.each(["incarnation", "sharing", "archive-projection"] as const)(
   "rejects a stale idle publication before render: %s",

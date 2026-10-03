@@ -1,6 +1,6 @@
 // Covers the scripts/pr prepare-gates remote testbox mode.
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -351,149 +351,109 @@ describe("prepare gate changed-file plan", () => {
   });
 });
 
-describe("remote testbox gate delegation", () => {
-  function runRemoteGate(env: NodeJS.ProcessEnv) {
-    const dir = tempDirs.make("openclaw-pr-gates-remote-");
-    const stubBin = join(dir, "bin");
-    mkdirSync(stubBin);
-    writeFileSync(
-      join(stubBin, "node"),
-      [
-        "#!/bin/sh",
-        `if [ "$1" != scripts/crabbox-wrapper.mjs ]; then exec '${process.execPath}' "$@"; fi`,
-        "printf 'ARG:%s\\n' \"$@\"",
-        `printf '{"provider":"blacksmith-testbox","leaseId":"tbx_stub","exitCode":0,"runStatus":"passed"}\\n' >&2`,
-      ].join("\n"),
-    );
-    chmodSync(join(stubBin, "node"), 0o755);
-
-    const workDir = join(dir, "work");
-    mkdirSync(workDir);
+describe("private QA build scope", () => {
+  function runBuildGate(
+    options: {
+      docsOnly?: boolean;
+      remote?: "testbox";
+      qa?: string;
+      workers?: string;
+      failBuild?: boolean;
+      conditional?: boolean;
+    } = {},
+  ) {
+    const { repoDir, headSha } = makeRetryRepo();
+    writeFileSync(join(repoDir, ".local", "pr-meta.env"), "PR_AUTHOR=fixture\n");
     const result = runGatesBash(
-      "run_remote_testbox_full_test_gate 'pnpm test (blacksmith-testbox)' .local/gates-test.log pr-424242-gates",
+      [
+        `enter_worktree() { PR_MAIN_SHA=${headSha}; }`,
+        "checkout_prep_branch() { :; }",
+        "prepare_local_gate_workspace() { :; }",
+        "derive_prepare_gate_change_plan() {",
+        `  PREPARE_GATE_BASE_SHA=${headSha}`,
+        "  PREPARE_GATE_CHANGED_FILES=''",
+        `  PREPARE_GATE_DOCS_ONLY=${options.docsOnly ?? false}`,
+        "  PREPARE_GATE_CHANGELOG_ONLY=false",
+        "  PREPARE_GATE_CHANGELOG_UPDATE=false",
+        "  PREPARE_GATE_CHANGELOG_REQUIRED=false",
+        "}",
+        "run_quiet_logged() {",
+        '  local label="$1"; shift 2',
+        '  printf \'%s\\t%s\' "$label" "${OPENCLAW_BUILD_PRIVATE_QA-<unset>}" >> .local/commands',
+        "  printf '\\t%s' \"$@\" >> .local/commands",
+        "  printf '\\n' >> .local/commands",
+        ...(options.failBuild ? ['  if [ "$label" = "pnpm build" ]; then return 23; fi'] : []),
+        "}",
+        "run_remote_testbox_gates() {",
+        "  printf 'remote-gates\\t%s\\n' \"${OPENCLAW_BUILD_PRIVATE_QA-<unset>}\" >> .local/commands",
+        "}",
+        `require_remote_testbox_gate_stamp() { printf '%s\\n' '{"leaseId":"tbx_fixture"}'; }`,
+        options.conditional ? 'prepare_gates 4242 || exit "$?"' : "prepare_gates 4242",
+      ].join("\n"),
       {
-        cwd: workDir,
-        env: { PATH: `${stubBin}:${process.env.PATH ?? ""}`, ...env },
+        cwd: repoDir,
+        env: {
+          OPENCLAW_PR_GATES_REMOTE: options.remote,
+          OPENCLAW_BUILD_PRIVATE_QA: options.qa,
+          OPENCLAW_VITEST_MAX_WORKERS: options.workers,
+        },
       },
     );
-
-    return { result, workDir, logPath: join(workDir, ".local/gates-test.log") };
+    const commands = readFileSync(join(repoDir, ".local", "commands"), "utf8")
+      .trimEnd()
+      .split("\n")
+      .map((line) => line.split("\t"));
+    return { result, commands, headSha, stamp: join(repoDir, ".local", "gates.env") };
   }
 
   it.each([
-    { name: "absent controls", env: {}, expected: [] },
-    {
-      name: "explicit controls",
-      env: { OPENCLAW_TEST_PROJECTS_PARALLEL: "2", OPENCLAW_VITEST_MAX_WORKERS: "1" },
-      expected: ["OPENCLAW_TEST_PROJECTS_PARALLEL=2", "OPENCLAW_VITEST_MAX_WORKERS=1"],
-    },
-    {
-      name: "normalized integer controls",
-      env: { OPENCLAW_TEST_PROJECTS_PARALLEL: " 02 ", OPENCLAW_VITEST_MAX_WORKERS: "001" },
-      expected: ["OPENCLAW_TEST_PROJECTS_PARALLEL=2", "OPENCLAW_VITEST_MAX_WORKERS=1"],
-    },
-    {
-      name: "empty controls",
-      env: { OPENCLAW_TEST_PROJECTS_PARALLEL: "", OPENCLAW_VITEST_MAX_WORKERS: " \t " },
-      expected: [],
-    },
-    {
-      name: "only the worker control",
-      env: { OPENCLAW_VITEST_MAX_WORKERS: "3" },
-      expected: ["OPENCLAW_VITEST_MAX_WORKERS=3"],
-    },
-  ])("runs the full worktree Testbox command with $name", ({ env, expected }) => {
-    const { result, logPath } = runRemoteGate(env);
+    { name: "default scheduling", qa: undefined, workers: undefined },
+    { name: "explicit workers and caller QA value", qa: "0", workers: "2" },
+  ])("prepares local full-test artifacts without changing $name", ({ qa, workers }) => {
+    const { result, commands, headSha, stamp } = runBuildGate({ qa, workers });
     expect(result.status, result.stderr).toBe(0);
-    const args = readFileSync(logPath, "utf8")
-      .split("\n")
-      .filter((line) => line.startsWith("ARG:"))
-      .map((line) => line.slice(4));
-    expect(args).toEqual([
-      "scripts/crabbox-wrapper.mjs",
-      "run",
-      "--provider",
-      "blacksmith-testbox",
-      "--blacksmith-org",
-      "openclaw",
-      "--blacksmith-workflow",
-      ".github/workflows/ci-check-testbox.yml",
-      "--blacksmith-job",
-      "check",
-      "--blacksmith-ref",
-      "main",
-      "--idle-timeout",
-      "90m",
-      "--ttl",
-      "240m",
-      "--timing-json",
-      "--label",
-      "pr-424242-gates",
-      "--",
-      "env",
-      "CI=1",
-      "OPENCLAW_TESTBOX_REMOTE_RUN=1",
-      "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false",
-      ...expected,
-      "corepack",
-      "pnpm",
-      "test",
-    ]);
-  });
-
-  it.each(
-    ["OPENCLAW_TEST_PROJECTS_PARALLEL", "OPENCLAW_VITEST_MAX_WORKERS"].flatMap((name) =>
-      ["0", "-1", "1.5", "9007199254740992", "2; touch injected"].map((value) => ({ name, value })),
-    ),
-  )("rejects $name=$value before remote dispatch", ({ name, value }) => {
-    const { result, workDir, logPath } = runRemoteGate({ [name]: value });
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain(`${name} must be a positive integer`);
-    expect(existsSync(logPath)).toBe(false);
-    expect(existsSync(join(workDir, "injected"))).toBe(false);
-  });
-
-  it("extracts the last successful blacksmith-testbox timing stamp", () => {
-    const dir = tempDirs.make("openclaw-pr-gates-stamp-");
-    const log = join(dir, "gates-test.log");
-    writeFileSync(
-      log,
+    const inheritedQa = qa ?? "<unset>";
+    expect(commands).toEqual([
+      ["pnpm build", inheritedQa, "env", "OPENCLAW_BUILD_PRIVATE_QA=1", "pnpm", "build"],
+      ["pnpm check", inheritedQa, "pnpm", "check", "--base", headSha],
       [
-        "provider=blacksmith-testbox id=tbx_first sync=delegated auth=blacksmith",
-        "GitHub Actions run: https://github.com/openclaw/openclaw/actions/runs/1234",
-        '{"not":"a stamp"}',
-        "not json at all",
-        '{"provider":"blacksmith-testbox","leaseId":"tbx_first","exitCode":1,"runStatus":"failed"}',
-        '{"provider":"blacksmith-testbox","leaseId":"tbx_final","exitCode":0,"runStatus":"passed"}',
-        "GitHub Actions run: https://github.com/openclaw/openclaw/actions/runs/9999",
-        "GitHub Actions run: https://github.com/example/other/actions/runs/8888",
-        "",
-      ].join("\n"),
-    );
-
-    const result = runGatesBash(
-      `require_remote_testbox_gate_stamp '${log}' | jq -r '[.leaseId, .actionsRunUrl] | @tsv'`,
-    );
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(
-      "tbx_final\thttps://github.com/openclaw/openclaw/actions/runs/1234",
-    );
+        "pnpm test",
+        inheritedQa,
+        ...(workers ? ["env", `OPENCLAW_VITEST_MAX_WORKERS=${workers}`] : []),
+        "pnpm",
+        "test",
+      ],
+    ]);
+    expect(readFileSync(stamp, "utf8")).toContain(`FULL_GATES_HEAD_SHA=${headSha}\n`);
   });
 
-  it("fails when the gate log has no successful stamp", () => {
-    const dir = tempDirs.make("openclaw-pr-gates-stamp-");
-    const log = join(dir, "gates-test.log");
-    writeFileSync(
-      log,
-      '{"provider":"blacksmith-testbox","leaseId":"tbx_only","exitCode":1,"runStatus":"failed"}\n',
+  it.each([
+    { name: "docs-only", docsOnly: true, remote: undefined, gateMode: "docs_only" },
+    { name: "Testbox", docsOnly: false, remote: "testbox" as const, gateMode: "remote_testbox" },
+  ])("preserves $name producer and test inputs", ({ docsOnly, remote, gateMode }) => {
+    const { result, commands, headSha, stamp } = runBuildGate({ docsOnly, remote, qa: "0" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(commands).toEqual(
+      remote
+        ? [["remote-gates", "0"]]
+        : [
+            ["pnpm build", "0", "pnpm", "build"],
+            ["pnpm check", "0", "pnpm", "check", "--base", headSha],
+          ],
     );
-
-    const result = runGatesBash(`require_remote_testbox_gate_stamp '${log}'`);
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("no successful blacksmith-testbox timing stamp");
+    expect(readFileSync(stamp, "utf8")).toContain(`GATES_MODE=${gateMode}\n`);
   });
+
+  it.each([false, true])(
+    "stops at build failure without a success stamp, conditional=%s",
+    (conditional) => {
+      const { result, commands, stamp } = runBuildGate({ failBuild: true, conditional });
+      expect(result.status, result.stderr).toBe(23);
+      expect(commands.map(([label]) => label)).toEqual(["pnpm build"]);
+      expect(existsSync(stamp)).toBe(false);
+    },
+  );
 });
-
 describe("prepare author access snapshot", () => {
   it.each([
     ["admin", "maintainer"],

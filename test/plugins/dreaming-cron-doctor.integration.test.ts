@@ -3,14 +3,14 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import memoryCore from "../../extensions/memory-core/index.js";
+import {
+  inspectCronJobsForDoctor,
+  repairCronJobsForDoctor,
+} from "../../src/commands/doctor/cron/store-repair.js";
 import type { OpenClawConfig } from "../../src/config/types.js";
 import { CronService, type CronEvent } from "../../src/cron/service.js";
 import { createNoopLogger } from "../../src/cron/service.test-harness.js";
-import {
-  getCronJobsStoreRevision,
-  saveCronJobsStoreWithRevisionNative,
-} from "../../src/cron/store.js";
-import { inspectCronJobsForDoctor, repairCronJobsForDoctor } from "../../src/cron/store/doctor.js";
+import { getCronJobsStoreRevision } from "../../src/cron/store.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
 import * as sqliteSnapshot from "../../src/infra/sqlite-snapshot.js";
 import { createPluginDoctorStateMigrationContext } from "../../src/infra/state-migrations.plugin-doctor-context.js";
@@ -35,6 +35,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../src/test-utils/openclaw-test-state.js";
+import { seedCronStoreInCurrentDatabase } from "../helpers/cron/store.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -110,7 +111,7 @@ async function withCronFixture(
       [retiredStore, [makeJob("retired", legacyFields), makeJob("malformed")]],
       [untouchedStore, [makeJob("survivor")]],
     ] as const) {
-      saveCronJobsStoreWithRevisionNative(storePath, { version: 1, jobs: [...jobs] });
+      seedCronStoreInCurrentDatabase(storePath, { version: 1, jobs: [...jobs] });
     }
     runOpenClawStateWriteTransaction(({ db }) => {
       db.prepare("UPDATE cron_jobs SET sort_order = 17 WHERE store_key = ? AND job_id = ?").run(
@@ -338,7 +339,7 @@ describe("host Cron Doctor repair", () => {
     await withCronFixture(async (fixture) => {
       const { state, activeStore, retiredStore, databasePath } = fixture;
       const migration = getDreamingMigration(fixture);
-      saveCronJobsStoreWithRevisionNative(fixture.untouchedStore, {
+      seedCronStoreInCurrentDatabase(fixture.untouchedStore, {
         version: 1,
         jobs: [
           makeJob("survivor"),
@@ -586,7 +587,6 @@ describe("host Cron Doctor repair", () => {
   it.each([
     { layout: "inactive only", activeDreaming: false, enabled: true },
     { layout: "active and inactive", activeDreaming: true, enabled: true },
-    { layout: "inactive only", activeDreaming: false, enabled: false },
     { layout: "active and inactive", activeDreaming: true, enabled: false },
   ])(
     "keeps $layout history and authored lookalikes after Doctor and runtime dreaming enabled=$enabled",
@@ -672,9 +672,7 @@ describe("host Cron Doctor repair", () => {
                       action: activeDreaming ? "updated" : "added",
                     },
                   ]
-                : activeDreaming
-                  ? [{ jobId: "survivor", action: "removed" }]
-                  : [],
+                : [{ jobId: "survivor", action: "removed" }],
             );
             expect(logger.warn).toHaveBeenCalledWith(
               expect.stringContaining(

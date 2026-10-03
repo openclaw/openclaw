@@ -45,15 +45,32 @@ export async function preparePhysicalSessionStorePath(
 export function publishSystemEventStoreConfig(cfg: OpenClawConfig): void {
   const env = { ...process.env };
   const paths = new Map<string, string>();
-  publishSystemEventStoreResolver((sessionKey, owner) => {
+  const resolve = (sessionKey: string, owner?: string) => {
     const agentId = resolveAgentIdFromSessionKey(sessionKey, owner);
     const scope = { sessionKey, agentId, env };
     const key = JSON.stringify([agentId, resolveSessionStorePathForScope(scope, cfg)]);
-    if (!paths.has(key)) {
-      paths.set(key, resolvePhysicalSessionStorePath(scope, cfg));
-    }
-    return paths.get(key)!;
-  });
+    return { scope, key };
+  };
+  publishSystemEventStoreResolver(
+    (sessionKey, owner) => {
+      const { scope, key } = resolve(sessionKey, owner);
+      if (!paths.has(key)) {
+        paths.set(key, resolvePhysicalSessionStorePath(scope, cfg));
+      }
+      return paths.get(key)!;
+    },
+    async (sessionKey, owner) => {
+      const { scope, key } = resolve(sessionKey, owner);
+      if (!paths.has(key)) {
+        const prepared = await preparePhysicalSessionStorePath(scope, cfg);
+        // A synchronous sibling may already have installed the same owner's selection.
+        if (!paths.has(key)) {
+          paths.set(key, prepared);
+        }
+      }
+      return paths.get(key)!;
+    },
+  );
 }
 
 export function captureSessionWatcherStorePaths(

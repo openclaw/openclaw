@@ -15,7 +15,7 @@ import {
 import {
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
-  runWithGatewayIndependentRootWorkContinuation,
+  runWithGatewayDetachedWorkContinuation,
   waitForGatewayRestartFenceSettlement,
 } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -59,7 +59,7 @@ import {
   trimSummaryElisionsToCap,
 } from "./state.js";
 import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
-import { isFollowupRunAborted, isFollowupRunDeferredError, type FollowupRun } from "./types.js";
+import { FollowupRunDeferredError, isFollowupRunAborted, type FollowupRun } from "./types.js";
 
 type InternalFollowupRun = FollowupRun & {
   /** Keep admission state out of the public plugin-facing FollowupRun contract. */
@@ -360,10 +360,6 @@ function collectQueuedPromptMedia(
   };
 }
 
-function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
-  return item.currentInboundEventKind === "room_event" || item.currentInboundAudio === true;
-}
-
 function buildCollectTranscriptInput(
   items: FollowupRun[],
   messages?: (PersistedUserTurnMessage | undefined)[],
@@ -494,7 +490,8 @@ function requiresIndividualCollectDrain(item: FollowupRun): boolean {
     item.disableCollectBatching === true ||
     item.run.skillWorkshopProposalRevision !== undefined ||
     item.run.skillLibraryAuthoring !== undefined ||
-    hasRuntimeOnlyFollowupMetadata(item)
+    item.currentInboundEventKind === "room_event" ||
+    item.currentInboundAudio === true
   );
 }
 
@@ -653,7 +650,7 @@ async function runQueueSummaryDelivery(
       await run({ abortSignal: cancellation.signal, onAdmitted });
     } catch (err) {
       if (!admitted) {
-        deferredBeforeAdmission = isFollowupRunDeferredError(err);
+        deferredBeforeAdmission = err instanceof FollowupRunDeferredError;
         if (!deferredBeforeAdmission) {
           releaseQueueSummaryDeliveryForRetry(queue, delivery);
         }
@@ -675,8 +672,6 @@ async function runQueueSummaryDelivery(
         });
         return false;
       }
-    }
-    if (!admitted) {
       consumeQueueSummaryDelivery(queue, delivery);
     }
     return true;
@@ -796,14 +791,10 @@ function resolveOverflowSummarySourceGroup(queue: {
     return [];
   }
   const contextKey = resolveFollowupDeliveryContextKey(source);
-  const sources: FollowupRun[] = [];
-  for (const candidate of queue.summarySources) {
-    if (resolveFollowupDeliveryContextKey(candidate) !== contextKey) {
-      break;
-    }
-    sources.push(candidate);
-  }
-  return sources;
+  const end = queue.summarySources.findIndex(
+    (candidate) => resolveFollowupDeliveryContextKey(candidate) !== contextKey,
+  );
+  return queue.summarySources.slice(0, end < 0 ? undefined : end);
 }
 
 async function drainProtectedPriorityFollowup(
@@ -1169,7 +1160,8 @@ export function scheduleFollowupDrain(
               activeGroupItems.some((item) =>
                 hasExclusiveTurnAdmission(item.turnAdoptionLifecycle),
               );
-            const consumeAdmittedGroup = () => {
+            const admitGroupSources = async () => {
+              await Promise.all(activeGroupItems.map((item) => admitFollowupRunLifecycle(item)));
               cancellation.admit();
               admitted = true;
               removeQueuedItemsByRef(queue.items, activeGroupItems);
@@ -1178,10 +1170,6 @@ export function scheduleFollowupDrain(
                   retireFollowupRunCancellation(item);
                 }
               }
-            };
-            const admitGroupSources = async () => {
-              await Promise.all(activeGroupItems.map((item) => admitFollowupRunLifecycle(item)));
-              consumeAdmittedGroup();
             };
             const completeGroup = () => {
               removeQueuedItemsByRef(queue.items, activeGroupItems);
@@ -1280,7 +1268,7 @@ export function scheduleFollowupDrain(
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
-      if (!isFollowupRunDeferredError(err)) {
+      if (!(err instanceof FollowupRunDeferredError)) {
         if (isGatewayRestartDrainError(err)) {
           // A reversible signal fence may reopen. One-way abort synchronously
           // retires the queue above; rollback leaves it here for normal retry.
@@ -1314,8 +1302,10 @@ export function scheduleFollowupDrain(
   // Give the detached chain its own root so inherited request admission cannot go stale.
   // Queued turns re-admit on the generation current at drain time: the detached
   // drain runs outside any ambient prepared-generation scope, so a parked turn
-  // never inherits the predecessor run's replaced generation.
-  void runWithGatewayIndependentRootWorkContinuation(
+  // never inherits the predecessor run's replaced generation. The drain also owns
+  // a fresh async work scope: drained turns run tracked agent work that must keep
+  // working after the triggering request's scope has closed.
+  void runWithGatewayDetachedWorkContinuation(
     () => runOutsidePreparedModelRuntimePluginGenerationScope(drainQueuedFollowups),
     "session:followup-drain",
   ).catch((err: unknown) => {

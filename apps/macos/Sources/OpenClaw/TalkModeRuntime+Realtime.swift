@@ -11,31 +11,10 @@ private enum RealtimeRelayConfigurationError: LocalizedError {
 }
 
 extension TalkModeRuntime {
-    #if DEBUG
-    typealias VoiceWakePermissionProvider = @Sendable () async -> Bool
-    typealias RealtimeAudioCaptureProvider =
-        @MainActor @Sendable () -> any RealtimeTalkAudioCapturing
-    #endif
-
     private enum ScheduledRealtimeRecoveryState: Equatable {
         case cancelled
         case waitingForStartToFinish
         case ready
-    }
-
-    private static let realtimeStableSessionSeconds: TimeInterval = 30
-    private static let realtimeRestartDelaysNanoseconds: [UInt64] = [500_000_000, 2_000_000_000]
-
-    static func realtimeRestartAttempt(
-        previousRapidRestarts: Int,
-        activeDuration: TimeInterval) -> Int
-    {
-        activeDuration >= self.realtimeStableSessionSeconds ? 1 : previousRapidRestarts + 1
-    }
-
-    static func realtimeRestartDelayNanoseconds(attempt: Int) -> UInt64? {
-        guard attempt > 0, attempt <= self.realtimeRestartDelaysNanoseconds.count else { return nil }
-        return self.realtimeRestartDelaysNanoseconds[attempt - 1]
     }
 
     func stop(
@@ -70,9 +49,9 @@ extension TalkModeRuntime {
         let projectionGeneration = self.realtimeRelayGeneration
         _ = await MainActor.run {
             self.realtimeRelayDeliveryGate.deliver(ifActive: projectionGeneration) {
-                TalkModeController.shared.updateLevel(0)
-                TalkModeController.shared.updatePartialTranscript("")
-                TalkModeController.shared.updatePhase(.idle)
+                self.controller()?.updateLevel(0)
+                self.controller()?.updatePartialTranscript("")
+                self.controller()?.updatePhase(.idle)
             }
         }
     }
@@ -103,20 +82,14 @@ extension TalkModeRuntime {
 
     func start() async {
         let gen = lifecycleGeneration
-        #if DEBUG
-        guard self.voiceWakeSupportedProvider() else { return }
-        let hasVoiceWakePermission = await self.voiceWakePermissionProvider()
-        #else
-        guard voiceWakeSupported else { return }
-        let hasVoiceWakePermission = await PermissionManager.ensureVoiceWakePermissions(interactive: true)
-        #endif
+        guard self.dependencies.permissions.supported() else { return }
+        let hasVoiceWakePermission = await self.dependencies.permissions.ensure(true)
         guard hasVoiceWakePermission else {
             logger.error("talk runtime not starting: permissions missing")
             return
         }
-        macOSRealtimeRelayOptIn = await MainActor.run {
-            AppStateStore.shared.talkRealtimeRelayEnabled
-        }
+        guard let optIn = await MainActor.run(body: { self.state()?.talkRealtimeRelayEnabled }) else { return }
+        macOSRealtimeRelayOptIn = optIn
         let bypassRealtime = bypassRealtimeOnNextStart
         bypassRealtimeOnNextStart = false
         if !macOSRealtimeRelayOptIn || bypassRealtime {
@@ -126,8 +99,8 @@ extension TalkModeRuntime {
         if isPaused {
             phase = .idle
             await MainActor.run {
-                TalkModeController.shared.updateLevel(0)
-                TalkModeController.shared.updatePhase(.idle)
+                self.controller()?.updateLevel(0)
+                self.controller()?.updatePhase(.idle)
             }
             return
         }
@@ -206,12 +179,12 @@ extension TalkModeRuntime {
         phase = recognitionStarted ? .listening : .idle
         return await self.projectRealtimeRelay(relayGeneration, nil) {
             if recognitionStarted, let status {
-                TalkModeController.shared.updatePartialTranscript(status)
+                self.controller()?.updatePartialTranscript(status)
             } else if !recognitionStarted {
-                TalkModeController.shared.updatePartialTranscript(
+                self.controller()?.updatePartialTranscript(
                     String(localized: "Realtime unavailable — native speech could not start"))
             }
-            TalkModeController.shared.updatePhase(recognitionStarted ? .listening : .idle)
+            self.controller()?.updatePhase(recognitionStarted ? .listening : .idle)
         }
     }
 
@@ -252,16 +225,7 @@ extension TalkModeRuntime {
                     "brain=\(realtimeBrain ?? "missing", privacy: .public); using native fallback")
             return false
         }
-        return Self.shouldUseRealtimeRelay(
-            localOptIn: macOSRealtimeRelayOptIn,
-            hasGatewayRealtimeRelayTuple: hasGatewayRealtimeRelayTuple)
-    }
-
-    static func shouldUseRealtimeRelay(
-        localOptIn: Bool,
-        hasGatewayRealtimeRelayTuple: Bool) -> Bool
-    {
-        localOptIn && hasGatewayRealtimeRelayTuple
+        return true
     }
 
     func startRealtimeRelay(generation: Int) async throws {
@@ -303,8 +267,8 @@ extension TalkModeRuntime {
         realtimeSessionReadyAt = Date()
         phase = .listening
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
-            TalkModeController.shared.updatePartialTranscript("")
-            TalkModeController.shared.updatePhase(.listening)
+            self.controller()?.updatePartialTranscript("")
+            self.controller()?.updatePhase(.listening)
         }
         logger.info(
             "talk realtime ready provider=\(realtimeProvider ?? "default", privacy: .public) " +
@@ -317,10 +281,11 @@ extension TalkModeRuntime {
         relayGeneration: UInt64) async throws
     {
         let locale = await MainActor.run { () -> String? in
+            guard let state = self.state() else { return nil }
             guard self.realtimeRelayDeliveryGate.deliver(ifActive: relayGeneration, {
-                AppStateStore.shared.seamColorHex = config.seamColorHex
+                state.seamColorHex = config.seamColorHex
             }) else { return nil }
-            return AppStateStore.shared.voiceWakeLocaleID
+            return state.voiceWakeLocaleID
         }
         #if DEBUG
         if let checkpoint = self.realtimeConfigApplicationCheckpoint {
@@ -342,13 +307,13 @@ extension TalkModeRuntime {
         recognitionGeneration: Int,
         relayGeneration: UInt64) async -> Bool
     {
-        let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
+        let locale = await MainActor.run { self.state()?.voiceWakeLocaleID }
         #if DEBUG
         if let checkpoint = self.realtimeConfigApplicationCheckpoint {
             await checkpoint()
         }
         #endif
-        guard self.isCurrent(lifecycleGeneration),
+        guard let locale, self.isCurrent(lifecycleGeneration),
               !self.isPaused,
               self.recognitionGeneration == recognitionGeneration,
               self.realtimeRelayGeneration == relayGeneration,
@@ -387,9 +352,7 @@ extension TalkModeRuntime {
         guard isCurrent(lifecycleGeneration), !isPaused,
               realtimeRelayGeneration == relayGeneration
         else { throw CancellationError() }
-        let activeSessionKey = await MainActor.run {
-            WebChatManager.shared.activeSessionKey
-        }
+        let activeSessionKey = await self.dependencies.selectedSession()
         let sessionKey: String = if let activeSessionKey {
             activeSessionKey
         } else {
@@ -400,20 +363,14 @@ extension TalkModeRuntime {
             provider: realtimeProvider,
             model: realtimeModelId,
             voice: realtimeSpeakerVoice)
-        #if DEBUG
-        let audioCaptureProvider = self.realtimeAudioCaptureProvider
-        #endif
+        let dependencies = self.dependencies
         return await MainActor.run {
-            #if DEBUG
-            let audioCapture = audioCaptureProvider()
-            #else
-            let audioCapture = MacRealtimeTalkAudioCapture()
-            #endif
+            let audioCapture = dependencies.audioCapture()
             return RealtimeTalkRelaySession(
                 transport: bootstrap.transport,
                 options: options,
                 audioCapture: audioCapture,
-                pcmPlayer: RealtimePCMStreamingAudioPlayer(),
+                pcmPlayer: dependencies.pcmPlayer(),
                 onStatus: { [weak self] status in
                     Task { await self?.handleRealtimeStatus(status, relayGeneration: relayGeneration) }
                 },
@@ -507,7 +464,7 @@ extension TalkModeRuntime {
         logger.error(
             "talk realtime issue code=\(issue.code, privacy: .public) " +
                 "message=\(issue.message, privacy: .public)")
-        _ = await self.projectRealtimeRelay(relayGeneration, session) { TalkModeController.shared
+        _ = await self.projectRealtimeRelay(relayGeneration, session) { self.controller()?
             .updatePartialTranscript(issue.message)
         }
     }
@@ -560,7 +517,7 @@ extension TalkModeRuntime {
             await self.setEnabled(false)
             guard !self.isEnabled, self.realtimeSession == nil else { return }
             _ = await self.projectRealtimeRelay(self.realtimeRelayGeneration, nil) {
-                TalkModeController.shared.exitTalkMode()
+                self.controller()?.exitTalkMode()
             }
             return
         }
@@ -578,16 +535,16 @@ extension TalkModeRuntime {
         realtimeSessionReadyAt = nil
         phase = .idle
         let shouldRecover = isEnabled && !isPaused
-        let attempt = Self.realtimeRestartAttempt(
+        let attempt = RealtimeTalkRecovery.restartAttempt(
             previousRapidRestarts: rapidRealtimeRestartCount,
             activeDuration: activeDuration)
-        let delay = Self.realtimeRestartDelayNanoseconds(attempt: attempt)
+        let delay = RealtimeTalkRecovery.restartDelayNanoseconds(attempt: attempt)
         guard await self.projectRealtimeRelay(terminalGeneration, nil, {
-            TalkModeController.shared.updateLevel(0)
-            TalkModeController.shared.updateSpeakingLevel(nil)
-            TalkModeController.shared.updatePhase(.idle)
+            self.controller()?.updateLevel(0)
+            self.controller()?.updateSpeakingLevel(nil)
+            self.controller()?.updatePhase(.idle)
             if shouldRecover {
-                TalkModeController.shared.updatePartialTranscript(delay == nil
+                self.controller()?.updatePartialTranscript(delay == nil
                     ? String(localized: "Realtime disconnected repeatedly — using native speech")
                     : String(localized: "Realtime disconnected — reconnecting…"))
             }
@@ -615,7 +572,7 @@ extension TalkModeRuntime {
         let phase: TalkModePhase = speaking ? .speaking : .listening
         self.phase = phase
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
-            TalkModeController.shared.updatePhase(phase)
+            self.controller()?.updatePhase(phase)
         }
     }
 
@@ -626,7 +583,7 @@ extension TalkModeRuntime {
               !self.isPaused
         else { return }
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
-            TalkModeController.shared.updateLevel(level)
+            self.controller()?.updateLevel(level)
         }
     }
 
@@ -637,7 +594,7 @@ extension TalkModeRuntime {
               !self.isPaused
         else { return }
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
-            TalkModeController.shared.updateSpeakingLevel(level)
+            self.controller()?.updateSpeakingLevel(level)
         }
     }
 
@@ -656,12 +613,12 @@ extension TalkModeRuntime {
         if transcript.isFinal {
             phase = .thinking
             _ = await self.projectRealtimeRelay(relayGeneration, session) {
-                TalkModeController.shared.commitTranscript(text)
-                TalkModeController.shared.updatePhase(.thinking)
+                self.controller()?.commitTranscript(text)
+                self.controller()?.updatePhase(.thinking)
             }
         } else {
             _ = await self.projectRealtimeRelay(relayGeneration, session) {
-                TalkModeController.shared.updatePartialTranscript(text)
+                self.controller()?.updatePartialTranscript(text)
             }
         }
     }
@@ -765,17 +722,6 @@ extension TalkModeRuntime {
 
     func _test_setRecognitionCleanupProbe(_ probe: (@Sendable () -> Void)?) {
         self.recognitionCleanupProbe = probe
-    }
-
-    func _test_setVoiceWakeReadiness(supported: Bool, permissionGranted: Bool) {
-        self.voiceWakeSupportedProvider = { supported }
-        self.voiceWakePermissionProvider = { permissionGranted }
-    }
-
-    func _test_setRealtimeAudioCaptureProvider(
-        _ provider: @escaping RealtimeAudioCaptureProvider)
-    {
-        self.realtimeAudioCaptureProvider = provider
     }
 
     func _test_setRealtimeConfigApplicationCheckpoint(

@@ -2,7 +2,11 @@
 // hook emission, thread bindings, and browser/MCP cleanup side effects.
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
@@ -880,7 +884,9 @@ test("sessions.reset closes a spawned ACP child that lives in a different agent 
   expect(closedKeys).toContain("agent:codex:acp:cross-store-child");
 });
 
-test("sessions.reset closes child ACP runtimes concurrently so stuck children do not serialize cleanup", async () => {
+test("sessions.reset closes child ACP runtimes concurrently so stuck children do not serialize cleanup", async ({
+  signal,
+}) => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
   acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
@@ -936,6 +942,7 @@ test("sessions.reset closes child ACP runtimes concurrently so stuck children do
   // Parent cancel resolves immediately; child cancels hang until released. With
   // sequential cleanup only the first child would dispatch; concurrent cleanup
   // dispatches all three before any resolves.
+  const childrenEntered = createDeferred();
   const releaseChildren: Array<() => void> = [];
   acpManagerMocks.cancelSession.mockImplementation(async (...args: unknown[]) => {
     const req = args[0] as { sessionKey?: string } | undefined;
@@ -944,20 +951,26 @@ test("sessions.reset closes child ACP runtimes concurrently so stuck children do
     }
     await new Promise<void>((resolve) => {
       releaseChildren.push(resolve);
+      if (releaseChildren.length === 3) {
+        childrenEntered.resolve();
+      }
     });
   });
 
+  const resetPromise = directSessionReq<{ ok: true }>("sessions.reset", { key: "main" });
   try {
-    const resetPromise = directSessionReq<{ ok: true }>("sessions.reset", {
-      key: "main",
-    });
-
-    await vi.waitFor(() => {
-      const childCancels = (
-        acpManagerMocks.cancelSession.mock.calls as unknown as Array<[{ sessionKey?: string }]>
-      ).filter((call) => call[0]?.sessionKey?.startsWith("agent:main:acp-child"));
-      expect(childCancels.length).toBe(3);
-    });
+    await withinTest(
+      awaitGateBeforeSettlement(
+        childrenEntered.promise,
+        resetPromise,
+        "Reset settled before all child cancellations entered",
+      ),
+      signal,
+    );
+    const childCancels = (
+      acpManagerMocks.cancelSession.mock.calls as unknown as Array<[{ sessionKey?: string }]>
+    ).filter((call) => call[0]?.sessionKey?.startsWith("agent:main:acp-child"));
+    expect(childCancels.length).toBe(3);
 
     for (const release of releaseChildren) {
       release();
@@ -966,6 +979,10 @@ test("sessions.reset closes child ACP runtimes concurrently so stuck children do
     expect(reset.ok).toBe(true);
   } finally {
     acpManagerMocks.cancelSession.mockImplementation(async () => {});
+    for (const release of releaseChildren) {
+      release();
+    }
+    await resetPromise.catch(() => {});
   }
 });
 

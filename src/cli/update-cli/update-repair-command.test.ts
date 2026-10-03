@@ -153,11 +153,26 @@ describe("update repair ledger recovery", () => {
       const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
       const detail =
         "Update refused: package manager owner is unknown; no changes were made. Run this OpenClaw install through its active npm, pnpm, or Bun global shim, or reinstall it with that package manager, then retry.";
+      const captureSteps: UpdateRunRecord["steps"] = [
+        {
+          step: "original-state-capture",
+          status: "completed",
+          detail: "Original state retained for manual recovery.",
+        },
+        {
+          step: "warning:original-state-capture:1",
+          status: "completed",
+          detail: "Optional plugin files could not be captured.",
+        },
+      ];
       recordUpdateRunStep(run.runId, { step: "driver:adopted", status: "completed" });
       if (legacy) {
         recordUpdateRunStep(run.runId, { step: "requested", status: "failed", detail });
       } else {
         recordUpdateRunStep(run.runId, { step: "installation-inspection", status: "in_progress" });
+        for (const step of captureSteps) {
+          recordUpdateRunStep(run.runId, step);
+        }
       }
       finishUpdateRun(run.runId, {
         status: legacy ? "failed" : "skipped",
@@ -190,6 +205,10 @@ describe("update repair ledger recovery", () => {
         expect(lastRun.steps).toContainEqual(
           expect.objectContaining({ step: "requested", detail }),
         );
+      } else {
+        expect(lastRun.steps).toEqual(
+          expect.arrayContaining(captureSteps.map((step) => expect.objectContaining(step))),
+        );
       }
       expect(renderUpdateRunReport(lastRun).headline).not.toContain("update failed");
       expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
@@ -201,7 +220,7 @@ describe("update repair ledger recovery", () => {
         }),
       );
       await updateRepairCommand({});
-      expect(mocks.finalize).toHaveBeenCalledExactlyOnceWith({}, []);
+      expect(mocks.finalize).toHaveBeenCalledExactlyOnceWith({}, [], undefined);
     },
   );
 
@@ -209,6 +228,8 @@ describe("update repair ledger recovery", () => {
     "newer target",
     "unknown target",
     "mutated run",
+    "unknown capture warning",
+    "failed capture warning",
     "different failure",
     "new run during lookup",
   ])("does not acknowledge a refusal with %s", async (problem) => {
@@ -223,6 +244,17 @@ describe("update repair ledger recovery", () => {
     });
     if (problem === "mutated run") {
       recordUpdateRunStep(run.runId, { step: "finalize:doctor", status: "failed" });
+    }
+    if (problem === "unknown capture warning") {
+      recordUpdateRunStep(run.runId, {
+        step: "warning:original-state-capture:restore",
+        status: "completed",
+      });
+    } else if (problem === "failed capture warning") {
+      recordUpdateRunStep(run.runId, {
+        step: "warning:original-state-capture:1",
+        status: "failed",
+      });
     }
     finishUpdateRun(run.runId, { status: "failed", reason: "update-failed" });
     const before = getUpdateRun(run.runId);
@@ -455,7 +487,7 @@ describe("update repair ledger recovery", () => {
       expect(mocks.finalize).not.toHaveBeenCalled();
       await updateRepairCommand({});
 
-      expect(mocks.finalize).toHaveBeenCalledExactlyOnceWith({}, []);
+      expect(mocks.finalize).toHaveBeenCalledExactlyOnceWith({}, [], undefined);
       expect(getUpdateRun(run.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
     },
   );
@@ -472,7 +504,7 @@ describe("update repair ledger recovery", () => {
       await updateRepairCommand({});
 
       if (offset > 0) {
-        expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId]);
+        expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId], undefined);
         expect(getUpdateRun(run.runId)).toEqual(recorded);
       } else {
         expect(mocks.finalize).not.toHaveBeenCalled();
@@ -520,7 +552,7 @@ describe("update repair ledger recovery", () => {
       await expect(updateRepairCommand(opts)).rejects.toThrow("Stop the service through its owner");
 
       expect(getUpdateRun(run.runId)).toEqual(run);
-      expect(mocks.finalize).toHaveBeenCalledWith(opts, [run.runId]);
+      expect(mocks.finalize).toHaveBeenCalledWith(opts, [run.runId], undefined);
     },
   );
 
@@ -548,7 +580,7 @@ describe("update repair ledger recovery", () => {
       await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");
 
       expect(getUpdateRun(run.runId)).toEqual(recorded);
-      expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId]);
+      expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId], undefined);
     },
   );
 
@@ -568,7 +600,7 @@ describe("update repair ledger recovery", () => {
 
     await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");
 
-    expect(mocks.finalize).toHaveBeenCalledWith({}, [old.runId, newer.runId]);
+    expect(mocks.finalize).toHaveBeenCalledWith({}, [old.runId, newer.runId], undefined);
     expect(mocks.reachable).not.toHaveBeenCalled();
     expect(listUpdateRuns()).toEqual(recorded);
   });
@@ -731,7 +763,7 @@ describe("update repair ledger recovery", () => {
     await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");
 
     expect(getUpdateRun(run.runId)?.status).toBe("running");
-    expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId]);
+    expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId], undefined);
   });
 
   it.each([

@@ -2,6 +2,7 @@
  * Regression coverage for IDENTITY.md parsing and merging.
  * Ensures placeholders are ignored and rich identity fields stay stable.
  */
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

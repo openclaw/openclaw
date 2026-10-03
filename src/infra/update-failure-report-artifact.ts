@@ -23,9 +23,25 @@ import {
   renderUpdateRunReport,
   type UpdateRunReport,
 } from "./update-run-report.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 const DOCTOR_LINT_REPORT_SECTION = "\n## Complete Doctor lint findings (";
+const NATIVE_FAILURE_REPORT_SECTION = "\n## Native process diagnostics\n";
+
+function nativeFailureDiagnostics(steps: UpdateRunRecord["steps"]): string {
+  const diagnostics = steps.flatMap((step) =>
+    step.status === "failed" && step.termination === "signal" && step.stderrTail
+      ? [
+          `Check: ${step.step}; termination: signal; signal: ${step.signal ?? "unknown"}\n\n${step.stderrTail
+            .split("\n")
+            .map((line) => `    ${line}`)
+            .join("\n")}`,
+        ]
+      : [],
+  );
+  return diagnostics.length ? `${NATIVE_FAILURE_REPORT_SECTION}\n${diagnostics.join("\n\n")}` : "";
+}
 
 async function withUpdateReportWrite<T>(outputPath: string, write: () => Promise<T>): Promise<T> {
   await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
@@ -68,11 +84,14 @@ export async function refreshUpdateRunReportArtifact(
     // Preserve the artifact writer's appendix while refreshing only its summary.
     const appendixStart = previous.indexOf(DOCTOR_LINT_REPORT_SECTION);
     const appendix = appendixStart < 0 ? "" : `\n${previous.slice(appendixStart)}`;
+    const native = appendix.includes(NATIVE_FAILURE_REPORT_SECTION)
+      ? ""
+      : nativeFailureDiagnostics(run.steps);
     const report = renderUpdateRunReport(run, { mode: run.target.kind });
     await writeTextAtomic(
       outputPath,
       redactSupportString(
-        `${report.markdown}${appendix}`,
+        `${report.markdown}${appendix}${native}`,
         { env, stateDir },
         { maxLength: Number.MAX_SAFE_INTEGER },
       ),
@@ -174,10 +193,14 @@ export async function writeUpdateRunReportArtifact(params: {
           )
         : undefined;
     const findings = params.result.steps.flatMap((step) => step.doctorLintFindings ?? []);
+    const native = nativeFailureDiagnostics(
+      run?.steps ?? params.result.steps.flatMap(updateRunStepsFromResultStep),
+    );
     const body = [
       report.markdown,
       `${DOCTOR_LINT_REPORT_SECTION}${findings.length})\n`,
       ...findings.map((finding) => `- ${formatUpdateDoctorLintFinding(finding, env)}`),
+      ...(native ? [native] : []),
       failurePath ? `\nBounded diagnostic JSON: ${path.relative(directory, failurePath)}` : "",
     ].join("\n");
     await writeTextAtomic(

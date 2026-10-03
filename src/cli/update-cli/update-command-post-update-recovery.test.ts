@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as configOwner from "../../config/config.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
@@ -19,9 +18,11 @@ import {
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunNotice, renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { renderUpdateRunNotice } from "../../infra/update-run-notice.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 
 const mocks = vi.hoisted(() => ({
   verifyGateway: vi.fn<typeof import("./update-command-verification.js").verifyUpdatedGateway>(
@@ -127,7 +128,7 @@ import { registerRestartFailureOwnershipTest } from "./update-command-restart-fa
 import { UpdateCommandFailure } from "./update-command-result.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useStateDatabaseTempDirs();
 
 beforeEach(() => {
   mocks.verifyGateway.mockReset();
@@ -623,14 +624,13 @@ describe("failed update recovery restart", () => {
       expect(mocks.printResult.mock.lastCall?.[2]).toEqual({
         nextAction: recorded.origin.nextAction,
       });
-      for (const report of [
-        renderUpdateRunReport(recorded).markdown,
-        renderUpdateRunNotice(recorded, "finished"),
-      ]) {
-        expect(report).toContain("readyz-unhealthy");
-        expect(report).toContain("triage");
-        expect(report).not.toContain("remains stopped");
-      }
+      const report = renderUpdateRunReport(recorded).markdown;
+      expect(report).toContain("readyz-unhealthy");
+      expect(report).toContain("triage");
+      expect(report).not.toContain("remains stopped");
+      expect(renderUpdateRunNotice(recorded, "finished")).toBe(
+        "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+      );
     },
   );
 

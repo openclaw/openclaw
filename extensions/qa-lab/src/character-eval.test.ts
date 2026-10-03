@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runQaCharacterEval } from "./character-eval.js";
+import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-helpers.js";
 import type { QaSuiteResult } from "./suite.js";
 
 type QaCharacterEvalParams = Parameters<typeof runQaCharacterEval>[0];
@@ -135,19 +136,23 @@ async function makeSuiteResult(params: {
     report: "# report",
     watchUrl: "http://127.0.0.1:43124",
     startedScenarioIds: ["character-vibes"],
-    scenarios: [
-      {
-        name: "Character vibes",
-        status: resultStatus,
-        steps: [
-          {
-            name: `transcript for ${params.model}`,
-            status: "pass",
-            details: params.transcript,
-          },
-        ],
-      },
-    ],
+    ...recordQaSuiteTestResults(
+      undefined,
+      [makeQaSuiteTestScenario("character-vibes")],
+      [
+        {
+          name: "Character vibes",
+          status: resultStatus,
+          steps: [
+            {
+              name: `transcript for ${params.model}`,
+              status: "pass",
+              details: params.transcript,
+            },
+          ],
+        },
+      ],
+    ),
   } satisfies QaSuiteResult;
 }
 

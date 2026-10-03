@@ -1,8 +1,8 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import createDOMPurify from "dompurify";
 import type { MermaidConfig } from "mermaid";
-import mermaidScriptUrl from "mermaid/dist/mermaid.min.js?url&no-inline";
 import frameScriptUrl from "./frame.js?url&no-inline";
+import mermaidScriptUrl from "./mermaid-script-url.ts";
 
 export type MermaidTheme = {
   background: string;
@@ -185,6 +185,9 @@ function sanitizeMermaidSvg(source: string, backgroundColor: string): string {
 }
 
 function createMermaidFrame(): MermaidFrame {
+  if (!mermaidScriptUrl) {
+    throw new MermaidTransientError("The Mermaid classic script URL was not injected.");
+  }
   const frame = document.createElement("iframe");
   const channel = new MessageChannel();
   let readyResolve: () => void;
@@ -335,6 +338,12 @@ export function renderMermaidSvg(source: string, theme: MermaidTheme): Promise<s
         maxEdges: MAX_EDGES,
         arrowMarkerAbsolute: false,
         theme: "base",
+        look: "classic",
+        flowchart: { layout: "dagre" },
+        state: { layout: "dagre" },
+        class: { layout: "dagre" },
+        er: { layout: "dagre" },
+        requirement: { layout: "dagre" },
         themeCSS: "",
         fontFamily: theme.fontFamily,
         themeVariables: {

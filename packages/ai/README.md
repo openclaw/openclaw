@@ -21,7 +21,10 @@ Provider ids, credentials, model catalogs, retries, and failover remain
 application concerns. OpenClaw supplies those policies around this package.
 Host policy (request fetch guarding, secret redaction, strict-tool defaults,
 provider plugin hooks, and diagnostics logging) can be injected with
-`configureAiTransportHost`; the defaults are inert.
+`configureAiTransportHost`; the defaults are inert. Node callers that need
+runtime-local policy can use `createNodeLlmRuntime`; it preserves that host across
+provider work without replacing the process default. `createLlmRuntime` continues
+to use the process-default host.
 
 The explicit `@openclaw/ai/internal/anthropic`, `google-model-family`, `openai`,
 `openai-completions-compat`, `openai-responses-payload-policy`, `retry-after`, `runtime`, `shared`, and

@@ -47,6 +47,42 @@ function selectSessionKeys(params: {
 }
 
 describe("filterAndSortSessionEntries search", () => {
+  test("matches title punctuation and spacing before selecting the result window", () => {
+    const key = "agent:main:communication";
+    const store: Record<string, SessionEntry> = {
+      [key]: {
+        sessionId: "communication",
+        updatedAt: 1,
+        displayName: "Per-session communication controls in UI",
+      },
+      "agent:main:unrelated": {
+        sessionId: "unrelated",
+        updatedAt: 2,
+        displayName: "Unrelated discussion",
+      },
+    };
+    const projection = createSessionRowProjectionFixture({ cfg: baseCfg, store });
+    const search = (query: string) =>
+      filterAndSortSessionEntries(
+        prepareSessionRowSelection(projection, { search: query, limit: 1 }),
+      ).map(([selected]) => selected);
+    try {
+      for (const query of [
+        "per session communi",
+        "per-session communication controls",
+        "PER—SESSION   COMMUNICATION",
+      ]) {
+        expect(search(query), query).toEqual([key]);
+      }
+      expect(search("per session missing")).toEqual([]);
+      expect(search("---")).toEqual([]);
+      expect(search("agent main communication")).toEqual([]);
+      expect(search(key)).toEqual([key]);
+    } finally {
+      projection.dispose();
+    }
+  });
+
   test("prepares workspace identity names before selection and refreshes them after edits", async () => {
     const workspace = tempDirs.make("openclaw-search-identity-");
     const identityPath = path.join(workspace, "IDENTITY.md");

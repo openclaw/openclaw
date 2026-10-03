@@ -28,6 +28,25 @@ const outbound: ChannelOutboundAdapter = {
   sendText: async ({ text }) => ({ channel: "matrix", ...(await send(text)) }),
 };
 
+type QueueName = "outbound" | "session";
+
+function legacyEntry(queueName: QueueName, id: string, age: number, media?: string) {
+  return {
+    id,
+    enqueuedAt: NOW - age,
+    retryCount: 0,
+    ...(queueName === "outbound"
+      ? { channel: "matrix", to: "!room:example", payloads: [{ text: id, mediaUrl: media }] }
+      : {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: id,
+          messageId: id,
+          ...(media ? { expectedMediaUrls: [media] } : {}),
+        }),
+  };
+}
+
 describe("legacy file queue migration to recovery", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
   let queueContext: OpenClawStateWorkerContext;
@@ -52,28 +71,53 @@ describe("legacy file queue migration to recovery", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  function writeLegacy(queueName: QueueName, name: string, entry: object) {
+    const source = path.join(
+      tmpDir(),
+      queueName === "outbound" ? "delivery-queue" : "session-delivery-queue",
+      name,
+    );
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    const raw = JSON.stringify(entry, null, 2) + "\n";
+    fs.writeFileSync(source, raw);
+    return { source, raw };
+  }
+
+  function createMedia() {
+    const media = path.join(
+      tmpDir(),
+      "delivery-queue-media",
+      "23456789-1234-4234-8234-123456789abc.png",
+    );
+    const bytes = Buffer.from([255, 0, 7, 128]);
+    fs.mkdirSync(path.dirname(media), { recursive: true });
+    fs.writeFileSync(media, bytes);
+    fs.utimesSync(media, new Date(NOW - 4 * 86400000), new Date(NOW - 4 * 86400000));
+    return { media, bytes };
+  }
+
+  const recoverOutbound = () =>
+    recoverPendingDeliveries({
+      cfg: {},
+      stateDir: tmpDir(),
+      log: createRecoveryLog(),
+      deliver: deliverOutboundPayloadsInternal,
+    });
+
   it("does not dispatch legacy files at or beyond 72 hours, but delivers fresh work once", async () => {
     const originals = new Map<string, Buffer>();
-    for (const dirName of ["delivery-queue", "session-delivery-queue"]) {
-      const dir = path.join(tmpDir(), dirName);
-      fs.mkdirSync(dir, { recursive: true });
+    for (const queueName of ["outbound", "session"] as const) {
       for (const [id, age] of [
         ["below", AGE_LIMIT - 1],
         ["exact", AGE_LIMIT],
         ["above", AGE_LIMIT + 1],
       ] as const) {
-        const entry = {
-          id,
-          enqueuedAt: NOW - age,
-          retryCount: 0,
-          ...(dirName === "delivery-queue"
-            ? { channel: "matrix", to: "!room:example", payloads: [{ text: id }] }
-            : { kind: "agentTurn", sessionKey: "agent:main:main", message: id, messageId: id }),
-        };
-        const sourcePath = path.join(dir, id + ".json");
-        const bytes = Buffer.from(JSON.stringify(entry, null, 2) + "\n");
-        originals.set(sourcePath, bytes);
-        fs.writeFileSync(sourcePath, bytes);
+        const { source, raw } = writeLegacy(
+          queueName,
+          id + ".json",
+          legacyEntry(queueName, id, age),
+        );
+        originals.set(source, Buffer.from(raw));
       }
     }
     const migrated = await migrateLegacyDeliveryQueues({ stateDir: tmpDir() });
@@ -90,12 +134,7 @@ describe("legacy file queue migration to recovery", () => {
         stateDir: tmpDir(),
         log: createRecoveryLog(),
       });
-      await recoverPendingDeliveries({
-        cfg: {},
-        stateDir: tmpDir(),
-        log: createRecoveryLog(),
-        deliver: deliverOutboundPayloadsInternal,
-      });
+      await recoverOutbound();
       await recoverPendingSessionDeliveries({
         queueContext,
         log: createRecoveryLog(),
@@ -109,51 +148,6 @@ describe("legacy file queue migration to recovery", () => {
       ),
     ).toEqual(["below"]);
   });
-  it.each(["outbound", "session"])(
-    "%s: preserves held queue-owned attachments after normal spool cleanup",
-    async (queueName) => {
-      const spool = path.join(tmpDir(), "delivery-queue-media");
-      fs.mkdirSync(spool, { recursive: true });
-      const name = "12345678-1234-4234-8234-123456789abc.png";
-      const media = path.join(spool, name);
-      const bytes = Buffer.from([0, 255, 128, 4, 9]);
-      fs.writeFileSync(media, bytes);
-      fs.utimesSync(media, new Date(NOW - 4 * 86400000), new Date(NOW - 4 * 86400000));
-      const queue = path.join(
-        tmpDir(),
-        queueName === "outbound" ? "delivery-queue" : "session-delivery-queue",
-      );
-      fs.mkdirSync(queue, { recursive: true });
-      const source = path.join(queue, "held.json");
-      const raw = JSON.stringify({
-        id: "held",
-        enqueuedAt: NOW - AGE_LIMIT,
-        retryCount: 0,
-        ...(queueName === "outbound"
-          ? {
-              channel: "matrix",
-              to: "!room:example",
-              payloads: [{ text: "held", mediaUrl: media }],
-            }
-          : {
-              kind: "agentTurn",
-              sessionKey: "agent:main:main",
-              message: "held",
-              messageId: "held",
-              expectedMediaUrls: [media],
-            }),
-      });
-      fs.writeFileSync(source, raw);
-      await migrateLegacyDeliveryQueues({ stateDir: tmpDir() });
-      await pruneOrphanedDeliveryQueueMedia({ stateDir: tmpDir(), nowMs: NOW });
-      expect(fs.existsSync(media)).toBe(false);
-      expect(fs.readFileSync(source + ".migrated", "utf8")).toBe(raw);
-      const archive = source + ".media.migrated";
-      const copies = fs.readdirSync(archive);
-      expect(copies).toHaveLength(1);
-      expect(fs.readFileSync(path.join(archive, copies[0]!))).toEqual(bytes);
-    },
-  );
   it("keeps ordinary old SQLite deliveries eligible, without adding a runtime TTL", async () => {
     vi.mocked(Date.now).mockReturnValue(NOW - 2 * AGE_LIMIT);
     await enqueueDelivery(
@@ -172,12 +166,7 @@ describe("legacy file queue migration to recovery", () => {
     vi.mocked(Date.now).mockReturnValue(NOW);
     await migrateLegacyDeliveryQueues({ stateDir: tmpDir() });
     const session = vi.fn(async (_entry: QueuedSessionDelivery) => undefined);
-    await recoverPendingDeliveries({
-      cfg: {},
-      stateDir: tmpDir(),
-      log: createRecoveryLog(),
-      deliver: deliverOutboundPayloadsInternal,
-    });
+    await recoverOutbound();
     await recoverPendingSessionDeliveries({
       queueContext,
       log: createRecoveryLog(),
@@ -188,18 +177,11 @@ describe("legacy file queue migration to recovery", () => {
   });
 
   it("does not redeliver a consumed row when source archival is retried", async () => {
-    const dir = path.join(tmpDir(), "delivery-queue");
-    fs.mkdirSync(dir, { recursive: true });
-    const source = path.join(dir, "once.json");
-    const bytes = JSON.stringify({
-      id: "once",
-      enqueuedAt: NOW - 1,
-      retryCount: 0,
-      channel: "matrix",
-      to: "!room:example",
-      payloads: [{ text: "once" }],
-    });
-    fs.writeFileSync(source, bytes);
+    const { source, raw } = writeLegacy(
+      "outbound",
+      "once.json",
+      legacyEntry("outbound", "once", 1),
+    );
     const rename = fs.renameSync;
     const failure = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
       if (from === source) {
@@ -213,12 +195,7 @@ describe("legacy file queue migration to recovery", () => {
       stateDir: tmpDir(),
       log: createRecoveryLog(),
     });
-    await recoverPendingDeliveries({
-      cfg: {},
-      stateDir: tmpDir(),
-      log: createRecoveryLog(),
-      deliver: deliverOutboundPayloadsInternal,
-    });
+    await recoverOutbound();
     expect(send).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(source)).toBe(true);
     failure.mockRestore();
@@ -228,126 +205,75 @@ describe("legacy file queue migration to recovery", () => {
       stateDir: tmpDir(),
       log: createRecoveryLog(),
     });
-    await recoverPendingDeliveries({
-      cfg: {},
-      stateDir: tmpDir(),
-      log: createRecoveryLog(),
-      deliver: deliverOutboundPayloadsInternal,
-    });
+    await recoverOutbound();
     expect(send).toHaveBeenCalledTimes(1);
-    expect(fs.readFileSync(source + ".migrated", "utf8")).toBe(bytes);
+    expect(fs.readFileSync(source + ".migrated", "utf8")).toBe(raw);
   });
-  it.each(["outbound", "session"])(
-    "%s: preserves media through failed copies, terminal rows, and archive retries",
-    async (queueName) => {
-      const spool = path.join(tmpDir(), "delivery-queue-media");
-      fs.mkdirSync(spool, { recursive: true });
-      const name = "23456789-1234-4234-8234-123456789abc.png";
-      const media = path.join(spool, name);
-      const bytes = Buffer.from([255, 0, 7, 128]);
-      const queue = path.join(
-        tmpDir(),
-        queueName === "outbound" ? "delivery-queue" : "session-delivery-queue",
-      );
-      fs.mkdirSync(path.join(queue, "failed"), { recursive: true });
-      for (const variant of ["copy-failure", "failed", "archive-failure"] as const) {
-        fs.writeFileSync(media, bytes);
-        fs.utimesSync(media, new Date(NOW - 4 * 86400000), new Date(NOW - 4 * 86400000));
-        const source = path.join(
-          queue,
-          variant === "failed" ? "failed/terminal.json" : variant + ".json",
-        );
-        const raw = JSON.stringify({
-          id: variant,
-          enqueuedAt: NOW - AGE_LIMIT,
+  it("preserves outbound media through failed copies, terminal rows, and archive retries", async () => {
+    for (const variant of ["copy-failure", "failed", "archive-failure"] as const) {
+      const { media, bytes } = createMedia();
+      const { source, raw } = writeLegacy(
+        "outbound",
+        variant === "failed" ? "failed/terminal.json" : variant + ".json",
+        {
+          ...legacyEntry("outbound", variant, AGE_LIMIT, media),
           retryCount: 1,
           retainOnFailure: true,
-          ...(queueName === "outbound"
-            ? { channel: "matrix", to: "!room:example", payloads: [{ mediaUrl: media }] }
-            : {
-                kind: "agentTurn",
-                sessionKey: "agent:main:main",
-                message: "held",
-                messageId: variant,
-                expectedMediaUrls: [media],
-              }),
-        });
-        fs.mkdirSync(path.dirname(source), { recursive: true });
-        fs.writeFileSync(source, raw);
-        const archive = source + ".media.migrated";
-        if (variant === "copy-failure") {
-          fs.writeFileSync(archive, "injected obstruction");
-        }
-        const rename = fs.renameSync;
-        const fault = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
-          if (variant === "archive-failure" && from === source) {
-            throw new Error("injected archive failure");
-          }
-          return rename(from, to);
-        });
-        await migrateLegacyDeliveryQueues({ stateDir: tmpDir() });
-        await pruneOrphanedDeliveryQueueMedia({ stateDir: tmpDir(), nowMs: NOW });
-        fault.mockRestore();
-        if (variant === "copy-failure") {
-          expect.soft(fs.existsSync(media)).toBe(true);
-          fs.rmSync(archive);
-        } else {
-          expect.soft(fs.existsSync(media)).toBe(false);
-        }
-        await migrateLegacyDeliveryQueues({ stateDir: tmpDir() });
-        expect.soft(fs.existsSync(source)).toBe(false);
-        expect.soft(fs.existsSync(source + ".migrated")).toBe(true);
-        if (fs.existsSync(archive) && fs.statSync(archive).isDirectory()) {
-          const copies = fs.readdirSync(archive);
-          expect.soft(copies).toHaveLength(1);
-          expect.soft(fs.readFileSync(path.join(archive, copies[0]!))).toEqual(bytes);
-        } else {
-          expect.soft(false, "verified media backup is missing").toBe(true);
-        }
-      }
-    },
-  );
-  it.each(["outbound", "session"])(
-    "%s: reacquires media custody when an archived source reappears",
-    async (queueName) => {
-      const spool = path.join(tmpDir(), "delivery-queue-media");
-      fs.mkdirSync(spool, { recursive: true });
-      const media = path.join(spool, "34567890-1234-4234-8234-123456789abc.png");
-      fs.writeFileSync(media, Buffer.from([0, 255, 2]));
-      fs.utimesSync(media, new Date(NOW - 4 * 86400000), new Date(NOW - 4 * 86400000));
-      const queue = path.join(
-        tmpDir(),
-        queueName === "outbound" ? "delivery-queue" : "session-delivery-queue",
+        },
       );
-      fs.mkdirSync(queue, { recursive: true });
-      const source = path.join(queue, "reappeared.json");
-      const raw = JSON.stringify({
-        id: "reappeared",
-        enqueuedAt: NOW - AGE_LIMIT,
-        retryCount: 0,
-        ...(queueName === "outbound"
-          ? { channel: "matrix", to: "!room:example", payloads: [{ mediaUrl: media }] }
-          : {
-              kind: "agentTurn",
-              sessionKey: "agent:main:main",
-              message: "held",
-              messageId: "reappeared",
-              expectedMediaUrls: [media],
-            }),
-      });
-      fs.writeFileSync(source, raw);
-      await migrateLegacyDeliveryQueues({ stateDir: tmpDir() });
-      expect(fs.existsSync(source)).toBe(false);
-      fs.writeFileSync(source, raw);
-      const backupDir = source + ".media.migrated";
-      for (const name of fs.readdirSync(backupDir)) {
-        fs.rmSync(path.join(backupDir, name));
+      const archive = source + ".media.migrated";
+      if (variant === "copy-failure") {
+        fs.writeFileSync(archive, "injected obstruction");
       }
-      const retried = await migrateLegacyDeliveryQueues({ stateDir: tmpDir() });
-      expect(retried.warnings.length).toBeGreaterThan(0);
+      const rename = fs.renameSync;
+      const fault = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+        if (variant === "archive-failure" && from === source) {
+          throw new Error("injected archive failure");
+        }
+        return rename(from, to);
+      });
+      await migrateLegacyDeliveryQueues({ stateDir: tmpDir() });
       await pruneOrphanedDeliveryQueueMedia({ stateDir: tmpDir(), nowMs: NOW });
-      expect(fs.existsSync(media)).toBe(true);
-      expect(fs.readFileSync(source, "utf8")).toBe(raw);
-    },
-  );
+      fault.mockRestore();
+      if (variant === "copy-failure") {
+        expect.soft(fs.existsSync(media)).toBe(true);
+        fs.rmSync(archive);
+      } else {
+        expect.soft(fs.existsSync(media)).toBe(false);
+      }
+      await migrateLegacyDeliveryQueues({ stateDir: tmpDir() });
+      expect.soft(fs.existsSync(source)).toBe(false);
+      expect.soft(fs.readFileSync(source + ".migrated", "utf8")).toBe(raw);
+      if (fs.existsSync(archive) && fs.statSync(archive).isDirectory()) {
+        const copies = fs.readdirSync(archive);
+        expect.soft(copies).toHaveLength(1);
+        expect.soft(fs.readFileSync(path.join(archive, copies[0]!))).toEqual(bytes);
+      } else {
+        expect.soft(false, "verified media backup is missing").toBe(true);
+      }
+    }
+  });
+  it("reacquires session media custody when an archived source reappears", async () => {
+    const { media, bytes } = createMedia();
+    const { source, raw } = writeLegacy(
+      "session",
+      "reappeared.json",
+      legacyEntry("session", "reappeared", AGE_LIMIT, media),
+    );
+    await migrateLegacyDeliveryQueues({ stateDir: tmpDir() });
+    expect(fs.existsSync(source)).toBe(false);
+    fs.writeFileSync(source, raw);
+    const backupDir = source + ".media.migrated";
+    const copies = fs.readdirSync(backupDir);
+    expect(copies).toHaveLength(1);
+    for (const name of copies) {
+      expect(fs.readFileSync(path.join(backupDir, name))).toEqual(bytes);
+      fs.rmSync(path.join(backupDir, name));
+    }
+    const retried = await migrateLegacyDeliveryQueues({ stateDir: tmpDir() });
+    expect(retried.warnings.length).toBeGreaterThan(0);
+    await pruneOrphanedDeliveryQueueMedia({ stateDir: tmpDir(), nowMs: NOW });
+    expect(fs.existsSync(media)).toBe(true);
+    expect(fs.readFileSync(source, "utf8")).toBe(raw);
+  });
 });

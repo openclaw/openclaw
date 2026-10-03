@@ -13,6 +13,8 @@ import {
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
+  SessionTranscriptWorkerError,
+  SessionTranscriptWorkerInput,
   SessionTranscriptWorkerReply,
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
@@ -48,6 +50,35 @@ export function encodeSessionTranscriptWorkerError(
   }
   const payload = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
   return payload ? { kind: "read-error", message: coerceErrorMessage(error), payload } : undefined;
+}
+
+export function encodeSessionTranscriptRequestError(
+  error: unknown,
+  request: SessionTranscriptWorkerInput,
+): SessionTranscriptWorkerError | undefined {
+  if (
+    error instanceof SessionHistoryDeltaPreparationError &&
+    request.kind === "history-page" &&
+    request.request.kind === "delta"
+  ) {
+    // Auxiliary readers may need retirement before the host consumes partial visibility facts.
+    return { kind: "delta-visibility", partial: error.partial };
+  }
+  if (
+    error instanceof SyntaxError &&
+    request.kind === "history-page" &&
+    (request.request.kind === "message-lookup" ||
+      request.request.kind === "message-by-id" ||
+      request.request.kind === "message-count" ||
+      request.request.kind === "artifacts" ||
+      request.request.kind === "message-page" ||
+      request.request.kind === "around-id" ||
+      request.request.kind === "source-messages" ||
+      request.request.kind === "recent-page")
+  ) {
+    return { kind: "syntax", message: error.message };
+  }
+  return encodeSessionTranscriptWorkerError(error);
 }
 
 export function unwrapSessionTranscriptWorkerReply<

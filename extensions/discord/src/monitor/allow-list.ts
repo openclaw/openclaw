@@ -5,6 +5,7 @@ import {
 import type { InboundMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import {
   buildChannelKeyCandidates,
+  normalizeChannelSlug,
   resolveChannelEntryMatchWithFallback,
   resolveChannelMatchConfig,
   type ChannelMatchSource,
@@ -80,10 +81,7 @@ export function normalizeDiscordAllowList(raw: string[] | undefined, prefixes: s
 }
 
 export function normalizeDiscordSlug(value: string) {
-  return normalizeLowercaseStringOrEmpty(value)
-    .replace(/^#/, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  return normalizeChannelSlug(value);
 }
 
 export function normalizeDiscordDisplaySlug(value: string) {
@@ -295,19 +293,13 @@ export function resolveDiscordCommandAuthorized(params: {
   if (!params.isDirectMessage) {
     return true;
   }
-  const allowList = normalizeDiscordAllowList(params.allowFrom, ["discord:", "user:", "pk:"]);
-  if (!allowList) {
-    return true;
-  }
-  return allowListMatches(
-    allowList,
-    {
-      id: params.author.id,
-      name: params.author.username,
-      tag: formatDiscordUserTag(params.author),
-    },
-    { allowNameMatching: params.allowNameMatching },
-  );
+  return resolveDiscordUserAllowed({
+    allowList: params.allowFrom,
+    userId: params.author.id,
+    userName: params.author.username,
+    userTag: formatDiscordUserTag(params.author),
+    allowNameMatching: params.allowNameMatching,
+  });
 }
 
 export function resolveDiscordGuildEntry(params: {
@@ -374,7 +366,7 @@ function resolveDiscordChannelEntryMatch(
   });
 }
 
-function hasConfiguredDiscordChannels(
+export function hasConfiguredDiscordChannels(
   channels: DiscordGuildEntryResolved["channels"] | undefined,
 ): channels is NonNullable<DiscordGuildEntryResolved["channels"]> {
   return Boolean(channels && Object.keys(channels).length > 0);
@@ -524,8 +516,7 @@ export function resolveDiscordChannelPolicyCommandAuthorizer(params: {
   guildInfo?: DiscordGuildEntryResolved | null;
   channelConfig?: DiscordChannelConfigResolved | null;
 }) {
-  const channelAllowlistConfigured =
-    Boolean(params.guildInfo?.channels) && Object.keys(params.guildInfo?.channels ?? {}).length > 0;
+  const channelAllowlistConfigured = hasConfiguredDiscordChannels(params.guildInfo?.channels);
   return {
     configured:
       params.groupPolicy === "allowlist" &&

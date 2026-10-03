@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { recordCompletedLegacyAgentDirMigration } from "./state-migrations.agent-dir-receipt.js";
@@ -16,6 +17,66 @@ import { captureLegacyStateSnapshotIdentity } from "./state-migrations.plan.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("legacy owner advisories", () => {
+  it.each([false, true])(
+    "uses Doctor's original data owner independently of runtime ownership (duplicate id: %s)",
+    async (duplicate) => {
+      const root = fs.realpathSync(tempDirs.make("openclaw-roster-owner-"));
+      const stateDir = path.join(root, "state");
+      const sourcePath = path.join(stateDir, "agent", "settings.json");
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      const bytes = '{"legacy":true}\n';
+      fs.writeFileSync(sourcePath, bytes);
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        HOME: root,
+        OPENCLAW_HOME: root,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+        OPENCLAW_AGENT_DIR: undefined,
+        PI_CODING_AGENT_DIR: undefined,
+      };
+      const source: OpenClawConfig = {
+        plugins: { enabled: false },
+        agents: {
+          defaults: {
+            systemAgent: { agentId: "runtime" },
+            authInheritance: { agentId: "runtime" },
+          },
+          list: [
+            ...(duplicate ? [{ id: "ops" }] : []),
+            { id: "ops", default: true },
+            { id: "runtime" },
+          ],
+        },
+      };
+      const migrated = migrateLegacyConfig(source, {
+        sourceConfigBeforeMigrations: source,
+        context: { authoredRaw: source, resolvedRaw: source, env, homedir: () => root },
+        pluginContracts: false,
+      });
+      expect(migrated.partiallyValid).not.toBe(true);
+      if (!migrated.config) {
+        throw new Error("Doctor did not migrate the source roster");
+      }
+      const detected = await detectLegacyStateMigrations({
+        cfg: migrated.config,
+        sourceConfigBeforeMigrations: source,
+        env,
+        homedir: () => root,
+        doctorOnlyStateMigrations: true,
+        pluginPlanning: "deferred",
+        artifactPreservingReadOnly: true,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
+      const owner = duplicate ? "ops-2" : "ops";
+      expect(detected.targetAgentId).toBe(owner);
+      expect(detected.agentDir.targetDir).toBe(path.join(stateDir, "agents", owner, "agent"));
+      expect(migrated.config.agents?.defaults?.systemAgent?.agentId).toBe("runtime");
+      expect(migrated.config.agents?.defaults?.authInheritance?.agentId).toBe("runtime");
+      expect(fs.readFileSync(sourcePath, "utf8")).toBe(bytes);
+    },
+  );
+
   it.each([
     ["settings", "none", false],
     ["loose-db", "none", false],

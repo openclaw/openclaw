@@ -1,5 +1,4 @@
 // Imessage tests cover monitor.last route plugin behavior.
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -18,9 +17,11 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
 import {
   matchIMessageAcpConversation,
@@ -270,7 +271,13 @@ async function runChannelInboundEventForLastRouteTest(params: RunChannelInboundE
 }
 
 describe("iMessage monitor last-route updates", () => {
-  const tempDirs: string[] = [];
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+    afterAll(async () => {
+      await closeOpenClawAgentDatabasesAsync(sessionRoot);
+      cleanup();
+    });
+  });
+  const sessionRoot = tempDirs.make("openclaw-imessage-last-route-");
   const openClawStates: OpenClawTestState[] = [];
 
   beforeEach(() => {
@@ -303,9 +310,6 @@ describe("iMessage monitor last-route updates", () => {
     vi.useRealTimers();
     await Promise.all(openClawStates.splice(0).map((state) => state.cleanup()));
     vi.unstubAllEnvs();
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   function setAvailablePrivateApiMethods(rpcMethods: string[]): void {
@@ -607,8 +611,7 @@ describe("iMessage monitor last-route updates", () => {
   }
 
   function createTestStateDir(prefix: string): string {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-    tempDirs.push(stateDir);
+    const stateDir = tempDirs.make(prefix, sessionRoot);
     return stateDir;
   }
 

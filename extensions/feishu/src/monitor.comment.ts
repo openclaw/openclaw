@@ -14,6 +14,8 @@ import {
   encodeQuery,
   extractReplyText,
   parseCommentContentElements,
+  type FeishuDriveCommentCard,
+  type FeishuDriveCommentReply,
   type ParsedCommentContent,
   type ParsedCommentLinkedDocument,
 } from "./comment-shared.js";
@@ -86,30 +88,6 @@ type FeishuDriveMetaBatchQueryResponse = FeishuOpenApiResponse<{
     url?: string;
   }>;
 }>;
-
-type FeishuDriveCommentReply = {
-  reply_id?: string;
-  user_id?: string;
-  create_time?: number;
-  update_time?: number;
-  content?: {
-    elements?: unknown[];
-  };
-};
-
-type FeishuDriveCommentCard = {
-  comment_id?: string;
-  user_id?: string;
-  create_time?: number;
-  update_time?: number;
-  is_whole?: boolean;
-  has_more?: boolean;
-  page_token?: string;
-  quote?: string;
-  reply_list?: {
-    replies?: FeishuDriveCommentReply[];
-  };
-};
 
 type FeishuDriveCommentBatchQueryResponse = FeishuOpenApiResponse<{
   items?: FeishuDriveCommentCard[];

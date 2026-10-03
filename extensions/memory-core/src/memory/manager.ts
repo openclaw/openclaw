@@ -1,4 +1,3 @@
-// Memory Core plugin module implements the concrete memory index manager.
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -26,6 +25,7 @@ import type { EmbeddingProvider } from "./embeddings.js";
 import { getMemoryManagerLifecycle } from "./lifecycle.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { memoryDatabaseTableExists } from "./manager-db-kernel.js";
+import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   resolveEffectiveMemorySearchSettings,
   resolveMemoryEmbeddingProviderRequirement,
@@ -33,10 +33,7 @@ import {
   type MemoryEmbeddingProviderRequirement,
 } from "./manager-provider-lifecycle.js";
 import { getLocalEmbeddingRuntimeFacts } from "./manager-provider-runtime-facts.js";
-import {
-  createPendingMemoryProviderLifecycle,
-  type MemoryProviderLifecycleState,
-} from "./manager-provider-state.js";
+import type { MemoryProviderLifecycleState } from "./manager-provider-state.js";
 import {
   MemoryManagerRegistry,
   type MemoryManagerProviderFactory,
@@ -239,7 +236,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       store: { ...effectiveSettings.store, databasePath: dbPath },
     };
     this.providerRequirement = params.providerRequirement;
-    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.settings.provider);
+    this.providerLifecycle = { mode: "pending", requestedProvider: this.settings.provider };
     for (const memorySource of effectiveSettings.sources) {
       this.sources.add(memorySource);
     }
@@ -346,7 +343,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       runMemorySearchMaintenance({
         reason: params.reason,
         takeDirtyGeneration: () => this.takeSearchMaintenanceRequest(),
-        restoreDirtyGeneration: (generation) => this.restoreReindexRetryState(generation),
+        restoreDirtyGeneration: (generation) => this.adoptReindexRetryState(generation),
         acquireManager: () =>
           MemoryIndexManager.get({
             cfg: this.cfg,
@@ -481,7 +478,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         const canDegrade =
           this.providerRequirement.mode === "optional" &&
           (options?.allowEmbeddingBootstrapFallback || hadBootstrapFailure) &&
-          this.shouldFallbackOnError(err);
+          isMemoryEmbeddingOperationError(err);
         if (!canDegrade) {
           throw err;
         }
@@ -507,7 +504,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     this.syncing = this.syncOutcomes.track(run, true).finally(() => {
       this.syncing = null;
     });
-    return this.syncing ?? Promise.resolve();
+    return this.syncing;
   }
 
   status(): MemoryProviderStatus {
@@ -619,6 +616,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         lastProvider: this.batchFailure.lastProvider,
       },
       custom: {
+        watcher: this.memoryWatcherHealth,
         llamaCppRuntime: getLocalEmbeddingRuntimeFacts(this.provider),
         searchMode: providerInfo.searchMode,
         providerState: this.providerLifecycle,

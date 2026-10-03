@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 
 const fetchFn = createProviderUsageFetch(() => {

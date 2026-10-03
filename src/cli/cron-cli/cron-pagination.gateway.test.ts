@@ -265,6 +265,64 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     ).toHaveLength(2);
   });
 
+  it.each(["cron", "automations"])(
+    "%s retains the inventory query across filtered pages",
+    async (root) => {
+      const matching = Array.from({ length: 201 }, (_, index) =>
+        createJob(index, { name: `backup ${index}`, agentId: "ops", enabled: index % 2 === 0 }),
+      );
+      installRealCronGateway([
+        ...matching,
+        createJob(900, { name: "backup other", agentId: "other" }),
+        createJob(901, { name: "unrelated", agentId: "ops" }),
+      ]);
+
+      await runCron(["list", "--all", "--agent", "Ops", "--query", " Backup ", "--json"], root);
+
+      const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as { jobs: CronJob[] };
+      expect(result.jobs.map((job) => job.id).toSorted()).toEqual(
+        matching.map((job) => job.id).toSorted(),
+      );
+      const requests = mocks.callGatewayFromCli.mock.calls
+        .filter(([method]) => method === "cron.list")
+        .map((call) => call[2]);
+      const filters = { includeDisabled: true, agentId: "ops", query: "Backup", limit: 200 };
+      expect(requests).toEqual([
+        { ...filters, offset: 0 },
+        { ...filters, offset: 200 },
+      ]);
+    },
+  );
+
+  it.each(["", "   "])("omits a blank inventory query %j", async (query) => {
+    installRealCronGateway([createJob(0)]);
+
+    await runCron(["list", "--query", query, "--json"]);
+
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith("cron.list", expect.anything(), {
+      includeDisabled: false,
+      limit: 200,
+      offset: 0,
+    });
+  });
+
+  it("uses the inventory query for visible names in text output and empty JSON results", async () => {
+    installRealCronGateway([
+      createJob(0, { displayName: "Visible backup" }),
+      createJob(1),
+      createJob(2, { displayName: "Visible paused", enabled: false }),
+    ]);
+
+    await runCron(["list", "--query", "VISIBLE"]);
+    const output = mocks.runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(output).toContain("Visible backup");
+    expect(output).not.toContain("Job 001");
+    expect(output).not.toContain("Visible paused");
+
+    await runCron(["list", "--query", "no-matching-automation", "--json"]);
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ jobs: [] }));
+  });
+
   it("never combines Gateway pages from different cron snapshots", async () => {
     const original = Array.from({ length: 201 }, (_, index) => createJob(index));
     installRealCronGateway(original, {

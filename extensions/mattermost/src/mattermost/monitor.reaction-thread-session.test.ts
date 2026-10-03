@@ -163,34 +163,24 @@ async function runReactionThroughMonitor(params: { baseUrl: string; postId: stri
 }
 
 describe("mattermost reaction thread placement", () => {
-  it("routes a thread-reply reaction through the production post lookup", async () => {
-    const loopback = await startLoopbackMattermost({
-      id: "post-reply",
-      root_id: "root-1",
-    });
-
-    await runReactionThroughMonitor({ baseUrl: loopback.baseUrl, postId: "post-reply" });
-
-    expect(loopback.requests).toContain("GET /api/v4/posts/post-reply");
+  it.each([
+    {
+      post: { id: "post-reply", root_id: "root-1" },
+      sessionKey: `${BASE_SESSION_KEY}:thread:root-1`,
+    },
+    { post: null, sessionKey: BASE_SESSION_KEY },
+  ])("uses session $sessionKey after the production post lookup", async ({ post, sessionKey }) => {
+    const postId = post?.id ?? "post-unknown";
+    const loopback = await startLoopbackMattermost(post);
+    await runReactionThroughMonitor({ baseUrl: loopback.baseUrl, postId });
+    expect(loopback.requests).toContain(`GET /api/v4/posts/${postId}`);
     expect(loopbackState.enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(loopbackState.enqueueSystemEvent).toHaveBeenCalledWith(
       expect.stringContaining("Mattermost reaction added"),
       expect.objectContaining({
-        sessionKey: `${BASE_SESSION_KEY}:thread:root-1`,
-        contextKey: "mattermost:reaction:post-reply:thumbsup:user-1:added",
+        sessionKey,
+        contextKey: `mattermost:reaction:${postId}:thumbsup:user-1:added`,
       }),
-    );
-  });
-
-  it("keeps the parent channel session when the production post lookup fails", async () => {
-    const loopback = await startLoopbackMattermost(null);
-
-    await runReactionThroughMonitor({ baseUrl: loopback.baseUrl, postId: "post-unknown" });
-
-    expect(loopbackState.enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(loopbackState.enqueueSystemEvent).toHaveBeenCalledWith(
-      expect.stringContaining("Mattermost reaction added"),
-      expect.objectContaining({ sessionKey: BASE_SESSION_KEY }),
     );
   });
 });

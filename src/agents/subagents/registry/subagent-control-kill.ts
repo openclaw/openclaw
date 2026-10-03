@@ -1,13 +1,9 @@
-/** Authorized tree and admin subagent kill orchestration. */
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
-import {
-  killSubagentRun,
-  resolveSubagentKillTargetState,
-} from "./subagent-control-kill-runtime.js";
+import { killSubagentRun } from "./subagent-control-kill-runtime.js";
 import {
   withSubagentKillScope,
   type KillTree,
@@ -26,6 +22,7 @@ import {
 } from "./subagent-control-session.js";
 import type { SubagentAdminKillParams, SubagentAdminKillResult } from "./subagent-control.types.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
+import { resolveSubagentKillTargetState } from "./subagent-registry-completion.js";
 import {
   listSubagentRunsForController,
   listSubagentRunsForRequester,
@@ -38,7 +35,6 @@ async function killLatestSubagentRun(params: {
   scope: KillScope;
   suppressTaskDelivery?: boolean;
   beforeSessionKill?: () => boolean;
-  expectedRunId?: string;
   expectedGeneration?: number;
   expectedOwnerKey?: string;
 }): Promise<{
@@ -48,16 +44,16 @@ async function killLatestSubagentRun(params: {
 }> {
   const { tree, scope } = params;
   for (
-    let pending = scope.cancellationControl?.prepareRead?.();
+    let pending = scope.cancellationControl.prepareRead?.();
     pending;
-    pending = scope.cancellationControl?.prepareRead?.()
+    pending = scope.cancellationControl.prepareRead?.()
   ) {
     await pending;
   }
   const matchesExpected = (entry: SubagentRunRecord) =>
     (params.expectedGeneration === undefined || entry.generation === params.expectedGeneration) &&
     (!params.expectedOwnerKey || entry.requesterSessionKey === params.expectedOwnerKey);
-  scope.cancellationControl?.assertCurrent();
+  scope.cancellationControl.assertCurrent();
   const entry = tree.entry;
   const session = tree.session;
   if (!session) {
@@ -83,12 +79,12 @@ async function killLatestSubagentRun(params: {
   // cancellation of its captured descendants. Refusals on a live row stay fenced.
   if (result.superseded && !tree.isCurrent(entry) && tree.canTraverse() && matchesExpected(entry)) {
     return {
-      entry,
+      entry: tree.entry,
       session,
-      result: { killed: false, targetState: resolveSubagentKillTargetState(entry) },
+      result: { killed: false, targetState: resolveSubagentKillTargetState(tree.entry) },
     };
   }
-  return { entry, session, result };
+  return { entry: tree.entry, session, result };
 }
 
 function collectKillErrors(trees: KillTree[], unlabeledRoot?: KillTree) {
@@ -363,8 +359,6 @@ export async function killSubagentRunAdmin(
         tree,
         scope,
         beforeSessionKill: control?.beforeSessionKill,
-        // Resolve stable task identity once; a later replacement must not inherit this Stop.
-        expectedRunId: expectedRunId || (expectedTaskRunId ? entry.runId : undefined),
         expectedGeneration: params.expectedGeneration,
         expectedOwnerKey: params.expectedOwnerKey?.trim() || undefined,
       });
@@ -372,7 +366,7 @@ export async function killSubagentRunAdmin(
       rootStopSuperseded = stopResult.superseded === true;
       // Descendant cleanup can yield long enough for the target run to finish.
       // Return the freshest registry state so task cancellation cannot make a stale kill sticky.
-      const targetState = resolveSubagentKillTargetState(stopped.entry) ?? stopResult.targetState;
+      const targetState = resolveSubagentKillTargetState(tree.entry) ?? stopResult.targetState;
       const killedTarget =
         targetState?.state === "terminal" &&
         targetState.task.status === "cancelled" &&

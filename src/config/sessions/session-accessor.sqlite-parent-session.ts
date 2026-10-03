@@ -8,6 +8,7 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { forkCliSessionBindings } from "./cli-session-binding.js";
 import type {
   ForkSessionEntryFromParentTargetParams,
   ForkSessionEntryFromParentTargetResult,
@@ -270,6 +271,13 @@ export async function forkSessionEntryFromParentTarget(
     storePath: params.storePath,
     sessionId: prepared.parentEntry.sessionId,
   });
+  // Backend normalization may load plugins. Prepare before BEGIN; the commit
+  // below rejects this plan if either authoritative session row changed.
+  const { cliBackendSupportsSessionFork } = await import("../../agents/cli-backends.js");
+  const cliSessionBindings = forkCliSessionBindings(
+    prepared.parentEntry,
+    cliBackendSupportsSessionFork,
+  );
   return await runExclusiveSqliteSessionWrite<ForkSessionEntryFromParentTargetResult>(
     resolved,
     async () => {
@@ -342,6 +350,9 @@ export async function forkSessionEntryFromParentTarget(
             totalTokens: undefined,
             totalTokensFresh: false,
             totalTokensVersion: undefined,
+            cliSessionBindings,
+            cliSessionIds: undefined,
+            claudeCliSessionId: undefined,
           };
           const previousIdentity = readSessionIdentitySnapshot(writeDatabase, [
             sessionTarget.canonicalKey,

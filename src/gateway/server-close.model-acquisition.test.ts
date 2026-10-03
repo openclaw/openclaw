@@ -7,6 +7,8 @@ import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error
 import { expect, it, vi } from "vitest";
 import { getPreparedModelCatalogWorkerPoolSnapshot } from "../agents/prepared-model-catalog-worker.js";
 import {
+  acquireAgentRunPreparedModelRuntime,
+  loadPublishedGatewayReplyDispatchRuntime,
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
 } from "../agents/prepared-model-runtime.js";
@@ -32,7 +34,7 @@ it.each(["final Gateway", "live sibling", "closing sibling"] as const)(
     fixture.config.gateway = { reload: { mode: "hybrid" } };
     fixture.config.agents = {
       defaults: { workspace: fixture.state.workspaceDir, model: `${fixture.pluginId}/before` },
-      entries: { main: { default: true, workspace: fixture.state.workspaceDir } },
+      entries: { main: { workspace: fixture.state.workspaceDir } },
     };
     const entered = createDeferredCore();
     const cancelled = createDeferredCore();
@@ -180,6 +182,20 @@ it.each(["final Gateway", "live sibling", "closing sibling"] as const)(
         await expect(context.loadGatewayModelCatalog({ agentId: "main" })).resolves.toContainEqual(
           expect.objectContaining({ provider: fixture.pluginId, id: "after" }),
         );
+        const dispatch = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
+        expect(dispatch).toBeDefined();
+        await using lease = await acquireAgentRunPreparedModelRuntime(
+          {
+            agentId: "main",
+            agentDir: dispatch!.agentDir,
+            config: dispatch!.config,
+            workspaceDir: dispatch!.workspaceDir,
+            allowGatewaySubagentBinding: true,
+          },
+          { pluginGeneration: dispatch!.pluginGeneration },
+        );
+        expect(lease.snapshot.isCurrent()).toBe(true);
+        expect(lease.snapshot.config.agents?.defaults?.model).toBe(`${fixture.pluginId}/after`);
       }
     } finally {
       armed = false;
@@ -286,12 +302,19 @@ it.each(["static catalog", "synthetic auth"] as const)(
       };`,
     );
     fixture.config.agents = {
-      defaults: { workspace: fixture.state.workspaceDir, model: `${provider}/model` },
+      ownership: "explicit",
+      defaults: {
+        workspace: fixture.state.workspaceDir,
+        model: `${provider}/model`,
+        heartbeat: { agentId: "main" },
+        systemAgent: { agentId: "main" },
+      },
       entries: {
-        main: { default: true, workspace: fixture.state.workspaceDir },
+        main: { workspace: fixture.state.workspaceDir },
         late: { workspace: fixture.state.path("late-workspace") },
       },
     };
+    fixture.config.talk = { agentId: "main" };
     const unsubscribe = registerPreparedModelRuntimePublicationListener(({ phase: event }) => {
       if (event === "published" && getPreparedModelRuntimeStartupStatus()?.degraded === false) {
         completePublications++;

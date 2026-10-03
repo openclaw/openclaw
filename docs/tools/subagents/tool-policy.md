@@ -20,6 +20,13 @@ policies leave the continuation under its ordinary restricted policy. Current
 tool restrictions and live revocation checks still apply at execution; the
 handoff does not grant additional tools or infer a sender identity.
 
+An automatic completion turn for a requester on the Claude CLI backend keeps that same
+captured policy. The tools reach the CLI only through OpenClaw's policy-filtered
+MCP surface, so native CLI tools stay disabled for the turn and every inherited
+deny still applies. Other CLI backends, node-hosted Claude CLI sessions, and
+settle batches do not regain requester tools. Message-tool-only replies keep
+their existing source-bound `message` grant.
+
 Sub-agents always lose `gateway`, `agents_list`, `session_status`, `progress_card`, `cron`,
 `message`, `sessions_send`, and the `conversations_*` tools regardless of
 depth or role (system-level/interactive tools, parent-owned progress cards, direct delivery surfaces, or

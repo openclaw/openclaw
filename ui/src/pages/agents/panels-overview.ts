@@ -28,12 +28,10 @@ import {
   buildAgentContext,
   buildModelOptions,
   createPrimaryModelExclusion,
-  normalizeModelValue,
   resolveAgentConfig,
   resolveAgentTextAvatar,
   resolveEffectiveModelFallbacks,
   resolveModelFallbacks,
-  resolveModelLabel,
   resolveModelPrimary,
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
@@ -53,13 +51,10 @@ export type IdentityAvatarLoader = Pick<IdentityAvatarController, "resolve" | "i
 export function renderAgentOverview(params: {
   applicationConfig?: ApplicationConfigCapability;
   agent: AgentsListResult["agents"][number];
-  basePath: string;
   defaultId: string | null;
   configForm: Record<string, unknown> | null;
   agentFilesList: AgentsFilesListResult | null;
   agentIdentity: AgentIdentityResult | null;
-  agentIdentityLoading: boolean;
-  agentIdentityError: string | null;
   identityDraft: AgentIdentityDraft;
   identityAvatarLoader: IdentityAvatarLoader;
   identitySaving: boolean;
@@ -118,11 +113,11 @@ export function renderAgentOverview(params: {
   const isDefault = context.isDefault;
   const config = resolveAgentConfig(configForm, agent.id);
   const agentModel = visibleAgent.model;
-  const defaultModel = resolveModelLabel(config.defaults?.model ?? agentModel);
   const entryPrimary = resolveModelPrimary(config.entry?.model);
+  const inheritedPrimary = resolveModelPrimary(config.defaults?.model ?? agentModel);
   const defaultPrimary =
     resolveModelPrimary(config.defaults?.model) ||
-    (defaultModel !== "-" ? normalizeModelValue(defaultModel) : null) ||
+    (inheritedPrimary !== "-" ? inheritedPrimary : null) ||
     (configForm ? null : resolveModelPrimary(agentModel));
   const effectivePrimary = entryPrimary ?? defaultPrimary ?? null;
   const selectedPrimary = isDefault ? effectivePrimary : entryPrimary;

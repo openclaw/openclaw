@@ -11,6 +11,7 @@ import type {
   SessionListDiagnostics,
   SessionListPhase,
 } from "../session-list-diagnostics.types.js";
+import { SLOW_GATEWAY_REQUEST_MS } from "../slow-request-diagnostics.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
@@ -79,9 +80,7 @@ function startSessionListDiagnostics(
     mark,
     startSyncCpu,
     finishSyncCpu,
-    get projection() {
-      return projection;
-    },
+    projection,
     respond: ((...args) => {
       mark("response");
       responseOutcome = args[0] ? "ok" : "error";
@@ -100,7 +99,9 @@ function startSessionListDiagnostics(
       mark("handlerExit");
       const handlerElapsedMs = checkpoint - startedAt;
       const shouldLog =
-        logEnabled && handlerElapsedMs >= 1_000 && areDiagnosticsEnabledForProcess();
+        logEnabled &&
+        handlerElapsedMs >= SLOW_GATEWAY_REQUEST_MS &&
+        areDiagnosticsEnabledForProcess();
       if (!shouldLog && !sessionListDiagnostics.hasSubscribers) {
         return;
       }

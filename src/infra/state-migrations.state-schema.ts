@@ -1,3 +1,4 @@
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   prepareOpenClawStateDatabaseSchema,
   type OpenClawStateDatabaseSchemaMigration,
@@ -69,6 +70,13 @@ export function createStateSchemaMigrationStep(params: {
     target: [database],
     requiredness: params.requiredness,
     reversibility: "checkpoint-required",
-    run: () => prepareOpenClawStateDatabaseSchema({ env: stateEnv }, params.mode),
+    run: async () => {
+      const result = await prepareOpenClawStateDatabaseSchema({ env: stateEnv }, params.mode);
+      if (result.changes.length > 0) {
+        // Schema repair can expose install records hidden from pre-upgrade discovery.
+        clearPluginMetadataLifecycleCaches();
+      }
+      return result;
+    },
   };
 }

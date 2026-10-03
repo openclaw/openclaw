@@ -1028,27 +1028,20 @@ it("accepts a successful completed publisher for finalization without a Linux ch
 
 it("rejects retired Tideclaw alpha finalization before writes", () => {
   const f = fixture("tideclaw/alpha/2026-09-13-0400Z");
-  const tag = "v2026.9.4-alpha.1";
-  f.addDraft(tag, true);
-  const result = f.run("finalize-core", tag, "false");
+  const alphaTag = "v2026.9.4-alpha.1";
+  f.addDraft(alphaTag, true);
+  const result = f.run("finalize-core", alphaTag, "false");
   expect(result.status, result.stderr).toBe(1);
   expect(result.stderr).toContain("Alpha releases are retired;");
   expect(f.mutations()).toEqual([]);
 });
 
-it.each([
-  { ref: "unreviewed/branch", tag: "v2026.9.4-alpha.1", latest: "false" },
-  { ref: "tideclaw/alpha/2026-09-13-0400Z", tag: nextTag, latest: "false" },
-  { ref: "tideclaw/alpha/2026-09-13-0400Z", tag: "v2026.9.4-alpha.1", latest: "true" },
-])(
-  "rejects unapproved branch finalization $ref/$tag/$latest",
-  ({ ref, tag: selectedTag, latest }) => {
-    const f = fixture(ref);
-    f.addDraft(selectedTag, selectedTag.includes("-alpha."));
-    expect(f.run("finalize-core", selectedTag, latest).status).toBe(1);
-    expect(f.mutations()).toEqual([]);
-  },
-);
+it("rejects a retired alpha workflow even when finalizing a stable tag", () => {
+  const f = fixture("tideclaw/alpha/2026-09-13-0400Z");
+  f.addDraft(nextTag);
+  failed(f.run("finalize-core", nextTag, "false"), "Alpha releases are retired;");
+  expect(f.mutations()).toEqual([]);
+});
 
 it("publishes opt-in desktop metadata only after successful Linux and legacy readback", () => {
   const f = fixture(toolingRef, true);
@@ -1485,7 +1478,7 @@ it("refuses mirroring before canonical initialization without creating a release
   expect(f.mutations()).toEqual([]);
 });
 
-it.each(["v2026.9.3-alpha.1", "v2026.9.3-beta.1", "v2026.6.33"])(
+it.each(["v2026.9.3-beta.1", "v2026.6.33"])(
   "rejects non-regular target %s before touching GitHub",
   (releaseTag) => {
     const f = fixture();
@@ -1556,7 +1549,6 @@ it.each([null, tag])(
 
 it.each([
   { releaseTag: nextTag, prerelease: false },
-  { releaseTag: "v2026.6.33", prerelease: false },
   { releaseTag: "v2026.8.35", prerelease: false },
   { releaseTag: "v2026.9.4-beta.1", prerelease: true },
 ])("honors explicit non-latest finalization of $releaseTag", ({ releaseTag, prerelease }) => {

@@ -1,4 +1,3 @@
-// Memory Core plugin module coordinates synchronization and shadow reindexing.
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -26,7 +25,7 @@ import { cleanupAgedMemoryReindexTempFiles, removeMemoryDatabaseFiles } from "./
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { withMemoryIndexPublishGeneration } from "./manager-index-generation-lease.js";
 import {
-  resolveMemoryProviderState,
+  resolveMemoryProviderLifecycle,
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
 } from "./manager-provider-state.js";
@@ -312,7 +311,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         const targetedSessionSync = await runMemoryTargetedSessionSync({
           hasSessionSource: this.sources.has("sessions"),
           targetArchiveFiles,
-          reason: params?.reason,
           progress: progress ?? undefined,
           sessionsFullRetryDirty: this.sessionsFullRetryDirty,
           sessionsReconcileDirty: this.sessionsReconcileDirty,
@@ -323,7 +321,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
               corpusEntries: targetSessionSync?.corpusEntries,
             });
           },
-          shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
           activateFallbackProvider: async (reason) => {
             this.endSyncProviderGeneration();
             return await this.activateFallbackProvider(reason);
@@ -342,11 +339,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           if (params?.reason !== "cli") {
             this.recordAutomaticRebuild();
           }
-          await this.runInPlaceReindex({
-            reason: params?.reason,
-            force: params?.force,
-            progress: progress ?? undefined,
-          });
+          await this.runInPlaceReindex(progress);
           return;
         }
 
@@ -364,7 +357,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       } catch (err) {
         this.dirty ||= this.sources.has("memory");
         const reason = formatErrorMessage(err);
-        const shouldFallback = this.shouldFallbackOnError(err);
+        const shouldFallback = isMemoryEmbeddingOperationError(err);
         if (shouldFallback) {
           // A failed generation cannot wait on its own sync lease while activating fallback.
           this.endSyncProviderGeneration();
@@ -374,15 +367,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           if ((needsFullReindex || isSearchBootstrap) && !hasTargetArchiveFiles) {
             needsFullReindex = true;
             this.beginSyncProviderGeneration();
-            await this.runInPlaceReindex({
-              reason: params?.reason ?? "fallback",
-              force: true,
-              progress: progress ?? undefined,
-            });
+            await this.runInPlaceReindex(progress);
           }
           return;
         }
-        if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
+        if (!this.provider && this.fts.enabled && isMemoryEmbeddingOperationError(err)) {
           this.syncOutcomes.recordActiveFailure(err);
           log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
           return;
@@ -396,10 +385,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         await this.pruneEmbeddingCacheIfNeeded();
       }
     }
-  }
-
-  protected shouldFallbackOnError(err: unknown): boolean {
-    return isMemoryEmbeddingOperationError(err);
   }
 
   protected resolveBatchConfig(): MemoryEmbeddingBatchConfig {
@@ -480,19 +465,18 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       return false;
     }
 
-    const fallbackState = resolveMemoryProviderState({
+    this.providerLifecycle = resolveMemoryProviderLifecycle({
       provider: fallbackResult.provider,
       runtime: fallbackResult.runtime,
       requestedProvider: currentProviderId,
       fallbackFrom: currentProviderId,
       fallbackReason: reason,
     });
-    this.fallbackFrom = fallbackState.fallbackFrom;
-    this.fallbackReason = fallbackState.fallbackReason;
-    this.provider = fallbackState.provider;
-    this.providerRuntime = fallbackState.providerRuntime;
-    this.providerUnavailableReason = fallbackState.providerUnavailableReason;
-    this.providerLifecycle = fallbackState.lifecycle;
+    this.fallbackFrom = currentProviderId;
+    this.fallbackReason = reason;
+    this.provider = fallbackResult.provider;
+    this.providerRuntime = fallbackResult.runtime;
+    this.providerUnavailableReason = undefined;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallbackRequest.provider})`, {
@@ -501,11 +485,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     return true;
   }
 
-  private async runInPlaceReindex(params: {
-    reason?: string;
-    force?: boolean;
-    progress?: MemorySyncProgressState;
-  }): Promise<void> {
+  private async runInPlaceReindex(progress?: MemorySyncProgressState): Promise<void> {
     // Build outside the shared agent DB, then publish only memory-owned tables
     // in one short transaction so failed rebuilds leave the current index usable.
     const dbPath = resolveUserPath(this.settings.store.databasePath);
@@ -513,10 +493,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const originalDb = this.db;
     const originalRetryState = this.snapshotReindexRetryState();
     const shouldRetryMemoryOnFailure = this.sources.has("memory");
-    const shouldRetrySessionsOnFailure = this.shouldSyncSessions(
-      { reason: params.reason, force: params.force },
-      true,
-    );
+    const shouldRetrySessionsOnFailure = this.shouldSyncSessions(undefined, true);
     let shadowCleanup: MemoryIndexDatabase | undefined;
     try {
       await cleanupAgedMemoryReindexTempFiles(dbPath);
@@ -539,7 +516,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             shouldSyncMemory,
             shouldSyncSessions,
             needsFullReindex: true,
-            progress: params.progress,
+            progress,
           });
           if (!shouldSyncMemory) {
             this.clearMemoryRetryState();
@@ -619,7 +596,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       // cache only after successful publication so failed rebuilds retain their work.
       await this.pruneEmbeddingCacheIfNeeded();
     } catch (err) {
-      this.restoreReindexRetryState(originalRetryState);
+      this.adoptReindexRetryState(originalRetryState);
       this.markFailedFullReindexRetry({
         memory: shouldRetryMemoryOnFailure,
         sessions: shouldRetrySessionsOnFailure,

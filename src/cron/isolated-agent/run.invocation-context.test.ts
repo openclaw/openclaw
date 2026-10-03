@@ -74,6 +74,35 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
     restoreFastTestEnv(previousFastTestEnv);
   });
 
+  it("retains the selected owner while reusing a global session", async () => {
+    mockRunCronFallbackPassthrough();
+    const session = makeCronSession({ isNewSession: false });
+    resolveCronSessionMock.mockReturnValue(session);
+    let admittedOwner: { sessionKey?: string; agentId?: string } | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
+      const admitted = getAgentRunContext(runParams.runId);
+      admittedOwner = { sessionKey: admitted?.sessionKey, agentId: admitted?.agentId };
+      return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
+    });
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        cfg: {
+          agents: { entries: { main: { default: true }, research: {} } },
+          session: { scope: "global" },
+        },
+        agentId: "research",
+        sessionKey: "main",
+        job: makeIsolatedAgentJobFixture({
+          sessionTarget: "session:main",
+          delivery: { mode: "none" },
+        }),
+      }),
+    );
+    expect(result.status).toBe("ok");
+    expect(result.sessionKey).toBe("global");
+    expect(admittedOwner).toEqual({ sessionKey: "global", agentId: "research" });
+  });
+
   it("releases invocation context without clearing an existing physical-id context", async () => {
     mockRunCronFallbackPassthrough();
     const initialSessionEntry = { retained: true };

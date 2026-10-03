@@ -519,8 +519,7 @@ extension OpenClawChatViewModel {
         logDiagnostic(
             "chat.ui send queued sessionKey=\(draft.session.key) "
                 + "localRunId=\(runId) pending=\(pendingRunCount)")
-        turnToolCallsById = [:]
-        updateStreamingAssistantText(nil)
+        self.clearStreamingActivity()
 
         // Production attachment sends enter the durable outbox above. Fixture,
         // preview, and embedded transports may intentionally have no outbox;
@@ -572,18 +571,12 @@ extension OpenClawChatViewModel {
         encodedAttachments: [OpenClawChatAttachmentPayload]) -> [OpenClawChatMessageContent]
     {
         var content: [OpenClawChatMessageContent] = [
-            OpenClawChatMessageContent(
-                type: "text",
-                text: messageText,
-                mimeType: nil,
-                fileName: nil,
-                content: nil),
+            OpenClawChatMessageContent(type: "text", text: messageText),
         ]
         for (attachment, payload) in zip(attachments, encodedAttachments) {
             content.append(
                 OpenClawChatMessageContent(
                     type: payload.type,
-                    text: nil,
                     mimeType: payload.mimeType,
                     fileName: payload.fileName,
                     sizeBytes: attachment.data.count,
@@ -701,8 +694,7 @@ extension OpenClawChatViewModel {
         let reusedRunAlreadyFinal = hasRecordedFinalMessage(runId: remoteRunId)
         if reusedRunAlreadyFinal {
             clearPendingRun(remoteRunId, hapticEvent: .runCompleted)
-            turnToolCallsById = [:]
-            updateStreamingAssistantText(nil)
+            self.clearStreamingActivity()
         } else {
             armPendingRunOwner(
                 runId: remoteRunId,

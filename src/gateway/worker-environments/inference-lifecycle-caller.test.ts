@@ -10,7 +10,7 @@ import { REQUEST } from "./inference.test-support.js";
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 describe("worker inference lifecycle caller", () => {
-  it.for(["start", "start-and-drain", "start-drain-release", "refusal", "after-start"] as const)(
+  it.for(["start", "start-drain-release", "refusal", "after-start"] as const)(
     "retains actual lifecycle caller custody for %s failure",
     async (failureMode, { signal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

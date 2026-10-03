@@ -32,6 +32,12 @@ function browserRuntime(
 ): PluginRuntime {
   const gateway: PluginRuntime["gateway"] = {
     isAvailable: async () => true,
+    async readSessionFacts() {
+      throw new Error("Unexpected session facts request");
+    },
+    async openPluginPanel() {
+      throw new Error("Unexpected plugin panel request");
+    },
     request: async <T = unknown>(
       method: string,
       params?: Record<string, unknown>,

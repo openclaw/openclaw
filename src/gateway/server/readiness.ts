@@ -67,12 +67,8 @@ export function createStartupChecker(deps: GatewayStartupStateDeps): StartupChec
 function shouldIgnoreReadinessFailure(
   accountSnapshot: ChannelAccountSnapshot,
   health: ChannelHealthEvaluation,
-  autostartSuppressed: boolean,
 ): boolean {
   if (health.reason === "unmanaged" || health.reason === "stale-socket") {
-    return true;
-  }
-  if (autostartSuppressed && health.reason === "not-running") {
     return true;
   }
   // Channel restarts spend time in backoff with running=false before the next
@@ -98,6 +94,7 @@ export function createReadinessChecker(
     getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
     getStateDatabaseFailure?: () => Error | undefined;
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
+    allowPendingAgentDatabases?: boolean;
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
     shouldSkipChannelReadiness?: () => boolean;
     cacheTtlMs?: number;
@@ -109,7 +106,9 @@ export function createReadinessChecker(
   let cachedAt = 0;
   let cachedState: Omit<ReadinessResult, "uptimeMs"> | null = null;
 
-  const readReadiness = (): ReadinessResult => {
+  const readReadiness = (
+    agentDatabases: readonly AgentDatabaseAdmissionRefusal[] | undefined,
+  ): ReadinessResult => {
     const startup = getStartup();
     const uptimeMs = startup.uptimeMs;
     const now = startedAt + uptimeMs;
@@ -129,13 +128,16 @@ export function createReadinessChecker(
         uptimeMs,
       };
     }
-    const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
-    if (agentDatabases?.length) {
+    const failedAgents = agentDatabases?.filter(
+      (refusal) =>
+        deps.allowPendingAgentDatabases === false ||
+        refusal.code !== "agent-database-inspection-pending",
+    );
+    if (failedAgents?.length) {
       cachedState = null;
       return {
         ready: false,
-        failing: agentDatabases.map(({ agentId }) => `agent-database:${agentId}`),
-        agentDatabases,
+        failing: failedAgents.map(({ agentId }) => `agent-database:${agentId}`),
         uptimeMs,
       };
     }
@@ -183,10 +185,7 @@ export function createReadinessChecker(
           }
           continue;
         }
-        if (
-          !health.healthy &&
-          !shouldIgnoreReadinessFailure(accountSnapshot, health, autostartSuppressed)
-        ) {
+        if (!health.healthy && !shouldIgnoreReadinessFailure(accountSnapshot, health)) {
           failing.push(channelId);
           break;
         }
@@ -202,9 +201,14 @@ export function createReadinessChecker(
     return { ...cachedState, uptimeMs };
   };
   return () => {
-    const result = readReadiness();
+    const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
+    const result = readReadiness(agentDatabases);
     const getEventLoopHealth = deps.getEventLoopHealth;
     const eventLoop = getEventLoopHealth?.();
-    return eventLoop ? { ...result, eventLoop } : result;
+    return {
+      ...result,
+      ...(agentDatabases?.length ? { agentDatabases } : {}),
+      ...(eventLoop ? { eventLoop } : {}),
+    };
   };
 }

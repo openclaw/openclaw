@@ -1,5 +1,10 @@
 import { resolveEnvNormalizationKeys } from "../infra/env.js";
 import {
+  clearFsSafeEnvFallback,
+  fsSafeEnvInput,
+  normalizeFsSafeNativeEnv,
+} from "../infra/fs-safe-env.js";
+import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
@@ -78,7 +83,7 @@ export function snapshotEnvByPlatformKey(
   // Windows has one logical slot per case-insensitive key. Retain its exact spelling so
   // publication and rollback can compare-and-swap the slot without losing the original key.
   const snapshot = new Map<string, EnvSnapshotEntry>();
-  for (const [key, value] of Object.entries(env)) {
+  for (const [key, value] of Object.entries(fsSafeEnvInput(env))) {
     const platformKey = envSnapshotKey(key);
     if (!snapshot.has(platformKey)) {
       snapshot.set(platformKey, { key, value });
@@ -99,6 +104,7 @@ export function replaceEnvSnapshotEntry(
   current: EnvSnapshotEntry | undefined,
   next: EnvSnapshotEntry | undefined,
 ): void {
+  clearFsSafeEnvFallback(env);
   if (current) {
     delete env[current.key];
   }
@@ -124,7 +130,7 @@ export function indexConfigRuntimeEnvValues(
 export function snapshotEnvProperties(
   env: Readonly<NodeJS.ProcessEnv>,
 ): Map<string, EnvSnapshotEntry> {
-  return new Map(Object.entries(env).map(([key, value]) => [key, { key, value }]));
+  return new Map(Object.entries(fsSafeEnvInput(env)).map(([key, value]) => [key, { key, value }]));
 }
 
 export type PublishedConfigRuntimeEnvChange = {
@@ -145,4 +151,5 @@ export function rollbackConfigRuntimeEnvChanges(
     }
     replaceEnvSnapshotEntry(env, currentEntry, change.before);
   }
+  normalizeFsSafeNativeEnv(env);
 }

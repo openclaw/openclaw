@@ -1,11 +1,13 @@
+import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
 
 const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 export const SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY = "openclawSyntheticMissingToolResult";
-export const DEFAULT_MISSING_TOOL_RESULT_TEXT =
+export const LEGACY_MISSING_TOOL_RESULT_TEXT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 
 type ToolCallLike = {
@@ -120,24 +122,14 @@ export function extractToolResultIds(message: ToolResultMessage): string[] {
     callId?: unknown;
     call_id?: unknown;
   };
-  const ids: string[] = [];
-  for (const value of [
+  return normalizeUniqueTrimmedStringList([
     record.toolCallId,
     record.toolUseId,
     record.tool_call_id,
     record.tool_use_id,
     record.callId,
     record.call_id,
-  ]) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const id = value.trim();
-    if (id && !ids.includes(id)) {
-      ids.push(id);
-    }
-  }
-  return ids;
+  ]);
 }
 
 export function extractToolResultId(message: ToolResultMessage): string | null {
@@ -178,7 +170,7 @@ export function isSyntheticMissingToolResult(message: {
     Array.isArray(content) &&
     content.some((block) => {
       const record = asOptionalObjectRecord(block);
-      return record?.type === "text" && record.text === DEFAULT_MISSING_TOOL_RESULT_TEXT;
+      return record?.type === "text" && record.text === LEGACY_MISSING_TOOL_RESULT_TEXT;
     })
   );
 }
@@ -282,22 +274,20 @@ export function classifyToolUseResultPairing(
           continue;
         }
         droppedDuplicateCount += 1;
-        if (!isSyntheticMissingToolResult(normalized)) {
-          const replaceable = syntheticById.claim(id);
-          if (replaceable) {
-            const discardedSource = replaceable.sourceResult;
-            if (discardedSource) {
-              droppedResults.push({
-                message: discardedSource,
-                index: replaceable.sourceResultIndex ?? index,
-              });
-            }
-            replaceable.result = normalizeToolResultName(normalized, replaceable.name);
-            replaceable.sourceResult = message;
-            replaceable.sourceResultIndex = index;
-          } else {
-            droppedResults.push({ message, index });
+        const replaceable = isSyntheticMissingToolResult(normalized)
+          ? undefined
+          : syntheticById.claim(id);
+        if (replaceable) {
+          const discardedSource = replaceable.sourceResult;
+          if (discardedSource) {
+            droppedResults.push({
+              message: discardedSource,
+              index: replaceable.sourceResultIndex ?? index,
+            });
           }
+          replaceable.result = normalizeToolResultName(normalized, replaceable.name);
+          replaceable.sourceResult = message;
+          replaceable.sourceResultIndex = index;
         } else {
           droppedResults.push({ message, index });
         }

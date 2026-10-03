@@ -1,6 +1,7 @@
 import { copyFile, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+import { mermaidClassicBundlePlugin } from "./vite-plugin.ts";
 
 const output = fileURLToPath(new URL("../../apps/shared/mermaid/assets/mermaid", import.meta.url));
 
@@ -8,6 +9,13 @@ export default defineConfig({
   base: "./",
   // Native builds run directly from source, before workspace dist files exist.
   resolve: { tsconfigPaths: true },
+  worker: {
+    format: "iife",
+    plugins: () => [mermaidClassicBundlePlugin()],
+    rolldownOptions: {
+      output: { codeSplitting: false },
+    },
+  },
   build: {
     outDir: output,
     emptyOutDir: true,
@@ -20,6 +28,7 @@ export default defineConfig({
     },
   },
   plugins: [
+    mermaidClassicBundlePlugin(),
     {
       name: "native-mermaid-document",
       async closeBundle() {

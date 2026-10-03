@@ -19,6 +19,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
 import * as userProfileList from "../state/user-profile-list.js";
+import { setAvatar } from "../state/user-profile-writes.worker.js";
 import * as userProfiles from "../state/user-profiles.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 import * as managedOutgoingMedia from "./managed-image-attachments.js";
@@ -31,13 +32,6 @@ import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { installGatewayTestHooks, testState, writeSessionStore } from "./test-helpers.js";
-import * as workspaceIcons from "./workspace-icon-http.js";
-
-// Icon I/O has its own suite; its detached import must not outlive this cursor fixture.
-vi.mock("./workspace-icon-http.js", () => ({
-  prepareSessionWorkspaceIcon: vi.fn(async () => undefined),
-}));
-
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = createTempDirTracker();
 
@@ -373,9 +367,7 @@ describe("chat.history cursor catch-up", () => {
     try {
       const avatarUrls: string[] = [];
       for (const byte of [1, 2]) {
-        expect(userProfiles.setAvatar(profile.id, new Uint8Array([byte]), "image/png").ok).toBe(
-          true,
-        );
+        expect(setAvatar(profile.id, new Uint8Array([byte]), "image/png").ok).toBe(true);
         const { avatarRevision } = userProfiles.getUserProfileDisplay(profile.id);
         const avatarUrl = buildControlUiUserAvatarPath(profile.id, avatarRevision);
         avatarUrls.push(avatarUrl);
@@ -563,38 +555,28 @@ describe("chat.history cursor catch-up", () => {
   });
 
   test("chat.startup returns startup projections with a delta", async () => {
-    const prepareIcon = vi.spyOn(workspaceIcons, "prepareSessionWorkspaceIcon");
-    try {
-      const { context, storePath } = await createCursorSession();
-      context.readChatStartupProjection = async () => ({
-        metadata: { swarmEnabled: false },
-        sessionModelCatalog: [],
-        defaultModelCatalog: [],
-      });
-      const page = await callChat<{ deltaCursor?: string }>(context, "chat.startup");
-      await appendTranscriptMessage(currentScope(storePath), {
-        eventId: "startup-append",
-        parentId: "cached",
-        message: { role: "assistant", content: "startup delta", timestamp: 2 },
-      });
-      const delta = await callChat(context, "chat.startup", { cursor: page.payload?.deltaCursor });
-      expect(delta).toMatchObject({
-        ok: true,
-        payload: {
-          kind: "delta",
-          messages: [expect.any(Object)],
-          sessionInfo: expect.any(Object),
-          metadata: expect.any(Object),
-        },
-      });
-      expect(delta.payload).not.toHaveProperty("agentsList");
-    } finally {
-      await Promise.allSettled(
-        prepareIcon.mock.results
-          .filter((result) => result.type === "return")
-          .map((result) => result.value),
-      );
-      prepareIcon.mockRestore();
-    }
+    const { context, storePath } = await createCursorSession();
+    context.readChatStartupProjection = async () => ({
+      metadata: { swarmEnabled: false },
+      sessionModelCatalog: [],
+      defaultModelCatalog: [],
+    });
+    const page = await callChat<{ deltaCursor?: string }>(context, "chat.startup");
+    await appendTranscriptMessage(currentScope(storePath), {
+      eventId: "startup-append",
+      parentId: "cached",
+      message: { role: "assistant", content: "startup delta", timestamp: 2 },
+    });
+    const delta = await callChat(context, "chat.startup", { cursor: page.payload?.deltaCursor });
+    expect(delta).toMatchObject({
+      ok: true,
+      payload: {
+        kind: "delta",
+        messages: [expect.any(Object)],
+        sessionInfo: expect.any(Object),
+        metadata: expect.any(Object),
+      },
+    });
+    expect(delta.payload).not.toHaveProperty("agentsList");
   });
 });

@@ -244,6 +244,40 @@ describe("worker transcript commit client", () => {
 });
 
 describe("worker live-event client", () => {
+  it("does not send retired previews after connection readiness returns", async () => {
+    const harness = connectionHarness();
+    const ready = createDeferred<WorkerHelloOk>();
+    harness.waitForReady.mockReturnValue(ready.promise);
+    harness.requestLiveEvent.mockImplementation(async (request) =>
+      request.lastAckedSeq > 0 ? resyncRequired() : successResponse({ ackedSeq: request.seq }),
+    );
+    const client = new WorkerLiveEventClient(harness.connection, {
+      runEpoch: 3,
+      maxBufferedEvents: 1,
+    });
+    try {
+      expect(client.enqueuePreview("run-1", LIVE_EVENT)).toBe(true);
+      expect(client.enqueuePreview("run-1", LIVE_EVENT)).toBe(false);
+      const terminal = client.emitTerminal("run-1", TERMINAL_EVENT);
+      ready.resolve(HELLO);
+
+      await expect(terminal).resolves.toBeUndefined();
+      expect(
+        harness.requestLiveEvent.mock.calls.map(([{ seq, lastAckedSeq, event }]) => ({
+          seq,
+          lastAckedSeq,
+          event,
+        })),
+      ).toEqual([
+        { seq: 2, lastAckedSeq: 1, event: TERMINAL_EVENT },
+        { seq: 1, lastAckedSeq: 0, event: TERMINAL_EVENT },
+      ]);
+    } finally {
+      ready.resolve(HELLO);
+      client.dispose();
+    }
+  });
+
   it("accepts out-of-order cumulative ACKs while a no-progress response has peers in flight", async () => {
     const harness = connectionHarness();
     const firstResponse = createDeferred<LiveResponse>();

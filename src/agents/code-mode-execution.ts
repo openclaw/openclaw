@@ -1,5 +1,10 @@
 import type { AgentRunApprovalWait } from "./agent-run-approval-wait.js";
-import { codeModeReplayIdForToolCall, isCodeModeSwarmAvailable } from "./code-mode-bridge.js";
+import { raceWithAbortSignal } from "./agent-tools.abort.js";
+import {
+  codeModeReplayIdForToolCall,
+  isCodeModeSwarmAvailable,
+  requiresCodeModeCompletion,
+} from "./code-mode-bridge.js";
 import {
   createCodeModeCatalogProjection,
   type CodeModeCatalogProjection,
@@ -63,6 +68,7 @@ export async function runCodeModeExec(params: {
   code: string;
   assistantTurnId?: string;
   restartSafe: boolean;
+  required?: boolean;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
   onRuntime?: (runtime: ToolSearchRuntime) => void;
@@ -90,7 +96,7 @@ export async function runCodeModeExec(params: {
     mcpIds: namespaceRuntime.mcpBindings.keys(),
   });
   const apiFiles = createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled);
-  const owner = createCodeModeRunOwner(params.ctx, config);
+  const owner = createCodeModeRunOwner(params.ctx, config, params.required);
   const { approvalWait } = owner;
   const signal = owner.bindCall(params.signal);
   const output = new CodeModeOutputState(config.maxOutputBytes, params.resultBudget);
@@ -285,6 +291,9 @@ function dispatchCodeModeRequests(
   pending: PendingBridgeState[],
   requests: PendingBridgeRequest[],
 ): void {
+  if (requiresCodeModeCompletion(requests, params.catalogProjection)) {
+    params.owner.requireCompletion();
+  }
   const pendingIds = new Set(pending.map((entry) => entry.id));
   const newPendingRequests = requests.filter((request) => !pendingIds.has(request.id));
   // Watchdog grace permits checkpoint/cleanup, never admission of new effects.
@@ -302,6 +311,7 @@ function dispatchCodeModeRequests(
       parentToolCallId: params.parentToolCallId,
       codeModeRunId: params.codeModeReplayId,
       remainingMs: params.budget.deadlineMs - performance.now(),
+      completionRequired: params.owner.completionRequired,
       activeRunId: params.owner.runId,
       ctx: params.ctx,
       signal: params.signal,
@@ -337,6 +347,11 @@ function createInlineHost(
       // Own an existing run slot before any host effect, through internal parking.
       reserve();
       dispatchCodeModeRequests(params, pending, boundary.pendingRequests);
+      // Required waits park the VM, not the caller. The same owner resumes its
+      // exact continuation on settlement without returning an abandonable handle.
+      if (params.owner.completionRequired) {
+        return { kind: "checkpoint" };
+      }
       // Pressure parks the VM, never the cell-owned host operations.
       const signal = AbortSignal.any([params.signal, context.signal, context.yieldSignal]);
       const ready = await waitForPending(
@@ -442,7 +457,8 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
   // deadline still falls back to a suspended snapshot below.
   while (
     result.status === "waiting" &&
-    result.pendingRequests.length > 0 &&
+    (result.pendingRequests.length > 0 ||
+      (params.owner.completionRequired && pending.length > 0)) &&
     result.pendingRequests.every((request) => request.method !== "yield")
   ) {
     if (
@@ -457,6 +473,9 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
     }
     const remainingMs = params.budget.deadlineMs - performance.now();
     if (remainingMs <= 0) {
+      if (params.owner.completionRequired) {
+        throw new Error("interrupted");
+      }
       break;
     }
     if (params.signal?.aborted) {
@@ -469,13 +488,34 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
         releaseReservation = reserveActiveRunSlot();
       }
       dispatchCodeModeRequests(params, pending, result.pendingRequests);
-      const ready = await waitForPending(
+      let ready: boolean;
+      const hasPendingGuestTimer = pendingBridgeStatesForSettlement(
         pending,
         result.settlementMode,
-        params.budget,
-        params.approvalWait,
-        params.signal,
-      );
+      ).some((entry) => entry.method === "sleep" && !entry.settled);
+      if (params.owner.completionRequired && !hasPendingGuestTimer) {
+        // Preserve the unused execution allowance across the off-VM wait. Never
+        // grant a fresh slice: guest work, admission, checkpoint and restore still
+        // spend the original budget. Run and tool deadlines keep their own clocks.
+        const remainingBudgetMs = params.budget.deadlineMs - performance.now();
+        if (remainingBudgetMs <= 0) {
+          throw new Error("interrupted");
+        }
+        await raceWithAbortSignal(
+          waitForPendingBridgeSettlement(pending, result.settlementMode),
+          params.signal,
+        );
+        params.budget.deadlineMs = performance.now() + remainingBudgetMs;
+        ready = true;
+      } else {
+        ready = await waitForPending(
+          pending,
+          result.settlementMode,
+          params.budget,
+          params.approvalWait,
+          params.signal,
+        );
+      }
       const resumeBudgetMs = ready
         ? usableResumeBudgetMs(params.budget.deadlineMs, params.config)
         : undefined;
@@ -489,6 +529,9 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
         }
         // Parked rather than resumed: without a usable budget the restore alone
         // would burn the remaining deadline and fail a recoverable run.
+        if (params.owner.completionRequired) {
+          throw new Error("interrupted");
+        }
         return parkSnapshot(result, params.replaySafe);
       }
       // Deliver the settled frontier only. Unresolved sibling promises remain
@@ -519,6 +562,11 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
     return abortedResult();
   }
   if (result.status === "waiting") {
+    if (params.owner.completionRequired) {
+      throw new ToolInputError(
+        "Required Code Mode work cannot yield an unfinished program. Finish the program or cancel the run; do not replay completed actions.",
+      );
+    }
     const pendingReplaySafe = pendingBridgeRequestsReplaySafe(
       result.pendingRequests,
       params.runtime,

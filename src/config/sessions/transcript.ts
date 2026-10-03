@@ -33,7 +33,6 @@ import {
   isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
   readActiveTranscriptEntryAnchor,
-  readLatestSessionTranscriptMessageEvent,
   readLatestTranscriptAssistantText,
   readSessionTranscriptMessageEventPage,
   resolveSessionEntrySelection,
@@ -46,6 +45,7 @@ import {
   type TranscriptEvent,
 } from "./session-accessor.js";
 import type { LatestTranscriptAssistantText } from "./session-accessor.types.js";
+import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnLifecyclePatch,
@@ -58,7 +58,10 @@ import {
   applyBeforeMessageWriteToAssistant,
   type AssistantBeforeMessageWrite,
 } from "./transcript-assistant-message.js";
-import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
+import {
+  resolveMirroredTranscriptText,
+  type SessionTranscriptDeliveryMirror,
+} from "./transcript-mirror.js";
 import {
   isWithinTranscriptWindow,
   normalizeRecentTranscriptLimit,
@@ -89,17 +92,6 @@ export type SessionTranscriptAppendResult =
     };
 
 export type SessionTranscriptUpdateMode = "inline" | "file-only" | "none";
-export type SessionTranscriptDeliveryMirror =
-  | {
-      kind: "channel-final";
-      sourceMessageId?: string;
-    }
-  | {
-      kind: "channel-final-suppressed";
-      reason: "stale-foreground";
-      sourceMessageId?: string;
-    };
-
 type InternalSessionTranscriptDeliveryMirror =
   | SessionTranscriptDeliveryMirror
   | {
@@ -411,25 +403,9 @@ export async function appendAssistantMessageToSessionTranscript(
   }
 
   return appendExactAssistantMessageToSessionTranscript({
-    agentId: params.agentId,
+    ...params,
     sessionKey,
-    ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
-    ...(params.expectedLifecycleRevision !== undefined
-      ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
-      : {}),
-    ...(params.expectedWriterRunId ? { expectedWriterRunId: params.expectedWriterRunId } : {}),
-    ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
-    ...(params.sessionLifecyclePatch
-      ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
-      : {}),
-    storePath: params.storePath,
-    ...(params.eventId ? { eventId: params.eventId } : {}),
-    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-    ...(params.runId ? { runId: params.runId } : {}),
-    updateMode: params.updateMode,
-    onMessageCommitted: params.onMessageCommitted,
-    config: params.config,
-    ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
+    expectedWriterRunId: params.expectedWriterRunId || undefined,
     message: {
       ...recordAssistantManagedMediaUrls(
         { role: "assistant" as const, openclawDelivery: { mediaUrls: [] } },
@@ -659,13 +635,13 @@ function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): 
 }
 
 async function readLatestVisibleTranscriptMessage(scope: {
-  agentId?: string;
+  agentId: string;
   sessionId: string;
-  sessionKey?: string;
+  sessionKey: string;
   storePath: string;
 }): Promise<{ id?: string; message: unknown } | undefined> {
   try {
-    const event = readLatestSessionTranscriptMessageEvent(scope)?.event;
+    const event = (await prepareSessionTranscriptHydration(scope).readLatestActiveMessage())?.event;
     if (!event || typeof event !== "object" || Array.isArray(event)) {
       return undefined;
     }
@@ -712,11 +688,11 @@ async function findLatestEquivalentAssistantMessageId(
     return undefined;
   }
 
-  if (target.storePath && target.sessionId) {
+  if (target.storePath && target.sessionId && target.agentId && target.sessionKey) {
     const latest = await readLatestVisibleTranscriptMessage({
-      ...(target.agentId ? { agentId: target.agentId } : {}),
+      agentId: target.agentId,
       sessionId: target.sessionId,
-      ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
+      sessionKey: target.sessionKey,
       storePath: target.storePath,
     });
     const latestMessage = latest?.message as { role?: unknown } | undefined;

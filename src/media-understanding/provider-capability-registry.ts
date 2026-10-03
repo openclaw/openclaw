@@ -1,4 +1,3 @@
-// Capability metadata for the configured shared media model entries.
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProvider } from "../plugins/capability-provider-runtime.js";

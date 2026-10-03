@@ -6,7 +6,8 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ensureProfileForEmail, setDisplayName } from "../state/user-profiles.js";
+import { setDisplayName } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -38,7 +39,7 @@ export async function withMentionInbox(
     try {
       await run(fixture);
     } finally {
-      fixture.dispose();
+      await fixture.dispose();
     }
   });
 }
@@ -137,10 +138,9 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
     push,
     setSession,
     openInbox,
-    dispose() {
-      for (const instance of inboxes) {
-        instance.dispose();
-      }
+    async dispose() {
+      await Promise.all([...inboxes].map((instance) => instance.dispose()));
+      await scheduler.stop();
     },
     post(sourceId = "source-one", overrides: Partial<MentionCommittedInput> = {}, target = inbox) {
       let committedSource = committedSources.get(sourceId);

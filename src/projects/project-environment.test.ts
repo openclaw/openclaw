@@ -50,7 +50,7 @@ vi.mock("../state/openclaw-state-lease.js", () => ({
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.execute,
 }));
-vi.mock("../state/openclaw-state-lease-worker-storage.js", () => ({
+vi.mock("../state/openclaw-state-lease-worker-operation.js", () => ({
   runWithOpenClawStateLeaseWorker: async (
     _lease: unknown,
     context: unknown,
@@ -100,7 +100,7 @@ import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { materializeProjectClone, refreshProjectClone } from "./project-clone.js";
 import { registerResolvedProject } from "./project-registration.js";
 import { removeProjectRegistry } from "./project-registry.js";
-import type { ProjectRegistryRecord } from "./project-registry.kernel.js";
+import type { ProjectRegistryRecord } from "./project-registry.types.js";
 
 type ProjectOperation = "remove" | "register" | "materialize" | "refresh";
 type ProjectCommandName =

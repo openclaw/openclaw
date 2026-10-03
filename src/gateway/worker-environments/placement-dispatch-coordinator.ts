@@ -6,12 +6,12 @@ import type {
   WorkerProvisioningDispatchPlacement,
 } from "./placement-dispatch-failure.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
-import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import type { WorkerPlacementRecoveryAdmission } from "./placement-recovery-contract.js";
-import type {
-  WorkerPlacementDispatchAdmission,
-  WorkerPlacementCancellationTarget,
-} from "./service-contract.js";
+import {
+  matchesWorkerPlacementTarget,
+  type WorkerPlacementCancellationTarget,
+} from "./placement-target.js";
+import type { WorkerPlacementDispatchAdmission } from "./service-contract.js";
 
 function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(
   run: (report: (placement: WorkerDispatchPlacement) => void) => Promise<T>,
@@ -216,6 +216,21 @@ export function coordinateWorkerPlacementDispatch(
     authorize?.();
     return result;
   };
+  const runSessionOperation = <T>(
+    sessionId: string,
+    signal: AbortSignal | undefined,
+    run: () => Promise<T>,
+  ): Promise<T> => {
+    signal?.throwIfAborted();
+    const admission = reserveSessions([sessionId]);
+    return admission.hold(
+      (async () => {
+        await racePromiseWithAbortSignal(admission.ready, signal);
+        signal?.throwIfAborted();
+        return await run();
+      })(),
+    );
+  };
   return {
     async awaitTurnClaimRelease(sessionId, wait) {
       const claimWait = { settled: Promise.resolve() };
@@ -357,17 +372,10 @@ export function coordinateWorkerPlacementDispatch(
         );
         return await admitDispatch(
           request,
-          (signal) => {
-            signal?.throwIfAborted();
-            const admission = reserveSessions([request.sessionId]);
-            return admission.hold(
-              (async () => {
-                await racePromiseWithAbortSignal(admission.ready, signal);
-                signal?.throwIfAborted();
-                return await service.dispatch(request, report, authorize, signal);
-              })(),
-            );
-          },
+          (signal) =>
+            runSessionOperation(request.sessionId, signal, () =>
+              service.dispatch(request, report, authorize, signal),
+            ),
           authorize,
           callerSignal,
         );
@@ -429,17 +437,10 @@ export function coordinateWorkerPlacementDispatch(
         await Promise.allSettled(predecessors.map((pending) => pending.operation));
         return await admitDispatch(
           request,
-          (signal) => {
-            signal?.throwIfAborted();
-            const admission = reserveSessions([request.sessionId]);
-            return admission.hold(
-              (async () => {
-                await racePromiseWithAbortSignal(admission.ready, signal);
-                signal?.throwIfAborted();
-                return await service.move(request, report, authorize, signal);
-              })(),
-            );
-          },
+          (signal) =>
+            runSessionOperation(request.sessionId, signal, () =>
+              service.move(request, report, authorize, signal),
+            ),
           authorize,
         );
       }, onTransition);
@@ -475,15 +476,7 @@ export function coordinateWorkerPlacementDispatch(
           request,
           authorize,
           beforeDrain,
-          (run) => {
-            const admission = reserveSessions([request.sessionId]);
-            return admission.hold(
-              (async () => {
-                await admission.ready;
-                return await run();
-              })(),
-            );
-          },
+          (run) => runSessionOperation(request.sessionId, undefined, run),
           operations.length
             ? {
                 isCurrent: isPending,

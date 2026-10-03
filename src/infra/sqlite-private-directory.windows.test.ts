@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -147,8 +148,14 @@ describe.runIf(process.platform === "win32")("private SQLite directory creation 
     const root = tempDirs.make("openclaw-sqlite-private-failure-");
     const regularFile = path.join(root, "parent-file");
     await fs.writeFile(regularFile, "not a directory");
-    await expect(createPrivateSqliteDirectory(path.join(regularFile, "child"))).rejects.toThrow(
-      /CreateDirectoryW.*Win32 error/u,
+    const failure = await createPrivateSqliteDirectory(path.join(regularFile, "child")).catch(
+      (error: unknown) => error,
     );
+    expect(failure).toMatchObject({
+      message: expect.stringMatching(/CreateDirectoryW.*Win32 error/u),
+      code: "EIO",
+      errno: expect.any(Number),
+    });
+    expect(isPrivateDirectoryCreationRefused(failure)).toBe(true);
   });
 });

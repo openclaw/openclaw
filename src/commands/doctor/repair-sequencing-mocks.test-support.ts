@@ -199,43 +199,6 @@ vi.mock("./shared/invalid-plugin-config.js", () => ({
   }),
 }));
 
-vi.mock("./shared/legacy-tools-by-sender.js", () => ({
-  maybeRepairLegacyToolsBySenderKeys: (cfg: OpenClawConfig) => {
-    const channels = cfg.channels as Record<string, unknown> | undefined;
-    const tools = channels?.tools as
-      | { exec?: { toolsBySender?: Record<string, unknown> } }
-      | undefined;
-    const bySender = tools?.exec?.toolsBySender;
-    const rawKey = bySender
-      ? Object.keys(bySender).find((key) => !key.startsWith("id:"))
-      : undefined;
-    if (!bySender || !rawKey) {
-      return { config: cfg, changes: [] };
-    }
-    const targetKey = `id:${rawKey.trim()}`;
-    return {
-      config: {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          tools: {
-            ...(channels?.tools as Record<string, unknown> | undefined),
-            exec: {
-              ...tools?.exec,
-              toolsBySender: {
-                [targetKey]: bySender[rawKey],
-              },
-            },
-          },
-        },
-      },
-      changes: [
-        `channels.tools.exec.toolsBySender: migrated 1 legacy key to typed id: entries (${rawKey} -> ${targetKey})`,
-      ],
-    };
-  },
-}));
-
 vi.mock("./shared/exec-safe-bins.js", () => ({
   maybeRepairExecSafeBinProfiles: (cfg: OpenClawConfig) => ({
     config: cfg,

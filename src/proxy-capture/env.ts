@@ -1,4 +1,3 @@
-// Proxy capture env helpers build proxy-related env vars for child processes.
 import { randomUUID } from "node:crypto";
 import type { Agent } from "node:http";
 import process from "node:process";

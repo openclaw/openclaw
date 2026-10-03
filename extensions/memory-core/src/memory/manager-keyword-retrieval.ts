@@ -1,4 +1,3 @@
-// Memory Core plugin module owns keyword retrieval and ranking.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -6,13 +5,14 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
-  MEMORY_INDEX_FTS_TABLE,
-  MEMORY_INDEX_PATHS_FTS_TABLE,
+  MEMORY_INDEX_FTS_TABLE as FTS_TABLE,
+  MEMORY_INDEX_PATHS_FTS_TABLE as PATH_FTS_TABLE,
   type MemorySearchResult,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { buildFtsQuery, scoreExactPathTieForTemporalDecay } from "./hybrid.js";
+import { scoreExactPathTieForTemporalDecay } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
+import { buildFtsQuery } from "./keyword-query.js";
 import {
   runMemoryCuratedCandidates,
   runMemoryKeywordSearch,
@@ -33,8 +33,6 @@ import {
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
-const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
-const PATH_FTS_TABLE = MEMORY_INDEX_PATHS_FTS_TABLE;
 const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const EXACT_PATH_CANDIDATE_LIMIT = 200;
 const log = createSubsystemLogger("memory");

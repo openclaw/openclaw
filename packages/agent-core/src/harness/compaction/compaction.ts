@@ -579,7 +579,7 @@ const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation mes
 Update the existing structured summary with new information. RULES:
 - PRESERVE all existing information from the previous summary
 - ADD new progress, decisions, and context from the new messages
-- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
+- UPDATE the Progress section: move items from "In Progress" to "Done" when completed. Record checks that ran and their results as completed, even when they failed; keep unresolved blockers separate.
 - UPDATE "Next Steps" based on what was accomplished
 - PRESERVE exact file paths, function names, and error messages
 - If something is no longer relevant, you may remove it
@@ -817,21 +817,12 @@ export function prepareCompaction(
 
   const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
   const messagesToSummarize: AgentMessage[] = [...resetPreludeMessages];
-  for (let i = boundaryStart; i < historyEnd; i++) {
+  const turnPrefixMessages: AgentMessage[] = [];
+  for (let i = boundaryStart; i < cutPoint.firstKeptEntryIndex; i++) {
     const entry = effectiveEntries.at(i);
     const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
     if (msg) {
-      messagesToSummarize.push(msg);
-    }
-  }
-  const turnPrefixMessages: AgentMessage[] = [];
-  if (cutPoint.isSplitTurn) {
-    for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
-      const entry = effectiveEntries.at(i);
-      const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-      if (msg) {
-        turnPrefixMessages.push(msg);
-      }
+      (i < historyEnd ? messagesToSummarize : turnPrefixMessages).push(msg);
     }
   }
   if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) {

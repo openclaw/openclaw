@@ -80,10 +80,8 @@ export function parseBeamMirrorConfig(
     return `${MIRROR_CONFIG_PATH} must be a closed object with endpoint/token/catalogs/pollSeconds/activeWindowMinutes`;
   }
   const endpoint = typeof mirror.endpoint === "string" ? mirror.endpoint.trim() : "";
-  let parsedEndpoint: URL;
-  try {
-    parsedEndpoint = new URL(endpoint);
-  } catch {
+  const parsedEndpoint = URL.parse(endpoint);
+  if (!parsedEndpoint) {
     return `${MIRROR_CONFIG_PATH}.endpoint must be an absolute URL`;
   }
   // Bearer credentials and transcripts must never cross the network in the

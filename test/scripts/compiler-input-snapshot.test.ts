@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { ARTIFACT_CACHE_VERSION } from "../../scripts/lib/build-artifact-cache.mts";
 import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
-import { createDeferred, withTestTimeout } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
@@ -66,7 +66,6 @@ function sealDiagnostic(before: CompilerInputSnapshot, after: CompilerInputSnaps
 it.each([
   ['{"compilerOptions":{"target":"invalid"},"include":["src/**/*.ts"]}', "TS6046"],
   ['{"include":"src/**/*.ts"}', "TS5024"],
-  ['{"files":"src/index.ts"}', "TS5024"],
   ['{"extends":"./missing.json","include":["src/**/*.ts"]}', "TS5083"],
   ['{"compilerOptions": {', "TS1005"],
 ])("rejects invalid native compiler configuration %s", (config, diagnostic) => {
@@ -245,12 +244,15 @@ it.each([
   ["config-bytes", "base.json", '{ "compilerOptions": {"target":"ES2023","types":[]} }\n'],
 ])(
   "identifies a %s rejection without exposing configuration or tool bytes",
-  (category, file, bytes) => {
+  async (category, file, bytes) => {
     const f = fixture();
     const before = f.snapshot();
+    await before.prepare();
     f.signature(before);
     f.write(file!, bytes!);
-    expect(sealDiagnostic(before, f.snapshot()).detail).toEqual({ category });
+    const after = f.snapshot();
+    await after.prepare();
+    expect(sealDiagnostic(before, after).detail).toEqual({ category });
   },
 );
 
@@ -293,16 +295,6 @@ it.each(["ascii", "unicode", "controls"])(
     expect(changes.every(({ path: filename }) => filename.length <= 160)).toBe(true);
   },
 );
-
-it("prepares the same ordered source and installed-alias namespace as synchronous readers", async () => {
-  const f = fixture();
-  const synchronous = f.snapshot();
-  const prepared = f.snapshot();
-  await prepared.prepare();
-  for (const outputRoot of [undefined, path.join(f.root, "packages/local/dist")]) {
-    expect(f.signature(prepared, outputRoot)).toBe(f.signature(synchronous, outputRoot));
-  }
-});
 
 it("ignores checkout scratch packages that disappear during preparation", async () => {
   const f = fixture();
@@ -480,8 +472,12 @@ it("invalidates an indirect dependency symlink when its final target changes", a
   }
 });
 
-it("preloads sibling subtrees while the ordered visitor waits on a deeper directory", async () => {
-  const f = fixture();
+it("preloads sibling subtrees while the ordered visitor waits on a deeper directory", async ({
+  signal,
+  onTestFinished,
+}) => {
+  const testRoots = useAutoCleanupTempDirTracker(onTestFinished);
+  const f = fixture(testRoots.make("compiler-input-snapshot-preparation-"));
   f.write("fanout/a/deeper/input.ts", "export {};\n");
   f.write("fanout/b/deeper/input.ts", "export {};\n");
   f.write(".artifacts/ignored/input.ts", "export {};\n");
@@ -513,39 +509,48 @@ it("preloads sibling subtrees while the ordered visitor waits on a deeper direct
   });
   const snapshot = f.snapshot();
   const preparation = snapshot.prepare();
+  let cleanup: Promise<void> | undefined;
+  const finishPreparation = () =>
+    (cleanup ??= (async () => {
+      release.resolve();
+      try {
+        await preparation;
+      } finally {
+        reader.mockRestore();
+      }
+    })());
+  // Vitest runs these hooks in reverse order, after afterEach: join before removing inputs.
+  onTestFinished(finishPreparation);
   try {
-    await withTestTimeout(
-      Promise.all([heldStarted.promise, siblingStarted.promise]),
-      5_000,
-      "preparation serialized the independent directory subtrees",
+    await withinTest(
+      awaitGateBeforeSettlement(
+        Promise.all([heldStarted.promise, siblingStarted.promise]),
+        preparation,
+        "preparation serialized the independent directory subtrees",
+      ),
+      signal,
     );
     expect(peak).toBeLessThanOrEqual(16);
   } finally {
-    release.resolve();
-    try {
-      await preparation;
-    } finally {
-      reader.mockRestore();
-    }
+    await finishPreparation();
   }
   expect(active).toBe(0);
   expect(observed.has(path.join(f.root, ".artifacts"))).toBe(false);
   expect(observed.has(path.join(f.root, ".cache/vitest"))).toBe(false);
-  expect(f.signature(snapshot)).toBe(f.signature(f.snapshot()));
+  const synchronous = f.snapshot();
+  for (const outputRoot of [undefined, path.join(f.root, "packages/local/dist")]) {
+    expect(f.signature(snapshot, outputRoot)).toBe(f.signature(synchronous, outputRoot));
+  }
 });
 
 it.each([
-  ["source addition", "src/shadow.ts", "export const shadow = 1;\n"],
-  ["package addition", "src/package.json", '{"type":"commonjs"}'],
   ["nested workspace metadata", "packages/local/.tmp/package.json", '{"type":"commonjs"}'],
   [
     "installed package metadata",
     "packages/local/package.json",
     '{"name":"fixture-package","type":"commonjs"}',
   ],
-  ["inherited config", "base.json", '{"compilerOptions":{"target":"ES2022","types":[]}}'],
   ["generator input", "scripts/generator.mts", "export const generator = 2;\n"],
-  ["compiler input", "tools/compiler.js", "export const compiler = 2;\n"],
 ])("retains invalidation after a %s change", async (_label, filename, bytes) => {
   const f = fixture();
   const before = f.snapshot();

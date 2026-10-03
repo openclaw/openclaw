@@ -18,7 +18,7 @@ import { resolveSessionTranscriptReadTarget } from "../config/sessions/session-a
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
@@ -53,16 +53,12 @@ type SqliteTitleFieldCacheEntry = ReturnType<typeof readSessionTranscriptWaterma
 };
 
 // Found titles survive appends only while the rewrite generation and visible reset window stay fixed.
-const sqliteTitleFieldCache = new Map<string, SqliteTitleFieldCacheEntry>();
+const sqliteTitleFieldCache = new LruCache<SqliteTitleFieldCacheEntry>(
+  SQLITE_TITLE_FIELD_CACHE_MAX_ENTRIES,
+);
 
 function sqliteTitleFieldCacheKey(target: SessionTranscriptReadTarget): string {
   return `${target.agentId ?? ""}\0${target.sessionId}\0${target.storePath ?? ""}`;
-}
-
-function setSqliteTitleFieldCache(key: string, entry: SqliteTitleFieldCacheEntry): void {
-  sqliteTitleFieldCache.delete(key);
-  sqliteTitleFieldCache.set(key, entry);
-  pruneMapToMaxSize(sqliteTitleFieldCache, SQLITE_TITLE_FIELD_CACHE_MAX_ENTRIES);
 }
 
 function readSqliteTitleProbeRange(
@@ -169,7 +165,7 @@ function hydrateSqliteTitleFields(
       return { ...EMPTY_SESSION_TITLE_FIELDS };
     }
     const variant = opts?.includeInterSession === true ? "includeInterSession" : "default";
-    const entry = sqliteTitleFieldCache.get(cacheKey);
+    const entry = sqliteTitleFieldCache.peek(cacheKey);
     const cached = entry?.generation === watermark.generation ? entry : undefined;
     const current = cached?.maxSeq === watermark.maxSeq;
     const cachedTitle = cached?.firstUserMessages[variant];
@@ -181,7 +177,7 @@ function hydrateSqliteTitleFields(
         cachedTitle.scannedMessages >=
           Math.min(cached.totalMessages, SQLITE_TITLE_PROBE_MAX_MESSAGES))
     ) {
-      setSqliteTitleFieldCache(cacheKey, cached);
+      sqliteTitleFieldCache.set(cacheKey, cached);
       return {
         firstUserMessage: cachedTitle.text,
         lastMessagePreview: cached.lastMessagePreview,
@@ -235,7 +231,7 @@ function hydrateSqliteTitleFields(
     };
     firstUserMessages[variant] = { text: fields.firstUserMessage, scannedMessages };
     // Retain only the watermark and bounded strings, never the probe's transcript payloads.
-    setSqliteTitleFieldCache(cacheKey, {
+    sqliteTitleFieldCache.set(cacheKey, {
       generation: tail.generation,
       maxSeq: tail.maxSeq,
       boundarySeq: tail.boundarySeq,

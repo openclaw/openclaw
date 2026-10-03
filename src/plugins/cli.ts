@@ -1,4 +1,3 @@
-// Registers plugin-related CLI commands.
 import type { Command } from "commander";
 import { getRuntimeConfigSnapshot, readConfigFileSnapshot } from "../config/config.js";
 import {

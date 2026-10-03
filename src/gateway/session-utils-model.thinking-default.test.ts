@@ -42,7 +42,7 @@ describe("Gateway stored thinking levels", () => {
               provider: "openai",
               id: "native-effort-fixture",
               name: "Native effort fixture",
-              [PREPARED_THINKING_POLICY]: openaiPolicy,
+              [PREPARED_THINKING_POLICY]: { resolve: openaiPolicy },
               ...catalog,
             },
           ]
@@ -232,11 +232,11 @@ describe.each([false, true])("Gateway thinking catalog indexed=%s", (indexed) =>
     { configured: true, configuredReasoning: undefined, expected: "high" },
     { configured: false, configuredReasoning: false, expected: "off" },
   ])("keeps logical defaults separate from donor levels: %j", (scenario) => {
-    const logicalPolicy = vi.fn<PreparedThinkingPolicy>(() => ({
+    const logicalPolicy = vi.fn<PreparedThinkingPolicy["resolve"]>(() => ({
       levels: [{ id: "off" }, { id: "medium" }, { id: "high" }],
       defaultLevel: "medium",
     }));
-    const donorPolicy = vi.fn<PreparedThinkingPolicy>(() => ({
+    const donorPolicy = vi.fn<PreparedThinkingPolicy["resolve"]>(() => ({
       levels: [{ id: "off" }, { id: "low", label: "On" }, { id: "high" }],
       defaultLevel: "high",
     }));
@@ -246,14 +246,14 @@ describe.each([false, true])("Gateway thinking catalog indexed=%s", (indexed) =>
         id: "Reasoner",
         name: "Logical",
         reasoning: true,
-        [PREPARED_THINKING_POLICY]: logicalPolicy,
+        [PREPARED_THINKING_POLICY]: { resolve: logicalPolicy },
       },
       {
         provider: "donor",
         id: "Reasoner",
         name: "Donor",
         reasoning: true,
-        [PREPARED_THINKING_POLICY]: donorPolicy,
+        [PREPARED_THINKING_POLICY]: { resolve: donorPolicy },
       },
     ];
     const cfg: OpenClawConfig = scenario.configured
@@ -298,7 +298,7 @@ describe.each([false, true])("Gateway thinking catalog indexed=%s", (indexed) =>
   });
 
   it("retains an authoritative absent policy across all default and clamp reads", () => {
-    const otherPolicy = vi.fn<PreparedThinkingPolicy>(() => ({
+    const otherPolicy = vi.fn<PreparedThinkingPolicy["resolve"]>(() => ({
       levels: [{ id: "high" }],
       defaultLevel: "high",
     }));

@@ -283,6 +283,16 @@ because the final outcome is unknown. Failed or incomplete terminal responses,
 including content filtering, cannot be overridden by identity recovery. The
 identity checks stay enforced on every attempt.
 
+When OpenAI Responses cuts off a tool call at `max_output_tokens`, the embedded
+runner can continue once in the same run after earlier tools have settled. It
+appends a runtime transcript notice identifying the unfinished call when its ID
+is available and instructing the model to split the work into smaller tool calls.
+The incomplete call is not executed, completed tool results remain available,
+and earlier transcript entries are unchanged. A second truncation ends the run
+with the existing unfinished-tool-call warning. Transport error logs include the
+allowlisted incomplete reason without raw provider text; content-filtered and
+unrecognized incomplete responses retain their existing failure behavior.
+
 A worker message-size failure is separate from a model context-window limit.
 Retry with a smaller response or continue on the Gateway. If the worker cannot
 preserve the model's continuation data, stop or reclaim it before retrying on
@@ -657,6 +667,15 @@ attribution. These diagnostics measure cleanup without changing its ordering or
 completion behavior.
 
 ### Slow agent database opens
+
+Foreground Gateway startup reports a bounded set of `startup phase` records even
+without opt-in tracing. CLI records identify entry-module loading, environment
+selection, command imports, and state preparation before `loading configuration`.
+Gateway records identify database preflight, authentication, startup maintenance,
+listener binding, and readiness. Measured phases log both their start and elapsed
+duration; `total` is elapsed time from process startup (or the current in-process
+restart). These are wall times, including asynchronous waits, not CPU measurements.
+Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the detailed nested phase breakdown.
 
 The `slow OpenClaw agent database open` warning includes `phaseDurationsMs` when
 a persistent database open takes at least one second:

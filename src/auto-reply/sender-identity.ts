@@ -92,14 +92,11 @@ export function resolveSenderCandidates(
   }
 
   pushCandidate(params.commandSenderId);
-  const normalized: string[] = [];
-  for (const sender of candidates) {
-    const entries = normalizeAllowFromEntry({ plugin, cfg, accountId, value: sender });
-    for (const entry of entries) {
-      if (!normalized.includes(entry)) {
-        normalized.push(entry);
-      }
-    }
-  }
-  return normalized;
+  return [
+    ...new Set(
+      candidates.flatMap((sender) =>
+        normalizeAllowFromEntry({ plugin, cfg, accountId, value: sender }),
+      ),
+    ),
+  ];
 }

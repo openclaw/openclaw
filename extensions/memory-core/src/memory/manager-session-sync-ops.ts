@@ -6,9 +6,8 @@ import {
   onInternalSessionTranscriptUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
+  buildSessionEntry,
   listSessionTranscriptCorpusEntriesForAgent,
-  loadArchivedSessions,
-  readTranscriptStatsBatchReadOnlySync,
   sessionPathForFile,
   sessionPathForSessionIdentity,
   statSessionEntrySync,
@@ -21,9 +20,9 @@ import {
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { listMemorySessionTombstones } from "../memory-entry-origins.js";
 import { runInMemoryBackgroundContext } from "./background-context.js";
+import { readMemoryTranscriptStatsInWorker } from "./manager-cpu-worker-runtime.js";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
 import {
   isMemorySessionIndexable,
@@ -75,25 +74,17 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       includeContentRevision: false,
       readOnly,
     });
-    const archivedSessions = new Map(
-      loadArchivedSessions({
-        agentId: this.agentId,
-        storePath: resolveStorePath(this.cfg.session?.store, { agentId: this.agentId }),
-        sessionIds: entries
-          .filter((entry) => entry.artifactKind === "archive-artifact")
-          .map((entry) => entry.sessionId),
-      }).map((archive) => [archive.archiveName, archive]),
-    );
     const forgottenSessions = new Set(
-      listMemorySessionTombstones({
-        agentId: this.agentId,
-        sessionIds: entries.map((entry) => entry.sessionId),
-      }).map((entry) => entry.sessionId),
+      (
+        await listMemorySessionTombstones({
+          agentId: this.agentId,
+          sessionIds: entries.map((entry) => entry.sessionId),
+        })
+      ).map((entry) => entry.sessionId),
     );
     return entries.filter((entry) => {
-      const archive = archivedSessions.get(path.basename(entry.sessionFile));
       const archivedSessionKey =
-        archive?.sessionId === entry.sessionId ? archive.sessionKey : undefined;
+        entry.artifactKind === "archive-artifact" ? entry.sessionKey : undefined;
       return (
         !forgottenSessions.has(entry.sessionId) &&
         isMemorySessionIndexable(entry, archivedSessionKey)
@@ -196,10 +187,11 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       db: this.db,
       source: "sessions",
     });
+    const indexedPaths = new Set(existingRows.map((row) => row.path));
     const sqliteCorpusEntries = corpusEntries.filter(
       (entry) => entry.transcriptSource === "sqlite",
     );
-    const transcriptStats = readTranscriptStatsBatchReadOnlySync(
+    const transcriptStats = await readMemoryTranscriptStatsInWorker(
       sqliteCorpusEntries.map((entry) => ({
         agentId: entry.agentId,
         sessionId: entry.sessionId,
@@ -207,6 +199,9 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         ...(entry.storePath ? { storePath: entry.storePath } : {}),
       })),
     );
+    if (this.closed) {
+      return [];
+    }
     const statsByEntry = new Map(
       sqliteCorpusEntries.map((entry, index) => [entry, transcriptStats[index]] as const),
     );
@@ -214,6 +209,18 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       await runWithConcurrency(
         corpusEntries.map(
           (corpusEntry) => async (): Promise<MemorySessionStartupFileState | null> => {
+            // Missing rows can be intentional: parsing applies provenance admission
+            // that corpus metadata cannot express. Recheck on every catch-up so a
+            // later user turn can make a previously excluded session eligible.
+            if (!indexedPaths.has(this.sessionPathForCorpusEntry(corpusEntry))) {
+              const entry = await buildSessionEntry(
+                corpusEntry.sessionFile,
+                this.buildSessionEntryOptions(corpusEntry),
+              );
+              if (entry && !isMemorySessionIndexable(entry)) {
+                return null;
+              }
+            }
             if (corpusEntry.transcriptSource === "sqlite") {
               const stats = statsByEntry.get(corpusEntry);
               return stats
@@ -275,7 +282,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
 
   protected async runSessionStartupCatchup(): Promise<string[]> {
     const dirtyFiles = await this.markSessionStartupCatchupDirtyFiles();
-    if (!this.sessionsDirty || this.closed) {
+    if (!this.sessionsDirty || this.closing || this.closed) {
       return dirtyFiles;
     }
     void this.sync({ reason: "session-startup-catchup" }).catch((err: unknown) => {

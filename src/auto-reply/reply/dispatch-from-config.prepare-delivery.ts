@@ -2,14 +2,12 @@ import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-in
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import { logVerbose } from "../../globals.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import {
   copyReplyPayloadMetadata,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../reply-payload.js";
-import { resolveRoutedPolicyConversationType } from "./dispatch-from-config.context.js";
 import type { PluginBindingTranscriptOwner } from "./dispatch-from-config.events.js";
 import type { GatherDispatchRequestReadyState } from "./dispatch-from-config.gather.js";
 import { hasAskUserPayload } from "./dispatch-from-config.payloads.js";
@@ -17,6 +15,7 @@ import {
   loadReplyMediaPathsRuntime,
   loadRouteReplyRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
+import { resolveReplyPolicyConversationType } from "./get-reply-conversation-type.js";
 import type { ReplyDispatchKind, ReplyDispatchOperation } from "./reply-dispatcher.types.js";
 import {
   createReplyDeliveryContext,
@@ -56,25 +55,25 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     ? { ...currentAcpSession.entry, acp: currentAcpSession.acp }
     : undefined;
   const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionEntryWithAcp);
-  const normalizedRouteReplyChannel = normalizeMessageChannel(replyRoute.channel);
-  const normalizedProviderChannel = normalizeMessageChannel(ctx.Provider);
-  const normalizedSurfaceChannel = normalizeMessageChannel(ctx.Surface);
-  const normalizedCurrentSurface = normalizedProviderChannel ?? normalizedSurfaceChannel;
   const effectiveExplicitDeliverRoute =
     ctx.ExplicitDeliverRoute === true || replyRoute.inheritedExternalRoute === true;
-  const isInternalWebchatTurn =
-    normalizedCurrentSurface === INTERNAL_MESSAGE_CHANNEL &&
-    (normalizedSurfaceChannel === INTERNAL_MESSAGE_CHANNEL || !normalizedSurfaceChannel) &&
-    !effectiveExplicitDeliverRoute;
-  const hasRouteReplyCandidate = Boolean(
-    !suppressAcpChildUserDelivery &&
-    !isInternalWebchatTurn &&
-    normalizedRouteReplyChannel &&
-    replyRoute.to &&
-    normalizedRouteReplyChannel !== normalizedCurrentSurface &&
-    !state.replyOperationRunState.heartbeat,
-  );
-  const routeReplyRuntime = hasRouteReplyCandidate ? await loadRouteReplyRuntime() : undefined;
+  const {
+    currentSurface: normalizedCurrentSurface,
+    isInternalWebchatTurn,
+    shouldRouteToOriginating: hasRouteReplyCandidate,
+  } = resolveReplyRoutingDecision({
+    provider: ctx.Provider,
+    surface: ctx.Surface,
+    explicitDeliverRoute: effectiveExplicitDeliverRoute,
+    originatingChannel: replyRoute.channel,
+    originatingTo: replyRoute.to,
+    suppressDirectUserDelivery: suppressAcpChildUserDelivery,
+    isRoutableChannel: Boolean,
+  });
+  const routeReplyRuntime =
+    hasRouteReplyCandidate && !state.replyOperationRunState.heartbeat
+      ? await loadRouteReplyRuntime()
+      : undefined;
   const {
     originatingChannel: routeReplyChannel,
     currentSurface,
@@ -181,7 +180,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       sessionKey: agentRuntimeSessionKey,
       policySessionKey:
         options?.sessionKey ?? resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
-      policyConversationType: resolveRoutedPolicyConversationType(ctx),
+      policyConversationType: resolveReplyPolicyConversationType(ctx),
       accountId: replyContextAccountId,
       requesterSenderId: ctx.SenderId,
       requesterSenderName: ctx.SenderName,

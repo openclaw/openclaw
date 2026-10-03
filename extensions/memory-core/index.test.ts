@@ -234,13 +234,6 @@ describe("buildPromptSection", () => {
     if (!eagerSearch || !eagerGet) {
       throw new Error("expected eager memory tools");
     }
-    const prompt = lazy
-      .promptBuilder({
-        availableTools: new Set(["memory_search", "memory_get"]),
-        agentId: "main",
-      })
-      .join("\n");
-
     expect(lazy.search.parameters).toStrictEqual(eagerSearch.parameters);
     expect(lazy.get.parameters).toStrictEqual(eagerGet.parameters);
     expect(lazy.search.description).toBe(eagerSearch.description);
@@ -259,8 +252,6 @@ describe("buildPromptSection", () => {
     expect(lazy.get.description).toContain("status=ok");
     expect(lazy.get.description).toContain("status=not_found");
     expect(lazy.get.description).toContain("results are partial");
-    expect(prompt).toContain("Report partial, unavailable, or stale recall");
-    expect(prompt).toContain("warning and action guidance");
   });
 });
 
@@ -399,10 +390,19 @@ describe("memory-core plugin runtime registration", () => {
       };
     };
     expect(ownerTool).toMatchObject({ name: "intent" });
+    expect(ownerTool.description).toContain("system injects the reminder automatically");
     expect(ownerTool.description).toContain("Use scheduled tasks for time-based reminders");
     expect(ownerTool.description).not.toMatch(/\b(?:cron|automations)\b/u);
-    expect(ownerTool.parameters?.properties?.scope?.default).toBe("channel");
-    expect(ownerTool.parameters?.properties?.senderScope?.default).toBe("sender");
+    expect(ownerTool.parameters?.properties?.channelScope).toBeUndefined();
+    expect(ownerTool.parameters?.properties?.scope).toMatchObject({
+      type: "string",
+      enum: ["conversation", "channel", "anywhere"],
+      default: "channel",
+    });
+    expect(ownerTool.parameters?.properties?.senderScope).toMatchObject({
+      enum: ["sender", "anyone"],
+      default: "sender",
+    });
     expect(warn).toHaveBeenCalledTimes(1);
   });
 

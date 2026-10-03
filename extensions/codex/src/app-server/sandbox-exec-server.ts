@@ -28,6 +28,7 @@ import type {
   OpenClawLeasedExecServer,
   OpenClawNodeExecServer,
 } from "./sandbox-exec-server/types.js";
+import { codexWebSocketDataToBuffer } from "./websocket-data.js";
 
 /** Codex environment metadata registered for one sandbox exec-server lease. */
 export type CodexSandboxExecEnvironment = {
@@ -153,16 +154,16 @@ function canExposeLocalExecServerToAppServer(
   if (typeof startOptions.url !== "string") {
     return false;
   }
-  try {
-    const host = new URL(startOptions.url).hostname.toLowerCase();
-    const ipHost = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
-    if (host === "localhost" || ipHost === "::1") {
-      return true;
-    }
-    return isIP(ipHost) === 4 && ipHost.split(".")[0] === "127";
-  } catch {
+  const host = URL.parse(startOptions.url)?.hostname.toLowerCase();
+  if (!host) {
     return false;
   }
+  const ipHost = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+  return (
+    host === "localhost" ||
+    ipHost === "::1" ||
+    (isIP(ipHost) === 4 && ipHost.split(".")[0] === "127")
+  );
 }
 
 async function acquireOpenClawExecServer(params: {
@@ -514,10 +515,5 @@ function handleExecServerSocketError(error: unknown): void {
 }
 
 async function handleMessage(session: CodexSandboxExecSession, data: RawData): Promise<void> {
-  const buffer = Array.isArray(data)
-    ? Buffer.concat(data)
-    : Buffer.isBuffer(data)
-      ? data
-      : Buffer.from(data);
-  await session.handleRequest(parseRequest(buffer.toString("utf8")));
+  await session.handleRequest(parseRequest(codexWebSocketDataToBuffer(data).toString("utf8")));
 }

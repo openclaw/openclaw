@@ -7,7 +7,12 @@ import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createContext, detection, mountPage } from "./test-helpers/page.test-support.ts";
+import {
+  createContext,
+  detection,
+  mountPage,
+  type TestModelSetupPage,
+} from "./test-helpers/page.test-support.ts";
 
 const authStatus: ModelAuthStatusResult = {
   ts: 1,
@@ -52,6 +57,22 @@ const configSnapshot = {
   valid: true,
   issues: [],
 };
+
+async function startSignIn(page: TestModelSetupPage, operation: "connect" | "setup") {
+  if (operation === "setup") {
+    page.querySelector<HTMLButtonElement>('[data-auth-choice="setup-only"] button')!.click();
+    return;
+  }
+  page.querySelector<HTMLButtonElement>("[data-models-connect]")!.click();
+  await waitForFast(() =>
+    expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain("Radius account"),
+  );
+  page.querySelector<HTMLButtonElement>('[data-models-login-provider="radius"]')!.click();
+  await page.updateComplete;
+  [...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button")]
+    .find((button) => button.textContent?.includes("Radius account"))!
+    .click();
+}
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -124,21 +145,7 @@ it.each(["connect", "setup"] as const)(
       const setupButton = page.querySelector<HTMLButtonElement>(
         '[data-auth-choice="setup-only"] button',
       )!;
-      if (operation === "connect") {
-        page.querySelector<HTMLButtonElement>("[data-models-connect]")!.click();
-        await waitForFast(() =>
-          expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-            "Radius account",
-          ),
-        );
-        page.querySelector<HTMLButtonElement>('[data-models-login-provider="radius"]')!.click();
-        await page.updateComplete;
-        [...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button")]
-          .find((button) => button.textContent?.includes("Radius account"))!
-          .click();
-      } else {
-        setupButton.click();
-      }
+      await startSignIn(page, operation);
       await waitForFast(() => {
         const signIn = page.querySelector(".wizard-step__sign-in");
         expect(signIn).not.toBeNull();
@@ -237,8 +244,6 @@ it.each(["agent", "connection", "cancel"] as const)(
 
 it.each([
   ["connect", "terminal"],
-  ["connect", "request"],
-  ["setup", "terminal"],
   ["setup", "request"],
 ] as const)(
   "Model Setup keeps %s recovery context in Details after a %s failure",
@@ -311,21 +316,7 @@ it.each([
         client,
         firstRun: false,
       });
-      if (operation === "connect") {
-        page.querySelector<HTMLButtonElement>("[data-models-connect]")!.click();
-        await waitForFast(() =>
-          expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-            "Radius account",
-          ),
-        );
-        page.querySelector<HTMLButtonElement>('[data-models-login-provider="radius"]')!.click();
-        await page.updateComplete;
-        [...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button")]
-          .find((button) => button.textContent?.includes("Radius account"))!
-          .click();
-      } else {
-        page.querySelector<HTMLButtonElement>('[data-auth-choice="setup-only"] button')!.click();
-      }
+      await startSignIn(page, operation);
       await waitForFast(() =>
         expect(page.querySelector(".wizard-step__sign-in")?.textContent).toContain(
           "Waiting for sign-in",

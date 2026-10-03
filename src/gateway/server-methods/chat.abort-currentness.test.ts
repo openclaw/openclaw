@@ -23,6 +23,48 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
+function createDeferredWorkerCancellation() {
+  const cancelled = createDeferred();
+  const workerPersistence = createDeferred<string[]>();
+  const service = {};
+  registerWorkerInferenceSessionControl(service, {
+    reserveDrain: () => {
+      throw new Error("unexpected drain reservation");
+    },
+    resolveTarget: () => undefined,
+    captureCancel: () => ({
+      runIds: ["worker-run"],
+      cancel: (control) => {
+        control?.assertCurrent?.();
+        control?.onCancelled?.("worker-run");
+        cancelled.resolve();
+        return workerPersistence.promise;
+      },
+    }),
+  });
+  return { cancelled, workerPersistence, service };
+}
+
+function setPendingRegistrations(
+  context: ReturnType<typeof createChatAbortContext>,
+  ts = 1,
+  attemptId?: string,
+) {
+  for (const prefix of ["agent", "pending-chat"]) {
+    context.dedupe.set(`${prefix}:pending`, {
+      ts,
+      ok: true,
+      payload: {
+        runId: "pending",
+        status: "accepted",
+        sessionKey: "main",
+        agentId: "main",
+        ...(attemptId ? { reservationId: attemptId, attemptId } : {}),
+      },
+    });
+  }
+}
+
 describe("chat.abort original authority and registration", () => {
   it("preserves exact-run descendant and partial persistence failures after parent Stop", async () => {
     const descendantFailure = new Error("descendant cancellation failed");
@@ -63,24 +105,7 @@ describe("chat.abort original authority and registration", () => {
   it.each([undefined, "worker-run"])(
     "waits for worker cancellation persistence before responding to Stop with runId=%s",
     async (runId) => {
-      const cancelled = createDeferred();
-      const workerPersistence = createDeferred<string[]>();
-      const service = {};
-      registerWorkerInferenceSessionControl(service, {
-        reserveDrain: () => {
-          throw new Error("unexpected drain reservation");
-        },
-        resolveTarget: () => undefined,
-        captureCancel: () => ({
-          runIds: ["worker-run"],
-          cancel: (control) => {
-            control?.assertCurrent?.();
-            control?.onCancelled?.("worker-run");
-            cancelled.resolve();
-            return workerPersistence.promise;
-          },
-        }),
-      });
+      const { cancelled, workerPersistence, service } = createDeferredWorkerCancellation();
       const respond = vi.fn();
       const stopping = invokeChatAbortHandler({
         handler: handleChatAbortRequestWithLifecycle,
@@ -104,26 +129,9 @@ describe("chat.abort original authority and registration", () => {
   );
 
   it("preserves worker cancellation and partial persistence failures after synchronous Stop", async () => {
-    const cancelled = createDeferred();
-    const workerPersistence = createDeferred<string[]>();
+    const { cancelled, workerPersistence, service } = createDeferredWorkerCancellation();
     const workerFailure = new Error("worker cancellation write failed");
     const partialFailure = new Error("partial output write failed");
-    const service = {};
-    registerWorkerInferenceSessionControl(service, {
-      reserveDrain: () => {
-        throw new Error("unexpected drain reservation");
-      },
-      resolveTarget: () => undefined,
-      captureCancel: () => ({
-        runIds: ["worker-run"],
-        cancel: (control) => {
-          control?.assertCurrent?.();
-          control?.onCancelled?.("worker-run");
-          cancelled.resolve();
-          return workerPersistence.promise;
-        },
-      }),
-    });
     const context = createChatAbortContext({ workerEnvironmentService: service });
     const run = createActiveRun("main", { sessionId: "main-session", agentId: "main" });
     context.chatAbortControllers.set("worker-run", run);
@@ -195,18 +203,7 @@ describe("chat.abort original authority and registration", () => {
         }
         return true;
       });
-      for (const prefix of ["agent", "pending-chat"]) {
-        context.dedupe.set(`${prefix}:pending`, {
-          ts: 1,
-          ok: true,
-          payload: {
-            runId: "pending",
-            status: "accepted",
-            sessionKey: "main",
-            agentId: "main",
-          },
-        });
-      }
+      setPendingRegistrations(context);
       const pending = [...context.dedupe];
       const persist = vi.spyOn(persistence, "persistAbortedPartials").mockResolvedValue(undefined);
       try {
@@ -264,39 +261,13 @@ describe("chat.abort original authority and registration", () => {
     const replacement = createActiveRun("main", { sessionId: "main-session", agentId: "main" });
     context.chatAbortControllers.set("first", first);
     context.chatAbortControllers.set("reused", stale);
-    for (const prefix of ["agent", "pending-chat"]) {
-      context.dedupe.set(`${prefix}:pending`, {
-        ts: 1,
-        ok: true,
-        payload: {
-          runId: "pending",
-          status: "accepted",
-          sessionKey: "main",
-          agentId: "main",
-          reservationId: "old",
-          attemptId: "old",
-        },
-      });
-    }
+    setPendingRegistrations(context, 1, "old");
     let pending: Array<[string, unknown]> = [];
     first.controller.signal.addEventListener(
       "abort",
       () => {
         context.chatAbortControllers.set("reused", replacement);
-        for (const prefix of ["agent", "pending-chat"]) {
-          context.dedupe.set(`${prefix}:pending`, {
-            ts: 2,
-            ok: true,
-            payload: {
-              runId: "pending",
-              status: "accepted",
-              sessionKey: "main",
-              agentId: "main",
-              reservationId: "new",
-              attemptId: "new",
-            },
-          });
-        }
+        setPendingRegistrations(context, 2, "new");
         pending = [...context.dedupe];
       },
       { once: true },

@@ -44,7 +44,6 @@ async function reloadChannels(
     isLifecycleReloadAborted: () => false,
     getChannelAutostartSuppression: () => null,
     channelReloadTargets: () => channels,
-    logSuppressedChannelRestart: vi.fn(),
     scheduleRecoveryRestart,
   });
 }
@@ -335,7 +334,6 @@ it.each(
       isLifecycleReloadAborted: () => false,
       getChannelAutostartSuppression: () => null,
       channelReloadTargets: () => channels,
-      logSuppressedChannelRestart: vi.fn(),
       scheduleRecoveryRestart,
     });
     if (state === "racing") {

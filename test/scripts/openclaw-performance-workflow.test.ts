@@ -1214,7 +1214,7 @@ printf '%s\\n' \
     }
   });
 
-  posixIt.each([
+  posixIt.for([
     { name: "direct", pushResults: [], fetchResults: [], success: true },
     { name: "remote duplicate", pushResults: [124], fetchResults: [], success: true, duplicate: 1 },
     {
@@ -1226,8 +1226,10 @@ printf '%s\\n' \
     { name: "missing token", pushResults: [], fetchResults: [], success: false, token: "" },
   ])(
     "advertises a clawgrit URL only after verified success ($name)",
-    async ({ name, pushResults, fetchResults, success, duplicate, token }) => {
+    { timeout: 55_000 },
+    async ({ name, pushResults, fetchResults, success, duplicate, token }, { signal }) => {
       const report = await runCiGitStep({
+        signal,
         workflow: { file: WORKFLOW, job: "publish", step: "Publish to clawgrit reports" },
         performance: { mode: "publish", remoteDuplicateAttempt: duplicate },
         fetchResults,
@@ -1245,13 +1247,13 @@ printf '%s\\n' \
         expect(report.githubSummary).toContain("ClawSweeper GitHub App installation");
       }
     },
-    55_000,
   );
 
   posixIt(
     "preserves both reports when concurrent writers update one latest pointer",
-    async () => {
+    async ({ signal }) => {
       const report = await runCiGitStep({
+        signal,
         workflow: { file: WORKFLOW, job: "publish", step: "Publish to clawgrit reports" },
         performance: { mode: "publish", race: true },
         fetchResults: [],

@@ -328,8 +328,8 @@ const executionRoot = "/tmp/workshop-skills";
 describe("runCronIsolatedAgentTurn — rooted runtime fallback", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
-  it("rejects a rooted turn before the unsupported Codex harness starts", async () => {
-    resolveEffectiveAgentRuntimeMock.mockReturnValue("codex");
+  it("rejects a rooted turn before an unsupported harness starts", async () => {
+    resolveEffectiveAgentRuntimeMock.mockReturnValue("unsupported-harness");
     mockRunCronFallbackPassthrough();
 
     const result = await runCronIsolatedAgentTurn(
@@ -342,6 +342,44 @@ describe("runCronIsolatedAgentTurn — rooted runtime fallback", () => {
     });
     expect(runCliAgentMock).not.toHaveBeenCalled();
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves rooted host constraints when dispatching a Codex review", async () => {
+    const skillsSnapshot = { prompt: "Explicit safe instructions", skills: [{ name: "safe" }] };
+    resolveEffectiveAgentRuntimeMock.mockReturnValue("codex");
+    isCliProviderMock.mockReturnValue(false);
+    mockRunCronFallbackPassthrough();
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        executionRoot,
+        skillsSnapshot,
+        job: {
+          payload: {
+            kind: "agentTurn",
+            message: SKILL_WORKSHOP_MAINTENANCE_PROMPT,
+            toolsAllow: [...SKILL_WORKSHOP_MAINTENANCE_TOOLS],
+          },
+          delivery: { mode: "none" },
+        },
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: executionRoot,
+        cwd: executionRoot,
+        sessionRoot: executionRoot,
+        requireWorkspaceOnly: true,
+        requireWritableSandbox: true,
+        skillsSnapshot,
+        toolsAllow: [...SKILL_WORKSHOP_MAINTENANCE_TOOLS],
+        trigger: "cron",
+      }),
+    );
+    expect(runCliAgentMock).not.toHaveBeenCalled();
   });
 
   it("runs a rooted review with a Claude CLI primary and returns its report", async () => {

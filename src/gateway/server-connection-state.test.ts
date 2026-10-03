@@ -23,6 +23,7 @@ import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 import { buildGatewaySnapshot } from "./server/health-state.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 
 type ConnectionIdReads = { count: number };
@@ -190,12 +191,92 @@ describe("gateway connection state", () => {
           await projection.ensureMaterialized();
           committedConfig = relaxed;
           publish("committed relaxation without a projection mark", [ownKey, foreignKey]);
+
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: ownKey },
+            { parentSessionKey: foreignKey },
+          );
+          const later = makeClient("later-policy-reader", { count: 0 });
+          later.client.connect = { ...peer.client.connect };
+          later.client.authenticatedUserProfile = peer.client.authenticatedUserProfile;
+          prepareGatewayRecipientProfile(later.client);
+          state.clients.add(later.client);
+          peer.send.mockClear();
+          peer.send.mockImplementationOnce(() => {
+            committedConfig = restricted;
+          });
+          await projection.withPreparedExactRows(
+            () => [{ key: ownKey, agentId: "main" }],
+            (read) => {
+              state.broadcast(
+                "sessions.changed",
+                { sessionKey: ownKey, agentId: "main", reason: "metadata" },
+                {
+                  sessionKeys: [ownKey],
+                  agentId: "main",
+                  prepareSessionProjection: prepareSessionEventProjection(projection, read),
+                },
+              );
+            },
+            { includeAncestors: true },
+          );
+          expect(peer.send).toHaveBeenCalledOnce();
+          expect(later.send).toHaveBeenCalledOnce();
+          expect(JSON.parse(peer.send.mock.lastCall![0]).payload).toMatchObject({
+            session: { key: ownKey },
+            ancestorSessions: [{ key: foreignKey }],
+          });
+          expect(JSON.parse(later.send.mock.lastCall![0]).payload).toMatchObject({
+            session: { key: ownKey },
+            ancestorSessions: [],
+          });
+          expect(JSON.parse(later.send.mock.lastCall![0]).payload).not.toHaveProperty(
+            "ancestorSessionRefs",
+          );
+          const replacement = await createSessionRowProjection({
+            cfg: runtimeConfig,
+            getPolicyConfig: () => committedConfig,
+          });
+          let detachReplacement: (() => void) | undefined;
+          try {
+            await replacement.ensureMaterialized();
+            peer.send.mockClear();
+            later.send.mockClear();
+            await projection.withPreparedExactRows(
+              () => [{ key: ownKey, agentId: "main" }],
+              (read) => {
+                detachReplacement = state.attachSessionRowProjection(replacement);
+                state.broadcast(
+                  "sessions.changed",
+                  { sessionKey: ownKey, agentId: "main", reason: "metadata" },
+                  {
+                    sessionKeys: [ownKey],
+                    agentId: "main",
+                    prepareSessionProjection: prepareSessionEventProjection(projection, read),
+                  },
+                );
+              },
+              { includeAncestors: true },
+            );
+            expect(peer.send).not.toHaveBeenCalled();
+            expect(later.send).not.toHaveBeenCalled();
+            state.broadcast(
+              "sessions.changed",
+              { sessionKey: ownKey, agentId: "main", reason: "metadata" },
+              { sessionKeys: [ownKey], agentId: "main" },
+            );
+            expect(peer.send).toHaveBeenCalledOnce();
+            expect(later.send).toHaveBeenCalledOnce();
+          } finally {
+            detachReplacement?.();
+            replacement.dispose();
+          }
         } finally {
           detach();
           projection.dispose();
         }
       } finally {
-        state.mentionInbox.dispose();
+        await state.mentionInbox.dispose();
       }
     });
   });
@@ -393,7 +474,7 @@ describe("gateway connection state", () => {
         stopPublication();
         detach();
         projection.dispose();
-        state.mentionInbox.dispose();
+        await state.mentionInbox.dispose();
       }
     });
   });
@@ -535,7 +616,7 @@ describe("gateway connection state", () => {
         upsertPresence(presenceKey, { watchedSessions: undefined });
         detach();
         projection.dispose();
-        state.mentionInbox.dispose();
+        await state.mentionInbox.dispose();
       }
     });
   });

@@ -40,18 +40,25 @@ async function runPendingRefresh(host: WorkboardHost): Promise<void> {
     while (runtime.liveRefreshPending && (runtime.liveRefreshGeneration ?? 0) === generation) {
       const entry = runtime.liveRefreshEntry;
       const state = getWorkboardState(host);
-      if (!entry?.client || documentHidden() || shouldDeferWorkboardLiveRefresh(state)) {
+      if (
+        !entry?.client ||
+        documentHidden() ||
+        (!entry.refresh && shouldDeferWorkboardLiveRefresh(state)) ||
+        entry.shouldDefer?.()
+      ) {
         return;
       }
       runtime.liveRefreshPending = false;
       const targetEpoch = runtime.liveChangeEpoch;
       const targetRevision = runtime.liveHighestSeenRevision ?? 0;
-      const refreshed = await refreshWorkboard({
-        host,
-        client: entry.client,
-        requestUpdate: entry.requestUpdate,
-        source: "live",
-      });
+      const targetInvalidation = runtime.liveInvalidationRevision ?? 0;
+      const refreshed = await (entry.refresh?.() ??
+        refreshWorkboard({
+          host,
+          client: entry.client,
+          requestUpdate: entry.requestUpdate,
+          source: "live",
+        }));
       if ((runtime.liveRefreshGeneration ?? 0) !== generation) {
         return;
       }
@@ -64,6 +71,7 @@ async function runPendingRefresh(host: WorkboardHost): Promise<void> {
         runtime.liveAppliedRevision = Math.max(runtime.liveAppliedRevision ?? 0, targetRevision);
       }
       runtime.liveRefreshPending =
+        (runtime.liveInvalidationRevision ?? 0) !== targetInvalidation ||
         runtime.liveChangeEpoch !== targetEpoch ||
         (runtime.liveHighestSeenRevision ?? 0) > (runtime.liveAppliedRevision ?? 0);
     }
@@ -81,7 +89,8 @@ async function runPendingRefresh(host: WorkboardHost): Promise<void> {
       !runtime.liveRefreshRetryTimer &&
       runtime.liveRefreshEntry?.client &&
       !documentHidden() &&
-      !shouldDeferWorkboardLiveRefresh(state)
+      !runtime.liveRefreshEntry.shouldDefer?.() &&
+      (runtime.liveRefreshEntry.refresh || !shouldDeferWorkboardLiveRefresh(state))
     ) {
       void runPendingRefresh(host);
     }
@@ -92,6 +101,8 @@ export function configureWorkboardLiveRefresh(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
   requestUpdate?: () => void;
+  refresh?: () => Promise<boolean>;
+  shouldDefer?: () => boolean;
 }): boolean {
   const runtime = getWorkboardRuntime(params.host);
   const requiresCanonicalReload = Boolean(
@@ -100,11 +111,21 @@ export function configureWorkboardLiveRefresh(params: {
   runtime.liveRefreshEntry = {
     client: params.client,
     requestUpdate: params.requestUpdate,
+    refresh: params.refresh,
+    shouldDefer: params.shouldDefer,
   };
   if (runtime.liveRefreshPending && !runtime.liveRefreshRetryTimer) {
     void runPendingRefresh(params.host);
   }
   return requiresCanonicalReload;
+}
+
+/** Observer bursts share the canonical read queue and its single coalescing timer. */
+export function invalidateWorkboardLiveRefresh(host: WorkboardHost): void {
+  const runtime = getWorkboardRuntime(host);
+  runtime.liveInvalidationRevision = (runtime.liveInvalidationRevision ?? 0) + 1;
+  runtime.liveRefreshPending = true;
+  scheduleRetry(host, runtime.liveRefreshGeneration ?? 0);
 }
 
 export function handleWorkboardChanged(host: WorkboardHost, payload: unknown): boolean {

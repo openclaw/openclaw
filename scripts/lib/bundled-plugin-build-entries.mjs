@@ -29,7 +29,7 @@ export const BUNDLED_PLUGIN_BUILD_ENV_NAMES = [
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]*$/u;
 const TOP_LEVEL_PRIVATE_TEST_SURFACE_RE =
   /(?:^|[._-])(?:test|spec|test-support|test-helpers|test-fixtures|test-harness|mock-setup)(?:[._-]|$)/u;
-const toPosixPath = (value) => value.replaceAll("\\", "/");
+const toPosixPath = (value) => value.replaceAll(path.sep, "/");
 
 function parseBundledPluginBuildIdFilter(env = process.env) {
   const raw = env[BUNDLED_PLUGIN_BUILD_IDS_ENV];
@@ -115,6 +115,14 @@ function isExcludedTopLevelPublicSurfaceFile(fileName) {
   );
 }
 
+function isTopLevelPublicSurfaceFile(fileName) {
+  return (
+    !fileName.includes("/") &&
+    TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS.has(path.extname(fileName)) &&
+    !isExcludedTopLevelPublicSurfaceFile(fileName)
+  );
+}
+
 const CATALOG_ENTRY_FIELDS = ["providerCatalogEntry", "capabilityCatalogEntry"];
 
 function collectPluginCatalogSourceEntries(manifest) {
@@ -194,12 +202,7 @@ export function collectTopLevelPublicSurfaceEntries(pluginDir) {
         return [];
       }
 
-      const ext = path.extname(dirent.name);
-      if (!TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS.has(ext)) {
-        return [];
-      }
-
-      if (isExcludedTopLevelPublicSurfaceFile(dirent.name)) {
+      if (!isTopLevelPublicSurfaceFile(dirent.name)) {
         return [];
       }
 
@@ -211,16 +214,7 @@ export function collectTopLevelPublicSurfaceEntries(pluginDir) {
 function collectTopLevelPublicSurfaceEntriesFromFiles(relativeFiles) {
   return relativeFiles
     .flatMap((relativeFile) => {
-      if (relativeFile.includes("/")) {
-        return [];
-      }
-
-      const ext = path.extname(relativeFile);
-      if (!TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS.has(ext)) {
-        return [];
-      }
-
-      if (isExcludedTopLevelPublicSurfaceFile(relativeFile)) {
+      if (!isTopLevelPublicSurfaceFile(relativeFile)) {
         return [];
       }
 
@@ -230,7 +224,7 @@ function collectTopLevelPublicSurfaceEntriesFromFiles(relativeFiles) {
 }
 
 function collectTrackedBundledPluginFiles(cwd) {
-  const result = spawnSync("git", ["ls-files", "--", BUNDLED_PLUGIN_ROOT_DIR], {
+  const result = spawnSync("git", ["ls-files", "-z", "--", BUNDLED_PLUGIN_ROOT_DIR], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
@@ -239,18 +233,30 @@ function collectTrackedBundledPluginFiles(cwd) {
     return null;
   }
   const filesByPlugin = new Map();
-  for (const rawLine of result.stdout.split("\n")) {
-    const line = toPosixPath(rawLine.trim());
-    if (!fs.existsSync(path.join(cwd, line))) {
+  const prefix = `${BUNDLED_PLUGIN_ROOT_DIR}/`;
+  for (const file of result.stdout.split("\0")) {
+    if (!file.startsWith(prefix)) {
       continue;
     }
-    const match = new RegExp(`^${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/(.+)$`).exec(line);
-    if (!match) {
+    const separator = file.indexOf("/", prefix.length);
+    if (separator === -1) {
       continue;
     }
-    const [, dirName, relativeFile] = match;
+    const dirName = file.slice(prefix.length, separator);
+    const relativeFile = file.slice(separator + 1);
+    const relevant =
+      relativeFile === "package.json" ||
+      relativeFile === "openclaw.plugin.json" ||
+      isTopLevelPublicSurfaceFile(relativeFile);
+    // Any existing tracked file establishes a known plugin directory. Once known,
+    // only metadata and top-level entry files affect its build inventory.
+    if ((!relevant && filesByPlugin.has(dirName)) || !fs.existsSync(path.join(cwd, file))) {
+      continue;
+    }
     const files = filesByPlugin.get(dirName) ?? [];
-    files.push(relativeFile);
+    if (relevant) {
+      files.push(relativeFile);
+    }
     filesByPlugin.set(dirName, files);
   }
 

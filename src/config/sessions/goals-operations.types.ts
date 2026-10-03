@@ -17,6 +17,25 @@ export type SessionGoalOperation = SessionGoalOperationIdentity &
 
 export type SessionGoalOperationResult = Omit<SessionsGoalMutationResult, "replayed">;
 
+export type SessionGoalOperationErrorCode =
+  | "expired"
+  | "operation-conflict"
+  | "session-rebound"
+  | "goal-rebound"
+  | "capacity"
+  | "receipt-invalid"
+  | "invalid";
+
+export type SessionGoalOperationLookup = {
+  sessionKey: string;
+  expectedSessionId: string;
+  operation: SessionGoalOperation;
+};
+
+export type SessionGoalOperationLookupResult =
+  | { receipt: SessionGoalOperationResult | undefined }
+  | { error: { code: SessionGoalOperationErrorCode; message: string } };
+
 /** Closed session mutation admitted together with its transcript and lifecycle state. */
 export type SessionTranscriptTurnMutation = {
   kind: "goal";

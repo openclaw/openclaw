@@ -10,11 +10,10 @@ import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isProfileInCooldown,
   resolveAuthProfileDisplayLabel,
-  resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "./model-auth.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "./model-selection.js";
 
@@ -64,7 +63,7 @@ export function formatModelCatalogAuthLabel(
       return true;
     }
     const mode = store.profiles[id]?.type ?? cfg.auth?.profiles?.[id]?.mode;
-    return !isStoredAuthProfileType(mode) || mode === "api_key";
+    return mode !== "oauth" && mode !== "token";
   });
   if (!order.length) {
     return label.fallback;
@@ -99,10 +98,6 @@ export function formatModelCatalogAuthLabel(
     return `${label.profiles[profileId]}${flags.length ? ` (${flags.join(", ")})` : ""}`;
   });
   return `${profiles.join(", ")} (${label.source})`;
-}
-
-function isStoredAuthProfileType(value: unknown): value is AuthProfileCredential["type"] {
-  return value === "api_key" || value === "oauth" || value === "token";
 }
 
 function captureProfileLabel(
@@ -171,6 +166,7 @@ export type ModelCatalogAuthLabels = ReadonlyMap<
 export function prepareModelCatalogAuthLabels(params: {
   config: OpenClawConfig;
   agentDir: string;
+  authStorePath: string;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   store: AuthProfileStore;
@@ -202,7 +198,7 @@ export function prepareModelCatalogAuthLabels(params: {
             : label,
         ]),
       ),
-      source: `auth profile store: ${shortenHomePath(resolveAuthStorePathForDisplay(params.agentDir))}`,
+      source: `auth profile store: ${shortenHomePath(params.authStorePath)}`,
       fallback: captureFallbackLabel(
         provider,
         params.config,

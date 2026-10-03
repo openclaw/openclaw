@@ -143,13 +143,8 @@ export async function markRestartAbortedMainSessions(params: {
     return result;
   }
 
-  const storeTargets = new Map<
-    string,
-    Pick<MainSessionRecoveryStoreTarget, "agentId" | "storePath">
-  >();
-  const addStoreTarget = (
-    target: Pick<MainSessionRecoveryStoreTarget, "agentId" | "storePath">,
-  ) => {
+  const storeTargets = new Map<string, RestartRecoveryStoreTarget>();
+  const addStoreTarget = (target: RestartRecoveryStoreTarget) => {
     const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
     });
@@ -237,7 +232,6 @@ export async function markRestartAbortedMainSessions(params: {
             ) {
               return undefined;
             }
-            const wasRunning = entry.status === "running";
             const runs = normalizeMainSessionRecoveryRunFences([
               ...(entry.restartRecoveryRuns ?? []).filter(
                 (run) => run.lifecycleGeneration === currentLifecycleGeneration,
@@ -263,7 +257,7 @@ export async function markRestartAbortedMainSessions(params: {
               action: "mark",
               forceRestartSafeTools: matchedActiveAdmission,
               replaceRuns: true,
-              resetRuntime: !wasRunning,
+              resetRuntime: entry.status !== "running",
               runs,
             };
           },

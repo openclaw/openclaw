@@ -184,7 +184,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       getScrollElement: () => this.scrollElement,
       estimateSize: () => CHAT_TRANSCRIPT_ESTIMATED_ROW_PX,
       getItemKey: () => "",
-      initialRect: initialTranscriptRect(host),
+      initialRect: initialTranscriptRect(),
       initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
       anchorTo: "end",
       followOnAppend: false,
@@ -197,16 +197,19 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           if (instance.scrollElement !== this.scrollElement || !rect.width || !rect.height) {
             return;
           }
+          const railGeometry = this.positionRail.read();
+          const scrollMargin = resolveTranscriptScrollMargin(
+            instance.scrollElement,
+            this.appliedHeaderHeight,
+          );
           this.commitComposerResize(true);
-          const previousHeight = this.observedHeight;
           const widthChanged = this.observedWidth !== null && this.observedWidth !== rect.width;
-          const heightChanged = previousHeight !== null && previousHeight !== rect.height;
+          const heightChanged = this.observedHeight !== null && this.observedHeight !== rect.height;
           this.observedWidth = rect.width;
           this.observedHeight = rect.height;
-          this.positionRail.sync();
           // appliedHeaderHeight, not headerHeight: only the render paths fold a
           // header toggle into the margin, because they own its compensation.
-          syncScrollMargin(instance.scrollElement, instance, this.appliedHeaderHeight);
+          syncScrollMargin(instance, scrollMargin);
           callback(rect);
           if (widthChanged) {
             // Keep stale offscreen sizes as estimates — a full measure() wipe
@@ -216,6 +219,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
             this.measureConnectedRows();
             this.presentation.queueRowMeasure();
           }
+          this.positionRail.sync(railGeometry);
           if (widthChanged || heightChanged) {
             this.callbacks.onViewportResize?.();
             this.host.requestUpdate();
@@ -267,11 +271,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       () => this.measureConnectedRows(),
     );
     this.rowRefs = new TranscriptRowRefs(this.virtualizerController.getVirtualizer(), {
-      // Preserve initial positioning and smooth-scroll measurement gates.
-      canMeasureVisibleRows: () =>
-        !this.implicitEndAnchorPending &&
-        this.offsetState.scrollCommand?.behavior !== "smooth" &&
-        (this.callbacks.visuallyPresented?.() ?? true),
       isCurrentRow: (element, key) =>
         this.threadInnerElement?.contains(element) === true && this.rowIndexesByKey.has(key),
       onMount: (key) => {
@@ -609,7 +608,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       () => this.cancelScroll(),
       () => this.presentation.queueRowMeasure(),
     );
-    if (behavior !== "smooth") {
+    // A smooth no-op emits no native idle event to capture the end. Preserve
+    // that actual resting edge before a later row measurement grows the range.
+    if (behavior !== "smooth" || this.endAnchor.recordViewport(this.scrollElement)) {
       this.endAnchor.capture(this.scrollElement);
     }
     return true;

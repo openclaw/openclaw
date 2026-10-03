@@ -172,6 +172,17 @@ OpenClaw-tool media. On `message_tool_only` routes, this narrow provenance lets
 native runtime artifacts survive source-reply suppression; normal send policy
 and ambient-room admission still apply.
 
+## Harness delivery defaults
+
+Set `deliveryDefaults.visibleReplies` to `"automatic"` or `"message_tool"`
+when a harness needs a default visible-reply policy. Explicit message config
+still takes precedence.
+
+The former `sourceVisibleReplies` alias was deprecated on July 25, 2026 and
+removed after its October 1 compatibility window. Update plugins that still
+use the alias before updating OpenClaw. This changes a live plugin declaration;
+persisted sessions and transcript formats are unchanged.
+
 ## Terminal tool outcomes
 
 `AgentHarnessAttemptParams.observeToolTerminal` is the host-owned terminal

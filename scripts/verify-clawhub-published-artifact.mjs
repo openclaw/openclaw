@@ -5,7 +5,10 @@ import { readdirSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { readClawHubBootstrapManifest } from "./lib/clawhub-bootstrap-artifact.mjs";
+import {
+  parseClawHubArtifactOptions,
+  readClawHubBootstrapManifest,
+} from "./lib/clawhub-bootstrap-artifact.mjs";
 import { readBoundedRegularFile } from "./plugin-publication-artifact.mjs";
 
 const DEFAULT_ATTEMPTS = 12;
@@ -467,21 +470,8 @@ export async function verifyPublishedClawHubPackage(options) {
   };
 }
 
-function parseArgs(argv) {
-  const result = {};
-  for (let index = 0; index < argv.length; index += 2) {
-    const key = argv[index];
-    const value = argv[index + 1];
-    if (!key?.startsWith("--") || value === undefined) {
-      fail(`Invalid argument: ${String(key)}`);
-    }
-    result[key.slice(2).replaceAll("-", "_")] = value;
-  }
-  return result;
-}
-
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const args = parseClawHubArtifactOptions(process.argv.slice(2));
   const retryOptions = {
     attempts: positiveInteger(
       process.env.OPENCLAW_CLAWHUB_VERIFY_ATTEMPTS,

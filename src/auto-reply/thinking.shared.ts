@@ -10,7 +10,7 @@ export { normalizeFastMode };
 export type { FastMode };
 
 /** Canonical thinking level values accepted by chat commands and session state. */
-const ALL_THINKING_LEVELS = [
+export const ALL_THINKING_LEVELS = [
   "off",
   "minimal",
   "low",

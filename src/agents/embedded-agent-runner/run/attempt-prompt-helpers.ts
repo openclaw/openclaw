@@ -25,7 +25,14 @@ import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js"
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
+import { normalizeContextTokenBudget } from "../utils.js";
+import type { DecisionPromptBuildFields } from "./attempt-decision-prefilter.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
+
+export type ResolvedPromptBuildHookResult = PluginHookBeforePromptBuildResult & {
+  decisionPromptBuildFields?: DecisionPromptBuildFields;
+  hasPendingNonPromptBuildContext: boolean;
+};
 
 type PromptBuildHookRunner = Pick<HookRunner, "runBeforePromptBuild"> &
   Partial<Pick<HookRunner, "runAgentTurnPrepare" | "runHeartbeatPromptContribution">> & {
@@ -63,7 +70,7 @@ export async function resolvePromptBuildHookResult(params: {
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
-}): Promise<PluginHookBeforePromptBuildResult> {
+}): Promise<ResolvedPromptBuildHookResult> {
   const runId = params.hookCtx.runId;
   const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
   const queuedContext = cachedInjections
@@ -129,7 +136,35 @@ export async function resolvePromptBuildHookResult(params: {
           return undefined;
         })
     : undefined;
+  const decisionPromptBuildFields = promptBuildResult
+    ? Object.fromEntries(
+        (
+          [
+            "systemPrompt",
+            "prependContext",
+            "appendContext",
+            "prependSystemContext",
+            "appendSystemContext",
+          ] as const
+        ).flatMap((field) =>
+          typeof promptBuildResult[field] === "string"
+            ? [[field, promptBuildResult[field]] as const]
+            : [],
+        ),
+      )
+    : undefined;
   return {
+    hasPendingNonPromptBuildContext: Boolean(
+      queuedContext.prependContext?.trim() ||
+      queuedContext.appendContext?.trim() ||
+      turnPrepareResult?.prependContext?.trim() ||
+      turnPrepareResult?.appendContext?.trim() ||
+      heartbeatContribution?.prependContext?.trim() ||
+      heartbeatContribution?.appendContext?.trim(),
+    ),
+    ...(decisionPromptBuildFields && Object.keys(decisionPromptBuildFields).length > 0
+      ? { decisionPromptBuildFields }
+      : {}),
     systemPrompt: promptBuildResult?.systemPrompt,
     ...(promptBuildResult?.toolsAllow !== undefined
       ? { toolsAllow: promptBuildResult.toolsAllow }
@@ -152,9 +187,6 @@ export async function resolvePromptBuildHookResult(params: {
 }
 
 export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {
-  if (!sessionKey) {
-    return "full";
-  }
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
 }
 
@@ -461,6 +493,8 @@ export function buildAfterTurnRuntimeContext(params: {
     attempt: params.attempt,
     activeAgentId: params.activeAgentId,
   });
+  const tokenBudget = normalizeContextTokenBudget(params.tokenBudget);
+  const currentTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
   return {
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.attempt.sessionKey,
@@ -507,16 +541,8 @@ export function buildAfterTurnRuntimeContext(params: {
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.after-turn",
     }),
-    ...(typeof params.tokenBudget === "number" &&
-    Number.isFinite(params.tokenBudget) &&
-    params.tokenBudget > 0
-      ? { tokenBudget: Math.floor(params.tokenBudget) }
-      : {}),
-    ...(typeof params.currentTokenCount === "number" &&
-    Number.isFinite(params.currentTokenCount) &&
-    params.currentTokenCount > 0
-      ? { currentTokenCount: Math.floor(params.currentTokenCount) }
-      : {}),
+    ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+    ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
     ...(params.promptCache ? { promptCache: params.promptCache } : {}),
     transcriptStorage: { kind: "sqlite" },
     ...(sessionTarget ? { sessionTarget } : {}),

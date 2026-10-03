@@ -1,4 +1,3 @@
-// Gateway method descriptor types define the reusable contract shared by core, plugin, channel, and auxiliary methods.
 import { normalizePluginGatewayMethodScope } from "../../shared/gateway-method-policy.js";
 import { ADMIN_SCOPE, type OperatorScope } from "../operator-scopes.js";
 

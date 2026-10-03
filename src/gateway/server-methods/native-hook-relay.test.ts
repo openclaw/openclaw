@@ -1,8 +1,7 @@
+import fs from "node:fs";
 /**
  * Tests for relaying native hook events through gateway request handlers.
  */
-
-import fs from "node:fs";
 import { Server } from "node:http";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -17,7 +16,7 @@ import {
 import { resolveExecApprovalsPath } from "../../infra/exec-approvals-config.js";
 import * as mcpGrants from "../../infra/exec-approvals-mcp.js";
 import { ExecApprovalsMigrationRequiredError } from "../../infra/exec-approvals-migration-gate.js";
-import { saveExecApprovals } from "../../infra/exec-approvals-store.js";
+import { saveExecApprovals } from "../../infra/exec-approvals-store.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";

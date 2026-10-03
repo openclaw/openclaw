@@ -181,7 +181,6 @@ async function runPersonalFile(
       mutationSymlinks: "reject",
       hardlinks: "reject",
       maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-      nonBlockingRead: true,
       assertBeforeMutation: target.assertCurrent,
     });
     const read = async (): Promise<UsersPersonalFileGetResult> => {

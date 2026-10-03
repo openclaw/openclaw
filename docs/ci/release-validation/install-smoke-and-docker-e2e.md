@@ -18,7 +18,7 @@ The `Install Smoke` workflow no longer runs on pull requests or `main` pushes. I
 
 The slow Bun global install and runtime smoke is separately gated by `run_bun_global_install_smoke`. It installs the candidate with trusted lifecycle scripts, then verifies representative CLI, local-agent, and Gateway paths under Bun 1.4 or newer. It runs on the nightly schedule, defaults on for workflow calls from release checks, and manual `Install Smoke` dispatches can opt into it. Normal PR CI still runs the fast Bun launcher regression lane for Node-relevant changes. QR and installer Docker tests keep their own install-focused Dockerfiles.
 
-The Bun-only runtime smoke reuses the verified candidate tarball with the checksum-pinned Bun fork from `setup-test-bun`. It masks system Node with recording sentinels in a private mount namespace, leaving the host unchanged, and uses child-PID-correlated spawn tracing to detect Node attempts across install, CLI, Gateway, node-host pairing, a mocked agent turn, Doctor, terminal, and browser steps. The lane first attempts a Node-less `bun install` and, while the listed preinstall blocker reproduces, completes installation with a preserved Node binary visible only on that install's PATH. Both installs put sentinels for the other Node launchers on PATH, leaving `node` absent from the install sentinel directory so Bun can inject its lifecycle shim during the first attempt. Node is also available for payload verification. The Bun-only lane runs only in Release Checks (Full Release Validation) through its own `run_bun_only_runtime_smoke` input, never on the nightly schedule or a manual `Install Smoke` dispatch, and skips frozen targets. It is advisory for now (`continue-on-error`): a failure is recorded on the run without blocking the release. Known Node requirements live in `scripts/e2e/lib/bun-only-runtime/expected-node-blockers.json`: an unlisted Node attempt fails, and a listed blocker that no longer reproduces fails until its entry is deleted.
+The Bun-only runtime smoke reuses the verified candidate tarball with the checksum-pinned Bun fork from `setup-test-bun`. It masks system Node with recording sentinels in a private mount namespace, leaving the host unchanged, and uses child-PID-correlated spawn tracing to detect Node attempts across install, CLI, Gateway, node-host pairing, a mocked agent turn, Doctor, terminal, and browser steps. The lane makes one Node-less `bun install` attempt with `OPENCLAW_PACKAGE_BUN_LAUNCHER` set to the pinned Bun executable; an install failure fails the lane without retrying with Node. The install puts sentinels for the other Node launchers on PATH, leaving `node` absent from the install sentinel directory so Bun can inject its lifecycle shim. Node remains available for payload preparation and verification before the smoke hides it. The Bun-only lane runs only in Release Checks (Full Release Validation) through its own `run_bun_only_runtime_smoke` input, never on the nightly schedule or a manual `Install Smoke` dispatch, and skips frozen targets. It is advisory for now (`continue-on-error`): a failure is recorded on the run without blocking the release. Known Node requirements live in `scripts/e2e/lib/bun-only-runtime/expected-node-blockers.json`: an unlisted Node attempt fails, and a listed blocker that no longer reproduces fails until its entry is deleted.
 
 ## Local Docker E2E
 
@@ -104,12 +104,15 @@ First-hop compatibility lanes share a 3,200-second inner container budget and a
 seconds before its final candidate hop; another 560 seconds for that hop and about
 five seconds for assertions project roughly 2,125 seconds for a complete lane.
 A roughly 1.5× slow-host margin gives 3,200 seconds, with another 300 seconds for
-host-side work. The self-upgrade job allows 130 minutes: six first-hop source
-versions need two 3,500-second waves under the unchanged npm weight limit of five;
-the 20-minute, weight-three survivor overlaps those waves. Adding ten minutes for
-job setup and artifacts gives about 127 minutes, rounded to 130. Targeted
-first-hop jobs retain their 60-minute job budget. Phase and update-step durations
-are printed in the lane log.
+host-side work. Targeted runs measured roughly 540–720 seconds per update; each
+lane performs multiple updates, so that is not the complete lane duration.
+First-hop lanes have weight two under the unchanged npm weight limit of five,
+admitting at most two at once to reduce npm and disk contention. The 20-minute,
+weight-three survivor can overlap one first-hop lane. The self-upgrade job allows
+210 minutes: three 3,500-second waves plus a conservative 20 minutes for the
+survivor and ten minutes for setup and artifacts total 205 minutes, rounded up.
+Targeted first-hop jobs retain their 60-minute job budget. Phase and update-step
+durations are printed in the lane log.
 
 Authenticated update restart uses a 2,280-second container budget and a
 2,580-second (43-minute) lane budget: hosted run `36506342273` exceeded 1,515

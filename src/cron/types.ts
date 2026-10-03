@@ -151,7 +151,8 @@ export type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>
 /** Explicit execution-error disposition used consistently by retry, history, and alerts. */
 export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
-  | { kind: "permanent" };
+  /** `reportedByAgent`: the run's final answer reported AUTOMATION_FAILED; no runtime fault. */
+  | { kind: "permanent"; reportedByAgent?: true };
 
 /** Closed producer-authored facts allowed in operator-facing failure notifications. */
 export type CronFailureNotificationDetail =
@@ -279,8 +280,17 @@ export type CronJobState = Omit<
   runningReceiptId?: string;
   /** Nonce for a committed schedule edit during the pending run. */
   runningScheduleChangeId?: string;
-  /** Unresolved recovery scope and last notified signature, when an alert was requested. */
-  failureAlertIncident?: { signature?: string; scope: "run" | "trigger" };
+  /**
+   * Unresolved recovery scope and last notified signature, when an alert was requested.
+   * `repair` records the owner-conversation repair request that replaced the streak's first
+   * alert, and `alerted` that its fallback alert was sent. It lasts until the job succeeds,
+   * so a streak is repaired at most once.
+   */
+  failureAlertIncident?: {
+    signature?: string;
+    scope: "run" | "trigger";
+    repair?: { atMs: number; alerted?: true };
+  };
   /** Fences notification settlement when multiple cycles share a timestamp. */
   lastFailureNotificationId?: string;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */

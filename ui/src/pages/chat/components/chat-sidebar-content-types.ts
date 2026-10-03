@@ -1,4 +1,5 @@
 import type { TemplateResult } from "lit";
+import type { ChatMessageGetResult } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
@@ -7,13 +8,6 @@ import type {
   SessionDiffLoader,
   SessionDiffOwner,
 } from "./session-diff-panel.ts";
-
-type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
-type DetailFullMessageResult = {
-  ok?: boolean;
-  message?: unknown;
-  unavailableReason?: DetailUnavailableReason;
-};
 
 type SidebarFullMessageRequest = {
   sessionKey: string;
@@ -24,7 +18,7 @@ type SidebarFullMessageRequest = {
 
 export type SidebarFullMessageLoader = (
   request: SidebarFullMessageRequest,
-) => Promise<DetailFullMessageResult | null | undefined>;
+) => Promise<Partial<ChatMessageGetResult> | null | undefined>;
 
 type MarkdownSidebarContent = {
   kind: "markdown";
@@ -146,7 +140,15 @@ export type ToolOutputSidebarContent = {
   agentId?: string;
 };
 
+type McpAppSidebarContent = {
+  kind: "mcp-app";
+  title: string;
+  launch: import("../../../components/mcp-app-launch.ts").McpAppOpenDetail;
+  rawText?: null;
+};
+
 export type SidebarContent =
+  | McpAppSidebarContent
   | ToolOutputSidebarContent
   | MarkdownSidebarContent
   | CanvasSidebarContent

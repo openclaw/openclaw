@@ -1,6 +1,7 @@
-// @vitest-environment node
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+// @vitest-environment node
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import { createStagedAttachment } from "./chat-delivery-attachments.test-support.ts";
@@ -44,7 +45,7 @@ it.each([true, false])(
     expect(host.chatAttachments).toEqual([attachment]);
     expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
     expect(host.chatQueue).toEqual([]);
-    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
     expect(host.chatError).toBe("Earlier request failed");
     expect(host.lastError).toBe("Earlier request failed");
   },
@@ -81,7 +82,7 @@ it("rechecks send access after settings settle without sending an admitted later
   settingsPatch.resolve(true);
   await send;
 
-  expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+  expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
   expect(listStoredChatOutboxes(host)[0]?.queue).toMatchObject([
     {
       id: original.id,
@@ -142,7 +143,7 @@ it.each([true, false])(
     expect(
       chatOutboxOwner(host).admit(
         host,
-        { scope: { sessionKey: "global", agentId: "writer" }, awaitingDefaults: false },
+        captureChatOutboxAdmission(host, "global", "writer"),
         queued,
       ),
     ).toBe("admitted");

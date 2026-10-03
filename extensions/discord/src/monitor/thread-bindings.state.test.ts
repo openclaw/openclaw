@@ -23,43 +23,27 @@ import { ensureBindingsLoaded, ensureBindingsLoadedAsync } from "./thread-bindin
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 import type { ThreadBindingManager, ThreadBindingRecord } from "./thread-bindings.types.js";
 
-const stores = vi.hoisted(() => {
-  const entries = vi.fn<() => Promise<PluginStateEntry<ThreadBindingRecord>[]>>();
-  const register = vi.fn<PluginStateKeyedStore<ThreadBindingRecord>["register"]>();
-  const remove = vi.fn<PluginStateKeyedStore<ThreadBindingRecord>["delete"]>();
-  const syncRegister = vi.fn<PluginStateSyncKeyedStore<ThreadBindingRecord>["register"]>();
-  const syncUpdate = vi.fn<NonNullable<PluginStateSyncKeyedStore<ThreadBindingRecord>["update"]>>();
-  const syncDeleteIf =
-    vi.fn<NonNullable<PluginStateSyncKeyedStore<ThreadBindingRecord>["deleteIf"]>>();
-  const syncDelete = vi.fn<PluginStateSyncKeyedStore<ThreadBindingRecord>["delete"]>();
-  const syncEntries = vi.fn<() => PluginStateEntry<ThreadBindingRecord>[]>();
-  return {
-    warn: vi.fn(),
-    entries,
-    register,
-    delete: remove,
-    syncEntries,
-    syncRegister,
-    syncDelete,
-    syncUpdate,
-    syncDeleteIf,
-    openKeyedStore:
-      vi.fn<
-        (
-          options: OpenKeyedStoreOptions,
-        ) => Pick<PluginStateKeyedStore<ThreadBindingRecord>, "entries" | "register" | "delete">
-      >(),
-    openSyncKeyedStore:
-      vi.fn<
-        (
-          options: OpenKeyedStoreOptions,
-        ) => Pick<
-          PluginStateSyncKeyedStore<ThreadBindingRecord>,
-          "entries" | "register" | "delete" | "update" | "deleteIf"
-        >
-      >(),
-  };
-});
+type AsyncStore = Pick<
+  PluginStateKeyedStore<ThreadBindingRecord>,
+  "entries" | "register" | "delete"
+>;
+type SyncStore = Pick<
+  PluginStateSyncKeyedStore<ThreadBindingRecord>,
+  "entries" | "register" | "delete" | "update" | "deleteIf"
+>;
+const stores = vi.hoisted(() => ({
+  warn: vi.fn(),
+  entries: vi.fn<AsyncStore["entries"]>(),
+  register: vi.fn<AsyncStore["register"]>(),
+  delete: vi.fn<AsyncStore["delete"]>(),
+  syncEntries: vi.fn<SyncStore["entries"]>(),
+  syncRegister: vi.fn<SyncStore["register"]>(),
+  syncDelete: vi.fn<SyncStore["delete"]>(),
+  syncUpdate: vi.fn<NonNullable<SyncStore["update"]>>(),
+  syncDeleteIf: vi.fn<NonNullable<SyncStore["deleteIf"]>>(),
+  openKeyedStore: vi.fn<(options: OpenKeyedStoreOptions) => AsyncStore>(),
+  openSyncKeyedStore: vi.fn<(options: OpenKeyedStoreOptions) => SyncStore>(),
+}));
 
 vi.mock("../runtime.js", () => {
   const runtime = { state: stores, logging: { getChildLogger: () => ({ warn: stores.warn }) } };
@@ -153,21 +137,22 @@ function pauseNextWrite(rows?: Map<string, ThreadBindingRecord>) {
 describe("Discord thread binding restoration", () => {
   beforeEach(async () => {
     await resetThreadBindingsForTests();
-    stores.warn.mockReset();
-    stores.entries.mockReset().mockResolvedValue([]);
-    stores.syncEntries.mockReset().mockReturnValue([]);
-    stores.syncRegister.mockReset();
-    stores.syncDelete.mockReset().mockReturnValue(true);
-    stores.syncUpdate.mockReset().mockReturnValue(false);
-    stores.syncDeleteIf.mockReset().mockReturnValue(false);
-    stores.register.mockReset().mockResolvedValue();
-    stores.delete.mockReset().mockResolvedValue(true);
-    stores.openKeyedStore.mockReset().mockImplementation(() => ({
+    for (const mock of Object.values(stores)) {
+      mock.mockReset();
+    }
+    stores.entries.mockResolvedValue([]);
+    stores.syncEntries.mockReturnValue([]);
+    stores.syncDelete.mockReturnValue(true);
+    stores.syncUpdate.mockReturnValue(false);
+    stores.syncDeleteIf.mockReturnValue(false);
+    stores.register.mockResolvedValue();
+    stores.delete.mockResolvedValue(true);
+    stores.openKeyedStore.mockImplementation(() => ({
       entries: stores.entries,
       register: stores.register,
       delete: stores.delete,
     }));
-    stores.openSyncKeyedStore.mockReset().mockImplementation(() => ({
+    stores.openSyncKeyedStore.mockImplementation(() => ({
       entries: stores.syncEntries,
       register: stores.syncRegister,
       delete: stores.syncDelete,
@@ -309,28 +294,18 @@ describe("Discord thread binding restoration", () => {
     await manager.stop();
   });
 
-  it.each(["register", "delete"] as const)(
-    "retains the in-memory fallback after a failed %s",
-    async (operation) => {
-      stores.entries.mockResolvedValue([persistedBinding()]);
-      const manager = await persistentManager();
-      stores[operation].mockRejectedValueOnce(new Error("persistence failed"));
-      try {
-        const mutation =
-          operation === "register"
-            ? manager.bindTarget(replacementTarget)
-            : manager.unbindThread({ threadId: "thread-1", sendFarewell: false });
-        await mutation;
-        expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe(
-          operation === "register" ? "agent:main:subagent:replacement" : undefined,
-        );
-        expect(stores[operation]).toHaveBeenCalledOnce();
-        expect(stores.openSyncKeyedStore).not.toHaveBeenCalled();
-      } finally {
-        await manager.stop();
-      }
-    },
-  );
+  it("retains the in-memory fallback after a failed write", async () => {
+    stores.entries.mockResolvedValue([persistedBinding()]);
+    const manager = await persistentManager();
+    stores.register.mockRejectedValueOnce(new Error("persistence failed"));
+    await manager.bindTarget(replacementTarget);
+    expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe(
+      replacementTarget.targetSessionKey,
+    );
+    expect(stores.register).toHaveBeenCalledOnce();
+    expect(stores.openSyncKeyedStore).not.toHaveBeenCalled();
+    await manager.stop();
+  });
 
   it.each([
     ["after-prefix", "sibling", "touch"],
@@ -658,38 +633,5 @@ describe("Discord thread binding restoration", () => {
     expect(saved.maxAgeMs).toBe(1000);
     expect(stores.register).not.toHaveBeenCalled();
     await manager.stop();
-  });
-
-  it("removes restored SQLite rows through synchronous compatibility with persistence disabled", async () => {
-    await withOpenClawTestState({ label: "discord-thread-binding-restore" }, async () => {
-      stores.openKeyedStore.mockImplementation((options) =>
-        createPluginStateKeyedStoreForTests<ThreadBindingRecord>("discord", options),
-      );
-      stores.openSyncKeyedStore.mockImplementation((options) =>
-        createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>("discord", options),
-      );
-      const saved = persistedBinding();
-      const store = createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>("discord", {
-        namespace: "thread-bindings",
-        maxEntries: 10_000,
-      });
-      try {
-        store.register(saved.key, saved.value);
-        const manager = await createTestManager();
-        expect(manager.getByThreadId("thread-1")).toEqual(saved.value);
-        expect(stores.openSyncKeyedStore).not.toHaveBeenCalled();
-        expect(
-          unbindThreadBindingsBySessionKey({
-            targetSessionKey: saved.value.targetSessionKey,
-            sendFarewell: false,
-          }),
-        ).toHaveLength(1);
-        expect(store.lookup(saved.key)).toBeUndefined();
-        await manager.stop();
-      } finally {
-        await resetThreadBindingsForTests();
-        resetPluginStateStoreForTests();
-      }
-    });
   });
 });

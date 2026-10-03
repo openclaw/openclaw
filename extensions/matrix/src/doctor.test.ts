@@ -1,16 +1,7 @@
-// Matrix tests cover doctor plugin behavior.
-import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { normalizeCompatibilityConfig } from "./doctor-contract.js";
-import { cleanStaleMatrixPluginConfig, collectMatrixInstallPathWarnings } from "./doctor.js";
 
 describe("matrix doctor", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
   function normalizeMatrixDmConfig(dm: Record<string, unknown>) {
     return normalizeCompatibilityConfig({
       cfg: {
@@ -26,33 +17,6 @@ describe("matrix doctor", () => {
   function expectChangeContaining(changes: readonly string[], fragment: string): void {
     expect(changes.join("\n")).toContain(fragment);
   }
-
-  it("warns on stale custom Matrix plugin paths and cleans them", async () => {
-    const missingPath = path.join(tmpdir(), `openclaw-matrix-missing-${Date.now()}`);
-    await fs.rm(missingPath, { recursive: true, force: true });
-
-    const warnings = await collectMatrixInstallPathWarnings({
-      plugins: {
-        installs: {
-          matrix: { source: "path", sourcePath: missingPath, installPath: missingPath },
-        },
-      },
-    });
-    expect(warnings[0]).toContain("custom path that no longer exists");
-
-    const cleaned = await cleanStaleMatrixPluginConfig({
-      plugins: {
-        installs: {
-          matrix: { source: "path", sourcePath: missingPath, installPath: missingPath },
-        },
-        load: { paths: [missingPath, "/other/path"] },
-        allow: ["matrix", "other-plugin"],
-      },
-    });
-    expect(cleaned.changes[0]).toContain("Removed stale Matrix plugin references");
-    expect(cleaned.config.plugins?.load?.paths).toEqual(["/other/path"]);
-    expect(cleaned.config.plugins?.allow).toEqual(["other-plugin"]);
-  });
 
   it("normalizes legacy Matrix room allow aliases to enabled", () => {
     const result = normalizeCompatibilityConfig({

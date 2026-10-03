@@ -2,8 +2,8 @@ import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   consumeCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
@@ -30,7 +30,7 @@ import {
 import { createClientHarness } from "./test-support.js";
 import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-compact-");
 let tempDir: string;
 
 function contextEngineBinding() {
@@ -103,7 +103,7 @@ function settleCompactionHarnessAfterAssertions(harness: ReturnType<typeof creat
 describe("maybeCompactCodexAppServerSession", () => {
   beforeEach(() => {
     resetCodexTestBindingStore();
-    tempDir = tempDirs.make("openclaw-codex-compact-");
+    tempDir = tempDirs.make();
   });
 
   afterEach(() => {

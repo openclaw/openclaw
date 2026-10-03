@@ -4,7 +4,6 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -33,16 +32,28 @@ import {
   buildTelegramGroupPeerId,
   getTelegramTextParts,
   joinTelegramTextParts,
+  resolveTelegramPrimaryMedia,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 
 type TelegramDebounceLane = "default" | "forward";
 
+// One multi-message forward reaches the bot as one update per message, often in later
+// getUpdates responses: live Test Server bursts (2026-10-01) arrived 208-790 ms apart while
+// the Gateway re-polled within 40 ms, so the quiet window must outlast one late delivery.
+const FORWARD_BURST_QUIET_MS = 1_000;
+
+export type TelegramInboundMediaHydration =
+  | { kind: "ready"; allMedia: TelegramMediaRef[] }
+  | { kind: "retry"; error: unknown };
+
 export type TelegramDebounceEntry = {
   ctx: TelegramContext;
   msg: Message;
   allMedia: TelegramMediaRef[];
+  /** Deferred attachment download for a buffered forward; replaces `allMedia` at flush. */
+  hydrateMedia?: (abortSignals: readonly AbortSignal[]) => Promise<TelegramInboundMediaHydration>;
   storeAllowFrom: string[];
   receivedAtMs: number;
   debounceKey: string | null;
@@ -101,7 +112,7 @@ export function createTelegramInboundBuffers({
     pending?: readonly TelegramDebounceEntry[],
   ): number => {
     if (entry.debounceLane === "forward") {
-      return 80;
+      return FORWARD_BURST_QUIET_MS;
     }
     const debounceMs = resolveDebounceMs();
     // Explicit zero disables ordinary bursts, not automatic long-paste assembly.
@@ -120,25 +131,32 @@ export function createTelegramInboundBuffers({
       commandOptions: { botUsername: entry.botUsername },
     });
     if (entry.debounceLane === "forward") {
-      return hasDebounceableText || entry.allMedia.length > 0;
+      return hasDebounceableText || resolveTelegramPrimaryMedia(entry.msg) !== undefined;
     }
     return typeof entry.msg.text === "string" && hasDebounceableText && entry.allMedia.length === 0;
   };
-  const resolveTelegramDebounceLane = (msg: Message): TelegramDebounceLane => {
-    const forwardMeta = msg as {
-      forward_origin?: unknown;
-      forward_from?: unknown;
-      forward_from_chat?: unknown;
-      forward_sender_name?: unknown;
-      forward_date?: unknown;
-    };
-    return (forwardMeta.forward_origin ??
-      forwardMeta.forward_from ??
-      forwardMeta.forward_from_chat ??
-      forwardMeta.forward_sender_name ??
-      forwardMeta.forward_date)
-      ? "forward"
-      : "default";
+  const resolveTelegramDebounceLane = (msg: Message): TelegramDebounceLane =>
+    msg.forward_origin ? "forward" : "default";
+  // Buffered forwards download after their quiet window, like album members, so a slow
+  // attachment cannot split the burst. A retryable member failure retries the whole batch.
+  const hydrateBufferedMedia = async (
+    entries: readonly TelegramDebounceEntry[],
+    participants: readonly TelegramSpooledReplayDeferredParticipant[],
+  ): Promise<TelegramDebounceEntry[]> => {
+    const abortSignals = participants.map((participant) => participant.abortSignal);
+    const hydrated: TelegramDebounceEntry[] = [];
+    for (const entry of entries) {
+      const media = await entry.hydrateMedia?.(abortSignals);
+      if (media?.kind === "retry") {
+        releaseDispatchDedupeClaims(
+          mergeDispatchDedupeClaims(...entries.map((item) => item.dispatchDedupeClaims)),
+          media.error,
+        );
+        throw media.error;
+      }
+      hydrated.push(media ? { ...entry, allMedia: media.allMedia } : entry);
+    }
+    return hydrated;
   };
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
     debounceMs: resolveDebounceMs(),
@@ -154,90 +172,83 @@ export function createTelegramInboundBuffers({
           pending.reduce((total, item) => total + getTelegramTextParts(item.msg).text.length, 0) +
             getTelegramTextParts(entry.msg).text.length <=
             50_000)),
-    onFlush: (entries) => {
+    onFlush: (bufferedEntries) => {
       const completion = (async () => {
-        const participants = spooledReplayParticipants(entries);
-        const last = entries.at(-1);
-        if (!last) {
-          return;
-        }
+        const participants = spooledReplayParticipants(bufferedEntries);
         try {
-          if (entries.length === 1) {
-            const result = await processMessageWithReplyChain({
-              ctx: last.ctx,
-              msg: last.msg,
-              allMedia: last.allMedia,
-              storeAllowFrom: last.storeAllowFrom,
-              options: {
-                receivedAtMs: last.receivedAtMs,
-                ingressBuffer: "inbound-debounce",
-                threadSpec: last.threadSpec,
-                ...promptContextBoundaryOptions(
-                  last.promptContextMinTimestampMs,
-                  last.promptContextAmbientWatermark,
-                ),
-                ...spooledReplayOptions(participants),
-                channelIngressResolvers: last.channelIngressResolvers,
-              },
-              dispatchDedupeClaims: last.dispatchDedupeClaims,
-              spooledReplayParticipants: participants,
-            });
-            settleSpooledReplayParticipants(participants, result);
+          const entries = await hydrateBufferedMedia(bufferedEntries, participants);
+          const first = entries[0];
+          const last = entries.at(-1);
+          if (!first || !last) {
             return;
           }
-          const combinedTextParts = joinTelegramTextParts(
-            entries.map((entry) => entry.msg),
-            last.debounceLane === "forward"
-              ? "\n"
-              : (previous) => ((previous.text?.length ?? 0) >= 4000 ? "" : "\n"),
-          );
-          const combinedText = combinedTextParts.text;
-          const combinedMedia = entries.flatMap((entry) => entry.allMedia);
-          if (!combinedText.trim() && combinedMedia.length === 0) {
-            releaseDispatchDedupeClaims(
-              mergeDispatchDedupeClaims(...entries.map((entry) => entry.dispatchDedupeClaims)),
-            );
+          const batched = entries.length > 1;
+          const messages = entries.map((entry) => entry.msg);
+          const textParts = batched
+            ? joinTelegramTextParts(
+                messages,
+                last.debounceLane === "forward"
+                  ? "\n"
+                  : (previous) => ((previous.text?.length ?? 0) >= 4000 ? "" : "\n"),
+              )
+            : undefined;
+          const allMedia = batched ? entries.flatMap((entry) => entry.allMedia) : first.allMedia;
+          const dispatchDedupeClaims = batched
+            ? mergeDispatchDedupeClaims(...entries.map((entry) => entry.dispatchDedupeClaims))
+            : first.dispatchDedupeClaims;
+          if (textParts && !textParts.text.trim() && allMedia.length === 0) {
+            releaseDispatchDedupeClaims(dispatchDedupeClaims);
             settleSpooledReplayParticipants(participants, { kind: "skipped" });
             return;
           }
-          const first = expectDefined(entries.at(0), "multi-entry Telegram debounce batch");
-          const syntheticMessage = {
-            ...buildSyntheticTextMessage({
-              base: first.msg,
-              text: combinedText,
-              entities: combinedTextParts.entities,
-              date: last.msg.date ?? first.msg.date,
-            }),
-            forward_origin: undefined,
-          };
+          const msg = textParts
+            ? {
+                ...buildSyntheticTextMessage({
+                  base: first.msg,
+                  text: textParts.text,
+                  entities: textParts.entities,
+                  date: last.msg.date ?? first.msg.date,
+                }),
+                forward_origin: undefined,
+              }
+            : first.msg;
           const result = await processMessageWithReplyChain({
-            ctx: buildSyntheticContext(first.ctx, syntheticMessage),
-            msg: syntheticMessage,
-            allMedia: combinedMedia,
+            ctx: batched ? buildSyntheticContext(first.ctx, msg) : first.ctx,
+            msg,
+            allMedia,
             storeAllowFrom: first.storeAllowFrom,
             options: {
-              ...(last.msg.message_id ? { messageIdOverride: String(last.msg.message_id) } : {}),
-              ambientTranscriptBody: formatTelegramAmbientTranscriptBody(
-                entries.map((entry) => entry.msg),
-              ),
+              ...(batched
+                ? {
+                    ...(last.msg.message_id
+                      ? { messageIdOverride: String(last.msg.message_id) }
+                      : {}),
+                    ambientTranscriptBody: formatTelegramAmbientTranscriptBody(messages),
+                    bufferedMessages: messages,
+                  }
+                : {}),
               receivedAtMs: first.receivedAtMs,
-              ingressBuffer: last.debounceLane === "forward" ? "inbound-debounce" : "text-batch",
+              ingressBuffer:
+                batched && last.debounceLane !== "forward" ? "text-batch" : "inbound-debounce",
               threadSpec: first.threadSpec,
-              bufferedMessages: entries.map((entry) => entry.msg),
               ...promptContextBoundaryOptions(
-                latestPromptContextMinTimestampMs(
-                  ...entries.map((entry) => entry.promptContextMinTimestampMs),
-                ),
-                latestPromptContextAmbientWatermark(
-                  ...entries.map((entry) => entry.promptContextAmbientWatermark),
-                ),
+                batched
+                  ? latestPromptContextMinTimestampMs(
+                      ...entries.map((entry) => entry.promptContextMinTimestampMs),
+                    )
+                  : first.promptContextMinTimestampMs,
+                batched
+                  ? latestPromptContextAmbientWatermark(
+                      ...entries.map((entry) => entry.promptContextAmbientWatermark),
+                    )
+                  : first.promptContextAmbientWatermark,
               ),
               ...spooledReplayOptions(participants),
-              channelIngressResolvers: entries.flatMap((entry) => entry.channelIngressResolvers),
+              channelIngressResolvers: batched
+                ? entries.flatMap((entry) => entry.channelIngressResolvers)
+                : first.channelIngressResolvers,
             },
-            dispatchDedupeClaims: mergeDispatchDedupeClaims(
-              ...entries.map((entry) => entry.dispatchDedupeClaims),
-            ),
+            dispatchDedupeClaims,
             spooledReplayParticipants: participants,
           });
           settleSpooledReplayParticipants(participants, result);

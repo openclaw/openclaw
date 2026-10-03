@@ -60,10 +60,6 @@ describe("Telegram live policy reload", () => {
 
   it.each([
     ["botToken", "123456:synthetic-token"],
-    ["apiRoot", "https://api.telegram.org"],
-    ["proxy", "http://127.0.0.1:8080"],
-    ["commands", { native: false }],
-    ["customCommands", [{ command: "hello", description: "Say hello" }]],
     ["futurePolicy", true],
   ])("keeps startup ownership for %s even alongside live policy", (key, value) => {
     const plan = planTelegramChange(

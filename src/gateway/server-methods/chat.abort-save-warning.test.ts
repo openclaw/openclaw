@@ -35,6 +35,30 @@ if (!abortSession) {
   throw new Error("sessions.abort handler is not registered");
 }
 
+async function queueCollector(sessionKey: string, groupId: string, runId: string) {
+  enqueueSwarmRun({
+    groupId,
+    runId,
+    start: vi.fn(async () => {}),
+    activeRunIds: ["occupied-slot"],
+    maxConcurrent: 1,
+    onStartFailure: () => true,
+  });
+  await registerSubagentRun({
+    runId,
+    childSessionKey: sessionKey,
+    requesterSessionKey: "agent:main:main",
+    requesterAgentId: "main",
+    requesterDisplayKey: "main",
+    task: "queued collector",
+    cleanup: "keep",
+    collect: true,
+    queued: true,
+    expectsCompletionMessage: false,
+  });
+  await fixture.settle();
+}
+
 it.each([false, true])(
   "preserves queued worker persistence failure with killFailure=%s",
   async (killFails) => {
@@ -44,27 +68,7 @@ it.each([false, true])(
       sessionId: "queued-worker-failure-session",
     };
     await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
-    enqueueSwarmRun({
-      groupId: "queued-worker-failure",
-      runId: "queued-collector",
-      start: vi.fn(async () => {}),
-      activeRunIds: ["occupied-slot"],
-      maxConcurrent: 1,
-      onStartFailure: () => true,
-    });
-    await registerSubagentRun({
-      runId: "queued-collector",
-      childSessionKey: scope.sessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      requesterDisplayKey: "main",
-      task: "queued collector",
-      cleanup: "keep",
-      collect: true,
-      queued: true,
-      expectsCompletionMessage: false,
-    });
-    await fixture.settle();
+    await queueCollector(scope.sessionKey, "queued-worker-failure", "queued-collector");
     const killFailure = new Error("collector cancellation failed");
     const workerFailure = new Error("worker cancellation persistence failed", {
       cause: new SqliteWorkerError("worker result lost", "outcome-unknown"),
@@ -172,27 +176,7 @@ it.each([
     void active.projectSessionTerminalPersistence.catch(() => {});
   }
   if (route === "queued") {
-    enqueueSwarmRun({
-      groupId: "save-warning",
-      runId: "queued-save-warning",
-      start: vi.fn(async () => {}),
-      activeRunIds: ["occupied-slot"],
-      maxConcurrent: 1,
-      onStartFailure: () => true,
-    });
-    await registerSubagentRun({
-      runId: "queued-save-warning",
-      childSessionKey: scope.sessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      requesterDisplayKey: "main",
-      task: "queued collector",
-      cleanup: "keep",
-      collect: true,
-      queued: true,
-      expectsCompletionMessage: false,
-    });
-    await fixture.settle();
+    await queueCollector(scope.sessionKey, "save-warning", "queued-save-warning");
   }
   const respond = vi.fn();
   const context = createChatAbortContext({

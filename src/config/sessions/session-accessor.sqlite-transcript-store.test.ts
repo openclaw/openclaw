@@ -10,8 +10,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { readSessionTranscriptActiveStats } from "./session-accessor.sqlite-active-events.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import { readActiveTranscriptStats } from "./session-accessor.sqlite-history.test-support.js";
 import {
   readTranscriptEventRows,
   readTranscriptStatsSync,
@@ -329,7 +329,7 @@ describe("SQLite exact transcript rewrite", () => {
         work.restore();
       }
       expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(true);
-      expect(() => readSessionTranscriptActiveStats(scope)).toThrow(
+      expect(() => readActiveTranscriptStats(scope)).toThrow(
         SessionTranscriptProjectionUnavailableError,
       );
       expect(searchSessionTranscripts({ ...scope, query: "question" }).hits).toEqual([]);
@@ -339,7 +339,7 @@ describe("SQLite exact transcript rewrite", () => {
       expect(searchSessionTranscripts({ ...scope, query: "changed" }).hits).toMatchObject([
         { messageId: "user" },
       ]);
-      expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(3);
+      expect(readActiveTranscriptStats(scope).eventCount).toBe(3);
     });
   });
 

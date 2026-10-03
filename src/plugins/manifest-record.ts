@@ -509,6 +509,7 @@ export function buildBundleManifestRecord(params: {
     description?: string;
     version?: string;
     skills: string[];
+    onboardingSkill?: string;
     settingsFiles?: string[];
     hooks: string[];
     capabilities: string[];
@@ -538,6 +539,9 @@ export function buildBundleManifestRecord(params: {
     format: "bundle",
     bundleFormat: params.candidate.bundleFormat,
     bundleCapabilities: params.manifest.capabilities,
+    ...(params.manifest.onboardingSkill
+      ? { onboardingSkill: params.manifest.onboardingSkill }
+      : {}),
     activation: params.manifest.activation,
     channels: [],
     providers: [],

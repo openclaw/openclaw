@@ -1,20 +1,15 @@
-import fs from "node:fs";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { readConfigFileSnapshot } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { isTrustedOfficialPluginInstallRecord } from "../plugins/official-external-install-records.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { maybeRepairPluginRegistryState } from "./doctor-plugin-registry.js";
 import {
   createCurrentIndex,
   hermeticEnv,
   readRequiredPersistedInstalledPluginIndex,
 } from "./doctor-plugin-registry.test-support.js";
-import { importShippedPluginInstallConfigForDoctor } from "./doctor/shared/plugin-registry-migration.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
@@ -32,65 +27,45 @@ afterEach(() => {
 });
 
 describe("doctor official plugin provenance", () => {
-  it.each(["persisted", "legacy-config"] as const)(
-    "persists missing ClawHub authority from a proven official %s record",
-    async (source) => {
-      const stateDir = makeTrackedTempDir("openclaw-doctor-provenance", tempDirs);
-      const installRecords = { [pluginId]: legacyRecord };
-      const config = source === "legacy-config" ? { plugins: { installs: installRecords } } : {};
-      if (source === "persisted") {
-        await writePersistedInstalledPluginIndex(
-          { ...createCurrentIndex(), installRecords },
-          { stateDir },
-        );
-      } else {
-        const configPath = path.join(stateDir, "openclaw.json");
-        fs.writeFileSync(configPath, JSON.stringify(config));
-        await withEnvAsync(
-          {
-            ...hermeticEnv(),
-            OPENCLAW_CONFIG_PATH: configPath,
-            OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          },
-          async () => {
-            await importShippedPluginInstallConfigForDoctor(await readConfigFileSnapshot());
-          },
-        );
-      }
-      expect(
-        isTrustedOfficialPluginInstallRecord({ pluginId, packageName, record: legacyRecord }),
-      ).toBe(false);
+  it("persists missing ClawHub authority from a proven official record", async () => {
+    const stateDir = makeTrackedTempDir("openclaw-doctor-provenance", tempDirs);
+    const installRecords = { [pluginId]: legacyRecord };
+    await writePersistedInstalledPluginIndex(
+      { ...createCurrentIndex(), installRecords },
+      { stateDir },
+    );
+    expect(
+      isTrustedOfficialPluginInstallRecord({ pluginId, packageName, record: legacyRecord }),
+    ).toBe(false);
 
-      await maybeRepairPluginRegistryState({
-        stateDir,
-        candidates: [],
-        env: hermeticEnv(),
-        config: {},
-        prompter: { shouldRepair: true },
-      });
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      candidates: [],
+      env: hermeticEnv(),
+      config: {},
+      prompter: { shouldRepair: true },
+    });
 
-      const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
-      const record = persisted.installRecords[pluginId]!;
-      expect(record).toEqual({
-        ...legacyRecord,
-        clawhubUrl: "https://clawhub.ai",
-        clawhubChannel: "official",
-      });
-      expect(isTrustedOfficialPluginInstallRecord({ pluginId, packageName, record })).toBe(true);
+    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
+    const record = persisted.installRecords[pluginId]!;
+    expect(record).toEqual({
+      ...legacyRecord,
+      clawhubUrl: "https://clawhub.ai",
+      clawhubChannel: "official",
+    });
+    expect(isTrustedOfficialPluginInstallRecord({ pluginId, packageName, record })).toBe(true);
 
-      await maybeRepairPluginRegistryState({
-        stateDir,
-        candidates: [],
-        env: hermeticEnv(),
-        config: {},
-        prompter: { shouldRepair: true },
-      });
-      expect((await readRequiredPersistedInstalledPluginIndex(stateDir)).installRecords).toEqual(
-        persisted.installRecords,
-      );
-    },
-  );
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      candidates: [],
+      env: hermeticEnv(),
+      config: {},
+      prompter: { shouldRepair: true },
+    });
+    expect((await readRequiredPersistedInstalledPluginIndex(stateDir)).installRecords).toEqual(
+      persisted.installRecords,
+    );
+  });
 
   it.each([
     { name: "path source", record: { ...legacyRecord, source: "path" } },

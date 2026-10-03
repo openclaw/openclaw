@@ -187,7 +187,7 @@ private func replayDurableMessage(
     runId: String? = nil,
     emptyThinking: Bool = false) -> OpenClawChatMessage
 {
-    try! ChatPayloadDecoding.decode(replayRawMessage(
+    try! GatewayPayloadDecoding.decode(replayRawMessage(
         role: role,
         text: text,
         timestamp: timestamp,
@@ -602,7 +602,7 @@ struct ChatStreamReplayTests {
             runId: runId, seq: 7, stream: "tool", ts: now + 200,
             data: ["phase": AnyCodable("result"), "name": AnyCodable("read"), "toolCallId": AnyCodable("read-1")])))
         try harness.transport.emit(.sessionMessage(OpenClawSessionMessageEventPayload(
-            sessionKey: "main", message: ChatPayloadDecoding.decode(tool),
+            sessionKey: "main", message: GatewayPayloadDecoding.decode(tool),
             messageId: "layout-read", messageSeq: nil)))
         harness.transport.emit(replayNarrationEvent(
             runId: runId, itemId: "second", text: secondText, seq: 8, timestamp: now + 600))
@@ -663,7 +663,7 @@ struct ChatStreamReplayTests {
             runId: runId, itemId: "late", text: "Retired run narration", seq: 9, timestamp: now + 800))
         // A canonical echo is the FIFO barrier after the rejected late event.
         try harness.transport.emit(.sessionMessage(OpenClawSessionMessageEventPayload(
-            sessionKey: "main", message: ChatPayloadDecoding.decode(final),
+            sessionKey: "main", message: GatewayPayloadDecoding.decode(final),
             messageId: "saved-final", messageSeq: nil)))
         try await harness.converge("final echo consumed after the retired event") { vm in
             vm.historyMutationGeneration > generation
@@ -958,7 +958,7 @@ struct ChatStreamReplayTests {
             workPayload.removeValue(forKey: "stopReason")
             workPayload["openclawStreamFallback"] = ["source": "segment", "itemId": "progress-1"]
         }
-        let toolMessage: OpenClawChatMessage = try ChatPayloadDecoding.decode(AnyCodable(workPayload))
+        let toolMessage: OpenClawChatMessage = try GatewayPayloadDecoding.decode(AnyCodable(workPayload))
         let toolEvent = OpenClawChatTransportEvent.sessionMessage(OpenClawSessionMessageEventPayload(
             sessionKey: "main",
             message: toolMessage,

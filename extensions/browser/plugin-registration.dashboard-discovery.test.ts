@@ -18,7 +18,9 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { registerBrowserPlugin } from "./plugin-registration.js";
-import { getBrowserStateRuntime } from "./src/browser-runtime-state.js";
+import { getBrowserStateRuntime, setBrowserStateRuntime } from "./src/browser-runtime-state.js";
+import { resolveBrowserConfig } from "./src/browser/config.js";
+import { createBrowserRuntimeState, stopBrowserRuntime } from "./src/browser/runtime-lifecycle.js";
 import {
   closeTrackedBrowserTabsForSessions,
   trackSessionBrowserTab,
@@ -40,6 +42,56 @@ const serviceScope = new AsyncLocalStorage<string>();
 
 beforeEach(() => reconcile.mockReset());
 afterEach(() => vi.restoreAllMocks());
+
+it.each(["stop", "replacement"] as const)(
+  "runs cleanup under service authority until %s",
+  async (end) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      // Native timers retain async context; keep that contract in the fake clock.
+      const schedule = globalThis.setTimeout;
+      vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) =>
+        schedule(AsyncLocalStorage.bind(callback), delay, ...args),
+      );
+      const lifecycle = await registerDiscovery(state.stateDir);
+      const observed = createDeferred<void>();
+      const scopes: Array<string | undefined> = [];
+      reconcile.mockImplementation(async () => {
+        scopes.push(serviceScope.getStore());
+        observed.resolve();
+        return 0;
+      });
+      await lifecycle.start();
+      const runtime = await serviceScope.run("ended-caller", () =>
+        createBrowserRuntimeState({
+          resolved: resolveBrowserConfig(undefined),
+          port: 18_791,
+        }),
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(300_000);
+        await observed.promise;
+        expect(scopes).toEqual(["discovery-service"]);
+        if (end === "stop") {
+          await lifecycle.stop();
+        } else {
+          setBrowserStateRuntime({ ...getBrowserStateRuntime() });
+        }
+        await vi.advanceTimersByTimeAsync(600_000);
+        expect(scopes).toHaveLength(1);
+      } finally {
+        await lifecycle.stop();
+        await stopBrowserRuntime({
+          current: runtime,
+          getState: () => runtime,
+          clearState: vi.fn(),
+          onWarn: vi.fn(),
+        });
+        vi.useRealTimers();
+      }
+    });
+  },
+);
 
 async function registerDiscovery(stateDir: string) {
   const services: OpenClawPluginService[] = [];

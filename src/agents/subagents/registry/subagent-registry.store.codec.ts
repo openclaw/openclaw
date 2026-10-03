@@ -1,17 +1,19 @@
 import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Selectable } from "kysely";
-import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
+import type { SessionStateNotice } from "../../../sessions/session-state-events.kernel.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
+import type {
+  SubagentRegistryWrite,
+  SubagentRegistryWriteReceipt,
+} from "./subagent-registry.store.kernel.js";
+import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
-export type SubagentRunSqliteRow = Selectable<SubagentRunsTable>;
 type CanonicalSubagentRunRecord = SubagentRunRecord &
   Required<Pick<SubagentRunRecord, "completion" | "delivery">>;
 const EXECUTION_STATUSES = new Set("queued running interrupted terminal".split(" "));
-export const DELIVERY_STATUSES = new Set(
+const DELIVERY_STATUSES = new Set(
   "not_required pending in_progress delivered failed suspended discarded".split(" "),
 );
 
@@ -77,31 +79,16 @@ export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRe
     payload.delivery.status = "not_required";
   }
   const record = normalizeSubagentRunState(payload);
-  return record.runId && record.childSessionKey && record.requesterSessionKey ? record : null;
+  if (!record.runId || !record.childSessionKey || !record.requesterSessionKey) {
+    return null;
+  }
+  rememberSubagentRunVersion(record, subagentRunRowVersion(row)!);
+  return record;
 }
 
 /** Canonically serializes a run before an outer transaction acquires the write lock. */
 export function bindSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqliteRow {
   return bindMutableSubagentRunRecord(structuredClone(entry));
-}
-
-/** Binds an isolated registry capture without copying its complete payload again. */
-export function bindCapturedSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqliteRow {
-  assertCanonicalSubagentRunRecord(entry);
-  const completion = entry.completion;
-  const hadTerminalReply = Object.hasOwn(completion, "terminalReply");
-  const terminalReply = completion.terminalReply;
-  try {
-    // Preserve aliases during the second normalization, which can change text again.
-    return bindMutableSubagentRunRecord({ ...entry });
-  } finally {
-    // Root writes use the copy; restore the sole nested write before capture publication.
-    if (hadTerminalReply) {
-      completion.terminalReply = terminalReply;
-    } else {
-      delete completion.terminalReply;
-    }
-  }
 }
 
 function bindMutableSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqliteRow {
@@ -122,4 +109,65 @@ function bindMutableSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqli
       normalized.completionTarget === "parent" ? { parentCompletion: normalized } : normalized,
     ),
   };
+}
+
+const recordVersions = new WeakMap<SubagentRunRecord, string>();
+
+export function rememberSubagentRunVersion(entry: SubagentRunRecord, version: string): void {
+  recordVersions.set(entry, version);
+}
+
+export function subagentRunRecordVersion(entry: SubagentRunRecord | undefined): string | null {
+  return entry
+    ? (recordVersions.get(entry) ?? subagentRunRowVersion(bindSubagentRunRecord(entry)))
+    : null;
+}
+
+export function parseSubagentRegistryWriteReceipt(
+  value: unknown,
+  write: SubagentRegistryWrite,
+): SubagentRegistryWriteReceipt {
+  if (!isRecord(value) || value.writeId !== write.writeId) {
+    throw new Error("Registry acknowledgement identifies another write");
+  }
+  if (
+    Array.isArray(value.conflictRunIds) &&
+    value.conflictRunIds.every((id) => typeof id === "string")
+  ) {
+    return { writeId: write.writeId, conflictRunIds: value.conflictRunIds };
+  }
+  if (!(value.versions instanceof Map) || !Array.isArray(value.notices)) {
+    throw new Error("Registry acknowledgement is missing commit facts");
+  }
+  const versions = new Map<string, string | null>();
+  for (const [id, version] of value.versions) {
+    if (typeof id !== "string" || (version !== null && typeof version !== "string")) {
+      throw new Error("Registry acknowledgement has an invalid row version");
+    }
+    versions.set(id, version);
+  }
+  const ids = [...write.values.map((row) => row.run_id), ...write.deleteRunIds];
+  if (versions.size !== ids.length || ids.some((id) => !versions.has(id))) {
+    throw new Error("Registry acknowledgement does not cover its written rows");
+  }
+  const notices = value.notices.map((notice): SessionStateNotice => {
+    if (
+      !isRecord(notice) ||
+      typeof notice.watcherSessionKey !== "string" ||
+      (notice.watcherStorePath !== null && typeof notice.watcherStorePath !== "string") ||
+      typeof notice.targetSessionKey !== "string" ||
+      typeof notice.lastSeenSequence !== "number" ||
+      typeof notice.queueOnly !== "boolean"
+    ) {
+      throw new Error("Registry acknowledgement has an invalid terminal notice");
+    }
+    return {
+      watcherSessionKey: notice.watcherSessionKey,
+      watcherStorePath: notice.watcherStorePath,
+      targetSessionKey: notice.targetSessionKey,
+      lastSeenSequence: notice.lastSeenSequence,
+      queueOnly: notice.queueOnly,
+    };
+  });
+  return { writeId: write.writeId, versions, notices };
 }

@@ -74,6 +74,10 @@ Candidate installs and nested build commands use a private pnpm virtual store,
 so preparing an update cannot prune dependencies used by the serving Gateway.
 The candidate's temporary workspace settings are restored before checking for
 source changes; the live checkout's workspace settings are preserved.
+Candidate commands keep the qualified Node first among Node providers on `PATH`,
+while preserving launcher-only prefixes such as scoped pnpm shims ahead of it.
+This also applies when the selected Node directory was already on `PATH`; its
+package-manager executables do not displace those scoped launchers.
 
 Before activating a package or Git update, the updater also checks discoverable
 managed Gateways that share the physical installation. An observed live sibling
@@ -153,12 +157,17 @@ This observation does not grant the updater control of a system LaunchDaemon.
 
 Teams running a gateway directly from a git checkout on a server can update it
 with `scripts/update-gateway.sh` from inside that checkout. It is the reference
-for a source-server update: it fails closed on all tracked local changes,
-including build outputs, fast-forwards `main` (or rebases a local server branch
-onto `origin/main`), installs dependencies with a frozen lockfile, builds clean,
-and stops the gateway before replacing its build output. If the build fails, it
-restores the previous output and restarts that build while still returning the
-build failure.
+for a source-server update: it refuses tracked local changes, including build
+outputs, and prepares the fetched target in a private checkout. It checks that
+`main` can fast-forward, or rebases the local server branch with `--rebase-merges`.
+Dependencies install with a frozen lockfile and the candidate builds before the
+serving checkout changes. A preparation failure leaves the existing service
+running. After preparation, the script stops its selected service and checks for
+other observed managed consumers before publishing source, dependencies, and
+generated output together. Stop any shared-install siblings through their own
+service owners first; this script does not stop or restart them for you.
+The consumer check precedes the first source change; it does not lock out new
+service starts during source and runtime publication.
 
 Like `openclaw update`, the script builds runtime JavaScript, plugin assets, and
 the Control UI without generating TypeScript declarations by default. Set
@@ -173,19 +182,27 @@ dependencies, hooks, or configuration. Missing or invalid metadata, provisioning
 failure, or a version mismatch stops before checkout update or restart; repair
 the target pin or install a compatible Corepack, then retry.
 
-The same fetched commit is used for fast-forward or rebase. This is a fetched-target
-toolchain preflight, not a complete preflight of a rebased local branch or its
-build. The build rollback covers generated output, not Git, installed dependencies,
-or configuration. Local branch overrides remain in effect: install and build resolve the resulting
-checkout's pin, which may differ from the probed target pin. Operators must verify
-those overrides and maintain a recovery path. The same shim directory leads
-nested commands' `PATH`, and child workspace and lockfile roots follow each
-operation's directory. Bootstrap or install failure leaves service lifecycle
-untouched. During the build, the updater owns all generated output roots, including
-package-local `dist` directories. If restoration cannot finish or build writers
-have not stopped, it leaves the service stopped and reports the retained backup
-path. If restart of a successful new build fails, it retains the previous output
-without replacing chunks that a new process may already be using.
+The same fetched commit is used for fast-forward or rebase. The resulting
+candidate's pnpm pin is checked separately, so local branch overrides remain in
+effect. The same scoped shim directory leads nested commands' `PATH`, and each
+operation uses its own workspace and lockfile roots. Accepted untracked build
+inputs are copied into the candidate and checked again before publication.
+References resolving inside the checkout follow the candidate's corresponding
+files. Genuinely external links remain operator-owned references: their target
+identity is checked, but external directory contents are not recursively frozen.
+Retained runtime transaction directories remain recovery material and are excluded
+from candidate build inputs on retry.
+
+If publication fails after stopping the service, the script restores and verifies
+the previous Git revision and retained dependencies/output before restarting it.
+It preserves the original failure. Configuration and external operator data are
+outside this runtime transaction. Changed source or unverified child cleanup
+prevents destructive recovery; retained paths are reported for inspection.
+If restart of a verified new runtime fails, that runtime stays in place because
+a new process may already be using it, and previous artifacts remain available
+for operator recovery. Failed automatic invocations also retain their small
+scoped pnpm launcher directory; remove the reported directory only after all
+update children have stopped.
 The hosted [installers](/install/installer) also support npm-owned temporary provisioning
 when Corepack is unavailable; this server script deliberately requires Corepack.
 
@@ -197,6 +214,11 @@ the first update across the pin change. Validate that launcher against both the
 intended target and the known-good rollback ref before starting the update.
 Updating target files alone does not repair an older running binary.
 </Warning>
+
+Already-running source-server scripts that call the older three-argument build
+adapter still own their earlier Git and dependency changes. That compatibility
+path retains its output-only recovery; loading a newer adapter cannot move an
+old shell's completed install behind the stop boundary.
 
 The published 2026.9.4 source-server script also builds before its final restart.
 Candidate build entry points recognize its existing update marker only when the
@@ -377,8 +399,9 @@ the install command fails, OpenClaw retries once with `--omit=optional`, which
 helps hosts where native optional dependencies cannot compile.
 The packaged lifecycle restores the matching precompiled fs-safe dependency
 when that retry omitted it. It uses the version declared by the installed
-fs-safe package and does not run dependency build scripts. A working native
-binding needs no extra download. Unsupported hosts or failed downloads produce
+fs-safe package and does not run dependency build scripts. Repair works on Node
+and Bun and preserves any existing native package. A working native binding
+needs no extra download. Unsupported hosts or failed downloads produce
 a warning and allow installation to finish; explicitly disabling fs-safe native
 support also skips this repair.
 
@@ -443,6 +466,11 @@ versioned runtime caches and valid links to them: other installs or profiles may
 still use them. `openclaw update` still runs Doctor after installing the candidate;
 after a manual package replacement, run `openclaw doctor --fix` before restarting
 the Gateway.
+
+During a marked Windows 2026.9.4 update, package lifecycle also asks Doctor's
+read-only schema preflight to reject an incompatible shared-state upgrade before
+activation. It does not migrate operator state. Independent package installation
+does not run this legacy-updater check.
 
 The fresh post-core continuation runs repairing Doctor before plugin convergence,
 including when an older updater already ran Doctor without `--fix`. This completes

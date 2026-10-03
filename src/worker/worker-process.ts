@@ -161,6 +161,8 @@ export async function runWorkerProcess(
     browserRuntime?: WorkerBrowserRuntime;
   } = {},
 ): Promise<void> {
+  const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
+  await initializeSqliteRuntimeCapabilities();
   // Stdout belongs to the worker result; diagnostics stay on stderr through process shutdown.
   routeLogsToStderr();
   enableConsoleCapture();

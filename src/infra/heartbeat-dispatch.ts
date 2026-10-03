@@ -214,6 +214,7 @@ async function prepareHeartbeatDispatchReply(
       heartbeatTerminalToolFailure: failure,
       replyPayload: selected,
     },
+    useHeartbeatFailureCopy: prepared.useHeartbeatFailureCopy,
     hasRelayableExecCompletion: prepared.hasRelayableExecCompletion,
     suppressUnmarkedSourceReplies:
       resolveSourceReplyDeliveryMode({
@@ -232,12 +233,22 @@ async function prepareHeartbeatDispatchReply(
       log.warn("heartbeat: scratch update ignored because no monitor job exists");
     } else {
       try {
-        const written = writeCronJobScratch({
-          storePath: resolveCronJobsStorePathFromConfig(cfg),
-          jobId: preflight.scratchJobId,
-          content: scratch,
-          expectedRevision: preflight.scratchRevision ?? 0,
-        });
+        const owner = runState.agentTurnOwner;
+        const written = await writeCronJobScratch(
+          {
+            storePath: resolveCronJobsStorePathFromConfig(cfg),
+            jobId: preflight.scratchJobId,
+            content: scratch,
+            expectedRevision: preflight.scratchRevision ?? 0,
+          },
+          {
+            assertCurrent() {
+              if (runState.agentTurnOwner !== owner || resolveReplyOperationAbortReason(owner)) {
+                throw new Error("Heartbeat scratch writer is no longer current");
+              }
+            },
+          },
+        );
         if (!written.ok) {
           log.warn("heartbeat: scratch update lost a concurrent revision race");
         }

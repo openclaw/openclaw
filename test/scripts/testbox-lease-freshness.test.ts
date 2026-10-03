@@ -47,6 +47,18 @@ describe("Testbox lease freshness", () => {
     expect(existsSync(fixture.statePath)).toBe(false);
   });
 
+  it.each([undefined, "invalid-sha"])("rejects incomplete allocation HEAD %s", (headSha) => {
+    const fixture = createLeaseFixture();
+    fixture.allocate();
+    const prepared = fixture.reuse();
+    const receipt = JSON.parse(readFileSync(fixture.statePath, "utf8"));
+    const invalid = JSON.stringify({ ...receipt, headSha });
+    writeFileSync(fixture.statePath, invalid);
+    expect(() => fixture.reuse()).toThrow("headSha");
+    expect(() => prepared?.assertCurrent()).toThrow("headSha");
+    expect(readFileSync(fixture.statePath, "utf8")).toBe(invalid);
+  });
+
   it("records and reuses a lease with more than a buffer of source deletions", () => {
     const fixture = createLeaseFixture();
     const blob = fixture.git(["hash-object", "-w", "--stdin"], "");
@@ -106,36 +118,46 @@ describe("Testbox lease freshness", () => {
     }
   });
 
-  it.each([
-    "headSha",
-    "baseSha",
-    "dependencyDigest",
-    "environmentDigest",
-    "workflow",
-    "job",
-    "ref",
-  ])("rejects recorded leases after %s changes", (field) => {
+  it.each(["baseSha", "dependencyDigest", "environmentDigest", "workflow", "job", "ref"])(
+    "rejects recorded leases after %s changes",
+    (field) => {
+      const fixture = createLeaseFixture();
+      const prepared = fixture.allocate();
+      expect(prepared).not.toBeNull();
+      const saved = readFileSync(fixture.statePath, "utf8");
+      let args: string[] = [];
+      if (field === "baseSha") {
+        fixture.advanceBase();
+      } else if (field === "dependencyDigest") {
+        writeFileSync(join(fixture.root, "package.json"), '{"name":"changed"}\n');
+      } else if (field === "environmentDigest") {
+        writeFileSync(join(fixture.root, ".node-version"), "26.8.1\n");
+      } else {
+        args = [`--blacksmith-${field}`, "changed"];
+      }
+      expect(() => fixture.reuse(args)).toThrow(field);
+      expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
+    },
+  );
+
+  it("reuses prepared leases across source commits without rewriting allocation provenance", () => {
     const fixture = createLeaseFixture();
-    const prepared = fixture.allocate();
-    expect(prepared).not.toBeNull();
+    const allocation = fixture.allocate();
     const saved = readFileSync(fixture.statePath, "utf8");
-    let args: string[] = [];
-    if (field === "headSha") {
-      fixture.advanceHead();
-      expect(fixture.git(["rev-parse", "refs/remotes/origin/main"])).toBe(
-        prepared?.current.baseSha,
-      );
-    } else if (field === "baseSha") {
-      fixture.advanceBase();
-    } else if (field === "dependencyDigest") {
-      writeFileSync(join(fixture.root, "package.json"), '{"name":"changed"}\n');
-    } else if (field === "environmentDigest") {
-      writeFileSync(join(fixture.root, ".node-version"), "26.8.1\n");
-    } else {
-      args = [`--blacksmith-${field}`, "changed"];
+    for (const changedSource of [false, true]) {
+      if (changedSource) {
+        writeFileSync(join(fixture.root, "source.ts"), "export const value = 2;\n");
+        fixture.git(["add", "source.ts"]);
+      }
+      const head = fixture.advanceHead();
+      const reused = fixture.reuse();
+      expect(reused?.current.headSha).toBe(head);
+      expect(reused?.current.baseSha).toBe(allocation?.current.baseSha);
+      expect(reused?.attribution.headSha).toBe(head);
+      expect(() => reused?.assertCurrent()).not.toThrow();
+      recordTestboxLeaseFreshness(reused);
+      expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
     }
-    expect(() => fixture.reuse(args)).toThrow(field);
-    expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
   });
 
   it.each([
@@ -366,8 +388,8 @@ describe("Testbox lease freshness", () => {
     const fixture = createLeaseFixture();
     fixture.allocate();
     const saved = readFileSync(fixture.statePath, "utf8");
-    fixture.advanceHead();
-    expect(() => fixture.reuse([], { OPENCLAW_TESTBOX_ALLOW_STALE: "1" })).toThrow("headSha");
+    fixture.advanceBase();
+    expect(() => fixture.reuse([], { OPENCLAW_TESTBOX_ALLOW_STALE: "1" })).toThrow("baseSha");
     expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
   });
 });

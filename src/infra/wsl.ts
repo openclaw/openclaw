@@ -5,11 +5,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 
 let wslCached: boolean | null = null;
 
-/** Clears the cached async WSL detection result between isolated tests. */
-export function resetWSLStateForTests(): void {
-  wslCached = null;
-}
-
 /** Detects WSL from environment variables without touching the filesystem. */
 export function isWSLEnv(env: Record<string, string | undefined> = process.env): boolean {
   return Boolean(env.WSL_INTEROP || env.WSL_DISTRO_NAME || env.WSLENV);
@@ -18,7 +13,7 @@ export function isWSLEnv(env: Record<string, string | undefined> = process.env):
 /**
  * Synchronously detects WSL from env vars first, then `/proc/version`.
  */
-export function isWSLSync(): boolean {
+function isWSLSync(): boolean {
   if (process.platform !== "linux") {
     return false;
   }

@@ -24,6 +24,7 @@ import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import type { createAgentTurnService } from "../src/gateway/agent-turn/agent-turn-service.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
+import { createDeferredCore } from "../src/shared/deferred.ts";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import {
   summarizeMockInferenceRequest,
@@ -2161,34 +2162,21 @@ async function runGatewaySample(
         }
       }
       const historyClients = await concurrently(
-        Array.from({ length: options.historyClients }, async () => {
-          const historyClient = await connectGateway(port, setupDeadlineAt, protocolVersion, false);
-          ownClient(historyClient);
-          return historyClient;
-        }),
+        Array.from({ length: options.historyClients }, async () =>
+          ownClient(await connectGateway(port, setupDeadlineAt, protocolVersion, false)),
+        ),
       );
       const sessionUpdateClients = await concurrently(
         Array.from(
           { length: options.sessionUpdates > 0 ? options.sessionUpdateClients : 0 },
-          async () => {
-            const updateClient = await connectGateway(
-              port,
-              setupDeadlineAt,
-              protocolVersion,
-              false,
-            );
-            ownClient(updateClient);
-            return updateClient;
-          },
+          async () =>
+            ownClient(await connectGateway(port, setupDeadlineAt, protocolVersion, false)),
         ),
       );
       const subscriptionProbeClient =
         options.subscribers > 0
-          ? await connectGateway(port, setupDeadlineAt, protocolVersion, false)
+          ? ownClient(await connectGateway(port, setupDeadlineAt, protocolVersion, false))
           : undefined;
-      if (subscriptionProbeClient) {
-        ownClient(subscriptionProbeClient);
-      }
       if (!live) {
         mockCheckpoints.push(await readMockRequests(mockPort, setupDeadlineAt));
       }
@@ -2272,10 +2260,7 @@ async function runGatewaySample(
       let browserDone = !browserProbe;
       const workloadDone = () => probesStopped || (turnsDone && updatesDone && browserDone);
       let startedTurnCount = 0;
-      let resolveAllTurnsStarted!: () => void;
-      const allTurnsStarted = new Promise<void>((resolve) => {
-        resolveAllTurnsStarted = resolve;
-      });
+      const { promise: allTurnsStarted, resolve: resolveAllTurnsStarted } = createDeferredCore();
       if (!live) {
         providerBeforeLoad = readProviderRequestLog(requestLogPath).length;
       }

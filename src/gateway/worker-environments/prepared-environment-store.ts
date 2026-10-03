@@ -21,7 +21,7 @@ import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { find as findPlacement } from "./placement-row-codec.js";
 import { parseWorkerEnvironmentState } from "./state.js";
 import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
-import type { WorkerEnvironmentMutationMethods } from "./store-worker-contract.js";
+import type { WorkerEnvironmentMutationMethods } from "./store.types.js";
 
 type PreparationRow = Pick<
   Selectable<WorkerEnvironments>,

@@ -75,10 +75,17 @@ is enabled, that `plugins.allow` includes it when an allowlist is
 configured, and that any custom `appServer.command`, `url`, `authToken`, or
 headers are valid.
 
+**An app-server message cannot be parsed:** OpenClaw recovers raw newlines inside
+otherwise valid JSON strings. Invalid escapes or unescaped control characters
+produce a redacted warning, then decoding resumes with the next message on both
+Node and Bun. These invalid fragments do not consume the following valid message.
+
 **The resident catalog reports a spawn failure:** a missing executable
 (`ENOENT`), missing execute permission (`EACCES`), or incompatible CPU
 (`EBADARCH`, sometimes shown as macOS errno `-86`) stops that catalog's
-automatic retries and records one advisory. Repair the installation, then
+automatic retries and records one advisory. This includes native launch errors
+whose diagnostics arrive after the managed launcher exits during registration
+or initialization, on both Node and Bun. Repair the installation, then
 restart the Gateway to retry. Unrelated configuration reloads do not retry the
 failed executable. Disabling the
 plugin through config reload retires its catalog refresh loop.

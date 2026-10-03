@@ -52,7 +52,7 @@ function activationValueFingerprint(value: unknown): string {
   return fingerprint;
 }
 
-function activationConfigFingerprint(config: OpenClawConfig): string {
+export function activationConfigFingerprint(config: OpenClawConfig): string {
   // Auto-enable replaces the plugin policy but carries the immutable fleet/model trees.
   return hashStableJson(
     Object.fromEntries(

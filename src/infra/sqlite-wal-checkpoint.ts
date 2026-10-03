@@ -139,6 +139,8 @@ function checkpoint(database: DatabaseSync, mode: SqliteWalCheckpointMode) {
 }
 
 /** Offline maintenance must stop before compaction or recovery if truncation remains busy. */
+export class SqliteWalCheckpointBusyError extends Error {}
+
 export function truncateSqliteWal(database: DatabaseSync, sqlitePath: string): void {
   const row = checkpoint(database, "TRUNCATE");
   const busy = readFiniteSqliteNumber(row?.busy ?? (row ? Object.values(row)[0] : undefined));
@@ -146,7 +148,9 @@ export function truncateSqliteWal(database: DatabaseSync, sqlitePath: string): v
     throw new Error(`SQLite checkpoint returned an invalid result for ${sqlitePath}.`);
   }
   if (busy !== 0) {
-    throw new Error(`SQLite checkpoint remained busy for ${sqlitePath}. Stop OpenClaw and retry.`);
+    throw new SqliteWalCheckpointBusyError(
+      `SQLite checkpoint remained busy for ${sqlitePath}. Stop OpenClaw and retry.`,
+    );
   }
 }
 

@@ -3,6 +3,7 @@ import { expect, test, vi } from "vitest";
 import { getRegistryWorktree, listRegistryWorktrees } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
+import type { SessionEntry } from "../config/sessions.js";
 import {
   loadSessionEntry,
   onSessionIdentityMutation,
@@ -36,54 +37,130 @@ const { createSessionStoreDir } = setupSessionCreateTestHarness(async (makeTempD
   gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
 });
 
-test.each([false, true])(
-  "sessions.create atomically persists trusted visible-spawn tool policy with required parent=%s",
-  async (required) => {
-    const { storePath } = await createSessionStoreDir();
-    const parentSessionKey = "agent:main:main";
-    const actor = { type: "human", source: "profile", id: "visible-spawn-creator" } as const;
-    await writeSessionStore({
-      entries: {
-        [parentSessionKey]: {
-          ...sessionStoreEntry("sess-visible-spawn-parent"),
-          createdVia: "operator",
-          createdActor: actor,
-          ...(required ? { sandbox: "required" } : {}),
-        },
-      },
-    });
+type CreatedSessionPayload = { key?: string; entry?: SessionEntry };
 
-    const created = await directSessionReq<{
-      key?: string;
-      entry?: {
-        label?: string;
-        spawnedBy?: string;
-        completionOwnerSessionKey?: string;
-        parentSessionKey?: string;
-        spawnDepth?: number;
-        inheritedToolPolicyVersion?: number;
-        inheritedToolAllow?: string[];
-        inheritedToolDeny?: string[];
-      };
-    }>(
-      "sessions.create",
-      {
-        agentId: "main",
-        label: "Restricted visible child",
-        parentSessionKey,
-        spawnDepth: 1,
+async function holdSessionWriter(storePath: string) {
+  const writerEntered = createDeferredCore();
+  const releaseWriter = createDeferredCore();
+  const heldWriter = runExclusiveSqliteSessionWrite(
+    resolveSqliteStoreScope(storePath, { agentId: "main" }),
+    async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+    },
+    "session.transcript.batch",
+  );
+  await writerEntered.promise;
+  return { releaseWriter, heldWriter };
+}
+
+test("sessions.create atomically persists trusted visible-spawn tool policy with required parent", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const parentSessionKey = "agent:main:main";
+  const actor = { type: "human", source: "profile", id: "visible-spawn-creator" } as const;
+  await writeSessionStore({
+    entries: {
+      [parentSessionKey]: {
+        ...sessionStoreEntry("sess-visible-spawn-parent"),
+        createdVia: "operator",
+        createdActor: actor,
+        sandbox: "required",
       },
-      {
-        client: {
-          connect: { scopes: ["operator.write"] },
-          internal: {
-            syntheticClient: true,
-            operatorRoleActor: { kind: "system" },
-            sessionCreation: {
-              via: "spawn",
-              actor: { type: "agent", id: "main" },
-              requesterSessionKey: parentSessionKey,
-              completionOwnerSessionKey: "agent:main:discord:direct:alice",
+    },
+  });
+
+  const created = await directSessionReq<CreatedSessionPayload>(
+    "sessions.create",
+    {
+      agentId: "main",
+      label: "Restricted visible child",
+      parentSessionKey,
+      spawnDepth: 1,
+    },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          syntheticClient: true,
+          operatorRoleActor: { kind: "system" },
+          sessionCreation: {
+            via: "spawn",
+            actor: { type: "agent", id: "main" },
+            requesterSessionKey: parentSessionKey,
+            completionOwnerSessionKey: "agent:main:discord:direct:alice",
+            inheritedToolPolicy: {
+              version: 1,
+              allow: ["read", "sessions_spawn"],
+              deny: ["exec"],
+            },
+          },
+        },
+      } as never,
+    },
+  );
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+  expect(created.payload?.entry).toMatchObject({
+    label: "Restricted visible child",
+    spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:alice",
+    parentSessionKey,
+    spawnDepth: 1,
+    inheritedToolPolicyVersion: 1,
+    inheritedToolAllow: ["read", "sessions_spawn"],
+    inheritedToolDeny: ["exec"],
+  });
+  const key = requireNonEmptyString(created.payload?.key, "visible child key");
+  const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+  expect(child).toMatchObject({
+    spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:alice",
+    inheritedToolPolicyVersion: 1,
+    inheritedToolAllow: ["read", "sessions_spawn"],
+    inheritedToolDeny: ["exec"],
+    createdActor: actor,
+  });
+  expect(child?.sandbox).toBe("required");
+});
+
+test("sessions.create persists trusted agent-runtime spawn permissions", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const parentSessionKey = "agent:main:main";
+  const actor = { type: "human", source: "profile", id: "runtime-spawn-creator" } as const;
+  await writeSessionStore({
+    entries: {
+      [parentSessionKey]: {
+        ...sessionStoreEntry("sess-runtime-spawn-parent"),
+        createdVia: "operator",
+        createdActor: actor,
+      },
+    },
+  });
+
+  const created = await directSessionReq<CreatedSessionPayload>(
+    "sessions.create",
+    {
+      agentId: "main",
+      label: "Runtime visible child",
+      parentSessionKey,
+      spawnDepth: 1,
+    },
+    {
+      context: {
+        // This fixture starts after authentication; token transport has its own tests.
+        validateAgentRuntimeApprovalAuthority: () => true,
+      },
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: parentSessionKey,
+            sessionSpawnContext: {
+              completionOwnerSessionKey: "agent:main:discord:direct:bob",
+              inheritedPermissionMode: "full",
               inheritedToolPolicy: {
                 version: 1,
                 allow: ["read", "sessions_spawn"],
@@ -91,121 +168,33 @@ test.each([false, true])(
               },
             },
           },
-        } as never,
-      },
-    );
-
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
-    expect(created.payload?.entry).toMatchObject({
-      label: "Restricted visible child",
-      spawnedBy: parentSessionKey,
-      completionOwnerSessionKey: "agent:main:discord:direct:alice",
-      parentSessionKey,
-      spawnDepth: 1,
-      inheritedToolPolicyVersion: 1,
-      inheritedToolAllow: ["read", "sessions_spawn"],
-      inheritedToolDeny: ["exec"],
-    });
-    const key = requireNonEmptyString(created.payload?.key, "visible child key");
-    const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
-    expect(child).toMatchObject({
-      spawnedBy: parentSessionKey,
-      completionOwnerSessionKey: "agent:main:discord:direct:alice",
-      inheritedToolPolicyVersion: 1,
-      inheritedToolAllow: ["read", "sessions_spawn"],
-      inheritedToolDeny: ["exec"],
-      createdActor: required ? actor : { type: "agent", id: "main" },
-    });
-    expect(child?.sandbox).toBe(required ? "required" : undefined);
-  },
-);
-
-test.each([false, true])(
-  "sessions.create persists trusted agent-runtime spawn permissions with required parent=%s",
-  async (required) => {
-    const { storePath } = await createSessionStoreDir();
-    const parentSessionKey = "agent:main:main";
-    const actor = { type: "human", source: "profile", id: "runtime-spawn-creator" } as const;
-    await writeSessionStore({
-      entries: {
-        [parentSessionKey]: {
-          ...sessionStoreEntry("sess-runtime-spawn-parent"),
-          createdVia: "operator",
-          createdActor: actor,
-          ...(required ? { sandbox: "required" } : {}),
         },
-      },
-    });
+      } as never,
+    },
+  );
 
-    const created = await directSessionReq<{
-      key?: string;
-      entry?: {
-        createdVia?: string;
-        createdActor?: unknown;
-        spawnedBy?: string;
-        completionOwnerSessionKey?: string;
-        inheritedToolAllow?: string[];
-        inheritedToolDeny?: string[];
-      };
-    }>(
-      "sessions.create",
-      {
-        agentId: "main",
-        label: "Runtime visible child",
-        parentSessionKey,
-        spawnDepth: 1,
-      },
-      {
-        context: {
-          // This fixture starts after authentication; token transport has its own tests.
-          validateAgentRuntimeApprovalAuthority: () => true,
-        },
-        client: {
-          connect: { scopes: ["operator.write"] },
-          internal: {
-            agentRuntimeIdentity: {
-              kind: "agentRuntime",
-              agentId: "main",
-              sessionKey: parentSessionKey,
-              sessionSpawnContext: {
-                completionOwnerSessionKey: "agent:main:discord:direct:bob",
-                inheritedPermissionMode: "full",
-                inheritedToolPolicy: {
-                  version: 1,
-                  allow: ["read", "sessions_spawn"],
-                  deny: ["exec"],
-                },
-              },
-            },
-          },
-        } as never,
-      },
-    );
-
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
-    expect(created.payload?.entry).toMatchObject({
-      createdVia: "spawn",
-      createdActor: required ? actor : { type: "agent", id: "main" },
-      spawnedBy: parentSessionKey,
-      completionOwnerSessionKey: "agent:main:discord:direct:bob",
-      permissionMode: "full",
-      inheritedToolAllow: ["read", "sessions_spawn"],
-      inheritedToolDeny: ["exec"],
-    });
-    const key = requireNonEmptyString(created.payload?.key, "runtime visible child key");
-    const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
-    expect(child).toMatchObject({
-      spawnedBy: parentSessionKey,
-      completionOwnerSessionKey: "agent:main:discord:direct:bob",
-      permissionMode: "full",
-      inheritedToolPolicyVersion: 1,
-      createdActor: required ? actor : { type: "agent", id: "main" },
-    });
-    expect(child?.sandbox).toBe(required ? "required" : undefined);
-  },
-);
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+  expect(created.payload?.entry).toMatchObject({
+    createdVia: "spawn",
+    createdActor: { type: "agent", id: "main" },
+    spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:bob",
+    permissionMode: "full",
+    inheritedToolAllow: ["read", "sessions_spawn"],
+    inheritedToolDeny: ["exec"],
+  });
+  const key = requireNonEmptyString(created.payload?.key, "runtime visible child key");
+  const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+  expect(child).toMatchObject({
+    spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:bob",
+    permissionMode: "full",
+    inheritedToolPolicyVersion: 1,
+    createdActor: { type: "agent", id: "main" },
+  });
+  expect(child?.sandbox).toBeUndefined();
+});
 
 test("sessions.create rejects a replaced required spawn parent before child creation", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -267,17 +256,7 @@ test("sessions.create commits no session after delegated authority closes", asyn
   const sessionKey = "agent:main:dashboard:authority-race";
   let authorityCurrent = true;
   const firstGuard = createDeferredCore();
-  const writerEntered = createDeferredCore();
-  const releaseWriter = createDeferredCore();
-  const heldWriter = runExclusiveSqliteSessionWrite(
-    resolveSqliteStoreScope(storePath, { agentId: "main" }),
-    async () => {
-      writerEntered.resolve();
-      await releaseWriter.promise;
-    },
-    "session.transcript.batch",
-  );
-  await writerEntered.promise;
+  const { releaseWriter, heldWriter } = await holdSessionWriter(storePath);
 
   const creating = directSessionReq(
     "sessions.create",
@@ -325,18 +304,7 @@ test("sessions.create commits no child after its bound Gateway is replaced", asy
   const replacement = {};
   let current = admitted;
   const firstGuard = createDeferredCore();
-  const writerEntered = createDeferredCore();
-  const releaseWriter = createDeferredCore();
-  const resolvedStore = resolveSqliteStoreScope(storePath, { agentId: "main" });
-  const heldWriter = runExclusiveSqliteSessionWrite(
-    resolvedStore,
-    async () => {
-      writerEntered.resolve();
-      await releaseWriter.promise;
-    },
-    "session.transcript.batch",
-  );
-  await writerEntered.promise;
+  const { releaseWriter, heldWriter } = await holdSessionWriter(storePath);
   const creating = directSessionReq(
     "sessions.create",
     { agentId: "main", key: sessionKey },
@@ -409,17 +377,7 @@ test("sessions.create commits no child after its worker turn closes", async () =
     owner: { kind: "worker", environmentId: "worker-environment", ownerEpoch: 7 },
   });
   const firstGuard = createDeferredCore();
-  const writerEntered = createDeferredCore();
-  const releaseWriter = createDeferredCore();
-  const heldWriter = runExclusiveSqliteSessionWrite(
-    resolveSqliteStoreScope(storePath, { agentId: "main" }),
-    async () => {
-      writerEntered.resolve();
-      await releaseWriter.promise;
-    },
-    "session.transcript.batch",
-  );
-  await writerEntered.promise;
+  const { releaseWriter, heldWriter } = await holdSessionWriter(storePath);
   const creating = directSessionReq(
     "sessions.create",
     { agentId: "main", key: sessionKey },

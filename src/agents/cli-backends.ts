@@ -3,11 +3,6 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ContextEngineHostCapability } from "../context-engine/types.js";
-import type {
-  CliBackendConfig,
-  CliBackendRuntimeArtifactPolicy,
-} from "../plugins/cli-backend.types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import {
   resolvePluginSetupCliBackend,
@@ -15,58 +10,52 @@ import {
 } from "../plugins/setup-registry.js";
 import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime.js";
 import type {
-  CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
   CliBundleMcpMode,
   CliBackendPlugin,
-  CliBackendNativeToolMode,
-  CliBackendSideQuestionToolMode,
-  CliBackendToolAvailabilityEnforcement,
-  PluginTextTransforms,
 } from "../plugins/types.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
 
-type CliBackendsDeps = {
-  resolvePluginSetupCliBackend: typeof resolvePluginSetupCliBackend;
-  resolvePluginSetupRegistry: typeof resolvePluginSetupRegistry;
-  resolveRuntimeCliBackends: typeof resolveRuntimeCliBackends;
-};
-
-const defaultCliBackendsDeps: CliBackendsDeps = {
+const defaultCliBackendsDeps = {
   resolvePluginSetupCliBackend,
   resolvePluginSetupRegistry,
   resolveRuntimeCliBackends,
 };
 
+type CliBackendsDeps = typeof defaultCliBackendsDeps;
+
 let cliBackendsDeps: CliBackendsDeps = defaultCliBackendsDeps;
 
 /** Fully merged CLI backend definition used by agent runner execution. */
-export type ResolvedCliBackend = {
-  id: string;
-  modelProvider?: string;
-  config: CliBackendConfig;
+export type ResolvedCliBackend = Pick<
+  CliBackendPlugin,
+  | "id"
+  | "modelProvider"
+  | "config"
+  | "bundleMcpMode"
+  | "transformSystemPrompt"
+  | "textTransforms"
+  | "defaultAuthProfileId"
+  | "authEpochMode"
+  | "autoSelectAuthProfile"
+  | "contextEngineHostCapabilities"
+  | "ownsNativeCompaction"
+  | "manualCompaction"
+  | "prepareExecution"
+  | "resolveExecutionArgs"
+  | "resolveModelId"
+  | "parseJsonlEvent"
+  | "parseJsonlLifecycleEvent"
+  | "toolAvailabilityEnforcement"
+  | "isolatesInstructionsWithExactTools"
+  | "projectNativeToolAuthority"
+  | "nativeToolMode"
+  | "hostOwnedTools"
+  | "sideQuestionToolMode"
+  | "runtimeArtifact"
+> & {
   bundleMcp: boolean;
-  bundleMcpMode?: CliBundleMcpMode;
   pluginId?: string;
-  transformSystemPrompt?: CliBackendPlugin["transformSystemPrompt"];
-  textTransforms?: PluginTextTransforms;
-  defaultAuthProfileId?: string;
-  authEpochMode?: CliBackendAuthEpochMode;
-  autoSelectAuthProfile?: boolean;
-  contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
-  ownsNativeCompaction?: boolean;
-  manualCompaction?: CliBackendPlugin["manualCompaction"];
-  prepareExecution?: CliBackendPlugin["prepareExecution"];
-  resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
-  resolveModelId?: CliBackendPlugin["resolveModelId"];
-  parseJsonlEvent?: CliBackendPlugin["parseJsonlEvent"];
-  parseJsonlLifecycleEvent?: CliBackendPlugin["parseJsonlLifecycleEvent"];
-  toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
-  isolatesInstructionsWithExactTools?: true;
-  projectNativeToolAuthority?: CliBackendPlugin["projectNativeToolAuthority"];
-  nativeToolMode?: CliBackendNativeToolMode;
-  sideQuestionToolMode?: CliBackendSideQuestionToolMode;
-  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
 };
 
 type ResolvedCliBackendLiveTest = {
@@ -273,6 +262,12 @@ export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendL
   };
 }
 
+/** Whether the backend can branch a native session at a recorded checkpoint. */
+export function cliBackendSupportsSessionFork(provider: string, cfg?: OpenClawConfig): boolean {
+  const config = resolveCliBackendConfig(provider, cfg)?.config;
+  return Boolean(config?.forkArg && config.resumeAtArg);
+}
+
 /** Resolves the executable CLI backend registered by its owning plugin. */
 export function resolveCliBackendConfig(
   provider: string,
@@ -326,6 +321,7 @@ export function resolveCliBackendConfig(
     isolatesInstructionsWithExactTools: backend.isolatesInstructionsWithExactTools,
     projectNativeToolAuthority: backend.projectNativeToolAuthority,
     nativeToolMode: backend.nativeToolMode,
+    hostOwnedTools: backend.hostOwnedTools,
     sideQuestionToolMode: backend.sideQuestionToolMode,
     runtimeArtifact: backend.runtimeArtifact,
   };

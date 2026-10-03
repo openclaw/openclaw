@@ -1,15 +1,14 @@
-// Control UI view renders the Apps & extensions promo page.
 import { html, nothing, type TemplateResult } from "lit";
 import type { RouteId } from "../../app-route-paths.ts";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
+import { brandIcons } from "../../components/brand-icons.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import "../../styles/apps.css";
 import "../../components/native-chrome-setup.ts";
-import { brandIcons } from "../about/brand-icons.ts";
+import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import { appsBrandIcons } from "./brand-icons.ts";
 
 registerAppsEnglish();
@@ -46,7 +45,8 @@ const externalCta = (href: string, labelKey: string): AppCardCta => ({
   href,
   labelKey,
 });
-const docsCta = (path: string) => externalCta(`https://docs.openclaw.ai${path}`, "appsPage.ctaDocs");
+const docsCta = (path: string) =>
+  externalCta(`https://docs.openclaw.ai${path}`, "appsPage.ctaDocs");
 
 const APP_SECTIONS: readonly AppSection[] = [
   {
@@ -59,7 +59,10 @@ const APP_SECTIONS: readonly AppSection[] = [
         icon: appsBrandIcons.apple,
         copyKey: "appsPage.cards.ios",
         ctas: [
-          externalCta("https://apps.apple.com/app/openclaw-ai-that-does-things/id6780396132", "appsPage.ctaAppStore"),
+          externalCta(
+            "https://apps.apple.com/app/openclaw-ai-that-does-things/id6780396132",
+            "appsPage.ctaAppStore",
+          ),
           docsCta("/platforms/ios"),
         ],
       },
@@ -69,7 +72,10 @@ const APP_SECTIONS: readonly AppSection[] = [
         icon: appsBrandIcons.android,
         copyKey: "appsPage.cards.android",
         ctas: [
-          externalCta("https://play.google.com/store/apps/details?id=ai.openclaw.app", "appsPage.ctaPlayStore"),
+          externalCta(
+            "https://play.google.com/store/apps/details?id=ai.openclaw.app",
+            "appsPage.ctaPlayStore",
+          ),
           docsCta("/platforms/android"),
         ],
       },
@@ -117,7 +123,10 @@ const APP_SECTIONS: readonly AppSection[] = [
         icon: appsBrandIcons.windows,
         copyKey: "appsPage.cards.windows",
         ctas: [
-          externalCta("https://github.com/openclaw/openclaw-windows-node/releases/latest", "appsPage.ctaDownload"),
+          externalCta(
+            "https://github.com/openclaw/openclaw-windows-node/releases/latest",
+            "appsPage.ctaDownload",
+          ),
           docsCta("/platforms/windows"),
         ],
       },
@@ -143,7 +152,10 @@ const APP_SECTIONS: readonly AppSection[] = [
         icon: appsBrandIcons.chrome,
         copyKey: "appsPage.cards.chrome",
         ctas: [
-          externalCta("https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig", "appsPage.ctaChromeWebStore"),
+          externalCta(
+            "https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig",
+            "appsPage.ctaChromeWebStore",
+          ),
           externalCta("https://docs.openclaw.ai/tools/chrome-extension", "appsPage.ctaSetupGuide"),
         ],
       },
@@ -161,15 +173,14 @@ const APP_SECTIONS: readonly AppSection[] = [
   },
 ];
 
-const COMMUNITY_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; labelKey: string }> =
-  [
-    {
-      href: COMMUNITY_DISCORD_URL,
-      icon: brandIcons.discord,
-      labelKey: "appsPage.linkDiscord",
-    },
-    { href: "https://docs.openclaw.ai", icon: icons.book, labelKey: "appsPage.linkDocs" },
-  ];
+const COMMUNITY_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; labelKey: string }> = [
+  {
+    href: COMMUNITY_DISCORD_URL,
+    icon: brandIcons.discord,
+    labelKey: "appsPage.linkDiscord",
+  },
+  { href: "https://docs.openclaw.ai", icon: icons.book, labelKey: "appsPage.linkDocs" },
+];
 
 function renderCta(cta: AppCardCta, index: number, props: AppsProps) {
   const className = index === 0 ? "apps-card__cta apps-card__cta--primary" : "apps-card__cta";

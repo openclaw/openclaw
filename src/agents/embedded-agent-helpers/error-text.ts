@@ -19,6 +19,7 @@ import {
   renderAssistantRequestFailureCopy,
   renderFormatErrorCopy,
 } from "../failover/assistant-request-failure-copy.js";
+import { failoverReasonFromClassification } from "../failover/classification-rules.js";
 import {
   classifyFailoverSignal,
   isProviderCompletedErrorFinishReasonMessage,
@@ -44,29 +45,30 @@ const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
 export const SYNTHESIZED_TIMEOUT_ERROR_TEXT = "LLM request timed out.";
 const MODEL_NOT_FOUND_USER_TEXT =
-  "The selected model was not found by the provider. Check the model id or choose a different model.";
+  "This model was not found. Choose another model in the Control UI.";
 const RUNTIME_FAILURE_COPY: Partial<
   Record<ReturnType<typeof classifyProviderRuntimeFailureKind>, string>
 > = {
-  auth_refresh: "Authentication refresh failed. Re-authenticate this provider and try again.",
-  refresh_contention:
-    "Authentication refresh is already in progress elsewhere and this attempt timed out waiting for it. Retry in a moment.",
+  auth_refresh:
+    "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+  refresh_contention: "Another sign-in is still in progress. Wait a moment, then try again.",
   refresh_timeout:
-    "Authentication refresh timed out before the provider completed. Retry in a moment; re-authenticate only if it keeps failing.",
+    "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the Control UI.",
   callback_timeout:
-    "Browser OAuth did not complete before manual fallback kicked in. Retry the login flow and paste the redirect URL if prompted.",
+    "Sign-in wasn't completed. Try signing in again. If asked for a link, paste the full link from your browser.",
   callback_validation:
-    "Browser OAuth returned an invalid or incomplete callback. Retry the login flow and make sure the full redirect URL is pasted if prompted.",
+    "The sign-in link wasn't accepted. Try signing in again. If asked for a link, paste the full link from your browser.",
   auth_scope:
-    "Authentication is missing the required OpenAI ChatGPT scopes. Re-run OpenAI login and try again.",
+    "This login doesn't have the access OpenClaw needs. Sign in again under Models in the Control UI.",
   auth_html:
-    "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
+    "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
   auth_invalid_token: AUTH_INVALID_TOKEN_USER_TEXT,
   upstream_html:
-    "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
-  proxy: "LLM request failed: proxy or tunnel configuration blocked the provider request.",
+    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+  proxy:
+    "Couldn't connect to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
   tls_certificate:
-    "LLM request failed: TLS certificate validation rejected the provider endpoint. Check the endpoint hostname, proxy, and local certificate trust.",
+    "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
   model_not_found: MODEL_NOT_FOUND_USER_TEXT,
 };
 const TOOL_CALL_INPUT_MISSING_RE =
@@ -95,12 +97,7 @@ function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErro
   return {
     provider: opts?.provider ?? msg.provider ?? opts?.providerOwner?.id,
     model: opts?.model ?? msg.model,
-    reason:
-      classification?.kind === "reason"
-        ? classification.reason
-        : classification
-          ? ("context_overflow" as const)
-          : null,
+    reason: failoverReasonFromClassification(classification),
     status: signal.status ?? extractErrorHttpStatus(signal.message ?? "")?.code,
     providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(signal, { providerPlugin }),
     storageFailure: classifyGatewayStorageFailure(msg),

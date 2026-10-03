@@ -13,7 +13,10 @@ import {
   readSessionTranscriptFailureRunId,
   readSessionTranscriptRunId,
 } from "../../sessions/transcript-events.js";
-import { isVisibleTranscriptRecord } from "../../sessions/transcript-visible-record.js";
+import {
+  isVisibleAssistantResultEventForRun,
+  isVisibleTranscriptRecord,
+} from "../../sessions/transcript-visible-record.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -223,8 +226,6 @@ async function findArchivedFinal(
   sessionId: string,
   runId: string,
 ): Promise<TranscriptArchiveReadResult> {
-  const { isVisibleAssistantResultEventForRun } =
-    await import("../../sessions/transcript-visible-record.js");
   const result: TranscriptArchiveReadResult = {};
   await scanArchivedTranscript(bytes, compressed, sessionId, (event) => {
     if (isVisibleAssistantResultEventForRun(event, runId)) {

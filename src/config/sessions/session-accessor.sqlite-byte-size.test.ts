@@ -13,7 +13,6 @@ import {
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import {
   readRecentSessionTranscriptMessageEvents,
-  readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptVisibleMessageDeltaCore,
 } from "./session-accessor.sqlite-active-events.js";
@@ -23,6 +22,7 @@ import {
   readRecentSessionTranscriptHistoryEvents,
   readTranscriptDisplayDelta,
 } from "./session-accessor.sqlite-history-events.js";
+import { readActiveTranscriptStats } from "./session-accessor.sqlite-history.test-support.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import type { SessionTranscriptRuntimeScope } from "./session-accessor.types.js";
 import {
@@ -43,7 +43,7 @@ const readers: Array<
   [string, (scope: SessionTranscriptReadScope & { agentId: string }) => unknown]
 > = [
   ["usage stats", readTranscriptStatsSync],
-  ["active stats", readSessionTranscriptActiveStats],
+  ["active stats", readActiveTranscriptStats],
   [
     "rebuild preflight",
     (scope) =>

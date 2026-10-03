@@ -3,44 +3,20 @@
  * Combines provider plugin replay hooks with core transport fallbacks so chat
  * history sanitization, tool IDs, thinking blocks, and turn validation align.
  */
-import { bindsClaudeThinkingPrefix } from "@openclaw/llm-core";
+import { isDirectAnthropicModel } from "@openclaw/ai/internal/anthropic";
+import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import type { ProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
-import { shouldDropClaudeThinkingBlocks } from "../plugins/provider-replay-helpers.js";
+import { buildAnthropicReplayPolicyForModel } from "../plugins/provider-replay-helpers.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ProviderReplayPolicy } from "../plugins/types.js";
 import { isAnthropicApi } from "./embedded-agent-helpers/anthropic-api.js";
 import { isGoogleModelApi } from "./embedded-agent-helpers/google.js";
-import type { ToolCallIdMode } from "./tool-call-id.js";
-
-/** Scope of transcript content sanitization before provider replay. */
-type TranscriptSanitizeMode = "full" | "images-only";
-
-/** Effective replay policy applied before sending transcript history to a provider. */
-export type TranscriptPolicy = {
-  sanitizeMode: TranscriptSanitizeMode;
-  sanitizeToolCallIds: boolean;
-  toolCallIdMode?: ToolCallIdMode;
-  duplicateToolCallIdStyle?: "openai";
-  preserveNativeAnthropicToolUseIds: boolean;
-  repairToolUseResultPairing: boolean;
-  preserveSignatures: boolean;
-  appendOnlyRuntimeContext?: boolean;
-  sanitizeThoughtSignatures?: {
-    allowBase64Only?: boolean;
-    includeCamelCase?: boolean;
-  };
-  dropThinkingBlocks: boolean;
-  dropReasoningFromHistory?: boolean;
-  applyGoogleTurnOrdering: boolean;
-  validateGeminiTurns: boolean;
-  validateAnthropicTurns: boolean;
-  allowSyntheticToolResults: boolean;
-};
+import type { TranscriptPolicy } from "./transcript-policy.types.js";
 
 const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   sanitizeMode: "images-only",
@@ -51,6 +27,7 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   repairToolUseResultPairing: true,
   preserveSignatures: false,
   appendOnlyRuntimeContext: false,
+  inHistorySystemUpdates: false,
   sanitizeThoughtSignatures: undefined,
   dropThinkingBlocks: false,
   dropReasoningFromHistory: false,
@@ -96,46 +73,33 @@ function buildUnownedProviderTransportReplayFallback(params: {
   modelApi?: string | null;
   modelId?: string | null;
   model?: ProviderRuntimeModel;
+  inHistorySystemUpdates: boolean;
 }): ProviderReplayPolicy | undefined {
   const isGoogle = isGoogleModelApi(params.modelApi);
-  const isAnthropic = isAnthropicApi(params.modelApi);
+  if (isAnthropicApi(params.modelApi)) {
+    return {
+      ...buildAnthropicReplayPolicyForModel(
+        params.modelId ?? undefined,
+        params.model,
+        params.inHistorySystemUpdates,
+      ),
+      ...(modelDisablesReasoningEffort(params.model) ? { dropThinkingBlocks: true } : {}),
+    };
+  }
   const isStrictOpenAiCompatible = params.modelApi === "openai-completions";
-  const requiresOpenAiCompatibleToolIdSanitization =
-    params.modelApi === "openai-completions" ||
-    params.modelApi === "openai-responses" ||
-    params.modelApi === "openai-chatgpt-responses" ||
-    params.modelApi === "azure-openai-responses";
+  const isOpenAiResponses = isOpenAiResponsesCompatibleApi(params.modelApi);
+  const requiresOpenAiCompatibleToolIdSanitization = isStrictOpenAiCompatible || isOpenAiResponses;
 
-  if (
-    !isGoogle &&
-    !isAnthropic &&
-    !isStrictOpenAiCompatible &&
-    !requiresOpenAiCompatibleToolIdSanitization
-  ) {
+  if (!isGoogle && !requiresOpenAiCompatibleToolIdSanitization) {
     return undefined;
   }
 
   const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
-  const isClaudeOpenAiResponses = isOpenAiResponsesCompatibleApi(params.modelApi)
-    ? isClaudeFamilyModelId(modelId)
-    : false;
+  const isClaudeOpenAiResponses = isOpenAiResponses && isClaudeFamilyModelId(modelId);
   return {
-    ...(isGoogle || isAnthropic ? { sanitizeMode: "full" as const } : {}),
-    ...(isGoogle || isAnthropic || requiresOpenAiCompatibleToolIdSanitization
-      ? {
-          sanitizeToolCallIds: true,
-          toolCallIdMode: "strict" as const,
-        }
-      : {}),
-    ...(isAnthropic
-      ? {
-          preserveSignatures: true,
-          appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({
-            id: modelId,
-            params: params.model?.params,
-          }),
-        }
-      : {}),
+    ...(isGoogle ? { sanitizeMode: "full" as const } : {}),
+    sanitizeToolCallIds: true,
+    toolCallIdMode: "strict",
     ...(isGoogle
       ? {
           sanitizeThoughtSignatures: {
@@ -144,23 +108,16 @@ function buildUnownedProviderTransportReplayFallback(params: {
           },
         }
       : {}),
-    ...(isAnthropic && shouldDropClaudeThinkingBlocks(modelId, params.model)
-      ? { dropThinkingBlocks: true }
-      : {}),
-    ...(isAnthropic && modelDisablesReasoningEffort(params.model)
-      ? { dropThinkingBlocks: true }
-      : {}),
     ...(isStrictOpenAiCompatible
       ? { dropReasoningFromHistory: !shouldPreserveReasoningContentReplay(params) }
       : {}),
-    ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
-    ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
-    ...(isAnthropic || isStrictOpenAiCompatible || isClaudeOpenAiResponses
+    ...(isGoogle || isStrictOpenAiCompatible
+      ? { applyAssistantFirstOrderingFix: true, validateGeminiTurns: true }
+      : {}),
+    ...(isStrictOpenAiCompatible || isClaudeOpenAiResponses
       ? { validateAnthropicTurns: true }
       : {}),
-    ...(isGoogle || isAnthropic || isOpenAiResponsesCompatibleApi(params.modelApi)
-      ? { allowSyntheticToolResults: true }
-      : {}),
+    ...(isGoogle || isOpenAiResponses ? { allowSyntheticToolResults: true } : {}),
   };
 }
 
@@ -205,34 +162,12 @@ function mergeTranscriptPolicy(
     return basePolicy;
   }
 
-  const merged = {
-    ...basePolicy,
-    ...(policy.sanitizeMode != null ? { sanitizeMode: policy.sanitizeMode } : {}),
-    ...(policy.toolCallIdMode ? { toolCallIdMode: policy.toolCallIdMode } : {}),
-    ...(policy.duplicateToolCallIdStyle
-      ? { duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle }
-      : {}),
-    ...(policy.sanitizeThoughtSignatures
-      ? { sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures }
-      : {}),
-    ...(typeof policy.applyAssistantFirstOrderingFix === "boolean"
-      ? { applyGoogleTurnOrdering: policy.applyAssistantFirstOrderingFix }
-      : {}),
-  };
-  for (const key of [
-    "sanitizeToolCallIds",
-    "preserveNativeAnthropicToolUseIds",
-    "repairToolUseResultPairing",
-    "preserveSignatures",
-    "appendOnlyRuntimeContext",
-    "dropThinkingBlocks",
-    "dropReasoningFromHistory",
-    "validateGeminiTurns",
-    "validateAnthropicTurns",
-    "allowSyntheticToolResults",
-  ] as const) {
-    if (typeof policy[key] === "boolean") {
-      merged[key] = policy[key];
+  const merged = { ...basePolicy };
+  for (const [key, value] of Object.entries(policy)) {
+    if (value != null) {
+      Object.assign(merged, {
+        [key === "applyAssistantFirstOrderingFix" ? "applyGoogleTurnOrdering" : key]: value,
+      });
     }
   }
   return merged;
@@ -258,9 +193,13 @@ function resolveTranscriptPolicyCacheKey(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  directApiKey?: boolean;
 }): string {
   return JSON.stringify({
     provider: params.provider,
+    directApiKey: params.directApiKey === true,
+    baseUrl:
+      params.model?.baseUrl?.trim() || (params.env ?? process.env).ANTHROPIC_BASE_URL?.trim() || "",
     modelApi: params.modelApi ?? "",
     modelId: params.modelId ?? "",
     canonicalModelId:
@@ -288,6 +227,7 @@ export function resolveTranscriptPolicy(params: {
   env?: NodeJS.ProcessEnv;
   model?: ProviderRuntimeModel;
   runtimeHandle?: ProviderRuntimePluginHandle;
+  directApiKey?: boolean;
 }): TranscriptPolicy {
   const provider = normalizeProviderId(params.provider ?? "");
   const cacheConfig = canCacheTranscriptPolicy(params) ? params.config : undefined;
@@ -319,6 +259,14 @@ export function resolveTranscriptPolicy(params: {
     modelId: params.modelId ?? "",
     modelApi: params.modelApi,
     model: params.model,
+    inHistorySystemUpdates:
+      params.directApiKey === true &&
+      params.modelApi === "anthropic-messages" &&
+      isDirectAnthropicModel({ provider, baseUrl: params.model?.baseUrl }, params.env) &&
+      supportsClaudeInHistorySystemMessages({
+        id: params.modelId ?? undefined,
+        params: params.model?.params,
+      }),
   };
 
   // Once a provider adopts the replay-policy hook, replay policy should come
@@ -331,8 +279,13 @@ export function resolveTranscriptPolicy(params: {
           modelApi: params.modelApi,
           modelId: params.modelId,
           model: params.model,
+          inHistorySystemUpdates: context.inHistorySystemUpdates,
         }),
       );
+  if (policy.inHistorySystemUpdates) {
+    policy.inHistorySystemUpdates = context.inHistorySystemUpdates;
+    policy.appendOnlyRuntimeContext ||= context.inHistorySystemUpdates;
+  }
   if (cacheConfig && cacheKey) {
     let configCache = transcriptPolicyCache.get(cacheConfig);
     if (!configCache) {

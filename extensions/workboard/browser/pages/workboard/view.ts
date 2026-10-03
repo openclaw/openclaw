@@ -42,7 +42,7 @@ import {
   renderPriorityIcon,
   dispatchSummaryMessage,
   refreshStatusLabel,
-  matchesFilter,
+  matchesCardQuery,
   type WorkboardProps,
 } from "./view-helpers.ts";
 import { workboardPopoverRef } from "./view-popover.ts";
@@ -69,7 +69,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
   const scopedCards = state.cards
     .filter((card) => state.showArchived || !card.metadata?.archivedAt)
     .filter((card) => matchesWorkboardCardScope(props, card))
-    .filter((card) => matchesFilter(card, { query: state.query, priority: "all" }));
+    .filter((card) => matchesCardQuery(card, state.query));
   const now = Date.now();
   const cardsForFilters = (ignore?: "status" | "priority" | "attention") =>
     filterWorkboardCards({
@@ -181,6 +181,18 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
       },
     });
   }
+  const closeSearch = (event: Event, restoreFocus: boolean) => {
+    if (!(event.currentTarget instanceof HTMLElement)) {
+      return;
+    }
+    const control = event.currentTarget.closest(".workboard-search-control");
+    state.query = "";
+    state.searchOpen = false;
+    props.onRequestUpdate?.();
+    if (restoreFocus) {
+      queueMicrotask(() => control?.querySelector<HTMLButtonElement>("button")?.focus());
+    }
+  };
   const activeFilterCount = activeFilters.length;
   const hasActiveFilters = activeFilterCount > 0 || state.statusFilter.size > 0;
   const activeFiltering =
@@ -252,6 +264,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
         <header class="workboard-heading">
           ${props.heading}
           <div class="workboard-heading__actions settings-section__actions">
+            ${writable && props.onNewBoard ? html`<button class="btn workboard-new-board" type="button" @click=${props.onNewBoard}>${icons.plus}${t("workboard.newBoard")}</button>` : nothing}
             <span class="workboard-refresh-control" title=${refreshStatus || t("common.refresh")}>
               <button
                 class="btn btn--icon btn--ghost workboard-refresh ${
@@ -364,36 +377,14 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                           }
                           event.preventDefault();
                           event.stopPropagation();
-                          if (!(event.currentTarget instanceof HTMLElement)) {
-                            return;
-                          }
-                          const control = event.currentTarget.closest(".workboard-search-control");
-                          state.query = "";
-                          state.searchOpen = false;
-                          props.onRequestUpdate?.();
-                          queueMicrotask(() =>
-                            control?.querySelector<HTMLButtonElement>("button")?.focus(),
-                          );
+                          closeSearch(event, true);
                         }}
                       />
                       <button
                         class="btn btn--icon workboard-search__clear"
                         type="button"
                         aria-label=${t("workboard.closeSearch")}
-                        @click=${(event: MouseEvent) => {
-                          if (!(event.currentTarget instanceof HTMLElement)) {
-                            return;
-                          }
-                          const control = event.currentTarget.closest(".workboard-search-control");
-                          state.query = "";
-                          state.searchOpen = false;
-                          props.onRequestUpdate?.();
-                          if (event.detail === 0) {
-                            queueMicrotask(() =>
-                              control?.querySelector<HTMLButtonElement>("button")?.focus(),
-                            );
-                          }
-                        }}
+                        @click=${(event: MouseEvent) => closeSearch(event, event.detail === 0)}
                       >
                         ${icons.x}
                       </button>

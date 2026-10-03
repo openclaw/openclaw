@@ -13,9 +13,9 @@ export type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 export type ExecApprovalUnavailableDecision = "allow-always";
 
-export const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
+const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
 
-export function normalizeExecHost(value?: string | null): ExecHost | null {
+function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
     return normalized;

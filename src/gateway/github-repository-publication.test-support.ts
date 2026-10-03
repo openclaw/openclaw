@@ -84,14 +84,14 @@ export async function createRepositoryPublicationFixture(
   );
   const sourceRef = typeof requestedRef === "string" ? requestedRef : requestedRef && baseCommit;
   const store = getSessionRepositoryWorkspaceStore();
-  let workspace = store.create({
+  let workspace = await store.create({
     agentId: "main",
     sessionKey: session.sessionKey,
     url: "https://github.com/owner/repository.git",
     requestedRef: sourceRef,
     assertCurrent: () => {},
   });
-  workspace = store.bindBase({
+  workspace = await store.bindBase({
     workspaceId: workspace.workspaceId,
     expectedRevision: workspace.revision,
     baseCommit,
@@ -147,7 +147,7 @@ export async function createRepositoryPublicationFixture(
     const publicationDigest = "sha256:" + createHash("sha256").update(raw).digest("hex");
     const ref = "refs/openclaw/worker-results/" + suffix;
     payloads.set(ref, { publicationStagingRoot, publicationDigest });
-    workspace = store.acceptCheckpoint({
+    workspace = await store.acceptCheckpoint({
       workspaceId: workspace.workspaceId,
       expectedRevision: workspace.revision,
       checkpointRef: ref,
@@ -264,7 +264,13 @@ export async function createRepositoryPublicationFixture(
       );
     }
     if (endpoint.includes("/compare/")) {
-      expect(endpoint).toContain("/compare/" + baseCommit + "..." + runtime.baseHead);
+      const source = endpoint.split("/compare/")[1]!.split("...")[0]!;
+      expect(endpoint).toContain("..." + runtime.baseHead);
+      if (source !== baseCommit) {
+        return commandResult(
+          JSON.stringify({ sha: git(["merge-base", source, runtime.baseHead]) }),
+        );
+      }
       return commandResult(
         JSON.stringify({ sha: runtime.commonHistory ? runtime.mergeBase : null }),
       );

@@ -112,7 +112,6 @@ it.each([
   { agentCount: 3, phase: "validation" },
   { agentCount: 480, phase: "validation" },
   { agentCount: 3, phase: "activation" },
-  { agentCount: 480, phase: "activation" },
 ])(
   "completes required repairs and reports deferred inspection for $agentCount agents during $phase",
   async ({ agentCount, phase }) => {

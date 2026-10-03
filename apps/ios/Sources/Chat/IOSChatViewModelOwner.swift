@@ -37,11 +37,8 @@ final class IOSChatViewModelOwner {
         let reconnected = connected && !self.wasConnected
         self.wasConnected = connected
         if authorityChanged { self.viewModel?.retireQuestionAuthority() }
-        if let viewModel, !viewModel.isQuestionAuthorityRetired, !authorityChanged, !Self.requiresViewModelRebuild(
-            currentOwnerID: self.ownerID,
-            nextOwnerID: ownerID,
-            currentTransportAgentID: self.transportAgentID,
-            nextTransportAgentID: agentID)
+        if let viewModel, !viewModel.isQuestionAuthorityRetired, !authorityChanged,
+           self.ownerID == ownerID, self.transportAgentID == agentID
         {
             if self.routingContract != routingContract {
                 self.routingContract = routingContract
@@ -162,22 +159,13 @@ final class IOSChatViewModelOwner {
         let agent = appModel.gatewayAgents.first { $0.id == self.presentationAgentID }
         let name = agent?.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         self.presentationAgentName = name.isEmpty ? appModel.chatAgentName : name
-        self.presentationAgentBadge = AgentIdentityPresentation.normalizedBadgeEmoji(
-            agent?.identity?["emoji"]?.value as? String) ??
-            AgentIdentityPresentation.initialsBadge(for: self.presentationAgentName)
+        self.presentationAgentBadge = AgentIdentityPresentation.badge(
+            avatarText: agent?.identity?["emoji"]?.value as? String,
+            displayName: self.presentationAgentName)
         self.hasVerifiedOfflineRoutingIdentity = appModel.hasVerifiedChatOfflineRoutingIdentity
     }
 
     nonisolated static func transportAgentID(_ value: String?) -> String {
         value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-    }
-
-    nonisolated static func requiresViewModelRebuild(
-        currentOwnerID: String,
-        nextOwnerID: String,
-        currentTransportAgentID: String,
-        nextTransportAgentID: String) -> Bool
-    {
-        currentOwnerID != nextOwnerID || currentTransportAgentID != nextTransportAgentID
     }
 }

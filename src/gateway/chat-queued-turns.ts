@@ -7,6 +7,7 @@
  * remain abortable by authorized requesters after chat.send terminalizes.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import {
   resolveChatAbortDiagnosticReason,
@@ -61,12 +62,6 @@ type RegisterQueuedChatTurnParams = {
   onAborted?: (reason: ChatAbortDiagnosticReason) => void;
 };
 
-function resolveExactRunId(runId: string): string | undefined {
-  // chat.send idempotency keys are exact protocol identities. Trimming here
-  // would diverge from the active-run and dedupe registries.
-  return runId.length > 0 ? runId : undefined;
-}
-
 function createQueuedChatAbortSignalReason(stopReason: string | undefined): Error | undefined {
   // Queued turns can outlive active registrations; their signal owns restart disposition.
   if (stopReason === "restart") {
@@ -98,7 +93,8 @@ function deleteQueuedChatTurnEntry(
 }
 
 export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): boolean {
-  const runId = resolveExactRunId(params.runId);
+  // Run IDs are exact idempotency keys shared with the active-run registry; never trim them.
+  const runId = params.runId;
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!runId || !sessionKey) {
     return false;
@@ -144,13 +140,12 @@ export function completeQueuedChatTurn(
   runId: string,
   controller: AbortController,
 ): boolean {
-  const key = resolveExactRunId(runId);
-  if (!key) {
+  if (!runId) {
     return false;
   }
-  const entry = chatQueuedTurns.get(key);
+  const entry = chatQueuedTurns.get(runId);
   return entry?.controller === controller
-    ? deleteQueuedChatTurnEntry(chatQueuedTurns, key, entry)
+    ? deleteQueuedChatTurnEntry(chatQueuedTurns, runId, entry)
     : false;
 }
 
@@ -163,8 +158,7 @@ export function retireQueuedChatTurnCancellation(
   runId: string,
   controller: AbortController,
 ): boolean {
-  const key = resolveExactRunId(runId);
-  const entry = key ? chatQueuedTurns.get(key) : undefined;
+  const entry = runId ? chatQueuedTurns.get(runId) : undefined;
   if (!entry || entry.controller !== controller) {
     return false;
   }
@@ -188,7 +182,7 @@ export function abortQueuedChatTurnById(
     allowSessionMismatch?: boolean;
   },
 ): { aborted: boolean } {
-  const runId = resolveExactRunId(params.runId);
+  const runId = params.runId;
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!runId || !sessionKey) {
     return { aborted: false };
@@ -229,16 +223,8 @@ export function listQueuedChatTurnsForSession(params: {
   agentId?: string;
   defaultAgentId?: string;
 }): QueuedChatTurnMatch[] {
-  const sessionKeys = new Set(
-    Array.from(params.sessionKeys, (k) => normalizeOptionalString(k)).filter((k): k is string =>
-      Boolean(k),
-    ),
-  );
-  const sessionIds = new Set(
-    Array.from(params.sessionIds ?? [], (id) => normalizeOptionalString(id)).filter(
-      (id): id is string => Boolean(id),
-    ),
-  );
+  const sessionKeys = new Set(normalizeTrimmedStringList([...params.sessionKeys]));
+  const sessionIds = new Set(normalizeTrimmedStringList([...(params.sessionIds ?? [])]));
   const agentId = normalizeOptionalString(params.agentId)?.toLowerCase();
   const defaultAgentId = normalizeOptionalString(params.defaultAgentId)?.toLowerCase();
   const matches: QueuedChatTurnMatch[] = [];

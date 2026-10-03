@@ -12,6 +12,7 @@ import { visitPluginSourceReferences } from "./plugin-source-references.js";
 /** Acquire the same literal module inputs as execution, without evaluating plugin code. */
 export function inspectPluginSourceDependencies(
   entries: readonly { rootDir: string; entryFile: string }[],
+  dependencyLookupBoundary?: Parameters<typeof capturePluginGenerationArtifact>[5],
 ) {
   const files = new Set<string>();
   const packageRoots = new Set<string>();
@@ -27,7 +28,14 @@ export function inspectPluginSourceDependencies(
     seenEntries.add(source);
     const root = fs.realpathSync(entry.rootDir);
     // This scope grants source acquisition only. No module evaluation or registration runs here.
-    const artifact = capturePluginGenerationArtifact(root, source, (run) => run());
+    const artifact = capturePluginGenerationArtifact(
+      root,
+      source,
+      (run) => run(),
+      undefined,
+      undefined,
+      dependencyLookupBoundary,
+    );
     try {
       const pending = [artifact.resolve(source)];
       const visited = new Set<string>();
@@ -59,7 +67,7 @@ export function inspectPluginSourceDependencies(
               path.isAbsolute(specifier) ||
               specifier.startsWith("file:");
             try {
-              const conditions = ["node", kind];
+              const conditions = ["node", "module-sync", kind];
               const result = artifact.captureModule(captured, specifier, conditions);
               const target =
                 result && "target" in result

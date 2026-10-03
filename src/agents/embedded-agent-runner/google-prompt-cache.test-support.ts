@@ -13,14 +13,14 @@ export type SessionCustomEntry = {
 };
 
 export type TestGooglePromptCacheSessionManager = {
-  appendCustomEntry(customType: string, data: unknown): void | Promise<void>;
+  appendCustomEntryAsync(customType: string, data: unknown): Promise<void>;
   getEntries(): SessionCustomEntry[];
 };
 
 export function makeSessionManager(entries: SessionCustomEntry[] = []) {
   let counter = 0;
   return {
-    appendCustomEntry(customType: string, data: unknown) {
+    async appendCustomEntryAsync(customType: string, data: unknown) {
       counter += 1;
       entries.push({
         type: "custom" as const,

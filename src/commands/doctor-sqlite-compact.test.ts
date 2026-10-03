@@ -3,8 +3,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as sqliteIntegrity from "../infra/sqlite-integrity.js";
-import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
+import * as walCheckpoint from "../infra/sqlite-wal-checkpoint.js";
+import {
+  compactDoctorSqliteFile,
+  DoctorSqliteCompactionDeferredError,
+} from "./doctor-sqlite-compact.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -26,6 +31,11 @@ function createCompactDatabase(): string {
 }
 
 describe("import-finalize compaction", () => {
+  it("does not create a missing database when existing-file admission is required", () => {
+    const sqlitePath = path.join(tempDirs.make("doctor-compact-missing-"), "missing.sqlite");
+    expect(() => compactDoctorSqliteFile({ sqlitePath, requireExisting: true })).toThrow();
+    expect(fs.existsSync(sqlitePath)).toBe(false);
+  });
   it("verifies an already compact store once without rewriting it", () => {
     const sqlitePath = createCompactDatabase();
     const before = fs.readFileSync(sqlitePath);
@@ -81,6 +91,68 @@ describe("import-finalize compaction", () => {
       reader.exec("ROLLBACK;");
       reader.close();
       writer.close();
+    }
+  });
+
+  it("does not defer an initial busy checkpoint when native close also fails", () => {
+    const sqlitePath = createCompactDatabase();
+    const reader = openNodeSqliteDatabase(sqlitePath);
+    const writer = openNodeSqliteDatabase(sqlitePath);
+    const closeFailure = new Error("native close failure");
+    const openDatabase = nodeSqlite.openNodeSqliteDatabase;
+    vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+      const database = openDatabase(...args);
+      const close = database.close.bind(database);
+      database.close = () => {
+        close();
+        throw closeFailure;
+      };
+      return database;
+    });
+    try {
+      reader.exec("BEGIN; SELECT * FROM payload;");
+      writer.exec("INSERT INTO payload VALUES(2,'pending checkpoint');");
+      const failure = (() => {
+        try {
+          compactDoctorSqliteFile({ sqlitePath, busyTimeoutMs: 0 });
+        } catch (error) {
+          return error;
+        }
+        return undefined;
+      })();
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure).not.toBeInstanceOf(DoctorSqliteCompactionDeferredError);
+      expect((failure as AggregateError).errors).toEqual([
+        expect.any(walCheckpoint.SqliteWalCheckpointBusyError),
+        closeFailure,
+      ]);
+    } finally {
+      reader.exec("ROLLBACK;");
+      reader.close();
+      writer.close();
+    }
+  });
+
+  it("does not defer a real busy checkpoint after compaction", () => {
+    const sqlitePath = createCompactDatabase();
+    const truncate = walCheckpoint.truncateSqliteWal;
+    let checkpointCalls = 0;
+    let reader: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+    vi.spyOn(walCheckpoint, "truncateSqliteWal").mockImplementation((database, pathname) => {
+      if (++checkpointCalls === 2) {
+        reader = openNodeSqliteDatabase(pathname, { readOnly: true });
+        reader.exec("BEGIN; SELECT * FROM payload;");
+      }
+      return truncate(database, pathname);
+    });
+    try {
+      expect(() => compactDoctorSqliteFile({ sqlitePath, busyTimeoutMs: 0 })).toThrow(
+        walCheckpoint.SqliteWalCheckpointBusyError,
+      );
+      expect(checkpointCalls).toBe(2);
+    } finally {
+      reader?.exec("ROLLBACK;");
+      reader?.close();
     }
   });
 });

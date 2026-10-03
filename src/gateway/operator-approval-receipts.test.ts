@@ -13,10 +13,12 @@ import {
 import {
   forceDenyOperatorApproval,
   insertOperatorApproval,
-  pageOperatorApprovalReceiptsForRunInDatabase,
   resolveOperatorApproval,
-  summarizeOperatorApprovalReceiptsForRunInDatabase,
 } from "./operator-approval-store.js";
+import {
+  pageOperatorApprovalReceiptsForRunInDatabase,
+  summarizeOperatorApprovalReceiptsForRunInDatabase,
+} from "./operator-approval-store.receipts.js";
 
 const RETENTION_MS = 30 * 24 * 60 * 60_000;
 

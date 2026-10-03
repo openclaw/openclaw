@@ -178,40 +178,6 @@ function migratedSessionScope(
   return "conversation";
 }
 
-function migratedEntryChannel(entry: MigratedSessionEntry): string | null {
-  const delivery = asNullableRecord(entry.delivery);
-  const deliveryContext =
-    asNullableRecord(delivery?.context) ?? asNullableRecord(entry.deliveryContext);
-  const origin = asNullableRecord(delivery?.origin) ?? asNullableRecord(entry.origin);
-  return (
-    migratedText(entry.channel) ??
-    migratedText(deliveryContext?.channel) ??
-    migratedText(entry.lastChannel) ??
-    migratedText(origin?.provider)
-  );
-}
-
-function migratedEntryAccountId(entry: MigratedSessionEntry): string | null {
-  const delivery = asNullableRecord(entry.delivery);
-  const deliveryContext =
-    asNullableRecord(delivery?.context) ?? asNullableRecord(entry.deliveryContext);
-  const origin = asNullableRecord(delivery?.origin) ?? asNullableRecord(entry.origin);
-  return (
-    migratedText(deliveryContext?.accountId) ??
-    migratedText(entry.lastAccountId) ??
-    migratedText(origin?.accountId)
-  );
-}
-
-function migratedEntryDisplayName(entry: MigratedSessionEntry): string | null {
-  return (
-    migratedText(entry.displayName) ??
-    migratedText(entry.label) ??
-    migratedText(entry.subject) ??
-    migratedText(entry.groupId)
-  );
-}
-
 export function backfillOpenClawAgentSchema(db: DatabaseSync, previousVersion: number): void {
   if (previousVersion >= 2) {
     return;
@@ -270,20 +236,32 @@ export function backfillOpenClawAgentSchema(db: DatabaseSync, previousVersion: n
     if (!sessionKey || !sessionId || !entry) {
       continue;
     }
+    const delivery = asNullableRecord(entry.delivery);
+    const deliveryContext =
+      asNullableRecord(delivery?.context) ?? asNullableRecord(entry.deliveryContext);
+    const origin = asNullableRecord(delivery?.origin) ?? asNullableRecord(entry.origin);
     update.run(
       migratedSessionScope(entry, sessionKey),
       asFiniteNumber(entry.startedAt) ?? null,
       asFiniteNumber(entry.endedAt) ?? null,
       migratedStatus(entry.status),
       migratedChatType(entry.chatType),
-      migratedEntryChannel(entry),
-      migratedEntryAccountId(entry),
+      migratedText(entry.channel) ??
+        migratedText(deliveryContext?.channel) ??
+        migratedText(entry.lastChannel) ??
+        migratedText(origin?.provider),
+      migratedText(deliveryContext?.accountId) ??
+        migratedText(entry.lastAccountId) ??
+        migratedText(origin?.accountId),
       migratedText(entry.modelProvider),
       migratedText(entry.model),
       migratedText(entry.agentHarnessId),
       migratedText(entry.parentSessionKey),
       migratedText(entry.spawnedBy),
-      migratedEntryDisplayName(entry),
+      migratedText(entry.displayName) ??
+        migratedText(entry.label) ??
+        migratedText(entry.subject) ??
+        migratedText(entry.groupId),
       sessionId,
     );
   }

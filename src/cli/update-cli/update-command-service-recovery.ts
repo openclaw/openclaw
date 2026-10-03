@@ -1,4 +1,3 @@
-import { Writable } from "node:stream";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
@@ -13,6 +12,7 @@ import {
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createNullWriter } from "../../shared/null-writer.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   renderRestartDiagnostics,
@@ -48,11 +48,7 @@ import {
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
 
-const QUIET_SERVICE_STDOUT = new Writable({
-  write(_chunk, _encoding, callback) {
-    callback();
-  },
-});
+const QUIET_SERVICE_STDOUT = createNullWriter();
 
 export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   onGatewayStartAttempted?: () => void;
@@ -161,10 +157,30 @@ export function formatPostUpdateGatewayRecoveryInstructions(
   const beforeVersion = normalizeOptionalString(result.before?.version);
   if (isPackageManagerUpdateMode(result.mode) && beforeVersion) {
     lines.push(
-      `Rollback: reinstall OpenClaw ${beforeVersion} with the same package manager, then rerun \`${formatCliCommand("openclaw gateway install --force")}\`.`,
+      `Rollback: reinstall OpenClaw ${beforeVersion} with the same package manager, then rerun \`${installCommand}\`.`,
     );
   }
   return lines;
+}
+
+export function refuseUnsettledDoctorRecovery(
+  result: UpdateRunResult,
+  root: string,
+  assertCurrent: () => void,
+): boolean {
+  // A failed or foreign receipt cannot inherit an earlier settlement or rollback refusal.
+  const settlement = result.steps.findLast((step) => step.name === "doctor process settlement");
+  if (
+    settlement &&
+    (settlement.exitCode !== 0 ||
+      settlement.command !== "settle doctor process groups" ||
+      settlement.cwd !== root)
+  ) {
+    assertCurrent();
+    result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+    return true;
+  }
+  return false;
 }
 
 export async function admitMigratedGatewayRecovery(
@@ -180,12 +196,19 @@ export async function admitMigratedGatewayRecovery(
   result: UpdateRunResult,
   assertCurrent: () => void,
 ): Promise<boolean> {
+  const root = result.root ?? params.root;
+  if (refuseUnsettledDoctorRecovery(result, root, assertCurrent)) {
+    return false;
+  }
+  const settlement = result.steps.findLast((step) => step.name === "doctor process settlement");
+  const databaseRollback = result.steps.findLast((step) => step.name === "database rollback");
   if (
     result.reason !== "state-migrated-no-rollback" ||
     params.originalManagedServiceRuntime ||
     !params.shouldRestart ||
     !params.preManagedServiceStop?.stopped ||
-    !result.steps.some((step) => step.name === "database rollback" && step.exitCode !== 0) ||
+    databaseRollback?.exitCode === 0 ||
+    (!settlement && !databaseRollback) ||
     (result.recovery?.serviceRestartSafe === false &&
       result.recovery.reason === "source-rollback-failed")
   ) {
@@ -193,7 +216,6 @@ export async function admitMigratedGatewayRecovery(
   }
   assertCurrent();
   await params.packageTransaction?.assertRollbackSafe?.();
-  const root = result.root ?? params.root;
   const version = await readPackageVersion(root);
   const buildId = await readBuiltGatewayBuildId(root);
   assertCurrent();

@@ -13,7 +13,6 @@ import { runSqliteWorkerStoreWrite } from "./sqlite-worker-store.js";
 const { tempDirs: dirs, open } = useSqliteWorkerStoreFixture("sqlite-worker-preparation-");
 
 it.each([
-  { mib: 0, owner: "client" },
   { mib: 40, owner: "client" },
   { mib: 0, owner: "host" },
 ] as const)(

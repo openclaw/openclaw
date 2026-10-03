@@ -34,6 +34,7 @@ import {
   type ChatImageContent,
   type OffloadedRef,
 } from "../chat-attachments.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
@@ -41,7 +42,6 @@ import { resolveGatewayInputParticipant } from "../session-input-participant.js"
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
-  clientHasAdminScope,
   shouldSuppressAgentPromptPersistence,
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
@@ -213,7 +213,7 @@ export async function prepareAgentRunUserTurn(params: {
 
     const senderIsOwner = params.restoredCronContinuation
       ? true
-      : clientHasAdminScope(params.client);
+      : hasGatewayAdminScope(params.client);
     const settleWakeReplay = params.settleWakeReplay;
     if (
       settleWakeReplay &&

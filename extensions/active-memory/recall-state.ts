@@ -243,10 +243,7 @@ function sweepExpiredCacheEntries(now = asDateTimestampMs(Date.now())): void {
 }
 
 export function toSingleLineLogValue(value: string): string {
-  const singleLine = value
-    .replace(/[\r\n\t]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const singleLine = value.replace(/\s+/g, " ").trim();
   return singleLine.length > MAX_LOG_VALUE_CHARS
     ? `${truncateUtf16Safe(singleLine, MAX_LOG_VALUE_CHARS)}...`
     : singleLine;

@@ -1,5 +1,6 @@
 // Verifies live session model selection, switch queuing, and pending-flag cleanup.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as mod from "./live-model-switch.js";
 
 const state = vi.hoisted(() => ({
   resolveDefaultModelForAgentMock: vi.fn(),
@@ -37,8 +38,6 @@ vi.mock("../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: (...args: unknown[]) => state.resolveStorePathMock(...args),
 }));
 
-let mod: typeof import("./live-model-switch.js");
-
 async function loadModule() {
   return mod;
 }
@@ -73,10 +72,6 @@ function resolvePendingSelection(
 }
 
 describe("live model switch", () => {
-  beforeAll(async () => {
-    mod = await import("./live-model-switch.js");
-  });
-
   beforeEach(() => {
     state.resolveDefaultModelForAgentMock
       .mockReset()

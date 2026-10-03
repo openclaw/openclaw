@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { gitNullConfigPath } from "./git-exec.js";
 import {
@@ -36,7 +37,6 @@ it("rejects incomplete target inspection output even when Git exits zero", async
 });
 
 it.each([
-  { state: "partial-clone", expected: "promised objects in this partial clone" },
   { state: "unverified", expected: "did not verify repository corruption" },
   { state: "corrupt", expected: "verified repository corruption" },
 ])(
@@ -47,8 +47,8 @@ it.each([
     const runCommand: CommandRunner = async (argv) => {
       if (argv.includes("--get-regexp")) {
         return {
-          code: state === "partial-clone" ? 0 : 1,
-          stdout: state === "partial-clone" ? "remote.origin.promisor true\n" : "",
+          code: 1,
+          stdout: "",
           stderr: "",
         };
       }
@@ -65,10 +65,6 @@ it.each([
       timeoutMs: 1_000,
     });
     expect(result.stderr).toContain(expected);
-    if (state === "partial-clone") {
-      expect(result.stderr).not.toContain("repo corruption");
-      expect(result.stderr).toContain("sed -n 's/^?//p'");
-    }
   },
 );
 
@@ -112,6 +108,8 @@ it("uses the installed checkout runner for partial-clone classification", async 
   expect(transfer).toBeUndefined();
   expect(installedConfigProbed).toBe(true);
   expect(results.at(-1)?.stderrTail).toContain("promised objects in this partial clone");
+  expect(results.at(-1)?.stderrTail).not.toContain("repo corruption");
+  expect(results.at(-1)?.stderrTail).toContain("sed -n 's/^?//p'");
 });
 
 // Windows forcibly terminates children instead of delivering the handled POSIX signal.
@@ -127,6 +125,8 @@ it
     "missing-before",
     "legacy-git",
     "configured-limit",
+    "cleanup-uncertain",
+    "cleanup-io",
   ] as const)("transfers Git objects without buffering the pack (scenario=%s)", async (failure) => {
   const overflow = failure === "inventory" || failure === "inventory-closed";
   const missingPack = failure === "missing-pack";
@@ -318,6 +318,40 @@ it
   if (failure === "missing-before" || failure === "legacy-git") {
     expect(packBytes).toBeGreaterThan(baseBytes.length);
   }
+  if (failure === "cleanup-uncertain" || failure === "cleanup-io") {
+    const error =
+      failure === "cleanup-uncertain"
+        ? new Error("Git cleanup did not join", { cause: new CommandProcessCleanupError() })
+        : Object.assign(new Error("Git cleanup probe denied"), { code: "EACCES" });
+    const recorded = results.length;
+    const keepDirectory = path.join(install, ".git", "objects", "pack");
+    const retained = fs.readdirSync(keepDirectory).filter((name) => name.endsWith(".keep"));
+    expect(retained).toHaveLength(1);
+    const cleanup = admittedTransfer.cleanup({
+      ...step(install),
+      runCommand: async () => {
+        throw error;
+      },
+    });
+    if (failure === "cleanup-uncertain") {
+      await expect(cleanup).rejects.toBe(error);
+      expect(results.slice(recorded)).toEqual([]);
+    } else {
+      await expect(cleanup).resolves.toBeUndefined();
+      expect(results.slice(recorded)).toMatchObject([
+        {
+          name: "git-update-pack-cleanup",
+          advisory: {
+            kind: "recoverable-maintenance",
+            message: expect.stringContaining(error.message),
+          },
+        },
+      ]);
+    }
+    expect(fs.readdirSync(keepDirectory).filter((name) => name.endsWith(".keep"))).toEqual(
+      retained,
+    );
+  }
   if (failure === "retry") {
     await transfer!.cleanup(step(install));
     const inspection = path.join(root, "inspection.git");
@@ -342,6 +376,13 @@ it
   }
   await git(install, "checkout", "--detach", candidateSha);
   await transfer!.cleanup(step(install));
+  if (failure === "cleanup-uncertain" || failure === "cleanup-io") {
+    expect(
+      fs
+        .readdirSync(path.join(install, ".git", "objects", "pack"))
+        .filter((name) => name.endsWith(".keep")),
+    ).toEqual([]);
+  }
   if (failure === "configured-limit") {
     expect(packBytes).toBeGreaterThan(1024 * 1024);
     expect(await git(source, "config", "pack.packSizeLimit")).toBe("1m");

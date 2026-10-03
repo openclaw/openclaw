@@ -90,8 +90,10 @@ export function renderActiveFilters(
   </div>`;
 }
 
-function toggleStatus(state: WorkboardUiState, status: WorkboardStatus) {
-  if (state.statusFilter.has(status)) {
+function toggleStatus(state: WorkboardUiState, status: WorkboardStatus | undefined) {
+  if (status === undefined) {
+    state.statusFilter.clear();
+  } else if (state.statusFilter.has(status)) {
     state.statusFilter.delete(status);
   } else {
     state.statusFilter.add(status);
@@ -104,26 +106,16 @@ export function renderStatusTabs(state: WorkboardUiState, requestUpdate: (() => 
     role="group"
     aria-label=${t("workboard.fieldStatus")}
   >
-    <button
-      type="button"
-      aria-pressed=${state.statusFilter.size === 0}
-      @click=${() => {
-        state.statusFilter.clear();
-        requestUpdate?.();
-      }}
-    >
-      ${t("workboard.allStatuses")}
-    </button>
-    ${state.statuses.map(
+    ${[undefined, ...state.statuses].map(
       (status) => html`<button
         type="button"
-        aria-pressed=${state.statusFilter.has(status)}
+        aria-pressed=${status === undefined ? state.statusFilter.size === 0 : state.statusFilter.has(status)}
         @click=${() => {
           toggleStatus(state, status);
           requestUpdate?.();
         }}
       >
-        ${formatStatusLabel(status)}
+        ${status === undefined ? t("workboard.allStatuses") : formatStatusLabel(status)}
       </button>`,
     )}
   </div>`;
@@ -169,35 +161,23 @@ export function renderMobileStatusPicker(
       aria-label=${t("workboard.fieldStatus")}
       ${ref(workboardPopoverRef("start"))}
     >
-      <button
-        class="workboard-status-option"
-        type="button"
-        aria-pressed=${selected.length === 0}
-        @click=${() => {
-          state.statusFilter.clear();
-          requestUpdate?.();
-        }}
-      >
-        <span class="workboard-status-option__icon" aria-hidden="true">${icons.kanban}</span>
-        <span>${t("workboard.allWork")}</span>
-        <span class="workboard-mobile-status__count">${cards.length}</span>
-        <span class="workboard-status-option__check" aria-hidden="true">${icons.check}</span>
-      </button>
-      ${state.statuses.map(
+      ${[undefined, ...state.statuses].map(
         (status) => html`<button
           class="workboard-status-option"
           type="button"
-          aria-pressed=${state.statusFilter.has(status)}
+          aria-pressed=${status === undefined ? selected.length === 0 : state.statusFilter.has(status)}
           @click=${() => {
             toggleStatus(state, status);
             requestUpdate?.();
           }}
         >
           <span class="workboard-status-option__icon" aria-hidden="true">
-            <span class="workboard-status-dot workboard-status-dot--${status}"></span>
+            ${status === undefined ? icons.kanban : html`<span class="workboard-status-dot workboard-status-dot--${status}"></span>`}
           </span>
-          <span>${formatStatusLabel(status)}</span>
-          <span class="workboard-mobile-status__count">${counts.get(status) ?? 0}</span>
+          <span>${status === undefined ? t("workboard.allWork") : formatStatusLabel(status)}</span>
+          <span class="workboard-mobile-status__count"
+            >${status === undefined ? cards.length : (counts.get(status) ?? 0)}</span
+          >
           <span class="workboard-status-option__check" aria-hidden="true">${icons.check}</span>
         </button>`,
       )}

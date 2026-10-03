@@ -8,10 +8,16 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 const mocks = vi.hoisted(() => ({
   prepare: vi.fn(),
   profile: vi.fn(),
+  assertProfile: vi.fn(),
   providers: [] as PluginWebSearchProviderEntry[],
   beforeImport: vi.fn<() => Promise<void>>(),
 }));
-vi.mock("./users-profile-access.js", () => ({ resolveAuthenticatedProfileId: mocks.profile }));
+vi.mock("./users-profile-access.js", () => ({
+  prepareAuthenticatedProfile: async () => ({
+    profileId: mocks.profile(),
+    assertCurrent: mocks.assertProfile,
+  }),
+}));
 vi.mock("./web-search-status.js", () => ({ prepareWebSearchStatus: mocks.prepare }));
 vi.mock("../../plugins/plugin-registry-contributions.js", () => ({
   resolveManifestContractOwnerPluginId: () => "parallel",
@@ -58,6 +64,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.beforeImport.mockResolvedValue(undefined);
   mocks.profile.mockReturnValue("original-profile");
+  mocks.assertProfile.mockReset();
   config = {
     tools: { web: { search: { provider: "parallel", cacheTtlMinutes: 0 } } },
     plugins: {
@@ -79,9 +86,6 @@ afterEach(() => vi.unstubAllGlobals());
 describe("Search settings live provider authority", () => {
   it.each([
     ["lazy import", "client"],
-    ["lazy import", "profile"],
-    ["lazy import", "config"],
-    ["redirect", "client"],
     ["redirect", "profile"],
     ["redirect", "config"],
   ] as const)(
@@ -112,7 +116,9 @@ describe("Search settings live provider authority", () => {
       if (loss === "client") {
         options.client!.invalidated = true;
       } else if (loss === "profile") {
-        mocks.profile.mockReturnValue("replacement-profile");
+        mocks.assertProfile.mockImplementation(() => {
+          throw new Error("profile authority changed");
+        });
       } else {
         config = { tools: { web: { search: { enabled: false } } } };
       }

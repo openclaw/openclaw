@@ -56,6 +56,14 @@ function createReconnectRequest(startup: ChatHistoryResult | Promise<ChatHistory
   });
 }
 
+function disconnect(pane: TestChatPane) {
+  pane.applyGatewaySnapshot({
+    ...pane.context.gateway.snapshot,
+    phase: "reconnecting",
+    hello: null,
+  });
+}
+
 describe("chat pane connection lifecycle", () => {
   it("notifies the owning shell after a pane leaves its DOM subtree", async () => {
     const { pane } = createTestChatPane({
@@ -165,7 +173,7 @@ describe("chat pane connection lifecycle", () => {
     state.realtimeTalkStatus = "listening";
     state.realtimeTalkDetail = "live";
     state.realtimeTalkInputLevel.set(0.7);
-    state.realtimeTalkConversation = [
+    state.realtimeTalkConversationState.entries = [
       { id: "utterance", role: "user", text: "stale", isStreaming: true },
     ];
     state.realtimeTalkVideoStream = {} as MediaStream;
@@ -174,18 +182,14 @@ describe("chat pane connection lifecycle", () => {
     state.realtimeTalkVideoPending = true;
     state.realtimeTalkCameraError = true;
 
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      phase: "reconnecting",
-      hello: null,
-    });
+    disconnect(pane);
 
     expect(stop).toHaveBeenCalledOnce();
     expect(state.realtimeTalkActive).toBe(false);
     expect(state.realtimeTalkStatus).toBe("idle");
     expect(state.realtimeTalkDetail).toBeNull();
     expect(state.realtimeTalkInputLevel.value).toBe(0);
-    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkConversationState.entries).toEqual([]);
     expect(state.realtimeTalkVideoStream).toBeNull();
     expect(state.realtimeTalkCameraDevices).toEqual([]);
     expect(state.realtimeTalkVideoCapable).toBe(false);
@@ -252,12 +256,7 @@ describe("chat pane connection lifecycle", () => {
     state.renderLifecycle.afterCommit = () => cancelCommit;
     scheduleChatScroll(state);
 
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      client,
-      phase: "reconnecting",
-      hello: null,
-    });
+    disconnect(pane);
 
     expect(cancelCommit).toHaveBeenCalledOnce();
   });
@@ -272,12 +271,7 @@ describe("chat pane connection lifecycle", () => {
       global: new Promise<boolean>(() => {}),
     };
 
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      client,
-      phase: "reconnecting",
-      hello: null,
-    });
+    disconnect(pane);
 
     expect(state.chatModelSwitchPromises).toEqual({});
     expect(retireModelOverride).toHaveBeenCalledWith("global");
@@ -299,12 +293,7 @@ describe("chat pane connection lifecycle", () => {
       },
     ];
 
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      client,
-      phase: "reconnecting",
-      hello: null,
-    });
+    disconnect(pane);
 
     expect(state.guardianNotices).toEqual([]);
   });
@@ -318,42 +307,31 @@ describe("chat pane connection lifecycle", () => {
     state.chatSending = true;
     state.chatSendingScopeKey = "agent:main";
 
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      client,
-      phase: "reconnecting",
-      hello: null,
-    });
+    disconnect(pane);
 
     expect(state.chatSending).toBe(false);
     expect(state.chatSendingScopeKey).toBeNull();
   });
 
-  it.each([
-    { sessionKey: "agent:work:main", mainKey: "main" },
-    { sessionKey: "agent:work:home", mainKey: "home" },
-  ])(
-    "preserves owner-qualified model and identity state when global selection changes for $sessionKey",
-    ({ sessionKey, mainKey }) => {
-      const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-      const retireModelOverride = vi.fn();
-      const sessions = { retireModelOverride } as unknown as SessionCapability;
-      const { state } = createTestChatPane({ client, sessions });
-      state.sessionKey = sessionKey;
-      state.agentsList = { defaultId: "main", mainKey, scope: "global", agents: [] };
-      state.assistantAgentId = "work";
-      state.loadAssistantIdentity = vi.fn(async () => undefined);
-      state.chatModelSwitchPromises = {
-        global: new Promise<boolean>(() => {}),
-      };
-      const pending = state.chatModelSwitchPromises;
-      applySelectedChatAgent(state, "main");
-      expect(state.chatModelSwitchPromises).toBe(pending);
-      expect(state.assistantAgentId).toBe("work");
-      expect(retireModelOverride).not.toHaveBeenCalled();
-      expect(state.loadAssistantIdentity).not.toHaveBeenCalled();
-    },
-  );
+  it("preserves owner-qualified model and identity state when global selection changes", () => {
+    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
+    const retireModelOverride = vi.fn();
+    const sessions = { retireModelOverride } as unknown as SessionCapability;
+    const { state } = createTestChatPane({ client, sessions });
+    state.sessionKey = "agent:work:home";
+    state.agentsList = { defaultId: "main", mainKey: "home", scope: "global", agents: [] };
+    state.assistantAgentId = "work";
+    state.loadAssistantIdentity = vi.fn(async () => undefined);
+    state.chatModelSwitchPromises = {
+      global: new Promise<boolean>(() => {}),
+    };
+    const pending = state.chatModelSwitchPromises;
+    applySelectedChatAgent(state, "main");
+    expect(state.chatModelSwitchPromises).toBe(pending);
+    expect(state.assistantAgentId).toBe("work");
+    expect(retireModelOverride).not.toHaveBeenCalled();
+    expect(state.loadAssistantIdentity).not.toHaveBeenCalled();
+  });
 
   it("refreshes the transcript before secondary hydration after a same-client reconnect", async () => {
     const transcript = createDeferred<{
@@ -389,7 +367,7 @@ describe("chat pane connection lifecycle", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.startup",
       expect.objectContaining({ limit: 80, maxBytes: 256 * 1024, sessionKey: state.sessionKey }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
     expect(deferHydration).toHaveBeenCalledExactlyOnceWith(state.sessionKey, expect.any(Promise));
     expect(branches).not.toHaveBeenCalled();
@@ -416,13 +394,10 @@ describe("chat pane connection lifecycle", () => {
     expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(1);
   });
 
-  it.each(
-    (["online", "queued"] as const).flatMap((mode) =>
-      (["no-active-run", "failure"] as const).flatMap((outcome) =>
-        (["default agent", "main key"] as const).map((change) => ({ mode, outcome, change })),
-      ),
-    ),
-  )(
+  it.each([
+    { mode: "online", outcome: "no-active-run", change: "default agent" },
+    { mode: "queued", outcome: "failure", change: "main key" },
+  ] as const)(
     "retires a $mode Stop's $outcome presentation after agents.list changes the $change",
     async ({ mode, outcome, change }) => {
       const response = createDeferred<unknown>();

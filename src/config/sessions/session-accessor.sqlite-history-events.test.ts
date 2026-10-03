@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import {
@@ -53,6 +54,36 @@ function enforceSqliteVariableLimit(
 
 describe("SQLite transcript history events", () => {
   const scope = useHistoryEventScope();
+
+  it("discovers legacy controls without validating indexed message payloads outside the page", async () => {
+    const payload = "indexed-payload-outside-history-page";
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: 3, id: scope.sessionId },
+      messageEvent("older", null, "user", payload),
+      messageEvent("newer", "older", "assistant", "selected"),
+    ]);
+    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    db.prepare("DELETE FROM transcript_event_identities WHERE session_id = ? AND seq = 0").run(
+      scope.sessionId,
+    );
+    const native = new DatabaseSync(":memory:");
+    const validate = native.prepare("SELECT json_valid(?) AS valid");
+    let inspectedIndexedPayloads = 0;
+    db.function("json_valid", { deterministic: true }, (value) => {
+      if (typeof value === "string" && value.includes(payload)) {
+        inspectedIndexedPayloads += 1;
+      }
+      return Number(validate.get(value)!.valid);
+    });
+    try {
+      const page = readSessionTranscriptHistoryEventPage(scope, { maxMessages: 1, offset: 0 });
+      expect(page.events.map(historyEventId)).toEqual(["newer"]);
+      expect(page.totalMessages).toBe(2);
+      expect(inspectedIndexedPayloads).toBe(0);
+    } finally {
+      native.close();
+    }
+  });
 
   it("reads fresh generations and rows across empty and populated sessions", async () => {
     const limits = { maxMessages: 20, maxLines: 20, maxBytes: 64 * 1024 };
@@ -842,6 +873,71 @@ describe("SQLite transcript history events", () => {
     expect(
       readSessionTranscriptHistoryAnchorPage(scope, { messageId: "hidden", maxMessages: 10 }).found,
     ).toBe(false);
+  });
+
+  it("bounds a closed reset interval before hydrating excluded payloads", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        transcriptMessage("oversized-older", null, { role: "user", content: "older" }),
+        transcriptMessage("fitting-newer", "oversized-older", {
+          role: "assistant",
+          content: "newer",
+        }),
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "closing-reset",
+      parentId: "fitting-newer",
+      timestamp: "2026-09-07T00:00:00.000Z",
+      reason: "new",
+      summary: "x".repeat(4_096),
+    });
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    database.db
+      .prepare(
+        `UPDATE transcript_events
+         SET event_json = '{', event_zstd = NULL, event_utf8_bytes = 16384
+         WHERE session_id = ? AND seq = (
+           SELECT seq FROM transcript_event_identities
+           WHERE session_id = ? AND event_id = 'oversized-older'
+         )`,
+      )
+      .run(scope.sessionId, scope.sessionId);
+
+    const page = readSessionTranscriptHistoryAnchorPage(scope, {
+      closedResetInterval: true,
+      direction: "older",
+      maxBytes: 1_024,
+      maxMessages: 10,
+      messageId: "closing-reset",
+    });
+
+    expect(page.events.map(historyEventId)).toEqual(["fitting-newer"]);
+    expect(page).toMatchObject({ found: true, totalMessages: 2 });
+
+    database.db
+      .prepare(
+        `UPDATE transcript_events
+         SET event_json = NULL, event_zstd = X'00', event_utf8_bytes = 16384
+         WHERE session_id = ? AND seq = (
+           SELECT seq FROM transcript_event_identities
+           WHERE session_id = ? AND event_id = 'closing-reset'
+         )`,
+      )
+      .run(scope.sessionId, scope.sessionId);
+
+    const pageWithoutResetPayload = readSessionTranscriptHistoryAnchorPage(scope, {
+      closedResetInterval: true,
+      direction: "older",
+      maxBytes: 1_024,
+      maxMessages: 10,
+      messageId: "closing-reset",
+    });
+
+    expect(pageWithoutResetPayload.events.map(historyEventId)).toEqual(["fitting-newer"]);
+    expect(pageWithoutResetPayload).toMatchObject({ found: true, totalMessages: 2 });
   });
 
   it.each(["message", "custom_message"])(

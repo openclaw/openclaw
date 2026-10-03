@@ -572,19 +572,18 @@ export async function executeSetDefaultModel(
     opts,
     run: async (ctx) => {
       const { mutateConfigFile, readConfigFileSnapshot } = await import("../config/config.js");
-      const { applySystemAgentModelSelection, createSystemAgentModelSelectionUpdater } =
-        await import("./setup-model-selection.js");
+      const { createSystemAgentModelSelectionUpdater } = await import("./setup-model-selection.js");
       const targetAgentId = operation.agentId;
       const snapshot = await readConfigFileSnapshot();
       // Route projection and the live probes below all take the same optional
       // agent scope, so a per-agent selection is verified against that agent's
       // route with the exact rigor the default route gets.
       const projectRoute = (config: OpenClawConfig) => projectInferenceRoute(config, targetAgentId);
-      const stagedConfig = await applySystemAgentModelSelection({
-        config: snapshot.sourceConfig,
+      const selectModel = await createSystemAgentModelSelectionUpdater({
         model: operation.model,
         ...(targetAgentId ? { targetAgentId } : {}),
       });
+      const stagedConfig = selectModel(snapshot.sourceConfig);
       const beforeRoute = await projectRoute(snapshot.sourceConfig);
       const verifiedRoute = await projectRoute(stagedConfig);
       const verifyInferenceConfig =
@@ -610,10 +609,6 @@ export async function executeSetDefaultModel(
       let persistedVerification = initialVerification;
       let persistedBinding: SystemAgentVerifiedInferenceBinding | undefined;
       let selectedRouteForCommit = verifiedRoute;
-      const selectModel = await createSystemAgentModelSelectionUpdater({
-        model: operation.model,
-        ...(targetAgentId ? { targetAgentId } : {}),
-      });
       const result = await mutateConfigFile({
         base: "source",
         writeOptions: {

@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../../../agents/agent-scope.js";
+import { parseLegacyCredentialEntry } from "../../../agents/auth-profiles/legacy-flat-credential.js";
 import {
   areOAuthCredentialsEquivalent,
   hasMatchingOAuthIdentity,
@@ -10,12 +11,10 @@ import {
 import {
   loadPersistedAuthProfileStore,
   loadPersistedSharedAuthProfileStore,
-  parseLegacyCredentialEntry,
 } from "../../../agents/auth-profiles/persisted.js";
 import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
 import {
   applySessionEntryReplacements,
-  iterateDoctorSessionKeyBatches,
   scanDoctorSessionEntriesStrict,
   scanDoctorSessionEntriesTolerant,
 } from "../../../config/sessions/session-accessor.js";
@@ -58,6 +57,7 @@ import {
 import type { SessionModelRetirement } from "./retired-model-ref-repair.js";
 import { createRetiredModelRefRepairResolver } from "./retired-model-ref-repair.js";
 import { repairRetiredSessionModelRef } from "./retired-session-model-repair.js";
+import { iterateDoctorSessionKeyBatches } from "./session-entry-rewrite.js";
 
 function rewriteSessionModelPair(params: {
   entry: SessionEntry;

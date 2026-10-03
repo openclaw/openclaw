@@ -5,16 +5,15 @@ import { describe, expect, it } from "vitest";
 import { evaluateExecAllowlist } from "./exec-approvals-allowlist.js";
 import {
   analyzeArgvCommand,
-  analyzeWindowsShellCommand,
   buildEnforcedShellCommand,
   resolvePlannedSegmentArgv,
-  windowsEscapeArg,
 } from "./exec-approvals-analysis.js";
 import {
   makeExecutable,
   makePathEnv,
   makeExecApprovalsTempDir,
 } from "./exec-approvals-test-helpers.js";
+import { analyzeWindowsShellCommand, windowsEscapeArg } from "./windows-shell-command.js";
 
 describe("exec argv analysis", () => {
   it("parses argv commands", () => {

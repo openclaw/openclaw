@@ -17,7 +17,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
     name: "lobster",
     label: "Lobster Workflow",
     description:
-      "Run Lobster pipelines as a local-first workflow runtime (typed JSON envelope + resumable approvals).",
+      "Run Lobster workflows with resumable approvals and structured input. For needs_input, ask the user the returned prompt, then resume with their answer as responseJson matching responseSchema. For approvals, resume with approve. Use cancel: true to cancel a checkpoint.",
     parameters: Type.Object({
       action: Type.Enum(["run", "resume"], { type: "string" }),
       pipeline: Type.Optional(Type.String()),
@@ -25,6 +25,12 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       token: Type.Optional(Type.String()),
       approvalId: Type.Optional(Type.String()),
       approve: Type.Optional(Type.Boolean()),
+      responseJson: Type.Optional(
+        Type.String({
+          description: "User's answer as JSON for an input checkpoint. Use instead of approve.",
+        }),
+      ),
+      cancel: Type.Optional(Type.Literal(true)),
       cwd: Type.Optional(
         Type.String({
           description:
@@ -58,6 +64,8 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
         ...(typeof params.token === "string" ? { token: params.token } : {}),
         ...(typeof params.approvalId === "string" ? { approvalId: params.approvalId } : {}),
         ...(typeof params.approve === "boolean" ? { approve: params.approve } : {}),
+        ...(typeof params.responseJson === "string" ? { responseJson: params.responseJson } : {}),
+        ...(typeof params.cancel === "boolean" ? { cancel: params.cancel } : {}),
         cwd,
         timeoutMs,
         maxStdoutBytes,

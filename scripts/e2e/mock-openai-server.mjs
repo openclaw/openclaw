@@ -887,6 +887,9 @@ const server = http.createServer((req, res) => {
     ) {
       return;
     }
+    if (requestLog) {
+      process.send?.({ type: "mock-openai:request-logged", seq: requestLogSeq });
+    }
     if (selectedResponse) {
       requests.selections[controlSelection.models ? "model" : "global"] += 1;
       await waitForResponseRelease();

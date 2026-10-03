@@ -1,4 +1,3 @@
-// Normalizes runtime status values for CLI and gateway reporting.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type RuntimeStatusFormatInput = {
@@ -8,7 +7,6 @@ type RuntimeStatusFormatInput = {
   details?: string[];
 };
 
-/** Formats runtime health/status text with optional pid, state, and extra diagnostic details. */
 export function formatRuntimeStatusWithDetails({
   status,
   pid,

@@ -4,6 +4,7 @@ import {
 } from "@openclaw/ai/transports";
 import type { ModelCompatConfig } from "../../../config/types.models.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { createOpenAIServiceTierObservationWrapper } from "../../../llm/providers/stream-wrappers/openai-service-tier-observation.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
@@ -306,11 +307,11 @@ export async function settleEmbeddedAttemptStream(input: {
 
   try {
     await input.withOwnedTranscriptWrite(() =>
-      withSessionManagerWrite(sessionManager, () => {
+      withSessionManagerWrite(sessionManager, async () => {
         const { timedOutDuringCompaction } = input.readLifecycleState();
         compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
         const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
-        appendAttemptCacheTtlIfNeeded({
+        await appendAttemptCacheTtlIfNeeded({
           sessionManager,
           timedOutDuringCompaction,
           compactionOccurredThisAttempt,
@@ -327,7 +328,7 @@ export async function settleEmbeddedAttemptStream(input: {
         });
 
         if (timedOutDuringCompaction) {
-          const removedEntries = normalizeCompactionRecoveryTranscriptTail({
+          const removedEntries = await normalizeCompactionRecoveryTranscriptTail({
             activeSession,
             sessionManager,
           });
@@ -348,7 +349,7 @@ export async function settleEmbeddedAttemptStream(input: {
           !attempt.abortSignal?.aborted
         ) {
           try {
-            sessionManager.appendCustomEntry("openclaw:prompt-error", {
+            await sessionManager.appendCustomEntryAsync("openclaw:prompt-error", {
               timestamp: Date.now(),
               runId: attempt.runId,
               sessionId: attempt.sessionId,
@@ -401,6 +402,7 @@ export async function settleEmbeddedAttemptStream(input: {
 }
 
 export async function prepareEmbeddedAttemptTransport(input: {
+  assertCronRootCurrent?: () => void;
   attempt: EmbeddedRunAttemptParams;
   session: AgentSession;
   settingsManager: SettingsManager;
@@ -423,10 +425,16 @@ export async function prepareEmbeddedAttemptTransport(input: {
 }) {
   const attempt = input.attempt;
   const session = input.session;
-  const assertRunCurrent = resolveAdmittedRunActiveAssertion(
+  const assertAdmittedCurrent = resolveAdmittedRunActiveAssertion(
     attempt.admittedRunContext,
     input.abortSignal,
   );
+  const assertRunCurrent = input.assertCronRootCurrent
+    ? () => {
+        assertAdmittedCurrent?.();
+        input.assertCronRootCurrent?.();
+      }
+    : assertAdmittedCurrent;
   // Rebuild each turn from the session's original stream base so prior-turn
   // wrappers do not pin us to stale provider/API transport behavior.
   const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
@@ -638,6 +646,30 @@ export async function prepareEmbeddedAttemptTransport(input: {
   // Agent turns carry no credential, and provider wrappers classify auth from
   // options.apiKey (for example Anthropic OAuth identity), so attach it outermost.
   session.agent.streamFn = wrapApiKey(session.agent.streamFn);
+  const runtime = attempt.preparedModelRuntime;
+  const profileId = attempt.authProfileId;
+  const credential = profileId ? attempt.authProfileStore?.profiles[profileId] : undefined;
+  if (
+    runtime?.accountCatalog &&
+    profileId &&
+    credential?.type === "api_key" &&
+    attempt.model.provider === "openai" &&
+    attempt.model.api === "openai-responses"
+  ) {
+    const record = runtime.accountCatalog.prepareServiceTierObserver({ profileId, credential });
+    session.agent.streamFn = createOpenAIServiceTierObservationWrapper(
+      session.agent.streamFn,
+      (model) =>
+        !input.abortSignal.aborted &&
+        record({
+          modelId: model.id,
+          runtimeId: "openclaw",
+          api: model.api,
+          baseUrl: model.baseUrl,
+          serviceTiers: ["priority"],
+        }),
+    );
+  }
   return {
     serverToolClearingEnabled,
     compactionReplayEnabled: resolveCompactionReplayEligibility(attempt.model, {

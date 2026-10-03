@@ -30,14 +30,17 @@ export function createSessionObserverCompletion(params: {
       modelRef,
       useUtilityModel: true,
     }));
+    let reusable = false;
     try {
-      return await preparedPromise;
-    } catch (error) {
-      // Pending and successful preparation remain shared; settled failures do not.
-      if (state.preparedPromise === preparedPromise) {
+      const prepared = await preparedPromise;
+      reusable = !prepared.agentHarnessRuntimeOverride;
+      return prepared;
+    } finally {
+      // Share pending work and successful native routes. Failed or borrowed routes
+      // re-prepare next digest so newly available credentials can restore HTTP.
+      if (!reusable && state.preparedPromise === preparedPromise) {
         state.preparedPromise = undefined;
       }
-      throw error;
     }
   };
 

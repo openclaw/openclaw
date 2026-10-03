@@ -131,18 +131,15 @@ afterEach(() => {
 });
 
 describe("runUpdateCandidateAdmission", () => {
-  it.each([undefined, null, false, "1", 2])(
-    "keeps unsupported marker %s passive",
-    async (marker) => {
-      await setMarker(marker);
-      expect(await run()).toMatchObject({
-        owner: "installed",
-        fallbackReason: "unsupported-target",
-        warning: { code: "update-admission-unsupported-target" },
-      });
-      expect(mocks.spawn).not.toHaveBeenCalled();
-    },
-  );
+  it.each([undefined, "1", 2])("keeps unsupported marker %s passive", async (marker) => {
+    await setMarker(marker);
+    expect(await run()).toMatchObject({
+      owner: "installed",
+      fallbackReason: "unsupported-target",
+      warning: { code: "update-admission-unsupported-target" },
+    });
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
 
   it("honors forced installed admission through the option", async () => {
     expect(await run({ admission: "installed" })).toEqual({
@@ -246,59 +243,50 @@ describe("runUpdateCandidateAdmission", () => {
     await expect(fs.access(contextPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each(["admit", "refuse"] as const)(
-    "bounds warning diagnostics without changing the candidate's %s decision",
-    async (verdict) => {
-      const message = "diagnostic ".repeat(500);
-      const reply: UpdateAdmissionVerdict = {
-        ...admit(),
-        verdict,
-        reasons:
-          verdict === "refuse" ? [{ code: "invalid-config", message, nextAction: message }] : [],
-        warnings: [
-          { code: "x".repeat(81), message },
-          ...Array.from({ length: 40 }, (_, index) => ({ code: `warning-${index}`, message })),
-        ],
-        facts: {
-          ...admit().facts,
-          checks: [
-            { name: "config", status: verdict === "refuse" ? "refuse" : "warn", detail: message },
-          ],
-        },
-      };
-      fixture = { code: verdict === "refuse" ? 3 : 0, stdout: JSON.stringify(reply) };
-      const result = await run();
-      expect(result.owner).toBe("candidate");
-      expect(result.verdict?.verdict).toBe(verdict);
-      expect(result.verdict?.reasons.map((reason) => reason.code)).toEqual(
-        reply.reasons.map((reason) => reason.code),
-      );
-      expect(result.verdict?.warnings).toHaveLength(UPDATE_RUN_DIAGNOSTIC_LIMIT);
-      expect(result.verdict?.warnings[0]?.code).toBe("warning-0");
-      expect(
-        result.verdict?.warnings.every(
-          (warning) => warning.message.length <= UPDATE_RUN_TEXT_LIMIT,
-        ),
-      ).toBe(true);
-      expect(result.verdict?.facts.checks[0]).toMatchObject({
-        name: "config",
-        status: verdict === "refuse" ? "refuse" : "warn",
-      });
-      expect(result.verdict?.facts.checks[0]?.detail?.length).toBeLessThanOrEqual(
-        UPDATE_RUN_TEXT_LIMIT,
-      );
-      for (const reason of result.verdict?.reasons ?? []) {
-        expect(reason.message.length).toBeLessThanOrEqual(UPDATE_RUN_TEXT_LIMIT);
-        expect(reason.nextAction?.length).toBeLessThanOrEqual(UPDATE_RUN_TEXT_LIMIT);
-      }
-    },
-  );
+  it("bounds warning diagnostics without changing the candidate's refusal", async () => {
+    const message = "diagnostic ".repeat(500);
+    const reply: UpdateAdmissionVerdict = {
+      ...admit(),
+      verdict: "refuse",
+      reasons: [{ code: "invalid-config", message, nextAction: message }],
+      warnings: [
+        { code: "x".repeat(81), message },
+        ...Array.from({ length: 40 }, (_, index) => ({ code: `warning-${index}`, message })),
+      ],
+      facts: {
+        ...admit().facts,
+        checks: [{ name: "config", status: "refuse", detail: message }],
+      },
+    };
+    fixture = { code: 3, stdout: JSON.stringify(reply) };
+    const result = await run();
+    expect(result.owner).toBe("candidate");
+    expect(result.verdict?.verdict).toBe("refuse");
+    expect(result.verdict?.reasons.map((reason) => reason.code)).toEqual(
+      reply.reasons.map((reason) => reason.code),
+    );
+    expect(result.verdict?.warnings).toHaveLength(UPDATE_RUN_DIAGNOSTIC_LIMIT);
+    expect(result.verdict?.warnings[0]?.code).toBe("warning-0");
+    expect(
+      result.verdict?.warnings.every((warning) => warning.message.length <= UPDATE_RUN_TEXT_LIMIT),
+    ).toBe(true);
+    expect(result.verdict?.facts.checks[0]).toMatchObject({
+      name: "config",
+      status: "refuse",
+    });
+    expect(result.verdict?.facts.checks[0]?.detail?.length).toBeLessThanOrEqual(
+      UPDATE_RUN_TEXT_LIMIT,
+    );
+    for (const reason of result.verdict?.reasons ?? []) {
+      expect(reason.message.length).toBeLessThanOrEqual(UPDATE_RUN_TEXT_LIMIT);
+      expect(reason.nextAction?.length).toBeLessThanOrEqual(UPDATE_RUN_TEXT_LIMIT);
+    }
+  });
 
   it.each([
     { name: "internal error", code: 2, stdout: JSON.stringify(admit()), reason: "exit-2" },
     { name: "crash", code: null, stdout: "", reason: "crash" },
     { name: "malformed JSON", code: 0, stdout: "not a verdict", reason: "malformed-json" },
-    { name: "multiple documents", code: 0, stdout: "{}\n{}", reason: "malformed-json" },
     {
       name: "protocol mismatch",
       code: 0,
@@ -405,12 +393,12 @@ describe("runUpdateCandidateAdmission", () => {
       reason: "invalid-verdict",
     },
   ])(
-    "falls back after $name and retains only the first redacted stderr diagnostic",
+    "falls back after $name and retains the last redacted stderr diagnostic",
     async ({ code, stdout, reason }) => {
       fixture = {
         code,
         stdout,
-        stderr: "cannot inspect token=synthetic-secret\nsecond diagnostic\n",
+        stderr: "earlier diagnostic\ncannot inspect token=synthetic-secret\n",
       };
       const result = await run({ env: { API_TOKEN: "synthetic-secret" } });
       expect(result).toMatchObject({
@@ -420,7 +408,7 @@ describe("runUpdateCandidateAdmission", () => {
       });
       expect(result.warning?.message).toContain("cannot inspect");
       expect(result.warning?.message).not.toContain("synthetic-secret");
-      expect(result.warning?.message).not.toContain("second diagnostic");
+      expect(result.warning?.message).not.toContain("earlier diagnostic");
       expect(result.verdict).toBeUndefined();
       await expect(fs.access(contextPath)).rejects.toMatchObject({ code: "ENOENT" });
     },

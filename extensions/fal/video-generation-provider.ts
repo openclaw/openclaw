@@ -84,7 +84,6 @@ type FalQueueResponse = {
   request_id?: string;
   response_url?: string;
   status_url?: string;
-  cancel_url?: string;
   detail?: string;
   response?: FalVideoResponse;
   prompt?: string;
@@ -149,7 +148,6 @@ function readFalQueueResponse(payload: unknown): FalQueueResponse {
     request_id: normalizeOptionalString(payload.request_id),
     response_url: normalizeOptionalString(payload.response_url),
     status_url: normalizeOptionalString(payload.status_url),
-    cancel_url: normalizeOptionalString(payload.cancel_url),
     detail: normalizeOptionalString(payload.detail),
     response: payload.response === undefined ? undefined : readFalVideoPayload(payload.response),
     prompt: normalizeOptionalString(payload.prompt),
@@ -177,10 +175,10 @@ function toDataUrl(buffer: Buffer, mimeType: string): string {
 }
 
 function extractFalVideoEntry(payload: FalVideoResponse) {
-  if (normalizeOptionalString(payload.video?.url)) {
+  if (payload.video?.url) {
     return payload.video;
   }
-  return payload.videos?.find((entry) => normalizeOptionalString(entry.url));
+  return payload.videos?.find((entry) => entry.url);
 }
 
 async function downloadFalVideo(url: string, maxBytes: number): Promise<GeneratedVideoAsset> {
@@ -207,20 +205,15 @@ async function downloadFalVideo(url: string, maxBytes: number): Promise<Generate
 }
 
 function resolveFalQueueBaseUrl(baseUrl: string): string {
-  try {
-    const url = new URL(baseUrl);
-    if (url.hostname === "fal.run") {
-      url.hostname = "queue.fal.run";
-      return url.toString().replace(/\/$/, "");
-    }
-    return baseUrl.replace(/\/$/, "");
-  } catch {
+  const url = URL.parse(baseUrl);
+  if (!url) {
     return DEFAULT_FAL_QUEUE_BASE_URL;
   }
-}
-
-function isFalMiniMaxLiveModel(model: string): boolean {
-  return normalizeLowercaseStringOrEmpty(model) === DEFAULT_FAL_VIDEO_MODEL;
+  if (url.hostname === "fal.run") {
+    url.hostname = "queue.fal.run";
+    return url.toString().replace(/\/$/, "");
+  }
+  return baseUrl.replace(/\/$/, "");
 }
 
 function isFalSeedance2Model(model: string): boolean {
@@ -231,10 +224,6 @@ function isFalSeedance2ReferenceModel(model: string): boolean {
   return SEEDANCE_2_REFERENCE_VIDEO_MODELS.includes(
     model as (typeof SEEDANCE_2_REFERENCE_VIDEO_MODELS)[number],
   );
-}
-
-function isFalHeyGenVideoAgentModel(model: string): boolean {
-  return normalizeLowercaseStringOrEmpty(model) === HEYGEN_VIDEO_AGENT_MODEL;
 }
 
 function resolveFalResolution(resolution: VideoGenerationRequest["resolution"], model: string) {
@@ -280,14 +269,6 @@ function resolveFalReferenceUrl(
   return toDataUrl(asset.buffer, normalizeOptionalString(asset.mimeType) ?? defaultMimeType);
 }
 
-function resolveFalReferenceUrls(
-  assets: VideoGenerationRequest["inputImages"],
-  defaultMimeType: string,
-  label: string,
-): string[] {
-  return (assets ?? []).map((asset) => resolveFalReferenceUrl(asset, defaultMimeType, label));
-}
-
 function applyFalSeedanceControls(params: {
   req: VideoGenerationRequest;
   model: string;
@@ -323,29 +304,15 @@ function buildFalVideoRequestBody(params: {
   };
 
   if (isFalSeedance2ReferenceModel(params.model)) {
-    const imageUrls = resolveFalReferenceUrls(
-      params.req.inputImages,
-      "image/png",
-      "reference image",
-    );
-    const videoUrls = resolveFalReferenceUrls(
-      params.req.inputVideos,
-      "video/mp4",
-      "reference video",
-    );
-    const audioUrls = resolveFalReferenceUrls(
-      params.req.inputAudios,
-      "audio/mpeg",
-      "reference audio",
-    );
-    if (imageUrls.length > 0) {
-      requestBody.image_urls = imageUrls;
-    }
-    if (videoUrls.length > 0) {
-      requestBody.video_urls = videoUrls;
-    }
-    if (audioUrls.length > 0) {
-      requestBody.audio_urls = audioUrls;
+    for (const [field, assets, mimeType, label] of [
+      ["image_urls", params.req.inputImages, "image/png", "reference image"],
+      ["video_urls", params.req.inputVideos, "video/mp4", "reference video"],
+      ["audio_urls", params.req.inputAudios, "audio/mpeg", "reference audio"],
+    ] as const) {
+      const urls = (assets ?? []).map((asset) => resolveFalReferenceUrl(asset, mimeType, label));
+      if (urls.length > 0) {
+        requestBody[field] = urls;
+      }
     }
     applyFalSeedanceControls({ req: params.req, model: params.model, body: requestBody });
     return requestBody;
@@ -353,16 +320,17 @@ function buildFalVideoRequestBody(params: {
 
   const input = params.req.inputImages?.[0];
   if (input) {
-    requestBody.image_url = normalizeOptionalString(input.url)
-      ? normalizeOptionalString(input.url)
-      : input.buffer
+    requestBody.image_url =
+      normalizeOptionalString(input.url) ??
+      (input.buffer
         ? toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png")
-        : undefined;
+        : undefined);
   }
   // MiniMax Live on fal currently documents prompt + optional image_url only.
   // Keep the default model conservative so queue requests do not hang behind
   // unsupported knobs such as duration/resolution/aspect-ratio overrides.
-  if (isFalMiniMaxLiveModel(params.model) || isFalHeyGenVideoAgentModel(params.model)) {
+  const normalizedModel = normalizeLowercaseStringOrEmpty(params.model);
+  if (normalizedModel === DEFAULT_FAL_VIDEO_MODEL || normalizedModel === HEYGEN_VIDEO_AGENT_MODEL) {
     return requestBody;
   }
   applyFalSeedanceControls({ req: params.req, model: params.model, body: requestBody });
@@ -377,26 +345,15 @@ function validateFalVideoReferenceInputs(params: {
   const videoCount = params.req.inputVideos?.length ?? 0;
   const audioCount = params.req.inputAudios?.length ?? 0;
   if (isFalSeedance2ReferenceModel(params.model)) {
-    if (imageCount > SEEDANCE_REFERENCE_MAX_IMAGES) {
-      throw new Error(
-        `fal Seedance reference-to-video supports at most ${SEEDANCE_REFERENCE_MAX_IMAGES} reference images.`,
-      );
-    }
-    if (videoCount > SEEDANCE_REFERENCE_MAX_VIDEOS) {
-      throw new Error(
-        `fal Seedance reference-to-video supports at most ${SEEDANCE_REFERENCE_MAX_VIDEOS} reference videos.`,
-      );
-    }
-    if (audioCount > SEEDANCE_REFERENCE_MAX_AUDIOS) {
-      throw new Error(
-        `fal Seedance reference-to-video supports at most ${SEEDANCE_REFERENCE_MAX_AUDIOS} reference audios.`,
-      );
-    }
-    const totalFiles = imageCount + videoCount + audioCount;
-    if (totalFiles > SEEDANCE_REFERENCE_MAX_FILES) {
-      throw new Error(
-        `fal Seedance reference-to-video supports at most ${SEEDANCE_REFERENCE_MAX_FILES} total reference files.`,
-      );
+    for (const [count, max, label] of [
+      [imageCount, SEEDANCE_REFERENCE_MAX_IMAGES, "reference images"],
+      [videoCount, SEEDANCE_REFERENCE_MAX_VIDEOS, "reference videos"],
+      [audioCount, SEEDANCE_REFERENCE_MAX_AUDIOS, "reference audios"],
+      [imageCount + videoCount + audioCount, SEEDANCE_REFERENCE_MAX_FILES, "total reference files"],
+    ] as const) {
+      if (count > max) {
+        throw new Error(`fal Seedance reference-to-video supports at most ${max} ${label}.`);
+      }
     }
     if (audioCount > 0 && imageCount === 0 && videoCount === 0) {
       throw new Error(
@@ -474,7 +431,7 @@ async function waitForFalQueueResult(params: {
         errorContext: "fal video status request failed",
       }),
     );
-    const status = normalizeOptionalString(payload.status)?.toUpperCase();
+    const status = payload.status?.toUpperCase();
     if (!status) {
       throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
     }
@@ -500,8 +457,8 @@ async function waitForFalQueueResult(params: {
     }
     if (status === "FAILED" || status === "CANCELLED") {
       throw new Error(
-        normalizeOptionalString(payload.detail) ||
-          normalizeOptionalString(payload.error?.message) ||
+        payload.detail ||
+          payload.error?.message ||
           `fal video generation ${normalizeLowercaseStringOrEmpty(status)}`,
       );
     }
@@ -529,13 +486,6 @@ function resolveFalQueueRemainingMs(
     throw new Error(`fal video generation did not finish in time (last status: ${lastStatus})`);
   }
   return Math.max(1, Math.min(defaultMs, remainingMs));
-}
-
-function extractFalVideoPayload(payload: FalQueueResponse): FalVideoResponse {
-  if (payload.response) {
-    return payload.response;
-  }
-  return readFalVideoPayload(payload);
 }
 
 function buildFalVideoModeCapabilities(models: readonly string[]) {
@@ -607,8 +557,8 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
           errorContext: "fal video generation failed",
         }),
       );
-      const statusUrl = normalizeOptionalString(submitted.status_url);
-      const responseUrl = normalizeOptionalString(submitted.response_url);
+      const statusUrl = submitted.status_url;
+      const responseUrl = submitted.response_url;
       if (!statusUrl || !responseUrl) {
         throw new Error("fal video generation response missing queue URLs");
       }
@@ -627,9 +577,9 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         deadline: operationDeadline,
         dispatcherPolicy,
       });
-      const videoPayload = extractFalVideoPayload(payload);
+      const videoPayload = payload.response || readFalVideoPayload(payload);
       const entry = extractFalVideoEntry(videoPayload);
-      const url = normalizeOptionalString(entry?.url);
+      const url = entry?.url;
       if (!url) {
         throw new Error("fal video generation response missing output URL");
       }
@@ -638,9 +588,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         videos: [video],
         model,
         metadata: {
-          ...(normalizeOptionalString(submitted.request_id)
-            ? { requestId: normalizeOptionalString(submitted.request_id) }
-            : {}),
+          ...(submitted.request_id ? { requestId: submitted.request_id } : {}),
           ...(videoPayload.prompt ? { prompt: videoPayload.prompt } : {}),
           ...(typeof videoPayload.seed === "number" ? { seed: videoPayload.seed } : {}),
         },

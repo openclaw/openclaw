@@ -2,8 +2,8 @@
 // provider payload transforms, and MiniMax/Copilot special paths.
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginMetadataSnapshot } from "../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,

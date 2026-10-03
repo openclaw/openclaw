@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -24,13 +23,9 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import * as lifecycleNotices from "./server-restart-sentinel-notice.js";
 import { activateGatewayScheduledServices } from "./server-runtime-services.js";
@@ -57,28 +52,23 @@ let services: ReturnType<typeof activateGatewayScheduledServices> | undefined;
 let watcher: ReturnType<typeof startUpdateRunWatcher> | undefined;
 let scheduler: ReturnType<typeof createTestGatewayScheduler> | undefined;
 let lifecycle: ReturnType<typeof createGatewayUpdateLifecycle> | undefined;
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(async () => {
-    await watcher?.stop();
-    await lifecycle?.stop();
-    await services?.stopDeliveryRecovery();
-    services?.heartbeatRunner.stop();
-    await scheduler?.stop();
-    watcher = undefined;
-    services = undefined;
-    scheduler = undefined;
-    lifecycle = undefined;
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    closeOpenClawAgentDatabasesForTest();
-    clearRuntimeConfigSnapshot();
-    resetPluginRuntimeStateForTest();
-    resetGatewayWorkAdmission();
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
-    cleanup();
-  });
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-runtime-recovery-");
+afterEach(async () => {
+  await watcher?.stop();
+  await lifecycle?.stop();
+  await services?.stopDeliveryRecovery();
+  services?.heartbeatRunner.stop();
+  await scheduler?.stop();
+  watcher = undefined;
+  services = undefined;
+  scheduler = undefined;
+  lifecycle = undefined;
+  clearRuntimeConfigSnapshot();
+  resetPluginRuntimeStateForTest();
+  resetGatewayWorkAdmission();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 it("recovers a watcher-owned update notice on its runtime state after ambient root drift", async () => {
@@ -88,8 +78,8 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   scheduler = createTestGatewayScheduler("fake-timers");
   lifecycle = createGatewayUpdateLifecycle(scheduler);
   resetGatewayWorkAdmission();
-  const rootA = tempDirs.make("openclaw-runtime-recovery-a-");
-  const rootB = tempDirs.make("openclaw-runtime-recovery-b-");
+  const rootA = tempDirs.make();
+  const rootB = tempDirs.make();
   vi.stubEnv("OPENCLAW_STATE_DIR", rootA);
   vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
   const sessionKey = "agent:main:matrix:direct:owner";

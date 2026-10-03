@@ -1986,7 +1986,7 @@ describe("qa mock openai server", () => {
     );
   });
 
-  it("consumes a current private completion to spawn once, then remains silent", async () => {
+  it("consumes a private completion to spawn once and records the reviewed outcome", async () => {
     const server = await startMockServer();
     const nonce = "QA-PARENT-PRIVATE-CHILD1-0123456789ABCDEF0123456789ABCDEF";
     const kickoff = makeUserInput("Subagent terminal reply QA check: private.");
@@ -2018,11 +2018,11 @@ describe("qa mock openai server", () => {
       String(call?.call_id),
       JSON.stringify({ status: "accepted", childSessionKey: "agent:qa:subagent:second" }),
     );
-    const silent = await expectNonStreamingResponsesJson(server, {
+    const continued = await expectNonStreamingResponsesJson(server, {
       tools: [SESSIONS_SPAWN_TOOL],
       input: [kickoff, firstReceipt, completion, call, secondReceipt],
     });
-    expect(outputText(silent)).toBe("NO_REPLY");
+    expect(outputText(continued)).toBe("Second worker started.");
     const settled = await expectNonStreamingResponsesJson(server, {
       tools: [SESSIONS_SPAWN_TOOL],
       input: [
@@ -2039,7 +2039,7 @@ describe("qa mock openai server", () => {
         ),
       ],
     });
-    expect(outputText(settled)).toBe("NO_REPLY");
+    expect(outputText(settled)).toBe("Private review complete.");
     expect(outputItems(settled).some((item) => item.type === "function_call")).toBe(false);
   });
 

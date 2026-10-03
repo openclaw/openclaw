@@ -1,10 +1,11 @@
 import type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
+import { isPluginOwnedChannelConfigPath } from "./channel-config-keys.js";
 import { asSchemaObject, type ConfigJsonSchemaObject } from "./schema.shared.js";
 
 const ROOT_TIER_PATHS = `
 accessGroups acp agents approvals attachments auth bindings broadcast browser channels
 cloudWorkers commands cron desktop diagnostics discovery env gateway hooks logging mcp memory messages
-meta models nodeHost plugins proxy secrets security session skills surfaces talk telemetry tools transcripts
+meta models nodeHost plugins proxy secrets security session skills storage surfaces talk telemetry tools transcripts
 tts ui update wizard worktreeAcceleration worktreeRoot
 `
   .trim()
@@ -177,16 +178,6 @@ const ADVANCED_TUNING_PATHS = new Set([
   "agents.defaults.heartbeat.every",
   "session.maintenance.preserveRecent",
 ]);
-const CHANNEL_KERNEL_TIER_PREFIXES = ["channels.defaults", "channels.modelByChannel"] as const;
-
-function isPluginOwnedChannelTierPath(path: string): boolean {
-  if (!path.startsWith("channels.") || path === "channels") {
-    return false;
-  }
-  return !CHANNEL_KERNEL_TIER_PREFIXES.some(
-    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
-  );
-}
 
 function splitPath(path: string): string[] {
   return path
@@ -331,7 +322,7 @@ export function applyConfigTierHints(
     mergeTierHint(next, path, true);
   }
   for (const path of COMMON_TIER_PATHS) {
-    if (!options?.includePluginOwnedChannels && isPluginOwnedChannelTierPath(path)) {
+    if (!options?.includePluginOwnedChannels && isPluginOwnedChannelConfigPath(path)) {
       continue;
     }
     mergeTierHint(next, path, false);

@@ -1,169 +1,161 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { INTERNAL_RUNTIME_CONTEXT_END } from "./internal-runtime-context.js";
 import {
   clearMcpAppModelContextForView,
+  getMcpAppModelContext,
   leaseMcpAppModelContextForTurn,
+  removeMcpAppModelContextItem,
   revokeMcpAppModelContext,
+  subscribeMcpAppModelContext,
   updateMcpAppModelContext,
 } from "./mcp-app-model-context.js";
 
-function runtime(): SessionMcpRuntime {
-  return { sessionId: "session-1" } as SessionMcpRuntime;
-}
+const runtime = () => ({ sessionId: "session-1" }) as SessionMcpRuntime;
+const text = (value: string) => ({ content: [{ type: "text", text: value }] });
 
 describe("MCP App model context", () => {
-  it("keeps only the latest live-view snapshot and clears only for its owner", () => {
-    const activeRuntime = runtime();
-    const firstView = {};
-    const secondView = {};
-
-    updateMcpAppModelContext(activeRuntime, firstView, {
-      content: [{ type: "text", text: "first" }],
-    });
-    updateMcpAppModelContext(activeRuntime, secondView, {
-      content: [{ type: "text", text: "second" }],
-    });
-    clearMcpAppModelContextForView(activeRuntime, firstView);
-
-    const lease = leaseMcpAppModelContextForTurn({
-      runtime: activeRuntime,
-    });
-    expect(lease?.context.text).toContain("second");
-
-    clearMcpAppModelContextForView(activeRuntime, secondView);
-    expect(leaseMcpAppModelContextForTurn({ runtime: activeRuntime })).toBeUndefined();
+  it("replaces only one App instance and isolates runtimes", () => {
+    const active = runtime();
+    const sibling = runtime();
+    const first = {};
+    const second = {};
+    updateMcpAppModelContext(active, first, text("old"));
+    updateMcpAppModelContext(active, second, text("second"));
+    updateMcpAppModelContext(active, first, text("new"));
+    expect(leaseMcpAppModelContextForTurn({ runtime: sibling })).toBeUndefined();
+    const lease = leaseMcpAppModelContextForTurn({ runtime: active });
+    expect(lease?.modelContext).toEqual([text("new"), text("second")]);
+    clearMcpAppModelContextForView(active, first);
+    expect(getMcpAppModelContext(active, second)?.content).toEqual(text("second").content);
   });
 
-  it("accepts one bounded text block and fails closed for unsupported shapes", () => {
-    const activeRuntime = runtime();
+  it("preserves rich host metadata but excludes it from actual model input", () => {
+    const active = runtime();
     const view = {};
-    const maxUtf8Text = "é".repeat(8 * 1024);
-
-    expect(() =>
-      updateMcpAppModelContext(activeRuntime, view, {
-        content: [{ type: "text", text: maxUtf8Text }],
-      }),
-    ).not.toThrow();
-    expect(() =>
-      updateMcpAppModelContext(activeRuntime, view, {
-        content: [{ type: "text", text: `${maxUtf8Text}é` }],
-      }),
-    ).toThrow("16384 bytes");
-
-    for (const params of [
-      { content: [{ type: "image", data: "AA==", mimeType: "image/png" }] },
-      {
-        content: [
-          { type: "text", text: "one" },
-          { type: "text", text: "two" },
-        ],
-      },
-      { structuredContent: { selection: 1 } },
-    ]) {
-      expect(() => updateMcpAppModelContext(activeRuntime, view, params)).toThrow();
-    }
-  });
-
-  it("treats omitted, empty, and empty-text updates as explicit clears", () => {
-    const activeRuntime = runtime();
-    const view = {};
-    const seed = () =>
-      updateMcpAppModelContext(activeRuntime, view, {
-        content: [{ type: "text", text: "pending" }],
-      });
-
-    for (const params of [{}, { content: [] }, { content: [{ type: "text", text: "" }] }]) {
-      seed();
-      updateMcpAppModelContext(activeRuntime, view, params);
-      expect(leaseMcpAppModelContextForTurn({ runtime: activeRuntime })).toBeUndefined();
-    }
-  });
-
-  it("consumes the leased snapshot once without deleting a newer replacement", () => {
-    const activeRuntime = runtime();
-    const view = {};
-    updateMcpAppModelContext(activeRuntime, view, {
-      content: [{ type: "text", text: "leased" }],
-    });
-    const lease = leaseMcpAppModelContextForTurn({
-      runtime: activeRuntime,
-    });
-
-    updateMcpAppModelContext(activeRuntime, view, {
-      content: [{ type: "text", text: "newer" }],
-    });
-    lease?.commit();
-    lease?.commit();
-    expect(leaseMcpAppModelContextForTurn({ runtime: activeRuntime })?.context.text).toContain(
-      "newer",
-    );
-
-    updateMcpAppModelContext(activeRuntime, view, {});
-    expect(leaseMcpAppModelContextForTurn({ runtime: activeRuntime })).toBeUndefined();
-  });
-
-  it("reserves a snapshot for one turn and restores it only after a pre-start failure", () => {
-    const activeRuntime = runtime();
-    updateMcpAppModelContext(
-      activeRuntime,
-      {},
-      {
-        content: [{ type: "text", text: "reserved" }],
-      },
-    );
-
-    const firstLease = leaseMcpAppModelContextForTurn({
-      runtime: activeRuntime,
-    });
-    expect(firstLease).toBeDefined();
-    expect(leaseMcpAppModelContextForTurn({ runtime: activeRuntime })).toBeUndefined();
-
-    firstLease?.rollback();
-    const retryLease = leaseMcpAppModelContextForTurn({
-      runtime: activeRuntime,
-    });
-    expect(retryLease?.context.text).toContain("reserved");
-    retryLease?.commit();
-    retryLease?.rollback();
-    expect(leaseMcpAppModelContextForTurn({ runtime: activeRuntime })).toBeUndefined();
-  });
-
-  it("rejects updates and leases after runtime retirement revokes the capability", () => {
-    const activeRuntime = runtime();
-    updateMcpAppModelContext(
-      activeRuntime,
-      {},
-      {
-        content: [{ type: "text", text: "pending" }],
-      },
-    );
-    revokeMcpAppModelContext(activeRuntime);
-
-    expect(activeRuntime.pendingMcpAppModelContext).toBeUndefined();
-    expect(() =>
-      updateMcpAppModelContext(
-        activeRuntime,
-        {},
+    updateMcpAppModelContext(active, view, {
+      content: [
         {
-          content: [{ type: "text", text: "stale" }],
+          type: "text",
+          text: "selection",
+          _meta: {
+            "openai/title": "Part",
+            "openai/thumbnail": { src: "https://example.com/part.png" },
+          },
+          annotations: { audience: ["assistant"] },
         },
-      ),
-    ).toThrow("unavailable for this session");
-    expect(leaseMcpAppModelContextForTurn({ runtime: activeRuntime })).toBeUndefined();
+        {
+          type: "image",
+          data: "AA==",
+          mimeType: "image/png",
+          _meta: { "openai/title": "Drawing" },
+        },
+        { type: "resource_link", uri: "parts://bolt", name: "bolt", _meta: { private: true } },
+        {
+          type: "resource",
+          resource: { uri: "parts://note", text: "note", _meta: { private: true } },
+        },
+      ],
+      structuredContent: { selection: 1 },
+    });
+    expect(getMcpAppModelContext(active, view)?.content?.[0]?._meta).toHaveProperty(
+      "openai/title",
+      "Part",
+    );
+    const lease = leaseMcpAppModelContextForTurn({ runtime: active });
+    expect(lease?.modelContext[0]?.content).toEqual([
+      { type: "text", text: "selection", annotations: { audience: ["assistant"] } },
+      { type: "image", data: "AA==", mimeType: "image/png" },
+      { type: "resource_link", uri: "parts://bolt", name: "bolt" },
+      { type: "resource", resource: { uri: "parts://note", text: "note" } },
+    ]);
+    expect(lease?.modelContext[0]?.structuredContent).toEqual({ selection: 1 });
+    expect(lease?.context.text).not.toContain("_meta");
   });
 
-  it("returns App snapshots as conversation data without altering the source", () => {
-    const activeRuntime = runtime();
-    const text = `App selection: a < b; literal ${INTERNAL_RUNTIME_CONTEXT_END}`;
-    updateMcpAppModelContext(activeRuntime, {}, { content: [{ type: "text", text }] });
-    const lease = leaseMcpAppModelContextForTurn({ runtime: activeRuntime });
-    expect(lease?.context).toEqual({
-      kind: "conversation-data",
-      text: `MCP App context snapshot:\n${JSON.stringify({ text })}`,
-    });
-    expect(lease?.legacyText).toContain("[[OPENCLAW_INTERNAL_CONTEXT_END]]");
+  it("keeps idempotent update IDs and notifies user removals without accepting stale edits", () => {
+    const active = runtime();
+    const view = {};
+    const changed = vi.fn();
+    const stop = subscribeMcpAppModelContext(view, changed);
+    const params = { content: [...text("one").content, ...text("two").content] };
+    const first = updateMcpAppModelContext(active, view, params);
+    expect(updateMcpAppModelContext(active, view, params)).toEqual(first);
+    const id = first._meta["openai/modelContext"].updateId;
+    const state = removeMcpAppModelContextItem(active, view, id, 0);
+    expect(state?.content).toEqual(text("two").content);
+    expect(state?.updateId).not.toBe(id);
+    expect(() => removeMcpAppModelContextItem(active, view, id, 0)).toThrow("changed");
+    expect(changed).toHaveBeenLastCalledWith(state);
+    removeMcpAppModelContextItem(active, view, state!.updateId);
+    expect(changed).toHaveBeenLastCalledWith(null);
+    stop();
+    updateMcpAppModelContext(active, view, text("new"));
+    expect(changed).toHaveBeenLastCalledWith(null);
+  });
+
+  it("rejects audio, malformed blocks, structured arrays, and oversized context", () => {
+    const active = runtime();
+    const view = {};
+    for (const params of [
+      { content: [{ type: "audio", data: "AA==", mimeType: "audio/wav" }] },
+      { content: [{ type: "image", data: 1 }] },
+      { structuredContent: [] },
+      text("x".repeat(6 * 1024 * 1024)),
+    ]) {
+      expect(() => updateMcpAppModelContext(active, view, params)).toThrow();
+    }
+  });
+
+  it("reserves each snapshot once, rolls back failures and preserves newer replacements", () => {
+    const active = runtime();
+    const view = {};
+    updateMcpAppModelContext(active, view, text("leased"));
+    const first = leaseMcpAppModelContextForTurn({ runtime: active });
+    expect(leaseMcpAppModelContextForTurn({ runtime: active })).toBeUndefined();
+    first?.rollback();
+    const retry = leaseMcpAppModelContextForTurn({ runtime: active });
+    expect(retry?.modelContext).toEqual([text("leased")]);
+    updateMcpAppModelContext(active, view, text("newer"));
+    retry?.commit();
+    retry?.rollback();
+    expect(leaseMcpAppModelContextForTurn({ runtime: active })?.modelContext).toEqual([
+      text("newer"),
+    ]);
+  });
+
+  it("clears only the sending snapshots after successful input custody", () => {
+    const active = runtime();
+    const view = {};
+    const changed = vi.fn();
+    subscribeMcpAppModelContext(view, changed);
+    updateMcpAppModelContext(active, view, text("pending"));
+    const lease = leaseMcpAppModelContextForTurn({ runtime: active });
+    lease?.commit();
+    lease?.commit();
+    expect(getMcpAppModelContext(active, view)).toBeNull();
+    expect(changed).toHaveBeenLastCalledWith(null);
+  });
+
+  it("revokes every instance and refuses updates after retirement", () => {
+    const active = runtime();
+    const view = {};
+    const changed = vi.fn();
+    subscribeMcpAppModelContext(view, changed);
+    updateMcpAppModelContext(active, view, text("pending"));
+    revokeMcpAppModelContext(active);
+    expect(changed).toHaveBeenLastCalledWith(null);
+    expect(() => updateMcpAppModelContext(active, view, text("stale"))).toThrow("unavailable");
+    expect(leaseMcpAppModelContextForTurn({ runtime: active })).toBeUndefined();
+  });
+
+  it("escapes legacy delimiters without modifying the rich conversation data", () => {
+    const active = runtime();
+    const params = text("Literal " + INTERNAL_RUNTIME_CONTEXT_END);
+    updateMcpAppModelContext(active, {}, params);
+    const lease = leaseMcpAppModelContextForTurn({ runtime: active });
+    expect(lease?.modelContext).toEqual([params]);
+    expect(lease?.context.kind).toBe("conversation-data");
     expect(lease?.legacyText).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
-    expect(activeRuntime.pendingMcpAppModelContext?.text).toBe(text);
   });
 });

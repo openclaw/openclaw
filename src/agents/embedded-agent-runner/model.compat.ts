@@ -1,4 +1,5 @@
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
+import { isVllmQwenThinkingCompat as hasVllmQwenThinkingCompat } from "../model-compat-catalog.js";
 import { normalizeProviderId } from "../model-selection.js";
 
 export function mergeModelMediaInput(
@@ -34,38 +35,23 @@ export function resolveConfiguredFallbackReasoning(params: {
 
 export function resolveMergedConfiguredModelReasoning(params: {
   provider: string;
-  configuredCompat?: unknown;
-  resolvedCompat?: unknown;
+  compat?: unknown;
   configuredReasoning?: boolean;
   discoveredReasoning?: boolean;
 }): boolean {
   if (params.configuredReasoning !== undefined) {
     return params.configuredReasoning;
   }
-  if (isVllmQwenThinkingCompat({ provider: params.provider, compat: params.configuredCompat })) {
-    return true;
-  }
-  return resolveConfiguredFallbackReasoning({
-    provider: params.provider,
-    compat: params.resolvedCompat,
-    reasoning: params.discoveredReasoning,
-  });
+  return isVllmQwenThinkingCompat(params) || (params.discoveredReasoning ?? false);
 }
 
 function isVllmQwenThinkingCompat(params: { provider: string; compat?: unknown }): boolean {
-  const thinkingFormat = readCompatThinkingFormat(params.compat);
-  return (
-    normalizeProviderId(params.provider) === "vllm" &&
-    (thinkingFormat === "qwen" || thinkingFormat === "qwen-chat-template")
-  );
-}
-
-function readCompatThinkingFormat(compat: unknown): string | undefined {
+  const { compat } = params;
   if (!compat || typeof compat !== "object" || Array.isArray(compat)) {
-    return undefined;
+    return false;
   }
   const thinkingFormat = (compat as { thinkingFormat?: unknown }).thinkingFormat;
-  return typeof thinkingFormat === "string" ? thinkingFormat : undefined;
+  return hasVllmQwenThinkingCompat(normalizeProviderId(params.provider), { thinkingFormat });
 }
 
 export function mergeModelCompat(

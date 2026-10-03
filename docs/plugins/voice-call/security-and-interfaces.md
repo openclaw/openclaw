@@ -78,6 +78,11 @@ a standalone CLI runtime.
 analysis to the last N records (default 200). Output includes min/max/avg,
 p50, and p95 for turn latency and listen-wait times.
 
+Doctor imports older `calls.jsonl` records into SQLite, preserving call data and
+event ordering, and keeps the original log as `calls.jsonl.migrated`. Run
+`openclaw doctor --fix` before starting Voice Call with an older call log;
+runtime call-history reads use only canonical SQLite records.
+
 ## Agent tool
 
 Tool name: `voice_call`.

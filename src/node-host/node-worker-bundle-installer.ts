@@ -16,6 +16,7 @@ import { hasErrnoCode } from "../infra/errors.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import {
@@ -274,7 +275,11 @@ export class NodeWorkerBundleInstaller {
     try {
       await execFileAsync(
         process.execPath,
-        [path.join(bundleDir, WORKER_BUNDLE_ENTRY_PATH), "--internal-worker-prewarm"],
+        [
+          ...resolveRuntimeArgs(),
+          path.join(bundleDir, WORKER_BUNDLE_ENTRY_PATH),
+          "--internal-worker-prewarm",
+        ],
         {
           cwd: bundleDir,
           env: this.#workerEnv,

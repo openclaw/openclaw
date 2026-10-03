@@ -175,7 +175,7 @@ while (Date.now() - startedAt < timeoutMs) {
   if (remainingDelayMs <= 0) {
     break;
   }
-  const delayMs = Math.min(500, remainingDelayMs);
+  const delayMs = Math.min(100, remainingDelayMs);
   await new Promise((resolve) => {
     setTimeout(resolve, delayMs);
   });

@@ -2,13 +2,13 @@ import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/nu
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
-import { readSessionTranscriptBoundedMessageTailPage } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import {
   selectSessionCompanionReferenceItems,
   type SessionCompanionContextMessage,
   type SessionCompanionPreparedContext,
 } from "./session-companion-state.js";
+import { readSessionTranscriptBoundedMessageTailPageAsync } from "./session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const CONTEXT_MAX_MESSAGES = 40;
@@ -57,10 +57,6 @@ function extractUserText(message: unknown): string | undefined {
   return normalizeContextText(text) || undefined;
 }
 
-function readMessageTimestamp(message: unknown): number {
-  return resolveNonNegativeIntegerOption(asOptionalObjectRecord(message)?.timestamp, 0);
-}
-
 function appendContextMessages(
   events: Array<{ event: unknown }>,
   messages: SessionCompanionContextMessage[],
@@ -80,7 +76,7 @@ function appendContextMessages(
           ? extractUserText(message)
           : undefined;
     if (text && (role === "assistant" || role === "user")) {
-      messages.push({ role, text, ts: readMessageTimestamp(message) });
+      messages.push({ role, text, ts: resolveNonNegativeIntegerOption(message?.timestamp, 0) });
     }
   }
 }
@@ -123,7 +119,7 @@ async function readSessionCompanionContext(params: {
       contextMessages.length < CONTEXT_MAX_MESSAGES &&
       scannedMessages < CONTEXT_READ_MAX_SCANNED_MESSAGES
     ) {
-      const page = readSessionTranscriptBoundedMessageTailPage(scope, {
+      const page = await readSessionTranscriptBoundedMessageTailPageAsync(scope, {
         maxBytes: CONTEXT_READ_MAX_BYTES - rawBytes,
         maxMessages: Math.min(
           CONTEXT_READ_PAGE_MESSAGES,
@@ -179,7 +175,7 @@ async function readSessionCompanionContext(params: {
     ) {
       return { kind: "unavailable" };
     }
-    const fence = readSessionTranscriptBoundedMessageTailPage(scope, {
+    const fence = await readSessionTranscriptBoundedMessageTailPageAsync(scope, {
       maxBytes: 0,
       maxMessages: 0,
       offset: 0,

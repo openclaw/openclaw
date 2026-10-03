@@ -5,11 +5,15 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { UPGRADE_SURVIVOR_ASSERTION_SCENARIOS } from "../../../lib/upgrade-survivor-policy.mjs";
+import {
+  UPGRADE_SURVIVOR_ASSERTION_SCENARIOS,
+  usesStructuredToolSearchAtBaseline,
+} from "../../../lib/upgrade-survivor-policy.mjs";
 import {
   inspectNpmPackageTarball,
   validatePrepublishPluginRegistryArtifact,
 } from "../../../prepublish-plugin-registry-artifact.mjs";
+import { assert, readJson, write, writeJson } from "../fixtures/common.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { recordSuccessfulUpdateCheck } from "./diagnostics.mjs";
 import {
@@ -75,10 +79,6 @@ function requireEnv(name) {
   return value;
 }
 
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
 function readUpdateJson(file) {
   const raw = fs.readFileSync(file, "utf8");
   const jsonStart = raw.indexOf("{");
@@ -123,31 +123,14 @@ function isPathInsideManagedNpmProjectPackageRoot(params) {
   );
 }
 
-function write(file, contents) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents);
-}
-
-function writeJson(file, value) {
-  write(file, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-function seedLegacySessionMetadata(stateDir, perAgent) {
-  const legacySessionsDir = perAgent
-    ? path.join(stateDir, "agents", "main", "sessions")
-    : path.join(stateDir, "sessions");
+function seedLegacySessionMetadata(stateDir) {
+  const legacySessionsDir = path.join(stateDir, "agents", "main", "sessions");
   const baseUpdatedAt = Date.now() - 24 * 60 * 60 * 1000;
   writeJson(path.join(legacySessionsDir, "sessions.json"), {
-    [perAgent ? "agent:main:main" : "main"]: {
+    "agent:main:main": {
       sessionId: LEGACY_SESSION_MAIN_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_MAIN_ID}.jsonl`),
-      provider: "openai",
+      modelProvider: "openai",
       model: "gpt-5.5",
       updatedAt: baseUpdatedAt,
       skillsSnapshot: {
@@ -160,17 +143,17 @@ function seedLegacySessionMetadata(stateDir, perAgent) {
         ],
       },
     },
-    [perAgent ? "agent:main:+15551234567" : "+15551234567"]: {
+    "agent:main:+15551234567": {
       sessionId: LEGACY_SESSION_DIRECT_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_DIRECT_ID}.jsonl`),
-      provider: "openai",
+      modelProvider: "openai",
       model: "gpt-5.5",
       updatedAt: baseUpdatedAt + 100,
     },
-    [perAgent ? "agent:main:slack:channel:cupgrade" : "slack:channel:CUPGRADE"]: {
+    "agent:main:slack:channel:cupgrade": {
       sessionId: LEGACY_SESSION_GROUP_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_GROUP_ID}.jsonl`),
-      provider: "openai",
+      modelProvider: "openai",
       model: "gpt-5.5",
       updatedAt: baseUpdatedAt + 200,
       lastChannel: "slack",
@@ -352,8 +335,7 @@ function seedState() {
     agentId: "main",
     title: "Existing user session",
   });
-  // Volume imports start in per-agent JSON; other scenarios cover the older shared-store move.
-  seedLegacySessionMetadata(stateDir, scenario === "sqlite-volume");
+  seedLegacySessionMetadata(stateDir);
   sessionSourceFixture.recordLegacySessionSources(stateDir);
   seedLegacyExecApprovalPolicy(stateDir);
   if (scenario === "meeting-transcripts-sqlite") {
@@ -499,13 +481,15 @@ function assertConfigSurvived() {
   // Frozen recipes without coverage receipts predate this migration specimen.
   if (coverage && acceptsIntent(coverage, "tool-search")) {
     const toolSearch = config.tools?.toolSearch;
-    const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
+    const legacyBaseline =
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline" &&
+      !usesStructuredToolSearchAtBaseline(coverage.baselineVersion);
     assert(
-      toolSearch?.mode === (baseline ? "code" : "tools"),
+      toolSearch?.mode === (legacyBaseline ? "code" : "tools"),
       "Tool Search mode was not preserved or migrated",
     );
     assert(toolSearch.enabled !== false, "Tool Search was disabled during migration");
-    if (baseline) {
+    if (legacyBaseline) {
       assert(toolSearch.codeTimeoutMs === 5000, "Tool Search legacy timeout specimen changed");
     } else {
       assert(
@@ -513,6 +497,20 @@ function assertConfigSurvived() {
         "Tool Search legacy timeout was not removed",
       );
     }
+  }
+
+  if (coverage && acceptsIntent(coverage, "silent-reply-internal-retirement")) {
+    const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
+    assertStrict.deepEqual(
+      config.agents?.defaults?.silentReply,
+      baseline ? { group: "allow", internal: "allow" } : { group: "allow" },
+      "default silent-reply policy was not preserved or migrated",
+    );
+    assertStrict.deepEqual(
+      config.surfaces?.discord?.silentReply,
+      baseline ? { group: "disallow", internal: "disallow" } : { group: "disallow" },
+      "Discord silent-reply policy was not preserved or migrated",
+    );
   }
 
   if (acceptsIntent(coverage, "agents")) {
@@ -1868,7 +1866,7 @@ if (command === "list-scenarios") {
 } else if (command === "seed-volume") {
   assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
-  seedUpgradeVolume(stateDir);
+  await seedUpgradeVolume(stateDir, process.argv[3]);
 } else if (command === "assert-config") {
   assertConfigSurvived();
 } else if (command === "assert-restart-serving-turn") {

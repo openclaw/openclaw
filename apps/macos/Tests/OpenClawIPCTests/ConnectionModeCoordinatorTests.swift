@@ -3,6 +3,7 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
+@Suite(.testWaitLimit)
 @MainActor
 struct ConnectionModeCoordinatorTests {
     @Test(arguments: [
@@ -60,10 +61,9 @@ struct ConnectionModeCoordinatorTests {
             if listener.isRunning { listener.terminate() }
             listener.waitUntilExit()
         }
-        let startupDeadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while !FileManager.default.fileExists(atPath: ready.path), ContinuousClock.now < startupDeadline {
+        try await TestWait.state("listener port file") {
             try #require(listener.isRunning)
-            try await Task.sleep(for: .milliseconds(20))
+            return FileManager.default.fileExists(atPath: ready.path)
         }
         let port = try #require(Int(String(contentsOf: ready, encoding: .utf8)))
         let config = root.appendingPathComponent("openclaw.json")
@@ -141,10 +141,9 @@ struct ConnectionModeCoordinatorTests {
                     await finish()
                     return
                 }
-                let cleanupDeadline = ContinuousClock.now.advanced(by: .seconds(5))
-                while try store.records().contains(sentinel), ContinuousClock.now < cleanupDeadline {
+                try await TestWait.state("connection cleanup ledger") {
                     try #require(listener.isRunning)
-                    try await Task.sleep(for: .milliseconds(20))
+                    return try !store.records().contains(sentinel)
                 }
                 try #require(!store.records().contains(sentinel), "Connection cleanup did not reach its ledger")
                 // The retired sweep continued after its ledger read: lsof had a five-second

@@ -190,3 +190,14 @@ extension ChatInlineMathScanner.Piece {
         return nil
     }
 }
+
+extension ChatMarkdownProse {
+    var inlineMathLatex: [String] {
+        self.inlineContent?.compactMap { content in
+            if case let .math(span) = content {
+                return span.latex
+            }
+            return nil
+        } ?? []
+    }
+}

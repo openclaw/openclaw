@@ -52,7 +52,7 @@ import {
   seedChild,
   watcher,
 } from "./session-state-events.test-support.js";
-import { recordSubagentTerminalState } from "./subagent-terminal-state.js";
+import { prepareSubagentTerminalState } from "./subagent-terminal-state.js";
 
 const SESSION_STATE_MAX_ROWS = 50_000;
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -77,64 +77,86 @@ afterEach(async () => {
 });
 
 describe("session state events", () => {
-  it("refuses a session signal when ownership changes after the native facts verdict", async () => {
-    const database = createDatabaseOptions();
-    const target = { agentId: "main", sessionKey: child, env: database.env };
-    const entry = { sessionId: "session-child", updatedAt: 1, lifecycleRunId: "original-run" };
-    await upsertSessionEntryCore(target, entry);
-    openOpenClawStateDatabase(database);
-    const current = await withSessionEntryReadOnlyInWorker(
-      target,
-      () => {},
-      async (read, owner) => {
-        if (!read.ok) {
-          throw read.error;
-        }
-        return captureSessionEntryCurrentRead(target, owner);
-      },
-    );
-    if (!current.source) {
-      throw new Error("Expected a file-backed source");
-    }
-    let changedAfterVerdict = false;
-    const peer = new DatabaseSync(current.source.path);
-    const check = {
-      source: current.source,
-      assertCurrent: (facts: { lifecycleRunId?: unknown } | undefined) => {
-        current.assertSourceCurrent();
-        expect(facts?.lifecycleRunId).toBe("original-run");
-        if (!changedAfterVerdict) {
-          peer
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRunId', ?) WHERE session_key = ?",
-            )
-            .run("successor-run", child);
-          changedAfterVerdict = true;
-        }
-      },
-    };
-    try {
-      const input = eventInput({ watcherSessionKeys: [], dedupeKey: "currency-signal" });
-      const options = { ...database, now: 0, sessionEntryCurrent: check };
-      await expect(recordSessionStateEventAsync(input, options)).resolves.toBeUndefined();
-      expect(changedAfterVerdict).toBe(true);
-      expect(getSessionStateVersion(child, "main", database)).toBe(0);
-
+  it.each(
+    [
+      { change: "ownership", key: child, field: "lifecycleRunId", records: false },
+      { change: "metadata", key: child, field: "completionOwnerSessionKey", records: true },
+      { change: "another session", key: watcher, field: "lifecycleRunId", records: true },
+    ].flatMap(({ change, key, field, records }) =>
+      [1, 2].map((verdict) => ({ change, key, field, records, verdict })),
+    ),
+  )(
+    "records=$records after $change changes during native verdict $verdict",
+    async ({ key, field, records, verdict }) => {
+      const database = createDatabaseOptions();
+      const target = { agentId: "main", sessionKey: child, env: database.env };
+      const entry = { sessionId: "session-child", updatedAt: 1, lifecycleRunId: "original-run" };
       await upsertSessionEntryCore(target, entry);
-      expect(await recordSessionStateEventAsync(input, options)).toMatchObject({
-        sessionKey: child,
-        sessionId: entry.sessionId,
-      });
-      expect(getSessionStateVersion(child, "main", database)).toBeGreaterThan(0);
-    } finally {
-      peer.close();
-    }
-  });
+      await createWatcherSession(database);
+      openOpenClawStateDatabase(database);
+      const current = await withSessionEntryReadOnlyInWorker(
+        target,
+        () => {},
+        async (read, owner) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          return captureSessionEntryCurrentRead(target, owner);
+        },
+      );
+      if (!current.source) {
+        throw new Error("Expected a file-backed source");
+      }
+      let changedAfterVerdict = false;
+      let verdicts = 0;
+      const peer = new DatabaseSync(current.source.path);
+      const check = {
+        source: current.source,
+        assertCurrent: (facts: { lifecycleRunId?: unknown } | undefined) => {
+          current.assertSourceCurrent();
+          expect(facts?.lifecycleRunId).toBe("original-run");
+          if (++verdicts === verdict) {
+            peer
+              .prepare(
+                "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
+              )
+              .run(`$.${field}`, "successor-run", key);
+            changedAfterVerdict = true;
+          }
+        },
+      };
+      try {
+        const input = eventInput({ watcherSessionKeys: [], dedupeKey: "currency-signal" });
+        const options = { ...database, now: 0, sessionEntryCurrent: check };
+        const recorded = await recordSessionStateEventAsync(input, options);
+        expect(changedAfterVerdict).toBe(true);
+        if (records) {
+          expect(recorded).toMatchObject({ sessionKey: child, sessionId: entry.sessionId });
+          expect(await getSessionStateVersion(child, "main", database)).toBeGreaterThan(0);
+        } else {
+          expect(recorded).toBeUndefined();
+          expect(await getSessionStateVersion(child, "main", database)).toBe(0);
+        }
 
-  it("does not advance a replacement watch from older producer facts", () => {
+        await upsertSessionEntryCore(target, entry);
+        expect(await recordSessionStateEventAsync(input, options)).toMatchObject({
+          sessionKey: child,
+          sessionId: entry.sessionId,
+        });
+        expect(await getSessionStateVersion(child, "main", database)).toBeGreaterThan(0);
+      } finally {
+        peer.close();
+      }
+    },
+  );
+
+  it("does not advance a replacement watch from older producer facts", async () => {
     const database = createDatabaseOptions();
     resetHeartbeatEventsForTest();
-    registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: child }, database);
+    await registerSessionStateWatch(
+      { watcherSessionKey: watcher, targetSessionKey: child },
+      database,
+    );
     const readBinding = () =>
       openOpenClawStateDatabase(database)
         .db.prepare(
@@ -153,7 +175,7 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toEqual([]);
     expect(getLastHeartbeatEvent()).toMatchObject({ status: "skipped", reason: "store-replaced" });
   });
-  it("preserves older readers and version markers when watcher provenance is first written", () => {
+  it("preserves older readers and version markers when watcher provenance is first written", async () => {
     const database = createDatabaseOptions();
     const before = openOpenClawStateDatabase(database);
     before.db.exec("ALTER TABLE session_watch_cursors DROP COLUMN watcher_store_path");
@@ -161,7 +183,7 @@ describe("session state events", () => {
     closeOpenClawStateDatabaseForTest();
     const reopened = openOpenClawStateDatabase(database);
     const schemaBeforeRead = reopened.db.prepare("PRAGMA schema_version").get();
-    expect(getSessionStateVersion(child, "main", database)).toBe(0);
+    expect(await getSessionStateVersion(child, "main", database)).toBe(0);
     expect(reopened.db.prepare("PRAGMA schema_version").get()).toEqual(schemaBeforeRead);
     expect(
       reopened.db
@@ -199,19 +221,19 @@ describe("session state events", () => {
     expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual(userVersion);
   });
 
-  it("bumps a durable head that survives pruning all retained rows", () => {
+  it("bumps a durable head that survives pruning all retained rows", async () => {
     const database = createDatabaseOptions();
     const now = Date.now();
     const event = recordSessionStateEvent(eventInput(), { ...database, now });
-    expect(getSessionStateVersion(child, "main", database)).toBe(event?.sequence);
+    expect(await getSessionStateVersion(child, "main", database)).toBe(event?.sequence);
 
     sweepSessionStateWatchNotices({
       ...database,
       now: now + SESSION_STATE_RETENTION_MS + 1,
     });
 
-    expect(listSessionStateEventsSince(child, "main", 0, 200, database).events).toEqual([]);
-    expect(getSessionStateVersion(child, "main", database)).toBe(event?.sequence);
+    expect((await listSessionStateEventsSince(child, "main", 0, 200, database)).events).toEqual([]);
+    expect(await getSessionStateVersion(child, "main", database)).toBe(event?.sequence);
   });
 
   it("freezes one notice watermark while material events continue", () => {
@@ -229,14 +251,19 @@ describe("session state events", () => {
     });
   });
 
-  it("opens a fresh notice for material work interleaved before ack", () => {
+  it("opens a fresh notice for material work interleaved before ack", async () => {
     const database = createDatabaseOptions();
     seedChild(database);
     const frozen = recordSessionStateEvent(eventInput(), database)!;
     const interleaved = recordSessionStateEvent(eventInput(), database)!;
+    const watcherStorePath = peekSystemEventEntries(watcher)[0]?.sessionStorePath ?? null;
     resetSystemEventsForTest();
 
-    acknowledgeSessionStateNotices(watcher, [child], database);
+    await acknowledgeSessionStateNotices(
+      watcher,
+      [{ targetSessionKey: child, watcherStorePath }],
+      database,
+    );
 
     expect(readCursor(database)).toEqual({
       last_seen_sequence: frozen.sequence,
@@ -256,9 +283,14 @@ describe("session state events", () => {
       eventInput({ kind: "run_completed", actorType: "system", runId: "run-log-only" }),
       database,
     );
+    const watcherStorePath = peekSystemEventEntries(watcher)[0]?.sessionStorePath ?? null;
     resetSystemEventsForTest();
 
-    acknowledgeSessionStateNotices(watcher, [child], database);
+    await acknowledgeSessionStateNotices(
+      watcher,
+      [{ targetSessionKey: child, watcherStorePath }],
+      database,
+    );
     expect(readCursor(database)).toEqual({
       last_seen_sequence: material.sequence,
       notified_sequence: material.sequence,
@@ -323,14 +355,14 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toEqual([]);
   });
 
-  it("records log-only kinds without queueing notices", () => {
+  it("records log-only kinds without queueing notices", async () => {
     const database = createDatabaseOptions();
     const event = recordSessionStateEvent(
       eventInput({ kind: "compacted", actorType: "system" }),
       database,
     );
 
-    expect(getSessionStateVersion(child, "main", database)).toBe(event?.sequence);
+    expect(await getSessionStateVersion(child, "main", database)).toBe(event?.sequence);
     expect(peekSystemEventEntries(watcher)).toEqual([]);
   });
 
@@ -348,7 +380,7 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toHaveLength(1);
   });
 
-  it("returns the existing row for a duplicate dedupe key", () => {
+  it("returns the existing row for a duplicate dedupe key", async () => {
     const database = createDatabaseOptions();
     const input = eventInput({
       kind: "run_failed",
@@ -360,7 +392,9 @@ describe("session state events", () => {
     const duplicate = recordSessionStateEvent(input, database);
 
     expect(duplicate?.sequence).toBe(first?.sequence);
-    expect(listSessionStateEventsSince(child, "main", 0, 200, database).events).toHaveLength(1);
+    expect(
+      (await listSessionStateEventsSince(child, "main", 0, 200, database)).events,
+    ).toHaveLength(1);
   });
 
   it("re-enqueues and re-freezes pending notices after restart", async () => {
@@ -387,7 +421,7 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toHaveLength(1);
   });
 
-  it("prunes retention and cap rows while keeping monotonic autoincrement heads", () => {
+  it("prunes retention and cap rows while keeping monotonic autoincrement heads", async () => {
     const database = createDatabaseOptions();
     const now = Date.now();
     const { db } = openOpenClawStateDatabase(database);
@@ -412,7 +446,7 @@ describe("session state events", () => {
 
     const next = recordSessionStateEvent(eventInput(), { ...database, now: now + 1 })!;
     expect(next.sequence).toBeGreaterThan(before.sequence);
-    expect(getSessionStateVersion(child, "main", database)).toBe(next.sequence);
+    expect(await getSessionStateVersion(child, "main", database)).toBe(next.sequence);
   });
 
   it("prunes many composite session heads without recreating or regressing them", () => {
@@ -493,7 +527,7 @@ describe("session state events", () => {
     expect(updates.counts.watermarks).toBeLessThanOrEqual(4);
   });
 
-  it("lists typed ascending deltas with truncation and history-gap signaling", () => {
+  it("lists typed ascending deltas with truncation and history-gap signaling", async () => {
     const database = createDatabaseOptions();
     const now = Date.now();
     const first = recordSessionStateEvent(eventInput({ summary: "first" }), {
@@ -506,7 +540,7 @@ describe("session state events", () => {
     });
     recordSessionStateEvent(eventInput({ summary: "third" }), { ...database, now: now + 2 });
 
-    const page = listSessionStateEventsSince(child, "main", 0, 2, database);
+    const page = await listSessionStateEventsSince(child, "main", 0, 2, database);
     expect(page.events.map((event) => event.summary)).toEqual(["first", "second"]);
     expect(page.events[1]?.payload).toEqual({ status: "active" });
     expect(page.truncated).toBe(true);
@@ -516,10 +550,12 @@ describe("session state events", () => {
     openOpenClawStateDatabase(database)
       .db.prepare("DELETE FROM session_state_events WHERE sequence = ?")
       .run(first.sequence);
-    expect(listSessionStateEventsSince(child, "main", 0, 200, database).historyGap).toBe(false);
+    expect((await listSessionStateEventsSince(child, "main", 0, 200, database)).historyGap).toBe(
+      false,
+    );
   });
 
-  it("reports history gaps only for actually pruned events, not sparse global sequences", () => {
+  it("reports history gaps only for actually pruned events, not sparse global sequences", async () => {
     const database = createDatabaseOptions();
     const now = Date.now();
     // Other sessions consume early global sequences; the child starts high.
@@ -531,7 +567,9 @@ describe("session state events", () => {
     }
     const old = recordSessionStateEvent(eventInput({ summary: "old" }), { ...database, now })!;
     expect(old.sequence).toBeGreaterThan(1);
-    expect(listSessionStateEventsSince(child, "main", 0, 200, database).historyGap).toBe(false);
+    expect((await listSessionStateEventsSince(child, "main", 0, 200, database)).historyGap).toBe(
+      false,
+    );
 
     const later = now + SESSION_STATE_RETENTION_MS + 1;
     const fresh = recordSessionStateEvent(eventInput({ summary: "fresh" }), {
@@ -540,13 +578,13 @@ describe("session state events", () => {
     })!;
     sweepSessionStateWatchNotices({ ...database, now: later });
 
-    const sincePruned = listSessionStateEventsSince(child, "main", 0, 200, database);
+    const sincePruned = await listSessionStateEventsSince(child, "main", 0, 200, database);
     expect(sincePruned.historyGap).toBe(true);
     expect(sincePruned.events.map((event) => event.summary)).toEqual(["fresh"]);
-    expect(listSessionStateEventsSince(child, "main", old.sequence, 200, database).historyGap).toBe(
-      false,
-    );
-    expect(getSessionStateVersion(child, "main", database)).toBe(fresh.sequence);
+    expect(
+      (await listSessionStateEventsSince(child, "main", old.sequence, 200, database)).historyGap,
+    ).toBe(false);
+    expect(await getSessionStateVersion(child, "main", database)).toBe(fresh.sequence);
   });
 
   it("suppresses cursors and notices for agent-ambiguous bare watcher keys", () => {
@@ -563,7 +601,7 @@ describe("session state events", () => {
     expect(cursorRow.n).toBe(0);
   });
 
-  it("keeps same-keyed global sessions independent across agents", () => {
+  it("keeps same-keyed global sessions independent across agents", async () => {
     const database = createDatabaseOptions();
     const mainEvent = recordSessionStateEvent(
       eventInput({
@@ -586,17 +624,17 @@ describe("session state events", () => {
       database,
     )!;
 
-    expect(getSessionStateVersion("global", "main", database)).toBe(mainEvent.sequence);
-    expect(getSessionStateVersion("global", "ops", database)).toBe(opsEvent.sequence);
+    expect(await getSessionStateVersion("global", "main", database)).toBe(mainEvent.sequence);
+    expect(await getSessionStateVersion("global", "ops", database)).toBe(opsEvent.sequence);
     expect(
-      listSessionStateEventsSince("global", "main", 0, 200, database).events.map(
+      (await listSessionStateEventsSince("global", "main", 0, 200, database)).events.map(
         (event) => event.sequence,
       ),
     ).toEqual([mainEvent.sequence]);
 
     handleSessionStateSessionDeleted("global", "ops", database);
-    expect(getSessionStateVersion("global", "ops", database)).toBe(0);
-    expect(getSessionStateVersion("global", "main", database)).toBe(mainEvent.sequence);
+    expect(await getSessionStateVersion("global", "ops", database)).toBe(0);
+    expect(await getSessionStateVersion("global", "main", database)).toBe(mainEvent.sequence);
   });
 
   it("acks only drained session-state entries and ignores ordinary events", async () => {
@@ -627,7 +665,7 @@ describe("session state events", () => {
     expect(readCursor(database)?.last_seen_sequence).toBe(material.sequence);
   });
 
-  it("keeps target history on reset and removes all ownership on delete", () => {
+  it("keeps target history on reset and removes all ownership on delete", async () => {
     const database = createDatabaseOptions();
     seedChild(database);
     recordSessionStateEvent(eventInput(), database);
@@ -635,12 +673,12 @@ describe("session state events", () => {
     handleSessionStateSessionReset(watcher, database);
     expect(readCursor(database)).toBeUndefined();
     expect(
-      listSessionStateEventsSince(child, "main", 0, 200, database).events.length,
+      (await listSessionStateEventsSince(child, "main", 0, 200, database)).events.length,
     ).toBeGreaterThan(0);
 
     handleSessionStateSessionDeleted(child, "main", database);
-    expect(getSessionStateVersion(child, "main", database)).toBe(0);
-    expect(listSessionStateEventsSince(child, "main", 0, 200, database).events).toEqual([]);
+    expect(await getSessionStateVersion(child, "main", database)).toBe(0);
+    expect((await listSessionStateEventsSince(child, "main", 0, 200, database)).events).toEqual([]);
   });
 
   it("classifies missing provenance as human and inter-session provenance as agent", () => {
@@ -658,21 +696,24 @@ describe("session state events", () => {
     });
   });
 
-  it("registers explicit watchers who get notices only for later changes", () => {
+  it("registers explicit watchers who get notices only for later changes", async () => {
     const database = createDatabaseOptions();
     const preRegistration = recordSessionStateEvent(
       eventInput({ watcherSessionKeys: [] }),
       database,
     )!;
 
-    expect(registerSessionStateWatch({ watcherSessionKey: child, targetSessionKey: child })).toBe(
-      false,
-    );
     expect(
-      registerSessionStateWatch({ watcherSessionKey: "global", targetSessionKey: child }),
+      await registerSessionStateWatch({ watcherSessionKey: child, targetSessionKey: child }),
     ).toBe(false);
     expect(
-      registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: child }, database),
+      await registerSessionStateWatch({ watcherSessionKey: "global", targetSessionKey: child }),
+    ).toBe(false);
+    expect(
+      await registerSessionStateWatch(
+        { watcherSessionKey: watcher, targetSessionKey: child },
+        database,
+      ),
     ).toBe(true);
 
     expect(peekSystemEventEntries(watcher)).toHaveLength(0);
@@ -689,7 +730,10 @@ describe("session state events", () => {
 
     // Re-registering must keep the pending-notice cursor intact.
     expect(
-      registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: child }, database),
+      await registerSessionStateWatch(
+        { watcherSessionKey: watcher, targetSessionKey: child },
+        database,
+      ),
     ).toBe(true);
     expect(readCursor(database)).toEqual({
       last_seen_sequence: preRegistration.sequence,
@@ -698,40 +742,46 @@ describe("session state events", () => {
     });
   });
 
-  it.each(["ambient", "explicit"])("rebinds a replaced %s watch on the next group turn", (kind) => {
-    const database = createDatabaseOptions();
-    if (kind === "explicit") {
-      registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: group }, database);
-    } else {
-      registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
-    }
-    const { db } = openOpenClawStateDatabase(database);
-    db.prepare("UPDATE session_watch_cursors SET watcher_store_path = ?").run(
-      "/retired/store.sqlite",
-    );
-    expect(registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database)).toBe(
-      true,
-    );
-    expect(
-      db.prepare("SELECT watcher_store_path, provenance FROM session_watch_cursors").get(),
-    ).toEqual({
-      watcher_store_path: expect.not.stringContaining("/retired/"),
-      provenance: "ambient-group",
-    });
-    recordSessionStateEvent(eventInput({ sessionKey: group, watcherSessionKeys: [] }), database);
-    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
-  });
+  it.each(["ambient", "explicit"])(
+    "rebinds a replaced %s watch on the next group turn",
+    async (kind) => {
+      const database = createDatabaseOptions();
+      if (kind === "explicit") {
+        await registerSessionStateWatch(
+          { watcherSessionKey: watcher, targetSessionKey: group },
+          database,
+        );
+      } else {
+        await registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
+      }
+      const { db } = openOpenClawStateDatabase(database);
+      db.prepare("UPDATE session_watch_cursors SET watcher_store_path = ?").run(
+        "/retired/store.sqlite",
+      );
+      expect(
+        await registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database),
+      ).toBe(true);
+      expect(
+        db.prepare("SELECT watcher_store_path, provenance FROM session_watch_cursors").get(),
+      ).toEqual({
+        watcher_store_path: expect.not.stringContaining("/retired/"),
+        provenance: "ambient-group",
+      });
+      recordSessionStateEvent(eventInput({ sessionKey: group, watcherSessionKeys: [] }), database);
+      expect(peekSystemEventEntries(watcher)).toHaveLength(1);
+    },
+  );
 
-  it("registers one ambient main watcher for a distinct group session", () => {
+  it("registers one ambient main watcher for a distinct group session", async () => {
     const database = createDatabaseOptions();
     expect(
-      registerMainSessionGroupWatch(
+      await registerMainSessionGroupWatch(
         { sessionKey: group, agentId: "main" },
         { ...database, now: 100 },
       ),
     ).toBe(true);
     expect(
-      registerMainSessionGroupWatch(
+      await registerMainSessionGroupWatch(
         { sessionKey: group, agentId: "main" },
         { ...database, now: 200 },
       ),
@@ -761,12 +811,12 @@ describe("session state events", () => {
     expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set());
   });
 
-  it("does not register a group routed into the configured main session", () => {
+  it("does not register a group routed into the configured main session", async () => {
     const database = createDatabaseOptions();
     const mainSessionKey = "agent:main:work";
 
     expect(
-      registerMainSessionGroupWatch(
+      await registerMainSessionGroupWatch(
         {
           sessionKey: mainSessionKey,
           agentId: "main",
@@ -786,7 +836,7 @@ describe("session state events", () => {
     await vi.runAllTimersAsync();
     wakes.mockClear();
     const database = createDatabaseOptions();
-    registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
+    await registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
 
     for (const actorId of ["human-1", "human-2"]) {
       await recordSessionHumanDirectMessage(
@@ -802,7 +852,9 @@ describe("session state events", () => {
     }
     await vi.advanceTimersByTimeAsync(21_000);
 
-    expect(listSessionStateEventsSince(group, "main", 0, 200, database).events).toHaveLength(2);
+    expect(
+      (await listSessionStateEventsSince(group, "main", 0, 200, database)).events,
+    ).toHaveLength(2);
     expect(peekSystemEventEntries(watcher)).toHaveLength(1);
     const cursor = readCursor(database, watcher, group);
     expect(cursor).toBeDefined();
@@ -814,11 +866,11 @@ describe("session state events", () => {
     const database = createDatabaseOptions();
     const dormantGroup = "agent:main:slack:channel:dormant";
     const registeredAt = 100;
-    registerMainSessionGroupWatch(
+    await registerMainSessionGroupWatch(
       { sessionKey: group, agentId: "main" },
       { ...database, now: registeredAt },
     );
-    registerMainSessionGroupWatch(
+    await registerMainSessionGroupWatch(
       { sessionKey: dormantGroup, agentId: "main" },
       { ...database, now: registeredAt },
     );
@@ -851,7 +903,7 @@ describe("session state events", () => {
     wakes.mockClear();
     const database = createDatabaseOptions();
     const coordinator = "agent:main:coordinator";
-    registerSessionStateWatch(
+    await registerSessionStateWatch(
       { watcherSessionKey: coordinator, targetSessionKey: group },
       database,
     );
@@ -879,10 +931,13 @@ describe("session state events", () => {
     await vi.runAllTimersAsync();
     wakes.mockClear();
     const database = createDatabaseOptions();
-    registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
+    await registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
     expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set([group]));
 
-    registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: group }, database);
+    await registerSessionStateWatch(
+      { watcherSessionKey: watcher, targetSessionKey: group },
+      database,
+    );
     expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set());
     expect(
       openOpenClawStateDatabase(database)
@@ -893,7 +948,7 @@ describe("session state events", () => {
         .get(watcher, group),
     ).toEqual({ provenance: "explicit" });
     // Later inbound group registration must not downgrade the explicit watch.
-    registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
+    await registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
 
     await recordSessionHumanDirectMessage(
       {
@@ -921,9 +976,14 @@ describe("session state events", () => {
       actor: { actorType: "human" },
       channel: "webchat",
     });
-    expect(listSessionStateEventsSince(child, "main", 0, 200, database).events).toHaveLength(0);
+    expect(
+      (await listSessionStateEventsSince(child, "main", 0, 200, database)).events,
+    ).toHaveLength(0);
 
-    registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: child }, database);
+    await registerSessionStateWatch(
+      { watcherSessionKey: watcher, targetSessionKey: child },
+      database,
+    );
     await recordSessionHumanDirectMessage({
       sessionKey: child,
       entry,
@@ -932,7 +992,7 @@ describe("session state events", () => {
       channel: "webchat",
     });
 
-    const events = listSessionStateEventsSince(child, "main", 0, 200, database).events;
+    const events = (await listSessionStateEventsSince(child, "main", 0, 200, database)).events;
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ kind: "human_direct_message" });
     expect(peekSystemEventEntries(watcher)).toHaveLength(1);
@@ -959,33 +1019,20 @@ describe("session state events", () => {
     });
     const terminalContext = captureOpenClawStateWorkerContext(database);
     const assertTerminalCurrent = () => terminalContext.admission.assertCurrent();
-    await recordSubagentTerminalState(
-      {
+    for (const terminal of [
+      { runId: "run-child", outcomeStatus: "ok" },
+      { runId: "run-child", outcomeStatus: "ok" },
+      { runId: "run-child-cancelled", outcomeStatus: "cancelled" },
+    ] as const) {
+      const prepared = prepareSubagentTerminalState({
         childSessionKey: child,
-        runId: "run-child",
         requesterSessionKey: watcher,
-        outcomeStatus: "ok",
-      },
-      assertTerminalCurrent,
-    );
-    await recordSubagentTerminalState(
-      {
-        childSessionKey: child,
-        runId: "run-child",
-        requesterSessionKey: watcher,
-        outcomeStatus: "ok",
-      },
-      assertTerminalCurrent,
-    );
-    await recordSubagentTerminalState(
-      {
-        childSessionKey: child,
-        runId: "run-child-cancelled",
-        requesterSessionKey: watcher,
-        outcomeStatus: "cancelled",
-      },
-      assertTerminalCurrent,
-    );
+        ...terminal,
+      });
+      await recordSessionStateEventAsync(prepared.input.event, {
+        assertCurrent: assertTerminalCurrent,
+      });
+    }
     await recordSessionGoalChanged({
       sessionKey: child,
       entry: {
@@ -1007,7 +1054,7 @@ describe("session state events", () => {
       sessionId: "session-child",
     });
 
-    const events = listSessionStateEventsSince(child, "main", 0, 200, database).events;
+    const events = (await listSessionStateEventsSince(child, "main", 0, 200, database)).events;
     expect(events.map((event) => event.kind)).toEqual([
       "created",
       "child_spawned",

@@ -8,7 +8,6 @@ const bindingRuntimePath = /legacy-config-binding-repair\.runtime\.[jt]s$/u;
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
-  { name: "implicit single agent", config: {} },
   { name: "explicit single agent", config: { agents: { entries: { main: {} } } } },
   {
     name: "disabled plugins",

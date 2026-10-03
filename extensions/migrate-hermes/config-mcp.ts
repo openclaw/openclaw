@@ -16,13 +16,7 @@ const MCP_RESOURCE_UTILITY_TOOLS = ["resources_list", "resources_read"] as const
 const MCP_PROMPT_UTILITY_TOOLS = ["prompts_list", "prompts_get"] as const;
 
 function readPositiveNumeric(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return readPositiveNumber(value);
-  }
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  return readPositiveNumber(Number(value));
+  return readPositiveNumber(typeof value === "string" ? Number(value) : value);
 }
 
 function readToolFilterList(value: unknown): string[] | undefined {
@@ -277,13 +271,7 @@ export function mcpManualItems(params: {
     );
   } else if (
     (cert !== undefined || key !== undefined) &&
-    !(
-      (Array.isArray(cert) &&
-        cert.length === 2 &&
-        normalizeOptionalString(cert[0]) &&
-        normalizeOptionalString(cert[1])) ||
-      (normalizeOptionalString(cert) && key)
-    )
+    !mapHermesClientCertificate(raw).clientCert
   ) {
     add(
       "client-cert",

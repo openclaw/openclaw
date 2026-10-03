@@ -5,6 +5,7 @@ import Security
 import Testing
 @testable import OpenClaw
 
+@Suite(.testWaitLimit)
 @MainActor
 struct AppStateIsolationTests {
     @Test
@@ -34,7 +35,7 @@ struct AppStateIsolationTests {
             GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":true,"service":{"loaded":false}}"#)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             defer {
-                manager.setTestingDesiredActive(false)
+                manager.desiredActive = false
                 state.connectionMode = previousMode
                 GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
@@ -73,7 +74,7 @@ struct AppStateIsolationTests {
             #expect(manager.log != failureLog)
             #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
 
-            manager.setTestingDesiredActive(false)
+            manager.desiredActive = false
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
             await GatewayEndpointStore.shared.setLocalUnavailableReason(nil)
@@ -105,7 +106,7 @@ struct AppStateIsolationTests {
             let port = GatewayEnvironment.gatewayPort()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
             defer {
-                manager.setTestingDesiredActive(false)
+                manager.desiredActive = false
                 state.connectionMode = previousMode
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
@@ -125,7 +126,7 @@ struct AppStateIsolationTests {
             #expect(manager.lastFailureReason == reason)
             #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
 
-            manager.setTestingDesiredActive(false)
+            manager.desiredActive = false
             await connection.shutdown()
             await GatewayEndpointStore.shared.setLocalUnavailableReason(nil)
         }
@@ -320,7 +321,8 @@ struct AppStateIsolationTests {
 
 @MainActor
 struct ProfileChatPreferencesTests {
-    @Test func `full chat preferences belong to named profile`() async throws {
+    @Test(.timeLimit(.minutes(1)))
+    func `full chat preferences belong to named profile`() async throws {
         let profile = try #require(AppProfile.current.name)
         try #require(profile.hasPrefix("test-"))
         let favoritesKey = "openclaw.chat.modelFavorites"

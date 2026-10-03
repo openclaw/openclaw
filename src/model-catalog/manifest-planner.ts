@@ -1,4 +1,3 @@
-// Manifest model-catalog planner turns plugin catalog declarations into normalized rows and suppressions.
 import { normalizeModelCatalogProviderRows } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import {
   buildModelCatalogMergeKey,

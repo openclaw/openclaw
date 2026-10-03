@@ -59,7 +59,9 @@ the selected Gateway method still authorizes the request.
 
 `api.registerGatewayAccessPolicy({ authorize })` adds a plugin-owned access
 requirement to authenticated person admission. The callback receives the current
-configuration and the canonical profile's ID, email aliases, and assigned role.
+configuration and the canonical profile's ID, email aliases, optional verified
+`githubAccountIds`, and assigned role. Account IDs come from the existing identity
+owner; display logins and public email do not establish that binding.
 The Gateway resolves `requiredByRole` from the person's effective role and this
 plugin's ID; role-bound policies use that fact instead of inferring a binding
 from the default role's name.
@@ -141,6 +143,46 @@ applicable policy also requires fresh publication admission.
     plugins are rejected. Failed methods throw a `GatewayClientRequestError`, preserving structured
     `details`, retry metadata, and the Gateway error code for recovery flows. Use `isAvailable()`
     before choosing this path from tools that can also run in standalone agent processes.
+
+    `await api.runtime.gateway.openPluginPanel({ panelId, sessionKey, agentId })`
+    opens this plugin's registered native session panel in the requesting
+    Control UI. Unlike arbitrary `request`, this narrow capability is also
+    available to user-installed plugins. The host binds the plugin ID, keeps
+    the caller's existing `operator.write` authority, and targets only the
+    browser that requested the current action or agent turn. It rejects after
+    plugin retirement, caller revocation, or requester disconnection; a session
+    key never selects someone else's browser. `{ ok: true }` confirms command
+    delivery, not completion of a plugin's asynchronous document load. Native
+    UI must be enabled and the plugin must register the named panel.
+
+    `await api.runtime.gateway.readSessionFacts({ sessionKeys })` reads at most
+    40 sessions and returns typed `{ sessions, warnings? }` data. Each session
+    includes its key, identity, agent, bounded redacted title and message preview,
+    run state (`active`, `idle`, or `failed`), optional observer digest
+    (health, headline, assessment, revision), pull-request numbers and states,
+    archive state, and last activity time. The message preview is capped at
+    400 characters. `pullRequestsUnavailable` distinguishes unknown PR state
+    from a confirmed empty list. This lifecycle-bound read reuses the Gateway's
+    session projection and context-bound PR snapshot owner, preserves current
+    caller authority and session visibility, and omits incognito sessions.
+    Retained handles reject after their owner closes; no new SDK barrel export
+    is needed.
+
+    `await api.runtime.gateway.withUserProfileIdentity({ profileId, emails, githubAccountIds }, run)`
+    prepares the canonical profile's original binding lifetimes for up to 500
+    selected email aliases under the existing `users.list` / `operator.read`
+    permission. Optional `githubAccountIds` binds up to 500 positive safe numeric
+    account IDs to that same canonical profile. The callback receives a synchronous `assertCurrent()` function.
+    Compose it with the action's own authorization in the store's final commit
+    guard and immediately before dispatching an external mutation. It reads
+    current facts published by the profile owner without querying SQLite on the
+    calling thread. Moving an alias away and back, merging the selected profile,
+    an unsettled profile mutation, or closing the caller invalidates the check.
+    Selected account IDs must remain verified members of that profile.
+    Unselected email bindings can change independently. The preparation is
+    released when the callback settles, and retained assertions then reject.
+    This capability checks the selected identity; it does not grant permission
+    to perform the action or roll back a mutation already accepted externally.
 
   </Accordion>
   <Accordion title="api.runtime.nodes">

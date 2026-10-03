@@ -390,7 +390,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           port: 0,
           log,
           loadGatewayPluginBootstrapModule: async () => bootstrap,
-          prepareAttachedPluginRuntime: async (candidate) => {
+          prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
             loaded.push(candidate);
             beforeAttachment?.(candidate);
             return {
@@ -401,6 +401,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
                   "gateway-bindable",
                   workspaceDir,
                   runtime.pluginRuntime.registry,
+                  trackActivationCleanup,
                 );
                 registryOwner.publish(candidate.pluginRegistry);
               },
@@ -412,7 +413,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           nextConfig,
           sourceConfig,
           changedPaths: [],
-          prepareConfigEffects: () => async () => {},
+          prepareConfigEffects: () => ({ retire: () => {}, rollback: async () => {} }),
           assertInvokerOwned,
           pluginLifecycle: {
             reason,
@@ -968,7 +969,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       expect(bundledReload.runtime).toMatchObject({
         restartRequired: true,
         pluginIds: ["bundled-probe"],
-        warnings: [expect.stringMatching(/compiled bundled.*restart/i)],
+        warnings: ["Bundled plugin code remains loaded. Restart the Gateway to load edited code."],
       });
       expect(bundledReload.runtime.generation).toBeGreaterThan(configReceipt.runtime.generation);
       const repeatedBundled = await reload(changedSettings, ["bundled-probe"]);

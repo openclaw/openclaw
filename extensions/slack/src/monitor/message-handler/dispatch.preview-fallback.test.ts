@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/reply-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSlackCompleteBlocksFallbackText } from "../../blocks-fallback.js";
 import { slackSetupPlugin } from "../../channel.setup.js";
 import type { SlackSendResult } from "../../send.js";
 import { getSlackSessionRuns } from "../session-run-targets.js";
@@ -407,13 +408,11 @@ function createPreparedSlackMessage(params?: {
       ...params?.ctxPayload,
     },
     turn: {
-      storePath: "/tmp/slack-sessions.json",
       record: {},
     },
     replyToMode: params?.replyToMode ?? "all",
     isDirectMessage: params?.isDirectMessage ?? false,
     isRoomish: false,
-    preview: "",
     ackReactionValue: "eyes",
     ackReactionMessageTs: params?.ackReactionMessageTs,
     ackReactionPromise: params?.ackReactionPromise ?? null,
@@ -1502,9 +1501,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        text: ["Shelling", "", "• tool one", "• tool two"].join("\n"),
+        text: "Shelling\n\n_tool one_\n_tool two_\n\n1s",
         blocks: expect.arrayContaining([
-          { type: "section", text: { type: "mrkdwn", text: "🔄 *Shelling*" } },
+          { type: "section", text: { type: "plain_text", text: "Shelling", emoji: false } },
         ]),
       }),
     );
@@ -1516,7 +1515,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       requireMockCall(finalizeSlackPreviewEditMock, 0, "session card final edit")[0],
       "session card final edit",
     );
-    expect(JSON.stringify(finalEdit.blocks)).toContain("✅ *Shelling*");
+    expect(finalEdit.blocks).toContainEqual({
+      type: "section",
+      text: { type: "plain_text", text: "Shelling", emoji: false },
+    });
     expect(JSON.stringify(finalEdit.blocks)).toContain("Open in OpenClaw");
     expect(JSON.stringify(finalEdit.blocks)).toContain(
       "https://team.openclaw.ai/openclaw/chat/agent-1/slack/C123",
@@ -1528,7 +1530,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
   it("clears the stale session card when the terminal edit fails after final delivery", async () => {
     const draftStream = useDraftStream();
-    // Final reply lands, but terminalizing the card into its ✅ state fails.
+    // Final reply lands, but terminalizing the card fails.
     finalizeSlackPreviewEditMock.mockRejectedValueOnce(new Error("card edit failed"));
 
     mockedReplyOptionEvents = [{ kind: "item", progressText: "working" }];
@@ -1545,8 +1547,111 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps an approval-only card as Failed when the run fails without a final reply", async () => {
+    const draftStream = useDraftStream();
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedSlackStreamingMode = "progress";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "approval", phase: "requested", approvalId: "approval-1", command: "run checks" },
+    ];
+    mockedDispatchError = new Error("agent dispatch failed");
+
+    await expect(
+      dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          accountConfig: { streaming: { mode: "progress", progress: { style: "card" } } },
+        }),
+      ),
+    ).rejects.toThrow("agent dispatch failed");
+
+    expect(draftUpdateTexts(draftStream).at(-1)).toContain("Approval required: run checks");
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    const finalEdit = requireRecord(
+      requireMockCall(finalizeSlackPreviewEditMock, 0, "failed approval-only card edit")[0],
+      "failed approval-only card edit",
+    );
+    expect(finalEdit.text).toBe("Failed");
+    expect(finalEdit.blocks).toEqual([
+      { type: "section", text: { type: "plain_text", text: "Failed", emoji: false } },
+    ]);
+    expect(JSON.stringify(finalEdit.blocks)).not.toMatch(/\p{Extended_Pictographic}/u);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { outcome: "failed", errorReply: false, postsFailure: true },
+    { outcome: "failed", errorReply: true, postsFailure: false },
+    { outcome: "completed", errorReply: false, postsFailure: false },
+  ] as const)(
+    "closes a quiet tool-only card turn (outcome=$outcome, error reply=$errorReply)",
+    async ({ outcome, errorReply, postsFailure }) => {
+      const { createSlackDraftStream } =
+        await vi.importActual<typeof import("../../draft-stream.js")>("../../draft-stream.js");
+      let draftStream: ReturnType<typeof createSlackDraftStream> | undefined;
+      const edit = vi.fn(noopAsync);
+      const remove = vi.fn(noopAsync);
+      createSlackDraftStreamMock.mockImplementationOnce(
+        (params: Parameters<typeof createSlackDraftStream>[0]) => {
+          draftStream = createSlackDraftStream({ ...params, edit, remove });
+          return draftStream;
+        },
+      );
+      sendMessageSlackMock.mockResolvedValue(normalDeliveryResult);
+      finalizeSlackPreviewEditMock.mockResolvedValue(undefined);
+      mockedSlackStreamingMode = "progress";
+      mockedAgentRunTerminalOutcome = outcome;
+      mockedDispatchSequence = errorReply
+        ? [{ kind: "final", payload: { text: "Something failed", isError: true } }]
+        : [];
+      mockedReplyOptionEvents = [
+        { kind: "tool_start", itemId: "tool-1", name: "bash", phase: "start" },
+        checkpoint(async () => {
+          await draftStream?.flush();
+          expect(sendMessageSlackMock).not.toHaveBeenCalled();
+        }),
+      ];
+
+      await dispatch({
+        accountConfig: { streaming: { mode: "progress", progress: { style: "card" } } },
+      });
+
+      if (postsFailure) {
+        const blocks = [
+          { type: "section", text: { type: "plain_text", text: "Failed", emoji: false } },
+        ];
+        expect(sendMessageSlackMock).toHaveBeenCalledExactlyOnceWith(
+          expect.any(String),
+          "Failed",
+          expect.objectContaining({ blocks }),
+        );
+        expect(finalizeSlackPreviewEditMock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ text: "Failed", blocks, messageId: "normal-final" }),
+        );
+        expect(draftStream?.messageId()).toBe("normal-final");
+        // Sealed cards ignore late updates and survive dispatch cleanup.
+        draftStream?.update("late tool activity");
+        await draftStream?.flush();
+        expect(sendMessageSlackMock).toHaveBeenCalledTimes(1);
+        expect(edit).not.toHaveBeenCalled();
+        expect(remove).not.toHaveBeenCalled();
+      } else {
+        expect(sendMessageSlackMock).not.toHaveBeenCalled();
+        expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+      }
+      if (errorReply) {
+        expect(deliverRepliesMock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ replies: [{ text: "Something failed", isError: true }] }),
+        );
+      } else {
+        expect(deliverRepliesMock).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("terminalizes the progress card on a dispatch error", async () => {
     const draftStream = useDraftStream();
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
 
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [{ kind: "item", progressText: "working" }];
@@ -1554,7 +1659,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     await expect(
       dispatch({
-        accountConfig: progressAccount(),
+        accountConfig: progressAccount({ toolProgress: true }),
       }),
     ).rejects.toThrow("agent dispatch failed");
 
@@ -1562,7 +1667,11 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       requireMockCall(finalizeSlackPreviewEditMock, 0, "dispatch error card edit")[0],
       "dispatch error card edit",
     );
-    expect(JSON.stringify(finalEdit.blocks)).toContain("❌ *Working*");
+    expect(finalEdit.text).toBe("Failed\n\n_working_");
+    expect(finalEdit.blocks).toEqual([
+      { type: "section", text: { type: "plain_text", text: "Failed", emoji: false } },
+      { type: "section", text: { type: "mrkdwn", text: "_working_" } },
+    ]);
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
@@ -1577,17 +1686,18 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedAgentRunTerminalOutcome = "failed";
 
     await dispatch({
-      accountConfig: progressAccount(),
+      accountConfig: progressAccount({ toolProgress: true }),
     });
     expect(failedDraft.clear).not.toHaveBeenCalled();
-    expect(JSON.stringify(finalizeSlackPreviewEditMock.mock.calls[0]?.[0]?.blocks)).toContain(
-      "❌ *Working*",
-    );
+    expect(finalizeSlackPreviewEditMock.mock.calls[0]?.[0]?.blocks).toEqual([
+      { type: "section", text: { type: "plain_text", text: "Failed", emoji: false } },
+      { type: "section", text: { type: "mrkdwn", text: "_working_" } },
+    ]);
 
     finalizeSlackPreviewEditMock.mockClear();
     mockedAgentRunTerminalOutcome = "completed";
     await dispatch({
-      accountConfig: progressAccount(),
+      accountConfig: progressAccount({ toolProgress: true }),
     });
     expect(silentDraft.clear).toHaveBeenCalledTimes(1);
     expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
@@ -2054,7 +2164,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(finalizeSlackPreviewEditMock.mock.invocationCallOrder.at(-1)).toBeLessThan(
       draftStream.forceNewMessage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-    expectLastDraftUpdateText(draftStream, "Working\n\n• second turn");
+    expectLastDraftUpdateText(draftStream, "Working\n\n_second turn_\n\n1s");
   });
 
   it("clears re-armed queued progress when the followup settles without a final delivery", async () => {
@@ -2073,7 +2183,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const dropCallsBeforeSettlement = draftStream.dropDetachedMessages.mock.calls.length;
     await capturedReplyOptions?.onQueuedFollowupSettled?.();
 
-    expectLastDraftUpdateText(draftStream, "Working\n\n• queued turn");
+    expectLastDraftUpdateText(draftStream, "Working\n\n_queued turn_\n\n1s");
     expect(draftStream.clear).toHaveBeenCalledTimes(clearCallsBeforeSettlement + 1);
     expect(draftStream.clear.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
       draftStream.update.mock.invocationCallOrder.at(-1) ?? Number.POSITIVE_INFINITY,
@@ -3140,51 +3250,249 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(delivery.replies).toEqual([payload]);
   });
 
-  it("keeps plan explanation in the session card with a fresh preamble", async () => {
-    const draftStream = useDraftStream();
+  it.each(["Shelling", undefined])(
+    "keeps preamble and explanation as narration with title %s",
+    async (label) => {
+      const draftStream = useDraftStream();
+      mockedSlackStreamingMode = "progress";
+      mockedDispatchSequence = [];
+      mockedReplyOptionEvents = [
+        {
+          kind: "item",
+          itemKind: "preamble",
+          itemId: "preamble-1",
+          progressText: "Checking the workspace",
+        },
+        {
+          kind: "plan",
+          phase: "update",
+          explanation: "Executing the checklist.",
+          steps: [{ step: "Patch", status: "in_progress" }],
+        },
+      ];
 
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          accountConfig: {
+            streaming: { mode: "progress", progress: { toolProgress: true, label } },
+          },
+        }),
+      );
+
+      expect(draftStream.update).toHaveBeenLastCalledWith({
+        text: `${label ? `${label}\n\n` : ""}_Checking the workspace_\n\n_Executing the checklist._\n\n▸ Patch\n\n1s`,
+        blocks: [
+          ...(label
+            ? [
+                {
+                  type: "section",
+                  text: { type: "plain_text", text: label, emoji: false },
+                },
+              ]
+            : []),
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "_Checking the workspace_",
+            },
+          },
+          { type: "section", text: { type: "mrkdwn", text: "_Executing the checklist._" } },
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: "▸ Patch" },
+          },
+          {
+            type: "context",
+            elements: [{ type: "mrkdwn", text: "1s" }],
+          },
+        ],
+      });
+    },
+  );
+
+  it("deduplicates a plain plan headline without promoting it to a title", async () => {
+    const draftStream = useDraftStream();
+    mockedSlackStreamingMode = "progress";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
-      preamble("Checking the workspace", "preamble-1"),
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "plain-preamble",
+        progressText: "Read *literal* <@U123>",
+      },
       {
         kind: "plan",
         phase: "update",
-        explanation: "Executing the checklist.",
-        steps: [{ step: "Patch", status: "in_progress" }],
+        explanation: "Read *literal* <@U123>",
+        explanationFormat: "plain",
+        steps: [{ step: "Inspect", status: "in_progress" }],
       },
     ];
 
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
-        accountConfig: progressAccount({ toolProgress: true, label: "Shelling" }),
+        accountConfig: {
+          streaming: { mode: "progress", progress: { style: "card", toolProgress: false } },
+        },
       }),
     );
 
     expect(draftStream.update).toHaveBeenLastCalledWith({
-      text: ["Shelling", "", "Checking the workspace", "", "▸ Patch"].join("\n"),
+      text: "Read *literal* &lt;@U123&gt;",
       blocks: [
         {
           type: "section",
-          text: { type: "mrkdwn", text: "🔄 *Shelling*" },
-        },
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: "_Checking the workspace — Executing the checklist._",
-          },
-        },
-        {
-          type: "section",
-          text: { type: "mrkdwn", text: "▸ Patch" },
-        },
-        {
-          type: "context",
-          elements: [{ type: "mrkdwn", text: "⏱ 1s" }],
+          text: { type: "plain_text", text: "Read *literal* <@U123>", emoji: false },
         },
       ],
     });
   });
+
+  it("caps the card fallback text at the draft limit while keeping the long blocks", async () => {
+    const draftStream = useDraftStream();
+    mockedSlackStreamingMode = "progress";
+    const long = (word: string) => Array.from({ length: 400 }, () => word).join(" ");
+    mockedReplyOptionEvents = [
+      {
+        kind: "plan",
+        phase: "update",
+        explanation: long("explain"),
+        steps: [{ step: "Inspect", status: "in_progress" }],
+      },
+      { kind: "item", itemKind: "preamble", itemId: "preamble-1", progressText: long("status") },
+      ...Array.from({ length: 20 }, (_, index) => ({
+        kind: "approval" as const,
+        phase: "requested" as const,
+        approvalId: `approval-${index}`,
+        command: `${long("run")}-${index}`,
+      })),
+    ];
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { mode: "progress", progress: { style: "card" } } },
+      }),
+    );
+    const update = requireRecord(draftStream.update.mock.calls.at(-1)?.[0], "long card update");
+    const blocks = update.blocks as unknown[];
+    // Precondition: the full card text exceeds the 4,000-character draft limit.
+    expect(buildSlackCompleteBlocksFallbackText(blocks).length).toBeGreaterThan(4000);
+    expect((update.text as string).length).toBeLessThanOrEqual(4000);
+    expect(JSON.stringify(blocks)).toContain("Approval required:");
+  });
+
+  it.each([false, true])(
+    "deduplicates commentary overlapping a plan headline (detailed=%s)",
+    async (toolProgress) => {
+      const draftStream = useDraftStream();
+      mockedSlackStreamingMode = "progress";
+      mockedReplyOptionEvents = [
+        {
+          kind: "plan",
+          phase: "update",
+          explanation: "Checking the workspace",
+          steps: [{ step: "Inspect", status: "in_progress" }],
+        },
+        {
+          kind: "item",
+          itemKind: "preamble",
+          itemId: "preamble-1",
+          progressText: "Checking the workspace",
+        },
+      ];
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          accountConfig: {
+            streaming: {
+              mode: "progress",
+              progress: { style: "card", commentary: true, toolProgress },
+            },
+          },
+        }),
+      );
+      const text = draftUpdateTexts(draftStream).at(-1)!;
+      expect(text.match(/Checking the workspace/g)).toHaveLength(1);
+      expect(text).toContain("_Checking the workspace_");
+      expect(text.includes("▸ Inspect")).toBe(toolProgress);
+    },
+  );
+
+  it.each([
+    {
+      name: "deletes a successful card with nothing left to show instead of keeping a stale approval",
+      isError: false,
+    },
+    {
+      name: "keeps a failed card marked Failed instead of keeping a stale approval",
+      isError: true,
+    },
+  ])("$name", async ({ isError }) => {
+    const draftStream = useDraftStream();
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedSlackStreamingMode = "progress";
+    mockedReplyOptionEvents = [
+      { kind: "approval", phase: "requested", approvalId: "approval-1", command: "run checks" },
+    ];
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT, isError } }];
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { mode: "progress", progress: { style: "card" } } },
+      }),
+    );
+    expect(draftUpdateTexts(draftStream).at(-1)).toContain("Approval required: run checks");
+    if (isError) {
+      expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+      const finalEdit = requireRecord(
+        requireMockCall(finalizeSlackPreviewEditMock, 0, "failed card without stale approval")[0],
+        "failed card without stale approval",
+      );
+      expect(finalEdit.text).toBe("Failed");
+      expect(finalEdit.blocks).toEqual([
+        { type: "section", text: { type: "plain_text", text: "Failed", emoji: false } },
+      ]);
+      expect(draftStream.seal).toHaveBeenCalledTimes(1);
+      expect(draftStream.clear).not.toHaveBeenCalled();
+    } else {
+      expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+      expect(draftStream.seal).not.toHaveBeenCalled();
+      expect(draftStream.clear).toHaveBeenCalled();
+    }
+    expect(deliverRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{ text: FINAL_REPLY_TEXT, isError }],
+      }),
+    );
+  });
+
+  it.each([
+    { firstSend: "delivered", messageId: "171234.567" },
+    // The first Slack post is still queued or in flight, so no message id exists yet.
+    { firstSend: "pending", messageId: undefined },
+  ])(
+    "deletes a working card once a resolved approval was its last visible row (first send $firstSend)",
+    async ({ messageId }) => {
+      const draftStream = useDraftStream();
+      draftStream.messageId = () => messageId;
+      mockedSlackStreamingMode = "progress";
+      mockedReplyOptionEvents = [
+        // The default card hides the plan, but the compositor still holds it.
+        { kind: "plan", phase: "update", steps: [{ step: "Inspect", status: "in_progress" }] },
+        { kind: "approval", phase: "requested", approvalId: "approval-1", command: "run checks" },
+        { kind: "approval", phase: "resolved", approvalId: "approval-1" },
+      ];
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          accountConfig: { streaming: { mode: "progress", progress: { style: "card" } } },
+        }),
+      );
+      expect(draftUpdateTexts(draftStream)).toEqual([
+        "Approval required: run checks; approval requested",
+      ]);
+      expect(draftStream.clear).toHaveBeenCalled();
+      expect(draftStream.forceNewMessage).toHaveBeenCalled();
+    },
+  );
 
   it("keeps and terminalizes the progress card when the final reply is an error", async () => {
     const draftStream = useDraftStream();
@@ -3195,7 +3503,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
-        accountConfig: progressAccount(),
+        accountConfig: progressAccount({ toolProgress: true }),
       }),
     );
 
@@ -3205,7 +3513,11 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       requireMockCall(finalizeSlackPreviewEditMock, 0, "error session card edit")[0],
       "error session card edit",
     );
-    expect(JSON.stringify(finalEdit.blocks)).toContain("❌ *Working*");
+    expect(finalEdit.text).toBe("Failed\n\n_working_");
+    expect(finalEdit.blocks).toEqual([
+      { type: "section", text: { type: "plain_text", text: "Failed", emoji: false } },
+      { type: "section", text: { type: "mrkdwn", text: "_working_" } },
+    ]);
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
@@ -3237,7 +3549,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     ]);
     expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
   });
-  it("uses the default card title when no Slack progress label is configured", async () => {
+  it("omits filler titles when no Slack progress label is configured", async () => {
     const draftStream = useDraftStream();
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedSlackStreamingMode = "progress";
@@ -3256,9 +3568,11 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        blocks: expect.arrayContaining([
-          { type: "section", text: { type: "mrkdwn", text: "🔄 *Working*" } },
-        ]),
+        text: "_tool one_\n_tool two_\n\n1s",
+        blocks: [
+          { type: "section", text: { type: "mrkdwn", text: "_tool one_\n_tool two_" } },
+          { type: "context", elements: [{ type: "mrkdwn", text: "1s" }] },
+        ],
       }),
     );
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
@@ -3307,7 +3621,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(capturedReplyOptions?.shouldDeliverCommentaryPayloads).toBeUndefined();
     expect(capturedReplyOptions?.onVerboseProgressVisibility).toBeUndefined();
     expect(capturedReplyOptions?.progressPreambleEnabled).toBe(true);
-    expectLastDraftUpdateText(draftStream, "Keeping the released behavior\n\n🛠️ Bash: running");
+    expectLastDraftUpdateText(
+      draftStream,
+      "_Keeping the released behavior_\n\nBash — running\n\n1 tool · 1s",
+    );
   });
 
   it("does not flush draft previews for error finals before normal delivery", async () => {

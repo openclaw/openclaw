@@ -1,15 +1,15 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { addSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
+import { mutateSubagentRuns } from "./subagents/registry/subagent-registry-persistence.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByRunId,
@@ -21,11 +21,12 @@ import { buildRequesterSettleWakeIdentity } from "./subagents/registry/subagent-
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 const CRON_RUN_KEY = "agent:main:cron:daily-report:run:run-42";
+const sessionDirs = useSessionStoreTempDirs(afterAll, "cron-yield-policy-");
 
-function seedRequiredChild(
+async function seedRequiredChild(
   requesterSessionKey = CRON_RUN_KEY,
   overrides: Partial<SubagentRunRecord> = {},
-): SubagentRunRecord {
+): Promise<SubagentRunRecord> {
   const run: SubagentRunRecord = {
     runId: "run-child",
     childSessionKey: "agent:main:subagent:child",
@@ -42,11 +43,33 @@ function seedRequiredChild(
     execution: { status: "running" },
     ...overrides,
   };
-  addSubagentRunForTests(run);
+  await addSubagentRunForTests(run);
   return run;
 }
 
-const GENERIC_NO_CLAIM_ERROR = expect.stringContaining("return its result normally");
+it.each([
+  {
+    acknowledgment: "  PAUSE-MARKER\nneeds direction  ",
+    expected: "PAUSE-MARKER\nneeds direction",
+  },
+  { acknowledgment: undefined, expected: "Paused awaiting continuation." },
+  { acknowledgment: "x".repeat(12_001), expected: "x".repeat(12_000) },
+])(
+  "retains the announcing child's bounded message-wait notice (case %#)",
+  async ({ acknowledgment, expected }) => {
+    const child = await seedRequiredChild("agent:main:main", { requesterTurnRunId: undefined });
+    const tool = createYieldToolForTurn({
+      requesterSessionKey: child.childSessionKey,
+      requesterTurnRunId: child.runId,
+    });
+    const result = await tool.execute("yield-pause", { waitFor: "message", acknowledgment });
+    expect(result.details).toMatchObject({ status: "yielded" });
+    expect(getSubagentRunByRunId(child.runId)?.requesterSettleWake?.pauseNotice).toEqual({
+      acknowledgment: expected,
+    });
+    expect(getSubagentRunByRunId(child.runId)?.execution.status).toBe("running");
+  },
+);
 
 function createYieldToolForTurn({
   onYield = vi.fn(),
@@ -89,19 +112,19 @@ function createTestOpenClawTools(
 }
 
 describe("requester yield ownership", () => {
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests();
     resetProcessRegistryForTests();
   });
-  afterEach(() => {
-    resetSubagentRegistryForTests();
+  afterEach(async () => {
+    await resetSubagentRegistryForTests();
     resetProcessRegistryForTests();
   });
 
   it.each([CRON_RUN_KEY])(
     "rejects %s before runtime claim, durable intent, or runtime yield",
     async (requesterSessionKey) => {
-      seedRequiredChild(requesterSessionKey);
+      await seedRequiredChild(requesterSessionKey);
       const before = structuredClone(getSubagentRunByRunId("run-child"));
       const runtimeClaim = vi.fn(() => true);
       const onYield = vi.fn();
@@ -124,8 +147,8 @@ describe("requester yield ownership", () => {
     },
   );
 
-  it("omits yield for the execution identity and leaves its child owned", () => {
-    seedRequiredChild();
+  it("omits yield for the execution identity and leaves its child owned", async () => {
+    await seedRequiredChild();
     const before = structuredClone(getSubagentRunByRunId("run-child"));
     const tools = createTestOpenClawTools({
       sessionKey: "agent:main:telegram:default:direct:1234",
@@ -189,9 +212,9 @@ describe("requester yield ownership", () => {
       await expectStillActive();
       acknowledgeInternalToolResult(result);
       expect((await yieldTool.execute("yield-collected", {})).details).toMatchObject({
-        status: "error",
-        error: expect.stringContaining("return its result normally"),
+        status: "nothing_pending",
       });
+      expect(onYield).not.toHaveBeenCalled();
       expect(
         (await yieldTool.execute("yield-collected-message", { waitFor: "message" })).details,
       ).toMatchObject({
@@ -273,7 +296,7 @@ describe("requester yield ownership", () => {
   it.each([{ name: "with a registry turn", requesterTurnRunId: "run-collector-turn" }])(
     "rejects a swarm collector yield $name",
     async ({ requesterTurnRunId }) => {
-      seedRequiredChild("agent:main:subagent:collector");
+      await seedRequiredChild("agent:main:subagent:collector");
       const before = structuredClone(getSubagentRunByRunId("run-child"));
       const runtimeClaim = vi.fn(() => true);
       const onYield = vi.fn();
@@ -303,50 +326,46 @@ describe("requester yield ownership", () => {
   ])(
     "preserves child yield authorization under $policy / $runtime",
     async ({ policy, runtime, allowed }) => {
-      const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cron-yield-policy-"));
-      try {
-        const storePath = path.join(workspace, "sessions.json");
-        const config: OpenClawConfig = {
-          agents: { entries: { main: { default: true, workspace } } },
-          session: { store: storePath },
-          tools: policy,
-        };
-        const inheritedToolAllowlistRef: string[] = [];
-        const parent = createTestOpenClawTools({
-          config,
-          sessionKey: CRON_RUN_KEY,
-          inheritedToolAllowlistRef,
-          runtimeToolAllowlist: runtime,
-          inheritRuntimeToolAllowlist: true,
-        });
-        expect(parent.map((tool) => tool.name)).not.toContain("sessions_yield");
-        expect(inheritedToolAllowlistRef.includes("sessions_yield")).toBe(allowed);
-        const childSessionKey = "agent:main:subagent:policy-child";
-        await replaceSessionEntry(
-          { agentId: "main", sessionKey: childSessionKey, storePath },
-          {
-            sessionId: "policy-child",
-            updatedAt: 1000,
-            spawnedBy: CRON_RUN_KEY,
-            spawnDepth: 1,
-            inheritedToolPolicyVersion: 1,
-            inheritedToolAllow: inheritedToolAllowlistRef,
-          },
-        );
-        const child = createTestOpenClawTools({
-          config: { ...config, tools: { profile: "coding" } },
-          sessionKey: childSessionKey,
-        });
-        expect(child.some((tool) => tool.name === "sessions_yield")).toBe(allowed);
-      } finally {
-        await fs.rm(workspace, { recursive: true, force: true });
-      }
+      const workspace = sessionDirs.make();
+      const storePath = path.join(workspace, "sessions.json");
+      const config: OpenClawConfig = {
+        agents: { entries: { main: { default: true, workspace } } },
+        session: { store: storePath },
+        tools: policy,
+      };
+      const inheritedToolAllowlistRef: string[] = [];
+      const parent = createTestOpenClawTools({
+        config,
+        sessionKey: CRON_RUN_KEY,
+        inheritedToolAllowlistRef,
+        runtimeToolAllowlist: runtime,
+        inheritRuntimeToolAllowlist: true,
+      });
+      expect(parent.map((tool) => tool.name)).not.toContain("sessions_yield");
+      expect(inheritedToolAllowlistRef.includes("sessions_yield")).toBe(allowed);
+      const childSessionKey = "agent:main:subagent:policy-child";
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: childSessionKey, storePath },
+        {
+          sessionId: "policy-child",
+          updatedAt: 1000,
+          spawnedBy: CRON_RUN_KEY,
+          spawnDepth: 1,
+          inheritedToolPolicyVersion: 1,
+          inheritedToolAllow: inheritedToolAllowlistRef,
+        },
+      );
+      const child = createTestOpenClawTools({
+        config: { ...config, tools: { profile: "coding" } },
+        sessionKey: childSessionKey,
+      });
+      expect(child.some((tool) => tool.name === "sessions_yield")).toBe(allowed);
     },
   );
 
   it("resumes a later turn truthfully after an earlier turn spawned and yielded", async () => {
     const requesterSessionKey = "agent:main:dashboard:coordination";
-    const child = seedRequiredChild(requesterSessionKey, {
+    const child = await seedRequiredChild(requesterSessionKey, {
       childSessionKey: "agent:main:dashboard:work",
       label: "Work session",
       requesterTurnRunId: "run-turn-1",
@@ -362,7 +381,7 @@ describe("requester yield ownership", () => {
     expect((await turn1.execute("yield-turn-1", {})).details).toMatchObject({ status: "yielded" });
     expect(turn1Yield).toHaveBeenCalledOnce();
     expect(
-      settleRequesterAfterSessionSpawns({
+      await settleRequesterAfterSessionSpawns({
         requesterSessionKey,
         requesterAgentId: "main",
         requesterTurnRunId: "run-turn-1",
@@ -412,9 +431,6 @@ describe("requester yield ownership", () => {
       expect((result.details as { message: string }).message).toContain(
         "do not re-spawn, re-send, or poll",
       );
-      expect((result.details as { message: string }).message).not.toContain(
-        "return its result normally",
-      );
     }
     expect(turn2Yield).not.toHaveBeenCalled();
     // Reporting must not disturb the armed wake or claim the child for turn 2.
@@ -422,9 +438,27 @@ describe("requester yield ownership", () => {
 
     // The completion owner stays dispatching until its requester continuation returns.
     assert(settled?.requesterSettleWake);
-    settled.execution = { status: "terminal", startedAt: 2_000, endedAt: 3_000 };
-    settled.requesterSettleWake.status = "dispatching";
-    settled.requesterSettleWake.attemptCount = 1;
+    await mutateSubagentRuns([child.runId], (rows) => {
+      const current = rows.get(child.runId);
+      assert(current?.requesterSettleWake);
+      return {
+        value: undefined,
+        postimages: new Map([
+          [
+            child.runId,
+            {
+              ...current,
+              execution: { status: "terminal" as const, startedAt: 2_000, endedAt: 3_000 },
+              requesterSettleWake: {
+                ...current.requesterSettleWake,
+                status: "dispatching" as const,
+                attemptCount: 1,
+              },
+            },
+          ],
+        ]),
+      };
+    });
     const wakeIdentity = {
       requesterSessionKey,
       requesterAgentId: "main",
@@ -432,15 +466,14 @@ describe("requester yield ownership", () => {
       rearmGeneration: settled.requesterSettleWake.rearmGeneration,
     };
     const currentWakeRunId = buildRequesterSettleWakeIdentity(wakeIdentity).runId;
-    const beforeContinuation = structuredClone(settled);
+    const beforeContinuation = structuredClone(getSubagentRunByRunId(child.runId));
     const continuation = createYieldToolForTurn({
       requesterSessionKey,
       requesterTurnRunId: currentWakeRunId,
       onYield: turn2Yield,
     });
     expect((await continuation.execute("current-wake", {})).details).toMatchObject({
-      status: "error",
-      error: GENERIC_NO_CLAIM_ERROR,
+      status: "nothing_pending",
     });
     const wrongGeneration = createYieldToolForTurn({
       requesterSessionKey,
@@ -453,7 +486,7 @@ describe("requester yield ownership", () => {
       status: "already_pending",
       pendingChildren: [{ runId: child.runId }],
     });
-    seedRequiredChild(requesterSessionKey, {
+    await seedRequiredChild(requesterSessionKey, {
       runId: "unrelated-child",
       childSessionKey: "agent:main:subagent:unrelated",
       requesterTurnRunId: "another-turn",
@@ -468,7 +501,7 @@ describe("requester yield ownership", () => {
 
   it("reports a child an earlier turn spawned without yielding", async () => {
     const requesterSessionKey = "agent:main:main";
-    seedRequiredChild(requesterSessionKey, { requesterTurnRunId: undefined });
+    await seedRequiredChild(requesterSessionKey, { requesterTurnRunId: undefined });
     const onYield = vi.fn();
     const tool = createYieldToolForTurn({
       requesterSessionKey,
@@ -484,7 +517,7 @@ describe("requester yield ownership", () => {
   });
 
   it("does not persist or yield after a runtime claim failure", async () => {
-    seedRequiredChild("agent:main:main");
+    await seedRequiredChild("agent:main:main");
     const before = structuredClone(getSubagentRunByRunId("run-child"));
     const onYield = vi.fn();
     const tool = createYieldToolForTurn({

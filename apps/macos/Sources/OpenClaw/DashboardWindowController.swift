@@ -74,6 +74,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     let nativeBrowser: DashboardNativeBrowserHost
     private let messageHandler: DashboardMessageHandler
     let deviceSettingsMessageHandler: DashboardDeviceSettingsMessageHandler
+    /// The canonical Dashboard mount URL supplied by the manager. WebKit route
+    /// loads and SPA history do not mutate it, so native fallbacks stay rooted.
     private(set) var currentURL: URL {
         get { self.documentHost.currentURL }
         set { self.documentHost.currentURL = newValue }
@@ -116,6 +118,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var browserProfileImportOfferRequestIsInFlight = false
     private var browserProfileImportOfferRetryPending = false
     private var nativeCommandsReady = false
+    /// The document whose finish arrived while a newer load was pending.
+    private var deferredFinishSourceID: String?
     private(set) var gatewayHealth: DashboardGatewayHealth?
     private var gatewayHealthReadRevision: UInt64 = 0
     var onGatewayHealthChanged: (() -> Void)?
@@ -353,10 +357,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.show()
     }
 
-    func loadInBackground(url: URL, auth: DashboardWindowAuth, restoringRoute: URL? = nil) {
-        self.update(url: url, auth: auth, restoringRoute: restoringRoute)
-    }
-
     func invalidateBrowserSession(error: GatewayBrowserSessionError? = nil) {
         self.invalidateGatewayHealth()
         if let url = self.webView.url, ControlUIDocumentHost.isTrustedLinkSource(url, dashboardURL: self.currentURL) {
@@ -426,7 +426,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // outgoing experience before a delayed lookup can show it again.
         (window as? DashboardWindow)?.isHiddenForExperience = self.hasRetainedWindow
         (window as? DashboardWindow)?.lifetimeRevision &+= 1
-        self.advanceWindowIntent()
+        (self.window as? DashboardWindow)?.userIntentGeneration &+= 1
         self.notificationSourceID = UUID().uuidString
         self.pendingGatewaySwitch = nil
         _ = self.takePendingNativeActions()
@@ -735,6 +735,14 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // document survives and stays command-capable; clearing live state
         // here would queue native commands forever with no reload to flush.
         if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+            // A finish deferred for this successor belongs to the document that survives,
+            // unless that is a failure page (about:blank HTML), which still needs a reload.
+            if self.deferredFinishSourceID == self.notificationSourceID, !self.webView.isLoading,
+               !self.isShowingFailurePage, self.webView.url?.scheme?.lowercased().hasPrefix("http") == true
+            {
+                self.finishDocument()
+                return
+            }
             refreshNativeCommandReadiness()
             refreshGatewayHealth()
             return
@@ -757,12 +765,13 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
 extension DashboardWindowController {
     private func prepareForFailure(preservingPendingCommands: Bool = false) {
+        self.deferredFinishSourceID = nil
         self.documentHost.retirePendingLoad()
         self.invalidateGatewayHealth()
         self.documentHost.hasLiveContent = false
         self.nativeCommandsReady = false
         self.isShowingFailurePage = true
-        self.advanceNavigationGeneration()
+        self.navigationGeneration &+= 1
         // A pending picker owns its successor's actions, independent of the failing document.
         guard self.pendingGatewaySwitch == nil else { return }
         // Transient reconnects retain generic commands; route-specific navigation expires.
@@ -911,7 +920,7 @@ extension DashboardWindowController {
         defer {
             self.pendingNativeCommands = []
             self.pendingNativeNavigation = nil
-            self.advanceNavigationGeneration()
+            self.navigationGeneration &+= 1
         }
         return (self.pendingNativeCommands, self.pendingNativeNavigation)
     }
@@ -1065,12 +1074,6 @@ extension DashboardWindowController {
         self.flushPendingNativeNavigation()
     }
 
-    /// The canonical Dashboard mount URL supplied by the manager. WebKit route
-    /// loads and SPA history do not mutate it, so native fallbacks stay rooted.
-    var dashboardBaseURL: URL {
-        self.currentURL
-    }
-
     func windowDidEnterFullScreen(_: Notification) {
         self.updateToolbarVisibility(isFullScreen: true)
     }
@@ -1093,8 +1096,8 @@ extension DashboardWindowController {
         (self.window as? DashboardWindow)?.lifetimeRevision &+= 1
         (self.window as? DashboardWindow)?.isHiddenForExperience = false
         self.deviceSettingsMessageHandler.stopObserving()
-        self.advanceWindowIntent()
-        self.advanceNavigationGeneration()
+        (self.window as? DashboardWindow)?.userIntentGeneration &+= 1
+        self.navigationGeneration &+= 1
         self.documentHost.hasLiveContent = false
         self.nativeCommandsReady = false
         self.invalidateGatewayHealth()
@@ -1161,8 +1164,8 @@ extension DashboardWindowController {
 
     func dispatchNativeCommand(_ command: DashboardNativeCommand) {
         if command.supersedesPendingNavigation {
-            self.advanceWindowIntent()
-            self.advanceNavigationGeneration()
+            (self.window as? DashboardWindow)?.userIntentGeneration &+= 1
+            self.navigationGeneration &+= 1
         }
         guard self.canDispatchNativeCommands, self.isWindowOpen
         else {
@@ -1209,8 +1212,8 @@ extension DashboardWindowController {
     }
 
     func dispatchNativeNavigation(_ navigation: DashboardNativeNavigation) {
-        self.advanceWindowIntent()
-        self.advanceNavigationGeneration()
+        (self.window as? DashboardWindow)?.userIntentGeneration &+= 1
+        self.navigationGeneration &+= 1
         guard self.canDispatchNativeCommands else {
             // Navigation is state selection, so only the newest destination matters while loading.
             self.pendingNativeNavigation = navigation
@@ -1252,14 +1255,6 @@ extension DashboardWindowController {
 
     var windowLifetimeRevision: UInt64? {
         (self.window as? DashboardWindow)?.lifetimeRevision
-    }
-
-    private func advanceWindowIntent() {
-        (window as? DashboardWindow)?.userIntentGeneration &+= 1
-    }
-
-    private func advanceNavigationGeneration() {
-        self.navigationGeneration &+= 1
     }
 
     private func navigationFallbackIsCurrent(generation: UInt64, sourceURL: URL) -> Bool {
@@ -1409,17 +1404,30 @@ extension DashboardWindowController {
             self.nativeBrowser.navigationDidFinish(navigation, for: webView)
         } else if webView === self.webView {
             guard !self.isShowingFailurePage else { return }
-            // A finished sign-in document is usable but never receives native
-            // commands. Keep pending intent until the verified dashboard returns.
-            self.documentHost.hasLiveContent = true
-            guard self.isTrustedDashboardDocument else { return }
-            self.deviceSettingsMessageHandler.refresh(refreshAvailability: true)
-            self.publishNativeHistoryState()
-            self.nativeBrowser.scheduleStatePush()
-            self.refreshNativeCommandReadiness()
-            self.refreshGatewayHealth()
-            self.flushReadyNativeActions()
+            // A superseded navigation, such as a failure page replaced by a restore,
+            // can report completion after the newer load starts. Flushing native
+            // actions into it would let their fallback cut the restore short, so defer
+            // until the newer load commits or is cancelled (see showLoadFailure).
+            guard !webView.isLoading else {
+                self.deferredFinishSourceID = self.notificationSourceID
+                return
+            }
+            self.finishDocument()
         }
+    }
+
+    private func finishDocument() {
+        self.deferredFinishSourceID = nil
+        // A finished sign-in document is usable but never receives native
+        // commands. Keep pending intent until the verified dashboard returns.
+        self.documentHost.hasLiveContent = true
+        guard self.isTrustedDashboardDocument else { return }
+        self.deviceSettingsMessageHandler.refresh(refreshAvailability: true)
+        self.publishNativeHistoryState()
+        self.nativeBrowser.scheduleStatePush()
+        self.refreshNativeCommandReadiness()
+        self.refreshGatewayHealth()
+        self.flushReadyNativeActions()
     }
 
     func webView(

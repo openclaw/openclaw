@@ -2,7 +2,7 @@ import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-i
 import { availableWorkerSlots } from "../../packages/gateway-protocol/src/worker-capacity.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
-  formatNodeRunnerInventoryIssue,
+  createNodeRunnerInventoryIssueError,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_STATUS_WAIT_VERSION,
@@ -152,7 +152,7 @@ export async function waitForNodeRunnerAvailability(
       }
       const issue = transport.getIssue?.(nodeId);
       if (issue) {
-        throw new Error(formatNodeRunnerInventoryIssue(nodeId, issue));
+        throw createNodeRunnerInventoryIssueError(nodeId, issue);
       }
       await racePromiseWithAbortSignal(changed.promise, options.signal);
       changed = createDeferredCore();
