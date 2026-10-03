@@ -8,6 +8,11 @@ import type {
   SessionRow,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { BOARD_REPORT_GUIDANCE } from "../../boards/board-report.js";
+import {
+  BOARD_WIDGET_NAME_PATTERN,
+  normalizeOptionalBoardWidgetAnchor,
+  optionalBoardWidgetAnchorSchema,
+} from "../../boards/board-tool-args.js";
 import { BOARD_WEBSITE_GUIDANCE } from "../../boards/board-website.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { AnyAgentTool } from "./common.js";
@@ -41,7 +46,6 @@ const DASHBOARD_ACTIONS = [
 ] as const;
 const BOARD_TAB_ID_PATTERN = "^[a-z0-9-]{1,40}$";
 const BOARD_TAB_ID_REGEX = /^[a-z0-9-]{1,40}$/;
-const BOARD_WIDGET_NAME_PATTERN = "^[a-z0-9][a-z0-9._-]{0,63}$";
 const BOARD_PLUGIN_KIND_PATTERN = "^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$";
 const BOARD_PLUGIN_KIND_REGEX = /^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$/;
 
@@ -67,12 +71,7 @@ const DashboardToolSchema = Type.Object(
     name: Type.Optional(
       Type.String({ pattern: BOARD_WIDGET_NAME_PATTERN, description: "Stable widget name" }),
     ),
-    after: Type.Optional(
-      Type.String({
-        pattern: BOARD_WIDGET_NAME_PATTERN,
-        description: "Place after stable widget name",
-      }),
-    ),
+    after: optionalBoardWidgetAnchorSchema("Place after stable widget name; null or omit appends"),
     sizeW: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
     sizeH: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
     size: Type.Optional(Type.String({ enum: ["sm", "md", "lg", "xl", "full"] })),
@@ -195,7 +194,7 @@ function opForAction(action: string, params: Record<string, unknown>): BoardOp {
     case "widget_move": {
       const targetTabId = readToolStringParam(params, "tabId");
       const position = readNumberParam(params, "position", { integer: true, strict: true });
-      const after = readToolStringParam(params, "after");
+      const after = normalizeOptionalBoardWidgetAnchor(readToolStringParam(params, "after"));
       if (position !== undefined && after !== undefined) {
         throw new ToolInputError("widget_move accepts either position or after, not both");
       }
@@ -354,7 +353,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
         const title = readToolStringParam(params, "title");
         const tabId = readOptionalTabId(params);
         const size = readToolStringParam(params, "size");
-        const after = readToolStringParam(params, "after");
+        const after = normalizeOptionalBoardWidgetAnchor(readToolStringParam(params, "after"));
         const props = readPluginProps(params);
         return snapshotResult(
           await callGateway<BoardSnapshot>("board.widget.put", {

@@ -118,6 +118,9 @@ describe("dashboard tool", () => {
     });
     expect(Value.Check(tool.parameters, { action: "widget_move", name: "status" })).toBe(true);
     expect(
+      Value.Check(tool.parameters, { action: "widget_move", name: "status", after: null }),
+    ).toBe(true);
+    expect(
       Value.Check(tool.parameters, {
         action: "widget_put",
         name: "work-item",
@@ -396,6 +399,65 @@ describe("dashboard tool", () => {
             props: { cardId: "card-123" },
           },
           placement: { tabId: "main", size: "sm" },
+        },
+      ],
+    ]);
+  });
+
+  it.each([
+    ["omitted", {}],
+    ["explicit null", { after: null }],
+    ["literal null", { after: "null" }],
+  ])("creates the first plugin widget with %s after anchor", async (_label, placement) => {
+    const harness = recorder();
+    const tool = createDashboardTool({
+      agentSessionKey: "agent:main:first-widget",
+      callGateway: harness.callGateway,
+    });
+    const args = {
+      action: "widget_put",
+      name: "first-widget",
+      pluginKind: "workboard:card",
+      ...placement,
+    };
+
+    expect(Value.Check(tool.parameters, args)).toBe(true);
+    await tool.execute("put", args);
+
+    expect(harness.calls).toEqual([
+      [
+        "board.widget.put",
+        {
+          sessionKey: "agent:main:first-widget",
+          name: "first-widget",
+          content: { kind: "plugin", pluginKind: "workboard:card" },
+        },
+      ],
+    ]);
+  });
+
+  it("keeps genuine anchors and unrelated null strings", async () => {
+    const harness = recorder();
+    const tool = createDashboardTool({
+      agentSessionKey: "agent:main:anchored-widget",
+      callGateway: harness.callGateway,
+    });
+
+    await tool.execute("put", {
+      action: "widget_put",
+      name: "null",
+      pluginKind: "workboard:card",
+      after: "clock",
+    });
+
+    expect(harness.calls).toEqual([
+      [
+        "board.widget.put",
+        {
+          sessionKey: "agent:main:anchored-widget",
+          name: "null",
+          content: { kind: "plugin", pluginKind: "workboard:card" },
+          placement: { after: "clock" },
         },
       ],
     ]);

@@ -17,6 +17,11 @@ import {
   BOARD_REPORT_WIDGET_KIND,
   parseBoardReport,
 } from "../boards/board-report.js";
+import {
+  BOARD_WIDGET_NAME_PATTERN,
+  normalizeOptionalBoardWidgetAnchor,
+  optionalBoardWidgetAnchorSchema,
+} from "../boards/board-tool-args.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   assertWidgetHtmlSize,
@@ -86,7 +91,7 @@ function createShowWidgetToolSchema(
     }),
     name: Type.Optional(
       Type.String({
-        pattern: "^[a-z0-9][a-z0-9._-]{0,63}$",
+        pattern: BOARD_WIDGET_NAME_PATTERN,
         description:
           "Stable dashboard widget name; reuse the same name with pin=true and new report data or widget_code to update",
       }),
@@ -124,11 +129,8 @@ function createShowWidgetToolSchema(
         }),
       }),
     ),
-    after: Type.Optional(
-      Type.String({
-        pattern: "^[a-z0-9][a-z0-9._-]{0,63}$",
-        description: "Place after this dashboard widget name",
-      }),
+    after: optionalBoardWidgetAnchorSchema(
+      "Place after this dashboard widget name; null or omit appends",
     ),
     capabilities: Type.Optional(
       Type.Object({
@@ -464,7 +466,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         const tab = readToolStringParam(params, "tab");
         const size = readToolStringParam(params, "size");
         const frame = readToolStringParam(presentation ?? {}, "frame");
-        const after = readToolStringParam(params, "after");
+        const after = normalizeOptionalBoardWidgetAnchor(readToolStringParam(params, "after"));
         const pinnedTitle = boardWidgetTitle(title);
         if (!registration && !isReport) {
           assertPinnedWidgetDocumentSize(
