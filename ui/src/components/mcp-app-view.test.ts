@@ -1,10 +1,10 @@
-import { ContextProvider } from "@lit/context";
 import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
-import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { McpAppPanel } from "./mcp-app-panel.ts";
 import {
   MCP_APP_VIEW_EXPIRED_EVENT,
@@ -364,11 +364,8 @@ describe("mcp-app-view localization", () => {
       },
     };
     const panel = new McpAppPanel();
-    Reflect.set(panel, "context", context);
-    new ContextProvider(panel, {
-      context: applicationContext,
-      initialValue: context as unknown as ApplicationContext,
-    });
+    const provider = createApplicationContextProvider(context as unknown as ApplicationContext);
+    provider.append(panel);
     const expired = deferred();
     panel.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, () => expired.resolve(), { once: true });
     panel.launch = {
@@ -383,7 +380,7 @@ describe("mcp-app-view localization", () => {
         entrypoint: { type: "global" },
       },
     };
-    document.body.append(panel);
+    document.body.append(provider);
     await expired.promise;
     const view = panel.querySelector("mcp-app-view")!;
     await view.updateComplete;

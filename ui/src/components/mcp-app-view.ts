@@ -6,7 +6,7 @@ import {
   PostMessageTransport,
 } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol";
-import { LitElement, css, html, nothing, type PropertyValues } from "lit";
+import { LitElement, html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { createRef, ref } from "lit/directives/ref.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
@@ -30,6 +30,7 @@ import {
   type McpAppHostSandboxCsp,
 } from "./mcp-app-security.ts";
 import { collectMcpAppStyleVariables } from "./mcp-app-theme.ts";
+import { mcpAppViewStyles } from "./mcp-app-view-styles.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 
 registerMcpAppEnglish();
@@ -131,66 +132,7 @@ function hostContext(
 }
 
 export class McpAppView extends LitElement {
-  static override styles = css`
-    :host {
-      display: block;
-      width: 100%;
-    }
-    .mount {
-      width: 100%;
-      min-height: 160px;
-    }
-    .mount:empty {
-      min-height: 0;
-    }
-    :host([fill-container]),
-    :host([fill-container]) .mount {
-      height: 100%;
-      min-height: 0;
-    }
-    iframe {
-      display: block;
-      width: 100%;
-      border: 0;
-      background: var(--board-surface, transparent);
-    }
-    :host([display-mode="fullscreen"]) {
-      position: fixed;
-      inset: 0;
-      z-index: 1000;
-      background: var(--bg);
-      padding-top: 40px;
-      margin: 0;
-      border: 0;
-      box-sizing: border-box;
-    }
-    :host([display-mode="fullscreen"]) .mount {
-      height: calc(100dvh - 40px);
-    }
-    .exit-fullscreen {
-      position: absolute;
-      top: 4px;
-      right: 8px;
-    }
-    .inactive {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 14px;
-      background: var(--bg-accent);
-      color: var(--text);
-      font-size: 13px;
-    }
-    .inactive button {
-      flex-shrink: 0;
-    }
-    .error {
-      padding: 14px;
-      color: var(--danger, #dc2626);
-      font-size: 13px;
-    }
-  `;
+  static override styles = mcpAppViewStyles;
 
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;

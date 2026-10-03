@@ -100,7 +100,9 @@ describe("app launch catalog", () => {
       await element.updateComplete;
       expect(element.textContent).toContain("Library");
       expect(element.querySelector('[role="alert"]')).toBeNull();
-      for (const listener of configChanged) listener({ event: "config.changed" });
+      for (const listener of configChanged) {
+        listener({ event: "config.changed" });
+      }
       await catalog.updateComplete;
       await element.updateComplete;
       expect(describeSession).toHaveBeenCalledExactlyOnceWith({
