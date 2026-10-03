@@ -547,10 +547,9 @@ If a plugin fails to load, invoking its declared `runtime-slash` command in chat
 Use `qaRunners` when a plugin contributes one or more transport runners beneath
 the shared `openclaw qa` root. Keep this metadata cheap and static; the plugin
 runtime still owns actual CLI registration through a lightweight
-`qa-runner-api.ts` surface that exports matching `qaRunnerCliRegistrations`. For
-plugins using the shipped `runtime-api.ts` contract, that legacy surface remains
-accepted through 2026-10-01 while authors migrate. An
-optional `adapterFactory` exposes the transport to shared QA scenarios without
+`qa-runner-api.ts` surface that exports matching `qaRunnerCliRegistrations`.
+The pre-July 2026 `runtime-api.ts` fallback is retired; move runner registrations
+to `qa-runner-api.ts`. An optional `adapterFactory` exposes the transport to shared QA scenarios without
 changing the registered command's runner.
 
 Module-backed flow scenarios are an adapter-owned execution form. Set

@@ -26,7 +26,8 @@ import {
   stripProposalFrontmatterForSkill,
 } from "../skills/workshop/frontmatter.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
-import { hashSkillProposalContent, importLegacySkillProposal } from "../skills/workshop/store.js";
+import { hashSkillProposalContent } from "../skills/workshop/store.js";
+import { seedSkillProposal } from "../skills/workshop/store.test-support.js";
 import type { SkillProposalRecord } from "../skills/workshop/types.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -258,7 +259,7 @@ describe("Workshop relocation and workspace survival", () => {
       path.join("skill-workshop", "proposals", remaining.id, "PROPOSAL.md"),
       draft,
     );
-    await importLegacySkillProposal({
+    seedSkillProposal({
       record: remaining,
       ownerAgentId: "main",
       store: { env: state.env },

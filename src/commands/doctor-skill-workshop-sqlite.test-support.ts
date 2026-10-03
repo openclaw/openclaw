@@ -5,9 +5,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   hashSkillProposalContent,
-  importLegacySkillProposal,
   readSkillProposalRecord as readSkillProposalRecordImpl,
 } from "../skills/workshop/store.js";
+import { seedSkillProposal } from "../skills/workshop/store.test-support.js";
 import { SKILL_WORKSHOP_SCHEMA, type SkillProposalRecord } from "../skills/workshop/types.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -65,7 +65,7 @@ export async function seedAppliedLegacyProposal(
   const record = createAppliedLegacyProposal(proposal);
   fs.mkdirSync(proposal.target.skillDir, { recursive: true });
   fs.writeFileSync(record.target.skillFile, targetContent);
-  await importLegacySkillProposal({ record, ownerAgentId, store: { env } });
+  seedSkillProposal({ record, ownerAgentId, store: { env } });
   return record;
 }
 

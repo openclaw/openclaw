@@ -20,6 +20,7 @@ import {
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { projectPublicSessionEntryPatch } from "../config/sessions/session-entry-projection.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
@@ -30,10 +31,8 @@ import type {
 } from "../config/sessions/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
-  clearGenerationPrivateFieldsForRotatedSessionPatch,
-  generationValidPrivateFieldsForSameSession,
+  preserveGenerationPrivateFields,
   projectPluginSessionEntry,
-  projectPluginSessionEntryPatch,
   type SessionStoreReadParams,
   toSessionAccessScope,
 } from "./session-store-runtime-internal.js";
@@ -120,33 +119,6 @@ type SessionLifecycleArtifactsCleanupResult = {
   archivedTranscriptArtifacts: number;
   removedEntries: number;
 };
-
-function preserveGenerationPrivateFields(
-  persistedEntry: InternalSessionEntry,
-  publicPatch: Partial<SessionEntry>,
-): Partial<InternalSessionEntry> {
-  const nextSessionId = Object.hasOwn(publicPatch, "sessionId")
-    ? publicPatch.sessionId
-    : persistedEntry.sessionId;
-  const nextLifecycleRevision = Object.hasOwn(publicPatch, "lifecycleRevision")
-    ? publicPatch.lifecycleRevision
-    : persistedEntry.lifecycleRevision;
-  const privateFields = generationValidPrivateFieldsForSameSession(
-    persistedEntry,
-    nextSessionId,
-    nextLifecycleRevision,
-  );
-  return privateFields
-    ? {
-        ...publicPatch,
-        ...(!Object.hasOwn(publicPatch, "lifecycleRevision") &&
-        persistedEntry.lifecycleRevision !== undefined
-          ? { lifecycleRevision: persistedEntry.lifecycleRevision }
-          : {}),
-        ...privateFields,
-      }
-    : clearGenerationPrivateFieldsForRotatedSessionPatch(persistedEntry, publicPatch);
-}
 
 /** Resolves the configured session store path without selecting a row-operation agent. */
 export function resolveStorePath(
@@ -236,7 +208,7 @@ export async function patchSessionEntry(
       if (!patch) {
         return null;
       }
-      return preserveGenerationPrivateFields(persistedEntry, projectPluginSessionEntryPatch(patch));
+      return preserveGenerationPrivateFields(persistedEntry, projectPublicSessionEntryPatch(patch));
     },
     {
       assertCommitAllowed: params.assertCommitAllowed,
@@ -282,7 +254,7 @@ export async function updateSessionStoreEntry(
         return null;
       }
       const persistedEntry = internalEntry as InternalSessionEntry;
-      return preserveGenerationPrivateFields(persistedEntry, projectPluginSessionEntryPatch(patch));
+      return preserveGenerationPrivateFields(persistedEntry, projectPublicSessionEntryPatch(patch));
     },
     {
       skipMaintenance: params.skipMaintenance,

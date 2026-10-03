@@ -40,12 +40,6 @@ function transferUrl(gatewayUrl: string, routePath: string): URL {
   url.pathname = `${basePath}${routePath}`;
   url.search = "";
   url.hash = "";
-  if (url.host !== gateway.host) {
-    throw new NodeWorkerTransferHttpError(
-      "invalid-gateway-transport",
-      "worker transfer endpoint must stay on the connected gateway host",
-    );
-  }
   return url;
 }
 

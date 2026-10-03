@@ -15,7 +15,7 @@ import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.
 import { createSkillProposalEvent } from "../skills/workshop/plugin-hooks.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { appendSkillProposalEvent } from "../skills/workshop/store-sqlite-event.js";
-import { importLegacySkillProposal } from "../skills/workshop/store.js";
+import { seedSkillProposal } from "../skills/workshop/store.test-support.js";
 import type { SkillProposalRecord } from "../skills/workshop/types.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -69,7 +69,7 @@ describe("read-only Skill Workshop migration inspection", () => {
           skillDir: path.join(state.workspaceDir, "skills", "saved"),
         },
       });
-      await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
+      seedSkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
       const database = openOpenClawStateDatabase({ env: state.env });
       const events = ["2026-09-16T02:00:00Z", "2026-09-16T01:00:00Z"].map((occurredAt) =>
         appendSkillProposalEvent(database.db, {
@@ -136,7 +136,7 @@ describe("read-only Skill Workshop migration inspection", () => {
       await fs.mkdir(path.join(legacy, "scripts"), { recursive: true });
       await fs.writeFile(record.target.skillFile, content);
       await fs.writeFile(path.join(legacy, "scripts", "check.sh"), "printf ready\n");
-      await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
+      seedSkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
       appendSkillProposalEvent(
         openOpenClawStateDatabase({ env: state.env }).db,
         createSkillProposalEvent({
@@ -254,7 +254,7 @@ describe("read-only Skill Workshop migration inspection", () => {
           `skill-workshop/proposals/${record.id}/${record.draftFile}`,
           "# Saved\n",
         );
-        await importLegacySkillProposal({
+        seedSkillProposal({
           record,
           ownerAgentId: "main",
           store: { env: state.env },
@@ -332,7 +332,7 @@ describe("read-only Skill Workshop migration inspection", () => {
           }),
         );
         if (proposal) {
-          await importLegacySkillProposal({
+          seedSkillProposal({
             record: createAppliedLegacyProposal({
               id: "readonly-workshop-20260907-1234567890",
               title: "Legacy Workshop",
@@ -425,7 +425,7 @@ describe("read-only Skill Workshop migration inspection", () => {
             { record, workspaceDir: state.workspaceDir, claimReleasedTime: null },
           ]);
         } else {
-          await importLegacySkillProposal({
+          seedSkillProposal({
             record,
             ownerAgentId: "main",
             store: { env: state.env },
@@ -522,7 +522,7 @@ describe("read-only Skill Workshop migration inspection", () => {
           status: sample.status ?? "applied",
           ...(sample.origin ? { origin: sample.origin } : {}),
         };
-        await importLegacySkillProposal({
+        seedSkillProposal({
           record,
           ownerAgentId: sample.owner ?? "main",
           store: { env: state.env },

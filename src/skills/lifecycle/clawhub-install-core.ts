@@ -85,34 +85,12 @@ export type InstallClawHubSkillResult =
       replacementBlocked?: string;
     };
 
-export function normalizeExpectedArtifactIntegrity(expectedIntegrity: string): string;
-export function normalizeExpectedArtifactIntegrity(expectedIntegrity: undefined): undefined;
-export function normalizeExpectedArtifactIntegrity(
-  expectedIntegrity: string | undefined,
-): string | undefined;
-export function normalizeExpectedArtifactIntegrity(
-  expectedIntegrity: string | undefined,
-): string | undefined {
-  if (expectedIntegrity === undefined) {
-    return undefined;
-  }
+export function normalizeExpectedArtifactIntegrity(expectedIntegrity: string): string {
   const normalized = normalizeClawHubSha256Integrity(expectedIntegrity);
   if (!normalized) {
     throw new Error(`Invalid expected ClawHub archive integrity: ${expectedIntegrity}`);
   }
   return normalized;
-}
-
-function assertDownloadedArtifactIntegrity(
-  archive: ClawHubDownloadResult,
-  expectedIntegrity: string | undefined,
-): void {
-  const normalizedExpected = normalizeExpectedArtifactIntegrity(expectedIntegrity);
-  if (normalizedExpected && archive.integrity !== normalizedExpected) {
-    throw new Error(
-      `ClawHub archive integrity mismatch: expected ${normalizedExpected}, got ${archive.integrity}.`,
-    );
-  }
 }
 
 type ClawHubOfficialFlagContainer = {
@@ -397,7 +375,10 @@ export async function performClawHubSkillInstall(
   params: ClawHubInstallParams,
 ): Promise<InstallClawHubSkillResult> {
   try {
-    normalizeExpectedArtifactIntegrity(params.expectedIntegrity);
+    const expectedIntegrity =
+      params.expectedIntegrity === undefined
+        ? undefined
+        : normalizeExpectedArtifactIntegrity(params.expectedIntegrity);
     const files = resolveWorkspaceClawHubSkills(params.workspaceDir);
     const registry = resolveClawHubBaseUrl(params.baseUrl);
     await (files?.assertClawHubSkillInstallState ?? assertClawHubSkillInstallState)({
@@ -500,7 +481,11 @@ export async function performClawHubSkillInstall(
     }
 
     try {
-      assertDownloadedArtifactIntegrity(archive, params.expectedIntegrity);
+      if (expectedIntegrity && archive.integrity !== expectedIntegrity) {
+        throw new Error(
+          `ClawHub archive integrity mismatch: expected ${expectedIntegrity}, got ${archive.integrity}.`,
+        );
+      }
       const github = resolution?.installKind === "github" ? resolution.github : undefined;
       const install = await installDownloadedResolution({
         ...params,
@@ -518,7 +503,7 @@ export async function performClawHubSkillInstall(
         return {
           ok: false,
           error: install.error,
-          ...("replacementBlocked" in install && typeof install.replacementBlocked === "string"
+          ...(install.replacementBlocked !== undefined
             ? { replacementBlocked: install.replacementBlocked }
             : {}),
         };

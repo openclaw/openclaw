@@ -1,12 +1,10 @@
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { projectPublicSessionEntryPatch } from "../config/sessions/session-entry-projection.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
-import {
-  projectPluginSessionEntry,
-  projectPluginSessionEntryPatch,
-} from "./session-store-runtime-internal.js";
+import { projectPluginSessionEntry } from "./session-store-runtime-internal.js";
 import {
   patchSessionEntry,
   upsertSessionEntry,
@@ -153,7 +151,7 @@ describe("plugin session writer claim projection", () => {
       updatedAt: 10,
     });
     expect(
-      projectPluginSessionEntryPatch({
+      projectPublicSessionEntryPatch({
         activeWriterRunId: "run-next",
         lifecycleRunId: "run-lifecycle-next",
         sessionDiffBaselineCapture: {
