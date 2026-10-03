@@ -7,7 +7,7 @@ import type {
 import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type { ReplyDeliveryContext, ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import type { MarkdownTableMode } from "../../config/types.base.js";
+import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
@@ -331,7 +331,7 @@ export type ChannelOutboundSessionRoute = {
     kind: ChatType;
     id: string;
   };
-  chatType: "direct" | "group" | "channel";
+  chatType: ChatType;
   from: string;
   to: string;
   threadId?: string | number;
@@ -355,7 +355,7 @@ export type ChannelThreadingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
     chatType?: string | null;
-  }) => "off" | "first" | "all" | "batched";
+  }) => ReplyToMode;
   /**
    * When replyToMode is "off", allow explicit reply tags/directives to keep replyToId.
    *
@@ -433,7 +433,7 @@ export type ChannelThreadingToolContext = {
   currentChannelProvider?: ChannelId;
   currentThreadTs?: string;
   currentMessageId?: string | number;
-  replyToMode?: "off" | "first" | "all" | "batched";
+  replyToMode?: ReplyToMode;
   hasRepliedRef?: { value: boolean };
   /** True when posting at the parent conversation root would leak a thread-originated reply. */
   sameChannelThreadRequired?: boolean;
@@ -458,7 +458,7 @@ export type ChannelMessagingAdapter = {
     cfg: OpenClawConfig;
     accountId: string;
     conversation: {
-      kind: "direct" | "group" | "channel";
+      kind: ChatType;
       peerId: string;
       /** Canonical delivery target when it differs from the routing peer. */
       target?: string;
@@ -491,7 +491,7 @@ export type ChannelMessagingAdapter = {
     sessionKey: string;
     ctx: MsgContext;
   }) => string | undefined;
-  deriveLegacySessionChatType?: (sessionKey: string) => "direct" | "group" | "channel" | undefined;
+  deriveLegacySessionChatType?: (sessionKey: string) => ChatType | undefined;
   isLegacyGroupSessionKey?: (key: string) => boolean;
   canonicalizeLegacySessionKey?: (params: {
     key: string;

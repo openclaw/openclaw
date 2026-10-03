@@ -3,7 +3,6 @@ import type {
   SessionPlacementMachine,
   SessionsReclaimParams,
   WorkerDesktopLaunchResult,
-  WorkerDesktopObserveResult as ProtocolWorkerDesktopObserveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type {
@@ -74,8 +73,14 @@ export type WorkerEnvironmentServiceRecord = {
 
 export type { WorkerDesktopLaunchResult } from "../../../packages/gateway-protocol/src/index.js";
 
-export type WorkerDesktopObserveResult = ProtocolWorkerDesktopObserveResult & {
+export type WorkerDesktopObserveResult = {
   transport: "rfb";
+  wsPath: string;
+  expiresAtMs: number;
+  control: boolean;
+  /** Provider permission to request resizing, not negotiated RFB support. */
+  canResize?: boolean;
+  vncPassword?: string;
 };
 
 /** Request-facing lifecycle methods, kept separate from persistence and provider internals. */

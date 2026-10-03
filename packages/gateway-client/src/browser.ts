@@ -29,4 +29,5 @@ export type {
   ErrorShape,
   EventFrame,
   HelloOk,
+  QuestionRecord,
 } from "@openclaw/gateway-protocol";
