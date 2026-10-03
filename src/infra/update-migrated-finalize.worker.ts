@@ -479,7 +479,10 @@ async function finalizeInput(
     exitCode = error.exitCode;
     automaticTriage = error.automaticTriage;
   } finally {
-    await windowsRecovery?.complete(result?.status === "ok");
+    await windowsRecovery?.complete(
+      result?.status === "ok" ||
+        (result?.recovery?.serviceRestartSafe === true && result.recovery.service === "healthy"),
+    );
   }
   executorFence.assertCurrent();
   return { run, result, exitCode, automaticTriage, candidateStartAttempted };

@@ -35,6 +35,7 @@ it.each([false, true])(
       foreign.exec("INSERT INTO evidence VALUES (99)");
       foreign.close();
     }
+    const admitted = readUpdateDatabaseGenerations([pathname, missing]);
     const maintenance = await beginDoctorMaintenance({
       root: null,
       options: { repair: true, nonInteractive: true },
@@ -49,6 +50,7 @@ it.each([false, true])(
     const receipt = maintenance!.databaseWrites;
     expect(receipt).toEqual({
       unchanged: !changed,
+      fromGenerations: admitted,
       generations: readUpdateDatabaseGenerations([pathname, missing]),
     });
     expect(receipt?.generations[pathname]).not.toBe(databaseGenerations[pathname]);
@@ -135,6 +137,7 @@ it.each([
       expect(boundary.restart).toHaveBeenCalledOnce();
       expect(maintenance?.databaseWrites).toEqual({
         unchanged: true,
+        fromGenerations: databaseGenerations,
         generations: databaseGenerations,
       });
       return;
@@ -474,7 +477,10 @@ it("restores a service after state ownership fails without retaining a partial m
         release: () => {
           heldLeases--;
         },
-        assertCurrent: boundary.ownerAssert,
+        assertCurrent: (assertPolicy?: () => void) => {
+          boundary.ownerAssert();
+          assertPolicy?.();
+        },
         run<T>(operation: () => T): T {
           boundary.ownerAssert();
           return operation();
@@ -523,7 +529,10 @@ it.each(["acquired", "native-revoked", "install-drift"] as const)(
         release: () => {
           gatewayHeld = false;
         },
-        assertCurrent: boundary.ownerAssert,
+        assertCurrent: (assertPolicy?: () => void) => {
+          boundary.ownerAssert();
+          assertPolicy?.();
+        },
         run<T>(operation: () => T): T {
           boundary.ownerAssert();
           return operation();
