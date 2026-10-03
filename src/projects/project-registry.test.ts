@@ -319,7 +319,15 @@ describe("project registry", () => {
     const originalHead = (await git(target, "rev-parse", "HEAD")).stdout.trim();
     await commitFile(source, "later.txt", "pinned later commit\n");
     const commit = (await git(source, "rev-parse", "HEAD")).stdout.trim();
-    await ensureProjectCheckoutCommit({ url: source, target, commit });
+    const commitCommands = vi.spyOn(processExec, "runCommandWithTimeout");
+    try {
+      await ensureProjectCheckoutCommit({ url: source, target, commit });
+      expect(commitCommands.mock.calls.find(([argv]) => argv.includes("fetch"))?.[0]).toContain(
+        "--no-auto-maintenance",
+      );
+    } finally {
+      commitCommands.mockRestore();
+    }
     expect((await git(target, "rev-parse", "HEAD")).stdout.trim()).toBe(originalHead);
     expect((await git(target, "show", `${commit}:later.txt`)).stdout).toBe("pinned later commit\n");
     const project = await registerClonedProjectRegistry(

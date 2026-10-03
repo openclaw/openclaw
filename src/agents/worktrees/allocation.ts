@@ -41,6 +41,7 @@ export async function withWorktreeAllocationLease<T>(
         key: "capacity",
         database: { scope: "shared", options: { env: params.env } },
         leaseMs: WORKTREE_CREATE_LEASE_MS,
+        heartbeat: "worker",
         waitMs: WORKTREE_CREATE_LEASE_WAIT_MS,
         leaseLabel: "managed worktree allocation lease",
         operationLabel: "agents.worktrees.allocation",

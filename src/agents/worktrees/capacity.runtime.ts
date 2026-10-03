@@ -71,6 +71,7 @@ async function hydrateCommitObjects(repoRoot: string, commit: string): Promise<v
       repoRoot,
       [
         "fetch",
+        "--no-auto-maintenance",
         "--refetch",
         remote,
         "--no-tags",

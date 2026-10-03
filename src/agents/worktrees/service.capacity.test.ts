@@ -16,6 +16,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
+import * as capacity from "./capacity.js";
 import { getRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
@@ -335,6 +336,92 @@ describe("ManagedWorktreeService capacity", () => {
       expect(await fs.readFile(path.join(destination!, "README.md"), "utf8")).toBe(
         archived ? "saved restore state\n" : "base\n",
       );
+    },
+  );
+
+  it.each(["none", "files", "registration"])(
+    "recovers an unprepared branch after lease loss (changed=%s)",
+    async (changed) => {
+      const params = {
+        repoRoot: repo,
+        name: "retry-hydration",
+        baseRef: "HEAD",
+        ownerKind: "session" as const,
+        ownerId: "agent:main:retry-hydration",
+      };
+      let sourceHeld = false;
+      let cleanupEntered = false;
+      let destination: string | undefined;
+      vi.spyOn(capacity, "estimateWorktreeGitBytes").mockImplementationOnce(async () => {
+        expect(sourceHeld).toBe(true);
+        // Hydration starts after Git has registered the new branch but before publication.
+        expect(await git(repo, "branch", "--list", "openclaw/retry-hydration")).not.toBe("");
+        const listing = await git(repo, "worktree", "list", "--porcelain");
+        destination = listing
+          .split("\n")
+          .find((line) => line.startsWith("worktree ") && line.endsWith("retry-hydration"))
+          ?.slice("worktree ".length);
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            executeSqliteQuerySync(
+              db,
+              getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
+                .deleteFrom("state_leases")
+                .where("scope", "=", "core:managed-worktrees:create")
+                .where("lease_key", "=", "capacity"),
+            );
+          },
+          { env },
+        );
+        return 4096;
+      });
+
+      await expect(
+        service.create({
+          ...params,
+          withSource: async (run) => {
+            sourceHeld = true;
+            try {
+              return await run({ assertCurrent() {} });
+            } finally {
+              sourceHeld = false;
+            }
+          },
+          withRollback: async (run) => {
+            // Recovery must release source custody before taking allocation → source again.
+            expect(sourceHeld).toBe(false);
+            cleanupEntered = true;
+            if (changed === "files") {
+              await fs.writeFile(path.join(destination!, "keep.txt"), "new owner data\n");
+            } else if (changed === "registration") {
+              await fs.writeFile(
+                path.join(destination!, ".git"),
+                `gitdir: ${path.join(repo, ".git")}\n`,
+              );
+            }
+            return await run(() => {});
+          },
+        }),
+      ).rejects.toThrow(/was lost/);
+      expect(await service.listRegistryRecords()).toEqual([]);
+      if (changed === "files") {
+        expect(await fs.readFile(path.join(destination!, "keep.txt"), "utf8")).toBe(
+          "new owner data\n",
+        );
+      }
+      if (changed !== "none") {
+        expect(cleanupEntered).toBe(true);
+        expect(await fs.stat(destination!)).toBeDefined();
+        expect(await git(repo, "branch", "--list", "openclaw/retry-hydration")).not.toBe("");
+        return;
+      }
+      const branchBeforeRetry = await git(repo, "branch", "--list", "openclaw/retry-hydration");
+      const retried = await service.create(params);
+      expect(cleanupEntered).toBe(true);
+      expect(branchBeforeRetry).toBe("");
+      expect(retried.ownerId).toBe(params.ownerId);
+      expect(await fs.readFile(path.join(retried.path, "README.md"), "utf8")).toBe("base\n");
+      expect(await service.listRegistryRecords()).toEqual([retried]);
     },
   );
 

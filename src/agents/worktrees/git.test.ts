@@ -296,6 +296,11 @@ describe("Git ref mutation ownership", () => {
       recordRef: "origin/main",
       remote: true,
     });
+    expect(
+      vi
+        .mocked(processExec.runCommandWithTimeout)
+        .mock.calls.find(([argv]) => argv.includes("fetch"))?.[0],
+    ).toContain("--no-auto-maintenance");
     await expect(
       runGit(root, ["show-ref", "--verify", "--quiet", staleRef]),
     ).resolves.toMatchObject({
