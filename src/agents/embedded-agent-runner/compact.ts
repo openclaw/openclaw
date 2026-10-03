@@ -559,7 +559,8 @@ export async function compactEmbeddedAgentSessionDirect(
                 runtimePlan: isPrimaryCandidate ? params.runtimePlan : undefined,
               };
               const summaryFailoverPending =
-                options?.isFinalFallbackAttempt === false && params.trigger !== "manual";
+                options?.isFinalFallbackAttempt === false &&
+                (params.trigger ?? "manual") !== "manual";
               const result = await compactEmbeddedAgentSessionDirectOnce(
                 summaryFailoverPending ? { ...candidate, summaryFailoverPending: true } : candidate,
               );
