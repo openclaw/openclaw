@@ -50,7 +50,7 @@ import {
 import { persistAbortedPartials } from "./chat-transcript-persistence.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ChatAbortLifecycle = {
@@ -673,25 +673,48 @@ export async function handleChatAbortRequestWithLifecycle(
   }
 }
 
-export async function handleChatAbortRequest(options: GatewayRequestHandlerOptions): Promise<void> {
-  try {
-    await handleChatAbortRequestWithLifecycle(options);
-  } catch (error) {
-    const contention = resolveStateContentionPresentation(error);
-    if (!contention) {
-      throw error;
-    }
-    // A session read can fail even though cancellation takes effect. Do not
-    // replay Stop or claim it had no effect; preserve uncertainty at the RPC boundary.
-    options.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        "The server is busy. Check this turn's status before trying Stop again.\n\n" +
-          "SQLite transaction admission remained busy. Stopping may already have taken effect.",
-        { details: { errorKind: contention.errorKind } },
-      ),
-    );
+const ABORT_STATE_CONTENTION_MESSAGE =
+  "The server is busy. Check this turn's status before trying Stop again.\n\n" +
+  "SQLite transaction admission remained busy. Stopping may already have taken effect.";
+
+/**
+ * Preserve the typed contention outcome at the RPC boundary. A session read can
+ * fail even though cancellation takes effect, so Stop is never replayed and never
+ * claims it had no effect.
+ */
+export function respondToAbortStateContention(
+  options: GatewayRequestHandlerOptions,
+  error: unknown,
+): boolean {
+  const contention = resolveStateContentionPresentation(error);
+  if (!contention) {
+    return false;
   }
+  options.respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.UNAVAILABLE, ABORT_STATE_CONTENTION_MESSAGE, {
+      details: { errorKind: contention.errorKind },
+    }),
+  );
+  return true;
 }
+
+/** Every Stop entry point keeps the same typed contention outcome. */
+export function withAbortStateContentionGuard(
+  handler: GatewayRequestHandler,
+): GatewayRequestHandler {
+  return async (options) => {
+    try {
+      await handler(options);
+    } catch (error) {
+      if (!respondToAbortStateContention(options, error)) {
+        throw error;
+      }
+    }
+  };
+}
+
+export const handleChatAbortRequest: GatewayRequestHandler = withAbortStateContentionGuard(
+  handleChatAbortRequestWithLifecycle,
+);
