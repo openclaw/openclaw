@@ -4,7 +4,7 @@ import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js"
 
 /** Refuse one fixture's real worker commit without replacing its mutation or settlement. */
 export function refusePendingInputCommit(params: {
-  operation: "stage" | "complete";
+  operation: "stage" | "complete" | "finish";
   message: string;
   sessionId: string;
   runId: string;

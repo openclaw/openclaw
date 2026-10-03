@@ -55,6 +55,7 @@ export function createAgentRunAdmissionRevalidator(options: {
     cfg: OpenClawConfig;
     resolvedSessionKey?: string;
     getAdmittedSessionId: () => string;
+    hasGatewayAdmissionOutcome: () => boolean;
     respondToGatewayAdmissionOutcome: () => boolean;
   };
   activeRunAbort: ReturnType<typeof registerChatAbortController>;
@@ -69,7 +70,7 @@ export function createAgentRunAdmissionRevalidator(options: {
     rejectPreaccept,
     cleanupPreaccept,
   } = options;
-  const revalidate = (): true | Promise<undefined> => {
+  const publishAborted = () => {
     if (activeRunAbort.controller.signal.aborted) {
       setAbortedAgentDedupeEntries({
         dedupe: params.context.dedupe,
@@ -79,6 +80,9 @@ export function createAgentRunAdmissionRevalidator(options: {
         stopReason: activeRunAbort.entry?.abortStopReason ?? "rpc",
       });
     }
+  };
+  return (userTurn?: PreparedAgentRunUserTurn): true | Promise<undefined> => {
+    const disposition = parentResume ? "cancelled" : "interrupted";
     try {
       params.assertGatewayWorkAdmissionAllowed();
       if (parentResume) {
@@ -93,24 +97,33 @@ export function createAgentRunAdmissionRevalidator(options: {
         });
       }
     } catch (err) {
-      return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, err));
+      return (async () => {
+        const failure = userTurn
+          ? await releasePreparedAgentRunUserTurnAfterFailure(userTurn, err, disposition)
+          : err;
+        if (failure === err) {
+          publishAborted();
+        }
+        return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, failure));
+      })();
     }
-    if (!params.respondToGatewayAdmissionOutcome()) {
+    if (!activeRunAbort.controller.signal.aborted && !params.hasGatewayAdmissionOutcome()) {
       return true;
-    }
-    return cleanupPreaccept(true).then(() => undefined);
-  };
-  return (userTurn?: PreparedAgentRunUserTurn): true | Promise<undefined> => {
-    const result = revalidate();
-    if (result === true || !userTurn) {
-      return result;
     }
     return (async () => {
       try {
-        return await result;
-      } finally {
-        await releasePreparedAgentRunUserTurn(userTurn, "interrupted");
+        if (userTurn) {
+          await releasePreparedAgentRunUserTurn(userTurn, disposition);
+        }
+        // Abort replay must not publish before pending input has durably settled.
+        publishAborted();
+        params.assertGatewayWorkAdmissionAllowed();
+      } catch (error) {
+        return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, error));
       }
+      const admissionReleased = params.respondToGatewayAdmissionOutcome();
+      await cleanupPreaccept(admissionReleased);
+      return undefined;
     })();
   };
 }
