@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { EXEC_TIMEOUT_RETRY_GUIDANCE } from "../agents/bash-tools.exec-output.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
   isHeartbeatAcknowledgementText,
@@ -26,7 +27,7 @@ type StructuredExecCompletionEvent = {
 function parseStructuredExecCompletionEvent(evt: string): StructuredExecCompletionEvent | null {
   const trimmed = evt.trim();
   const match = STRUCTURED_EXEC_COMPLETION_EVENT_RE.exec(trimmed);
-  if (!match) {
+  if (!match || (match[5] !== undefined && match[5] !== EXEC_TIMEOUT_RETRY_GUIDANCE)) {
     return null;
   }
   const action = match[1] ?? "";
@@ -181,7 +182,7 @@ export function isExecCompletionEvent(evt: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   return (
     /^exec finished(?::|\s*\()/.test(normalized) ||
-    STRUCTURED_EXEC_COMPLETION_EVENT_RE.test(trimmed)
+    parseStructuredExecCompletionEvent(trimmed) !== null
   );
 }
 
