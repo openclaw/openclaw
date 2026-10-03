@@ -1,6 +1,11 @@
+import { inspect as inspectValue } from "node:util";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { isUnrecognizedLease, stopCrabboxLease } from "./crabbox-worker-command.js";
+import {
+  isUnrecognizedLease,
+  runCrabboxCommand,
+  stopCrabboxLease,
+} from "./crabbox-worker-command.js";
 
 const LEASE_ID = "cbx_absent_fixture";
 const readError = `coordinator GET /v1/leases/${LEASE_ID}: http 404: {"error":"not_found"}`;
@@ -14,6 +19,40 @@ const absentResult: SpawnResult = {
   killed: false,
   termination: "exit",
 };
+
+it.each(["output capture failed", "cleanup could not confirm process exit", "spawn ENOENT"])(
+  "reports the runner failure without retaining private error data: %s",
+  async (message) => {
+    const token = "synthetic-command-secret-0123456789";
+    const cause = Object.assign(
+      new Error(`${message} token=${token}`, {
+        cause: new Error(`nested token=${token}`),
+      }),
+      { stdout: token, stderr: token },
+    );
+    const error = await runCrabboxCommand({
+      action: "warmup",
+      args: ["warmup"],
+      binary: "crabbox",
+      timeoutMs: 1_000,
+      runCommand: async () => {
+        throw cause;
+      },
+    }).catch((rejection: unknown) => rejection);
+    expect(error).toMatchObject({
+      message: expect.stringContaining(`Crabbox warmup execution failed: ${message}`),
+    });
+    for (let current: unknown = error; current instanceof Error; current = current.cause) {
+      expect(current.message).not.toContain(token);
+    }
+    expect(inspectValue(error, { depth: null })).not.toContain(token);
+    expect(error).not.toHaveProperty("cause");
+    expect(error).toHaveProperty(
+      "message",
+      expect.not.stringContaining("synthetic-command-secret"),
+    );
+  },
+);
 
 describe("Crabbox lease absence classification", () => {
   it.each<{

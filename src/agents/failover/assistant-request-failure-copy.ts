@@ -10,6 +10,7 @@ import { isContextOverflowErrorFromTables } from "./context-overflow-tables.js";
 import {
   isServerErrorMessage,
   isSessionTranscriptValidationErrorMessage,
+  resolveExecutionApprovalFailureMessage,
 } from "./message-patterns.js";
 import { extractFailoverSignalDetails } from "./signal-details.js";
 import type { FailoverReason } from "./signal.js";
@@ -174,6 +175,12 @@ export function renderRecordedAssistantFailureCopy(message: {
   errorCode?: unknown;
   errorType?: unknown;
 }): string | undefined {
+  const approvalMessage = resolveExecutionApprovalFailureMessage(
+    typeof message.errorMessage === "string" ? message.errorMessage : undefined,
+  );
+  if (approvalMessage) {
+    return `⚠️ ${approvalMessage}`;
+  }
   const formatCopy = renderAssistantFormatFailureCopy(message);
   if (formatCopy) {
     return formatCopy;

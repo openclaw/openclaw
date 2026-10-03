@@ -112,6 +112,7 @@ type PluginNativeDependencyScope = { prepareDependencies?: () => void };
 
 export type PluginModuleCapture = {
   staticImports?: ReadonlySet<string>;
+  isNativeImportPattern: (specifier: string) => boolean;
   isRequireReference: (specifier: string) => boolean;
   prepareDependency: ReturnType<typeof createPluginDependencyLookup>;
   nativeScope: PluginNativeDependencyScope;

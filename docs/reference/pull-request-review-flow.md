@@ -151,6 +151,20 @@ finding needs a severity. Structural validity does not authorize preparation:
 `READY FOR /prepare-pr` still requires completed issue and behavior review,
 resolved substantive findings, and the applicable runtime proof.
 
+When a bounded investigation cannot establish or complete a safe fix for a local
+test failure, preserve `tests.result: "fail"` and record
+`tests.investigatedLocalFailures`. Its `head` must be the exact reviewed commit.
+Its nonempty `failures` array records each original `failure`, nonempty string
+arrays of `reproductionAttempts` and `evidence`, and a nonempty
+`remainingUncertainty`. Describe the commands and observed outcomes, and reference
+the evidence recorded in the PR. A passing replay does not prove a fix.
+
+This completed investigation can accompany a READY recommendation without
+turning the failed proof into a pass. Substantive findings, behavioral review,
+required CI, security checks, and enforced reviews remain independent gates.
+Use `tests.preExistingCi` only for its separate, attributed CI-failure workflow;
+local investigation does not authorize a CI exception.
+
 ## When automation stays quiet
 
 Automation may stay quiet when a maintainer is already handling the item, a

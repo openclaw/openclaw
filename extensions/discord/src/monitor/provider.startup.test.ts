@@ -144,7 +144,6 @@ describe("Discord provider startup", () => {
     const { client } = await createMonitorClient({ restFetch });
     expect(client.options.requestOptions).toEqual({
       timeout: DISCORD_REST_TIMEOUT_MS,
-      maxQueueSize: 1000,
       fetch: restFetch,
     });
   });

@@ -158,6 +158,7 @@ scripts/lib/plain-gh.sh
 scripts/lib/record-shared.mjs
 scripts/lib/release-changelog.mjs
 scripts/lib/repo-root.mjs
+scripts/lib/test-runtime.mts
 scripts/lib/test-selector-source-facts.mts
 scripts/lib/test-source-term-matcher.mts
 scripts/lib/tsdown-declaration-boundary.mts
@@ -547,6 +548,7 @@ src/config/sessions/cli-session-binding.ts
 src/config/sessions/session-incognito-side-data-contract.ts
 src/config/sessions/session-incognito-transcript-contract.ts
 src/config/sessions/session-model-context-projection.ts
+src/config/sessions/session-mutation-conflict-error.ts
 src/config/sessions/session-pending-input-custody-error.ts
 src/config/sessions/session-sqlite-target-paths.ts
 src/config/sessions/session-sqlite-target.ts
@@ -841,6 +843,9 @@ src/infra/openclaw-exec-env.ts
 src/infra/openclaw-process-census.ts
 src/infra/openclaw-root.fs.runtime.ts
 src/infra/openclaw-root.ts
+src/infra/package-update-activation-immutable.ts
+src/infra/package-update-activation-paths.ts
+src/infra/package-update-activation-schema.ts
 src/infra/path-case.ts
 src/infra/path-existence.ts
 src/infra/path-guards.ts
@@ -965,6 +970,7 @@ src/infra/update-doctor-result.ts
 src/infra/update-failure-facts.ts
 src/infra/update-failure-public-codes.ts
 src/infra/update-failure-public-identifiers.ts
+src/infra/update-immutable-install-schema.ts
 src/infra/update-managed-service-handoff-boot.ts
 src/infra/update-managed-service-handoff-cancellation.ts
 src/infra/update-managed-service-handoff-children.ts
@@ -1239,6 +1245,7 @@ src/plugins/plugin-native-admission.ts
 src/plugins/plugin-native-module-loader.ts
 src/plugins/plugin-native-namespace.ts
 src/plugins/plugin-native-reference.ts
+src/plugins/plugin-native-resolution.ts
 src/plugins/plugin-package-metadata-capture.ts
 src/plugins/plugin-peer-link.ts
 src/plugins/plugin-policy-id.ts
@@ -1428,6 +1435,7 @@ src/shared/store-writer-queue.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
 src/skills/discovery/filter.ts
+src/skills/skill-library-error.ts
 src/skills/lifecycle/upload-store-error.ts
 src/state/agent-creation-claim.ts
 src/state/agent-database-admission.ts

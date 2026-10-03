@@ -24,7 +24,13 @@ export async function preserveGatewayAuthTokenForService(params: {
     database,
     assertCurrent: params.assertCurrent,
   })) {
-    const stored = readSecretStoreValue({ scope, database, name: entry.name });
+    const stored = await readSecretStoreValue({
+      scope,
+      database,
+      name: entry.name,
+      assertCurrent: params.assertCurrent,
+    });
+    params.assertCurrent?.();
     if (!stored.ok) {
       if (stored.error.code === "SECRET_STORE_NOT_FOUND") {
         continue;

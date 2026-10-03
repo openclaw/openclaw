@@ -106,7 +106,7 @@ function tombstoneEntry(): SessionEntry {
 async function holdMutation(storePath: string, run: () => Promise<unknown> = async () => {}) {
   const started = createDeferred();
   const release = createDeferred();
-  const mutation = runExclusiveSessionLifecycleMutation({
+  const mutation = runExclusiveSessionLifecycleMutation("patch", {
     scope: storePath,
     identities: [sessionKey, sessionId],
     run: async () => {
@@ -139,7 +139,7 @@ async function expectRecoveryReleased(storePath: string, key = sessionKey) {
 }
 function interrupt(storePath: string, run: () => Promise<void>) {
   const target = { scope: storePath, identities: [sessionKey, sessionId] };
-  return runExclusiveSessionLifecycleMutation({
+  return runExclusiveSessionLifecycleMutation("patch", {
     ...target,
     prepare: async () => {
       await interruptSessionWorkAdmissions(target);

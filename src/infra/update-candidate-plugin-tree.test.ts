@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as fsSafe from "./fs-safe.js";
@@ -321,6 +322,120 @@ it("drains concurrent file copies before reporting a failure or publishing links
     await copying;
   }
 });
+
+it.each(["inventory", "bindings", "admission", "completion", "verification"] as const)(
+  "settles bounded %s reads before a metadata failure reaches cleanup",
+  async (phase) => {
+    const peerEntered = createDeferredCore();
+    const releasePeers = createDeferredCore();
+    const failure = new Error("plugin metadata unavailable");
+    const started: string[] = [];
+    let active = 0;
+    let maximum = 0;
+    let activeAtRejection: number | undefined;
+    let selectedDirectory = "";
+    let enabled = phase === "inventory" || phase === "bindings" || phase === "admission";
+    const intercept = async <T>(file: unknown, read: () => Promise<T>): Promise<T> => {
+      if (
+        !enabled ||
+        typeof file !== "string" ||
+        path.dirname(file) !== selectedDirectory ||
+        !path.basename(file).startsWith("read-")
+      ) {
+        return await read();
+      }
+      started.push(file);
+      active += 1;
+      maximum = Math.max(maximum, active);
+      try {
+        if (started.length === 1) {
+          await read();
+          throw failure;
+        }
+        peerEntered.resolve();
+        await releasePeers.promise;
+        return await read();
+      } finally {
+        active -= 1;
+      }
+    };
+    const installReadSpy = () => {
+      if (phase === "bindings") {
+        const realpath = fs.realpath;
+        vi.spyOn(fs, "realpath").mockImplementation((...args) =>
+          intercept(args[0], () => realpath(...args)),
+        );
+      } else {
+        const lstat = fs.lstat;
+        vi.spyOn(fs, "lstat").mockImplementation((...args) =>
+          intercept(args[0], () => lstat(...args)),
+        );
+      }
+    };
+    const preparing = fixture(false, async (source) => {
+      selectedDirectory = source;
+      for (let index = 0; index < 9; index += 1) {
+        const file = path.join(source, `read-${index}.txt`);
+        if (phase === "bindings") {
+          await fs.symlink("payload.txt", file);
+        } else {
+          await fs.writeFile(file, `plugin payload ${index}`);
+        }
+      }
+      if (phase === "completion") {
+        await fs.symlink("payload.txt", path.join(source, "copy-complete"));
+      }
+      if (phase === "inventory") {
+        installReadSpy();
+      }
+    });
+    const operation = (async () => {
+      const f = await preparing;
+      if (phase !== "inventory") {
+        installReadSpy();
+      }
+      if (phase === "completion") {
+        const symlink = fs.symlink;
+        vi.spyOn(fs, "symlink").mockImplementation(async (...args) => {
+          const result = await symlink(...args);
+          if (args[1] === path.join(f.destination, "copy-complete")) {
+            enabled = true;
+          }
+          return result;
+        });
+      } else if (phase === "verification") {
+        selectedDirectory = f.destination;
+        const readdir = fs.readdir;
+        vi.spyOn(fs, "readdir").mockImplementation((...args) => {
+          if (args[0] === f.destination) {
+            enabled = true;
+          }
+          return readdir(...args);
+        });
+      }
+      await f.copy();
+    })().catch((error: unknown) => {
+      activeAtRejection = active;
+      return error;
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        peerEntered.promise,
+        operation,
+        "metadata reads did not overlap before rejection",
+      );
+      expect(activeAtRejection).toBeUndefined();
+      releasePeers.resolve();
+      expect(await operation).toBe(failure);
+      expect(activeAtRejection).toBe(0);
+      expect(started.length).toBeGreaterThan(1);
+      expect(maximum).toBeLessThanOrEqual(4);
+    } finally {
+      releasePeers.resolve();
+      await operation;
+    }
+  },
+);
 
 it("copies a linked workspace dependency without reading or changing Git update transactions", async () => {
   let dependency = "";

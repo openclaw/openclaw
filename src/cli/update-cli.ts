@@ -49,6 +49,7 @@ type CommanderUpdateOptions = Record<string, unknown> & {
   restart?: boolean;
   reapplyLocalOverrides?: boolean;
   tag?: string;
+  sha?: string;
   timeout?: string;
   yes?: boolean;
 };
@@ -74,6 +75,9 @@ function createUpdateLeafAction(
         throw new Error(
           `--reapply-local-overrides is not supported for openclaw update ${command.name()}. Use it with openclaw update.`,
         );
+      }
+      if (inheritOptionFromParent<string>(command, "sha") !== undefined) {
+        throw new Error("--sha is supported only for openclaw update, not update subcommands.");
       }
       if (!options.supportsDryRun && inheritOptionFromParent<boolean>(command, "dryRun")) {
         throw new Error(
@@ -168,6 +172,7 @@ export function registerUpdateCli(program: Command) {
 ${theme.heading("What this does:")}
   - Git checkouts: fetches, rebases, installs deps, builds, and runs doctor
   - npm installs: updates via detected package manager
+  - Adopted immutable installs: prepares a sealed generation; activation is unavailable
 
 ${theme.heading("Switch channels:")}
   - Use --channel stable|extended-stable|beta|dev to persist the update channel in config
@@ -210,6 +215,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           dryRun: Boolean(opts.dryRun),
           channel: opts.channel,
           tag: opts.tag,
+          sha: opts.sha,
           timeout: opts.timeout,
           yes: Boolean(opts.yes),
           acceptCapabilities: Boolean(opts.acceptCapabilities),
@@ -219,6 +225,56 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
         handleUpdateCommandError(err);
       }
     });
+
+  update
+    .command("adopt-immutable")
+    .description("Explicitly record ownership of an existing sealed release installation")
+    .requiredOption("--root <path>", "Stable installation root containing current and releases")
+    .requiredOption("--service <unit>", "Existing system-scope systemd service unit")
+    .requiredOption("--account <name>", "Existing Gateway service account")
+    .requiredOption("--state-dir <path>", "Existing Gateway state directory")
+    .requiredOption("--config <path>", "Existing Gateway configuration file")
+    .requiredOption("--runtime <path>", "Pinned external Node executable")
+    .option("--profile <name>", "Existing Gateway profile")
+    .option(
+      "--previous-updater-stopped",
+      "Confirm the previous updater has settled and stopped scheduling",
+      false,
+    )
+    .option("--json", "Output result as JSON", false)
+    .action(
+      createUpdateLeafAction(async (opts, command) => {
+        if (opts.previousUpdaterStopped !== true) {
+          throw new Error(
+            "Adoption requires --previous-updater-stopped after the previous updater has settled and stopped scheduling.",
+          );
+        }
+        for (const key of ["channel", "tag", "timeout", "restart", "acceptCapabilities", "yes"]) {
+          const source = update.getOptionValueSource(key);
+          if (source && source !== "default") {
+            throw new Error(
+              `The parent option ${key} is not supported for openclaw update adopt-immutable.`,
+            );
+          }
+        }
+        const { updateAdoptImmutableCommand } =
+          await import("./update-cli/update-command-immutable.js");
+        await updateAdoptImmutableCommand({
+          root: requiredUpdateLeafString(opts, "root"),
+          service: {
+            unit: requiredUpdateLeafString(opts, "service"),
+            scope: "system",
+            account: requiredUpdateLeafString(opts, "account"),
+            stateDir: requiredUpdateLeafString(opts, "stateDir"),
+            configPath: requiredUpdateLeafString(opts, "config"),
+            profile: typeof opts.profile === "string" ? opts.profile : null,
+          },
+          runtime: requiredUpdateLeafString(opts, "runtime"),
+          previousUpdaterStopped: true,
+          json: Boolean(opts.json) || inheritedUpdateJson(command),
+        });
+      }),
+    );
 
   setCommandJsonMode(update.command("admit", { hidden: true }), "output", () => true)
     .description("Internal read-only candidate admission protocol")

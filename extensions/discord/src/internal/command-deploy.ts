@@ -5,83 +5,44 @@ import { commandsEqual, stableComparableObject } from "./command-comparison.js";
 import type { BaseCommand } from "./commands.js";
 import type { RequestClient } from "./rest.js";
 
-export type DeployCommandOptions = {
-  mode?: "overwrite" | "reconcile";
-  force?: boolean;
-};
-
 type SerializedCommand = ReturnType<BaseCommand["serialize"]>;
 
 const DISCORD_APPLICATION_COMMAND_LIMIT_REACHED = 30032;
 
 export class DiscordCommandDeployer {
-  private readonly hashes = new Map<string, string>();
-  private readonly loadedKeys = new Set<string>();
+  private hash: string | undefined;
+  private hashLoaded = false;
 
   constructor(
     private readonly params: {
       clientId: string;
       commands: BaseCommand[];
-      devGuilds?: string[];
       hashStore?: DiscordCommandDeployHashStore;
       rest: () => RequestClient;
     },
   ) {}
 
-  async deploy(options: DeployCommandOptions = {}) {
-    const commands = this.params.commands.filter((command) => command.name !== "*");
-    const globalCommands = commands.filter((command) => !command.guildIds);
-    const serializedGlobal = globalCommands.map((command) => command.serialize());
-    for (const [guildId, entries] of groupGuildCommands(commands)) {
-      await this.putCommandSetIfChanged(
-        this.scopedCacheKey(`guild:${guildId}`),
-        entries,
-        () =>
-          this.rest.put(Routes.applicationGuildCommands(this.params.clientId, guildId), {
-            body: entries,
-          }),
-        options,
-      );
+  async deploy() {
+    const commands = this.params.commands
+      .filter((command) => command.name !== "*")
+      .map((command) => command.serialize());
+    const hash = stableCommandSetHash(commands);
+    await this.loadPersistedHash();
+    if (this.hash === hash) {
+      return;
     }
-    if (this.params.devGuilds?.length) {
-      for (const guildId of this.params.devGuilds) {
-        const entries = commands.map((command) => command.serialize());
-        await this.putCommandSetIfChanged(
-          this.scopedCacheKey(`dev-guild:${guildId}`),
-          entries,
-          () =>
-            this.rest.put(Routes.applicationGuildCommands(this.params.clientId, guildId), {
-              body: entries,
-            }),
-          options,
-        );
-      }
-      return { mode: options.mode ?? "reconcile", usedDevGuilds: true };
+    await this.reconcileGlobalCommands(commands);
+    this.hash = hash;
+    try {
+      await this.params.hashStore?.register(this.cacheKey, hash);
+    } catch {
+      // Cache persistence must not turn a successful Discord deploy into a startup failure.
     }
-    const mode = options.mode === "overwrite" ? "overwrite" : "reconcile";
-    await this.putCommandSetIfChanged(
-      this.scopedCacheKey(`global:${mode}`),
-      serializedGlobal,
-      () =>
-        mode === "overwrite"
-          ? this.rest.put(Routes.applicationCommands(this.params.clientId), {
-              body: serializedGlobal,
-            })
-          : this.reconcileGlobalCommands(serializedGlobal),
-      options,
-    );
-    return { mode, usedDevGuilds: false };
   }
 
-  /**
-   * Scope cache keys by Discord application id so multi-bot setups that share a
-   * single command-deploy store still reconcile each application separately. The
-   * prior unscoped `global:reconcile` / `guild:<id>` keys let a later account
-   * with an identical command set reuse the first account's hash and skip its
-   * own application's reconcile entirely (#77359).
-   */
-  private scopedCacheKey(suffix: string): string {
-    return `app:${this.params.clientId}:${suffix}`;
+  // Shared stores must not let one application's hash suppress another's deploy (#77359).
+  private get cacheKey(): string {
+    return `app:${this.params.clientId}:global:reconcile`;
   }
 
   private async reconcileGlobalCommands(desired: SerializedCommand[]) {
@@ -126,35 +87,15 @@ export class DiscordCommandDeployer {
     }
   }
 
-  private async putCommandSetIfChanged(
-    key: string,
-    commands: SerializedCommand[],
-    deploy: () => Promise<unknown>,
-    options: { force?: boolean },
-  ): Promise<void> {
-    const hash = stableCommandSetHash(commands);
-    await this.loadPersistedHash(key);
-    if (!options.force && this.hashes.get(key) === hash) {
+  private async loadPersistedHash(): Promise<void> {
+    if (this.hashLoaded) {
       return;
     }
-    await deploy();
-    this.hashes.set(key, hash);
+    this.hashLoaded = true;
     try {
-      await this.params.hashStore?.register(key, hash);
-    } catch {
-      // Cache persistence must not turn a successful Discord deploy into a startup failure.
-    }
-  }
-
-  private async loadPersistedHash(key: string): Promise<void> {
-    if (this.loadedKeys.has(key)) {
-      return;
-    }
-    this.loadedKeys.add(key);
-    try {
-      const hash = await this.params.hashStore?.lookup(key);
+      const hash = await this.params.hashStore?.lookup(this.cacheKey);
       if (typeof hash === "string" && hash.trim()) {
-        this.hashes.set(key, hash);
+        this.hash = hash;
       }
     } catch {
       // Cache lookup failure is a miss. Reconcile repairs the canonical row after success.
@@ -164,18 +105,6 @@ export class DiscordCommandDeployer {
   private get rest(): RequestClient {
     return this.params.rest();
   }
-}
-
-function groupGuildCommands(commands: BaseCommand[]): Map<string, SerializedCommand[]> {
-  const guildCommands = new Map<string, SerializedCommand[]>();
-  for (const command of commands) {
-    for (const guildId of command.guildIds ?? []) {
-      const entries = guildCommands.get(guildId) ?? [];
-      entries.push(command.serialize());
-      guildCommands.set(guildId, entries);
-    }
-  }
-  return guildCommands;
 }
 
 function stableCommandKey(command: Pick<SerializedCommand, "name" | "type">) {

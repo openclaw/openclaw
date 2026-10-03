@@ -929,20 +929,17 @@ exec "$CRABBOX_TEST_NODE" "$@"
   it.each([
     { ...PROFILE, warmImage: false },
     { ...CLASSLESS_PROFILE, class: "standard", setup: "true", setupEnv: ["PROJECT_SETUP_VALUE"] },
-  ])(
-    "keeps explicitly or implicitly opted-out profiles on their existing enrollment path: %j",
-    async (profile) => {
-      vi.stubEnv("PROJECT_SETUP_VALUE", "synthetic");
-      const events: string[] = [];
-      const { options, observe } = projectOptions(events);
-      const { provider, calls } = createWarmProvider((call) => observe(call));
-      expect(provider.supportsProjectPreparation?.(profile)).toBe(false);
-      await provider.provision(profile, "project-optout", options);
-      expect(options.project.prepare).not.toHaveBeenCalled();
-      expect(options.prepareNodeRuntime).not.toHaveBeenCalled();
-      expect(options.beginNodeEnrollment).toHaveBeenCalledOnce();
-      expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
-      expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
-    },
-  );
+  ])("prepares runtime without project capture for opted-out profiles: %j", async (profile) => {
+    vi.stubEnv("PROJECT_SETUP_VALUE", "synthetic");
+    const events: string[] = [];
+    const { options, observe } = projectOptions(events);
+    const { provider, calls } = createWarmProvider((call) => observe(call));
+    expect(provider.supportsProjectPreparation?.(profile)).toBe(false);
+    await provider.provision(profile, "project-optout", options);
+    expect(options.project.prepare).not.toHaveBeenCalled();
+    expect(options.prepareNodeRuntime).toHaveBeenCalledOnce();
+    expect(options.beginNodeEnrollment).toHaveBeenCalledOnce();
+    expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
+    expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
+  });
 });

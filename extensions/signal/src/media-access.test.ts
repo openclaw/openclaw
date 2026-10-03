@@ -396,4 +396,26 @@ describe("Signal host-owned outbound media access", () => {
       expect(requests).toHaveLength(0);
     },
   );
+
+  it("propagates host-reader failures without contacting Signal", async () => {
+    await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
+    const deniedReader = vi.fn(async (): Promise<Buffer> => {
+      throw new Error("host denied this attachment");
+    });
+
+    await expect(
+      SIGNAL_MEDIA_ADAPTERS[0].deliver(
+        createContext({
+          mediaAccess: {
+            localRoots: [state.workspaceDir],
+            workspaceDir: state.workspaceDir,
+            readFile: deniedReader,
+          },
+        }),
+      ),
+    ).rejects.toThrow("host denied this attachment");
+
+    expect(deniedReader).toHaveBeenCalledOnce();
+    expect(requests).toHaveLength(0);
+  });
 });

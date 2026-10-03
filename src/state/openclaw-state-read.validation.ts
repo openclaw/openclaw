@@ -53,6 +53,12 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         Number.isSafeInteger(input.command.input.limit) &&
         (input.command.input.beforeSequence === undefined ||
           Number.isSafeInteger(input.command.input.beforeSequence))) ||
+      (input.command.type === "secrets.execEnvironment" &&
+        isRecord(input.command.input) &&
+        isStringArray(input.command.input.excludeNames)) ||
+      (input.command.type === "secrets.value" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.name === "string") ||
       (input.command.type === "secrets.metadata" &&
         isRecord(input.command.input) &&
         isRecord(input.command.input.scope) &&
@@ -68,6 +74,9 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         input.command.type === "restartSentinel.installReceipt") &&
         "input" in input.command &&
         input.command.input === undefined) ||
+      (input.command.type === "claws.packageOwnership" &&
+        typeof input.command.includeInstalls === "boolean" &&
+        (input.command.agentId === undefined || typeof input.command.agentId === "string")) ||
       (input.command.type === "acpSessions.metadata" &&
         Array.isArray(input.command.entries) &&
         input.command.entries.length <= 64 &&
@@ -178,6 +187,15 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             )) ||
           (input.command.scope.kind === "ids" && isStringArray(input.command.scope.runIds)))) ||
       input.command.type === "exec-approvals.read" ||
+      (input.command.type === "skillLibrary.read" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.kind === "string" &&
+        ["presentation", "list", "read", "seed", "change", "pins"].includes(
+          input.command.input.kind,
+        ) &&
+        isRecord(input.command.input.authority) &&
+        isStringArray(input.command.input.authority.scopes) &&
+        isRecord(input.command.input.authority.config)) ||
       ((input.command.type === "skills.library.descriptions" ||
         input.command.type === "skills.library.manifests") &&
         Array.isArray(input.command.input) &&

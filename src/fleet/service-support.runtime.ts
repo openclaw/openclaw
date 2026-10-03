@@ -80,15 +80,10 @@ export async function prepareCellDirectories(
   authSecretDir: string,
   owner?: { uid: number; gid: number },
 ): Promise<void> {
-  await Promise.all([
-    ensurePrivateDirectory(record.dataDir),
-    ensurePrivateDirectory(authSecretDir),
-  ]);
+  const directories = [record.dataDir, authSecretDir];
+  await Promise.all(directories.map(ensurePrivateDirectory));
   if (owner) {
-    await Promise.all([
-      fs.chown(record.dataDir, owner.uid, owner.gid),
-      fs.chown(authSecretDir, owner.uid, owner.gid),
-    ]);
+    await Promise.all(directories.map((directory) => fs.chown(directory, owner.uid, owner.gid)));
   }
 }
 

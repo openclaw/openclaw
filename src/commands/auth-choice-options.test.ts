@@ -106,9 +106,7 @@ describe("buildAuthChoiceOptions", () => {
     ]);
 
     const options = getOptions(true);
-    const cliChoices = formatAuthChoiceChoicesForCli({
-      includeSkip: true,
-    }).split("|");
+    const cliChoices = formatAuthChoiceChoicesForCli().split("|");
 
     expect(cliChoices).toContain("openai-api-key");
     expect(cliChoices).toContain("chutes");
@@ -136,7 +134,7 @@ describe("buildAuthChoiceOptions", () => {
       }),
     ]);
 
-    const cliChoices = formatStaticAuthChoiceChoicesForCli({ includeSkip: true }).split("|");
+    const cliChoices = formatStaticAuthChoiceChoicesForCli().split("|");
 
     expect(cliChoices).not.toContain("ollama");
     expect(cliChoices).not.toContain("openai-api-key");
@@ -480,9 +478,7 @@ describe("buildAuthChoiceOptions", () => {
 
     const options = getOptions();
     const optionValues = options.map((option) => option.value);
-    const cliChoiceValues = formatAuthChoiceChoicesForCli({
-      includeSkip: true,
-    }).split("|");
+    const cliChoiceValues = formatAuthChoiceChoicesForCli().split("|");
 
     expect(optionValues).toContain("openai-api-key");
     expect(optionValues).toContain("ollama");

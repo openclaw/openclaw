@@ -6,6 +6,8 @@ import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.
 export type PlacementTurnClaimReceipt = {
   placement?: WorkerSessionPlacementRecord;
   claim?: WorkerSessionTurnClaim;
+  closedClaim?: WorkerSessionTurnClaim;
+  environmentActivation?: { environmentId: string; lastActivatedAtMs: number };
   workspaceResult?: WorkerWorkspacePendingResult | null;
   placementMove?: WorkerPlacementMoveIntent | null;
 };

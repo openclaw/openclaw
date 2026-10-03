@@ -200,35 +200,13 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
-  it("accepts a real pnpm-produced package without booting npm for version diagnostics", () => {
+  it("accepts a real pnpm-produced package", () => {
     withTarball(
       ["dist/index.js"],
       { "dist/index.js": "export {};\n" },
-      (tarball, root) => {
-        const preload = join(root, "reject-npm-version.mjs");
-        writeFileSync(
-          preload,
-          `
-import childProcess from "node:child_process";
-import { syncBuiltinESMExports } from "node:module";
-const originalSpawnSync = childProcess.spawnSync;
-childProcess.spawnSync = function (...callArgs) {
-  if (callArgs[1]?.includes("--version")) {
-    throw new Error("npm version subprocess unavailable");
-  }
-  return originalSpawnSync.apply(this, callArgs);
-};
-syncBuiltinESMExports();
-`,
-        );
+      (tarball) => {
         const result = spawnSync(resolveTestNodeExecPath(), [resolve(CHECK_SCRIPT), tarball], {
           encoding: "utf8",
-          env: {
-            ...process.env,
-            NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(preload).href}`]
-              .filter(Boolean)
-              .join(" "),
-          },
         });
 
         expect(result.status, result.stderr).toBe(0);

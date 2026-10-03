@@ -21,6 +21,7 @@ import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lif
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
 import {
   projectAssignableSessionOwner,
@@ -40,7 +41,6 @@ import { projectSessionPatchResult } from "../session-utils-model.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
 import { startSessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
@@ -430,7 +430,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           );
         }
       };
-      const assignment = await runExclusiveSessionLifecycleMutation({
+      const assignment = await runExclusiveSessionLifecycleMutation("assign-owner", {
         scope: target.storePath,
         identities: [target.storeKey, expectedSessionId],
         run: () =>

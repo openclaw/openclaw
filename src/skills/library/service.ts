@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-  SKILL_LIBRARY_MAX_SELECTIONS,
   validateSkillsLibrarySaveParams,
   type SkillLibraryEntry,
   type SkillsLibraryListParams,
@@ -17,7 +16,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
-import { hasMultipleSessionSharingIdentities } from "../../state/user-profile-list.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import {
   assertProposalContainsNoLiteralSecrets,
   scanProposalBundle,
@@ -29,99 +28,36 @@ import {
   skillLibraryRevisionDir,
   stageSkillLibraryBundle,
 } from "./bundle.js";
-import { SkillLibraryError } from "./errors.js";
+import { captureSkillLibraryAccess } from "./store-access.js";
 import {
   assertSkillLibraryNameAvailable,
   assertSkillLibraryRevision,
   ensureSkillLibrarySchema,
-  projectSkillLibraryEntry,
   readSkillLibraryStore,
   recordSkillLibraryEvent,
   requireSkillLibraryEntry,
   requireSkillLibraryProfile,
   requireSkillLibraryUploadMetadata,
   resolveSkillLibraryActor,
-  selectSkillLibraryRevision,
   selectSkillLibraryRevisionMetadata,
-  selectSkillLibraryRow,
   skillLibraryDb,
   type SkillLibraryAuthority,
 } from "./store.js";
-
-/** Prepared once at human ingress; no library catalog or feature schema work. */
-export function resolveSkillLibraryPresentation(
+/** Prepared at human ingress without host database access. */
+export async function resolveSkillLibraryPresentation(
   authority: SkillLibraryAuthority,
   options: OpenClawStateDatabaseOptions = {},
-): Pick<
-  SkillsLibraryListResult,
-  "profileId" | "multipleProfiles" | "defaultTarget" | "canManageWorkspace"
-> {
-  authority.assertCurrent();
-  const multipleProfiles = hasMultipleSessionSharingIdentities(options);
-  const actor = resolveSkillLibraryActor(openOpenClawStateDatabase(options).db, authority);
-  return {
-    profileId: actor.profileId ?? null,
-    multipleProfiles,
-    defaultTarget:
-      actor.profileId && (multipleProfiles || !actor.admin)
-        ? "personal"
-        : actor.admin
-          ? "workspace"
-          : "unavailable",
-    canManageWorkspace: actor.admin,
-  };
+) {
+  return (await captureSkillLibraryAccess(authority, options).read("presentation", undefined))
+    .value;
 }
 
-export function listSkillLibrary(
+export async function listSkillLibrary(
   authority: SkillLibraryAuthority,
   params: SkillsLibraryListParams = {},
   options: OpenClawStateDatabaseOptions = {},
-): SkillsLibraryListResult {
-  authority.assertCurrent();
-  const presentation = resolveSkillLibraryPresentation(authority, options);
-  const entries =
-    readSkillLibraryStore(
-      (db) =>
-        executeSqliteQuerySync(
-          db,
-          skillLibraryDb(db)
-            .selectFrom("skill_library_entries")
-            .selectAll()
-            .where("removed", "=", 0)
-            .orderBy("slug")
-            .orderBy("skill_id"),
-        ).rows.flatMap((row) => {
-          const entry = projectSkillLibraryEntry(db, row, authority);
-          if (
-            !entry ||
-            (params.scope === "mine" &&
-              (!presentation.profileId || entry.ownerProfileId !== presentation.profileId)) ||
-            (params.scope === "team" && !entry.shared && entry.ownerProfileId !== null)
-          ) {
-            return [];
-          }
-          return [entry];
-        }),
-      options,
-    ) ?? [];
-  return {
-    entries,
-    ...presentation,
-    defaultSelectionLimit: SKILL_LIBRARY_MAX_SELECTIONS,
-    ...(presentation.profileId &&
-    entries.filter(
-      (entry) =>
-        entry.enabled &&
-        (entry.ownerProfileId === presentation.profileId ||
-          entry.ownerProfileId === null ||
-          entry.shared),
-    ).length > SKILL_LIBRARY_MAX_SELECTIONS
-      ? {
-          defaultSelectionNotice:
-            "New sessions select up to 64 enabled skills, personal skills first and then stable ID order. In a session, detach a selected skill to make room and attach another from the library.",
-        }
-      : {}),
-  };
+): Promise<SkillsLibraryListResult> {
+  return (await captureSkillLibraryAccess(authority, options).read("list", params)).value;
 }
 
 export function skillLibraryReceipt(
@@ -151,58 +87,23 @@ export async function readSkillLibrary(
   options: OpenClawStateDatabaseOptions = {},
   selected?: { revision: string; assertSessionAccess: () => void },
 ): Promise<SkillsLibraryReadResult> {
-  const authorize = (db: import("node:sqlite").DatabaseSync) => {
-    if (!selected) {
-      return requireSkillLibraryEntry(db, skillId, authority);
-    }
-    selected.assertSessionAccess();
-    if (revision !== selected.revision) {
-      throw new SkillLibraryError(
-        "FORBIDDEN",
-        "Only the session's exact selected revision can be read.",
-      );
-    }
-    const row = selectSkillLibraryRow(db, skillId);
-    const entry = row && projectSkillLibraryEntry(db, row, authority, selected.revision, true);
-    if (!entry) {
-      throw new SkillLibraryError("NOT_FOUND", "Selected revision is unavailable.");
-    }
-    return { ...entry, canEdit: false };
-  };
-  const result = readSkillLibraryStore((db) => {
-    const entry = authorize(db);
-    const selectedRevision = revision ?? entry.revision;
-    const metadata = selectSkillLibraryRevision(db, skillId, selectedRevision);
-    if (!metadata) {
-      throw new SkillLibraryError("NOT_FOUND", "Skill revision not found.");
-    }
-    return {
-      manifestJson: metadata.files_json,
-      entry: { ...entry, revision: selectedRevision, description: metadata.description },
-      revisions: selected
-        ? [{ revision: selected.revision, createdAt: metadata.created_at }]
-        : executeSqliteQuerySync(
-            db,
-            skillLibraryDb(db)
-              .selectFrom("skill_library_revisions")
-              .select(["revision", "created_at"])
-              .where("skill_id", "=", skillId)
-              .orderBy("created_at", "desc"),
-          ).rows.map((row) => ({ revision: row.revision, createdAt: row.created_at })),
-    };
-  }, options);
-  if (!result) {
-    throw new SkillLibraryError("NOT_FOUND", "Skill not found in your accessible library.");
-  }
+  const access = captureSkillLibraryAccess(authority, options);
+  selected?.assertSessionAccess();
+  const prepared = await access.read("read", {
+    skillId,
+    revision,
+    selectedRevision: selected?.revision,
+  });
+  selected?.assertSessionAccess();
+  const result = prepared.value;
   const files = await readSkillLibraryManifestTree(
-    skillLibraryRevisionDir(skillId, result.entry.revision, options.env),
+    skillLibraryRevisionDir(skillId, result.entry.revision, access.options.env),
     result.manifestJson,
     result.entry.revision,
   );
   // Revocation or transfer during filesystem work must not return a private artifact.
-  if (!readSkillLibraryStore(authorize, options)) {
-    throw new SkillLibraryError("NOT_FOUND", "Selected revision is unavailable.");
-  }
+  prepared.assertCurrent();
+  selected?.assertSessionAccess();
   return {
     entry: result.entry,
     revisions: result.revisions,

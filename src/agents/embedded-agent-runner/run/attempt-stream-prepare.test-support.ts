@@ -4,7 +4,10 @@ import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registr
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
+import {
+  buildToolLifecycleErrorResult,
+  prepareToolResult,
+} from "../../embedded-agent-tool-results.js";
 import { createMediaGenerationOperation } from "../../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
 import {
@@ -199,14 +202,17 @@ export function createCatalogSubscription() {
         const result = await execute(() => undefined);
         await onTerminal?.({
           result,
+          readSanitizedResult: prepareToolResult(result),
           isError: isToolResultError(result),
           executedArguments: structuredClone(args),
           effectReceipt: { state: "uncertain" },
         });
         return result;
       } catch (error) {
+        const result = buildToolLifecycleErrorResult(error);
         await onTerminal?.({
-          result: buildToolLifecycleErrorResult(error),
+          result,
+          readSanitizedResult: prepareToolResult(result),
           isError: true,
           executedArguments: structuredClone(args),
           effectReceipt: { state: "uncertain" },

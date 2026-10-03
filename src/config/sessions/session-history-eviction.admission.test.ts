@@ -45,9 +45,10 @@ vi.mock("../../sessions/session-lifecycle-admission.js", async (importOriginal) 
   return {
     ...actual,
     runExclusiveSessionLifecycleMutation: <T>(
-      params: Parameters<typeof actual.runExclusiveSessionLifecycleMutation<T>>[0],
+      operation: Parameters<typeof actual.runExclusiveSessionLifecycleMutation<T>>[0],
+      params: Parameters<typeof actual.runExclusiveSessionLifecycleMutation<T>>[1],
     ) =>
-      actual.runExclusiveSessionLifecycleMutation({
+      actual.runExclusiveSessionLifecycleMutation(operation, {
         ...params,
         run: async () => {
           await hook.beforePlan?.();

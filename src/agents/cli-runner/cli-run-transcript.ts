@@ -34,6 +34,7 @@ import {
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
 } from "../harness/agent-end-side-effects.js";
+import { buildAgentRunBlockedUserMessage } from "../harness/before-agent-run.js";
 import {
   finalizeHarnessContextEngineTurn,
   runHarnessContextEngineMaintenance,
@@ -308,19 +309,10 @@ export async function persistCliRunBlock(
   params: RunCliAgentParams,
   block: { message: string; pluginId: string },
 ): Promise<void> {
-  const nowMs = Date.now();
-  const redactedUserMessage = {
-    role: "user" as const,
-    content: [{ type: "text" as const, text: block.message }],
-    timestamp: nowMs,
-    idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
-    __openclaw: {
-      beforeAgentRunBlocked: {
-        blockedBy: block.pluginId,
-        blockedAt: nowMs,
-      },
-    },
-  };
+  const redactedUserMessage = buildAgentRunBlockedUserMessage(params.runId, {
+    message: block.message,
+    blockedBy: block.pluginId,
+  });
   try {
     const persisted = await params.userTurnTranscriptRecorder?.persistBlocked(redactedUserMessage);
     if (persisted) {

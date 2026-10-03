@@ -192,7 +192,7 @@ export async function cleanUpAutomaticallyArchivedWorktrees(
 ): Promise<void> {
   for (const target of targets) {
     try {
-      await runExclusiveSessionLifecycleMutation({
+      await runExclusiveSessionLifecycleMutation("worktree-cleanup", {
         scope: target.storePath,
         identities: [target.sessionKey, target.entry.sessionId],
         run: async () => {

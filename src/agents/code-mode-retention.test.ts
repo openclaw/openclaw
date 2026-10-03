@@ -9,9 +9,13 @@ import {
 
 it.for([
   {
-    name: "releases completed tool inputs while a real guest remains parked",
+    name: "releases completed inputs and frontier waits across 2,000 calls with a pending sibling",
     entrypoint: codeModeRetentionEntrypoint,
-    expected: { completedInputReleased: true, pendingInputPreserved: true },
+    expected: {
+      completedInputReleased: true,
+      pendingInputPreserved: true,
+      frontierReactionsBounded: true,
+    },
   },
   {
     name: "releases obsolete session wrappers while live descriptions remain synchronized",

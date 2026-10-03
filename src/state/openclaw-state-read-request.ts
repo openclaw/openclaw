@@ -8,6 +8,8 @@ import type {
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
   if (
     command.type === "secrets.metadata" ||
+    command.type === "secrets.execEnvironment" ||
+    command.type === "secrets.value" ||
     command.type === "sessionState.versions" ||
     command.type === "sessionState.ambientTargets" ||
     command.type === "sessionState.events" ||
@@ -207,6 +209,8 @@ function stringBytes(values: readonly (string | undefined)[]): number {
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (
+    command.type === "secrets.execEnvironment" ||
+    command.type === "secrets.value" ||
     command.type === "sessionState.versions" ||
     command.type === "sessionState.ambientTargets" ||
     command.type === "sessionState.events" ||
@@ -222,6 +226,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (command.type === "cron.activeReceiptOwners") {
     return bytes + Buffer.byteLength(command.agentId, "utf8");
+  }
+  if (command.type === "claws.packageOwnership") {
+    return bytes + Buffer.byteLength(command.agentId ?? "", "utf8");
   }
   if (command.type === "workerPlacements.changeSnapshot") {
     return bytes + stringBytes(command.profileIds ?? []);

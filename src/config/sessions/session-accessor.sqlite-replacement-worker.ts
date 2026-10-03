@@ -35,7 +35,7 @@ import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
 
-type SessionEntryWorkerPreparation = (
+export type SessionEntryWorkerPreparation = (
   execution: OpenClawAgentDatabaseExecution,
   source: AgentDatabaseRequestExecutionSource,
 ) => {
@@ -152,7 +152,10 @@ export async function withSessionEntryWorker<T>(
       // Cold native admission still owns the writer; snapshot planning releases it.
       const opened = await runOpenClawAgentWorkerWrite(
         options,
-        () => execution.runExisting(source, async () => true),
+        async () => {
+          await execution.prepare(source);
+          return execution.runExisting(source, async () => true);
+        },
         undefined,
         signal,
       );

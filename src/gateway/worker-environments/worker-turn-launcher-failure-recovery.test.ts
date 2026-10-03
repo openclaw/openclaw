@@ -185,13 +185,13 @@ describe("worker turn launcher failure recovery", () => {
     });
     try {
       await teardownStarted.promise;
-      const reconciling = placements.startReconcile({
+      const reconciling = await placements.startReconcile({
         sessionId: SESSION_ID,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: active.generation + 1,
       });
-      placements.fail({
+      await placements.fail({
         sessionId: SESSION_ID,
         expectedGeneration: reconciling.generation,
         recoveryError: "recovered elsewhere",
@@ -273,7 +273,7 @@ describe("worker turn launcher failure recovery", () => {
         runId: `move-${executionMode}-run`,
         owner: placementTurnOwner(active),
       });
-      const draining = placements.startDrain({
+      const draining = await placements.startDrain({
         sessionId: active.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,

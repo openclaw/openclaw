@@ -265,21 +265,21 @@ async function withFixture(
             ownerEpoch: 7,
           });
           let placement = await placements.startDispatch(target);
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId,
             from: "requested",
             to: "provisioning",
             expectedGeneration: placement.generation,
             patch: { environmentId: "policy-worker" },
           });
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId,
             from: "provisioning",
             to: "syncing",
             expectedGeneration: placement.generation,
             patch: { workerBundleHash: "a".repeat(64) },
           });
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId,
             from: "syncing",
             to: "starting",
@@ -289,7 +289,7 @@ async function withFixture(
               remoteWorkspaceDir: "/workspace/policy",
             },
           });
-          placements.transition({
+          await placements.transition({
             sessionId,
             from: "starting",
             to: "active",
