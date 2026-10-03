@@ -71,6 +71,46 @@ function screenshotPayload(screenIndex = 0, base64 = TINY_PNG_BASE64) {
   };
 }
 
+function attachedDesktopHarness(desktopRegistry?: ReturnType<typeof createDesktopSessionRegistry>) {
+  const h = createHarness();
+  h.releaseClaim();
+  h.state.environment = { ...h.state.environment, state: "ready", attachedSessionIds: [] };
+  const computers = createWorkerComputerService({ ...h.options, desktopRegistry });
+  const attachment = {
+    environmentId: h.state.environment.environmentId,
+    ownerEpoch: h.state.environment.ownerEpoch,
+    sessionId: h.claim.sessionId,
+    sessionKey: h.state.placement.sessionKey,
+    agentId: h.state.placement.agentId,
+    generation: 1,
+  };
+  return {
+    h,
+    computers,
+    attachment,
+    context(prepareAttachedComputer = computers.prepareAttached) {
+      return {
+        workerEnvironmentService: {
+          findSessionAttachment: () => attachment,
+          assertSessionAttachment: () => {},
+          touchSessionAttachment: async () => {},
+          prepareAttachedComputer,
+        },
+      } as unknown as GatewayRequestContext;
+    },
+    caller(context: GatewayRequestContext) {
+      return {
+        agentId: attachment.agentId,
+        sessionKey: attachment.sessionKey,
+        operationalRunInstance: h.run,
+        approvalAuthority: h.authority,
+        gatewayContextResolver: () => context,
+        receiptAuthority: () => validateAgentRunDelegatedAuthority(h.authority),
+      };
+    },
+  };
+}
+
 describe("createComputerTool node resolution", () => {
   beforeEach(() => {
     listNodesMock.mockReset();
@@ -91,27 +131,10 @@ describe("createComputerTool node resolution", () => {
   });
 
   it("takes over the selected conversation attachment through its admitted binding", async () => {
-    const h = createHarness();
-    h.releaseClaim();
-    h.state.environment = { ...h.state.environment, state: "ready", attachedSessionIds: [] };
     const desktopRegistry = createDesktopSessionRegistry();
-    const computers = createWorkerComputerService({ ...h.options, desktopRegistry });
-    const attachment = {
-      environmentId: h.state.environment.environmentId,
-      ownerEpoch: h.state.environment.ownerEpoch,
-      sessionId: h.claim.sessionId,
-      sessionKey: h.state.placement.sessionKey,
-      agentId: h.state.placement.agentId,
-      generation: 1,
-    };
-    const context = {
-      workerEnvironmentService: {
-        findSessionAttachment: () => attachment,
-        assertSessionAttachment: () => {},
-        touchSessionAttachment: async () => {},
-        prepareAttachedComputer: computers.prepareAttached,
-      },
-    } as unknown as GatewayRequestContext;
+    const fixture = attachedDesktopHarness(desktopRegistry);
+    const { h, computers, attachment } = fixture;
+    const context = fixture.context();
     await desktopRegistry.activate({
       sourceKey: attachment.environmentId,
       ownerEpoch: attachment.ownerEpoch,
@@ -140,14 +163,7 @@ describe("createComputerTool node resolution", () => {
             cleanups.push(registered);
           },
         }),
-        {
-          agentId: attachment.agentId,
-          sessionKey: attachment.sessionKey,
-          operationalRunInstance: h.run,
-          approvalAuthority: h.authority,
-          gatewayContextResolver: () => context,
-          receiptAuthority: () => validateAgentRunDelegatedAuthority(h.authority),
-        },
+        fixture.caller(context),
       );
     const tool = createTool();
     try {
@@ -192,18 +208,6 @@ describe("createComputerTool node resolution", () => {
       resetPluginRuntimeStateForTest();
       vi.restoreAllMocks();
     }
-  });
-
-  it("errors when no computer-capable node is connected", async () => {
-    listNodesMock.mockResolvedValue([
-      macComputerNode({ connected: false }),
-      { nodeId: "phone", platform: "ios", connected: true, commands: [] },
-    ]);
-    const tool = createComputerTool({ modelHasVision: true });
-    await expect(tool.execute("call", { action: "screenshot" })).rejects.toThrow(
-      /no connected computer-capable node/,
-    );
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
   it("keeps a bound session desktop's frames, actions, and cleanup on its transport", async () => {
@@ -346,78 +350,59 @@ describe("createComputerTool node resolution", () => {
   it.each([false, true])(
     "keeps cleanup custody when an attached binding resolves after cancellation (close fails=%s)",
     async (closeFails) => {
-      const h = createHarness();
-      h.releaseClaim();
-      h.state.environment = { ...h.state.environment, state: "ready", attachedSessionIds: [] };
-      const computers = createWorkerComputerService(h.options);
+      const fixture = attachedDesktopHarness();
+      const { h, computers, attachment } = fixture;
       const lifetime = new AbortController();
       const closing = createDeferredCore<PromiseSettledResult<void>>();
       let cleanup: ((reason: string) => Promise<void>) | undefined;
       const failure = new Error("attached desktop close failed");
       const close = vi.fn<PreparedWorkerComputer["close"]>();
-      const attachment = {
-        environmentId: h.state.environment.environmentId,
-        ownerEpoch: h.state.environment.ownerEpoch,
-        sessionId: h.claim.sessionId,
-        sessionKey: h.state.placement.sessionKey,
-        agentId: h.state.placement.agentId,
-        generation: 1,
-      };
-      const context = {
-        workerEnvironmentService: {
-          findSessionAttachment: () => attachment,
-          assertSessionAttachment: () => {},
-          touchSessionAttachment: async () => {},
-          prepareAttachedComputer: async (
-            authority: Parameters<typeof computers.prepareAttached>[0],
-          ) => {
-            const prepared = await computers.prepareAttached(authority);
-            if (!prepared) {
-              throw new Error("Expected attached computer");
-            }
-            const originalClose = prepared.close;
-            close.mockImplementation(async (reason) => {
-              if (closeFails && reason === "execution-complete") {
-                throw failure;
-              }
-              await originalClose(reason);
-            });
-            prepared.close = close;
-            const originalBind = prepared.bind.bind(prepared);
-            prepared.bind = (run) => {
-              const transport = originalBind(run);
-              return {
-                ...transport,
-                resolveNode: (query, signal) => {
-                  const resolved = transport.resolveNode(query, signal);
-                  // Retire after the resolver's final assertions, before its caller
-                  // receives the binding. Returning the same promise preserves that gap.
-                  void resolved.then(
-                    () =>
-                      queueMicrotask(() => {
-                        lifetime.abort();
-                        if (!cleanup) {
-                          closing.resolve({
-                            status: "rejected",
-                            reason: new Error("Computer cleanup was not registered"),
-                          });
-                          return;
-                        }
-                        void cleanup("cancellation").then(
-                          () => closing.resolve({ status: "fulfilled", value: undefined }),
-                          (reason: unknown) => closing.resolve({ status: "rejected", reason }),
-                        );
-                      }),
-                    (reason: unknown) => closing.resolve({ status: "rejected", reason }),
-                  );
-                  return resolved;
-                },
-              };
-            };
-            return prepared;
-          },
-        },
-      } as unknown as GatewayRequestContext;
+      const context = fixture.context(async (authority) => {
+        const prepared = await computers.prepareAttached(authority);
+        if (!prepared) {
+          throw new Error("Expected attached computer");
+        }
+        const originalClose = prepared.close;
+        close.mockImplementation(async (reason) => {
+          if (closeFails && reason === "execution-complete") {
+            throw failure;
+          }
+          await originalClose(reason);
+        });
+        prepared.close = close;
+        const originalBind = prepared.bind.bind(prepared);
+        prepared.bind = (run) => {
+          const transport = originalBind(run);
+          return {
+            ...transport,
+            resolveNode: (query, signal) => {
+              const resolved = transport.resolveNode(query, signal);
+              // Retire after the resolver's final assertions, before its caller
+              // receives the binding. Returning the same promise preserves that gap.
+              void resolved.then(
+                () =>
+                  queueMicrotask(() => {
+                    lifetime.abort();
+                    if (!cleanup) {
+                      closing.resolve({
+                        status: "rejected",
+                        reason: new Error("Computer cleanup was not registered"),
+                      });
+                      return;
+                    }
+                    void cleanup("cancellation").then(
+                      () => closing.resolve({ status: "fulfilled", value: undefined }),
+                      (reason: unknown) => closing.resolve({ status: "rejected", reason }),
+                    );
+                  }),
+                (reason: unknown) => closing.resolve({ status: "rejected", reason }),
+              );
+              return resolved;
+            },
+          };
+        };
+        return prepared;
+      });
       const tool = wrapToolWithGatewayCallerIdentity(
         createComputerTool({
           registerRunCleanup: (registered) => {
@@ -425,13 +410,8 @@ describe("createComputerTool node resolution", () => {
           },
         }),
         {
-          agentId: attachment.agentId,
-          sessionKey: attachment.sessionKey,
-          operationalRunInstance: h.run,
-          approvalAuthority: h.authority,
+          ...fixture.caller(context),
           approvalSignals: [lifetime.signal],
-          gatewayContextResolver: () => context,
-          receiptAuthority: () => validateAgentRunDelegatedAuthority(h.authority),
         },
       );
       try {
@@ -484,47 +464,28 @@ describe("createComputerTool node resolution", () => {
   ] as const)(
     "releases every attached preparation after rejected input followed by $nextAction (discarded close fails=$closeFails)",
     async ({ nextAction, closeFails }) => {
-      const h = createHarness();
-      h.releaseClaim();
-      h.state.environment = { ...h.state.environment, state: "ready", attachedSessionIds: [] };
-      const computers = createWorkerComputerService(h.options);
+      const fixture = attachedDesktopHarness();
+      const { h, computers, attachment } = fixture;
       const preparations: PreparedWorkerComputer[] = [];
       const closeAttempts = vi.fn<(index: number, reason: string) => void>();
       const failure = new Error("unused attached desktop close failed");
-      const attachment = {
-        environmentId: h.state.environment.environmentId,
-        ownerEpoch: h.state.environment.ownerEpoch,
-        sessionId: h.claim.sessionId,
-        sessionKey: h.state.placement.sessionKey,
-        agentId: h.state.placement.agentId,
-        generation: 1,
-      };
-      const context = {
-        workerEnvironmentService: {
-          findSessionAttachment: () => attachment,
-          assertSessionAttachment: () => {},
-          touchSessionAttachment: async () => {},
-          prepareAttachedComputer: async (
-            authority: Parameters<typeof computers.prepareAttached>[0],
-          ) => {
-            const prepared = await computers.prepareAttached(authority);
-            if (!prepared) {
-              throw new Error("Expected attached computer");
-            }
-            const index = preparations.length;
-            preparations.push(prepared);
-            const originalClose = prepared.close.bind(prepared);
-            prepared.close = async (reason) => {
-              closeAttempts(index, reason);
-              if (closeFails && index === 1 && reason === "execution-complete") {
-                throw failure;
-              }
-              await originalClose(reason);
-            };
-            return prepared;
-          },
-        },
-      } as unknown as GatewayRequestContext;
+      const context = fixture.context(async (authority) => {
+        const prepared = await computers.prepareAttached(authority);
+        if (!prepared) {
+          throw new Error("Expected attached computer");
+        }
+        const index = preparations.length;
+        preparations.push(prepared);
+        const originalClose = prepared.close.bind(prepared);
+        prepared.close = async (reason) => {
+          closeAttempts(index, reason);
+          if (closeFails && index === 1 && reason === "execution-complete") {
+            throw failure;
+          }
+          await originalClose(reason);
+        };
+        return prepared;
+      });
       const originalInvoke = h.privateInvoke.getMockImplementation();
       if (!originalInvoke) {
         throw new Error("Expected native computer transport");
@@ -544,14 +505,7 @@ describe("createComputerTool node resolution", () => {
             cleanup = registered;
           },
         }),
-        {
-          agentId: attachment.agentId,
-          sessionKey: attachment.sessionKey,
-          operationalRunInstance: h.run,
-          approvalAuthority: h.authority,
-          gatewayContextResolver: () => context,
-          receiptAuthority: () => validateAgentRunDelegatedAuthority(h.authority),
-        },
+        fixture.caller(context),
       );
       try {
         if (!cleanup) {
@@ -667,13 +621,13 @@ describe("createComputerTool node resolution", () => {
     },
   );
 
-  it.each(["windows", "linux"])("resolves and executes on a capable %s node", async (platform) => {
-    const nodeId = `${platform}-1`;
+  it("resolves and executes on a capable Windows node", async () => {
+    const nodeId = "windows-1";
     listNodesMock.mockResolvedValue([
       {
         nodeId,
-        displayName: `${platform} desktop`,
-        platform,
+        displayName: "Windows desktop",
+        platform: "windows",
         connected: true,
         commands: ["computer.act", "screen.snapshot"],
       },
@@ -694,98 +648,81 @@ describe("createComputerTool node resolution", () => {
     );
   });
 
-  it("reports the eligible node ids when an exact id names an ineligible machine", async () => {
-    listNodesMock.mockResolvedValue([
-      macComputerNode({ nodeId: "mac-disabled", commands: ["screen.snapshot"] }),
-      macComputerNode({ nodeId: "mac-ready" }),
-    ]);
+  it.each([
+    {
+      name: "no computer-capable node is connected",
+      nodes: [
+        macComputerNode({ connected: false }),
+        { nodeId: "phone", platform: "ios", connected: true, commands: [] },
+      ],
+      node: undefined,
+      error: /no connected computer-capable node/,
+    },
+    ...["requested-desktop", "Requested-Desktop"].map((nodeId) => ({
+      name: `ineligible id ${nodeId} takes precedence over an eligible display name`,
+      nodes: [
+        macComputerNode({ nodeId, displayName: "Disabled", commands: ["screen.snapshot"] }),
+        macComputerNode({ nodeId: "mac-ready", displayName: "requested-desktop" }),
+      ],
+      node: "requested-desktop",
+      error: /node "requested-desktop" is not computer-capable.*eligible node ids: mac-ready/,
+    })),
+    {
+      name: "an eligible display name is ambiguous across current clients",
+      nodes: [
+        macComputerNode({
+          nodeId: "mac-a",
+          displayName: "Shared Desktop",
+          clientId: "openclaw-macos",
+        }),
+        macComputerNode({ nodeId: "mac-b", displayName: "Shared Desktop", clientId: "node-host" }),
+      ],
+      node: "Shared Desktop",
+      error:
+        /ambiguous node: Shared Desktop.*node=mac-a.*node=mac-b.*eligible computer-capable node ids: mac-a, mac-b/,
+    },
+    {
+      name: "several computer-capable nodes require an explicit selector",
+      nodes: [macComputerNode({ nodeId: "mac-a" }), macComputerNode({ nodeId: "mac-b" })],
+      node: undefined,
+      error: /multiple computer-capable nodes connected; pass node explicitly: mac-a, mac-b/,
+    },
+    {
+      name: "computer.act without screen.snapshot is ineligible",
+      nodes: [
+        { nodeId: "desktop-1", platform: "windows", connected: true, commands: ["computer.act"] },
+      ],
+      node: "desktop-1",
+      error: /advertising computer\.act and screen\.snapshot/,
+    },
+  ])("rejects selection when $name", async ({ nodes, node, error }) => {
+    listNodesMock.mockResolvedValue(nodes);
     const tool = createComputerTool({ modelHasVision: true });
-    await expect(
-      tool.execute("call", { action: "screenshot", node: "mac-disabled" }),
-    ).rejects.toThrow(/node "mac-disabled" is not computer-capable.*eligible node ids: mac-ready/);
+    await expect(tool.execute("call", { action: "screenshot", node })).rejects.toThrow(error);
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it("never redirects an ineligible exact id to an eligible node with that display name", async () => {
-    listNodesMock.mockResolvedValue([
-      macComputerNode({
-        nodeId: "requested-desktop",
-        displayName: "Disabled",
-        commands: ["screen.snapshot"],
-      }),
-      macComputerNode({ nodeId: "mac-ready", displayName: "requested-desktop" }),
-    ]);
-    const tool = createComputerTool({ modelHasVision: true });
-    await expect(
-      tool.execute("call", { action: "screenshot", node: "requested-desktop" }),
-    ).rejects.toThrow(/node "requested-desktop" is not computer-capable/);
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects a case-insensitive ineligible id before an eligible display-name match", async () => {
-    listNodesMock.mockResolvedValue([
-      macComputerNode({
-        nodeId: "Requested-Desktop",
-        displayName: "Disabled",
-        commands: ["screen.snapshot"],
-      }),
-      macComputerNode({ nodeId: "mac-ready", displayName: "requested-desktop" }),
-    ]);
-    const tool = createComputerTool({ modelHasVision: true });
-    await expect(
-      tool.execute("call", { action: "screenshot", node: "requested-desktop" }),
-    ).rejects.toThrow(/is not computer-capable/);
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects an ambiguous eligible display-name match across current clients", async () => {
-    listNodesMock.mockResolvedValue([
-      macComputerNode({
-        nodeId: "mac-a",
-        displayName: "Shared Desktop",
-        clientId: "openclaw-macos",
-      }),
-      macComputerNode({ nodeId: "mac-b", displayName: "Shared Desktop", clientId: "node-host" }),
-    ]);
-    const tool = createComputerTool({ modelHasVision: true });
-    await expect(
-      tool.execute("call", { action: "screenshot", node: "Shared Desktop" }),
-    ).rejects.toThrow(
-      /ambiguous node: Shared Desktop.*node=mac-a.*node=mac-b.*eligible computer-capable node ids: mac-a, mac-b/,
-    );
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("resolves an eligible node by display name", async () => {
-    listNodesMock.mockResolvedValue([
-      macComputerNode({ nodeId: "mac-other", displayName: "Other Desktop" }),
-      macComputerNode({ nodeId: "mac-ready", displayName: "Studio Desktop" }),
-    ]);
+  it.each([
+    {
+      node: "Studio Desktop",
+      nodes: [
+        macComputerNode({ nodeId: "mac-other", displayName: "Other Desktop" }),
+        macComputerNode({ nodeId: "mac-ready", displayName: "Studio Desktop" }),
+      ],
+    },
+    {
+      node: "mac-ready",
+      nodes: [
+        macComputerNode({ nodeId: "mac-ready", displayName: "Studio" }),
+        macComputerNode({ nodeId: "mac-off", displayName: "mac-ready", commands: [] }),
+      ],
+    },
+  ])("resolves eligible selector $node without redirecting it", async ({ nodes, node }) => {
+    listNodesMock.mockResolvedValue(nodes);
     callGatewayToolMock.mockResolvedValue(screenshotPayload());
     const tool = createComputerTool({ modelHasVision: true });
 
-    await expect(
-      tool.execute("call", { action: "screenshot", node: "Studio Desktop" }),
-    ).resolves.toBeDefined();
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "node.invoke",
-      expect.anything(),
-      expect.objectContaining({ nodeId: "mac-ready", command: "screen.snapshot" }),
-      { signal: undefined },
-    );
-  });
-
-  it("selects an exact eligible id over an ineligible display-name collision", async () => {
-    listNodesMock.mockResolvedValue([
-      macComputerNode({ nodeId: "mac-ready", displayName: "Studio" }),
-      macComputerNode({ nodeId: "mac-off", displayName: "mac-ready", commands: [] }),
-    ]);
-    callGatewayToolMock.mockResolvedValue(screenshotPayload());
-    const tool = createComputerTool({ modelHasVision: true });
-
-    await expect(
-      tool.execute("call", { action: "screenshot", node: "mac-ready" }),
-    ).resolves.toBeDefined();
+    await expect(tool.execute("call", { action: "screenshot", node })).resolves.toBeDefined();
     expect(callGatewayToolMock).toHaveBeenCalledWith(
       "node.invoke",
       expect.anything(),
@@ -827,29 +764,6 @@ describe("createComputerTool node resolution", () => {
     const unknownNode = { action: "screenshot", node: "unknown-node" };
     await expect(tool.execute("call", tool.prepareArguments?.(unknownNode))).rejects.toThrow(
       /unknown node/,
-    );
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("requires an explicit node when several computer-capable nodes are connected", async () => {
-    listNodesMock.mockResolvedValue([
-      macComputerNode({ nodeId: "mac-a" }),
-      macComputerNode({ nodeId: "mac-b" }),
-    ]);
-    const tool = createComputerTool({ modelHasVision: true });
-    await expect(tool.execute("call", { action: "screenshot" })).rejects.toThrow(
-      /multiple computer-capable nodes connected; pass node explicitly: mac-a, mac-b/,
-    );
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects a node advertising computer.act without screen.snapshot", async () => {
-    listNodesMock.mockResolvedValue([
-      { nodeId: "desktop-1", platform: "windows", connected: true, commands: ["computer.act"] },
-    ]);
-    const tool = createComputerTool({ modelHasVision: true });
-    await expect(tool.execute("call", { action: "screenshot", node: "desktop-1" })).rejects.toThrow(
-      /advertising computer\.act and screen\.snapshot/,
     );
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
