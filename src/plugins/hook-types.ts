@@ -183,16 +183,10 @@ const pluginHookNameSet = new Set<PluginHookName>(PLUGIN_HOOK_NAMES);
 export const isPluginHookName = (hookName: unknown): hookName is PluginHookName =>
   typeof hookName === "string" && pluginHookNameSet.has(hookName as PluginHookName);
 
-const PROMPT_INJECTION_HOOK_NAMES = [
-  "agent_turn_prepare",
-  "before_prompt_build",
-  "heartbeat_prompt_contribution",
-] as const satisfies readonly PluginHookName[];
-
-const promptInjectionHookNameSet = new Set<PluginHookName>(PROMPT_INJECTION_HOOK_NAMES);
-
 export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
-  promptInjectionHookNameSet.has(hookName);
+  hookName === "agent_turn_prepare" ||
+  hookName === "before_prompt_build" ||
+  hookName === "heartbeat_prompt_contribution";
 
 const PLUGIN_HOOK_AGENT_TRIGGERS = ["cron", "heartbeat", "user"] as const;
 

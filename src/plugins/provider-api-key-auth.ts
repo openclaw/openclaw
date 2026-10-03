@@ -149,38 +149,6 @@ async function resolveDefaultModel(
   }
 }
 
-async function applyApiKeyConfig(params: {
-  ctx: ProviderAuthMethodNonInteractiveContext;
-  providerId: string;
-  profileIds: string[];
-  defaultModel?: string;
-  preserveExistingPrimary?: boolean;
-  applyConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
-}) {
-  const { applyAuthProfileConfig, applyPrimaryModel } = await loadProviderApiKeyAuthRuntime();
-  let next = params.ctx.config;
-  for (const profileId of params.profileIds) {
-    next = applyAuthProfileConfig(next, {
-      profileId,
-      provider: normalizeOptionalString(profileId.split(":", 1)[0]) || params.providerId,
-      mode: "api_key",
-    });
-  }
-  if (params.applyConfig) {
-    next = params.applyConfig(next);
-  }
-  if (!params.defaultModel) {
-    return next;
-  }
-  if (
-    params.preserveExistingPrimary === true &&
-    resolveAgentModelPrimaryValue(next.agents?.defaults?.model) !== undefined
-  ) {
-    return next;
-  }
-  return applyPrimaryModel(next, params.defaultModel);
-}
-
 /** Creates a provider auth method that captures, stores, and configures API-key credentials. */
 export function createProviderApiKeyAuthMethod(
   params: ProviderApiKeyAuthMethodOptions,
@@ -265,17 +233,29 @@ export function createProviderApiKeyAuthMethod(
         }
       }
 
-      return await applyApiKeyConfig({
-        ctx,
-        providerId: params.providerId,
-        profileIds,
-        defaultModel: await resolveDefaultModel(params, {
-          apiKey: resolved.key,
-          config: ctx.config,
-        }),
-        preserveExistingPrimary: params.preserveExistingPrimary,
-        applyConfig: params.applyConfig,
+      const defaultModel = await resolveDefaultModel(params, {
+        apiKey: resolved.key,
+        config: ctx.config,
       });
+      const { applyAuthProfileConfig, applyPrimaryModel } = await loadProviderApiKeyAuthRuntime();
+      let next = ctx.config;
+      for (const profileId of profileIds) {
+        next = applyAuthProfileConfig(next, {
+          profileId,
+          provider: normalizeOptionalString(profileId.split(":", 1)[0]) || params.providerId,
+          mode: "api_key",
+        });
+      }
+      if (params.applyConfig) {
+        next = params.applyConfig(next);
+      }
+      return defaultModel &&
+        !(
+          params.preserveExistingPrimary === true &&
+          resolveAgentModelPrimaryValue(next.agents?.defaults?.model) !== undefined
+        )
+        ? applyPrimaryModel(next, defaultModel)
+        : next;
     },
   };
 }

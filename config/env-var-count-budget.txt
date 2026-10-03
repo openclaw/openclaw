@@ -7,4 +7,5 @@
 # fs-safe 0.23 moves five existing native/Python environment names into OpenClaw's compatibility owner.
 # OPENCLAW_PROMPT_CACHE_ASSERT (#163379) is the owner-approved prompt-cache assertion switch; the operator system-update
 # custom-type constant no longer counts as an OPENCLAW_* name.
+# Cleanup since the last restore (OAuth sidecar retirement #163186, browser deslop #163709) removed names net of additions.
 476

@@ -12,13 +12,15 @@ private final class PendingRunOwnerReference {
 }
 
 extension OpenClawChatViewModel {
-    func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
-        guard !self.isTransportDetached else { return }
+    /// Returns the task that settles the event's transcript or question reconciliation, when it starts one.
+    @discardableResult
+    func handleTransportEvent(_ evt: OpenClawChatTransportEvent) -> Task<Void, Never>? {
+        guard !self.isTransportDetached else { return nil }
         self.handleSidebarEvent(evt)
-        if case .sessionObserver = evt, self.sidebarData != nil { return }
+        if case .sessionObserver = evt, self.sidebarData != nil { return nil }
         if self.usesWebConversation {
             self.handleWebConversationEvent(evt)
-            return
+            return nil
         }
         switch evt {
         case let .health(ok):
@@ -52,7 +54,7 @@ extension OpenClawChatViewModel {
             Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
             Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: session) }
         case let .sessionsChanged(change):
-            self.handleSessionsChangedEvent(change)
+            return self.handleSessionsChangedEvent(change)
         case let .sessionObserver(digest):
             self.sessions = ChatSessionSidebarModel.applying(
                 observerDigest: digest,
@@ -69,7 +71,7 @@ extension OpenClawChatViewModel {
         case let .progressCardChanged(event):
             self.handleProgressCardChanged(event)
         case .questionRequested, .questionResolved:
-            self.handleQuestionEvent(evt)
+            return self.handleQuestionEvent(evt)
         case .routeChanged, .reconnected, .seqGap:
             self.resetSessionReactions()
             self.invalidateSessionMetadataReadiness()
@@ -107,11 +109,12 @@ extension OpenClawChatViewModel {
             // Question refresh is best-effort and must not delay transcript
             // recovery behind a slow gateway round trip.
             Task { await self.refreshQuestions() }
-            Task {
+            return Task {
                 await self.refreshHistoryAfterRun(historyRequest: context)
                 await self.pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
             }
         }
+        return nil
     }
 
     func applySessionChangeProjection(
@@ -130,7 +133,7 @@ extension OpenClawChatViewModel {
         }
     }
 
-    private func handleSessionsChangedEvent(_ change: OpenClawChatSessionsChangedEvent) {
+    private func handleSessionsChangedEvent(_ change: OpenClawChatSessionsChangedEvent) -> Task<Void, Never>? {
         // Broad subscribers see every agent's canonical global row. Gate
         // ownership before the shared-key projection can replace local state.
         let eventSessionKey = change.sessionKey ?? change.session?.key
@@ -138,7 +141,11 @@ extension OpenClawChatViewModel {
             sessionKey: eventSessionKey,
             agentId: change.agentId,
             activeAgentId: self.currentSessionSnapshot().deliveryAgentID)
-        else { return }
+        else { return nil }
+        let matchesCurrentSession = { (key: String?) in
+            key.map { self.matchesCurrentSessionKey(incoming: $0, agentId: change.agentId, current: self.sessionKey) }
+                ?? false
+        }
         let swarmEvent = self.observeSwarmEvent(change)
         let ownedSwarmActivityNote = swarmEvent && SelfContainedSwarmHelpers.isActivityNote(change)
 
@@ -147,7 +154,7 @@ extension OpenClawChatViewModel {
            phase == "start" || phase == "end" || phase == "error"
         {
             self.handleLifecycleSessionChange(change, phase: phase)
-            return
+            return nil
         }
 
         self.applySessionChangeProjection(change, ownedSwarmActivityNote: ownedSwarmActivityNote)
@@ -157,15 +164,10 @@ extension OpenClawChatViewModel {
         if change.reason == "groups" {
             self.sessionGroupsRevision += 1
             self.refreshSessions(limit: 50)
-            return
+            return nil
         }
         if change.reason == "rewind" || change.reason == "branch-switch" {
-            guard let sessionKey = change.sessionKey,
-                  self.matchesCurrentSessionKey(
-                      incoming: sessionKey,
-                      agentId: change.agentId,
-                      current: self.sessionKey)
-            else { return }
+            guard matchesCurrentSession(change.sessionKey) else { return nil }
             self.replyTarget = nil
             self.narration = ChatNarration()
             self.runMessageScopesByRunID.removeAll()
@@ -173,27 +175,20 @@ extension OpenClawChatViewModel {
             let context = self.beginHistoryRequest()
             if change.reason == "branch-switch" {
                 let switchActivity = self.beginSessionBranchSwitchActivity(for: context.session)
-                Task {
+                return Task {
                     defer { self.endSessionBranchSwitchActivity(switchActivity) }
                     await self.reconcileSessionBranchChange(
                         switchActivity,
                         confirmFromBranchRefresh: true)
                 }
-                return
             }
-            Task {
+            return Task {
                 await self.refreshHistoryAfterRun(historyRequest: context)
                 guard self.isCurrentSession(context.session) else { return }
                 await self.refreshSessionBranches(confirmingBranchChange: true)
             }
-            return
         }
-        if phase == "message", let eventSessionKey,
-           self.matchesCurrentSessionKey(
-               incoming: eventSessionKey,
-               agentId: change.agentId,
-               current: self.sessionKey)
-        {
+        if phase == "message", matchesCurrentSession(eventSessionKey) {
             self.cancelHistoryInvalidationRefresh()
             self.invalidateHistorySnapshots()
             let context = self.beginHistoryRequest()
@@ -202,16 +197,12 @@ extension OpenClawChatViewModel {
                 await Self.refreshInvalidatedHistory(owner: owner, request: context)
             })
         }
-        guard change.reason == "patch" || change.reason == "command-metadata" else { return }
+        guard change.reason == "patch" || change.reason == "command-metadata" else { return nil }
         self.refreshSessions(limit: 50)
-        guard let eventSessionKey,
-              self.matchesCurrentSessionKey(
-                  incoming: eventSessionKey,
-                  agentId: change.agentId,
-                  current: self.sessionKey)
-        else { return }
+        guard matchesCurrentSession(eventSessionKey) else { return nil }
         let session = self.currentSessionSnapshot()
         Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
+        return nil
     }
 
     private func handleLifecycleSessionChange(

@@ -51,10 +51,12 @@ function loadBundleSettingsFile(params: {
     rootDir: params.rootDir,
     relativePath: params.relativePath,
     // Unsafe paths skip the bundle rather than weaken the plugin root boundary.
-    onOpenFailure: () => ({ ok: false, error: "skipping unsafe bundle settings file" }),
+    allowMissing: false,
   });
   if (!result.ok) {
-    log.warn(`${result.error}: ${absolutePath}`);
+    const message =
+      result.reason === "open" ? "skipping unsafe bundle settings file" : result.error;
+    log.warn(`${message}: ${absolutePath}`);
     return null;
   }
   return sanitizeAgentSettingsSnapshot(result.raw as AgentSettingsSnapshot);
