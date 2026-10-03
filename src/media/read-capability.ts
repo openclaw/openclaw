@@ -259,18 +259,16 @@ function resolveAgentScopedMediaAccess(
     return mediaAccess;
   }
   const openFile: HostOutboundMediaAccess["openFile"] = async (filePath, options) => {
-    // The same transport precedence as readFile: a native copy must never read a stale
-    // local mirror of a sandbox or remotely owned workspace.
-    if (mediaReadAllowed && workspaceOwnsMediaPath(params.workspaceMediaAccess, filePath)) {
-      return undefined;
-    }
+    // Paths owned by a transport or caller reader stay on that buffered reader: a native
+    // copy must never read a stale local mirror of a sandbox or remotely owned workspace.
     if (
-      registeredMedia &&
-      registeredRoots.some((root) => isPathInside(root, path.resolve(filePath)))
+      (mediaReadAllowed &&
+        (workspaceOwnsMediaPath(params.workspaceMediaAccess, filePath) ||
+          params.mediaAccess?.readFile ||
+          params.mediaReadFile)) ||
+      (registeredMedia &&
+        registeredRoots.some((root) => isPathInside(root, path.resolve(filePath))))
     ) {
-      return undefined;
-    }
-    if (mediaReadAllowed && (params.mediaAccess?.readFile || params.mediaReadFile)) {
       return undefined;
     }
     return await openLocalMediaFile(filePath, localRoots ?? [], {
