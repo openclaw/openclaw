@@ -83,6 +83,20 @@ async function requestUpdateRead(method: UpdateReadMethod, params: Record<string
 let home: TempHomeEnv;
 let lifecycle: UpdateCheckLifecycle;
 let campaignOwner: UpdateCampaignController;
+
+function announceCampaign(version = "2026.9.6") {
+  campaignOwner.announce({
+    target: { kind: "package", version },
+    apply: async () => "applied",
+    onChange: (campaign) =>
+      setUpdateScheduleCache({
+        next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+      }),
+  });
+  expect(campaignOwner.adopt().status).toBe("adopted");
+  return expectDefined(campaignOwner.getState(), "campaign state");
+}
+
 beforeEach(async () => {
   home = await createTempHomeEnv("openclaw-update-status-");
   lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
@@ -101,144 +115,65 @@ afterEach(async () => {
 });
 
 describe("update history RPCs", () => {
-  it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
-    "settles an applying campaign when its handed-off run finishes %s",
-    async (status) => {
-      campaignOwner.announce({
-        target: { kind: "package", version: "2026.9.6" },
-        apply: async () => "applied",
-        onChange: (campaign) =>
-          setUpdateScheduleCache({
-            next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
-          }),
-      });
-      expect(campaignOwner.adopt().status).toBe("adopted");
-      const campaignId = campaignOwner.getState()?.id;
-      const run = createUpdateRun({ trigger: "campaign", origin: { campaignId } });
-      campaignOwner.bindRun(expectDefined(campaignId, "campaign id"), run.runId);
-      finishUpdateRun(run.runId, { status, reason: "database-schema-preflight" });
-
-      const respond = await requestUpdateRead("update.status");
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          lastRun: expect.objectContaining({ runId: run.runId, status }),
-          schedule: { channel: "stable", autoEnabled: true },
-        }),
-      );
-      expect(campaignOwner.getState()).toBeUndefined();
-    },
-  );
-
-  it("reconciles the admitted campaign run even when newer history masks it", async () => {
-    campaignOwner.announce({
-      target: { kind: "package", version: "2026.9.6" },
-      apply: async () => "applied",
-      onChange: (campaign) =>
-        setUpdateScheduleCache({
-          next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
-        }),
-    });
-    campaignOwner.adopt();
-    const campaignId = expectDefined(campaignOwner.getState(), "campaign state").id;
-    const run = createUpdateRun({ trigger: "campaign", origin: { campaignId } });
-    campaignOwner.bindRun(campaignId, run.runId);
-    finishUpdateRun(run.runId, { status: "failed" });
-    const newer = createUpdateRun({ trigger: "cli" });
-    finishUpdateRun(newer.runId, { status: "skipped", reason: "dry-run" });
-
-    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        lastRun: expect.objectContaining({ runId: newer.runId }),
-        schedule: { channel: "stable", autoEnabled: true },
-      }),
-    );
-    expect(campaignOwner.getState()).toBeUndefined();
-  });
-
-  it("preserves status and retries campaign reconciliation after an exact-run read fails", async () => {
-    campaignOwner.announce({
-      target: { kind: "package", version: "2026.9.6" },
-      apply: async () => "applied",
-      onChange: (campaign) =>
-        setUpdateScheduleCache({
-          next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
-        }),
-    });
-    campaignOwner.adopt();
-    const campaign = expectDefined(campaignOwner.getState(), "campaign state");
-    const run = createUpdateRun({ trigger: "campaign", origin: { campaignId: campaign.id } });
-    campaignOwner.bindRun(campaign.id, run.runId);
-    finishUpdateRun(run.runId, { status: "failed" });
-    vi.spyOn(Date, "now").mockReturnValue(run.createdAtMs + 1);
-    const newer = createUpdateRun({ trigger: "cli" });
-    finishUpdateRun(newer.runId, { status: "skipped", reason: "dry-run" });
-    vi.spyOn(ledger, "getUpdateRunAsync").mockRejectedValueOnce(new Error("ledger read failed"));
-
-    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        lastRun: expect.objectContaining({ runId: newer.runId }),
-        schedule: { channel: "stable", autoEnabled: true, campaign },
-      }),
-    );
-    expect(campaignOwner.getState()).toEqual(campaign);
-    expect(warn).toHaveBeenCalledWith(
-      "update.status campaign run lookup failed: ledger read failed",
-    );
-    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ schedule: { channel: "stable", autoEnabled: true } }),
-    );
-    expect(campaignOwner.getState()).toBeUndefined();
-  });
-
-  it.each(["running", "unrelated"] as const)(
-    "keeps an applying campaign when the latest run is %s",
+  it.each(["failed", "running", "unrelated", "hidden-run retry"] as const)(
+    "reconciles an applying campaign against %s history",
     async (kind) => {
-      campaignOwner.announce({
-        target: { kind: "package", version: "2026.9.6" },
-        apply: async () => "applied",
-        onChange: (campaign) =>
-          setUpdateScheduleCache({
-            next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
-          }),
-      });
-      campaignOwner.adopt();
-      const campaign = campaignOwner.getState();
+      const campaign = announceCampaign();
       const run = createUpdateRun({
         trigger: "campaign",
-        origin: { campaignId: kind === "unrelated" ? randomUUID() : campaign?.id },
+        origin: { campaignId: kind === "unrelated" ? randomUUID() : campaign.id },
       });
-      if (kind === "unrelated") {
-        finishUpdateRun(run.runId, { status: "failed" });
+      const keepCampaign = kind === "running" || kind === "unrelated";
+      if (!keepCampaign) {
+        campaignOwner.bindRun(campaign.id, run.runId);
       }
-
+      if (kind !== "running") {
+        finishUpdateRun(run.runId, {
+          status: "failed",
+          ...(kind === "failed" ? { reason: "database-schema-preflight" } : {}),
+        });
+      }
+      let lastRunId = run.runId;
+      if (kind === "hidden-run retry") {
+        vi.spyOn(Date, "now").mockReturnValue(run.createdAtMs + 1);
+        const newer = createUpdateRun({ trigger: "cli" });
+        finishUpdateRun(newer.runId, { status: "skipped", reason: "dry-run" });
+        lastRunId = newer.runId;
+        vi.spyOn(ledger, "getUpdateRunAsync").mockRejectedValueOnce(
+          new Error("ledger read failed"),
+        );
+        expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            lastRun: expect.objectContaining({ runId: newer.runId }),
+            schedule: { channel: "stable", autoEnabled: true, campaign },
+          }),
+        );
+        expect(campaignOwner.getState()).toEqual(campaign);
+        expect(warn).toHaveBeenCalledWith(
+          "update.status campaign run lookup failed: ledger read failed",
+        );
+      }
       expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
-          schedule: { channel: "stable", autoEnabled: true, campaign },
+          lastRun: expect.objectContaining({
+            runId: lastRunId,
+            ...(kind === "failed" ? { status: "failed" } : {}),
+          }),
+          schedule: {
+            channel: "stable",
+            autoEnabled: true,
+            ...(keepCampaign ? { campaign } : {}),
+          },
         }),
       );
-      expect(campaignOwner.getState()).toEqual(campaign);
+      expect(campaignOwner.getState()).toEqual(keepCampaign ? campaign : undefined);
     },
   );
 
   it("does not clear a replacement campaign after an awaited ledger read", async () => {
-    const announce = (version: string) => {
-      campaignOwner.announce({
-        target: { kind: "package", version },
-        apply: async () => "applied",
-        onChange: (campaign) =>
-          setUpdateScheduleCache({
-            next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
-          }),
-      });
-      campaignOwner.adopt();
-      return expectDefined(campaignOwner.getState(), "campaign state");
-    };
-    const original = announce("2026.9.6");
+    const original = announceCampaign();
     const run = createUpdateRun({ trigger: "campaign", origin: { campaignId: original.id } });
     campaignOwner.bindRun(original.id, run.runId);
     finishUpdateRun(run.runId, { status: "failed" });
@@ -246,7 +181,7 @@ describe("update history RPCs", () => {
     vi.spyOn(ledger, "getUpdateRunStatusAsync").mockImplementationOnce(async () => {
       const status = await readStatus();
       campaignOwner.clear();
-      announce("2026.9.7");
+      announceCampaign("2026.9.7");
       return status;
     });
 
@@ -439,21 +374,42 @@ describe("update history RPCs", () => {
     expect(backup).not.toHaveBeenCalled();
   });
 
-  it.each(["update.status", "update.runs.get"] as const)(
-    "preserves readable history when reconciliation is refused through %s",
-    async (method) => {
-      const now = Date.now();
-      const clock = vi.spyOn(Date, "now").mockReturnValue(now - 25 * 60 * 60_000);
-      const run = createUpdateRun({ trigger: "cli" });
-      clock.mockReturnValue(now);
+  it.each(
+    (["update.status", "update.runs.get"] as const).flatMap((method) =>
+      (["refused", "dead driver", "expired legacy"] as const).map((kind) => ({ method, kind })),
+    ),
+  )("serves $method history after $kind reconciliation", async ({ method, kind }) => {
+    const driver =
+      kind === "dead driver"
+        ? expectDefined(readUpdateRunDriver(), "local driver identity")
+        : undefined;
+    const now = Date.now();
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(now - (kind === "dead driver" ? 31 : 25 * 60) * 60_000);
+    const run = createUpdateRun({
+      trigger: "cli",
+      ...(driver
+        ? {
+            origin: {
+              driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) },
+            },
+          }
+        : {}),
+      ...(kind === "expired legacy" ? { before: { version: "2026.9.2" } } : {}),
+    });
+    clock.mockReturnValue(now);
+    if (kind === "refused") {
       claimOpenClawStateOwnership("test-supervisor", {
         env: { ...process.env, OPENCLAW_SUPERVISOR_MODE: "external" },
       });
       vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
-      const respond = await requestUpdateRead(
-        method,
-        method === "update.runs.get" ? { runId: run.runId } : {},
-      );
+    }
+    const respond = await requestUpdateRead(
+      method,
+      method === "update.runs.get" ? { runId: run.runId } : {},
+    );
+    if (kind === "refused") {
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining(
@@ -464,52 +420,25 @@ describe("update history RPCs", () => {
         expect.stringMatching(/reconciliation failed:.*externally supervised/u),
       );
       expect(getUpdateRun(run.runId)).toEqual(run);
-    },
-  );
-
-  it.each(["update.status", "update.runs.get"] as const)(
-    "revalidates recorded dead drivers through %s",
-    async (method) => {
-      const driver = expectDefined(readUpdateRunDriver(), "local driver identity");
-      const now = Date.now();
-      const clock = vi.spyOn(Date, "now").mockReturnValue(now - 31 * 60_000);
-      const run = createUpdateRun({
-        trigger: "cli",
-        origin: { driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) } },
-      });
-      clock.mockReturnValue(now);
-      await requestUpdateRead(method, method === "update.runs.get" ? { runId: run.runId } : {});
-      expect(getUpdateRun(run.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
-    },
-  );
-
-  it.each(["update.status", "update.runs.get"] as const)(
-    "reconciles expired legacy admission before %s reaches the UI",
-    async (method) => {
-      const now = Date.now();
-      const clock = vi.spyOn(Date, "now").mockReturnValue(now - 25 * 60 * 60_000);
-      const legacy = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
-      clock.mockReturnValue(now);
-      const respond = await requestUpdateRead(
-        method,
-        method === "update.runs.get" ? { runId: legacy.runId } : {},
-      );
-      expect(getUpdateRun(legacy.runId)).toMatchObject({
-        phase: "finished",
+    } else {
+      const result = {
         status: "failed",
-        reason: "legacy-driver-expired",
+        reason: kind === "dead driver" ? "abandoned" : "legacy-driver-expired",
+      };
+      expect(getUpdateRun(run.runId)).toMatchObject({
+        ...result,
+        ...(kind === "expired legacy" ? { phase: "finished" } : {}),
       });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          [method === "update.status" ? "lastRun" : "run"]: expect.objectContaining({
-            status: "failed",
-            reason: "legacy-driver-expired",
+      if (kind === "expired legacy") {
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            [method === "update.status" ? "lastRun" : "run"]: expect.objectContaining(result),
           }),
-        }),
-      );
-    },
-  );
+        );
+      }
+    }
+  });
 
   it("projects distinct active and latest runs and reads persisted history in creation order", async () => {
     expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(true, {
