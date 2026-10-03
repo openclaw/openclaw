@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import path from "node:path";
+import { inspect } from "node:util";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
 import { createCrabboxNodeEnrollmentSetup } from "./crabbox-worker-node-enrollment.js";
@@ -36,9 +37,19 @@ it.each([
     env: { ...setup.forwardedEnv, PRIVATE_FIXTURE: envValue },
   };
   const require = createRequire(import.meta.url);
+  const failures: Error[] = [];
+  class ScriptError extends Error {
+    constructor(message?: string, options?: ErrorOptions) {
+      super(message, options);
+      if (options?.cause !== undefined) {
+        failures.push(this);
+      }
+    }
+  }
   await runInNewContext(setup.command.split("\n").slice(2, -1).join("\n"), {
     Buffer,
     AbortController,
+    Error: ScriptError,
     process: processFixture,
     console: { error: (line: string) => output.push(line) },
     require: (name: string) =>
@@ -81,4 +92,10 @@ it.each([
   expect(detail).not.toContain("synthetic-");
   expect(detail).not.toContain("�");
   expect(Buffer.byteLength(detail)).toBeLessThan(800);
+  const failure = failures.at(-1);
+  expect(failure).toMatchObject({ cause: expect.any(Error) });
+  for (let current: unknown = failure; current instanceof Error; current = current.cause) {
+    expect(current.message).not.toContain("synthetic-");
+  }
+  expect(inspect(failure, { depth: null })).not.toContain("synthetic-");
 });

@@ -19,7 +19,7 @@ export type CrabboxBinary = { binary: string; version: string };
 type CrabboxVersionProbe =
   | { status: "supported"; version: string }
   | { status: "outdated"; version: string }
-  | { status: "indeterminate"; reason: string; cause?: unknown };
+  | { status: "indeterminate"; reason: string };
 
 export async function probeCrabboxVersion(
   binary: string,
@@ -40,7 +40,6 @@ export async function probeCrabboxVersion(
     return {
       status: "indeterminate",
       reason: crabboxExecutionError("version command", error).message,
-      cause: error,
     };
   }
   signal?.throwIfAborted();

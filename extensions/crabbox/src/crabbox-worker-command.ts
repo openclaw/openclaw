@@ -84,7 +84,6 @@ export function crabboxExecutionError(action: string, cause: unknown): Error {
   const detail = redactToolPayloadText(message).replace(/\s+/gu, " ").trim();
   return new Error(
     `Crabbox ${action} execution failed: ${sliceUtf16Safe(detail, -MAX_COMMAND_DETAIL_CHARS)}`,
-    { cause },
   );
 }
 
