@@ -3,7 +3,11 @@ import { isMainThread } from "node:worker_threads";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { parseGatewayLockPayload } from "./gateway-lock-payload.js";
+import {
+  classifyGatewayLockProcessNamespace,
+  GatewayLockNamespaceError,
+  parseGatewayLockPayload,
+} from "./gateway-lock-payload.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 
 export const StateDatabaseAdmissionPendingError = resolveGlobalSingleton(
@@ -44,7 +48,12 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
   if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) {
     throw new Error(unavailable);
   }
+  const namespace = classifyGatewayLockProcessNamespace(owner.processNamespace, ownerPath);
+  if (namespace === "unknown") {
+    throw new GatewayLockNamespaceError();
+  }
   if (
+    namespace === "dead" ||
     isLockOwnerDefinitelyStale({
       payload: { pid: owner.pid, starttime: owner.startTime },
     })

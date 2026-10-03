@@ -779,6 +779,7 @@ src/infra/gateway-owner-lease.read.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
 src/infra/gateway-state-owner-directory.ts
+src/infra/gateway-state-owner-heartbeat.ts
 src/infra/gateway-state-owner-record.ts
 src/infra/gateway-state-owner.ts
 src/infra/gateway-process-argv.ts

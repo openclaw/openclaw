@@ -4,12 +4,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  GATEWAY_OWNER_HEARTBEAT_STALE_MS,
+  readGatewayLockProcessNamespace,
+  type LockPayload,
+} from "../infra/gateway-lock-payload.js";
+import {
   acquireGatewayLock,
   GatewayLockError,
   resolveGatewayLockPaths,
 } from "../infra/gateway-lock.js";
+import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
 import { prepareGithubIssue } from "../infra/github-issue.js";
 import { createSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   claimSessionSqliteMigrationGithubIssue,
   createSessionSqliteMigrationFailureIssue,
@@ -49,6 +56,27 @@ async function createLockFixture() {
       timeoutMs: 15,
     },
   };
+}
+
+async function seedGatewayOwner(
+  fixture: Awaited<ReturnType<typeof createLockFixture>>,
+  identity: Pick<LockPayload, "pid" | "startTime" | "processNamespace">,
+) {
+  const { ownerLockPath } = resolveGatewayLockPaths(fixture.env, fixture.lockDir);
+  const databasePath = path.join(fixture.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
+  const raw = JSON.stringify({
+    ...identity,
+    ownerId: "synthetic-gateway-owner",
+    createdAt: new Date().toISOString(),
+    configPath: fixture.env.OPENCLAW_CONFIG_PATH,
+    stateDir: fixture.env.OPENCLAW_STATE_DIR,
+    role: "gateway",
+  });
+  await fs.mkdir(path.dirname(ownerLockPath), { recursive: true });
+  await fs.writeFile(ownerLockPath, raw);
+  const now = new Date();
+  await fs.utimes(ownerLockPath, now, now);
+  return { ownerLockPath, databasePath, raw };
 }
 
 afterEach(() => {
@@ -98,6 +126,95 @@ describe("doctor SQLite maintenance lock", () => {
       await gatewayLock.release();
     }
   });
+
+  it.each(["absent PID", "different process at the same PID"] as const)(
+    "preserves foreign-namespace ownership with %s before destructive maintenance",
+    async (observation) => {
+      const fixture = await createLockFixture();
+      const namespace = readGatewayLockProcessNamespace();
+      const startedAt = getFileLockProcessStartTime(process.pid);
+      if (!namespace || startedAt === null) {
+        throw new Error("expected the local process namespace and start identity");
+      }
+      const owner = await seedGatewayOwner(fixture, {
+        pid: observation === "absent PID" ? 2_147_483_647 : process.pid,
+        startTime: startedAt + 1,
+        processNamespace: { ...namespace, pidNamespace: `${namespace.pidNamespace}-foreign` },
+      });
+      const marker = path.join(fixture.env.OPENCLAW_STATE_DIR, "maintenance-marker");
+      await fs.writeFile(marker, "Gateway data\n");
+      const run = vi.fn(async () => fs.writeFile(marker, "reclaimed\n"));
+
+      await expect(
+        withDoctorSqliteMaintenanceLock(
+          {
+            env: fixture.env,
+            operation: "state SQLite compaction",
+            protectedPaths: [marker],
+            run,
+          },
+          { lockOptions: fixture.lockOptions },
+        ),
+      ).rejects.toThrow(
+        /cannot verify Gateway ownership.*heartbeat is fresh.*inside the Gateway container/,
+      );
+
+      expect(run).not.toHaveBeenCalled();
+      await expect(fs.readFile(marker, "utf8")).resolves.toBe("Gateway data\n");
+      await expect(fs.readFile(owner.ownerLockPath, "utf8")).resolves.toBe(owner.raw);
+      expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).toThrow(
+        /cannot verify Gateway ownership.*heartbeat is fresh.*inside the Gateway container/,
+      );
+    },
+  );
+
+  it.each(["same namespace", "previous boot", "legacy record", "expired heartbeat"] as const)(
+    "recovers a stopped Gateway's %s ownership through maintenance",
+    async (kind) => {
+      const fixture = await createLockFixture();
+      const namespace = readGatewayLockProcessNamespace();
+      if (!namespace) {
+        throw new Error("expected the local process namespace");
+      }
+      const processNamespace =
+        kind === "previous boot"
+          ? {
+              ...namespace,
+              boot: {
+                ...namespace.boot,
+                identity: namespace.boot.identity.replace(/[0-9a-f]/i, (digit) =>
+                  digit === "1" ? "2" : "1",
+                ),
+              },
+            }
+          : kind === "expired heartbeat"
+            ? { ...namespace, pidNamespace: `${namespace.pidNamespace}-foreign` }
+            : namespace;
+      const owner = await seedGatewayOwner(fixture, {
+        pid: kind === "previous boot" ? process.pid : 2_147_483_647,
+        ...(kind === "previous boot"
+          ? { startTime: getFileLockProcessStartTime(process.pid) ?? undefined }
+          : {}),
+        ...(kind === "legacy record" ? {} : { processNamespace }),
+      });
+      if (kind === "expired heartbeat") {
+        const expired = new Date(Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1000);
+        await fs.utimes(owner.ownerLockPath, expired, expired);
+        expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).not.toThrow();
+      }
+      const run = vi.fn(() => "done");
+
+      await expect(
+        withDoctorSqliteMaintenanceLock(
+          { env: fixture.env, operation: "state SQLite compaction", run },
+          { lockOptions: fixture.lockOptions },
+        ),
+      ).resolves.toBe("done");
+
+      expect(run).toHaveBeenCalledOnce();
+      await expect(fs.stat(owner.ownerLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it("preserves a failed lock operation and its recovery action without running maintenance", async () => {
     const run = vi.fn();
