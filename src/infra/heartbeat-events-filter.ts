@@ -8,8 +8,10 @@ import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
 const MAX_EXEC_EVENT_PROMPT_CHARS = 8_000;
 export const HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX = "heartbeat-delivery:";
+// maybeNotifyOnExit owns this shape: a status head, then ` :: <output>`, or, when
+// nothing was captured, a blank line before producer notes (timeout retry guidance).
 const STRUCTURED_EXEC_COMPLETION_EVENT_RE =
-  /^exec (completed|failed) \(([a-z0-9_-]{1,64}), (code -?\d+|signal [^)]+)\)(?: :: ([\s\S]*))?$/i;
+  /^exec (completed|failed) \(([a-z0-9_-]{1,64}), (code -?\d+|signal [^)]+)\)(?: :: ([\s\S]*)|\n\n([\s\S]+))?$/i;
 
 type StructuredExecCompletionEvent = {
   raw: string;
@@ -17,6 +19,7 @@ type StructuredExecCompletionEvent = {
   id: string;
   result: string;
   output: string;
+  notes: string;
   succeeded: boolean;
 };
 
@@ -34,6 +37,7 @@ function parseStructuredExecCompletionEvent(evt: string): StructuredExecCompleti
     id: match[2] ?? "",
     result,
     output: (match[4] ?? "").trim(),
+    notes: (match[5] ?? "").trim(),
     succeeded: action.toLowerCase() === "completed" && result.toLowerCase() === "code 0",
   };
 }
@@ -64,9 +68,8 @@ function formatExecEventPromptText(pendingEvents: string[]): {
       return [];
     }
     hasMissingOutputFailure = true;
-    return [
-      `Exec ${parsed.action} (${parsed.id}, ${parsed.result}) without captured stdout/stderr.`,
-    ];
+    const missingOutput = `Exec ${parsed.action} (${parsed.id}, ${parsed.result}) without captured stdout/stderr.`;
+    return [parsed.notes ? `${missingOutput}\n\n${parsed.notes}` : missingOutput];
   });
   return { text: lines.join("\n").trim(), hasMissingOutputFailure };
 }

@@ -1,5 +1,6 @@
 // Covers heartbeat event prompt filtering.
 import { describe, expect, it } from "vitest";
+import { appendExecTimeoutRetryGuidance } from "../agents/bash-tools.exec-output.js";
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
@@ -101,6 +102,31 @@ describe("heartbeat event prompts", () => {
       ],
       unexpected: ["Please relay the command output to the user"],
     },
+    {
+      name: "keeps timeout retry guidance when the command printed nothing",
+      events: [
+        appendExecTimeoutRetryGuidance("Exec failed (abc12345, signal SIGTERM)", "overall-timeout"),
+      ],
+      opts: undefined,
+      expected: [
+        "Exec failed (abc12345, signal SIGTERM) without captured stdout/stderr.",
+        "Verify the resulting state before retrying",
+        "include the exit status or signal",
+      ],
+      unexpected: ["no command output was found"],
+    },
+    {
+      name: "keeps timeout retry guidance after captured output",
+      events: [
+        appendExecTimeoutRetryGuidance(
+          "Exec failed (abc12345, signal SIGTERM) :: partial output",
+          "overall-timeout",
+        ),
+      ],
+      opts: undefined,
+      expected: ["partial output", "Verify the resulting state before retrying"],
+      unexpected: ["without captured stdout/stderr"],
+    },
   ])("$name", ({ events, opts, expected, unexpected }) => {
     const prompt = buildExecEventPrompt(events, opts);
     for (const part of expected) {
@@ -189,6 +215,18 @@ describe("isExecCompletionEvent", () => {
     // Hex-style IDs also accepted
     expect(isExecCompletionEvent("Exec completed (abc12345, code 0)")).toBe(true);
   });
+
+  it.each(["overall-timeout", "no-output-timeout"] as const)(
+    "matches %s completions that carry retry guidance without output",
+    (reason) => {
+      const event = appendExecTimeoutRetryGuidance(
+        "Exec failed (calm-del, signal SIGKILL)",
+        reason,
+      );
+      expect(isExecCompletionEvent(event)).toBe(true);
+      expect(isRelayableExecCompletionEvent(event)).toBe(true);
+    },
+  );
 
   it("is case-insensitive", () => {
     expect(isExecCompletionEvent("EXEC COMPLETED (abc12345, code 0)")).toBe(true);
