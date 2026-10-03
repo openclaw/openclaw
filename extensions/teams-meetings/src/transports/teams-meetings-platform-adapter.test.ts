@@ -5,6 +5,7 @@ import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./teams-meetings-platform-adapt
 import {
   CONSUMER_URL,
   MEETING_STATE_KEY,
+  abortingMedia,
   consumerLightMeetingUrl,
   status,
   control,
@@ -612,7 +613,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(bridge.remove).toHaveBeenCalledOnce();
   });
 
-  it("restores pending and legacy sources-array entries during leave cleanup", () => {
+  it("keeps pending and legacy sources-array entries muted during leave cleanup", () => {
     const pending = { muted: true };
     const legacy = { currentSrc: "blob:https://teams.live.com/legacy", muted: true };
     const { result } = runLeaveScript({
@@ -779,13 +780,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     async (deviceLabel, selectedInputLabel) => {
       const leave = control({ label: "Leave" });
       const microphone = control({ label: "Turn microphone off", pressed: true });
-      const media = {
-        sinkId: "",
-        srcObject: liveMediaStream(),
-        async setSinkId(value: string) {
-          media.sinkId = value;
-        },
-      };
+      const media = pageMedia({ srcObject: liveMediaStream() });
       const { result } = await runStatusScript({
         allowMicrophone: true,
         devices: [
@@ -939,14 +934,11 @@ describe("Microsoft Teams meeting platform adapter", () => {
   });
 
   it("bridges a live Teams MediaStream when its unloaded audio element rejects setSinkId", async () => {
-    const source: PageMedia = {
+    const source = abortingMedia("The element has no supported source.", {
       muted: false,
       sinkId: "built-in-output",
       srcObject: liveMediaStream(),
-      async setSinkId() {
-        throw new DOMException("The element has no supported source.", "AbortError");
-      },
-    };
+    });
     const routingOrder: string[] = [];
     const bridge: PageMedia = {
       isConnected: false,

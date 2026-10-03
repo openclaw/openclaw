@@ -447,7 +447,7 @@ describe("Microsoft Teams meeting audio routing", () => {
     expect(source.muted).toBe(true);
   });
 
-  it("restores pending and legacy sources-array entries during status cleanup", async () => {
+  it("keeps pending and legacy sources-array entries muted during status cleanup", async () => {
     const pending: PageMedia = { muted: true, sinkId: "", async setSinkId() {} };
     const legacy: PageMedia = {
       currentSrc: "blob:https://teams.live.com/legacy",
@@ -651,13 +651,10 @@ describe("Microsoft Teams meeting audio routing", () => {
 
   it("ignores an unrelated media element when the live remote stream is routed", async () => {
     const live = pageMedia({ srcObject: liveMediaStream() });
-    const unrelated: PageMedia = {
+    const unrelated = abortingMedia("The element has no supported source.", {
       muted: true,
       sinkId: "built-in-output",
-      async setSinkId() {
-        throw new DOMException("The element has no supported source.", "AbortError");
-      },
-    };
+    });
     const { result } = await runAudioStatusScript({
       media: [live, unrelated],
       priorMeeting: {
@@ -675,14 +672,11 @@ describe("Microsoft Teams meeting audio routing", () => {
 
   it("keeps a loaded non-MediaStream AbortError retryable", async () => {
     const routed = pageMedia();
-    const loaded: PageMedia = {
+    const loaded = abortingMedia("Cannot route loaded media.", {
       currentSrc: "blob:https://teams.live.com/remote-audio",
       readyState: 4,
       sinkId: "built-in-output",
-      async setSinkId() {
-        throw new DOMException("Cannot route loaded media.", "AbortError");
-      },
-    };
+    });
     const { result } = await runAudioStatusScript({
       media: [routed, loaded],
     });

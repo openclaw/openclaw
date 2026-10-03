@@ -13,6 +13,14 @@ import {
   runStatusScript,
 } from "./teams-meetings-platform-adapter.test-helpers.js";
 
+function setCaptionText(row: ReturnType<typeof captionRow>, text: string) {
+  const caption = row.querySelector('[data-tid="closed-caption-text"]');
+  if (!caption) {
+    throw new Error("expected caption text control");
+  }
+  caption.textContent = text;
+}
+
 function transcriptReader(
   window: Record<string, unknown>,
   { currentUrl = URL, finalize = false } = {},
@@ -131,11 +139,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       captionsInitiallyOn: true,
     });
     await vi.advanceTimersByTimeAsync(1_000);
-    const caption = row.querySelector('[data-tid="closed-caption-text"]');
-    if (!caption) {
-      throw new Error("expected caption text control");
-    }
-    caption.textContent = "We should leave";
+    setCaptionText(row, "We should leave");
     const second = await runCaptionRows([row], first);
 
     expect(second.result.lastCaptionText).toBe("We should leave");
@@ -147,11 +151,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
   it("keeps a mid-sentence caption correction in the same row lifecycle", async () => {
     const row = captionRow("OpenClaw QA", "I like cats");
     const first = await runCaptionRows([row]);
-    const caption = row.querySelector('[data-tid="closed-caption-text"]');
-    if (!caption) {
-      throw new Error("expected caption text control");
-    }
-    caption.textContent = "I liked cats";
+    setCaptionText(row, "I liked cats");
     const second = await runCaptionRows([row], first);
 
     expect(second.result.transcriptLines).toBe(1);
@@ -216,11 +216,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     });
     const disappeared = await runCaptionRows([], first);
     await vi.advanceTimersByTimeAsync(1_000);
-    const caption = row.querySelector('[data-tid="closed-caption-text"]');
-    if (!caption) {
-      throw new Error("expected caption text control");
-    }
-    caption.textContent = "Completely different second utterance";
+    setCaptionText(row, "Completely different second utterance");
     const second = await runCaptionRows([row], disappeared, {
       priorMeeting: first.window[MEETING_STATE_KEY] as Record<string, unknown>,
     });
@@ -235,11 +231,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
   it("commits a removed row before Teams rapidly reuses its DOM node", async () => {
     const row = captionRow("OpenClaw QA", "Rapid first utterance");
     const first = await runCaptionRows([row]);
-    const caption = row.querySelector('[data-tid="closed-caption-text"]');
-    if (!caption) {
-      throw new Error("expected caption text control");
-    }
-    caption.textContent = "Rapid second utterance";
+    setCaptionText(row, "Rapid second utterance");
     first.triggerCaptionMutation(undefined, row);
     const second = await runCaptionRows([row], first);
 
@@ -258,11 +250,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     });
     const disappeared = await runCaptionRows([], first);
     await vi.advanceTimersByTimeAsync(1_000);
-    const caption = row.querySelector('[data-tid="closed-caption-text"]');
-    if (!caption) {
-      throw new Error("expected caption text control");
-    }
-    caption.textContent = "Thank you everyone";
+    setCaptionText(row, "Thank you everyone");
     const second = await runCaptionRows([row], disappeared);
 
     expect(second.result.recentTranscript).toMatchObject([
