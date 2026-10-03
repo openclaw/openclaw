@@ -110,3 +110,66 @@ export function collaborativeSessionsList() {
     ts: 1,
   };
 }
+
+export function personGroupedSessionsList() {
+  const ada = {
+    type: "human" as const,
+    id: "profile-ada",
+    identity: { type: "profile" as const, id: "profile-ada" },
+    label: "Ada",
+    avatarUrl: "/api/users/profile-ada/avatar?v=1",
+  };
+  const bob = {
+    type: "human" as const,
+    id: "profile-bob",
+    identity: { type: "profile" as const, id: "profile-bob" },
+    label: "Bob",
+    avatarUrl: "/api/users/profile-bob/avatar?v=1",
+  };
+  return {
+    count: 2,
+    owners: [ada, bob],
+    defaults: { contextTokens: null, model: null, modelProvider: null },
+    path: "",
+    sessions: [
+      {
+        key: "agent:main:ada",
+        kind: "direct",
+        label: "Ada research",
+        createdActor: ada,
+        owner: { actor: ada },
+        updatedAt: 2,
+      },
+      {
+        key: "agent:main:bob",
+        kind: "direct",
+        label: "Bob operations",
+        createdActor: bob,
+        owner: { actor: bob },
+        updatedAt: 1,
+      },
+    ],
+    ts: 1,
+  };
+}
+
+export function ownerFirstSessionRow(
+  ownerId: string,
+  key: string,
+  label: string,
+  updatedAt: number,
+) {
+  const owner = {
+    type: "human" as const,
+    id: ownerId,
+    label: ownerId === "profile-ada" ? "Ada" : "Bob",
+  };
+  return {
+    key,
+    kind: "direct" as const,
+    label,
+    createdActor: owner,
+    owner: { actor: owner },
+    updatedAt,
+  };
+}
