@@ -51,7 +51,7 @@ const mocks = vi.hoisted(() => ({
   audit: vi.fn<typeof import("../daemon/service-audit.js").auditGatewayServiceConfig>(),
   confirm: vi.fn(),
   note: vi.fn(),
-  health: vi.fn(async () => ({ healthy: true })),
+  health: vi.fn(async () => ({ outcome: "ready", healthy: true })),
   suspend: vi.fn<typeof import("../daemon/schtasks.js").suspendScheduledTaskAutoStartForUpdate>(),
   resume: vi.fn<typeof import("../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate>(),
 }));
@@ -390,7 +390,7 @@ async function runInstallationCase(params: {
             const ref = JSON.parse(await fs.readFile(configPath!, "utf8")).gateway.auth.token;
             expect(ref).toMatchObject({ source: "store" });
             expect(writerContext?.cfgForPersistence.gateway?.auth?.token).toEqual(ref);
-            const stored = readSecretStoreValue({ scope: { kind: "team" }, name: ref.id });
+            const stored = await readSecretStoreValue({ scope: { kind: "team" }, name: ref.id });
             expect(stored.ok && stored.value === "maintenance-fixture-token").toBe(true);
           }
           if (params.revoked) {

@@ -30,64 +30,57 @@ describe("Decision primary tool-definition diagnostics", () => {
     expect(read).not.toHaveBeenCalled();
     expect(logger.debug).not.toHaveBeenCalled();
   });
-  it("measures actual visible definitions and keeps nonzero required tools without logging payloads", () => {
-    const required = {
-      name: "message",
-      description: "private required description",
-      parameters: { type: "object" },
-    };
-    const optional = {
-      name: "read",
-      description: "private optional description",
-      parameters: { secret: "private schema" },
-    };
-    const baseline = measureDecisionToolSurface(() => [required, optional], ["message", "denied"]);
-    logDecisionToolRequest({
-      decision,
-      baseline,
-      readFinal: () => [required],
-      requiredNames: ["message", "denied"],
-      trace,
-    });
-    const record = logger.debug.mock.calls[0]?.[1];
-    expect(record).toMatchObject({
-      baselineVisibleTools: 2,
-      finalVisibleTools: 1,
-      requiredRetained: 1,
-      definitionCharsSaved:
-        JSON.stringify([required, optional]).length - JSON.stringify([required]).length,
-      restrictionApplied: true,
-      stage: "primary-dispatch",
-      providerAcceptance: "not-observed",
-    });
-    expect(JSON.stringify(record)).not.toContain("private");
-    expect(record).not.toHaveProperty("tools");
-  });
-  it("reports unknown rather than zero for unmeasurable definitions", () => {
-    const read = () => [
-      {
-        name: "x",
+  it.each([false, true])(
+    "measures definitions without disclosing payloads (unreadable=%s)",
+    (unreadable) => {
+      const required = {
+        name: "message",
+        description: "private required description",
         parameters: {
-          get secret() {
-            throw new Error("private payload");
+          get type() {
+            if (unreadable) {
+              throw new Error("private payload");
+            }
+            return "object";
           },
         },
-      },
-    ];
-    logDecisionToolRequest({
-      decision,
-      baseline: measureDecisionToolSurface(read),
-      readFinal: read,
-      trace,
-    });
-    expect(logger.debug.mock.calls[0]?.[1]).toMatchObject({
-      surfaceEffect: "unknown",
-      baselineDefinitionChars: null,
-      finalDefinitionChars: null,
-      definitionCharsSaved: null,
-    });
-    expect(JSON.stringify(logger.debug.mock.calls)).not.toContain("private");
-  });
+      };
+      const optional = {
+        name: "read",
+        description: "private optional description",
+        parameters: { secret: "private schema" },
+      };
+      logDecisionToolRequest({
+        decision,
+        baseline: measureDecisionToolSurface(() => [required, optional], ["message", "denied"]),
+        readFinal: () => [required],
+        requiredNames: ["message", "denied"],
+        trace,
+      });
+      const record = logger.debug.mock.calls[0]?.[1];
+      expect(record).toMatchObject(
+        unreadable
+          ? {
+              surfaceEffect: "unknown",
+              baselineDefinitionChars: null,
+              finalDefinitionChars: null,
+              definitionCharsSaved: null,
+            }
+          : {
+              baselineVisibleTools: 2,
+              finalVisibleTools: 1,
+              requiredRetained: 1,
+              definitionCharsSaved:
+                JSON.stringify([required, optional]).length - JSON.stringify([required]).length,
+              restrictionApplied: true,
+              stage: "primary-dispatch",
+              providerAcceptance: "not-observed",
+            },
+      );
+      expect(JSON.stringify(logger.debug.mock.calls)).not.toContain("private");
+      expect(record).not.toHaveProperty("tools");
+    },
+  );
   it("captures Code Mode description scalars before mutation and recaptures only on owner refresh", () => {
     const tool = { name: "exec", description: "a full bounded directory", parameters: {} };
     let active = ["exec"];

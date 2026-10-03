@@ -98,6 +98,56 @@ function writeAllowFromFixture(params: {
 }
 
 describe("pairing store", () => {
+  it.each(["list", "approve"] as const)(
+    "rolls back %s when owner authority is revoked before commit",
+    async (operation) => {
+      const { env } = createTestEnv();
+      const createdAt =
+        operation === "list" ? "2020-01-01T00:00:00.000Z" : new Date().toISOString();
+      writeChannelPairingStateSnapshot(
+        "telegram",
+        {
+          version: 1,
+          requests: [
+            {
+              id: "123",
+              code: "ABCDEFGH",
+              createdAt,
+              lastSeenAt: createdAt,
+              meta: { accountId: "default" },
+            },
+          ],
+          allowFrom: {},
+        },
+        env,
+      );
+      const before = readChannelPairingStateSnapshot("telegram", env);
+      const { db } = openOpenClawStateDatabase({ env });
+      let admitted = false;
+      const assertCurrent = () => {
+        if (!db.isTransaction) {
+          return;
+        }
+        if (admitted) {
+          throw new Error("owner authority revoked");
+        }
+        admitted = true;
+      };
+
+      await expect(
+        operation === "list"
+          ? listChannelPairingRequests("telegram", env, undefined, assertCurrent)
+          : approveChannelPairingCode({
+              channel: "telegram",
+              code: "ABCDEFGH",
+              env,
+              assertCurrent,
+            }),
+      ).rejects.toThrow("owner authority revoked");
+      expect(readChannelPairingStateSnapshot("telegram", env)).toEqual(before);
+    },
+  );
+
   it("normalizes allowlist entries through channel pairing adapters", async () => {
     const { env } = createTestEnv();
     pairingMocks.getPairingAdapter.mockReturnValue({

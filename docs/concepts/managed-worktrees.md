@@ -501,12 +501,17 @@ The updater and Doctor retain their existing owners and do not require this rout
 capability to upgrade an older installation. No schema or configuration migration
 is required.
 
+The [local state owner contract](/gateway/protocol/versioning#local-state-owner-routing)
+lists each required capability, refusal state, and retained writer boundary.
+
 ```bash
 openclaw worktrees list [--json]
 openclaw worktrees create <repo-root> [--name <name>] [--base-ref <ref>] [--source-profile <name>]... [--json]
 openclaw worktrees remove <id> [--force | --if-lossless | --exact-state <file>] [--json]
 openclaw worktrees restore <id> [--recover-exact-state <file>] [--json]
 openclaw worktrees gc [--json]
+openclaw worktrees recover-removal <id> --snapshot <oid> [--json]
+openclaw worktrees retire-snapshot <id> --expected-ref <ref> --expected-oid <oid> --removed-at <milliseconds> --retained-ref <ref> --retained-oid <oid> [--json]
 ```
 
 The Control UI **Worktrees** page under Settings provides creation with a base-branch picker, ordinary removal and restoration, and garbage collection. It shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
@@ -529,6 +534,36 @@ Leave **Base branch** empty to fetch and use the remote default branch. Branch s
 | `worktrees.retireSnapshot` | Retire one redundant snapshot with exact retained-source guards.        |
 
 `worktrees.list` requires `operator.read`. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing, restoring, and garbage-collecting worktrees remain admin-only. Branch listing reads existing refs only and never fetches, and remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
+
+Owner-routed requests require `operator.admin` and the corresponding
+[capability](/gateway/protocol/versioning#local-state-owner-routing). Their wire
+fields and results are:
+
+| Method                     | Request beyond `expectedOwnerId`                                                                                          | Result                                                                                                                  |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `worktrees.create`         | `repoRoot`; optional `name`, `baseRef`, `profiles`, `expectedRepoIdentity`                                                | Full worktree record, including any `gcProtection`. The CLI captures the physical repository identity before dispatch.  |
+| `worktrees.remove`         | `id`; optional, mutually exclusive `force`, `ifLossless`, or `exactState`                                                 | `removed`, optional `snapshotRef`, `snapshotError`, `recoveryPath`, `recoveryRetainedUntil`, and lossless `cleanup`.    |
+| `worktrees.restore`        | `id`; optional `recoverExactState`                                                                                        | Full restored worktree record.                                                                                          |
+| `worktrees.gc`             | No additional fields                                                                                                      | Complete cleanup summary, including `outcome`, issues, protection counts/reasons, retired paths, and `limitsSatisfied`. |
+| `worktrees.recoverRemoval` | `id`, `snapshot` (the expected pending snapshot OID)                                                                      | `removed: true`, optional `snapshotRef`.                                                                                |
+| `worktrees.retireSnapshot` | `id`, `expectedSnapshotRef`, `expectedSnapshotOid`, `expectedRemovedAt`, `retainedSourceRef`, `expectedRetainedSourceOid` | `retired: true`, `id`.                                                                                                  |
+
+`exactState` and `recoverExactState` carry the validated JSON object, not a file
+path: `ownerKind` (`manual`, `session`, or `workboard`), optional `ownerId`,
+`createdAt`, `lastActiveAt`, `head`, `branchHead`, and `indexSha256`. Snapshot and
+head OIDs accept 40 or 64 lowercase hexadecimal characters; `indexSha256` is 64.
+Snapshot retirement also requires an exact removal timestamp and a retained ref
+under `refs/heads/` or `refs/remotes/`.
+
+Old RPC clients that omit `expectedOwnerId` retain the public record without
+`gcProtection`, the original removal fields (`removed`, `snapshotRef`,
+`snapshotError`), and the original completed-GC summary (`removed`,
+`orphansDeleted`, `snapshotsPruned`). For those clients, a snapshot failure returns
+`removed: false` and `snapshotError`; incomplete GC returns a nonretryable error
+with the summary in its details. Owner-routed removal instead reports a snapshot
+failure as an error; owner-routed GC returns its full `completed`, `deferred`, or
+`partial` outcome. The new recovery and retirement methods always require the
+owner field. A partial or lost result is not permission to replay the mutation.
 
 ## Workboard workspaces
 

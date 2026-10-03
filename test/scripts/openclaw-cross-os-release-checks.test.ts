@@ -30,7 +30,6 @@ import {
   buildGatewayStopArgsFromHelpText,
   buildGatewayStatusArgsFromHelpText,
   buildInstallerSmokeScript,
-  buildWindowsPathBootstrapScript,
   canConnectToLoopbackPort,
   buildRealUpdateEnv,
   dashboardHtmlMarkerStatus,
@@ -1037,10 +1036,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const script = buildWindowsFreshShellVersionCheckScript({
       expectedNeedle: "2026.4.14",
     });
-    expect(script).toContain(buildWindowsPathBootstrapScript());
-    expect(script).not.toContain(
-      buildWindowsPathBootstrapScript({ includeCurrentProcessPath: false }),
-    );
+    expect(script).toContain("foreach ($candidate in @($env:Path, $userPath, $machinePath))");
     expect(script).toContain("Get-Command npm.cmd -ErrorAction SilentlyContinue");
     expect(script).toContain('$env:Path = "$npmPrefix;$env:Path"');
     expect(script).toContain("(Join-Path $npmPrefix 'openclaw.cmd')");
@@ -1049,10 +1045,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
   it("keeps Windows dev-update toolchain checks compatible with setup-node PATH shims", () => {
     const script = buildWindowsDevUpdateToolchainCheckScript();
-    expect(script).toContain(buildWindowsPathBootstrapScript());
-    expect(script).not.toContain(
-      buildWindowsPathBootstrapScript({ includeCurrentProcessPath: false }),
-    );
+    expect(script).toContain("foreach ($candidate in @($env:Path, $userPath, $machinePath))");
     expect(script).toContain("$pnpmPath = Resolve-CommandPath 'pnpm'");
     expect(script).toContain("$corepackPath = Resolve-CommandPath 'corepack'");
     expect(script).toContain("$npmPath = Resolve-CommandPath 'npm'");

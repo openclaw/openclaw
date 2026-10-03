@@ -39,6 +39,14 @@ creation, compaction, adoption, and child-spawn producers are non-notifying;
 child-spawn cursor seeding remains T1. Placement restart clearing remains T2,
 while synchronous result compatibility readers and transition guards remain T1.
 
+Workspace alias registration and snapshot operations retain T2 for their native
+Doctor/migration and relocation-retirement callers alongside worker dispatch.
+Plugin catalog repair, legacy import, and migration-receipt retirement are also
+T2; synchronous ModelRegistry loading keeps the catalog kernel T1. Preference
+read/write operations and profile email-binding, snapshot, and authority readers
+have exact worker-only entries. Native profile alias reads, admission fallbacks,
+workspace identity resolution, and explicit deletion retain their existing tiers.
+
 Runtime cache-TTL, bootstrap, prompt-error, and provider replay markers append
 through the existing transcript writer worker. Custom-message appends use the
 same worker and adopt their committed view before notifying observers. Bootstrap
@@ -246,6 +254,18 @@ their established adapters and cleanup owners. A Promise around synchronous SQL,
 or `withOpenClawAgentDatabaseReadOnly` alone, does not move execution off thread.
 `readWithCanonicalSessionAdmission` validates session reads on the executing
 thread; invoke it inside the worker's admitted reader.
+
+Gateway Claw package cleanup reads install and package ownership through the
+read-only worker without reconciling unrelated MCP, cron, or workspace state.
+The existing pending deletion journal freezes install identity: ordinary install
+writers refuse changes. Retry-status publication atomically supersedes the old
+journal operation, making the changed record and revocation of delayed Gateway
+effects visible together. Final removal retires owned rows together with journal completion. Package dependency reads
+and status claims run in workers under the existing artifact lease keys; transaction
+and commit admission retain the original lease and requester through settlement.
+The Gateway still checks the current deletion journal, config, cancellation, and
+lease authority immediately before effects. Stored formats, schemas, and update
+migrations are unchanged by this worker cutover.
 
 Reply initialization and audited admission validators can reserve their exact
 session keys in the shared store queue. Unrelated sessions proceed while a holder
@@ -599,6 +619,18 @@ authoring mutation guards remain for the next cutover. Schemas, quotas, retentio
 publication security checks, and update behavior are unchanged.
 
 ## Carry facts, publish after commit
+
+Personal model-account success and failover-failure bookkeeping use typed reductions
+in the existing `authProfiles` shared-state worker. The host captures the physical
+store before provider probes or writer admission; the synchronous transaction
+rereads current usage and refuses changed credentials. Both host and worker use
+the same usage reducers, and provider observations retain their credential and
+block-generation checks. Transaction and commit grants recheck live host authority
+without caller-thread SQL. Acknowledged usage returns to the selected turn only;
+personal credentials and selection never enter shared rotation. Post-run success
+remains nonblocking, while maintenance close joins accepted bookkeeping. OAuth
+refresh, selection, and released SDK updater callbacks retain their existing
+owners. Schemas, credential bytes, retention, and update behavior are unchanged.
 
 Message-tool-only completion records use the canonical per-agent writer. The
 host captures the original store and run facts before waiting; configured-store
@@ -1468,10 +1500,14 @@ existing reader. Store-bound questions retain authority through persistence and
 publish only an acknowledged safe answer. Reset hides their public entries
 immediately while accepted work settles privately. Runtime refresh follows the
 commit; failed refresh never invites replay of a saved answer. The released
-synchronous question SDK methods retain their contracts. Runtime value and exec
-environment reads, hidden GitHub operations, and the CLI allowed-host setter
-remain with their existing owners. Schemas, retention, stored bytes, and update
-behavior are unchanged.
+synchronous question SDK methods retain their contracts. Exact values and coherent
+exec-environment snapshots use bounded commands in that same read worker. The host
+captures the physical store before yielding, registers returned secrets with its
+redaction owner, and seals exec sentinels with its process-local key. Each exec
+call rechecks its existing source authority after awaiting the run's shared
+snapshot; generic SecretRef callers retain their current activation guards.
+Hidden GitHub operations and the CLI allowed-host setter remain with their existing
+owners. Schemas, retention, stored bytes, and update behavior are unchanged.
 
 Placement change reporting reads its before/after snapshots in the shared-state
 read worker using the placement store's row codec. It transfers only session

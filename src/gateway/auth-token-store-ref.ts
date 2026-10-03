@@ -17,8 +17,8 @@ const GATEWAY_AUTH_TOKEN_STORE_SCOPE = { kind: "team" } as const;
 /** Minimal config shape needed to pick the store provider alias. */
 type GatewayTokenStoreRefConfig = Parameters<typeof resolveDefaultSecretProviderAlias>[0];
 
-function readStoredGatewayToken(): string | undefined {
-  const existing = readSecretStoreValue({
+async function readStoredGatewayToken(): Promise<string | undefined> {
+  const existing = await readSecretStoreValue({
     scope: GATEWAY_AUTH_TOKEN_STORE_SCOPE,
     name: GATEWAY_AUTH_TOKEN_STORE_NAME,
   });
@@ -40,7 +40,7 @@ export async function provisionGatewayTokenStoreRef(params: {
   config: GatewayTokenStoreRefConfig;
   token?: string;
 }): Promise<{ ref: SecretRef; token: string }> {
-  const stored = params.token ? undefined : readStoredGatewayToken();
+  const stored = params.token ? undefined : await readStoredGatewayToken();
   const token = params.token ?? stored ?? randomToken();
   assertSecretStoreValue(token, "secret", GATEWAY_AUTH_TOKEN_STORE_NAME);
   if (token !== stored) {

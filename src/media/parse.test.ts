@@ -45,8 +45,13 @@ describe("splitMediaFromOutput", () => {
     expectParsedMediaOutputCase(input, { mediaUrls: undefined });
   }
 
-  function expectRejectedRemoteMediaUrlCase(input: string) {
+  function expectUnrecognizedMediaTextCase(input: string) {
     expectParsedMediaOutputCase(input, { mediaUrls: undefined, text: input });
+  }
+
+  function expectPolicyRejectedMediaUrlCase(input: string) {
+    expectParsedMediaOutputCase(input, { mediaUrls: undefined, text: "" });
+    expect(splitMediaFromOutput(input).rejectedMediaCount).toBe(1);
   }
 
   it.each([
@@ -96,7 +101,7 @@ describe("splitMediaFromOutput", () => {
     "media://inbound/image.png?token=value",
     "media://inbound/",
   ])("does not extract an invalid inbound URI: %s", (source) => {
-    expectRejectedRemoteMediaUrlCase(`MEDIA:${source}`);
+    expectPolicyRejectedMediaUrlCase(`MEDIA:${source}`);
   });
 
   it.each([",", '"', "'", "\\", ")", "}", "]", "`"])(
@@ -114,7 +119,7 @@ describe("splitMediaFromOutput", () => {
   it("does not shorten a rejected quoted URL into an accepted media reference", () => {
     const prefix = "https://example.com/video.mp4?token=";
     const mediaUrl = `${prefix}${"a".repeat(4096 - prefix.length)},`;
-    expectRejectedRemoteMediaUrlCase(`MEDIA:"${mediaUrl}"`);
+    expectPolicyRejectedMediaUrlCase(`MEDIA:"${mediaUrl}"`);
   });
 
   const nativeFilePath = path.resolve("media", "café 100% image.png");
@@ -331,7 +336,7 @@ describe("splitMediaFromOutput", () => {
     // `MEDIA:"first.png," "second.png,"` attached `first.png," "second.png`, while the recorded base
     // rejects the payload and keeps the line as visible text. The weld needed an extension on the last
     // member, which is what these three shapes carry.
-    expectRejectedRemoteMediaUrlCase(input);
+    expectUnrecognizedMediaTextCase(input);
   });
 
   it("keeps a quoted list whose every member is rejected as text", () => {
@@ -342,7 +347,7 @@ describe("splitMediaFromOutput", () => {
       'MEDIA:"first" "second"',
       "MEDIA:'first.png,' 'second'",
     ] as const) {
-      expectRejectedRemoteMediaUrlCase(input);
+      expectUnrecognizedMediaTextCase(input);
     }
     // An accepted member beside a rejected one is untouched: it is the only member that ever reaches
     // the accepted path, and the reject stays text.
@@ -354,12 +359,10 @@ describe("splitMediaFromOutput", () => {
       mediaUrls: ["first.png"],
       text: '"second.png,"',
     });
-    // A list that yields no reference makes the same strip-or-keep decision `main` makes, on the same
-    // string: the outer quote pair comes off first, so a payload whose remaining text reads as a path is
-    // stripped and one that reads as a rejected remote URL stays visible.
+    // Policy-rejected paths and URLs are removed without promoting the remaining words to media.
     expectRejectedMediaPathCase('MEDIA:"../../a" "../../b"');
-    expectRejectedRemoteMediaUrlCase('MEDIA:"http://evil.example/x.png" "y.png,"');
-    expectRejectedRemoteMediaUrlCase('MEDIA:"http://evil.example/x.png" "y"');
+    expectPolicyRejectedMediaUrlCase('MEDIA:"http://evil.example/x.png" "y.png,"');
+    expectPolicyRejectedMediaUrlCase('MEDIA:"http://evil.example/x.png" "y"');
   });
 
   it("keeps a quoted reference whole when its own value contains that quote", () => {
@@ -577,7 +580,7 @@ describe("splitMediaFromOutput", () => {
       "MEDIA:C:\\Users\\First Last\\workspace\\shot.png https://127.0.0.1/secret.png",
       {
         mediaUrls: ["C:\\Users\\First Last\\workspace\\shot.png"],
-        text: "https://127.0.0.1/secret.png",
+        text: "",
       },
     );
   });
@@ -599,8 +602,9 @@ describe("splitMediaFromOutput", () => {
     "MEDIA:https://metadata.google.internal../a.png",
     "MEDIA:https://example..com/a.png",
     "MEDIA:https://media.local/a.png",
+    "MEDIA:https://user:synthetic-password@example.com/a.png",
   ] as const)("rejects unsafe remote media URL: %s", (input) => {
-    expectRejectedRemoteMediaUrlCase(input);
+    expectPolicyRejectedMediaUrlCase(input);
   });
 
   it.each([

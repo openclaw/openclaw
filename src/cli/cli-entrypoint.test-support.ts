@@ -127,6 +127,12 @@ export const localStateOwnerFixtureEntrypoint = {
   distWorkerPath: "cli/local-state-owner.child.test-support.js",
 } as const;
 
+export const adminStateOwnerFixtureEntrypoint = {
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "admin-state-owner.child.test-support",
+  distWorkerPath: "cli/admin-state-owner.child.test-support.js",
+} as const;
+
 export const updateFinalizationOutputEntrypoint = {
   currentModuleUrl: import.meta.url,
   sourceWorkerName: "update-finalization-output.test-support",

@@ -9,6 +9,7 @@ import { isCodeFile, isTestRelatedFile, listRepoFilesSync } from "./check-file-u
 import { renderFindingGroups } from "./lib/grouped-findings.js";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { parseInventoryReportCliArgs } from "./lib/report-cli-helpers.mts";
+import { getPropertyNameText } from "./lib/ts-guard-utils.mts";
 
 type EnvMutationOperation = "assign" | "delete" | "replace" | "stubEnv";
 
@@ -96,22 +97,14 @@ function envKeyFromExpression(node: ts.Node): string | null {
   return null;
 }
 
-function propertyNameText(name: ts.PropertyName | undefined): string | null {
-  if (!name) {
-    return null;
-  }
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
-    return name.text;
-  }
-  return null;
-}
-
 function envKeysFromObjectLiteral(node: ts.Expression): string[] {
   if (!ts.isObjectLiteralExpression(node)) {
     return [];
   }
   return node.properties
-    .map((property) => (ts.isPropertyAssignment(property) ? propertyNameText(property.name) : null))
+    .map((property) =>
+      ts.isPropertyAssignment(property) ? getPropertyNameText(property.name) : null,
+    )
     .filter((key): key is string => key !== null && TRACKED_ENV_KEYS.has(key));
 }
 

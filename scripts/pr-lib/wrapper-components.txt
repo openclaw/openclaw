@@ -1242,6 +1242,7 @@ src/plugins/plugin-native-admission.ts
 src/plugins/plugin-native-module-loader.ts
 src/plugins/plugin-native-namespace.ts
 src/plugins/plugin-native-reference.ts
+src/plugins/plugin-native-resolution.ts
 src/plugins/plugin-package-metadata-capture.ts
 src/plugins/plugin-peer-link.ts
 src/plugins/plugin-policy-id.ts

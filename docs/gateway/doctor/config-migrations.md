@@ -270,6 +270,19 @@ runs the same migration. Repeating Doctor leaves the normalized row and its IDs
 unchanged. Published SDK and operator input normalization remain available at
 the input boundary.
 
+## Claw provenance schema
+
+Claw update plans and resume previews require the current provenance columns.
+Older SQLite databases that lack bootstrap or extension provenance columns now
+stop with `openclaw doctor --fix` guidance. Read-only planning leaves those
+databases unchanged instead of projecting absent columns as empty values.
+
+Doctor and the update-time Doctor pass use the existing shared-state schema
+repair. Doctor preserves a verified pre-migration database snapshot even when
+the numeric schema version is already current, then adds the missing nullable
+columns. Install records, package references, timestamps, and consent-bound v1
+resume plans retain their values. Repeating the repair is idempotent.
+
 ## Channel account routing during an update
 
 Doctor preserves existing channel account maps and their implicit default route.
@@ -369,7 +382,7 @@ configured path cannot be served by the Gateway. Disabled accounts, Telegram pol
 Feishu WebSocket transport receive no pin. Explicit objects and `false` settings
 remain authoritative.
 
-Startup and update-time Doctor use the same migration owner. Doctor validates
+Explicit and update-time Doctor use the same migration owner. Doctor validates
 and backs up the config through the normal write flow. Pins and the
 `meta.migrations.webhookListeners` completion marker are saved together, including
 when channel settings come from `$include` files. Fresh installations record
@@ -387,13 +400,14 @@ the installer's backed-up config publication before its new runtime starts.
 Update a retained older standalone plugin before removing its pin; older plugin
 versions can still open their historical default port.
 
-For a read-only external config source, startup records completion in canonical
-SQLite machine state only when the completion marker is the sole required change.
-If endpoints or other channel settings need repair, update that external source
-and its completion marker as directed by the startup error. Startup refuses to
-drop an unmigrated endpoint. A fresh read-only installation needs no pins.
-When no config file exists yet, startup can record the same marker-only completion
-without creating a config file that would interfere with `gateway --dev` setup.
+Startup leaves config bytes unchanged. When the completion marker is the sole
+required change, startup records it in canonical SQLite machine state, including
+when no config file exists yet. If endpoints or other channel settings need
+repair, startup refuses with `openclaw doctor --fix` guidance. For a read-only
+external config source, update that source and its completion marker as directed
+by the startup error. Startup refuses to drop an unmigrated endpoint. A fresh
+installation needs no pins or a new config file that would interfere with
+`gateway --dev` setup.
 
 The existing explicit-key migrations remain supported: `webhookPort` and
 `webhookHost` become `legacyWebhook: { port, host? }`; Teams `webhook.port` becomes

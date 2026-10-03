@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
@@ -8,9 +6,9 @@ import { resolveConfigPath } from "../../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessions/targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { preflightOpenClawDatabaseSchemaContexts } from "../../state/openclaw-database-preflight-contexts.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-  preflightOpenClawDatabaseSchemas,
   type IncompatibleOpenClawDatabase,
   type IndeterminateOpenClawDatabase,
   type OpenClawDatabaseSchemaPreflight,
@@ -63,34 +61,6 @@ export function formatSchemaRefusalLines(
     OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
     "Installing manually via npm bypasses this guard; back up first and verify compatibility.",
   ];
-}
-
-async function checkTargetDatabaseSchemas(
-  supportedVersions: OpenClawSchemaVersions,
-  context: TargetDatabaseSchemaContext,
-): Promise<OpenClawDatabaseSchemaPreflight> {
-  let configuredAgentDatabaseCandidatePaths: string[];
-  try {
-    configuredAgentDatabaseCandidatePaths = resolveConfiguredAgentDatabaseCandidatePaths(
-      context.config,
-      { env: context.env },
-    );
-  } catch (error) {
-    throw new UpdatePreMutationError(
-      "database-schema-preflight",
-      `Update refused: could not inspect configured database paths: ${formatErrorMessage(error)}`,
-    );
-  }
-  return preflightOpenClawDatabaseSchemas({
-    env: context.env,
-    supportedVersions,
-    preserveSourceArtifacts: isArtifactPreservingStateRead(),
-    // Include default on-disk stores that update-time Doctor can later touch,
-    // without resolving configured candidates into writable migration owners.
-    configuredAgentDatabaseTargets: [],
-    // Inspection keeps registered paths without adopting their migration ownership.
-    configuredAgentDatabaseCandidatePaths,
-  });
 }
 
 export async function captureTargetDatabaseSchemaContext(
@@ -161,19 +131,6 @@ export async function captureTargetDatabaseSchemaContext(
   };
 }
 
-function canonicalDatabaseIdentity(database: { kind: "agent" | "state"; path: string }): string {
-  let canonical: string;
-  try {
-    // Native traversal must see the original locator before any lexical
-    // normalization: link/../file can name a different database from resolve().
-    canonical = fs.realpathSync.native(database.path);
-  } catch {
-    canonical = path.resolve(database.path);
-  }
-  const comparable = process.platform === "win32" ? canonical.toLowerCase() : canonical;
-  return `${database.kind}\0${comparable}`;
-}
-
 /** Inspect the union of caller/service stores without granting migration ownership. */
 export async function checkTargetDatabaseSchemasForContexts(
   supportedVersions: OpenClawSchemaVersions | undefined,
@@ -182,23 +139,27 @@ export async function checkTargetDatabaseSchemasForContexts(
   if (!supportedVersions) {
     return { incompatible: [], indeterminate: [] };
   }
-  const incompatible = new Map<string, IncompatibleOpenClawDatabase>();
-  const indeterminate = new Map<string, IndeterminateOpenClawDatabase>();
-  for (const context of contexts) {
-    const result = await checkTargetDatabaseSchemas(supportedVersions, context);
-    for (const database of result.incompatible) {
-      const identity = canonicalDatabaseIdentity(database);
-      incompatible.set(identity, incompatible.get(identity) ?? database);
-      indeterminate.delete(identity);
+  const inspectionContexts = contexts.map((context) => {
+    try {
+      return {
+        env: context.env,
+        configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(
+          context.config,
+          { env: context.env },
+        ),
+      };
+    } catch (error) {
+      throw new UpdatePreMutationError(
+        "database-schema-preflight",
+        `Update refused: could not inspect configured database paths: ${formatErrorMessage(error)}`,
+      );
     }
-    for (const database of result.indeterminate) {
-      const identity = canonicalDatabaseIdentity(database);
-      if (!incompatible.has(identity) && !indeterminate.has(identity)) {
-        indeterminate.set(identity, database);
-      }
-    }
-  }
-  return { incompatible: [...incompatible.values()], indeterminate: [...indeterminate.values()] };
+  });
+  return preflightOpenClawDatabaseSchemaContexts({
+    contexts: inspectionContexts,
+    supportedVersions,
+    preserveSourceArtifacts: isArtifactPreservingStateRead(),
+  });
 }
 
 export function hasSchemaRefusal(schemas: OpenClawDatabaseSchemaPreflight): boolean {

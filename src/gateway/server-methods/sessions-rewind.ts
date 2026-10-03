@@ -284,7 +284,7 @@ async function mutateSessionAtMessage(
   ];
   let targetStillCurrent = true;
   let blockedByActiveRun = false;
-  await runExclusiveSessionLifecycleMutation({
+  await runExclusiveSessionLifecycleMutation(action, {
     scope: initial.storePath,
     identities: lifecycleIdentities,
     prepare: async () => {

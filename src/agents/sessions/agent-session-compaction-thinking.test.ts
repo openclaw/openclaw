@@ -92,44 +92,29 @@ describe("AgentSession threshold compaction thinking", () => {
     },
   );
 
-  it("runs adaptive summaries at the chat turn's high effort on adaptive-capable models", () => {
-    const resolveCompactionThinkingLevel = createAttemptCompactionThinkingResolver(
-      {
-        config: { agents: { defaults: { compaction: { thinkingLevel: "adaptive" } } } },
-        sessionKey: undefined,
-        sandboxSessionKey: undefined,
-      },
-      "main",
-    );
-    const claude = {
-      ...testModel,
-      provider: "anthropic",
-      id: "claude-sonnet-4-6",
-      api: "anthropic-messages" as const,
-      reasoning: true,
-    };
-
-    expect(resolveCompactionThinkingLevel(claude, "low")).toBe("high");
-  });
-
-  it("resolves summaries against a Claude deployment alias's backing model", () => {
-    const resolveCompactionThinkingLevel = createAttemptCompactionThinkingResolver(
-      {
-        config: { agents: { defaults: { compaction: { thinkingLevel: "adaptive" } } } },
-        sessionKey: undefined,
-        sandboxSessionKey: undefined,
-      },
-      "main",
-    );
-    const deployment = {
-      ...testModel,
+  it.each([
+    { provider: "anthropic", id: "claude-sonnet-4-6" },
+    {
       provider: "claude-gateway",
       id: "team-sonnet",
+      params: { canonicalModelId: "claude-sonnet-4-6" },
+    },
+  ])("runs adaptive summaries at high effort for $provider/$id", (model) => {
+    const resolveCompactionThinkingLevel = createAttemptCompactionThinkingResolver(
+      {
+        config: { agents: { defaults: { compaction: { thinkingLevel: "adaptive" } } } },
+        sessionKey: undefined,
+        sandboxSessionKey: undefined,
+      },
+      "main",
+    );
+    const candidate = {
+      ...testModel,
+      ...model,
       api: "anthropic-messages" as const,
       reasoning: true,
-      params: { canonicalModelId: "claude-sonnet-4-6" },
     };
 
-    expect(resolveCompactionThinkingLevel(deployment, "low")).toBe("high");
+    expect(resolveCompactionThinkingLevel(candidate, "low")).toBe("high");
   });
 });
