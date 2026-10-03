@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -55,17 +56,15 @@ beforeAll(async () => {
       );
     });
   });
-  const listening = Promise.withResolvers<void>();
-  server.listen(0, "127.0.0.1", listening.resolve);
-  await listening.promise;
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
 });
 
 afterAll(async () => {
   server.closeAllConnections();
-  const closed = Promise.withResolvers<void>();
-  server.close(() => closed.resolve());
-  await closed.promise;
+  server.close();
+  await once(server, "close");
 });
 
 beforeEach(() => {

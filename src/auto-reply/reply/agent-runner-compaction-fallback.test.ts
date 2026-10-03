@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
@@ -65,9 +66,8 @@ it("answers through a stalled compaction summary and does not re-run it next tur
         );
       });
     });
-    const listening = Promise.withResolvers<void>();
-    server.listen(0, "127.0.0.1", listening.resolve);
-    await listening.promise;
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
     const sessionKey = "agent:main:main";
     const sessionId = "compaction-summary-fallback";
     const storePath = path.join(state.sessionsDir(), "sessions.json");
@@ -210,9 +210,8 @@ it("answers through a stalled compaction summary and does not re-run it next tur
       await scheduler.stop();
       clearRuntimeConfigSnapshot();
       server.closeAllConnections();
-      const closed = Promise.withResolvers<void>();
-      server.close(() => closed.resolve());
-      await closed.promise;
+      server.close();
+      await once(server, "close");
     }
   });
 }, 120_000);
