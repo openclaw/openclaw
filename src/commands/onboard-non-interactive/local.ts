@@ -413,6 +413,8 @@ export async function runNonInteractiveLocalSetup(params: {
             json: false,
             timeoutMs: opts.installDaemon && process.platform === "win32" ? 90_000 : 10_000,
             config: nextConfig,
+            // Keep derived credentials on the Gateway configured by this setup run.
+            localPortOverride: gatewayResult.port,
             token: probeAuth.token,
             password: probeAuth.password,
           },

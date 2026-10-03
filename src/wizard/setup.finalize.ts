@@ -547,6 +547,8 @@ export async function finalizeSetupWizard(
               json: false,
               timeoutMs: 10_000,
               config: healthConfig,
+              // Keep derived credentials on the Gateway configured by this setup run.
+              localPortOverride: settings.port,
               token: settings.authMode === "token" ? settings.gatewayToken : undefined,
               password: probePassword,
             },
