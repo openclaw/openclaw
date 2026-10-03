@@ -90,18 +90,34 @@ export async function resolvePrivateCommandRouteTargets(params: {
       });
     }
   }
-  return sortPrivateCommandRouteTargets({
-    cfg: params.commandParams.cfg,
-    originChannel,
-    targets: dedupeByKey(targets, (target) =>
-      [
-        target.channel,
-        target.to,
-        target.accountId ?? "",
-        target.threadId == null ? "" : String(target.threadId),
-      ].join("\0"),
-    ),
-  });
+  const owners = commandParams.cfg.commands?.ownerAllowFrom;
+  if (!Array.isArray(owners) || owners.length === 0) {
+    return [];
+  }
+  return dedupeByKey(targets, (target) =>
+    [
+      target.channel,
+      target.to,
+      target.accountId ?? "",
+      target.threadId == null ? "" : String(target.threadId),
+    ].join("\0"),
+  )
+    .map((target) => {
+      const keys = buildPrivateCommandRouteOwnerKeys(target);
+      const ownerPreference = owners.findIndex((owner) =>
+        keys.has(normalizeLowercaseStringOrEmpty(String(owner))),
+      );
+      return {
+        target,
+        ownerPreference,
+        originPreference: target.channel === originChannel ? 0 : 1,
+      };
+    })
+    .filter((entry) => entry.ownerPreference !== -1)
+    .toSorted(
+      (a, b) => a.originPreference - b.originPreference || a.ownerPreference - b.ownerPreference,
+    )
+    .map((entry) => entry.target);
 }
 
 /** Tries private targets in priority order until delivery stops or owns further recovery. */
@@ -206,21 +222,6 @@ function listPrivateCommandRouteCandidateChannels(originChannel: string) {
   );
 }
 
-function resolveOwnerPreferenceIndex(params: {
-  cfg: HandleCommandsParams["cfg"];
-  target: PrivateCommandRouteTarget;
-}): number {
-  const owners = params.cfg.commands?.ownerAllowFrom;
-  if (!Array.isArray(owners) || owners.length === 0) {
-    return Number.MAX_SAFE_INTEGER;
-  }
-  const keys = buildPrivateCommandRouteOwnerKeys(params.target);
-  const index = owners.findIndex((owner) =>
-    keys.has(normalizeLowercaseStringOrEmpty(String(owner))),
-  );
-  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
-}
-
 function buildPrivateCommandRouteOwnerKeys(target: PrivateCommandRouteTarget): Set<string> {
   const channel = normalizeLowercaseStringOrEmpty(target.channel);
   const to = normalizeLowercaseStringOrEmpty(target.to);
@@ -239,22 +240,4 @@ function buildPrivateCommandRouteOwnerKeys(target: PrivateCommandRouteTarget): S
     }
   }
   return keys;
-}
-
-function sortPrivateCommandRouteTargets(params: {
-  cfg: HandleCommandsParams["cfg"];
-  originChannel: string;
-  targets: PrivateCommandRouteTarget[];
-}): PrivateCommandRouteTarget[] {
-  return params.targets
-    .map((target) => ({
-      target,
-      ownerPreference: resolveOwnerPreferenceIndex({ cfg: params.cfg, target }),
-      originPreference: target.channel === params.originChannel ? 0 : 1,
-    }))
-    .filter((entry) => entry.ownerPreference !== Number.MAX_SAFE_INTEGER)
-    .toSorted(
-      (a, b) => a.originPreference - b.originPreference || a.ownerPreference - b.ownerPreference,
-    )
-    .map((entry) => entry.target);
 }
