@@ -12,11 +12,8 @@ import type {
   PluginDoctorMigrationBackupWarning,
   PluginDoctorStateMigration,
 } from "./doctor-contract-module.js";
-import {
-  isTrustedForDurableStores,
-  resolvePluginDoctorStateMigrationRecords,
-} from "./doctor-contract-registry.js";
 import type { PluginStateRetentionContract } from "./doctor-retired-state.js";
+import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 
 export type PluginDoctorMigrationResourceCollectionParams = {
@@ -120,22 +117,14 @@ export async function preparePluginDoctorMigrationResources(
   };
 }
 
-/** Inspect original sources before an installed updater replaces the service. */
+/** Inspect sources for selected trusted owners before the updater replaces the service. */
 export async function assertPluginStateRetention(
-  params: Parameters<typeof resolvePluginDoctorStateMigrationRecords>[0] & {
-    candidateRoot: string;
-  } & Parameters<
-      PluginStateRetentionContract["stateMigrations"][number]["assertSupportedState"]
-    >[0],
+  records: readonly PluginManifestRecord[],
+  params: { candidateRoot: string } & Parameters<
+    PluginStateRetentionContract["stateMigrations"][number]["assertSupportedState"]
+  >[0],
 ): Promise<void> {
-  const records = resolvePluginDoctorStateMigrationRecords({
-    ...params,
-    artifactPreservingReadOnly: true,
-  });
   for (const record of records) {
-    if (!isTrustedForDurableStores(record)) {
-      continue;
-    }
     const declared = record.doctorContract?.stateMigrations;
     if (!Array.isArray(declared)) {
       continue;

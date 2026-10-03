@@ -190,7 +190,10 @@ describe("retained plugin state checks", () => {
           diagnostics: [],
         },
       };
-      const check = migrationResources.assertPluginStateRetention(params);
+      const records = doctor
+        .resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true })
+        .filter(doctor.isTrustedForDurableStores);
+      const check = migrationResources.assertPluginStateRetention(records, params);
       if (refuses) {
         await expect(check).rejects.toThrow("Install OpenClaw 2026.9.7");
       } else {
