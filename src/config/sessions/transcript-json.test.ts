@@ -1,6 +1,26 @@
+import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { normalizeTranscriptJsonValue } from "./transcript-json.js";
+
+it("releases discarded tool-output backing strings while sharing persisted payloads", async ({
+  signal,
+}) => {
+  const result = await runNodeScript(
+    [
+      "--expose-gc",
+      "--import",
+      "./scripts/tsx.mjs",
+      fileURLToPath(new URL("./transcript-json.retention.test-support.ts", import.meta.url)),
+    ],
+    process.env,
+    undefined,
+    { cwd: fileURLToPath(new URL("../../../", import.meta.url)), signal },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+});
 
 it.each([
   ["numbers", () => ({ zero: -0, nan: Number.NaN, infinity: Number.POSITIVE_INFINITY })],

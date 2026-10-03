@@ -1266,7 +1266,7 @@ src/agents/auth-profiles/external-auth.ts	1
 src/agents/auth-profiles/oauth-refresh-failure.ts	2
 src/agents/auth-profiles/oauth-refresh-lock-errors.ts	1
 src/agents/auth-profiles/oauth.ts	2
-src/agents/auth-profiles/persisted.ts	4
+src/agents/auth-profiles/persisted.ts	2
 src/agents/auth-profiles/policy.ts	1
 src/agents/auth-profiles/portability.ts	1
 src/agents/auth-profiles/profiles.ts	1
@@ -2659,7 +2659,6 @@ src/secrets/audit.ts	1
 src/secrets/channel-contract-api.ts	1
 src/secrets/configure.ts	2
 src/secrets/egress-proxy/stream-substitution.ts	2
-src/secrets/legacy-secretref-env-marker.ts	1
 src/secrets/plan.ts	2
 src/secrets/private-plan-file.ts	1
 src/secrets/resolve.ts	1

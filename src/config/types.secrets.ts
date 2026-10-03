@@ -35,7 +35,7 @@ export type SecretInputStringResolution =
   | { status: "missing"; value: undefined; ref: null };
 type SecretDefaults = SecretsConfig["defaults"];
 
-function isLegacySecretRefWithoutProvider(
+export function isLegacySecretRefWithoutProvider(
   value: unknown,
 ): value is { source: SecretRefSource; id: string } {
   if (!isRecord(value)) {
@@ -49,6 +49,13 @@ function isLegacySecretRefWithoutProvider(
     typeof value.id === "string" &&
     value.id.trim().length > 0 &&
     value.provider === undefined
+  );
+}
+
+export function hasLegacySecretRefExtraFields(value: unknown): boolean {
+  return (
+    isLegacySecretRefWithoutProvider(value) &&
+    Object.keys(value).some((key) => key !== "source" && key !== "provider" && key !== "id")
   );
 }
 
@@ -107,12 +114,13 @@ export function parseLegacySecretRefEnvMarker(
   };
 }
 
-/** Coerce canonical and env-shorthand secret inputs into a SecretRef.
- * Retired string markers are parsed only by doctor migration above. */
+/** Parse current structured refs and supported env shorthand without legacy normalization. */
+export function parseSecretRef(value: unknown, defaults?: SecretDefaults): SecretRef | null {
+  return isSecretRef(value) ? value : parseEnvTemplateSecretRef(value, defaults?.env);
+}
+
+/** Public SDK input adapter; persisted config and state are normalized by Doctor. */
 export function coerceSecretRef(value: unknown, defaults?: SecretDefaults): SecretRef | null {
-  if (isSecretRef(value)) {
-    return value;
-  }
   if (isLegacySecretRefWithoutProvider(value)) {
     const provider = defaults?.[value.source] ?? DEFAULT_SECRET_PROVIDER_ALIAS;
     return {
@@ -121,7 +129,7 @@ export function coerceSecretRef(value: unknown, defaults?: SecretDefaults): Secr
       id: value.id,
     };
   }
-  return parseEnvTemplateSecretRef(value, defaults?.env);
+  return parseSecretRef(value, defaults);
 }
 
 /** Return whether a value contains either a literal secret string or resolvable SecretRef shape. */

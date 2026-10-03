@@ -5,7 +5,7 @@ import { resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
-import { resolveConfiguredSecretInputWithFallback } from "../../gateway/resolve-configured-secret-input-string.js";
+import { resolveCanonicalConfiguredSecretInputWithFallback } from "../../gateway/resolve-configured-secret-input-string.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
@@ -96,7 +96,7 @@ async function resolveGatewayHealthProbeAuth(
   ) {
     // Proxy mode's local password uses the same resolver as password mode;
     // unresolved configured refs must not fall back to ambient credentials.
-    const resolved = await resolveConfiguredSecretInputWithFallback({
+    const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
       config: nextConfig,
       env: process.env,
       value: nextConfig.gateway.auth.password,

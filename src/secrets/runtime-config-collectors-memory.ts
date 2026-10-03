@@ -15,7 +15,7 @@ import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-k
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { runtimeMemorySecretOwnerId } from "./runtime-memory-secret-owner.js";
 import {
-  collectSecretInputAssignment,
+  collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
   type ResolverContext,
   type SecretAssignmentOwner,
   type SecretDefaults,

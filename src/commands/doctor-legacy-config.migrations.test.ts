@@ -218,62 +218,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
-  it("migrates legacy secretref-env markers on SecretRef credential paths", () => {
-    const res = normalizeCompatibilityConfigValues({
-      secrets: {
-        defaults: {
-          env: "gateway-env",
-        },
-      },
-      channels: {
-        discord: {
-          token: "secretref-env:DISCORD_BOT_TOKEN",
-          accounts: {
-            work: {
-              token: "__env__:DISCORD_WORK_TOKEN",
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.config.channels?.discord?.accounts?.default).toBeUndefined();
-    expect(res.config.channels?.discord?.token).toEqual({
-      source: "env",
-      provider: "gateway-env",
-      id: "DISCORD_BOT_TOKEN",
-    });
-    expect(res.config.channels?.discord?.accounts?.work?.token).toEqual({
-      source: "env",
-      provider: "gateway-env",
-      id: "DISCORD_WORK_TOKEN",
-    });
-    expect(res.changes).toContain(
-      "Moved channels.discord.token secretref-env:DISCORD_BOT_TOKEN marker → structured env SecretRef.",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.discord.accounts.work.token __env__:DISCORD_WORK_TOKEN marker → structured env SecretRef.",
-    );
-  });
-
-  it("leaves invalid legacy secretref-env markers unchanged", () => {
-    const res = normalizeCompatibilityConfigValues({
-      messages: {
-        groupChat: {
-          visibleReplies: "message_tool",
-        },
-      },
-      channels: {
-        discord: {
-          token: "secretref-env:not-valid",
-        },
-      },
-    });
-
-    expect(res.config.channels?.discord?.token).toBe("secretref-env:not-valid");
-    expect(res.changes).toStrictEqual([]);
-  });
-
   it.each(["whatsapp", "discord", "telegram", "slack", "signal", "mattermost"])(
     "preserves the existing %s account set and shared policy",
     (channelId) => {

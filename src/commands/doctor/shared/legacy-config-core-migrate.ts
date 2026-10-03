@@ -5,7 +5,6 @@ import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.rost
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { HeartbeatSchema } from "../../../config/zod-schema.agent-runtime.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
-import { migrateLegacySecretRefEnvMarkers } from "../../../secrets/legacy-secretref-env-marker.js";
 import { migrateLegacyCommandOwners } from "../../doctor-command-owner.js";
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
 import type { LegacyCodexModelIdentity } from "./codex-route-model-ref.js";
@@ -13,6 +12,7 @@ import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js
 import { normalizeBaseCompatibilityConfigValues } from "./legacy-config-compatibility-base.js";
 import { normalizeLegacyOpenAICodexModelsAddMetadata } from "./legacy-config-core-normalizers.js";
 import { stripRetiredTuningKnobs } from "./legacy-config-migrations.runtime.retired-media.js";
+import { migrateLegacySecretInputs } from "./legacy-secret-inputs.js";
 import { migrateReservedMcpServerNames } from "./reserved-mcp-server-name-migrate.js";
 
 function repairAgentRoster(
@@ -155,7 +155,7 @@ export function normalizeCompatibilityConfigValues(
     next = channelMigrations.next;
     changes.push(...channelMigrations.changes);
   }
-  const secretRefMarkers = migrateLegacySecretRefEnvMarkers(next);
+  const secretRefMarkers = migrateLegacySecretInputs(next);
   if (secretRefMarkers.changes.length > 0) {
     next = secretRefMarkers.config;
     changes.push(...secretRefMarkers.changes);

@@ -347,9 +347,9 @@ it("keeps fixed-store ownership out of separate registered and suffixed database
 it.each([
   { name: "physical sentinel", parent: "global", model: "qwen3:14b", source: "inherited" },
   {
-    name: "literal main parent",
-    parent: "agent:main:main",
-    model: "qwen3:4b",
+    name: "shared physical sentinel",
+    parent: "global",
+    model: "qwen3:14b",
     source: "inherited",
   },
   {
@@ -374,26 +374,38 @@ it.each([
 ] as const)(
   "keeps $name model facts bound to stored lineage",
   async ({ name, parent, model, source }) => {
-    await withOpenClawTestState({ label: "combined-parent-model" }, async () => {
+    await withOpenClawTestState({ label: "combined-parent-model" }, async (state) => {
+      const shared = name === "shared physical sentinel";
+      const storePath = shared ? state.statePath("shared.sqlite") : undefined;
       const cfg: OpenClawConfig = {
-        session: { scope: "global", mainKey: "home" },
+        session: { scope: "global", ...(shared ? { store: storePath } : { mainKey: "home" }) },
         agents: {
-          entries: { main: {}, work: {} },
-          defaults: { model: { primary: "ollama/llama3.1:8b" } },
+          ownership: "explicit",
+          entries: shared ? { main: {}, ops: {}, work: {} } : { main: {}, work: {} },
+          defaults: {
+            ...(!shared ? { systemAgent: { agentId: "main" } } : {}),
+            sessionStore: { agentId: shared ? "ops" : "main" },
+            model: { primary: "ollama/llama3.1:8b" },
+          },
         },
       };
-      const parents: Array<[string, string, string]> = [
-        ["main", "global", "qwen3:8b"],
-        ["main", "agent:main:main", "qwen3:4b"],
-        ["main", "agent:main:home", "qwen3:30b"],
-        ["main", "agent:main:global", "qwen3:32b"],
-      ];
-      if (name !== "missing physical parent") {
+      if (shared) {
+        openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      }
+      const parents: Array<[string, string, string]> = shared
+        ? [["ops", "global", "qwen3:14b"]]
+        : [
+            ["main", "global", "qwen3:8b"],
+            ["main", "agent:main:main", "qwen3:4b"],
+            ["main", "agent:main:home", "qwen3:30b"],
+            ["main", "agent:main:global", "qwen3:32b"],
+          ];
+      if (!shared && name !== "missing physical parent") {
         parents.push(["work", "global", "qwen3:14b"]);
       }
       for (const [agentId, sessionKey, selectedModel] of parents) {
         replaceSessionEntrySync(
-          { agentId, sessionKey },
+          { agentId, sessionKey, storePath },
           {
             sessionId: `${agentId}-${sessionKey}`,
             updatedAt: 1,
@@ -406,9 +418,16 @@ it.each([
       }
       const key = "agent:work:dashboard:child";
       replaceSessionEntrySync(
-        { agentId: "work", sessionKey: key },
+        { agentId: "work", sessionKey: key, storePath },
         { sessionId: "child", updatedAt: 2, parentSessionKey: parent },
       );
+      if (shared) {
+        const combined = loadCombinedSessionStoreForGatewayCore(cfg);
+        expect(combined.targetsBySessionKey.get(key)?.storeTarget).toEqual({
+          agentId: "main",
+          storePath,
+        });
+      }
       await withResidentRows(cfg, async (projection) => {
         for (const opts of [{}, { agentId: "work" }]) {
           const list = await listProjectedSessions({ projection, opts });
@@ -419,6 +438,11 @@ it.each([
             modelOverrideSource: source,
             parentSessionKey: parent,
           });
+          if (shared && opts.agentId) {
+            expect(list.sessions).toMatchObject([
+              { agentId: "work", model, modelOverrideSource: source },
+            ]);
+          }
           const searched = await listProjectedSessions({
             projection,
             opts: { ...opts, search: model },
@@ -596,56 +620,6 @@ it.each([false, true])(
     });
   },
 );
-
-it("reads a raw parent from the child's captured shared physical store", async () => {
-  await withOpenClawTestState({ label: "combined-shared-parent-model" }, async (state) => {
-    const storePath = state.statePath("shared.sqlite");
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, ops: {}, work: {} },
-        defaults: { sessionStore: { agentId: "ops" }, model: { primary: "ollama/llama3.1:8b" } },
-      },
-      session: { scope: "global", store: storePath },
-    };
-    openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-    replaceSessionEntrySync(
-      { agentId: "ops", sessionKey: "global", storePath },
-      {
-        sessionId: "ops-parent",
-        updatedAt: 1,
-        providerOverride: "ollama",
-        modelOverride: "qwen3:14b",
-        modelOverrideSource: "user",
-        modelOverrideRouteResolution: "resolved",
-      },
-    );
-    const key = "agent:work:dashboard:shared-child";
-    replaceSessionEntrySync(
-      { agentId: "work", sessionKey: key, storePath },
-      { sessionId: "shared-child", updatedAt: 2, parentSessionKey: "global" },
-    );
-    const combined = loadCombinedSessionStoreForGatewayCore(cfg);
-    expect(combined.targetsBySessionKey.get(key)?.storeTarget).toEqual({
-      agentId: "main",
-      storePath,
-    });
-    await withResidentRows(cfg, async (projection) => {
-      const listed = await listProjectedSessions({ projection, opts: {} });
-      const expected = {
-        agentId: "work",
-        model: "qwen3:14b",
-        modelOverrideSource: "inherited",
-      };
-      expect(listed.sessions.find((row) => row.key === key)).toMatchObject(expected);
-      const scoped = await listProjectedSessions({
-        projection,
-        opts: { agentId: "work" },
-      });
-      expect(scoped.sessions).toMatchObject([expected]);
-    });
-  });
-});
 
 it.for([false, true])(
   "preserves qualified retired-owner keys in a shared store (alias=%s)",

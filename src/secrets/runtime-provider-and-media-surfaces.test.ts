@@ -29,6 +29,27 @@ function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+it("requires Doctor before resolving a providerless config SecretRef", async () => {
+  await expect(
+    prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        plugins: { enabled: false },
+        models: {
+          providers: {
+            example: {
+              baseUrl: "https://example.test/v1",
+              models: [],
+              apiKey: { source: "env", id: "SYNTHETIC_AUTH_KEY" },
+            },
+          },
+        },
+      }),
+      env: { SYNTHETIC_AUTH_KEY: "synthetic-credential" },
+      includeAuthStoreRefs: false,
+    }),
+  ).rejects.toThrow("openclaw doctor --fix");
+});
+
 function envTokenRef(id: string) {
   return { source: "env" as const, provider: "default" as const, id };
 }
