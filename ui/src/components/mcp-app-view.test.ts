@@ -1,17 +1,22 @@
 import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol";
+import type { LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
-import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../test-helpers/gateway-client.ts";
 import { McpAppPanel } from "./mcp-app-panel.ts";
 import {
   MCP_APP_VIEW_EXPIRED_EVENT,
   MCP_APP_MESSAGE_EVENT,
   MCP_APP_CONTEXT_EVENT,
   type McpAppContextEventDetail,
+  type McpAppContextState,
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
 
@@ -511,6 +516,179 @@ describe("mcp-app-view localization", () => {
     expect(bridge.setHostContext).toHaveBeenLastCalledWith(
       expect.objectContaining({ "openai/modelContext": null }),
     );
+  });
+
+  it("clears successive app updates in the Apps page's embedded conversation", async () => {
+    const [
+      { createMountedPanes },
+      { installTranscriptDomMocks },
+      { installOutboxBrowserStorage },
+      { createStorageMock },
+    ] = await Promise.all([
+      import("../pages/chat/chat-pane-mounted.test-support.ts"),
+      import("../pages/chat/components/chat-transcript.test-support.ts"),
+      import("../pages/chat/outbox-browser.test-support.ts"),
+      import("../test-helpers/storage.ts"),
+      import("../pages/apps/apps-page.ts"),
+    ]);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    installOutboxBrowserStorage();
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    installTranscriptDomMocks();
+    vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(window);
+    const frameSource = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "src")!;
+    vi.spyOn(HTMLIFrameElement.prototype, "src", "set").mockImplementation(function (
+      this: HTMLIFrameElement,
+      value,
+    ) {
+      frameSource.set!.call(this, value);
+      queueMicrotask(() =>
+        window.dispatchEvent(
+          new MessageEvent("message", {
+            source: window,
+            data: { method: "ui/notifications/sandbox-proxy-ready" },
+          }),
+        ),
+      );
+    });
+    const sessionKey = "agent:main:apps-context";
+    const viewId = "apps-context-view";
+    const fixture = createMountedPanes([
+      {
+        key: sessionKey,
+        sessionId: "session-apps-context",
+        agentId: "main",
+        kind: "direct",
+        updatedAt: 1,
+      },
+    ]);
+    const { gateway } = fixture.context;
+    gateway.snapshot.sessionKey = sessionKey;
+    gateway.snapshot.hello!.features!.methods!.push("mcp.app.discover");
+    const client = gateway.snapshot.client!;
+    const originalRequest = client.request.bind(client);
+    const first: NonNullable<McpAppContextState> = {
+      updateId: "selection-one",
+      content: [
+        { type: "text", text: "selected hex bolt", _meta: { "openai/title": "Hex bolt" } },
+        { type: "image", data: "AA==", mimeType: "image/png" },
+      ],
+    };
+    const second: NonNullable<McpAppContextState> = {
+      updateId: "selection-two",
+      content: [
+        ...first.content!,
+        { type: "resource", resource: { uri: "parts://bolt", text: "Steel hex bolt" } },
+      ],
+    };
+    let modelContext: McpAppContextState = null;
+    const request = createGatewayRequestMock(async (method, params, options) => {
+      if (method === "agents.list") {
+        return {
+          defaultId: "main",
+          mainKey: "main",
+          agents: [{ id: "main", model: { primary: "openai/gpt-4.1" } }],
+        };
+      }
+      if (method === "models.list") {
+        return { models: [{ id: "gpt-4.1", name: "Test model", provider: "openai" }] };
+      }
+      if (method === "mcp.app.discover") {
+        return {
+          servers: [
+            {
+              serverName: "parts",
+              label: "Parts library",
+              entrypoints: [
+                {
+                  title: "Library",
+                  toolName: "library",
+                  resourceUri: "ui://parts/library",
+                  entrypoint: { type: "global" },
+                },
+              ],
+            },
+          ],
+        };
+      }
+      if (method === "mcp.app.launch") {
+        return { viewId };
+      }
+      if (method === "mcp.app.view") {
+        return {
+          sandboxUrl: "/mcp-app-sandbox?ticket=test",
+          sandboxPort: 8444,
+          html: "<!doctype html><button>Choose part</button>",
+          toolInput: {},
+          toolResult: { content: [] },
+          messageSupported: true,
+          updateModelContextSupported: true,
+        };
+      }
+      if (method === "mcp.app.updateModelContext") {
+        modelContext = modelContext ? second : first;
+        fixture.emitGatewayEvent("mcp.app.hostContextChanged", { viewId });
+        return { _meta: { "openai/modelContext": { updateId: modelContext.updateId } } };
+      }
+      if (method === "mcp.app.modelContext") {
+        return { state: modelContext };
+      }
+      return originalRequest(method, params, options);
+    });
+    const appClient = createTestGatewayClient(request);
+    client.request = appClient.request.bind(appClient);
+    const apps = document.createElement("openclaw-apps-page") as LitElement & { appSearch: string };
+    apps.appSearch = "?server=parts&tool=library";
+    const provider = createApplicationContextProvider(fixture.context);
+    const initialized = deferred();
+    provider.addEventListener(MCP_APP_CONTEXT_EVENT, () => initialized.resolve(), { once: true });
+    provider.append(apps);
+    document.body.append(provider);
+    try {
+      await apps.updateComplete;
+      await vi.dynamicImportSettled();
+      await apps.updateComplete;
+      expect(
+        apps.querySelector('[role="alert"]')?.textContent,
+        JSON.stringify(request.mock.calls.map(([method]) => method)),
+      ).toBeUndefined();
+      const pane = apps.querySelector("openclaw-chat-pane")!;
+      expect(pane).not.toBeNull();
+      await pane.updateComplete;
+      await vi.dynamicImportSettled();
+      await pane.updateComplete;
+      expect(pane.querySelector('[role="alert"]')?.textContent).toBeUndefined();
+      await initialized.promise;
+      const strip = pane.querySelector<LitElement>("openclaw-mcp-app-context-strip")!;
+      expect(pane.classList.contains("mcp-app-conversation")).toBe(true);
+      expect(strip).not.toBeNull();
+      const bridge = bridgeMocks.instances[0] as Awaited<ReturnType<typeof mountBridge>>["bridge"];
+      await bridge.updateModelContextHandler!({ content: first.content });
+      await strip.updateComplete;
+      expect(strip.querySelectorAll(".mcp-app-context__item")).toHaveLength(2);
+      await bridge.updateModelContextHandler!({ content: second.content });
+      await strip.updateComplete;
+      expect(strip.querySelectorAll(".mcp-app-context__item")).toHaveLength(3);
+      expect(
+        request.mock.calls.filter(([method]) => method === "mcp.app.updateModelContext"),
+      ).toHaveLength(2);
+      modelContext = null;
+      fixture.emitGatewayEvent("mcp.app.hostContextChanged", {
+        viewId,
+        modelContext: null,
+        updateId: second.updateId,
+      });
+      await strip.updateComplete;
+      expect(strip.textContent?.trim()).toBe("");
+      expect(bridge.setHostContext).toHaveBeenLastCalledWith(
+        expect.objectContaining({ "openai/modelContext": null }),
+      );
+    } finally {
+      provider.remove();
+      await vi.dynamicImportSettled();
+      vi.useRealTimers();
+    }
   });
 
   it("does not let App parameters replace the mounted session, agent, or view", async () => {
