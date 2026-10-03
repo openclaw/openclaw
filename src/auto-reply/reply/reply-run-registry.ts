@@ -34,6 +34,7 @@ export {
   markReplyOperationGlobalLaneWaitProgress,
   replyRunRegistry,
   resolveActiveReplyOperationForSessionId,
+  resolveInitiatingReplyOperationForSessionId,
   resolveActiveReplyRunSessionId,
   resolveActiveReplyRunThreadId,
   resolveReplyOperationsForSession,
