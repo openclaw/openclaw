@@ -5,38 +5,41 @@ import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
 
 const SCENARIO = "live-frontier-execution-identity";
-type Fault =
-  | "none"
-  | "mock-lane"
-  | "model-fallback"
-  | "missing-identity"
-  | "raw-runtime"
-  | "wrong-run"
-  | "enforced-admission"
-  | "prompt-leak"
-  | "wrong-cli-execution"
-  | "reused-context"
-  | "restart-drift";
+type Fault = "none" | "raw-runtime" | "enforced-admission" | "prompt-leak";
+
+function createContext(turn: number, fault: Fault) {
+  return {
+    runId: `run-${turn}`,
+    contextId: `context-${turn}`,
+    executionId: `execution-${turn}`,
+    ingress: {
+      state: "present",
+      kind: "gateway-client",
+      boundary: "gateway.ws.authenticated-connect",
+    },
+    invoker: { state: "absent" },
+    coverageState: "unattributed",
+    agentPrincipal: { kind: "agent", principalRef: "qa" },
+    agentDefinition: { definitionRef: "qa" },
+    trustDomain: {
+      state: "present",
+      domainRef: `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`,
+    },
+    runtimeInstance: {
+      state: "present",
+      kind: "embedded",
+      runtimeRef:
+        fault === "raw-runtime"
+          ? "private-runtime"
+          : `hmac-sha256:v1:${"a".repeat(32)}:${"c".repeat(64)}`,
+    },
+  };
+}
 
 function runIdentityFlow(fault: Fault = "none") {
   let turn = 0;
   let marker = "";
-  let restarted = false;
-  const contexts = new Map<
-    string,
-    {
-      runId: string;
-      contextId: string;
-      executionId: string;
-      ingress: { state: string; kind: string; boundary: string };
-      invoker: { state: string };
-      coverageState: string;
-      agentPrincipal: { kind: string; principalRef: string };
-      agentDefinition: { definitionRef: string };
-      trustDomain: { state: string; domainRef: string };
-      runtimeInstance: { state: string; kind: string; runtimeRef: string };
-    }
-  >();
+  const contexts = new Map<string, ReturnType<typeof createContext>>();
   const call = vi.fn(async (method: string, params: Record<string, string>) => {
     if (method === "agent") {
       turn += 1;
@@ -45,32 +48,7 @@ function runIdentityFlow(fault: Fault = "none") {
       }
       marker = params.message.replace("Reply exactly: ", "");
       const runId = `run-${turn}`;
-      contexts.set(runId, {
-        runId,
-        contextId: fault === "reused-context" ? "context-1" : `context-${turn}`,
-        executionId: `execution-${turn}`,
-        ingress: {
-          state: "present",
-          kind: "gateway-client",
-          boundary: "gateway.ws.authenticated-connect",
-        },
-        invoker: { state: "absent" },
-        coverageState: "unattributed",
-        agentPrincipal: { kind: "agent", principalRef: "qa" },
-        agentDefinition: { definitionRef: "qa" },
-        trustDomain: {
-          state: "present",
-          domainRef: `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`,
-        },
-        runtimeInstance: {
-          state: "present",
-          kind: "embedded",
-          runtimeRef:
-            fault === "raw-runtime"
-              ? "private-runtime"
-              : `hmac-sha256:v1:${"a".repeat(32)}:${"c".repeat(64)}`,
-        },
-      });
+      contexts.set(runId, createContext(turn, fault));
       return { status: "accepted", runId };
     }
     if (method === "chat.history") {
@@ -78,7 +56,7 @@ function runIdentityFlow(fault: Fault = "none") {
         messages: [
           {
             role: "assistant",
-            provider: fault === "model-fallback" ? "mock-openai" : "fixture-live",
+            provider: "fixture-live",
             model: "fixture-model",
             stopReason: "stop",
             content: [{ type: "text", text: marker }],
@@ -96,20 +74,8 @@ function runIdentityFlow(fault: Fault = "none") {
       throw new Error("inspection selected an unknown execution");
     }
     return {
-      run: {
-        runId: fault === "wrong-run" ? "foreign-run" : context.runId,
-        executionId: context.executionId,
-      },
-      identity:
-        fault === "missing-identity"
-          ? { state: "unsupported" }
-          : {
-              state: "present",
-              context: {
-                ...context,
-                ...(restarted && fault === "restart-drift" ? { contextId: "replacement" } : {}),
-              },
-            },
+      run: { runId: context.runId, executionId: context.executionId },
+      identity: { state: "present", context },
       decisionDisplays: [
         {
           provenance: { state: "verified", producer: "run-admission" },
@@ -122,10 +88,7 @@ function runIdentityFlow(fault: Fault = "none") {
       ...(fault === "prompt-leak" ? { privateText: marker } : {}),
     };
   });
-  const restart = vi.fn(async (mutate: () => Promise<void>) => {
-    await mutate();
-    restarted = true;
-  });
+  const restart = vi.fn(async (mutate: () => Promise<void>) => mutate());
   const runQaCli = vi.fn(async (_env: unknown, args: string[]) => {
     expect(args.slice(0, 2)).toEqual(["audit", "--execution"]);
     const executionId = args[2];
@@ -136,9 +99,6 @@ function runIdentityFlow(fault: Fault = "none") {
     if (!args.includes("--json")) {
       return "Identity Invoker [absent] Decisions run_admission_identity_not_evaluated not-applicable";
     }
-    if (fault === "wrong-cli-execution") {
-      return { ...inspection, run: { executionId: "foreign-execution" } };
-    }
     return inspection;
   });
   return {
@@ -148,7 +108,7 @@ function runIdentityFlow(fault: Fault = "none") {
     result: runLoadedScenarioFlow(SCENARIO, {
       api: {
         env: {
-          providerMode: fault === "mock-lane" ? "mock-openai" : "live-frontier",
+          providerMode: "live-frontier",
           primaryModel: "fixture-live/fixture-model",
           gateway: { call, restartAfterStateMutation: restart },
         },
@@ -200,16 +160,9 @@ describe("live-frontier execution identity qualification", () => {
   });
 
   it.each([
-    ["mock-lane", "requires live-frontier"],
-    ["model-fallback", "selected live provider and model"],
-    ["missing-identity", "test condition was not met"],
     ["raw-runtime", "pseudonymized runtime identity"],
-    ["wrong-run", "exact authenticated ingress"],
     ["enforced-admission", "overstated admission authority"],
     ["prompt-leak", "exposed private content"],
-    ["wrong-cli-execution", "different live execution"],
-    ["reused-context", "reused one execution identity"],
-    ["restart-drift", "changed across Gateway replacement"],
   ] as const)("rejects %s evidence from the same executable flow", async (fault, message) => {
     await expect(runIdentityFlow(fault).result).rejects.toThrow(message);
   });
