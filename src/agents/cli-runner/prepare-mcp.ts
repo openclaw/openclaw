@@ -65,12 +65,10 @@ export function resolveCliMcpToolOwnership(
     nodePlacement: boolean;
     rooted: boolean;
     skipPreparation: boolean;
-    sideQuestion: boolean;
   },
 ) {
   const hostOwnedTools =
     options.enabled &&
-    !options.nodePlacement &&
     resolveExecConfigState({
       cfg: run.config,
       sessionEntry: run.sessionEntry,
@@ -79,9 +77,6 @@ export function resolveCliMcpToolOwnership(
       sessionKey: run.sessionKey,
     }).host !== "node" &&
     !options.rooted &&
-    !options.skipPreparation &&
-    !options.sideQuestion &&
-    run.disableTools !== true &&
     run.cliToolAvailability === undefined &&
     options.backend.nativeToolMode === "selectable" &&
     options.backend.toolAvailabilityEnforcement === "execution-args" &&

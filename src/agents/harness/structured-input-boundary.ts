@@ -143,12 +143,7 @@ export function snapshotStructuredInput(
       if (item === undefined) {
         return undefined;
       }
-      Object.defineProperty(result, key, {
-        configurable: true,
-        enumerable: true,
-        value: item,
-        writable: true,
-      });
+      result[key] = item;
     }
     return result;
   };
@@ -236,21 +231,7 @@ export function readStructuredInputText(
 }
 
 export function hasUnsafeVisibleCharacters(value: string): boolean {
-  for (const character of value) {
-    const codePoint = character.codePointAt(0) ?? 0;
-    if (
-      codePoint <= 0x1f ||
-      (codePoint >= 0x7f && codePoint <= 0x9f) ||
-      (codePoint >= 0x200b && codePoint <= 0x200f) ||
-      (codePoint >= 0x2028 && codePoint <= 0x202e) ||
-      codePoint === 0x2060 ||
-      (codePoint >= 0x2066 && codePoint <= 0x2069) ||
-      codePoint === 0xfeff
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return /[\p{Cc}\u200b-\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff]/u.test(value);
 }
 
 export function boundStructuredInputText(value: string, maximum: number): string {
