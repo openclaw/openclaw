@@ -242,15 +242,19 @@ export async function createGatewaySession(
   if (params.initialEntry?.pluginOwnerId && !authorizedPluginCreation) {
     return invalidSessionRequest("trusted plugin session owner is not authorized");
   }
-  const existingHarnessEntry =
-    explicitTargetKey && isAgentHarnessSessionKey(explicitTargetKey)
-      ? resolveSessionEntryAccessTarget({ cfg: params.cfg, sessionKey: explicitTargetKey }).entry
-      : undefined;
+  // Capture the requested incarnation before worker discovery yields to authority preparation.
+  const initialTargetEntry = explicitTargetKey
+    ? resolveSessionEntryAccessTarget({
+        cfg: params.cfg,
+        sessionKey: explicitTargetKey,
+        agentId,
+      }).entry
+    : undefined;
   if (
     explicitTargetKey &&
     isAgentHarnessSessionKey(explicitTargetKey) &&
     !authorizedHarnessCreation &&
-    (!existingHarnessEntry || existingHarnessEntry.modelSelectionLocked === true)
+    (!initialTargetEntry || initialTargetEntry.modelSelectionLocked === true)
   ) {
     return invalidSessionRequest(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
   }
@@ -328,13 +332,6 @@ export async function createGatewaySession(
   if (explicitTargetKey && creationTarget.canonicalKey === canonicalParentSessionKey) {
     return invalidSessionRequest("sessions.create key must differ from parentSessionKey");
   }
-  const initialTargetEntry = explicitTargetKey
-    ? resolveSessionEntryAccessTarget({
-        cfg: params.cfg,
-        sessionKey: creationTarget.canonicalKey,
-        agentId: creationTarget.agentId,
-      }).entry
-    : undefined;
   if (explicitTargetKey && !params.initialEntry) {
     // A trusted initializer holds the lifecycle fence through afterCreate. Waiting
     // on that fence would deadlock callers that must reject its visible pending row.
