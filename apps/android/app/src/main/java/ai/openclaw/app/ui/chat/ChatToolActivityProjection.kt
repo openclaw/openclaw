@@ -2,6 +2,7 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatToolActivity
+import ai.openclaw.app.chat.unwrapToolCallForDisplay
 
 /** A presentation-only bridge: history remains the owner of output and reconnect recovery. */
 internal class LiveToolActivityBridge {
@@ -86,8 +87,9 @@ internal fun projectToolActivity(
     var index = group.toolKeys.indexOf(key)
     val tools = group.tools.toMutableList()
     val toolKeys = group.toolKeys.toMutableList()
+    val displayCall = unwrapToolCallForDisplay(call.name, call.args)
     if (index < 0) {
-      tools.add(hiddenOwner?.let { it.tools[it.toolKeys.indexOf(key)] } ?: ChatToolActivity(call.toolCallId, call.name, null, null, call.isError == true, call.args, call.activity, true))
+      tools.add(hiddenOwner?.let { it.tools[it.toolKeys.indexOf(key)] } ?: ChatToolActivity(call.toolCallId, displayCall.name, null, null, call.isError == true, displayCall.args, call.activity, true))
       toolKeys.add(key)
       index = tools.lastIndex
     }
@@ -95,7 +97,7 @@ internal fun projectToolActivity(
       val tool = tools[index]
       tools[index] =
         tool.copy(
-          arguments = tool.arguments ?: call.args,
+          arguments = tool.arguments ?: displayCall.args,
           isError = tool.isError || call.isError == true,
           activity =
             if (call.activity?.status in setOf("blocked", "failed", "skipped")) {
