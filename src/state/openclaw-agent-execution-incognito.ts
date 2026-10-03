@@ -503,32 +503,6 @@ export function createAgentDatabaseExecutionCapture<FileExecution, FileConstrain
   }
   return Object.assign(capture, {
     forkIncognitoSessionFromParent,
-    /** Inactive read capabilities retain the captured actor while their lazy adapter loads. */
-    createIncognitoSessionComputeReader(
-      params: Parameters<
-        typeof import("../config/sessions/session-incognito-compute-read.js").createIncognitoSessionComputeReader
-      >[0],
-    ) {
-      const { actor, authority: readAuthority, signal: readSignal } = params;
-      const target = structuredClone(params.target);
-      readSignal?.throwIfAborted();
-      return actor.sessions.withCompute(
-        readAuthority,
-        target,
-        async () => {
-          const { createIncognitoSessionComputeReader } =
-            await import("../config/sessions/session-incognito-compute-read.js");
-          readSignal?.throwIfAborted();
-          return createIncognitoSessionComputeReader({
-            actor,
-            authority: readAuthority,
-            target,
-            signal: readSignal,
-          });
-        },
-        readSignal,
-      );
-    },
     /** Inactive topology view; production discovery continues to use the native owner. */
     listIncognito(env: NodeJS.ProcessEnv = process.env) {
       const capturedEnv = { ...env, OPENCLAW_STATE_DIR: resolveStateDir(env) };

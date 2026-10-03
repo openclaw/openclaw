@@ -184,6 +184,28 @@ function paginateSessionMessages(
   });
 }
 
+/** Retain the actor across lazy adapter loading without expanding shared execution imports. */
+export function createIncognitoSessionComputeReader(
+  params: Parameters<
+    typeof import("../config/sessions/session-incognito-compute-read.js").createIncognitoSessionComputeReader
+  >[0],
+) {
+  const { actor, authority, signal } = params;
+  const target = structuredClone(params.target);
+  signal?.throwIfAborted();
+  return actor.sessions.withCompute(
+    authority,
+    target,
+    async () => {
+      const { createIncognitoSessionComputeReader: createReader } =
+        await import("../config/sessions/session-incognito-compute-read.js");
+      signal?.throwIfAborted();
+      return createReader({ actor, authority, target, signal });
+    },
+    signal,
+  );
+}
+
 /** Inactive composition: callers retain the actor and supply already-prepared display facts. */
 export function createIncognitoSessionHistoryReader(params: {
   actor: Pick<IncognitoAgentDatabaseExecution, "sessions" | "assertCurrent">;
