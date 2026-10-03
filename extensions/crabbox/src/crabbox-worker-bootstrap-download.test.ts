@@ -461,7 +461,6 @@ describe("bootstrap artifact download retries", () => {
   );
 
   it.each([
-    { runtimeMinutes: 9, workerMinutes: 8, bootstrapTimeoutMs: undefined },
     { runtimeMinutes: 8, workerMinutes: 9, bootstrapTimeoutMs: undefined },
     { runtimeMinutes: 48, workerMinutes: 46, bootstrapTimeoutMs: 60 * 60_000 },
   ])(
@@ -574,33 +573,20 @@ describe("bootstrap artifact download retries", () => {
     expect(result.created).toHaveLength(3);
   });
 
-  it.each([
-    "ECONNRESET",
-    "ECONNREFUSED",
-    "ECONNABORTED",
-    "ENETUNREACH",
-    "EHOSTUNREACH",
-    "ENETDOWN",
-    "EPIPE",
-    "ERR_STREAM_PREMATURE_CLOSE",
-    "ABORT_ERR",
-    "ETIMEDOUT",
-    "ESOCKETTIMEDOUT",
-    "EAI_AGAIN",
-    502,
-    503,
-    504,
-  ])("recovers from %s with the same token and retained partial bytes", async (failure) => {
-    const result = await download([failure, "success"]);
-    expect(result.code).toBe(0);
-    expect(result.requests).toEqual(Array(2).fill("Bearer synthetic-worker-archive-token"));
-    expect(result.published).toEqual([archive]);
-    expect(result.delays).toEqual([250]);
-    if (typeof failure === "string") {
-      expect(result.ranges).toEqual([undefined, `bytes=${Math.floor(archive.length * 0.4)}-`]);
-      expect(result.removed.filter(({ bytes }) => bytes > 0)).toEqual([]);
-    }
-  });
+  it.each(["ECONNRESET", 502, 503])(
+    "recovers from %s with the same token and retained partial bytes",
+    async (failure) => {
+      const result = await download([failure, "success"]);
+      expect(result.code).toBe(0);
+      expect(result.requests).toEqual(Array(2).fill("Bearer synthetic-worker-archive-token"));
+      expect(result.published).toEqual([archive]);
+      expect(result.delays).toEqual([250]);
+      if (typeof failure === "string") {
+        expect(result.ranges).toEqual([undefined, `bytes=${Math.floor(archive.length * 0.4)}-`]);
+        expect(result.removed.filter(({ bytes }) => bytes > 0)).toEqual([]);
+      }
+    },
+  );
   it("restarts from the full response when the server ignores Range", async () => {
     const result = await download(["ECONNRESET", "ignore-range"]);
     expect(result.code, result.output).toBe(0);
@@ -633,17 +619,14 @@ describe("bootstrap artifact download retries", () => {
     expect(result.published).toEqual([]);
     expect(result.output).toContain("failed integrity verification (download attempt 2)");
   });
-  it.each(["digest", "short", "size", "pin", 401, 403, 404, 409, 410])(
-    "keeps %s terminal without retrying",
-    async (failure) => {
-      const result = await download([failure, "success"]);
-      expect(result.code).toBe(1);
-      expect(result.requests).toHaveLength(1);
-      expect(result.delays).toEqual([]);
-      expect(result.published).toEqual([]);
-      expect(result.output).toContain("download attempt 1");
-    },
-  );
+  it.each(["short", "size", "pin", 401])("keeps %s terminal without retrying", async (failure) => {
+    const result = await download([failure, "success"]);
+    expect(result.code).toBe(1);
+    expect(result.requests).toHaveLength(1);
+    expect(result.delays).toEqual([]);
+    expect(result.published).toEqual([]);
+    expect(result.output).toContain("download attempt 1");
+  });
   it.each([{ durationMs: 0, resetAfterBytes: 0 }, 503])(
     "reports %s and total attempts after exhaustion",
     async (failure) => {

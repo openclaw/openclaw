@@ -2473,7 +2473,7 @@ export async function runLegacyStateMigrations(params: {
     };
   }
 
-  // Index preparation can expose installed plugin owners. Freeze their full live action
+  // Schema repair can expose installed plugin owners. Freeze their full live action
   // inventory before the writer, rather than receipting the earlier pending-only preview.
   const inventory = resolveLivePluginDoctorStateMigrationInventory({ config, env });
   const migrations = await runLegacyStateMigrationSteps(
@@ -2586,8 +2586,8 @@ async function executeLegacyStateMigrations(
   const pluginDoctorConfig = params.pluginDoctorConfig ?? params.cfg;
   const configIncludedPaths = params.configIncludedPaths ?? [];
   const configuredPluginIds = collectRelevantDoctorPluginIds(pluginDoctorConfig);
-  // Retain a pre-preparation snapshot for refusal closure. Successful root/schema/index
-  // preparation can expose installed owners, whose actions are frozen before later writers.
+  // Retain a pre-preparation snapshot for refusal closure. Root relocation or schema repair
+  // can expose installed owners, whose actions are frozen before later writers.
   let pluginStateMigrationInventory = resolveLivePluginDoctorStateMigrationInventory({
     config: pluginDoctorConfig,
     env,

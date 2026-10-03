@@ -179,22 +179,10 @@ async function resolveActionTarget(params: {
   return resolvedTarget;
 }
 
-async function resolveResolvedTargetOrThrow(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  input: string;
-  accountId?: string;
-  plugin?: ChannelPlugin;
-  preferredKind?: "group" | "user" | "channel";
-}): Promise<ResolvedMessagingTarget> {
-  const resolved = await resolveChannelTarget({
-    cfg: params.cfg,
-    channel: params.channel,
-    input: params.input,
-    accountId: params.accountId,
-    preferredKind: params.preferredKind,
-    plugin: params.plugin,
-  });
+async function resolveResolvedTargetOrThrow(
+  params: Parameters<typeof resolveChannelTarget>[0],
+): Promise<ResolvedMessagingTarget> {
+  const resolved = await resolveChannelTarget(params);
   if (!resolved.ok) {
     throw resolved.error;
   }

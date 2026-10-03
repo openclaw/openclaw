@@ -12,6 +12,7 @@ import {
   fetchClawHubJson,
   isClawHubTelemetryDisabled,
   isDefaultClawHubBaseUrl,
+  readClawHubNonEmptyStringFields,
   readClawHubStringArrayField,
   readClawHubStringField,
   readRequiredClawHubBooleanField as readRequiredBoolean,
@@ -203,14 +204,12 @@ function parseCatalogPackage(
   if (family !== "code-plugin" && family !== "bundle-plugin") {
     throw new Error(`Malformed ClawHub ${context}: unsupported package family ${family}.`);
   }
-  const stats = value.stats;
-  if (stats !== undefined && stats !== null && !isRecord(stats)) {
-    throw new Error(`Malformed ClawHub ${context}: expected stats to be an object.`);
-  }
-  const summary = readClawHubStringField(value, "summary", context);
-  const ownerHandle = readClawHubStringField(value, "ownerHandle", context);
-  const latestVersion = readClawHubStringField(value, "latestVersion", context);
-  const runtimeId = readClawHubStringField(value, "runtimeId", context);
+  const stats = readOptionalRecord(value, "stats", context);
+  const display = readClawHubNonEmptyStringFields(
+    value,
+    ["summary", "ownerHandle", "latestVersion", "runtimeId"],
+    context,
+  );
   const icon =
     readClawHubStringField(value, "icon", context) ??
     readClawHubStringField(value, "ownerImage", context);
@@ -233,10 +232,7 @@ function parseCatalogPackage(
     family,
     isOfficial: readRequiredBoolean(value, "isOfficial", context),
     categories: readClawHubStringArrayField(value, "categories", context) ?? [],
-    ...(summary ? { summary } : {}),
-    ...(ownerHandle ? { ownerHandle } : {}),
-    ...(latestVersion ? { latestVersion } : {}),
-    ...(runtimeId ? { runtimeId } : {}),
+    ...display,
     ...(iconUrl ? { iconUrl } : {}),
     ...(verificationTier ? { verificationTier } : {}),
     ...(featured !== undefined ? { featured } : {}),
@@ -409,18 +405,14 @@ function parseVerification(
   if (!value) {
     return undefined;
   }
-  const summary = readClawHubStringField(value, "summary", "plugin verification");
-  const sourceRepo = readClawHubStringField(value, "sourceRepo", "plugin verification");
-  const sourceCommit = readClawHubStringField(value, "sourceCommit", "plugin verification");
-  const sourcePath = readClawHubStringField(value, "sourcePath", "plugin verification");
-  const scanStatus = readClawHubStringField(value, "scanStatus", "plugin verification");
+  const display = readClawHubNonEmptyStringFields(
+    value,
+    ["summary", "sourceRepo", "sourceCommit", "sourcePath", "scanStatus"],
+    "plugin verification",
+  );
   return {
     tier: readRequiredClawHubStringField(value, "tier", "plugin verification"),
-    ...(summary ? { summary } : {}),
-    ...(sourceRepo ? { sourceRepo } : {}),
-    ...(sourceCommit ? { sourceCommit } : {}),
-    ...(sourcePath ? { sourcePath } : {}),
-    ...(scanStatus ? { scanStatus } : {}),
+    ...display,
   };
 }
 

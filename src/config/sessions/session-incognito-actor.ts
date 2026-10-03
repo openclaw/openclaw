@@ -172,6 +172,12 @@ export function createIncognitoSessionFacts(
           | undefined;
         let postimage: IncognitoSessionFacts[] | undefined;
         let commitGranted = false;
+        function unknownOutcome(message: string): never {
+          for (const key of targets) {
+            unavailable.add(key);
+          }
+          throw new SqliteWorkerError(message, "outcome-unknown");
+        }
         return run(
           authority,
           async (scope) => {
@@ -207,36 +213,18 @@ export function createIncognitoSessionFacts(
                 try {
                   if (receipt !== undefined) {
                     if (!postimage || !isDeepStrictEqual(receipt, postimage)) {
-                      for (const key of targets) {
-                        unavailable.add(key);
-                      }
-                      throw new SqliteWorkerError(
-                        "Incognito commit receipt differs from its grant",
-                        "outcome-unknown",
-                      );
+                      unknownOutcome("Incognito commit receipt differs from its grant");
                     }
                     // Revocation cannot undo COMMIT. Publish while FIFO custody is still held.
                     postimage.forEach(install);
                   } else if (changing && (commitGranted || outcome.ok)) {
-                    for (const key of targets) {
-                      unavailable.add(key);
-                    }
-                    throw new SqliteWorkerError(
-                      "Incognito mutation has no confirmed commit receipt",
-                      "outcome-unknown",
-                    );
+                    unknownOutcome("Incognito mutation has no confirmed commit receipt");
                   }
                   if (
                     settlement.kind !== "not-entered" &&
                     native.admission.settlement?.kind !== "completed"
                   ) {
-                    for (const key of targets) {
-                      unavailable.add(key);
-                    }
-                    throw new SqliteWorkerError(
-                      "Incognito session native settlement is unknown",
-                      "outcome-unknown",
-                    );
+                    unknownOutcome("Incognito session native settlement is unknown");
                   }
                 } finally {
                   companion?.settle(companionOutcome);

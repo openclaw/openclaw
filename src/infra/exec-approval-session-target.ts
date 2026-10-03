@@ -97,16 +97,7 @@ export function resolveApprovalRequestSessionConversation(params: {
   if (expectedChannel && normalizeMessageChannel(resolved.channel) !== expectedChannel) {
     return null;
   }
-  return {
-    channel: resolved.channel,
-    kind: resolved.kind,
-    id: resolved.id,
-    rawId: resolved.rawId,
-    threadId: resolved.threadId,
-    baseSessionKey: resolved.baseSessionKey,
-    baseConversationId: resolved.baseConversationId,
-    parentConversationCandidates: resolved.parentConversationCandidates,
-  };
+  return resolved;
 }
 
 /** Resolves the best known message target for an exec approval request. */

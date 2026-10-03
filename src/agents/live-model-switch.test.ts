@@ -1,5 +1,6 @@
 // Verifies live session model selection, switch queuing, and pending-flag cleanup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import * as mod from "./live-model-switch.js";
 
 const state = vi.hoisted(() => ({
@@ -535,6 +536,71 @@ describe("live model switch", () => {
     });
   });
 
+  describe.each(["already-applied", "accepted"] as const)(
+    "queued live-model clear after %s selection",
+    (mode) => {
+      it.each([
+        { field: "provider", newer: { providerOverride: "other-provider" } },
+        { field: "model", newer: { modelOverride: "gpt-5.5" } },
+        { field: "runtime", newer: { agentRuntimeOverride: "codex" } },
+        { field: "auth profile", newer: { authProfileOverride: "profile-b" } },
+        { field: "auth source", newer: { authProfileOverrideSource: "auto" } },
+      ])("preserves a newer $field request", async ({ newer }) => {
+        const sessionEntry = {
+          liveModelSwitchPending: true,
+          providerOverride: "openai",
+          modelOverride: "gpt-5.4",
+          agentRuntimeOverride: "openclaw",
+          authProfileOverride: "profile-a",
+          authProfileOverrideSource: "user",
+        };
+        state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+        const applyPatch = state.updateSessionStoreMock.getMockImplementation();
+        if (!applyPatch) {
+          throw new Error("Session patch fixture is unavailable");
+        }
+        const gate = createDeferredCore();
+        state.updateSessionStoreMock.mockImplementationOnce(async (...args: unknown[]) => {
+          // The real writer queue reads its row only after earlier writes settle.
+          await gate.promise;
+          return applyPatch(...args);
+        });
+        const params = makeShouldSwitchParams({
+          currentProvider: "openai",
+          currentModel: mode === "accepted" ? "gpt-5.5" : "gpt-5.4",
+          currentAgentRuntimeOverride: "openclaw",
+          currentAuthProfileId: "profile-a",
+          currentAuthProfileIdSource: "user",
+        });
+        let pendingClear: Promise<void> | undefined;
+        try {
+          const selection = mod.shouldSwitchToLiveModel(params);
+          if (mode === "accepted") {
+            if (!selection) {
+              throw new Error("Expected a pending live model selection");
+            }
+            pendingClear = mod.clearLiveModelSwitchPending({
+              cfg: params.cfg,
+              sessionKey: params.sessionKey,
+              agentId: params.agentId,
+              defaultProvider: params.defaultProvider,
+              defaultModel: params.defaultModel,
+              expectedSelection: selection,
+            });
+          } else {
+            expect(selection).toBeUndefined();
+          }
+          expect(state.updateSessionStoreMock).toHaveBeenCalledTimes(1);
+          Object.assign(sessionEntry, newer);
+        } finally {
+          gate.resolve();
+          await (pendingClear ?? state.updateSessionStoreMock.mock.results[0]?.value);
+        }
+        expect(sessionEntry).toMatchObject({ liveModelSwitchPending: true, ...newer });
+      });
+    },
+  );
+
   describe("clearLiveModelSwitchPending", () => {
     it("deletes liveModelSwitchPending from the session entry", async () => {
       const sessionEntry = { liveModelSwitchPending: true, sessionId: "s-1" };
@@ -546,6 +612,9 @@ describe("live model switch", () => {
         cfg: { session: { store: "/tmp/custom-store.json" } },
         sessionKey: "main",
         agentId: "reply",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        expectedSelection: { provider: "anthropic", model: "claude-opus-4-6" },
       });
 
       expect(sessionEntry).not.toHaveProperty("liveModelSwitchPending");
@@ -558,6 +627,9 @@ describe("live model switch", () => {
         cfg: { session: { store: "/tmp/custom-store.json" } },
         sessionKey: undefined,
         agentId: "reply",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        expectedSelection: { provider: "anthropic", model: "claude-opus-4-6" },
       });
 
       expect(state.updateSessionStoreMock).not.toHaveBeenCalled();

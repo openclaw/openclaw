@@ -2,11 +2,11 @@ import path from "node:path";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveInstallWorkTimeoutMs } from "../../infra/install-mode-options.js";
-import {
-  runGlobalPackageUpdateSteps,
-  type PackageUpdateTransaction,
-} from "../../infra/package-update-steps.js";
-import type { PackageActivationOptions } from "../../infra/package-update-swap-contract.js";
+import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
+import type {
+  PackageActivationOptions,
+  PackageUpdateTransaction,
+} from "../../infra/package-update-swap-contract.js";
 import { PackageUpdateActivationError } from "../../infra/package-update-swap-contract.js";
 import {
   failedPackageVerificationStep,

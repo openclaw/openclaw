@@ -1,3 +1,4 @@
+import "./attempt-spawn-workspace.session-mocks.test-support.js";
 import "./attempt-spawn-workspace.tools-mock.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -365,22 +366,6 @@ vi.mock("../../sessions/sdk.js", () => ({
     hoisted.createAgentSessionMock(options),
 }));
 
-vi.mock("../../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../config/sessions/session-entry-read-runtime.js")>();
-  const readSessionEntryInWorker: typeof actual.readSessionEntryInWorker = async (
-    _scope,
-    assertCurrent,
-  ) => {
-    // These attempt fixtures have no quota-recovery entry; retain the async admission boundary.
-    assertCurrent();
-    await Promise.resolve();
-    assertCurrent();
-    return undefined;
-  };
-  return { ...actual, readSessionEntryInWorker };
-});
-
 vi.mock("../../subagents/spawn/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
@@ -681,13 +666,6 @@ vi.mock("../../tool-fs-policy.js", () => ({
   resolveSessionPermissionExecMode: (policy: { mode: string }) =>
     ({ "read-only": "deny", guarded: "ask", workspace: "auto", full: "full" })[policy.mode],
   resolveEffectiveToolFsWorkspaceOnly: () => false,
-}));
-
-vi.mock("../../transcript-policy.js", () => ({
-  resolveTranscriptPolicy: () => ({
-    allowSyntheticToolResults: false,
-    repairToolUseResultPairing: true,
-  }),
 }));
 
 vi.mock("../cache-ttl.js", () => ({

@@ -9,16 +9,14 @@ import {
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import {
-  runGlobalPackageUpdateSteps,
-  type PackageUpdateTransaction,
-} from "./package-update-steps.js";
+import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import {
   createNpmUpdateOptions,
   packageUpdateStepResult,
   stagedNpmPrefix,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 async function expectPackageVersion(packageRoot: string, version: string) {

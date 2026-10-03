@@ -16,11 +16,9 @@ import {
 } from "./device-pairing-identity.js";
 import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
 import {
-  cloneDevicePairingTokens,
   loadDevicePairingStateForMutation,
   mergeDevicePairingRoles,
   mergeDevicePairingScopes,
-  normalizeDevicePairingId,
   normalizeDevicePairingRole,
   preserveDeviceRoleScopes,
   resolvePairingRequestExpiry,
@@ -147,7 +145,7 @@ export function requestDevicePairingInWorker(
   baseDir?: string,
 ): RequestDevicePairingResult {
   const state = loadDevicePairingStateForMutation(nowMs, baseDir);
-  const deviceId = normalizeDevicePairingId(req.deviceId);
+  const deviceId = req.deviceId.trim();
   if (!deviceId) {
     throw new Error("deviceId required");
   }
@@ -237,7 +235,7 @@ export function removePairedDeviceInWorker(
   baseDir?: string,
 ): { deviceId: string } | null {
   const state = loadDevicePairingStateForMutation(nowMs, baseDir);
-  const normalized = normalizeDevicePairingId(deviceId);
+  const normalized = deviceId.trim();
   if (!normalized || !state.pairedByDeviceId[normalized]) {
     return null;
   }
@@ -287,7 +285,7 @@ export function pruneSupersededSilentPairedDevicesInWorker(params: {
   nowMs: number;
 }): PrunedSupersededPairedDevice[] {
   const state = loadDevicePairingStateForMutation(params.nowMs, params.baseDir);
-  const anchor = state.pairedByDeviceId[normalizeDevicePairingId(params.deviceId)];
+  const anchor = state.pairedByDeviceId[params.deviceId.trim()];
   if (!anchor || anchor.approvedVia !== "silent") {
     return [];
   }
@@ -347,14 +345,14 @@ export function removePairedDeviceRoleInWorker(params: {
   baseDir?: string;
 }): { deviceId: string; role: string; removedDevice: boolean } | null {
   const state = loadDevicePairingStateForMutation(params.nowMs, params.baseDir);
-  const normalizedDeviceId = normalizeDevicePairingId(params.deviceId);
+  const normalizedDeviceId = params.deviceId.trim();
   const role = normalizeDevicePairingRole(params.role);
   const device = state.pairedByDeviceId[normalizedDeviceId];
   if (!device || !role || !listApprovedPairedDeviceRoles(device).includes(role)) {
     return null;
   }
 
-  const tokens = cloneDevicePairingTokens(device);
+  const tokens = { ...device.tokens };
   delete tokens[role];
   const remainingRoles = listApprovedPairedDeviceRoles(device).filter((entry) => entry !== role);
   if (remainingRoles.length === 0) {

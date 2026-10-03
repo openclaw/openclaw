@@ -2,6 +2,7 @@
 // Normalizes host/IP inputs and classifies local/private gateway requests.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
+import os from "node:os";
 import {
   isCanonicalDottedDecimalIPv4,
   isIpInCidr,
@@ -16,7 +17,6 @@ import type { GatewayBindMode } from "../config/types.gateway.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
 import {
   pickMatchingExternalInterfaceAddress,
-  readNetworkInterfaces,
   safeNetworkInterfaces,
   type NetworkInterfacesSnapshot,
 } from "../infra/network-interfaces.js";
@@ -26,7 +26,7 @@ import { normalizeWebSocketProtocol } from "./websocket-protocol.js";
 
 /** Pick the primary non-internal IPv4 address, preferring common LAN interface names. */
 export function pickPrimaryLanIPv4(): string | undefined {
-  return pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
+  return pickMatchingExternalInterfaceAddress(os.networkInterfaces(), {
     family: "IPv4",
     preferredNames: ["en0", "eth0"],
   });

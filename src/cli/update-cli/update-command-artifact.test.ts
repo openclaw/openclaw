@@ -5,11 +5,11 @@ import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as privateWorkspaceRemoval from "../../infra/fs-safe-remove.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import {
   createNpmTarget,
   writePackageRoot,
 } from "../../infra/package-update-steps.test-support.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";

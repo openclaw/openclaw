@@ -59,9 +59,81 @@ try {
       }),
     );
   } else {
-    const program = new Command().name("openclaw").exitOverride();
-    registerWorktreesCli(program);
-    await program.parseAsync(process.argv.slice(2), { from: "user" });
+    const [{ requireNodeSqlite }, { resolveGatewayLockPaths }] = await Promise.all([
+      import("../infra/node-sqlite.js"),
+      import("../infra/gateway-lock.js"),
+    ]);
+    const native = requireNodeSqlite();
+    const ownerPath = resolveGatewayLockPaths(process.env).ownerLockPath;
+    let worktreeSql = 0;
+    let missingCustody = 0;
+    const ownerPids = new Set<number>();
+    const observe = (sql: string) => {
+      if (!/\bworktrees?\b|\bworktree_/iu.test(sql)) {
+        return;
+      }
+      worktreeSql += 1;
+      try {
+        const owner: { pid: number } = JSON.parse(fs.readFileSync(ownerPath, "utf8"));
+        ownerPids.add(owner.pid);
+      } catch {
+        missingCustody += 1;
+      }
+    };
+    for (const method of ["prepare", "exec"] as const) {
+      Object.defineProperty(native.DatabaseSync.prototype, method, {
+        ...Object.getOwnPropertyDescriptor(native.DatabaseSync.prototype, method),
+        value: new Proxy(native.DatabaseSync.prototype[method], {
+          apply(target, receiver, args: [string]) {
+            observe(args[0]);
+            return Reflect.apply(target, receiver, args);
+          },
+        }),
+      });
+    }
+    for (const method of ["get", "all", "run", "iterate"] as const) {
+      Object.defineProperty(native.StatementSync.prototype, method, {
+        ...Object.getOwnPropertyDescriptor(native.StatementSync.prototype, method),
+        value: new Proxy(native.StatementSync.prototype[method], {
+          apply(target, receiver: import("node:sqlite").StatementSync, args) {
+            observe(receiver.sourceSQL);
+            return Reflect.apply(target, receiver, args);
+          },
+        }),
+      });
+    }
+    process.on("exit", () => {
+      fs.writeFileSync(
+        path.join(control, "sql-observation.json"),
+        JSON.stringify({
+          pid: process.pid,
+          worktreeSql,
+          missingCustody,
+          ownerPids: [...ownerPids],
+        }),
+      );
+    });
+    const [{ withConsoleLogsRoutedToStderrForJson }, { runCliWithExitFinalization }] =
+      await Promise.all([import("./json-output-mode.js"), import("./one-shot-exit.js")]);
+    await runCliWithExitFinalization({
+      run: () =>
+        withConsoleLogsRoutedToStderrForJson(
+          process.argv,
+          async () => {
+            const program = new Command().name("openclaw").exitOverride();
+            registerWorktreesCli(program);
+            if (process.argv[2] === "sandbox") {
+              const { registerSandboxCli } = await import("./sandbox-cli.js");
+              registerSandboxCli(program);
+            }
+            await program.parseAsync(process.argv.slice(2), { from: "user" });
+          },
+          { retainRoutingUntilProcessExit: true },
+        ),
+      onError: (error) => {
+        throw error;
+      },
+    });
   }
 } catch (error) {
   const [{ formatCliFailureLines, formatCliJsonFailure }, { isJsonOutputModeActive }] =

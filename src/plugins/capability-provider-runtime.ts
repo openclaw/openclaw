@@ -251,12 +251,8 @@ function collectRequestedSpeechProviderIds(
   options: { includeVoiceModel: boolean },
 ): Set<string> {
   const requested = new Set<string>();
-  const tts =
-    typeof cfg?.tts === "object" && cfg.tts !== null
-      ? (cfg.tts as Record<string, unknown>)
-      : undefined;
-  addStringValue(requested, tts?.provider);
-  addObjectKeys(requested, tts?.providers);
+  addStringValue(requested, cfg?.tts?.provider);
+  addObjectKeys(requested, cfg?.tts?.providers);
   addStringValue(requested, cfg && talk.resolveConfiguredTalkSpeechProviderId(cfg));
   if (options.includeVoiceModel) {
     addModelConfigProviderIds(requested, cfg?.agents?.defaults?.voiceModel);

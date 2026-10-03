@@ -94,11 +94,8 @@ function isLoopbackRelayHostname(hostname: string): boolean {
 }
 
 function parseRelayEnvironment(value: unknown): ApnsRelayEnvironment | undefined {
-  const normalized = typeof value === "string" ? normalizeLowercaseStringOrEmpty(value) : "";
-  if (normalized === "sandbox" || normalized === "production") {
-    return normalized;
-  }
-  return undefined;
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  return normalized === "sandbox" || normalized === "production" ? normalized : undefined;
 }
 
 function normalizeApnsRelayBaseUrlWithPolicy(

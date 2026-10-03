@@ -18,7 +18,8 @@ import {
   runPackageActivationRecovery,
 } from "./package-update-activation.js";
 import * as integrity from "./package-update-integrity.js";
-import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as capability from "./update-post-core-capability.js";
 

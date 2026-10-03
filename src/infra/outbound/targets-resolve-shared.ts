@@ -18,7 +18,7 @@ export type OutboundTargetResolution = { ok: true; to: string } | { ok: false; e
 /**
  * Inputs shared by direct and heartbeat outbound target resolution.
  */
-type ResolveOutboundTargetParams = {
+export type ResolveOutboundTargetParams = {
   channel: string;
   to?: string;
   allowFrom?: string[];

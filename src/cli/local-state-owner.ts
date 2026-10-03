@@ -38,6 +38,8 @@ export async function runWithLocalStateOwner<T>(params: {
   params: Record<string, unknown>;
   target: string;
   recoveryCommand?: string;
+  requiredCapabilities?: readonly string[];
+  onForeignOwner?: "refuse";
   assertTargetCurrent?: () => void;
   runLocal: (scope: LocalMutationScope) => Promise<T>;
 }): Promise<T> {
@@ -127,6 +129,9 @@ export async function runWithLocalStateOwner<T>(params: {
     return await params.runLocal({ env, config, signal: controller.signal, assertCurrent });
   };
   const route = async (owner: GatewayLockIdentity): Promise<T> => {
+    if (params.onForeignOwner === "refuse") {
+      return refuse(new Error("This operation requires exclusive offline state ownership"));
+    }
     if (!owner.ownerId) {
       return refuse(new Error("Gateway lacks the expected-owner contract; update the Gateway."));
     }
@@ -142,7 +147,10 @@ export async function runWithLocalStateOwner<T>(params: {
         localPortOverride: owner.port,
         ignoreEnvUrlOverride: true,
         requiredMethods: [params.method],
-        requiredCapabilities: [GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING],
+        requiredCapabilities: [
+          GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING,
+          ...(params.requiredCapabilities ?? []),
+        ],
         timeoutMs: 600_000,
         signal: controller.signal,
         scopes: ["operator.admin"],

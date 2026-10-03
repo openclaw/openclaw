@@ -45,7 +45,6 @@ import {
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
-  type CrossContextDecoration,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
 import { executePollAction } from "./outbound-send-service.js";
@@ -220,35 +219,6 @@ async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Prom
   return randomIdempotencyKey();
 }
 
-function applyCrossContextMessageDecoration({
-  params,
-  message,
-  decoration,
-  preferPresentation,
-}: {
-  params: Record<string, unknown>;
-  message: string;
-  decoration: CrossContextDecoration;
-  preferPresentation: boolean;
-}): string {
-  const applied = applyCrossContextDecoration({
-    message,
-    decoration,
-    preferPresentation,
-  });
-  params.message = applied.message;
-  if (applied.presentation) {
-    const existing = normalizeMessagePresentation(params.presentation);
-    params.presentation = existing
-      ? {
-          ...existing,
-          blocks: [...applied.presentation.blocks, ...existing.blocks],
-        }
-      : applied.presentation;
-  }
-  return applied.message;
-}
-
 export async function applyMessageCrossContextMarker(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -275,12 +245,22 @@ export async function applyMessageCrossContextMarker(params: {
   if (!decoration) {
     return params.message;
   }
-  return applyCrossContextMessageDecoration({
-    params: params.args,
+  const applied = applyCrossContextDecoration({
     message: params.message,
     decoration,
     preferPresentation: params.preferPresentation,
   });
+  params.args.message = applied.message;
+  if (applied.presentation) {
+    const existing = normalizeMessagePresentation(params.args.presentation);
+    params.args.presentation = existing
+      ? {
+          ...existing,
+          blocks: [...applied.presentation.blocks, ...existing.blocks],
+        }
+      : applied.presentation;
+  }
+  return applied.message;
 }
 
 export async function executeGatewayAction(

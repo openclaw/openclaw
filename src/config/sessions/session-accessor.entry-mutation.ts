@@ -14,8 +14,6 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { loadSessionEntry, patchSessionEntryCore } from "./session-accessor.entry.js";
 import { createSessionEntryWithTranscriptInScope } from "./session-accessor.sqlite-creation.js";
 import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
-import "./session-accessor.sqlite-entry.js";
-import "./session-accessor.sqlite-parent-session.js";
 import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   captureLifecycleDatabaseScope,
