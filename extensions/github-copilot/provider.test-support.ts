@@ -63,3 +63,26 @@ export function interactiveContext(agentDir: string) {
     oauth: { createVpsAwareHandlers: vi.fn() },
   };
 }
+
+export async function runDeviceAuthWithFakeTimers<T>(
+  run: (openUrl: (url: string) => Promise<void>) => T | Promise<T>,
+): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    let notifyDeviceCodeShown!: () => void;
+    const deviceCodeShown = new Promise<void>((resolve) => {
+      notifyDeviceCodeShown = resolve;
+    });
+    const pending = Promise.resolve(run(async () => notifyDeviceCodeShown()));
+    const openedBeforeCompletion = await Promise.race([
+      deviceCodeShown.then(() => true),
+      pending.then(() => false),
+    ]);
+    expect(openedBeforeCompletion).toBe(true);
+    // Browser handoff follows the profile, device-code, and prompt work.
+    await vi.advanceTimersByTimeAsync(1_000);
+    return await pending;
+  } finally {
+    vi.useRealTimers();
+  }
+}

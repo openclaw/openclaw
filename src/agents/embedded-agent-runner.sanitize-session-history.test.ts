@@ -33,14 +33,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
     prepareProviderExtraParams: vi.fn(() => undefined),
     resolveProviderHookPlugin: vi.fn(() => undefined),
     resolveProviderPluginsForHooks: vi.fn(() => []),
-    resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
-      provider === "github-copilot"
-        ? {
-            buildReplayPolicy: ({ modelId }: { modelId?: string | null }) =>
-              modelId?.includes("claude") ? { dropThinkingBlocks: true } : undefined,
-          }
-        : undefined,
-    ),
+    resolveProviderRuntimePlugin: vi.fn(() => undefined),
     wrapProviderStreamFn: vi.fn(() => undefined),
   };
 });
@@ -686,7 +679,20 @@ describe("sanitizeSessionHistory", () => {
     expect(assistantContent(out, 3)).toEqual(current);
   });
 
-  it("preserves latest Copilot thinking and tool continuation while stripping older reasoning", async () => {
+  it("preserves latest thinking and tool continuation under an explicit stripping policy", async () => {
+    const policy: TranscriptPolicy = {
+      sanitizeMode: "images-only",
+      sanitizeToolCallIds: false,
+      preserveNativeAnthropicToolUseIds: false,
+      repairToolUseResultPairing: true,
+      preserveSignatures: false,
+      dropThinkingBlocks: true,
+      dropReasoningFromHistory: false,
+      applyGoogleTurnOrdering: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
+      allowSyntheticToolResults: false,
+    };
     const current = [
       thinking("read the file", "reasoning_text"),
       toolCall("tool_123"),
@@ -702,8 +708,9 @@ describe("sanitizeSessionHistory", () => {
       ],
       {
         modelApi: "openai-completions",
-        provider: "github-copilot",
-        modelId: "claude-opus-4.6",
+        provider: "policy-fixture",
+        modelId: "reasoning-fixture",
+        policy,
       },
     );
     expect(roles(out)).toEqual(["user", "assistant", "user", "assistant", "toolResult"]);

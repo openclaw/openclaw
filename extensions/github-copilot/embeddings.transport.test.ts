@@ -192,29 +192,6 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
     20_000,
   );
 
-  it("redacts credential-shaped text in model discovery errors over real transport", async () => {
-    const server = await startCopilotServer({
-      models: {
-        status: 401,
-        body: '{"error":{"message":"authentication failed"},"access_token":"ghu_AAAAUNIQUESECRETXXXX111122223333"}',
-      },
-    });
-    pointTokenAt(server.baseUrl);
-
-    let caught: Error | undefined;
-    try {
-      await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
-    } catch (error) {
-      caught = error as Error;
-    }
-
-    expect(server.requests).toEqual([{ method: "GET", url: "/models" }]);
-    expect(caught?.message).toContain("GitHub Copilot model discovery HTTP 401");
-    expect(caught?.message).toContain("authentication failed");
-    expect(caught?.message).not.toContain("ghu_AAAAUNIQUESECRETXXXX111122223333");
-    expect(caught?.message).not.toContain("UNIQUESECRET");
-  });
-
   it("redacts credential-shaped text in embeddings errors over real transport", async () => {
     const server = await startCopilotServer({
       models: { status: 200, body: DISCOVERY_MODELS_BODY },
@@ -262,6 +239,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
         caught = error as Error;
       }
 
+      expect(server.requests).toEqual([{ method: "GET", url: "/models" }]);
       expect(caught?.message).toContain("GitHub Copilot model discovery HTTP 403");
       expect(caught?.message).toContain("forbidden");
       // Forced `tools` mode must mask the token even though on-disk config

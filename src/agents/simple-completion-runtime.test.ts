@@ -428,7 +428,7 @@ describe("prepareSimpleCompletionModel", () => {
     expect(hoisted.setRuntimeApiKeyMock).not.toHaveBeenCalled();
   });
 
-  it("exchanges github token when provider is github-copilot", async () => {
+  it("stores protected provider-prepared auth for simple completion", async () => {
     hoisted.resolveModelMock.mockReturnValueOnce({
       model: {
         provider: "github-copilot",
@@ -471,7 +471,7 @@ describe("prepareSimpleCompletionModel", () => {
     expect(resolveSecretSentinel(storedKey)).toBe("copilot-runtime-token");
   });
 
-  it("returns exchanged copilot token in auth.apiKey for github-copilot provider", async () => {
+  it("returns protected provider-prepared auth to simple-completion callers", async () => {
     hoisted.resolveModelMock.mockReturnValueOnce({
       model: {
         provider: "github-copilot",
@@ -501,14 +501,13 @@ describe("prepareSimpleCompletionModel", () => {
       return;
     }
 
-    // Callers must only receive the short-lived Copilot runtime token. The
-    // original GitHub token is broader auth material and must not leave prep.
+    // Return the protected provider-prepared value, not the source credential.
     expect(looksLikeSecretSentinel(result.auth.apiKey ?? "")).toBe(true);
     expect(resolveSecretSentinel(result.auth.apiKey ?? "")).toBe("copilot-runtime-token");
     expect(result.auth.apiKey).not.toBe("ghu_original_github_token");
   });
 
-  it("keeps an exchanged Copilot token opaque when its source is a sentinel", async () => {
+  it("keeps provider-prepared auth opaque when its source is a sentinel", async () => {
     const sourceSecret = "github-source-secret";
     const sourceSentinel = mintSecretSentinel(sourceSecret, {
       label: "model-auth:github-copilot",
@@ -540,7 +539,7 @@ describe("prepareSimpleCompletionModel", () => {
     expect(resolveSecretSentinel(result.auth.apiKey ?? "")).toBe("copilot-runtime-token");
   });
 
-  it("applies exchanged copilot baseUrl to returned model", async () => {
+  it("applies the provider-prepared endpoint to the returned model", async () => {
     hoisted.resolveModelMock.mockReturnValueOnce({
       model: {
         provider: "github-copilot",

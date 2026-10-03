@@ -523,19 +523,6 @@ export function describeGithubCopilotProviderAuthContract(
         ],
         defaultModel,
       });
-      // Credential is sourced from the device flow response, not from the existing
-      // on-disk auth store. ensureAuthProfileStore is still called by the
-      // resolveExistingCopilotAuthResult existence check, which legitimately probes
-      // the store before launching the device flow when no profile exists yet.
-    });
-
-    it("uses the wizard prompter and openUrl hooks for the device code (no stdin/stdout)", async () => {
-      const provider = await getProvider();
-      stubGitHubDeviceFlowFetch({ accessToken: "github-device-token" });
-      const ctx = buildSpyAuthContext();
-
-      await runDeviceAuthWithFakeTimers(() => provider.auth[0]?.run(ctx as never), ctx.openUrl);
-
       expect(ctx.openUrl).toHaveBeenCalledWith("https://github.com/login/device");
       const noteCalls = (ctx.prompter.note as ReturnType<typeof vi.fn>).mock.calls;
       const codeNote = noteCalls.find(

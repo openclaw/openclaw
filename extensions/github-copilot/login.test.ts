@@ -411,7 +411,7 @@ describe("runGitHubCopilotDeviceFlow — polling intervals", () => {
     const startedAt = Date.now();
     const pollTimes: number[] = [];
     const pollResponses = [
-      { error: "slow_down", interval: 7 },
+      { error: "slow_down", interval: 12 },
       { access_token: "test-access-token", token_type: "bearer" },
     ];
     mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
@@ -426,7 +426,7 @@ describe("runGitHubCopilotDeviceFlow — polling intervals", () => {
 
     await vi.advanceTimersByTimeAsync(2_000);
     expect(pollTimes).toEqual([startedAt + 2_000]);
-    await vi.advanceTimersByTimeAsync(6_999);
+    await vi.advanceTimersByTimeAsync(11_999);
     expect(pollTimes).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);
 
@@ -434,6 +434,6 @@ describe("runGitHubCopilotDeviceFlow — polling intervals", () => {
       status: "authorized",
       accessToken: "test-access-token",
     });
-    expect(pollTimes).toEqual([startedAt + 2_000, startedAt + 9_000]);
+    expect(pollTimes).toEqual([startedAt + 2_000, startedAt + 14_000]);
   });
 });

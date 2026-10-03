@@ -17,6 +17,10 @@ import {
   createAuthProfileStoreFixture,
 } from "./auth-profiles/credential-fixtures.test-support.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import {
+  copilotModelId,
+  makeCopilotConfig,
+} from "./embedded-agent-runner.auth-profile-rotation.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import type { AgentHarness } from "./harness/types.js";
 import {
@@ -225,34 +229,6 @@ const makeAgentOverrideOnlyFallbackConfig = (agentId: string): OpenClawConfig =>
             {
               id: "mock-1",
               name: "Mock 1",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 16_000,
-              maxTokens: 2048,
-            },
-          ],
-        },
-      },
-    },
-  }) satisfies OpenClawConfig;
-
-const copilotModelId = "gpt-4o";
-
-const makeCopilotConfig = (): OpenClawConfig =>
-  ({
-    agents: {
-      list: [{ id: "test" }],
-    },
-    models: {
-      providers: {
-        "github-copilot": {
-          api: "openai-responses",
-          baseUrl: "https://api.copilot.example",
-          models: [
-            {
-              id: copilotModelId,
-              name: "Copilot GPT-4o",
               reasoning: false,
               input: ["text"],
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -713,7 +689,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     });
   });
 
-  it("refreshes copilot token after auth error and retries once", async () => {
+  it("refreshes provider-prepared auth after an auth error and retries the run", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
     try {
@@ -778,7 +754,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     }
   });
 
-  it("allows another auth refresh after a successful retry", async () => {
+  it("allows another provider-auth refresh after intervening reasoning recovery", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
     try {
@@ -865,7 +841,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     }
   });
 
-  it("does not reschedule copilot refresh after shutdown", async () => {
+  it("stops scheduled provider-auth refresh after run completion", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
     vi.useFakeTimers();
@@ -907,11 +883,10 @@ describe("runEmbeddedAgent auth profile rotation", () => {
 
       await vi.advanceTimersByTimeAsync(1);
       await runPromise;
-      const refreshCalls = resolveCopilotApiTokenMock.mock.calls.length;
-
-      await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
-
-      expect(resolveCopilotApiTokenMock.mock.calls.length).toBe(refreshCalls);
+      expect(resolveCopilotApiTokenMock).toHaveBeenCalledTimes(1);
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000 + 1);
+      expect(resolveCopilotApiTokenMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
       await fs.rm(agentDir, { recursive: true, force: true });

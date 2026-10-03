@@ -54,6 +54,7 @@ import {
   interactiveContext,
   registerProviderWithPluginConfig,
   requireAuthMethod,
+  runDeviceAuthWithFakeTimers,
 } from "./provider.test-support.js";
 
 const tempDirs: string[] = [];
@@ -74,29 +75,6 @@ afterAll(() => {
   vi.doUnmock("./register.runtime.js");
   vi.resetModules();
 });
-
-async function runDeviceAuthWithFakeTimers<T>(
-  run: (openUrl: (url: string) => Promise<void>) => T | Promise<T>,
-): Promise<T> {
-  vi.useFakeTimers();
-  try {
-    let notifyDeviceCodeShown!: () => void;
-    const deviceCodeShown = new Promise<void>((resolve) => {
-      notifyDeviceCodeShown = resolve;
-    });
-    const pending = Promise.resolve(run(async () => notifyDeviceCodeShown()));
-    const openedBeforeCompletion = await Promise.race([
-      deviceCodeShown.then(() => true),
-      pending.then(() => false),
-    ]);
-    expect(openedBeforeCompletion).toBe(true);
-    // Browser handoff follows the profile, device-code, and prompt work.
-    await vi.advanceTimersByTimeAsync(1_000);
-    return await pending;
-  } finally {
-    vi.useRealTimers();
-  }
-}
 
 async function createAgentDir() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-github-copilot-test-"));
@@ -465,7 +443,11 @@ describe("github-copilot plugin", () => {
       registerEmbeddingProviderMock.mock.calls[0]?.[0],
       "embedding provider registration",
     );
-    expect(adapter.id).toBe("github-copilot");
+    expect(adapter).toMatchObject({
+      id: "github-copilot",
+      transport: "remote",
+      autoSelectPriority: 15,
+    });
   });
 
   it.each([

@@ -54,6 +54,7 @@ describe("buildGithubCopilotReplayPolicy", () => {
   it("claims no policy for OpenAI-compatible transports", () => {
     expect(buildPolicy("openai-responses", "gpt-5.4")).toBeUndefined();
     expect(buildPolicy("openai-completions", "gemini-3.1-pro-preview")).toBeUndefined();
+    expect(buildPolicy("openai-completions", "claude-opus-4.6")).toBeUndefined();
   });
 });
 

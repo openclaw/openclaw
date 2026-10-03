@@ -19,7 +19,6 @@ import {
 import { resolveFirstGithubToken } from "./auth.js";
 import { resolveGithubCopilotDomain } from "./domain.js";
 import { COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS } from "./models.js";
-import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
 import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotRuntimeAuth } from "./runtime-auth.js";
 import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
@@ -45,28 +44,6 @@ type GitHubCopilotEmbeddingClient = {
   headers: Record<string, string>;
   fetchImpl: typeof fetch;
 };
-
-function isCopilotSetupError(err: unknown): boolean {
-  if (err instanceof CopilotRuntimeAuthError) {
-    return true;
-  }
-  if (!(err instanceof Error)) {
-    return false;
-  }
-  // All Copilot-specific setup failures should allow auto-selection to
-  // fall through to the next provider (e.g. OpenAI). This covers: missing
-  // GitHub token, authentication failures, no embedding models on the plan,
-  // model discovery errors, and user-pinned model not available on Copilot.
-  return (
-    err.message.includes("No GitHub token available") ||
-    err.message.includes("Copilot user response") ||
-    err.message.includes("No embedding models available") ||
-    err.message.includes("GitHub Copilot model discovery") ||
-    err.message.includes("github-copilot.model-discovery") ||
-    err.message.includes("GitHub Copilot embedding model") ||
-    err.message.includes("Unexpected response from GitHub Copilot user endpoint")
-  );
-}
 
 async function discoverEmbeddingModels(params: {
   baseUrl: string;
@@ -255,8 +232,6 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
   authProviderId: COPILOT_EMBEDDING_PROVIDER_ID,
   normalizeModel: ({ model }) => normalizeCopilotEmbeddingModel(model),
   autoSelectPriority: 15,
-  allowExplicitWhenConfiguredAuto: true,
-  shouldContinueAutoSelection: isCopilotSetupError,
   create: async (options) => {
     const explicitValue = normalizeResolvedSecretInputString({
       value: options.remote?.apiKey,

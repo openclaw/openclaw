@@ -286,32 +286,46 @@ describe("openai transport stream", () => {
     expect(functionCall?.id).toBeUndefined();
   });
 
-  it("drops oversized GitHub Copilot Responses reasoning replay ids before send", () => {
-    const model = makeResponsesModel({
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-      provider: "github-copilot",
-      baseUrl: "https://api.githubcopilot.com",
-      contextWindow: 400000,
-    });
-    const longReasoningId = `rs_${"x".repeat(380)}`;
+  it.each([
+    { label: "bounded", id: `rs_${"x".repeat(61)}`, retained: true },
+    { label: "oversized", id: `rs_${"x".repeat(380)}`, retained: false },
+  ])(
+    "handles $label GitHub Copilot Responses reasoning replay ids before send",
+    ({ id, retained }) => {
+      const model = makeResponsesModel({
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        provider: "github-copilot",
+        baseUrl: "https://api.githubcopilot.com",
+        contextWindow: 400000,
+      });
+      const params = buildOpenAIResponsesParams(
+        model,
+        replayContext({
+          source: model,
+          thinking: { signature: { type: "reasoning", id, summary: [] } },
+          text: true,
+        }),
+        { replayResponsesItemIds: true, sessionId: "session-123" },
+      ) as {
+        input?: Array<{
+          type?: string;
+          id?: string;
+        }>;
+      };
 
-    const params = buildOpenAIResponsesParams(
-      model,
-      replayContext({
-        source: model,
-        thinking: { signature: { type: "reasoning", id: longReasoningId, summary: [] } },
-      }),
-      { replayResponsesItemIds: true, sessionId: "session-123" },
-    ) as {
-      input?: Array<{
-        type?: string;
-        id?: string;
-      }>;
-    };
-
-    expect(params.input?.some((item) => item.type === "reasoning")).toBe(false);
-  });
+      expect(params.input?.filter((item) => item.type === "reasoning")).toEqual(
+        retained ? [{ type: "reasoning", id, summary: [] }] : [],
+      );
+      expect(params.input).toContainEqual(
+        expect.objectContaining({
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Checking the price.", annotations: [] }],
+        }),
+      );
+    },
+  );
 
   it("keeps embedded replay provenance as a compatibility fallback", () => {
     const model = makeResponsesModel({
@@ -531,7 +545,8 @@ describe("openai transport stream", () => {
 
   it("normalizes overlong Copilot Responses replay tool ids before dispatch", () => {
     const longToolItemId = "iVec" + "A".repeat(360);
-    const longToolCallId = `call_ug6lFGKwZDjHfzW8H0PDQRwN|${longToolItemId}`;
+    const longToolCallId = `call_${"x".repeat(100)}|${longToolItemId}`;
+    const expectedCallId = `call_${"x".repeat(59)}`;
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({
         id: "gpt-5.5",
@@ -554,7 +569,7 @@ describe("openai transport stream", () => {
       }),
       { sessionId: "session-123" },
     ) as {
-      input?: Array<{ type?: string; id?: string; call_id?: string }>;
+      input?: Array<{ type?: string; id?: string; call_id?: string; output?: unknown }>;
     };
 
     const functionCall = params.input?.find((item) => item.type === "function_call");
@@ -562,8 +577,8 @@ describe("openai transport stream", () => {
     expect(functionCall).toBeDefined();
     expect(functionOutput).toBeDefined();
     expect(functionCall?.id).toBeUndefined();
-    expect(functionCall?.call_id).toBe("call_ug6lFGKwZDjHfzW8H0PDQRwN");
-    expect(functionOutput?.call_id).toBe(functionCall?.call_id);
+    expect(functionCall?.call_id).toBe(expectedCallId);
+    expect(functionOutput).toMatchObject({ call_id: expectedCallId, output: "[]" });
     for (const item of params.input ?? []) {
       if (item.id !== undefined) {
         expect(item.id.length).toBeLessThanOrEqual(64);

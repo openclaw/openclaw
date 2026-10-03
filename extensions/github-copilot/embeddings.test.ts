@@ -1,6 +1,5 @@
 // Github Copilot tests cover embeddings plugin behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
 
 const resolveFirstGithubTokenMock = vi.hoisted(() => vi.fn());
 const resolveCopilotRuntimeAuthMock = vi.hoisted(() => vi.fn());
@@ -36,14 +35,6 @@ afterAll(() => {
 });
 
 const TEST_BASE_URL = "https://example.test";
-
-function shouldContinueAutoSelection(error: Error): boolean {
-  const shouldContinue = githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection;
-  if (!shouldContinue) {
-    throw new Error("GitHub Copilot embedding adapter did not expose auto-selection fallback");
-  }
-  return shouldContinue(error);
-}
 
 function buildModelsResponse(models: Array<{ id: string; supported_endpoints?: unknown }>) {
   return { data: models };
@@ -127,13 +118,6 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     fetchWithSsrFGuardMock.mockReset();
   });
 
-  it("registers the expected adapter metadata", () => {
-    expect(githubCopilotMemoryEmbeddingProviderAdapter.id).toBe("github-copilot");
-    expect(githubCopilotMemoryEmbeddingProviderAdapter.transport).toBe("remote");
-    expect(githubCopilotMemoryEmbeddingProviderAdapter.autoSelectPriority).toBe(15);
-    expect(githubCopilotMemoryEmbeddingProviderAdapter.allowExplicitWhenConfiguredAuto).toBe(true);
-  });
-
   it("picks text-embedding-3-small when available", async () => {
     mockDiscoveryResponse({
       ok: true,
@@ -190,20 +174,27 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     },
   );
 
-  it("matches embedding-capable models when supported_endpoints is missing or malformed", async () => {
-    mockDiscoveryResponse({
-      ok: true,
-      json: buildModelsResponse([
-        { id: "gpt-4o", supported_endpoints: { broken: true } },
-        { id: "text-embedding-3-small", supported_endpoints: [] },
-        { id: "text-embedding-ada-002" },
-      ]),
-    });
+  it.each([
+    { label: "missing", metadata: {} },
+    { label: "empty", metadata: { supported_endpoints: [] } },
+    { label: "malformed", metadata: { supported_endpoints: { broken: true } } },
+  ])(
+    "matches embedding-capable models when supported_endpoints is $label",
+    async ({ metadata }) => {
+      mockDiscoveryResponse({
+        ok: true,
+        json: buildModelsResponse([
+          { id: "chat-fixture", ...metadata },
+          { id: "embedding-fixture", ...metadata },
+        ]),
+      });
 
-    const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+      const result =
+        await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
 
-    expect(result.provider?.model).toBe("text-embedding-3-small");
-  });
+      expect(result.provider?.model).toBe("embedding-fixture");
+    },
+  );
 
   it("strips the provider prefix from a user-selected model", async () => {
     const options = {
@@ -512,27 +503,5 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
         model: "text-embedding-3-small",
       },
     });
-  });
-
-  it("treats authentication and discovery failures as auto-fallback errors", () => {
-    expect(
-      shouldContinueAutoSelection(new Error("Copilot user response missing endpoints.api")),
-    ).toBe(true);
-    expect(
-      shouldContinueAutoSelection(
-        new Error("Unexpected response from GitHub Copilot user endpoint"),
-      ),
-    ).toBe(true);
-    expect(
-      shouldContinueAutoSelection(
-        new Error("github-copilot.model-discovery: malformed JSON response"),
-      ),
-    ).toBe(true);
-    expect(
-      shouldContinueAutoSelection(
-        new CopilotRuntimeAuthError({ reason: "timeout", timeoutMs: 30_000 }),
-      ),
-    ).toBe(true);
-    expect(shouldContinueAutoSelection(new Error("Network timeout"))).toBe(false);
   });
 });

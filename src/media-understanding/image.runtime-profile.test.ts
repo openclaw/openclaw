@@ -242,7 +242,7 @@ describe("describeImageWithModelCore", () => {
       ...imageRequestDefaults(),
       provider: "github-copilot",
       model: "gemini-3.1-pro-preview",
-      prompt: "Describe the image.",
+      prompt: "Read the blue label.",
     });
 
     expect(completeMock).not.toHaveBeenCalled();
@@ -280,10 +280,10 @@ describe("describeImageWithModelCore", () => {
     });
     expect(context.systemPrompt).toBeUndefined();
     const userMessage = context.messages?.find((m) => m.role === "user");
-    expect(userMessage).toBeDefined();
-    const contentTypes = userMessage!.content.map((block) => (block as { type: string }).type);
-    expect(contentTypes).toContain("text");
-    expect(contentTypes).toContain("image");
+    expect(userMessage?.content).toEqual([
+      { type: "text", text: "Read the blue label." },
+      { type: "image", data: "cG5nLWJ5dGVz", mimeType: "image/png" },
+    ]);
   });
 
   it("keeps an exchanged Copilot image token opaque for sentinel-backed auth", async () => {
@@ -328,7 +328,9 @@ describe("describeImageWithModelCore", () => {
     expect(streamOptions.apiKey).toBe(storedValue);
   });
 
-  it("fails github-copilot image runtime setup when token exchange fails", async () => {
+  it("leaves image runtime unused when github-copilot auth preparation fails", async () => {
+    const providerStreamFn = vi.fn();
+    registerProviderStreamForModelMock.mockReturnValueOnce(providerStreamFn);
     mockImageModel({
       provider: "github-copilot",
       id: "gemini-3.1-pro-preview",
@@ -336,7 +338,7 @@ describe("describeImageWithModelCore", () => {
       baseUrl: "https://api.githubcopilot.com",
     });
     prepareProviderRuntimeAuthMock.mockRejectedValueOnce(
-      new Error("Copilot token exchange failed: HTTP 401"),
+      new Error("Copilot auth preparation failed: HTTP 401"),
     );
 
     await expect(
@@ -346,9 +348,17 @@ describe("describeImageWithModelCore", () => {
         model: "gemini-3.1-pro-preview",
         prompt: "Describe the image.",
       }),
-    ).rejects.toThrow("Copilot token exchange failed: HTTP 401");
+    ).rejects.toThrow("Copilot auth preparation failed: HTTP 401");
 
-    expect(setRuntimeApiKeyMock).not.toHaveBeenCalledWith("github-copilot", "test-token");
+    expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        context: expect.objectContaining({ [API_KEY_FIELD]: "test-token", authMode: "oauth" }),
+      }),
+    );
+    expect(setRuntimeApiKeyMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+    expect(providerStreamFn).not.toHaveBeenCalled();
     expect(completeMock).not.toHaveBeenCalled();
   });
 
