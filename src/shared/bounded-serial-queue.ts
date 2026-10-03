@@ -1,5 +1,10 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createDeferredCore } from "./deferred.js";
+
+// The voice transcript queue also runs in the browser, which has no Node async context.
+const asyncLocalStorage =
+  typeof process === "undefined"
+    ? undefined
+    : process.getBuiltinModule("node:async_hooks").AsyncLocalStorage;
 
 type BoundedSerialQueueAdmission<T> =
   | { accepted: true; completion: Promise<T> }
@@ -81,7 +86,7 @@ export class BoundedSerialQueue {
       weight,
       // Waiting work retains its caller's context, including an absent scope,
       // rather than inheriting the preceding task's drain microtask.
-      run: AsyncLocalStorage.bind(run),
+      run: asyncLocalStorage ? asyncLocalStorage.bind(run) : run,
       resolve: (value) => resolve(value as T),
       reject,
     };
