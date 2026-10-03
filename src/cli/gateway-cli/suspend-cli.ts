@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type {
   GatewaySuspendPrepareResult,
   GatewaySuspendResumeResult,
@@ -25,7 +26,7 @@ function parseWaitMs(value: string | number | undefined): number | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const seconds = typeof value === "number" ? value : Number(value.trim() || Number.NaN);
+  const seconds = parseStrictFiniteNumber(value) ?? Number.NaN;
   if (!Number.isFinite(seconds) || seconds < 0) {
     throw new Error("--wait must be a non-negative number of seconds");
   }
