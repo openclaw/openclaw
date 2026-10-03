@@ -45,6 +45,8 @@ const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const HAS_FILE_EXT_RE = /\.\w{1,10}$/;
 const MAX_FAILURE_LABEL_LENGTH = 180;
 
+class RemoteWorkspaceMediaPathError extends Error {}
+
 function resolveReplyMediaFailureLabel(media: string, index: number): string {
   const trimmed = media.trim();
   let source = trimmed;
@@ -90,7 +92,10 @@ function createReplyMediaFailure(media: string, index: number, error: unknown): 
   return {
     code: resolveReplyMediaFailureCode(error),
     kind: kind === "image" || kind === "audio" || kind === "video" ? kind : "document",
-    label: resolveReplyMediaFailureLabel(media, index),
+    label: truncateUtf16Safe(
+      `${error instanceof RemoteWorkspaceMediaPathError ? "Remote file outside workspace: " : ""}${resolveReplyMediaFailureLabel(media, index)}`,
+      MAX_FAILURE_LABEL_LENGTH,
+    ),
     ...(mimeType ? { mimeType } : {}),
   };
 }
@@ -214,6 +219,13 @@ export function createReplyMediaSourcePreparer(params: {
         path: managedMediaPath,
         contentType: mimeTypeFromFilePath(managedMediaPath),
       };
+    }
+    if (
+      params.workspaceMediaRoot &&
+      !resolveAbsoluteWorkspaceMedia(media) &&
+      !(await resolveInboundMediaReference(media))
+    ) {
+      throw new RemoteWorkspaceMediaPathError("Attachment path is outside the remote workspace.");
     }
     const cached = persistedMediaBySource.get(media);
     if (cached) {
