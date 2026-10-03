@@ -4,7 +4,11 @@ import path from "node:path";
 import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
-import { createDoctorContext, resetDoctorPluginState } from "./doctor-contract-api.test-support.js";
+import {
+  createDoctorContext,
+  resetDoctorPluginState,
+  type RawLegacyDoctorConfig,
+} from "./doctor-contract-api.test-support.js";
 import { resetMemoryCoreDreamingStateForTests } from "./src/test-helpers.js";
 
 function getMigration(id: string) {
@@ -40,8 +44,11 @@ describe("memory-core doctor QMD migration", () => {
   });
 
   function migrationParams() {
+    const config: RawLegacyDoctorConfig = {
+      agents: { list: [{ id: "main", workspace: workspaceDir }] },
+    };
     return {
-      config: { agents: { list: [{ id: "main", workspace: workspaceDir }] } },
+      config,
       env,
       stateDir,
       oauthDir: path.join(rootDir, "oauth"),

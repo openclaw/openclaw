@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   encodeMemoryEmbedding,
   ensureMemoryIndexSchema,
@@ -13,27 +12,15 @@ import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/plugin-state-test
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
-import { createDoctorContext, resetDoctorPluginState } from "./doctor-contract-api.test-support.js";
+import {
+  createDoctorContext,
+  resetDoctorPluginState,
+  type RawLegacyDoctorConfig,
+} from "./doctor-contract-api.test-support.js";
 import { bm25RankToScore, buildFtsQuery } from "./src/memory/keyword-query.js";
 import { runVectorKnnQuery } from "./src/memory/manager-search-knn.js";
 import { searchKeyword } from "./src/memory/manager-search.js";
 import { resetMemoryCoreDreamingStateForTests } from "./src/test-helpers.js";
-
-type AuthoredAgents = NonNullable<OpenClawConfig["agents"]>;
-type AuthoredEntry = NonNullable<AuthoredAgents["entries"]>[string];
-type AuthoredMemory = NonNullable<OpenClawConfig["memory"]>;
-type AuthoredMemorySearch = NonNullable<AuthoredMemory["search"]>;
-type RawLegacyMemorySearch = Omit<AuthoredMemorySearch, "store"> & {
-  store?: NonNullable<AuthoredMemorySearch["store"]> & { path?: string };
-};
-type RawLegacyDoctorConfig = Omit<OpenClawConfig, "agents" | "memory"> & {
-  agents?: Omit<AuthoredAgents, "entries"> & {
-    entries?: Record<string, AuthoredEntry & { default?: boolean }>;
-    list?: unknown[];
-  };
-  memory?: Omit<AuthoredMemory, "search"> & { search?: RawLegacyMemorySearch };
-  memorySearch?: RawLegacyMemorySearch;
-};
 
 function hostEvent(query: string, timestamp = "2026-07-01T00:00:00.000Z") {
   return { type: "memory.recall.recorded" as const, timestamp, query, resultCount: 0, results: [] };
