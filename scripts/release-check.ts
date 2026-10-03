@@ -851,23 +851,9 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
     configPath,
     `${JSON.stringify(
       {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.6-luna" },
-          },
-        },
         channels: {
           telegram: {
             enabled: true,
-          },
-        },
-        models: {
-          providers: {
-            openai: {
-              apiKey: "sk-openclaw-release-check",
-              baseUrl: "https://api.openai.com/v1",
-              models: [],
-            },
           },
         },
         plugins: {
