@@ -41,7 +41,15 @@ describe("agent harness reply media", () => {
       try {
         const result = await host.hostCapabilities.prepareReplyMedia!({
           kind: "payload",
-          payload: { mediaUrls: [outside, managedUrl, managed.path, httpUrl] },
+          payload: {
+            mediaUrls: [
+              outside,
+              path.relative(state.workspaceDir, outside),
+              managedUrl,
+              managed.path,
+              httpUrl,
+            ],
+          },
           workspaceRoot: "/remote-workspace",
           readWorkspaceFile,
         });
@@ -54,8 +62,11 @@ describe("agent harness reply media", () => {
         expect(fs.readFileSync(mediaUrls[0] ?? "", "utf8")).toBe("managed attachment");
         expect(readWorkspaceFile).not.toHaveBeenCalled();
         const failures = getReplyPayloadMetadata(result.payload)?.assistantMediaFailures;
-        expect(failures).toHaveLength(1);
-        expect(failures?.[0]?.label).toMatch(/^Remote file outside workspace: decoy-/);
+        expect(failures).toHaveLength(2);
+        expect(failures?.map((failure) => failure.label)).toEqual([
+          expect.stringMatching(/^Remote file: decoy-/),
+          expect.stringMatching(/^Remote file: decoy-/),
+        ]);
         expect(failures?.[0]?.label.length).toBeLessThanOrEqual(180);
         expect(failures?.[0]?.label).not.toContain(state.root);
       } finally {

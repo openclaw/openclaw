@@ -45,8 +45,6 @@ const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const HAS_FILE_EXT_RE = /\.\w{1,10}$/;
 const MAX_FAILURE_LABEL_LENGTH = 180;
 
-class RemoteWorkspaceMediaPathError extends Error {}
-
 function resolveReplyMediaFailureLabel(media: string, index: number): string {
   const trimmed = media.trim();
   let source = trimmed;
@@ -92,10 +90,7 @@ function createReplyMediaFailure(media: string, index: number, error: unknown): 
   return {
     code: resolveReplyMediaFailureCode(error),
     kind: kind === "image" || kind === "audio" || kind === "video" ? kind : "document",
-    label: truncateUtf16Safe(
-      `${error instanceof RemoteWorkspaceMediaPathError ? "Remote file outside workspace: " : ""}${resolveReplyMediaFailureLabel(media, index)}`,
-      MAX_FAILURE_LABEL_LENGTH,
-    ),
+    label: resolveReplyMediaFailureLabel(media, index),
     ...(mimeType ? { mimeType } : {}),
   };
 }
@@ -225,7 +220,7 @@ export function createReplyMediaSourcePreparer(params: {
       !resolveAbsoluteWorkspaceMedia(media) &&
       !(await resolveInboundMediaReference(media))
     ) {
-      throw new RemoteWorkspaceMediaPathError("Attachment path is outside the remote workspace.");
+      throw new Error("Attachment path is outside the remote workspace.");
     }
     const cached = persistedMediaBySource.get(media);
     if (cached) {
@@ -387,10 +382,14 @@ export function createReplyMediaSourcePreparer(params: {
       try {
         prepared.push({ source, outcome: await normalizeMediaSource(source) });
       } catch (error) {
-        prepared.push({
-          source,
-          outcome: { failure: createReplyMediaFailure(source, index, error) },
-        });
+        const failure = createReplyMediaFailure(source, index, error);
+        if (params.workspaceMediaRoot && isLikelyLocalMediaSource(source)) {
+          failure.label = truncateUtf16Safe(
+            `Remote file: ${failure.label}`,
+            MAX_FAILURE_LABEL_LENGTH,
+          );
+        }
+        prepared.push({ source, outcome: { failure } });
         logVerbose(`dropping blocked reply media ${source}: ${String(error)}`);
       }
     }
