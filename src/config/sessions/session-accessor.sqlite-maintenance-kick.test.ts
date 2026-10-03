@@ -110,7 +110,7 @@ it("joins an accepted maintenance timer while Doctor drainage waits on other wor
     assertDatabaseAccess() {},
   });
   const blocked = createDeferred();
-  maintenance.track(blocked.promise);
+  void maintenance.track(blocked.promise);
   maintenance.run(() => kickSessionEntryMaintenanceAfterWrite(request));
   const closing = maintenance.close();
   try {
