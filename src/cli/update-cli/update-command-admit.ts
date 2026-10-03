@@ -6,6 +6,7 @@ import {
   listLegacyOAuthSidecarPaths,
 } from "../../commands/doctor-auth-legacy-paths.js";
 import { planLegacyConfigForUpdateChannel } from "../../commands/doctor/legacy-config-repair.js";
+import { findRetiredConfigUpgradeRequirement } from "../../commands/doctor/shared/retired-config-formats.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
 import { createConfigIO } from "../../config/io.js";
 import { resolveStateDir } from "../../config/paths.js";
@@ -110,6 +111,14 @@ async function inspectUpdateAdmission(
           shellEnvFallback: "defer",
           suppressFutureVersionWarning: true,
         }).readConfigFileSnapshotForWrite();
+        const retired = findRetiredConfigUpgradeRequirement(
+          snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
+        );
+        if (retired) {
+          throw new UpdatePreMutationError("invalid-config", retired.message, {
+            nextAction: retired.nextAction,
+          });
+        }
         const legacyConfigPlan =
           !snapshot.valid && snapshot.legacyIssues.length
             ? planLegacyConfigForUpdateChannel(snapshot, writeOptions)
