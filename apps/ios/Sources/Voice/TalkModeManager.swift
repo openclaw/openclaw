@@ -4749,10 +4749,6 @@ extension TalkModeManager {
         }
     }
 
-    func _test_realtimeProvider() -> String? {
-        self.realtimeProvider
-    }
-
     func _test_realtimeModelId() -> String? {
         self.realtimeModelId
     }
