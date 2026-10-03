@@ -40,6 +40,7 @@ const OTHER_COLUMN: WorkboardSessionsColumn = {
   description: "Remaining sessions.",
   fallback: true,
 };
+const DEFAULT_COLUMNS = ["needs-input", "stuck", "working", "in-review", "merged", "done"];
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(NOW);
@@ -155,84 +156,132 @@ describe("Sessions board rules and live facts", () => {
     });
   });
 
-  it("takes the first full rule match and distinguishes unknown PR state from confirmed none", async () => {
-    const digest = { health: "on-track", headline: "Making progress", revision: 1 } as const;
-    await withService(
-      {
-        spec: {
-          scope: { includeArchived: true },
-          columns: [
-            {
-              id: "review",
-              label: "Review",
-              description: "Active reviewed work.",
-              match: [
-                {
-                  health: ["on-track"],
-                  run: ["active"],
-                  pullRequest: ["open"],
-                  archived: false,
-                },
-                { run: ["failed"], archived: false },
-              ],
-            },
-            {
-              id: "active",
-              label: "Active",
-              description: "All active work.",
-              match: { run: ["active"] },
-            },
-            {
-              id: "no-pr",
-              label: "No PR",
-              description: "Confirmed no pull request.",
-              match: { pullRequest: ["none"] },
-            },
-            OTHER_COLUMN,
-          ],
-        },
-        facts: [
-          facts("all", {
-            run: "active",
-            observerDigest: digest,
-            pullRequests: [{ number: 1, state: "open" }],
-          }),
-          facts("no-digest", { run: "active", pullRequests: [{ number: 2, state: "open" }] }),
-          facts("active-no-pr", { run: "active", observerDigest: digest }),
-          facts("archived", {
-            run: "active",
-            observerDigest: digest,
-            archived: true,
-            pullRequests: [{ number: 3, state: "open" }],
-          }),
-          facts("idle-pr", {
-            observerDigest: digest,
-            pullRequests: [{ number: 4, state: "open" }],
-          }),
-          facts("none"),
-          facts("unknown", { pullRequestsUnavailable: true }),
-          facts("failed", { run: "failed" }),
+  const digest = { health: "on-track", headline: "Making progress", revision: 1 } as const;
+  it.each([
+    {
+      name: "custom rules with conjunctions, alternatives, and unknown PR state",
+      spec: {
+        scope: { includeArchived: true },
+        columns: [
+          {
+            id: "review",
+            label: "Review",
+            description: "Active reviewed work.",
+            match: [
+              {
+                health: ["on-track"],
+                run: ["active"],
+                pullRequest: ["open"],
+                archived: false,
+              },
+              { run: ["failed"], archived: false },
+            ],
+          },
+          {
+            id: "active",
+            label: "Active",
+            description: "All active work.",
+            match: { run: ["active"] },
+          },
+          {
+            id: "no-pr",
+            label: "No PR",
+            description: "Confirmed no pull request.",
+            match: { pullRequest: ["none"] },
+          },
+          OTHER_COLUMN,
         ],
       },
-      async ({ service, request, store }) => {
-        const result = await service.read(BOARD_ID);
+      facts: [
+        facts("all", {
+          run: "active",
+          observerDigest: digest,
+          pullRequests: [{ number: 1, state: "open" }],
+        }),
+        facts("no-digest", { run: "active", pullRequests: [{ number: 2, state: "open" }] }),
+        facts("active-no-pr", { run: "active", observerDigest: digest }),
+        facts("archived", {
+          run: "active",
+          observerDigest: digest,
+          archived: true,
+          pullRequests: [{ number: 3, state: "open" }],
+        }),
+        facts("idle-pr", {
+          observerDigest: digest,
+          pullRequests: [{ number: 4, state: "open" }],
+        }),
+        facts("none"),
+        facts("unknown", { pullRequestsUnavailable: true }),
+        facts("failed", { run: "failed" }),
+      ],
+      placements: [
+        ["all", "review"],
+        ["no-digest", "active"],
+        ["active-no-pr", "active"],
+        ["archived", "active"],
+        ["idle-pr", "other"],
+        ["none", "no-pr"],
+        ["unknown", "other"],
+        ["failed", "review"],
+      ],
+      columns: ["review", "active", "no-pr", "other"],
+      warning: "pull-request information is unavailable",
+    },
+    {
+      name: "default rule priority for unobserved runs and PRs",
+      spec: createDefaultWorkboardSessionsBoardSpec(),
+      facts: [
+        facts("active", { run: "active" }),
+        facts("failed", { run: "failed" }),
+        facts("unhealthy-active", {
+          run: "active",
+          observerDigest: { health: "stuck", headline: "Stuck", revision: 1 },
+        }),
+        facts("needs-input", {
+          run: "active",
+          observerDigest: { health: "waiting-on-user", headline: "Approval", revision: 1 },
+        }),
+        facts("review", { pullRequests: [{ number: 1, state: "open" }] }),
+        facts("merged", { pullRequests: [{ number: 2, state: "merged" }] }),
+        facts("idle"),
+      ],
+      placements: [
+        ["active", "working"],
+        ["failed", "stuck"],
+        ["unhealthy-active", "stuck"],
+        ["needs-input", "needs-input"],
+        ["review", "in-review"],
+        ["merged", "merged"],
+        ["idle", "done"],
+      ],
+      columns: DEFAULT_COLUMNS,
+      warning: undefined,
+    },
+  ] satisfies Array<{
+    name: string;
+    spec: Partial<WorkboardSessionsBoardSpec>;
+    facts: WorkboardSessionFacts[];
+    placements: string[][];
+    columns: string[];
+    warning: string | undefined;
+  }>)(
+    "classifies sessions using $name",
+    async ({ spec, facts: rows, placements, columns, warning }) => {
+      await withService({ spec, facts: rows }, async ({ service, store, request }) => {
+        const read = await service.read(BOARD_ID);
+        expect(read.columns.map((column) => column.id)).toEqual(columns);
         expect(
-          result.sessions.map(({ label, columnId, source }) => ({ label, columnId, source })),
-        ).toEqual([
-          { label: "all", columnId: "review", source: "state" },
-          { label: "no-digest", columnId: "active", source: "state" },
-          { label: "active-no-pr", columnId: "active", source: "state" },
-          { label: "archived", columnId: "active", source: "state" },
-          { label: "idle-pr", columnId: "other", source: "state" },
-          { label: "none", columnId: "no-pr", source: "state" },
-          { label: "unknown", columnId: "other", source: "state" },
-          { label: "failed", columnId: "review", source: "state" },
-        ]);
+          read.sessions.map(({ label, columnId, source }) => [label, columnId, source]),
+        ).toEqual(placements.map(([label, columnId]) => [label, columnId, "state"]));
         expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
-        expect(result.warning).toContain("pull-request information is unavailable");
-        expect(result.sessions.find((session) => session.label === "unknown")?.reason).toBe(
-          "facts-unavailable",
-        );
+        if (warning) {
+          expect(read.warning).toContain(warning);
+          expect(read.sessions.find((session) => session.label === "unknown")?.reason).toBe(
+            "facts-unavailable",
+          );
+        } else {
+          expect(read.warning).toBeUndefined();
+        }
         expect(request).toHaveBeenCalledWith(
           "sessions.list",
           expect.objectContaining({
@@ -242,113 +291,80 @@ describe("Sessions board rules and live facts", () => {
           }),
           { scopes: ["operator.read"] },
         );
-      },
-    );
-  });
-
-  it("routes unobserved runs and PRs while preserving default rule priority", async () => {
-    await withService(
-      {
-        spec: createDefaultWorkboardSessionsBoardSpec(),
-        facts: [
-          facts("active", { run: "active" }),
-          facts("failed", { run: "failed" }),
-          facts("unhealthy-active", {
-            run: "active",
-            observerDigest: { health: "stuck", headline: "Stuck", revision: 1 },
-          }),
-          facts("needs-input", {
-            run: "active",
-            observerDigest: { health: "waiting-on-user", headline: "Approval", revision: 1 },
-          }),
-          facts("review", { pullRequests: [{ number: 1, state: "open" }] }),
-          facts("merged", { pullRequests: [{ number: 2, state: "merged" }] }),
-          facts("idle"),
-        ],
-      },
-      async ({ service }) => {
-        const read = await service.read(BOARD_ID);
-        expect(read.columns.map((column) => column.id)).toEqual([
-          "needs-input",
-          "stuck",
-          "working",
-          "in-review",
-          "merged",
-          "done",
-        ]);
-        expect(read.sessions.map((session) => [session.label, session.columnId])).toEqual([
-          ["active", "working"],
-          ["failed", "stuck"],
-          ["unhealthy-active", "stuck"],
-          ["needs-input", "needs-input"],
-          ["review", "in-review"],
-          ["merged", "merged"],
-          ["idle", "done"],
-        ]);
-      },
-    );
-  });
+      });
+    },
+  );
 
   it("repairs only old-default rules at startup, preserves custom boards and ordering, and is idempotent", async () => {
-    await withService({ facts: [] }, async ({ service, store, context, logger }) => {
-      await service.stop();
-      const oldSpec = createDefaultWorkboardSessionsBoardSpec();
-      const oldOrder = ["needs-input", "working", "stuck", "in-review", "merged", "done"];
-      oldSpec.columns.sort((a, b) => oldOrder.indexOf(a.id) - oldOrder.indexOf(b.id));
-      for (const column of oldSpec.columns) {
-        if (column.id === "working") {
-          column.match = { run: ["active"], health: ["on-track", "grinding", "wrapping-up"] };
-          column.label = "Building";
-          column.description = "My own description";
-        } else if (column.id === "stuck") {
-          column.match = { health: ["stuck", "failed"] };
+    await withService(
+      { facts: [] },
+      async ({ service, store, context, logger, repair, readSessionFacts }) => {
+        expect(repair).toHaveBeenCalledOnce();
+        await service.read(BOARD_ID);
+        await service.read(BOARD_ID);
+        expect(repair).toHaveBeenCalledOnce();
+        expect(readSessionFacts).not.toHaveBeenCalled();
+        await service.stop();
+        const oldSpec = createDefaultWorkboardSessionsBoardSpec();
+        const oldOrder = ["needs-input", "working", "stuck", "in-review", "merged", "done"];
+        oldSpec.columns.sort((a, b) => oldOrder.indexOf(a.id) - oldOrder.indexOf(b.id));
+        for (const column of oldSpec.columns) {
+          if (column.id === "working") {
+            column.match = { run: ["active"], health: ["on-track", "grinding", "wrapping-up"] };
+            column.label = "Building";
+            column.description = "My own description";
+          } else if (column.id === "stuck") {
+            column.match = { health: ["stuck", "failed"] };
+          }
         }
-      }
-      oldSpec.scope = { maxAgeHours: 24 };
-      await store.updateSessionsBoard(BOARD_ID, oldSpec);
-      await store.upsertBoard({ id: "custom", kind: "sessions" });
-      const customSpec = structuredClone(oldSpec);
-      customSpec.columns = customSpec.columns.map((column) =>
-        column.id === "working" ? { ...column, match: { run: ["active"] } } : column,
-      );
-      const custom = await store.updateSessionsBoard("custom", customSpec);
-      await store.upsertBoard({ id: "custom-order", kind: "sessions" });
-      const reordered = structuredClone(oldSpec);
-      reordered.columns.reverse();
-      await store.updateSessionsBoard("custom-order", reordered);
-      logger.info.mockClear();
-      await service.start(context);
-      const repaired = await store.getSessionsBoard(BOARD_ID);
-      expect(repaired.sessions.columns.map((column) => column.id)).toEqual([
-        "needs-input",
-        "stuck",
-        "working",
-        "in-review",
-        "merged",
-        "done",
-      ]);
-      expect(repaired.sessions.columns.find((column) => column.id === "working")).toMatchObject({
-        label: "Building",
-        description: "My own description",
-        match: { run: ["active"] },
-      });
-      expect(repaired.sessions.columns.find((column) => column.id === "stuck")?.match).toEqual([
-        { health: ["stuck", "failed"] },
-        { run: ["failed"] },
-      ]);
-      expect(repaired.sessions.scope).toEqual({ maxAgeHours: 24 });
-      expect(await store.getSessionsBoard("custom")).toEqual(custom);
-      expect(
-        (await store.getSessionsBoard("custom-order")).sessions.columns.map((column) => column.id),
-      ).toEqual(oldOrder.toReversed());
-      expect(logger.info).toHaveBeenCalledExactlyOnceWith(
-        "Sessions board updated default rules on 2 boards.",
-      );
-      await service.stop();
-      await service.start(context);
-      expect(await store.getSessionsBoard(BOARD_ID)).toEqual(repaired);
-      expect(logger.info).toHaveBeenCalledOnce();
-    });
+        oldSpec.scope = { maxAgeHours: 24 };
+        await store.updateSessionsBoard(BOARD_ID, oldSpec);
+        await store.upsertBoard({ id: "custom", kind: "sessions" });
+        const customSpec = structuredClone(oldSpec);
+        customSpec.columns = customSpec.columns.map((column) =>
+          column.id === "working" ? { ...column, match: { run: ["active"] } } : column,
+        );
+        const custom = await store.updateSessionsBoard("custom", customSpec);
+        await store.upsertBoard({ id: "custom-order", kind: "sessions" });
+        const reordered = structuredClone(oldSpec);
+        reordered.columns.reverse();
+        await store.updateSessionsBoard("custom-order", reordered);
+        logger.info.mockClear();
+        await service.start(context);
+        const repaired = await store.getSessionsBoard(BOARD_ID);
+        expect(repaired.sessions.columns.map((column) => column.id)).toEqual(DEFAULT_COLUMNS);
+        expect(repaired.sessions.columns.find((column) => column.id === "working")).toMatchObject({
+          label: "Building",
+          description: "My own description",
+          match: { run: ["active"] },
+        });
+        expect(repaired.sessions.columns.find((column) => column.id === "stuck")?.match).toEqual([
+          { health: ["stuck", "failed"] },
+          { run: ["failed"] },
+        ]);
+        expect(repaired.sessions.scope).toEqual({ maxAgeHours: 24 });
+        expect(await store.getSessionsBoard("custom")).toEqual(custom);
+        expect(
+          (await store.getSessionsBoard("custom-order")).sessions.columns.map(
+            (column) => column.id,
+          ),
+        ).toEqual(oldOrder.toReversed());
+        expect(logger.info).toHaveBeenCalledExactlyOnceWith(
+          "Sessions board updated default rules on 2 boards.",
+        );
+        await service.stop();
+        await service.start(context);
+        expect(await store.getSessionsBoard(BOARD_ID)).toEqual(repaired);
+        expect(logger.info).toHaveBeenCalledOnce();
+        await service.stop();
+        repair.mockResolvedValueOnce({ placements: 3, boards: 0 });
+        logger.info.mockClear();
+        await service.start(context);
+        expect(logger.info).toHaveBeenCalledExactlyOnceWith(
+          "Sessions board removed 3 non-operator placements.",
+        );
+      },
+    );
   });
 
   it("shares cached facts across boards, invalidates only changed keys, and coalesces notifications", async () => {
@@ -600,25 +616,6 @@ describe("Sessions board rules and live facts", () => {
         }
         expect(await store.getSessionsBoard(BOARD_ID)).toEqual(board);
         expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
-      },
-    );
-  });
-
-  it("repairs placements once at startup and stays idle until read", async () => {
-    await withService(
-      { facts: [] },
-      async ({ service, repair, readSessionFacts, context, logger }) => {
-        expect(repair).toHaveBeenCalledOnce();
-        await service.read(BOARD_ID);
-        await service.read(BOARD_ID);
-        expect(repair).toHaveBeenCalledOnce();
-        expect(readSessionFacts).not.toHaveBeenCalled();
-        await service.stop();
-        repair.mockResolvedValueOnce({ placements: 3, boards: 0 });
-        await service.start(context);
-        expect(logger.info).toHaveBeenCalledExactlyOnceWith(
-          "Sessions board removed 3 non-operator placements.",
-        );
       },
     );
   });
