@@ -36,10 +36,12 @@ async function withProviderFixtures(
     config: OpenClawConfig;
     state: OpenClawTestState;
     imported: (provider: string) => boolean;
+    registrationCount: (provider: string) => number;
     resolved: (provider: string) => unknown;
   }) => Promise<void>,
   options: {
     aliases?: Record<string, string>;
+    disposeErrorProvider?: string;
     runtimeAliases?: Record<string, string>;
     provider?: string;
   } = {},
@@ -54,6 +56,10 @@ async function withProviderFixtures(
     },
     async (state) => {
       const imported = (provider: string) => fs.existsSync(state.path(`${provider}.imported`));
+      const registrationCount = (provider: string): number => {
+        const file = state.path(`${provider}.registered`);
+        return fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\n").length : 0;
+      };
       const resolved = (provider: string): unknown => {
         const file = state.path(`${provider}.resolved`);
         return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : undefined;
@@ -76,7 +82,7 @@ async function withProviderFixtures(
                     }
                   : {}),
               }
-            : { "exact-supported": 32000 };
+            : { "exact-supported": 32000, "exact-alt": 24000 };
         const plugin = writePlugin({
           id,
           dir: state.path("plugins", id),
@@ -88,6 +94,8 @@ fs.writeFileSync(${JSON.stringify(state.path(`${id}.imported`))}, "loaded");
 module.exports = {
   id: ${JSON.stringify(id)},
   register(api) {
+    fs.appendFileSync(${JSON.stringify(state.path(`${id}.registered`))}, "registered\\n");
+    ${id === options.disposeErrorProvider ? 'api.lifecycle.onDispose(() => { throw new Error("fixture disposal failed"); });' : ""}
     api.registerProvider({
       id: ${JSON.stringify(id)},
       label: ${JSON.stringify(id)},
@@ -148,7 +156,7 @@ module.exports = {
         },
       };
       try {
-        await run({ config, state, imported, resolved });
+        await run({ config, state, imported, registrationCount, resolved });
       } finally {
         await clearRuntimeState();
       }
@@ -403,6 +411,43 @@ describe("config model validation with provider runtime", () => {
       expect(imported("pin-unrelated")).toBe(false);
       expect(result).toEqual({ refsChecked: 4, refsTotal: 4, errors: [] });
     });
+  });
+
+  it("prepares one runtime per inheriting agent for multiple changed fallbacks", async () => {
+    await withProviderFixtures(async ({ config, state, registrationCount }) => {
+      config.agents!.defaults!.model = {
+        primary,
+        fallbacks: [fallback, "pin-beta/exact-alt"],
+      };
+      const opsWorkspace = state.path("ops-workspace");
+      fs.mkdirSync(opsWorkspace);
+      config.agents!.entries!.ops = { workspace: opsWorkspace };
+
+      const result = await checkTouchedTextModelRefs({
+        config,
+        touchedPaths: [["agents", "defaults", "model", "fallbacks"]],
+      });
+
+      expect(result).toEqual({ refsChecked: 4, refsTotal: 4, errors: [] });
+      expect(registrationCount("pin-beta")).toBe(2);
+    });
+  });
+
+  it("reports prepared runtime cleanup failures as validation errors", async () => {
+    await withProviderFixtures(
+      async ({ config }) => {
+        const result = await checkTouchedTextModelRefs({
+          config,
+          touchedPaths: [["agents", "defaults", "model", "primary"]],
+        });
+
+        expect(result.refsChecked).toBe(1);
+        expect(result.errors).toEqual([
+          expect.stringContaining("Prepared plugin generation cleanup failed"),
+        ]);
+      },
+      { disposeErrorProvider: "pin-alpha" },
+    );
   });
 
   it.each(["disabled", "denied", "not allowed"] as const)(
