@@ -325,7 +325,9 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       reusable: boolean;
     };
     type Outcome = { entry: HashedEntry } | { error: unknown };
-    const pending: Array<{ file: boolean; outcome: Promise<Outcome> }> = [];
+    // DFS post-order: settled entries (reused files, directories, links) wait only
+    // behind earlier hashes, then drain with them.
+    const pending: Array<{ entry: HashedEntry } | { outcome: Promise<Outcome> }> = [];
     const hasher = fileHashing.createPackageFileHasher(
       async (file, stat) => (await hashFile(file, stat, Number(stat.size))).digest,
     );
@@ -337,23 +339,34 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       digest.update(retainedEntry);
       entriesObserved.set(relative, { fields, retained: retainedEntry, reusable });
     };
+    const settled = (entry: HashedEntry) => {
+      if (pending.length) {
+        pending.push({ entry });
+      } else {
+        appendEntry(entry);
+      }
+    };
     const drainFiles = async (limit = pending.length) => {
       let count = limit;
       if (!count) {
         return;
       }
-      let outcomes = await read(() => {
-        hasher.flush();
-        return Promise.all(pending.slice(0, count).map((item) => item.outcome));
-      });
+      const settle = (items: typeof pending) =>
+        read(() => {
+          hasher.flush();
+          return Promise.all(
+            items.map((item) => ("outcome" in item ? item.outcome : Promise.resolve(item))),
+          );
+        });
+      let outcomes = await settle(pending.slice(0, count));
       if (count < pending.length && outcomes.some((outcome) => "error" in outcome)) {
         count = pending.length;
-        outcomes = await read(() => {
-          hasher.flush();
-          return Promise.all(pending.map((item) => item.outcome));
-        });
+        outcomes = await settle(pending);
       }
-      pendingFiles -= pending.splice(0, count).filter((item) => item.file).length;
+      for (let next = pending[count]; next && "entry" in next; next = pending[++count]) {
+        outcomes.push(next);
+      }
+      pendingFiles -= pending.splice(0, count).filter((item) => "outcome" in item).length;
       // Journal digests and refusal precedence follow DFS order, not IO completion order.
       for (const outcome of outcomes) {
         if ("error" in outcome) {
@@ -440,10 +453,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
           fields.set("sha256", previousDigest);
           retained.push("file", previousDigest);
           // Keep reused entries behind earlier hashes without consuming a hash slot.
-          pending.push({
-            file: false,
-            outcome: Promise.resolve({ entry: { relative, fields, retained, reusable: true } }),
-          });
+          settled({ relative, fields, retained, reusable: true });
           return;
         }
         pendingFiles++;
@@ -455,7 +465,6 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         const admittedAtNs = BigInt(Date.now()) * 1_000_000n;
         const reusable = stat.ctimeNs + SETTLED_CTIME_MARGIN_NS <= admittedAtNs;
         pending.push({
-          file: true,
           outcome: trackIo(() => hasher.hash(file, stat)).then(
             (fileDigest) => {
               fields.set("sha256", fileDigest);
@@ -469,7 +478,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
           ),
         });
         if (pendingFiles === window) {
-          await drainFiles(pending.findIndex((item) => item.file) + 1);
+          await drainFiles(pending.findIndex((item) => "outcome" in item) + 1);
         }
         return;
       } else if (stat.isDirectory()) {
@@ -483,10 +492,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       } else {
         throw new Error("Package rollback contains a non-file entry");
       }
-      pending.push({
-        file: false,
-        outcome: Promise.resolve({ entry: { relative, fields, retained, reusable: false } }),
-      });
+      settled({ relative, fields, retained, reusable: false });
     }
 
     try {
