@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import {
   buildWindowsCmdExeCommandLine,
@@ -13,7 +13,24 @@ import {
   createSourceCliFixture,
   runSourceCliProbe,
 } from "./openclaw-cli-invocation.test-support.js";
-import { clearGatewayAgentCliShim, prepareGatewayAgentCliShim } from "./openclaw-cli-shim.js";
+import {
+  clearGatewayAgentCliShim,
+  mergeGatewayAgentCliPath,
+  prepareGatewayAgentCliShim,
+} from "./openclaw-cli-shim.js";
+
+const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn(() => "gbk"));
+const resolveWindowsOemCodePageForEncodingMock = vi.hoisted(() => vi.fn(() => 936));
+
+vi.mock("./windows-encoding.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./windows-encoding.js")>("./windows-encoding.js");
+  return {
+    ...actual,
+    resolveWindowsOemEncoding: resolveWindowsOemEncodingMock,
+    resolveWindowsOemCodePageForEncoding: resolveWindowsOemCodePageForEncodingMock,
+  };
+});
 
 const requireFromHere = createRequire(import.meta.url);
 
@@ -92,6 +109,117 @@ describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", 
       });
     },
   );
+
+  it("executes and regenerates a CJK-path launcher through cmd.exe", async () => {
+    await withTempDir("openclaw-source-cli-cjk-win-", async (root) => {
+      const fixture = await createSourceCliFixture(root);
+      const cjkCheckout = path.join(root, "用户", "OpenClaw source");
+      await fs.cp(fixture.checkout, cjkCheckout, { recursive: true });
+      const cjkEntryPath = path.join(cjkCheckout, "src", "entry.ts");
+      const invocation = resolveCurrentOpenClawCliInvocation([], {
+        argv1: cjkEntryPath,
+        cwd: fixture.callerCwd,
+        execArgv: fixture.execArgv,
+        execPath: process.execPath,
+      });
+      const stateDir = path.join(root, "state");
+      const shimPath = path.join(stateDir, "tmp", "agent-cli", "openclaw.cmd");
+      const command = buildWindowsCmdExeCommandLine(shimPath, ["probe"]);
+
+      for (const regeneration of [1, 2]) {
+        await prepareGatewayAgentCliShim({ env: {}, invocation, stateDir });
+        const result = runSourceCliProbe(
+          resolveTrustedWindowsCmdExe(),
+          ["/d", "/v:off", "/s", "/c", command],
+          fixture.callerCwd,
+          { windowsVerbatimArguments: true },
+        );
+        expectSourceCliSuccess(`CJK launcher regeneration ${regeneration}`, result, root);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          source: "gateway",
+          args: ["probe"],
+          cwd: fixture.callerCwd,
+          tsconfigPath: path.join(cjkCheckout, "tsconfig.json"),
+        });
+      }
+    });
+  });
+
+  it("keeps the existing launcher usable when CJK regeneration is unrepresentable", async () => {
+    await withTempDir("openclaw-source-cli-existing-win-", async (root) => {
+      const fixture = await createSourceCliFixture(root);
+      const stateDir = path.join(root, "state");
+      const shimPath = path.join(stateDir, "tmp", "agent-cli", "openclaw.cmd");
+      const command = buildWindowsCmdExeCommandLine(shimPath, ["probe"]);
+
+      await prepareGatewayAgentCliShim({ env: {}, invocation: fixture.invocation, stateDir });
+      const existingLauncher = await fs.readFile(shimPath);
+      const initial = runSourceCliProbe(
+        resolveTrustedWindowsCmdExe(),
+        ["/d", "/v:off", "/s", "/c", command],
+        fixture.callerCwd,
+        { windowsVerbatimArguments: true },
+      );
+      expectSourceCliSuccess("existing launcher before failed regeneration", initial, root);
+
+      const cjkCheckout = path.join(root, "用户", "OpenClaw source");
+      await fs.cp(fixture.checkout, cjkCheckout, { recursive: true });
+      const cjkEntryPath = path.join(cjkCheckout, "src", "entry.ts");
+      const cjkInvocation = resolveCurrentOpenClawCliInvocation([], {
+        argv1: cjkEntryPath,
+        cwd: fixture.callerCwd,
+        execArgv: fixture.execArgv,
+        execPath: process.execPath,
+      });
+      resolveWindowsOemEncodingMock.mockReturnValue("cp857");
+      resolveWindowsOemCodePageForEncodingMock.mockReturnValue(857);
+      const unavailableWarnings: string[] = [];
+      try {
+        await prepareGatewayAgentCliShim({
+          env: {},
+          invocation: cjkInvocation,
+          onUnavailable: (error) => unavailableWarnings.push(String(error).slice(0, 512)),
+          stateDir,
+        });
+      } finally {
+        resolveWindowsOemEncodingMock.mockImplementation(() => "gbk");
+        resolveWindowsOemCodePageForEncodingMock.mockImplementation(() => 936);
+      }
+
+      const preservedLauncher = await fs.readFile(shimPath);
+      expect(preservedLauncher.equals(existingLauncher)).toBe(true);
+      const afterFailedRegeneration = runSourceCliProbe(
+        resolveTrustedWindowsCmdExe(),
+        ["/d", "/v:off", "/s", "/c", command],
+        fixture.callerCwd,
+        { windowsVerbatimArguments: true },
+      );
+      expectSourceCliSuccess(
+        "existing launcher after failed CJK regeneration",
+        afterFailedRegeneration,
+        root,
+      );
+      const generatedPath = mergeGatewayAgentCliPath();
+      console.info(
+        "[gateway-agent-cli-fallback]",
+        JSON.stringify({
+          phase: "existing-launcher-after-failed-regeneration",
+          commandStatus: afterFailedRegeneration.status,
+          launcherPreserved: preservedLauncher.equals(existingLauncher),
+          generatedPathPresent: generatedPath !== undefined,
+          warningReported: unavailableWarnings.length > 0,
+        }),
+      );
+      expect(generatedPath).toBeUndefined();
+      expect(unavailableWarnings).toHaveLength(1);
+      expect(JSON.parse(afterFailedRegeneration.stdout)).toMatchObject({
+        source: "gateway",
+        args: ["probe"],
+        cwd: fixture.callerCwd,
+        tsconfigPath: path.join(fixture.checkout, "tsconfig.json"),
+      });
+    });
+  });
 
   it("preserves literal forwarded bangs and percent signs", async () => {
     await withTempDir("openclaw-source-cli-args-win-", async (root) => {
