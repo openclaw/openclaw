@@ -9,6 +9,7 @@ import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readRegularFile, statRegularFile } from "../infra/fs-safe.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { loadSkillRootRecords } from "../skills/loading/skill-root-loader.js";
 import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
 import type { SkillScanFinding } from "../skills/security/scanner.js";
@@ -22,6 +23,10 @@ type SkillScanSummary = Awaited<
 >;
 
 export type CodeSafetySummaryCache = Map<string, Promise<SkillScanSummary>>;
+
+const loadSkillScannerModule = createLazyRuntimeModule(
+  () => import("../skills/security/scanner.js"),
+);
 
 const MAX_PLUGIN_MANIFEST_BYTES = 1024 * 1024;
 // Skill file audit reads are bounded like other audit reads; matches the
@@ -89,7 +94,7 @@ async function getCodeSafetySummary(params: {
   const includeKey = includeFiles.length > 0 ? includeFiles.toSorted().join("\u0000") : "";
   const cacheKey = `${params.dirPath}\u0000${includeKey}`;
   const scan = async () => {
-    const skillScanner = await import("../skills/security/scanner.js");
+    const skillScanner = await loadSkillScannerModule();
     return await skillScanner.scanDirectoryWithSummary(params.dirPath, {
       includeFiles: params.includeFiles,
     });
@@ -113,7 +118,7 @@ async function getSkillCodeSafetySummary(params: {
       filePath: params.skillFilePath,
       maxBytes: MAX_SKILL_AUDIT_FILE_BYTES,
     }).then(({ buffer }) => buffer.toString("utf-8")),
-    import("../skills/security/scanner.js"),
+    loadSkillScannerModule(),
   ]);
   const skillFindings = [
     ...skillScanner.scanSkillContent(skillContent, params.skillFilePath),

@@ -20,7 +20,7 @@ import {
 import {
   normalizeResponsesInput,
   resolveMockSubagentTurn,
-} from "../../../../extensions/qa-lab/src/providers/mock-openai/mock-openai-input.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import {
   listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
