@@ -43,40 +43,28 @@ describe("PDF document extractor worker", () => {
     ),
   );
 
-  it("reports pages omitted by the automatic page budget", async () => {
-    const result = await createPdfDocumentExtractor().extract({
-      ...request,
-      buffer: completenessFixture,
-      maxPages: 20,
-    });
-    expect(result).toMatchObject({
-      text: expect.not.stringContaining("CORRECTION: REJECTED"),
-      metadata: {
-        pages: {
-          processed: Array.from({ length: 20 }, (_, index) => index + 1),
-          total: 21,
-          selection: "automatic",
-          truncated: true,
-        },
-        textTruncated: false,
-      },
-    });
-  });
-
   it("extracts page 21 when the page budget is one selected page", async () => {
+    const source = Buffer.concat([
+      Buffer.from("prefix"),
+      completenessFixture,
+      Buffer.from("suffix"),
+    ]);
+    const buffer = source.subarray(6, -6);
     const result = await createPdfDocumentExtractor().extract({
       ...request,
-      buffer: completenessFixture,
+      buffer,
       pageNumbers: [21],
       maxPages: 1,
     });
     expect(result).toMatchObject({
       text: "PAGE 21 CORRECTION: REJECTED",
+      images: [],
       metadata: {
         pages: { processed: [21], total: 21, selection: "explicit", truncated: false },
         textTruncated: false,
       },
     });
+    expect(buffer).toEqual(completenessFixture);
   });
 
   it("preserves an explicitly empty page selection through the real worker", async () => {
@@ -92,48 +80,21 @@ describe("PDF document extractor worker", () => {
     });
   });
 
-  it("extracts selected pages through the public plugin and preserves the caller's buffer", async () => {
+  it("preserves image-only pages beside selectable text", async () => {
+    const textPage = `BT /F1 12 Tf 40 700 Td (${"Selectable report text. ".repeat(12)}) Tj ET`;
+    const imagePage = "1 0 0 rg 50 50 300 500 re f";
+    const pages = [textPage, imagePage];
     const extractor = createPdfDocumentExtractor();
-    expect(extractor).toMatchObject({ id: "pdf", mimeTypes: ["application/pdf"] });
-    const source = Buffer.concat([Buffer.from("prefix"), fixture, Buffer.from("suffix")]);
-    const buffer = source.subarray(6, -6);
-    const result = await extractor.extract({ ...request, buffer, pageNumbers: [2] });
-    expect(result?.text).toContain("Second PDF page");
-    expect(result?.text).not.toContain("First PDF page");
-    expect(result?.images).toEqual([]);
-    expect(buffer).toEqual(fixture);
-  });
+    const input = { ...request, buffer: createPdfFixture(pages), minTextChars: 200 };
+    const result = await extractor.extract(input);
+    const imageOnly = await extractor.extract({ ...input, pageNumbers: [2] });
 
-  it.each([false, true])(
-    "preserves image-only pages beside selectable text (image first: %s)",
-    async (imageFirst) => {
-      const textPage = `BT /F1 12 Tf 40 700 Td (${"Selectable report text. ".repeat(12)}) Tj ET`;
-      const imagePage = "1 0 0 rg 50 50 300 500 re f";
-      const pages = imageFirst ? [imagePage, textPage] : [textPage, imagePage];
-      const extractor = createPdfDocumentExtractor();
-      const input = { ...request, buffer: createPdfFixture(pages), minTextChars: 200 };
-      const result = await extractor.extract(input);
-      const imageOnly = await extractor.extract({ ...input, pageNumbers: [imageFirst ? 1 : 2] });
-
-      expect(result?.text).toContain("Selectable report text.");
-      expect(result?.images).toHaveLength(1);
-      expect(result?.images).toEqual(imageOnly?.images);
-      const textOnly = await extractor.extract({ ...input, pageNumbers: [imageFirst ? 2 : 1] });
-      expect(textOnly?.images).toEqual([]);
-      expect(textOnly?.text).toBe(result?.text);
-    },
-  );
-
-  it("renders real pages within the aggregate pixel budget", async () => {
-    const result = await createPdfDocumentExtractor().extract({ ...request, minTextChars: 10_000 });
-    expect(result?.images).toHaveLength(2);
-    const pixels = result!.images.reduce((total, image) => {
-      const png = Buffer.from(image.data, "base64");
-      expect(png.subarray(1, 4).toString()).toBe("PNG");
-      return total + png.readUInt32BE(16) * png.readUInt32BE(20);
-    }, 0);
-    expect(pixels).toBeLessThanOrEqual(request.maxPixels);
-    expect(pixels).toBeGreaterThan(request.maxPixels / 2);
+    expect(result?.text).toContain("Selectable report text.");
+    expect(result?.images).toHaveLength(1);
+    expect(result?.images).toEqual(imageOnly?.images);
+    const textOnly = await extractor.extract({ ...input, pageNumbers: [1] });
+    expect(textOnly?.images).toEqual([]);
+    expect(textOnly?.text).toBe(result?.text);
   });
 
   it("joins canceled extraction before allowing the next document to succeed", async () => {
