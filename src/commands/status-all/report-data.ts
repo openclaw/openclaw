@@ -149,6 +149,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
       gatewayStartupPhase: gatewayProbe?.startupPhase,
       localGatewayHealthy:
         overview.gatewaySnapshot.localGatewayHealthy === true && !(health && "error" in health),
+      gatewayServer: gatewayProbe?.server,
       health,
       deliveryDiagnostics,
       exporterDiagnostics,
@@ -194,6 +195,7 @@ export async function buildStatusAllReportData(params: {
     secretDiagnosticsCount: params.overview.secretDiagnostics.length,
     updateRows: await buildStatusUpdateRows(diagnosis.sentinel?.payload, {
       localGatewayHealthy: diagnosis.localGatewayHealthy,
+      gatewayServer: diagnosis.gatewayServer,
     }),
     agentStatus: params.overview.agentStatus,
   });

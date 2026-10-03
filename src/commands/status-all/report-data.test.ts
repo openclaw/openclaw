@@ -220,7 +220,10 @@ describe("buildStatusAllReportData", () => {
           gatewaySnapshot: {
             ...baseStatusGatewaySnapshot,
             gatewayReachable: false,
-            gatewayProbe: null,
+            gatewayProbe:
+              history === "failed-healthy"
+                ? { server: { version: "2026.9.2", buildId: "fixture-build" } }
+                : null,
             gatewayCallOverrides: undefined,
             remoteUrlMissing: false,
             localGatewayHealthy: history === "failed-healthy",
@@ -255,7 +258,7 @@ describe("buildStatusAllReportData", () => {
                   history === "active"
                     ? "⬆️ OpenClaw update in progress: verifying."
                     : history === "failed-healthy"
-                      ? "Last update run failed (post-update-failed) — Gateway is currently healthy; run `openclaw update` to reconcile."
+                      ? "Last update run failed (post-update-failed) — Gateway is serving 2026.9.2; run `openclaw update` to clear the record."
                       : success,
               },
             ]
