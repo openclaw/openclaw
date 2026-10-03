@@ -1,6 +1,6 @@
 // Memory Host SDK tests cover embeddings remote fetch behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
+import { extractEmbeddingUsage, fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
 
 const postJsonMock = vi.hoisted(() => vi.fn());
 
@@ -242,5 +242,21 @@ describe("fetchRemoteEmbeddingVectors", () => {
         errorPrefix: "embedding fetch failed",
       }),
     ).rejects.toThrow("embedding fetch failed: malformed JSON response");
+  });
+});
+
+describe("extractEmbeddingUsage", () => {
+  it("normalizes OpenAI-style usage and tolerates partial or invalid shapes", () => {
+    expect(extractEmbeddingUsage({ usage: { prompt_tokens: 7, total_tokens: 9 } })).toEqual({
+      promptTokens: 7,
+      totalTokens: 9,
+    });
+    expect(extractEmbeddingUsage({ usage: { prompt_tokens: 3 } })).toEqual({
+      promptTokens: 3,
+      totalTokens: 3,
+    });
+    expect(extractEmbeddingUsage({})).toBeUndefined();
+    expect(extractEmbeddingUsage({ usage: { prompt_tokens: -1 } })).toBeUndefined();
+    expect(extractEmbeddingUsage({ usage: "unexpected" })).toBeUndefined();
   });
 });

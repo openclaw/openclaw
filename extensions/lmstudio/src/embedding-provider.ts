@@ -362,10 +362,34 @@ export async function createLmstudioEmbeddingProvider(
       return await resolveRequestProvider(prepared).embedBatch(inputs, callOptions);
     });
   };
+  const embedBatchDetailed: NonNullable<MemoryEmbeddingProvider["embedBatchDetailed"]> = async (
+    inputs,
+    callOptions,
+  ) => {
+    if (inputs.length === 0) {
+      return { embeddings: [] };
+    }
+    if (callOptions?.inputType === "query") {
+      // Query path keeps per-item leases; mirror embedBatch semantics and let usage
+      // fall back to estimation instead of bypassing the local-service lease.
+      return { embeddings: await embedBatch(inputs, callOptions) };
+    }
+    return await withLocalServiceLease(callOptions?.signal, async () => {
+      const prepared = await preloadModel(callOptions?.signal);
+      callOptions?.signal?.throwIfAborted();
+      const requestProvider = resolveRequestProvider(prepared);
+      return typeof requestProvider.embedBatchDetailed === "function"
+        ? await requestProvider.embedBatchDetailed(inputs, callOptions)
+        : { embeddings: await requestProvider.embedBatch(inputs, callOptions) };
+    });
+  };
   const provider: MemoryEmbeddingProvider = {
     ...remoteProvider,
     embed,
     embedBatch,
+    // Explicit override: the spread-in remote detailed path would skip the
+    // local-service lease and model preload that embedBatch performs.
+    embedBatchDetailed,
   };
   return {
     provider,

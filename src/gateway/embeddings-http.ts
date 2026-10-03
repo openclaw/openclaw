@@ -2,6 +2,7 @@
 // Bridges /v1/embeddings requests to configured OpenClaw memory providers.
 import { Buffer } from "node:buffer";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -14,6 +15,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
+import type { EmbeddingUsage } from "../plugins/embedding-provider-types.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
 import type { MemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import {
@@ -291,14 +293,28 @@ export async function handleOpenAiEmbeddingsHttpRequest(
         await handled.requestAuth.revalidate?.();
         return true;
       }
-      const embeddings = await provider.embedBatch(texts, {
+      const callOptions = {
         signal: abortController.signal,
-        inputType: "document",
-      });
+        inputType: "document" as const,
+      };
+      let embeddings: number[][];
+      let usage: EmbeddingUsage | undefined;
+      if (typeof provider.embedBatchDetailed === "function") {
+        const detailed = await provider.embedBatchDetailed(texts, callOptions);
+        embeddings = detailed.embeddings;
+        usage = detailed.usage;
+      } else {
+        embeddings = await provider.embedBatch(texts, callOptions);
+      }
       if (abortController.signal.aborted) {
         return true;
       }
       const encodingFormat = payload.encoding_format === "base64" ? "base64" : "float";
+      // OpenAI SDK clients require both usage fields; estimate from input text
+      // when the provider does not report real usage.
+      const estimatedTokens = estimateTokensFromChars(
+        texts.reduce((sum, text) => sum + text.length, 0),
+      );
 
       sendJson(res, 200, {
         object: "list",
@@ -309,8 +325,8 @@ export async function handleOpenAiEmbeddingsHttpRequest(
         })),
         model: requestModel,
         usage: {
-          prompt_tokens: 0,
-          total_tokens: 0,
+          prompt_tokens: usage?.promptTokens ?? estimatedTokens,
+          total_tokens: usage?.totalTokens ?? estimatedTokens,
         },
       });
     } finally {

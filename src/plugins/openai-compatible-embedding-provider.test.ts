@@ -978,4 +978,20 @@ describe("openai-compatible generic embedding provider", () => {
       "openai-compatible embeddings failed: malformed JSON response",
     );
   });
+
+  it("embedBatchDetailed surfaces provider-reported usage", async () => {
+    const server = await startEmbeddingServer({
+      respond: () => ({
+        data: [{ embedding: [0.1] }, { embedding: [0.2] }],
+        usage: { prompt_tokens: 777, total_tokens: 778 },
+      }),
+    });
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({ remote: { baseUrl: server.baseUrl } }),
+    );
+
+    const detailed = await provider.embedBatchDetailed?.(["first", "second"]);
+    expect(detailed?.usage).toEqual({ promptTokens: 777, totalTokens: 778 });
+    await expect(provider.embedBatch(["first", "second"])).resolves.toEqual([[0.1], [0.2]]);
+  });
 });
