@@ -7,8 +7,9 @@ import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import type { CronJob, CronRunStatus } from "../types.js";
-import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
+import { autoDisableCronJob, maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import {
+  bestEffortSuppressesFailureAlert,
   finalizeCronFailureNotifications,
   maybeEmitFailureAlert,
   resolveFailureIncident,
@@ -94,6 +95,10 @@ export function applyJobResult(
     // Startup recovery restores historical notification facts separately.
     replay?: boolean;
     replaySchedule?: { nextRunAtMs?: number };
+    // Watcher-completion provenance carried from the gateway exit watcher's
+    // runOnExit fire; never inferred from job state (a manually paused on-exit
+    // job force-run by an operator must not take the terminal disposition).
+    onExitWatcherCompletion?: boolean;
     deferredNotifications: DeferredCronNotifications;
   },
 ): boolean {
@@ -227,9 +232,50 @@ export function applyJobResult(
     job.deleteAfterRun === true &&
     completionStatus === "succeeded";
   let autoDisableNotificationOwnsFailure = false;
+  let oneShotTerminalDisable = false;
   const applyReplaySchedule = () => {
     const nextRunAtMs = job.state.autoDisabled ? undefined : opts.replaySchedule?.nextRunAtMs;
     job.state.nextRunAtMs = nextRunAtMs === undefined ? undefined : scheduleNextRun(nextRunAtMs);
+  };
+  // Terminal one-shot error disposition, shared by timed `at` failures and
+  // watcher-completed `on-exit` failures: the job never runs again, so the
+  // threshold-gated failure alert would stay silent forever. Record the
+  // durable auto-disable fact and route exactly one notice — the richer alert
+  // when a route can emit, else the generic auto-disable notice (#131490).
+  // Aborts keep the quiet disable: the operator already saw a visible outcome.
+  const applyTerminalOneShotErrorDisposition = (
+    retryDecision: ReturnType<typeof resolveTransientCronRetryDecision>,
+    options?: { completedOneShot?: boolean },
+  ) => {
+    const alertOwnsTerminalNotice = alertConfig !== null && !bestEffortSuppressesFailureAlert(job);
+    const recordedAutoDisable =
+      retryDecision.reason !== "aborted" &&
+      autoDisableCronJob({
+        job,
+        reason: "consecutive-failures",
+        atMs: result.endedAt,
+        consecutiveErrors: retryDecision.consecutiveErrors,
+        deferredNotifications: opts.deferredNotifications,
+        notify: !alertOwnsTerminalNotice,
+        ...(options?.completedOneShot ? { completedOneShot: true } : {}),
+      });
+    autoDisableNotificationOwnsFailure = recordedAutoDisable && !alertOwnsTerminalNotice;
+    oneShotTerminalDisable = recordedAutoDisable && alertOwnsTerminalNotice;
+    // System-owned payloads and aborts opt out of the auto-disable owner;
+    // keep the plain disable for them.
+    job.enabled = false;
+    job.state.nextRunAtMs = undefined;
+    state.deps.log.warn(
+      {
+        jobId: job.id,
+        jobName: job.name,
+        consecutiveErrors: retryDecision.consecutiveErrors,
+        error: result.error,
+        reason: retryDecision.reason,
+        retryCategory: retryDecision.retryCategory,
+      },
+      "cron: disabling one-shot job after error",
+    );
   };
   const finish = () => {
     if (opts.replaySchedule && job.schedule.kind !== "at") {
@@ -244,6 +290,7 @@ export function applyJobResult(
       result,
       completionStatus,
       autoDisableNotificationOwnsFailure,
+      oneShotTerminalDisable,
       replay: opts.replay,
       deferredNotifications: opts.deferredNotifications,
     });
@@ -328,21 +375,32 @@ export function applyJobResult(
           // Note: deleteAfterRun:true only triggers on ok (see shouldDelete above),
           // so exhausted-retry jobs are disabled but intentionally kept in the store
           // to preserve the error state for inspection.
-          job.enabled = false;
-          job.state.nextRunAtMs = undefined;
-          state.deps.log.warn(
-            {
-              jobId: job.id,
-              jobName: job.name,
-              consecutiveErrors: retryDecision.consecutiveErrors,
-              error: result.error,
-              reason: retryDecision.reason,
-              retryCategory: retryDecision.retryCategory,
-            },
-            "cron: disabling one-shot job after error",
-          );
+          applyTerminalOneShotErrorDisposition(retryDecision);
         }
       }
+    } else if (
+      job.schedule.kind === "on-exit" &&
+      opts.onExitWatcherCompletion === true &&
+      result.status === "error"
+    ) {
+      // Watcher-fired terminal run (explicit provenance from the exit
+      // watcher's runOnExit path): the watcher persisted this one-shot
+      // disabled BEFORE force-running the payload, so a first error here is
+      // already the job's last and must not park below failureAlert.after.
+      // Transient errors are terminal too — a retry would need re-enabling,
+      // and reconcile would re-arm (re-run) the completed watched command.
+      // Operator force-runs (armed or manually paused watchers) never carry
+      // the flag and keep the plain preserve path below.
+      applyTerminalOneShotErrorDisposition(
+        resolveTransientCronRetryDecision({
+          error: result.error,
+          errorClassification: result.errorClassification,
+          lastErrorReason: job.state.lastErrorReason,
+          executionStarted: result.executionStarted,
+          consecutiveErrors: job.state.consecutiveErrors,
+        }),
+        { completedOneShot: true },
+      );
     } else if (opts.scheduleMode === "preserve") {
       // Forced recurring or disabled one-shot runs cannot change a scheduled
       // slot. Preserve its absence, or its timestamp and paced provenance.
@@ -647,7 +705,13 @@ export function applyOutcomeToAuthoritativeJob(
     deferredNotifications: DeferredCronNotifications;
     triggerStateRetired?: boolean;
     // A requested run retains startup bookkeeping even when it advances ordinary cadence.
-    request?: { preserveCadence: boolean; scheduleOwnershipAtMs: number };
+    request?: {
+      preserveCadence: boolean;
+      scheduleOwnershipAtMs: number;
+      // The exit watcher's runOnExit fire: a payload error takes the terminal
+      // one-shot disposition instead of the quiet preserve path (#131490).
+      onExitWatcherCompletion?: boolean;
+    };
   },
 ): boolean {
   const scheduleOwnership = resolveCronRunScheduleOwnership({
@@ -701,6 +765,7 @@ export function applyOutcomeToAuthoritativeJob(
       opts.request?.preserveCadence && scheduleOwnership === "current" ? "preserve" : "advance",
     scheduleOwnership,
     scheduleOwnershipAtMs: opts.request?.scheduleOwnershipAtMs,
+    ...(opts.request?.onExitWatcherCompletion === true ? { onExitWatcherCompletion: true } : {}),
     deferredNotifications: opts.deferredNotifications,
   });
   applyTriggerRunResult(job, result, { scheduleOwnership, triggerOwnership });

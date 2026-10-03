@@ -255,6 +255,12 @@ async function executeJobCoreWithTimeoutUnfinalized(
     const result: CronCoreRunOutcome = {
       status: "error",
       error,
+      // Only operator cancels and restart retirements are aborted (quiet
+      // disable, #131490). Watchdog timeouts stay unclassified so retry
+      // policy and the terminal auto-disable disposition keep owning them.
+      ...(interruption === "cancelled"
+        ? { errorClassification: { kind: "aborted" as const } }
+        : {}),
       // The abort race must retain attribution already reported by the runner.
       ...(execution && {
         provider: execution.provider,

@@ -202,7 +202,7 @@ describe("CronService one-shot lifecycle", () => {
     const requestHeartbeatAndWait = vi.fn(async () => {
       throw new Error("heartbeat failed");
     });
-    const { cron, deps, cleanup, expectEmptyQueue } = await fixture({
+    const { cron, deps, cleanup } = await fixture({
       requestHeartbeatAndWait,
       removable: true,
     });
@@ -212,9 +212,19 @@ describe("CronService one-shot lifecycle", () => {
       );
       await cron.run(job.id, "force");
       expect(requestHeartbeatAndWait).toHaveBeenCalledOnce();
-      expect(deps.requestHeartbeat).not.toHaveBeenCalled();
-      expect(deps.enqueueSystemEvent).toHaveBeenCalledOnce();
-      expectEmptyQueue();
+      // The failed one-shot now parks through the auto-disable owner, whose
+      // notification wake is the only remaining heartbeat request (#131490).
+      expect(
+        deps.requestHeartbeat.mock.calls.map(([opts]) => (opts as { source?: string }).source),
+      ).toEqual(["notifications-event"]);
+      // The queued payload event is removed; only the terminal notice may remain.
+      for (const [, target] of deps.enqueueSystemEvent.mock.calls) {
+        expect(
+          peekSystemEventEntries(
+            sessionKey(target as { agentId?: string; sessionKey?: string } | undefined),
+          ).filter((event) => !/auto-disabled|failed 1 times/.test(event.text)),
+        ).toHaveLength(0);
+      }
       expect(cron.getJob(job.id)?.state).toMatchObject({
         lastRunStatus: "error",
         lastError: expect.stringContaining("heartbeat failed"),
@@ -292,11 +302,20 @@ describe("CronService one-shot lifecycle", () => {
         expect(stored?.state.consecutiveErrors).toBe(1);
         if (executionStarted) {
           expect(stored?.state.nextRunAtMs).toBeUndefined();
+          // The park is now a recorded auto-disable fact, and the
+          // terminal-disable failure alert is its only visible notice (#131490).
+          expect(stored?.state.autoDisabled).toMatchObject({
+            reason: "consecutive-failures",
+            consecutiveErrors: 1,
+          });
+          const posted = deps.enqueueSystemEvent.mock.calls.map(([text]) => String(text));
+          expect(posted).toEqual([expect.stringContaining("failed 1 times")]);
         } else {
           expect(stored?.state.nextRunAtMs).toBeTypeOf("number");
+          expect(stored?.state.autoDisabled).toBeUndefined();
+          expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+          expect(deps.requestHeartbeat).not.toHaveBeenCalled();
         }
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(deps.requestHeartbeat).not.toHaveBeenCalled();
       } finally {
         await cleanup();
       }

@@ -175,6 +175,39 @@ describe("cron execution watchdogs", () => {
     }
   });
 
+  it("keeps a timed one-shot retrying after a watchdog timeout instead of quiet-parking it (#131490)", async () => {
+    resetActiveCronTaskRunsForTests();
+    const job = dueJob("timeout-retry-131490", {
+      payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1 },
+      deleteAfterRun: false,
+    });
+    const runner = pendingRunner(({ onExecutionStarted }) => onExecutionStarted?.());
+    const { state, advance } = await fixture(job, {
+      cleanupTimedOutAgentRun: vi.fn(async () => {}),
+      runIsolatedAgentJob: runner.run,
+    });
+    const timer = onTimer(state);
+    try {
+      await runner.started.promise;
+      await advance(1_010);
+      await timer;
+      // A watchdog timeout is not an operator abort: the one-shot must keep
+      // its retry schedule rather than disabling silently with no durable
+      // auto-disable fact or terminal notification (#131490).
+      const stored = requireJob(state, job.id);
+      expect(stored.state.lastStatus).toBe("error");
+      expect(stored.state.lastError).toContain("timed out");
+      expect(stored.state.autoDisabled).toBeUndefined();
+      expect(stored.enabled).toBe(true);
+      expect(stored.state.nextRunAtMs).toBeGreaterThan(SCHEDULED_AT);
+    } finally {
+      stop(state);
+      runner.result.resolve({ status: "ok", summary: "late" });
+      await drain(timer, runner.result.promise);
+      resetActiveCronTaskRunsForTests();
+    }
+  });
+
   it.each(["timeout", "cancel"] as const)(
     "keeps resolved provider/model/session on %s rows (#95873)",
     async (mode) => {

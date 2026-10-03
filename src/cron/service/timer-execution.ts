@@ -484,10 +484,18 @@ async function executeScriptCronJob(
   // Script runners may settle after ignoring an abort. Recheck both operator
   // cancellation and scheduler ownership before any notify/wake side effect.
   if (!isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
-    return { status: "error" as const, error: "Gateway restarting." };
+    return {
+      status: "error" as const,
+      error: "Gateway restarting.",
+      errorClassification: { kind: "aborted" as const },
+    };
   }
   if (abortSignal?.aborted) {
-    return { status: "error" as const, error: abortErrorMessage(abortSignal) };
+    return {
+      status: "error" as const,
+      error: abortErrorMessage(abortSignal),
+      errorClassification: { kind: "aborted" as const },
+    };
   }
   if (options?.assertRunCurrent) {
     await options.assertRunCurrent();

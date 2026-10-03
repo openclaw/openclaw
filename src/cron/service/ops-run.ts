@@ -130,6 +130,10 @@ async function finishPreparedManualRun(
       request: {
         preserveCadence: isImmediateCronRunMode(mode),
         scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
+        // runOnExit is the watcher's terminal fire; plain operator force-runs
+        // never carry onExit, so a manually paused on-exit job keeps the
+        // quiet preserve path instead of the terminal disposition (#131490).
+        ...(prepared.onExit ? { onExitWatcherCompletion: true } : {}),
       },
     };
     const emitMissingTerminal = async (required = false) => {
