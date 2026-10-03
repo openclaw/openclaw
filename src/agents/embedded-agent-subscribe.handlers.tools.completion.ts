@@ -34,7 +34,9 @@ import {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
   extractMessagingToolSourceReplyPayload,
+  extractToolAuthoredSourceReplyPayload,
   isDeliveredMessagingToolSendToCurrentSource,
+  resolveToolAuthoredSourceReplyFinal,
 } from "./embedded-agent-messaging-extraction.js";
 import {
   isMessagingTool,
@@ -76,6 +78,10 @@ import {
   toolStartData,
 } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
+import {
+  buildToolAuthoredSourceReplyIdempotencyKey,
+  persistToolAuthoredSourceReply,
+} from "./embedded-agent-tool-authored-source-reply.js";
 import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
@@ -398,6 +404,38 @@ export async function handleToolExecutionEnd(
     !isToolError &&
     !messageDelivery?.partialDelivery;
   ctx.state.lastToolTurnOnlySourceProgress = ctx.state.turnToolsOnlySourceProgress;
+  // A tool whose author declared `canDeliverSourceReply` may hand the host a
+  // finished reply. The host delivers it to the current source and records it
+  // as the assistant turn, so no further model turn has to restate it.
+  const toolAuthoredSourceReply =
+    !isToolError && ctx.params.sourceReplyCapableToolNames?.has(toolName) === true
+      ? extractToolAuthoredSourceReplyPayload(result)
+      : undefined;
+  if (toolAuthoredSourceReply) {
+    const toolAuthoredFinal = resolveToolAuthoredSourceReplyFinal(result);
+    const idempotencyKey =
+      toolAuthoredSourceReply.idempotencyKey ??
+      buildToolAuthoredSourceReplyIdempotencyKey({ runId, toolCallId });
+    ctx.state.messagingToolSourceReplyPayloads.push({
+      ...toolAuthoredSourceReply,
+      idempotencyKey,
+      sourceReplyFinal: toolAuthoredFinal,
+    });
+    ctx.trimMessagingToolSent();
+    await persistToolAuthoredSourceReply({
+      cfg: ctx.params.config,
+      sessionKey: ctx.params.sessionKey,
+      sessionId: ctx.params.sessionId,
+      agentId: ctx.params.agentId,
+      runId,
+      toolName,
+      toolCallId,
+      payload: toolAuthoredSourceReply,
+      idempotencyKey,
+      sourceReplyFinal: toolAuthoredFinal,
+      log: ctx.log,
+    });
+  }
   // Track committed reminders only when cron.add completed successfully.
   if (
     !isToolError &&

@@ -11,7 +11,11 @@ export {
   isAsyncStartedToolResult,
   readAsyncStartedTaskIds,
 } from "../agents/embedded-agent-tool-results.js";
-export { extractMessagingToolSourceReplyPayload } from "../agents/embedded-agent-messaging-extraction.js";
+export {
+  extractMessagingToolSourceReplyPayload,
+  extractToolAuthoredSourceReplyPayload,
+  resolveToolAuthoredSourceReplyFinal,
+} from "../agents/embedded-agent-messaging-extraction.js";
 export { collectMessagingMediaUrlsFromRecord } from "../agents/embedded-agent-tool-media.js";
 export {
   collectAgentHarnessMessagingMediaUrls,

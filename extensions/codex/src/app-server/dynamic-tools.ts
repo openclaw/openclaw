@@ -8,7 +8,9 @@ import {
   finalizeToolTerminalPresentation,
   formatToolExecutionErrorMessage,
   getBeforeToolCallFailureDisposition,
+  buildToolAuthoredSourceReplyIdempotencyKey,
   embeddedAgentLog,
+  persistToolAuthoredSourceReply,
   getChannelAgentToolMeta,
   getPluginToolMeta,
   getPluginToolSideEffectOwnerKey,
@@ -33,6 +35,8 @@ import {
   copyInternalToolResultState,
   createAgentHarnessToolExecutionBoundaryRegistry,
   extractMessagingToolSourceReplyPayload,
+  extractToolAuthoredSourceReplyPayload,
+  resolveToolAuthoredSourceReplyFinal,
   getCoreTtsToolResultMediaUrls,
   normalizeAcceptedSessionSpawnResult,
   recordAgentHarnessToolResultTelemetry,
@@ -667,8 +671,47 @@ export function createCodexDynamicToolBridge(params: {
           if (deliveredSourceReply || toolConfirmedSourceReply) {
             telemetry.didDeliverSourceReplyViaMessageTool = true;
           }
+          // A `canDeliverSourceReply` tool may hand the host a finished reply. The
+          // host delivers it and records the assistant turn, so a final reply ends
+          // the Codex turn without another model step.
+          const toolAuthoredSourceReply =
+            toolEntry.tool.canDeliverSourceReply === true && !resultIsError
+              ? extractToolAuthoredSourceReplyPayload(rawResult)
+              : undefined;
+          const toolAuthoredSourceReplyFinal = toolAuthoredSourceReply
+            ? resolveToolAuthoredSourceReplyFinal(rawResult)
+            : undefined;
+          if (toolAuthoredSourceReply) {
+            const idempotencyKey =
+              toolAuthoredSourceReply.idempotencyKey ??
+              buildToolAuthoredSourceReplyIdempotencyKey({
+                runId: toolResultHookContext.runId ?? call.turnId,
+                toolCallId: call.callId,
+              });
+            telemetry.messagingToolSourceReplyPayloads.push({
+              ...toolAuthoredSourceReply,
+              idempotencyKey,
+              sourceReplyFinal: toolAuthoredSourceReplyFinal,
+            });
+            // Result handling is synchronous here; the transcript row is best effort
+            // and delivery does not depend on it (the helper logs failures).
+            void persistToolAuthoredSourceReply({
+              cfg: params.hookContext?.config,
+              sessionKey: toolResultHookContext.sessionKey,
+              sessionId: toolResultHookContext.sessionId,
+              agentId: toolResultHookContext.agentId,
+              runId: toolResultHookContext.runId,
+              toolName,
+              toolCallId: call.callId,
+              payload: toolAuthoredSourceReply,
+              idempotencyKey,
+              sourceReplyFinal: toolAuthoredSourceReplyFinal === true,
+              log: embeddedAgentLog,
+            });
+          }
           const continuesSourceReplyProgress = confirmedSourceReply && sourceReplyFinal === false;
           response.terminate =
+            toolAuthoredSourceReplyFinal === true ||
             ((rawResult.terminate === true || result.terminate === true) &&
               !continuesSourceReplyProgress) ||
             // Yield is an explicit owner-level turn handoff, not termination

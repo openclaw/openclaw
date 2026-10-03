@@ -268,8 +268,14 @@ export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
   extractMessagingToolSourceReplyPayload,
+  extractToolAuthoredSourceReplyPayload,
   isDeliveredMessagingToolSendToCurrentSource,
+  resolveToolAuthoredSourceReplyFinal,
 } from "../agents/embedded-agent-messaging-extraction.js";
+export {
+  buildToolAuthoredSourceReplyIdempotencyKey,
+  persistToolAuthoredSourceReply,
+} from "../agents/embedded-agent-tool-authored-source-reply.js";
 export {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,

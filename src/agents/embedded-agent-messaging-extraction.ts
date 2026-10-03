@@ -35,7 +35,44 @@ export function extractMessagingToolSourceReplyPayload(
   if (status && status !== "sent") {
     return undefined;
   }
-  const sourceReply = readRecord(details.sourceReply) ?? details;
+  return readSourceReplyPayload(details, readRecord(details.sourceReply) ?? details);
+}
+
+/**
+ * Reads the reply a `canDeliverSourceReply` tool authored in `details.sourceReply`.
+ * Unlike internal-ui mirrors, nothing has been sent yet: the host delivers the payload
+ * to the current source. Callers must already have verified the tool's capability.
+ */
+export function extractToolAuthoredSourceReplyPayload(
+  result: unknown,
+): MessagingToolSourceReplyPayload | undefined {
+  const details = readToolResultDetails(result);
+  const sourceReply = details ? readRecord(details.sourceReply) : undefined;
+  if (!details || !sourceReply) {
+    return undefined;
+  }
+  const payload = readSourceReplyPayload(details, sourceReply);
+  if (!payload) {
+    return undefined;
+  }
+  const hasVisibleContent =
+    Boolean(payload.text?.trim()) ||
+    Boolean(payload.mediaUrl) ||
+    Boolean(payload.mediaUrls?.length) ||
+    Boolean(payload.attachments?.length);
+  return hasVisibleContent ? { ...payload, toolAuthored: true } : undefined;
+}
+
+/** A tool-authored source reply completes the turn unless it says `final: false`. */
+export function resolveToolAuthoredSourceReplyFinal(result: unknown): boolean {
+  const sourceReply = readRecord(readToolResultDetails(result)?.sourceReply);
+  return sourceReply?.final !== false;
+}
+
+function readSourceReplyPayload(
+  details: Record<string, unknown>,
+  sourceReply: Record<string, unknown>,
+): MessagingToolSourceReplyPayload | undefined {
   const payload: MessagingToolSourceReplyPayload = {};
   const text = readStringValue(sourceReply.text) ?? readStringValue(details.message);
   if (text) {

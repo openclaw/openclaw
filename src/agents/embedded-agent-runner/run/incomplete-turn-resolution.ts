@@ -65,6 +65,13 @@ type TerminalAuthFailureContext = {
  * not produce a safe final assistant response and no committed delivery/progress
  * already completed the task.
  */
+/** A capable tool wrote the final reply itself; the host delivers it, so the turn is complete. */
+function hasFinalToolAuthoredSourceReply(attempt: IncompleteTurnAttempt): boolean {
+  return (attempt.messagingToolSourceReplyPayloads ?? []).some(
+    (payload) => payload.toolAuthored === true && payload.sourceReplyFinal !== false,
+  );
+}
+
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
@@ -111,7 +118,8 @@ export function resolveIncompleteTurnPayloadText(params: {
 
   if (
     params.attempt.hasToolMediaBlockReply ||
-    resolveSourceReplyDelivery(params.attempt) !== "missing"
+    resolveSourceReplyDelivery(params.attempt) !== "missing" ||
+    hasFinalToolAuthoredSourceReply(params.attempt)
   ) {
     return null;
   }

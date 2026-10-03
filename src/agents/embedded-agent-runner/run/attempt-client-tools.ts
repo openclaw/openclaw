@@ -24,6 +24,7 @@ import {
 } from "../../tool-replay-safety.js";
 import { addClientToolsToToolCatalog } from "../../tool-search-catalog.js";
 import { resolveToolSearchConfig, type ToolSearchCatalogRef } from "../../tool-search.js";
+import type { AnyAgentTool } from "../../tools/common.js";
 import { log } from "../logger.js";
 import {
   AGENT_RESERVED_TOOL_NAMES,
@@ -130,6 +131,14 @@ export function prepareEmbeddedAttemptClientTools(params: {
     const codeModeExecToolNames = new Set(
       params.effectiveTools.filter((tool) => isCodeModeExecTool(tool)).map((tool) => tool.name),
     );
+    // Only a tool author can opt a tool into delivering its result as the source reply;
+    // the completion handler checks exact registered names, never result fields.
+    const sourceReplyCapableToolNames = new Set(
+      params.uncompactedEffectiveTools
+        .filter((tool) => (tool as AnyAgentTool).canDeliverSourceReply === true)
+        .map((tool) => (tool.name ?? "").trim())
+        .filter((name) => name.length > 0),
+    );
     const clientConflictToolNames = params.deferredDirectoryToolsCallable
       ? builtinToolNames
       : coreBuiltinToolNames;
@@ -189,6 +198,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       replaySafeToolNames,
       replaySafeTools,
       codeModeExecToolNames,
+      sourceReplyCapableToolNames,
       sideEffectToolOwners,
       sessionToolAllowlist,
       trustedLocalMediaToolNames,
@@ -211,6 +221,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
         "coreBuiltinToolNames",
         "replaySafeToolNames",
         "codeModeExecToolNames",
+        "sourceReplyCapableToolNames",
         "trustedLocalMediaToolNames",
       ] as const) {
         current[key].clear();

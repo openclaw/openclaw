@@ -358,6 +358,52 @@ that duration in the fallback warning without exposing raw error text. Return
 available; the warning includes their count. These diagnostics do not turn an
 incomplete operation into a successful call.
 
+## Deliver the reply directly
+
+By default the model reads every tool result and writes the user-visible reply
+itself. A tool that already produces the finished reply, such as a report or a
+confirmation text, can hand it to OpenClaw instead and end the turn without
+that extra model step.
+
+Declare the capability on the tool and return the reply in
+`details.sourceReply`:
+
+```typescript
+api.registerTool({
+  name: "order_status",
+  description: "Report the status of one order.",
+  parameters: Type.Object({ orderId: Type.String() }),
+  canDeliverSourceReply: true,
+  async execute(_toolCallId, params) {
+    const report = await buildOrderStatusReport(params.orderId);
+    return {
+      content: [{ type: "text", text: report.text }],
+      details: {
+        ok: true,
+        sourceReply: {
+          text: report.text,
+          mediaUrls: report.pdfPath ? [report.pdfPath] : [],
+        },
+      },
+    };
+  },
+});
+```
+
+OpenClaw delivers `sourceReply.text`, `mediaUrl`, `mediaUrls`, and
+`attachments` to the conversation the turn came from, records the reply as the
+assistant turn in the session transcript, and stops the tool batch, so no
+further model turn restates the result. `content` still reaches the model when
+the turn continues, for example after `sourceReply.final: false`, which sends
+the reply as progress and lets the model keep working. Error results and
+results without visible reply content are ignored.
+
+Only the tool author can grant this: `canDeliverSourceReply` lives on the tool
+definition, never in a result, so a hook or a nested call cannot turn an
+ordinary result into a reply. Keep such tools out of Code Mode catalogs with
+`catalogMode: "direct-only"`; a tool called from inside an `exec` program
+returns to that program, not to the user.
+
 ## Configuration
 
 `configSchema` is optional. Omit it and OpenClaw applies a strict empty object

@@ -41,9 +41,7 @@ export function buildSourceReplyPayloadState(params: {
     ) {
       return [];
     }
-    // These replies were already sent by the tool. Mirror them into the
-    // transcript while marking channel delivery to suppress a duplicate send.
-    const reply: ReplyPayload = markReplyPayloadForSourceSuppressionDelivery({
+    const base: ReplyPayload = {
       text,
       ...(payload.mediaUrl || media[0] ? { mediaUrl: payload.mediaUrl || media[0] } : {}),
       ...(media.length ? { mediaUrls: media } : {}),
@@ -55,7 +53,16 @@ export function buildSourceReplyPayloadState(params: {
       ...(payload.presentation ? { presentation: payload.presentation } : {}),
       ...(payload.interactive ? { interactive: payload.interactive } : {}),
       ...(payload.channelData ? { channelData: payload.channelData } : {}),
-    });
+    };
+    // A tool-authored reply has not reached the channel yet: the host delivers
+    // it like assistant text, and its transcript row was already persisted at
+    // tool completion.
+    if (payload.toolAuthored) {
+      return [base];
+    }
+    // Every other source reply was already sent by the tool. Mirror it into the
+    // transcript while marking channel delivery to suppress a duplicate send.
+    const reply = markReplyPayloadForSourceSuppressionDelivery(base);
     if (params.sessionKey) {
       const idempotencyKey =
         payload.idempotencyKey ??

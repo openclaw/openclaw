@@ -8,7 +8,9 @@ import {
 import {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
+  extractToolAuthoredSourceReplyPayload,
   isDeliveredMessagingToolSendToCurrentSource,
+  resolveToolAuthoredSourceReplyFinal,
 } from "../../embedded-agent-messaging-extraction.js";
 import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
 import { readToolResultDetails } from "../../tool-result-error.js";
@@ -70,6 +72,44 @@ function isDeliveredMessageToolOnlySourceReply(
         }
       : {}),
   });
+}
+
+/**
+ * Stops the tool batch after a `canDeliverSourceReply` tool authored a final source reply.
+ * The host delivers that reply itself, so another model turn would only restate it.
+ */
+export function installToolAuthoredSourceReplyTerminalHook(params: {
+  agent: Agent;
+  sourceReplyCapableToolNames?: ReadonlySet<string>;
+}): void {
+  const capableToolNames = params.sourceReplyCapableToolNames;
+  if (!capableToolNames?.size) {
+    return;
+  }
+  const previousAfterToolCall = params.agent.afterToolCall?.bind(params.agent);
+  params.agent.afterToolCall = async (context, signal) => {
+    const hookResult = await previousAfterToolCall?.(context, signal);
+    const isError = hookResult?.isError ?? context.isError;
+    if (isError || !capableToolNames.has(context.toolCall.name)) {
+      return hookResult;
+    }
+    // An earlier hook returns a partial override: only the fields it supplies
+    // replace the executed result, exactly as the agent loop applies them.
+    const result = hookResult
+      ? {
+          ...context.result,
+          ...(hookResult.content !== undefined ? { content: hookResult.content } : {}),
+          ...(hookResult.details !== undefined ? { details: hookResult.details } : {}),
+        }
+      : context.result;
+    if (
+      extractToolAuthoredSourceReplyPayload(result) &&
+      resolveToolAuthoredSourceReplyFinal(result)
+    ) {
+      return { ...hookResult, terminate: true };
+    }
+    return hookResult;
+  };
 }
 
 export function installMessageToolOnlyTerminalHook(

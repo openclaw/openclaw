@@ -208,3 +208,39 @@ describe("incomplete-turn terminal metadata", () => {
     ).toBe("paused");
   });
 });
+
+describe("tool-authored source replies", () => {
+  // A `canDeliverSourceReply` tool wrote the answer; the host delivers it, so a
+  // tool-use stop with no post-tool assistant text is not an incomplete turn.
+  function toolAuthoredTurn(final: boolean) {
+    return {
+      payloadCount: 1,
+      aborted: false,
+      externalAbort: false,
+      timedOut: false,
+      attempt: makeEmbeddedRunnerAttempt({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "order_status", meta: "orderId=SO1" }],
+        messagingToolSourceReplyPayloads: [
+          { text: "Pedido SO1 creado.", toolAuthored: true, sourceReplyFinal: final },
+        ],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          stopReason: "toolUse",
+          content: [
+            { type: "toolCall", id: "tool_1", name: "order_status", arguments: { orderId: "SO1" } },
+          ],
+        }),
+      }),
+    };
+  }
+
+  it("treats a final tool-authored source reply as a complete tool-use turn", () => {
+    expect(resolveIncompleteTurnPayloadText(toolAuthoredTurn(true))).toBeNull();
+  });
+
+  it("still expects the model to finish after a progress reply", () => {
+    expect(resolveIncompleteTurnPayloadText(toolAuthoredTurn(false))).toContain(
+      "couldn't generate a response",
+    );
+  });
+});
