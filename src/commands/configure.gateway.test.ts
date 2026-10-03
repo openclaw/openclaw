@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayPort: vi.fn(),
   note: vi.fn(),
   randomToken: vi.fn(),
-  getTailnetHostname: vi.fn(),
+  getTailnetHostname: vi.fn(async (): Promise<string | null> => null),
 }));
 
 const chatChannels = vi.hoisted(() =>
@@ -92,13 +92,14 @@ async function runGatewayPrompt(params: {
 
 async function runTrustedProxyPrompt(params: {
   textQueue: Array<string | undefined>;
+  bind?: "loopback" | "lan";
   tailscaleMode?: "off" | "serve" | "funnel";
   baseConfig?: OpenClawConfig;
   confirmResult?: boolean;
 }) {
   return runGatewayPrompt({
     ...params,
-    selectQueue: ["loopback", "trusted-proxy", params.tailscaleMode ?? "off"],
+    selectQueue: [params.bind ?? "loopback", "trusted-proxy", params.tailscaleMode ?? "off"],
   });
 }
 
@@ -189,6 +190,7 @@ describe("promptGatewayConfig", () => {
     "configures proxy headers and disables incompatible Tailscale %s",
     async (tailscaleMode) => {
       const result = await runTrustedProxyPrompt({
+        bind: "lan",
         tailscaleMode,
         textQueue: [
           "18789",
@@ -207,7 +209,7 @@ describe("promptGatewayConfig", () => {
           allowUsers: ["nick@example.com"],
         },
       });
-      expect(result.config.gateway?.bind).toBe("loopback");
+      expect(result.config.gateway?.bind).toBe("lan");
       expect(result.config.gateway?.trustedProxies).toEqual(["10.0.1.10", "192.168.1.5"]);
       expect(result.config.gateway?.tailscale).toEqual({ mode: "off" });
     },
