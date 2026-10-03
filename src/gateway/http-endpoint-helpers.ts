@@ -1,3 +1,5 @@
+// Gateway HTTP endpoint helpers.
+// Wraps common POST JSON method, auth, scope, and body handling.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   readJsonBodyOrError,
@@ -8,17 +10,22 @@ import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js"
 import {
   authorizeGatewayHttpRequestOrReply,
   type AuthorizedGatewayHttpRequest,
-  resolveSharedSecretHttpOperatorScopes,
+  resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
-/** Shared admission for OpenAI-compatible endpoints; shared secrets retain operator scopes. */
+/** Handles a gateway POST JSON endpoint and returns the parsed body when authorized. */
 export async function handleGatewayPostJsonEndpoint(
   req: IncomingMessage,
   res: ServerResponse,
   opts: GatewayHttpRequestAuthOptions & {
     pathname: string;
     maxBodyBytes: number;
+    requiredOperatorMethod?: "chat.send" | (string & Record<never, never>);
+    resolveOperatorScopes?: (
+      req: IncomingMessage,
+      requestAuth: AuthorizedGatewayHttpRequest,
+    ) => string[];
   },
 ): Promise<
   | false
@@ -44,11 +51,15 @@ export async function handleGatewayPostJsonEndpoint(
     return undefined;
   }
 
-  const operatorScopes = resolveSharedSecretHttpOperatorScopes(req, requestAuth);
-  const scopeAuth = authorizeOperatorScopesForMethod("chat.send", operatorScopes);
-  if (!scopeAuth.allowed) {
-    sendMissingScopeForbidden(res, scopeAuth.missingScope);
-    return undefined;
+  const operatorScopes =
+    opts.resolveOperatorScopes?.(req, requestAuth) ??
+    resolveTrustedHttpOperatorScopes(req, requestAuth);
+  if (opts.requiredOperatorMethod) {
+    const scopeAuth = authorizeOperatorScopesForMethod(opts.requiredOperatorMethod, operatorScopes);
+    if (!scopeAuth.allowed) {
+      sendMissingScopeForbidden(res, scopeAuth.missingScope);
+      return undefined;
+    }
   }
 
   const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes);
