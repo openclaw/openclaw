@@ -615,14 +615,15 @@ export async function spawnAcpDirect(
       });
       const runId = readGatewayRunId(response) ?? childIdem;
       if (state.parentRelay && runId !== childIdem) {
-        state.parentRelay.dispose();
+        // Seal the old relay now; its Gateway owner joins diagnostic settlement.
+        void state.parentRelay.dispose();
         state.parentRelay = startParentRelay(runId);
       }
       state.parentRelay?.notifyStarted();
       return { runId };
     },
     async cleanupOnFailure({ state }) {
-      state?.parentRelay?.dispose();
+      await state?.parentRelay?.dispose();
       await cleanupFailedAcpSpawn({
         cfg,
         sessionKey,

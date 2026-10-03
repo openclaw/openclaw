@@ -9,7 +9,7 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
-import { buildCurrentInboundSteeringPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import { attachSteeringRuntimeContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import {
   isOpenClawSystemUpdateMessage,
   orderSystemUpdateMessages,
@@ -455,9 +455,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     }
 
     const expandedText = this.expandPrompt(text);
-    // Expand commands before adding this turn's model-only context.
-    const steeringPrompt = buildCurrentInboundSteeringPrompt(expandedText, currentInboundContext);
-
     const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
     // Transcript preparation may outlive the captured attempt. Recheck its owner
     // fence immediately before enqueue so a successor cannot inherit this steer.
@@ -465,7 +462,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       throw new Error("active session is finalizing");
     }
     await this.queueSteer(
-      steeringPrompt,
+      expandedText,
       images,
       preparedMessage && userTurnTranscriptRecorder
         ? { message: preparedMessage, recorder: userTurnTranscriptRecorder }
@@ -473,6 +470,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       media,
       imageOrder,
       queueIdentity,
+      currentInboundContext,
     );
   }
 
@@ -502,11 +500,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
+    currentInboundContext?: CurrentInboundPromptContext,
   ): Promise<void> {
     const runtimeMessage = this.createUserMessage(text, images, transcriptContext?.message);
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;
+    attachSteeringRuntimeContext(promptMessage, currentInboundContext);
     setSteeringMessageIdentity(promptMessage, queueIdentity);
     this.trackQueuedUserMessage(promptMessage, "steering", text);
     this.agent.steer(

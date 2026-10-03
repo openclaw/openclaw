@@ -20,6 +20,7 @@ import {
 } from "@openclaw/gateway-protocol/version";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { raceWithTimeout } from "@openclaw/retry";
 import {
   formatGatewayClientErrorForLog,
   isGatewayClientStoppedError,
@@ -573,21 +574,16 @@ export class GatewayClient {
       opts?.timeoutMs === undefined
         ? STOP_AND_WAIT_TIMEOUT_MS
         : resolveSafeTimeoutDelayMs(opts.timeoutMs);
-    let timeout: NodeJS.Timeout | null = null;
     try {
-      await Promise.race([
-        stopPromise,
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => {
-            reject(new Error(`gateway client stop timed out after ${timeoutMs}ms`));
-          }, timeoutMs);
-          timeout.unref?.();
-        }),
-      ]);
+      await raceWithTimeout(
+        Promise.resolve(stopPromise),
+        timeoutMs,
+        () => {
+          throw new Error(`gateway client stop timed out after ${timeoutMs}ms`);
+        },
+        { ref: false },
+      );
     } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
       // The transport deadline must never abandon accepted durable operations.
       await this.deviceAuth.drain();
     }

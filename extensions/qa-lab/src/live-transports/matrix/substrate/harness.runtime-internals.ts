@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { FetchLike } from "../../../docker-runtime.js";
 
 const MATRIX_QA_DEFAULT_IMAGE =
@@ -52,21 +53,9 @@ export async function withMatrixQaHarnessTimeout<T>(
   timeoutMs: number,
   task: Promise<T>,
 ): Promise<T> {
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      task,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          reject(new MatrixQaHarnessTimeoutError(`${label} timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
+  return await raceWithTimeout(task, timeoutMs, () => {
+    throw new MatrixQaHarnessTimeoutError(`${label} timed out after ${timeoutMs}ms`);
+  });
 }
 
 export async function waitForReachableMatrixBaseUrl(params: {

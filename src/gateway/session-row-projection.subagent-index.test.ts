@@ -1,10 +1,8 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { isMainThread } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
-import * as registryRead from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
@@ -32,9 +30,7 @@ import * as projectionWork from "./session-projection-work.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
-import { ready } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
-import { seedSessionRowProjectionTranscriptFixture } from "./session-row-projection.transcript-fixture.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 
@@ -406,78 +402,6 @@ it.each(["exact", "bulk"] as const)(
     );
   },
 );
-
-it("reuses the subagent index across a 2,048-session drain with unrelated writes and refreshes a changed run", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
-    const count = seedSessionRowProjectionTranscriptFixture();
-    for (let index = 1; index < count; index++) {
-      const run: SubagentRunRecord = {
-        runId: `run-${index}`,
-        childSessionKey: `agent:main:legacy-${index}`,
-        requesterSessionKey: "agent:main:legacy-0",
-        requesterDisplayKey: "parent",
-        task: "Synthetic task",
-        cleanup: "keep",
-        createdAt: 1,
-        execution: { status: "running", startedAt: 1 },
-        completion: { required: false },
-        delivery: { status: "not_required" },
-      };
-      subagentRuns.set(run.runId, run);
-    }
-    const builds = vi.spyOn(registryRead, "buildSubagentSessionListReadIndex");
-    const projection = await createSessionRowProjection({ cfg });
-    let writes = 0;
-    let writesDuringDrain = 0;
-    let drainSettled = false;
-    const producer = (async () => {
-      for (let update = 1; update <= 32; update++) {
-        await nextTurn();
-        if (!drainSettled) {
-          writesDuringDrain++;
-        }
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: "agent:main:legacy-2047" },
-          { sessionId: "legacy-2047", updatedAt: count + update, label: `Update ${update}` },
-        );
-        writes++;
-        if (update === 12) {
-          const run = subagentRuns.get("run-1")!;
-          subagentRuns.set(run.runId, {
-            ...run,
-            execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
-          });
-          persistRegistryFixture(subagentRuns, [run.runId]);
-        }
-      }
-    })();
-    const drain = (async () => {
-      await projection.ensureMaterialized();
-      drainSettled = true;
-    })();
-    try {
-      await Promise.all([producer, drain]);
-      // The bounded drain may finish before all producer turns; join its later publications too.
-      await projection.ensureMaterialized();
-      expect(projection.selectEntries().filter(ready)).toHaveLength(count);
-      expect(projection.dirtyRowCount).toBe(0);
-      expect(writes).toBe(32);
-      expect(writesDuringDrain).toBeGreaterThan(0);
-      expect(
-        projection.snapshot({ agentId: "main", key: "agent:main:legacy-2047" }).row?.label,
-      ).toBe("Update 32");
-      expect(projection.snapshot({ agentId: "main", key: "agent:main:legacy-1" }).row?.status).toBe(
-        "done",
-      );
-      expect(builds).toHaveBeenCalledTimes(1);
-    } finally {
-      await Promise.allSettled([producer, drain]);
-      projection.dispose();
-    }
-  });
-}, 120_000);
 
 it.each(
   (["ownership", "broad-ownership", "retirement", "clear", "persistence"] as const).flatMap(

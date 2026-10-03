@@ -18,6 +18,7 @@ import {
   collectForbiddenPackPaths,
   collectSkillShellScriptExecutableErrors,
   collectPackedInstalledPackageVerificationErrors,
+  createPackedBundledPluginActivationSmokeEnv,
   createPackedPluginSdkTypescriptSmokeProject,
   createPackedCompletionSmokeEnv,
   createPackedCliSmokeEnv,
@@ -168,6 +169,22 @@ describe("packed CLI smoke", () => {
     });
 
     expect(env).not.toHaveProperty("OPENAI_API_KEY");
+  });
+
+  it("isolates bundled plugin activation from ambient OpenClaw state", () => {
+    const env = createPackedBundledPluginActivationSmokeEnv(
+      {
+        HOME: "/tmp/operator-home",
+        OPENCLAW_STATE_DIR: "/tmp/operator-state",
+      },
+      "/tmp/release-check",
+    );
+
+    const homeDir = join("/tmp/release-check", "activation-home");
+    expect(env).toMatchObject({
+      HOME: homeDir,
+      OPENCLAW_STATE_DIR: join(homeDir, ".openclaw"),
+    });
   });
 
   it("does not admit provider credentials through smoke overrides", () => {

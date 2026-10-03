@@ -297,75 +297,54 @@ describe("worker placement session evidence", () => {
     });
   });
 
-  it("canonicalizes legacy default-main placements before batching", async () => {
-    const stateDir = tempDirs.make("openclaw-placement-session-canonical-main-");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
-      const cfg: OpenClawConfig = {
-        session: { store: storeTemplate },
-        agents: { entries: { ops: {} } },
-      };
-      setRuntimeConfigSnapshot(cfg, cfg);
-      const placement = localPlacement("session-canonical-main", "agent:main:main", "ops");
-      const canonicalKey = "agent:ops:main";
-      await sessionAccessor.upsertSessionEntryCore(
-        { agentId: "ops", sessionKey: canonicalKey },
-        { sessionId: placement.sessionId, updatedAt: 1 },
-      );
+  it.each(["ops", "main"])(
+    "resolves a migrated default-main placement persisted under %s",
+    async (agentId) => {
+      const stateDir = tempDirs.make("openclaw-placement-session-canonical-main-");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const cfg: OpenClawConfig = {
+          session: {
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: { entries: { ops: {} } },
+        };
+        setRuntimeConfigSnapshot(cfg, cfg);
+        const placement = localPlacement("session-canonical-main", "agent:main:main", "ops");
+        await sessionAccessor.upsertSessionEntryCore(
+          { agentId, sessionKey: `agent:${agentId}:main` },
+          { sessionId: placement.sessionId, updatedAt: 1 },
+        );
+        await expect(resolvePlacementEvidence(placement)).resolves.toBe("current");
+      });
+    },
+  );
 
-      const resolve = await createWorkerPlacementSessionEvidenceResolver([placement]);
-
-      await expect(resolve(placement)).resolves.toBe("current");
-    });
-  });
-
-  it("keeps a listed deleted-main placement current after default-agent migration", async () => {
-    const stateDir = tempDirs.make("openclaw-placement-session-legacy-main-");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const cfg: OpenClawConfig = {
-        session: {
-          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-        },
-        agents: { entries: { ops: {} } },
-      };
-      setRuntimeConfigSnapshot(cfg, cfg);
-      const placement = localPlacement("session-legacy-main", "agent:main:main", "ops");
-      await sessionAccessor.upsertSessionEntryCore(
-        { agentId: "main", sessionKey: placement.sessionKey },
-        { sessionId: placement.sessionId, updatedAt: 1 },
-      );
-
-      const resolve = await createWorkerPlacementSessionEvidenceResolver([placement]);
-
-      await expect(resolve(placement)).resolves.toBe("current");
-    });
-  });
-
-  it("reports absence when the configured session database is genuinely missing", async () => {
-    const stateDir = tempDirs.make("openclaw-placement-session-database-missing-");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await expect(
-        resolvePlacementEvidence(localPlacement("session-missing", "agent:main:missing")),
-      ).resolves.toBe("absent");
-      expect(fsSync.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
-      expect(
-        fsSync.existsSync(path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite")),
-      ).toBe(false);
-    });
-  });
-
-  it("keeps a placement when the agent database registry is unreadable", async () => {
-    const stateDir = tempDirs.make("openclaw-placement-session-registry-unreadable-");
-    fsSync.mkdirSync(path.join(stateDir, "state", "openclaw.sqlite"), { recursive: true });
-
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await expect(
-        resolvePlacementEvidence(
-          localPlacement("session-unreadable", "agent:retired:unreadable", "retired"),
-        ),
-      ).resolves.toBe("unknown");
-    });
-  });
+  it.each(["missing", "unreadable"] as const)(
+    "preserves placement evidence when the registry is %s",
+    async (registry) => {
+      const stateDir = tempDirs.make("openclaw-placement-session-registry-");
+      const registryPath = path.join(stateDir, "state", "openclaw.sqlite");
+      if (registry === "unreadable") {
+        fsSync.mkdirSync(registryPath, { recursive: true });
+      }
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const agentId = registry === "missing" ? "main" : "retired";
+        await expect(
+          resolvePlacementEvidence(
+            localPlacement("session-missing", `agent:${agentId}:missing`, agentId),
+          ),
+        ).resolves.toBe(registry === "missing" ? "absent" : "unknown");
+        if (registry === "missing") {
+          expect(fsSync.existsSync(registryPath)).toBe(false);
+          expect(
+            fsSync.existsSync(
+              path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+            ),
+          ).toBe(false);
+        }
+      });
+    },
+  );
 
   it.each(["configured", "fixed", "retired", "incognito-only"] as const)(
     "preserves registry failure boundaries for %s sessions",
@@ -430,48 +409,40 @@ describe("worker placement session evidence", () => {
     },
   );
 
-  it("keeps a placement when its session database is migration-invalid", async () => {
-    const stateDir = tempDirs.make("openclaw-placement-session-evidence-");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const sessionId = "session-1";
-      const sessionKey = "agent:main:main";
-      await sessionAccessor.upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        { sessionId, updatedAt: 1 },
-      );
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      database.db.exec("PRAGMA user_version = 999;");
-      closeOpenClawAgentDatabasesForTest();
-
-      await expect(resolvePlacementEvidence(localPlacement(sessionId, sessionKey))).resolves.toBe(
-        "unknown",
-      );
-    });
-  });
-
-  it("keeps strict fresh admission when no warm reader can continue a malformed store", async () => {
-    const stateDir = tempDirs.make("openclaw-placement-fresh-malformed-");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const current = localPlacement("current", "agent:main:current");
-      const unreadable = localPlacement("unreadable", "agent:main:unreadable");
-      const absent = localPlacement("absent", "agent:main:absent");
-      for (const subject of [current, unreadable]) {
-        await sessionAccessor.upsertSessionEntryCore(subject, {
-          sessionId: subject.sessionId,
-          updatedAt: 1,
-        });
-      }
-      openOpenClawAgentDatabase({ agentId: "main" })
-        .db.prepare(
-          "UPDATE session_nodes SET entry_json = ?, entry_valid = 1 WHERE session_key = ?",
-        )
-        .run("{", unreadable.sessionKey);
-      await closeOpenClawAgentDatabasesAsync();
-      const subjects = [current, unreadable, absent];
-      const resolve = await createWorkerPlacementSessionEvidenceResolver(subjects);
-      expect(await Promise.all(subjects.map(resolve))).toEqual(["unknown", "unknown", "unknown"]);
-    });
-  });
+  it.each(["migration-invalid", "malformed"] as const)(
+    "keeps strict fresh admission for a %s session database",
+    async (failure) => {
+      const stateDir = tempDirs.make("openclaw-placement-fresh-invalid-");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const current = localPlacement("current", "agent:main:current");
+        const unreadable = localPlacement("unreadable", "agent:main:unreadable");
+        const subjects =
+          failure === "malformed"
+            ? [current, unreadable, localPlacement("absent", "agent:main:absent")]
+            : [current];
+        for (const subject of failure === "malformed" ? [current, unreadable] : [current]) {
+          await sessionAccessor.upsertSessionEntryCore(subject, {
+            sessionId: subject.sessionId,
+            updatedAt: 1,
+          });
+        }
+        const database = openOpenClawAgentDatabase({ agentId: "main" });
+        if (failure === "migration-invalid") {
+          database.db.exec("PRAGMA user_version = 999;");
+          closeOpenClawAgentDatabasesForTest();
+        } else {
+          database.db
+            .prepare(
+              "UPDATE session_nodes SET entry_json = ?, entry_valid = 1 WHERE session_key = ?",
+            )
+            .run("{", unreadable.sessionKey);
+          await closeOpenClawAgentDatabasesAsync();
+        }
+        const resolve = await createWorkerPlacementSessionEvidenceResolver(subjects);
+        expect(await Promise.all(subjects.map(resolve))).toEqual(subjects.map(() => "unknown"));
+      });
+    },
+  );
 
   it("warns instead of silently swallowing resolver pipeline failures", async () => {
     const stateDir = tempDirs.make("openclaw-placement-session-pipeline-failure-");
