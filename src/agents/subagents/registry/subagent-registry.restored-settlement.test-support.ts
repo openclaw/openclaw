@@ -3,12 +3,14 @@ import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import type { deleteGatewaySession } from "../../../gateway/server-methods/sessions-delete.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
   getSharedGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import { trackAsyncWork } from "../../../shared/async-work-scope.js";
 import {
   createSessionEntry,
   createSubagentRunRecord,
@@ -23,6 +25,24 @@ import type { createSubagentRegistryMockState } from "./subagent-registry.mock-s
 import { makeQueuedRun } from "./subagent-registry.run-fixtures.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRun } from "./subagent-run-generation.js";
+
+vi.mock("../../../gateway/server-methods/sessions-delete.js", () => ({
+  deleteGatewaySession: async ({
+    params,
+    context,
+    assertCurrent,
+  }: Parameters<typeof deleteGatewaySession>[0]): ReturnType<typeof deleteGatewaySession> => {
+    // Both deletion entry points share this host fixture's controlled completion.
+    assertCurrent?.();
+    await expectDefined(context.recoveryRuntime, "fixture lifecycle runtime").dispatchSessionMethod(
+      "sessions.delete",
+      params,
+      { assertCurrent },
+    );
+    assertCurrent?.();
+    return { ok: true, result: { ok: true, key: params.key, deleted: true, archived: [] } };
+  },
+}));
 
 type RestoredSettlementTestOptions = {
   getRegistry: () => SubagentRegistryHarness;
@@ -44,6 +64,7 @@ export async function activateSubagentRegistryWithRecoveryRuntime(
   const gatewayContext = {
     chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
     recoveryRuntime,
+    trackExecution: trackAsyncWork,
     resolveGatewayContext: () => gatewayContext as never,
   };
   bindGatewayContextResolver(recoveryRuntime, gatewayContext.resolveGatewayContext);
