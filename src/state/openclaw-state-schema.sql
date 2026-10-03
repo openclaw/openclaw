@@ -1622,7 +1622,7 @@ CREATE INDEX IF NOT EXISTS idx_delivery_queue_pending
   ON delivery_queue_entries(queue_name, status, enqueued_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_failed
-  ON delivery_queue_entries(queue_name, status, failed_at, id);
+  ON delivery_queue_entries(status, queue_name, failed_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_session
   ON delivery_queue_entries(queue_name, status, session_key, enqueued_at, id)
@@ -1821,6 +1821,10 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_utterances (
     REFERENCES meeting_transcript_sessions(session_id, started_at)
     ON DELETE CASCADE
 ) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_utterances_id
+  ON meeting_transcript_utterances(session_id, session_started_at, utterance_id)
+  WHERE utterance_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS meeting_transcript_summaries (
   session_id TEXT NOT NULL,

@@ -414,7 +414,7 @@ export function createAgentTurnService(
           canonicalSessionKey,
           sessionAgentId,
           mainSessionKey,
-          creation: prepareSkillLibrarySessionCreation(
+          creation: await prepareSkillLibrarySessionCreation(
             principal,
             () => context.getRuntimeConfig(),
             resolveAgentRunSessionCreation(principal),

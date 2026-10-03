@@ -61,8 +61,9 @@ describe("dispatch Stop before provider allocation", () => {
     runtimeFactoryMocks.createDiskSpace.mockReturnValue({ read: vi.fn(), version: () => 0 });
     const entry = {
       sessionId: REQUEST.sessionId,
+      updatedAt: 1,
       lifecycleRevision: "original",
-      worktree: { id: "workspace" },
+      worktree: { id: "workspace", branch: "fixture", repoRoot: support.testState.root },
     };
     const target = {
       agentId: REQUEST.agentId,

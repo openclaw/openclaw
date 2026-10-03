@@ -647,10 +647,10 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
   try {
     const result = await executeAgentTurnOutcome(executionParams, runId);
-    recordAgentTurnExecutionOutcome(executionParams, result);
+    await recordAgentTurnExecutionOutcome(executionParams, result);
     return result;
   } catch (error) {
-    recordAgentTurnExecutionOutcome(executionParams, undefined);
+    await recordAgentTurnExecutionOutcome(executionParams, undefined);
     throw error;
   }
 }

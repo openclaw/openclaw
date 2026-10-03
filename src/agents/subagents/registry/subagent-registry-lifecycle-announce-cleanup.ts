@@ -192,27 +192,20 @@ export const startSubagentAnnounceCleanupFlow = (
       onPublished,
     });
   };
-  if (
-    !checkDescendants &&
-    (typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered")
-  ) {
+  const alreadyDelivered = () =>
+    typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered";
+  const finalizeDelivered = (options?: { skipRequesterDelivery: boolean }) =>
+    finalizeSubagentCleanup(context, entry, cleanup, "delivered", cleanupGeneration, stateContext, {
+      skipAnnounce: true,
+      ...options,
+    });
+  if (!checkDescendants && alreadyDelivered()) {
     runDetachedCleanupAttempt(context, {
       runId,
       entry,
       cleanupGeneration,
       stateContext,
-      run: () =>
-        finalizeSubagentCleanup(
-          context,
-          entry,
-          cleanup,
-          "delivered",
-          cleanupGeneration,
-          stateContext,
-          {
-            skipAnnounce: true,
-          },
-        ),
+      run: () => finalizeDelivered(),
     });
     return true;
   }
@@ -281,20 +274,8 @@ export const startSubagentAnnounceCleanupFlow = (
           }
           return;
         }
-        if (
-          checkDescendants &&
-          (typeof entry.delivery?.announcedAt === "number" ||
-            entry.delivery?.status === "delivered")
-        ) {
-          await finalizeSubagentCleanup(
-            context,
-            entry,
-            cleanup,
-            "delivered",
-            cleanupGeneration,
-            stateContext,
-            { skipAnnounce: true },
-          );
+        if (checkDescendants && alreadyDelivered()) {
+          await finalizeDelivered();
           return;
         }
         if (cleanup === "delete" && (await prepareChildSessionEffects())) {
@@ -346,18 +327,7 @@ export const startSubagentAnnounceCleanupFlow = (
           await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
           return;
         }
-        await finalizeSubagentCleanup(
-          context,
-          entry,
-          cleanup,
-          "delivered",
-          cleanupGeneration,
-          stateContext,
-          {
-            skipAnnounce: true,
-            skipRequesterDelivery,
-          },
-        );
+        await finalizeDelivered({ skipRequesterDelivery });
       },
     });
     return true;

@@ -145,6 +145,10 @@ export function resolveEffectiveUpdateChannel(params: {
     return { channel: params.configChannel, source: "config" };
   }
 
+  if (params.installKind === "immutable") {
+    return { channel: DEFAULT_GIT_CHANNEL, source: "default" };
+  }
+
   if (params.currentVersion && isBetaTag(params.currentVersion)) {
     return { channel: "beta", source: "installed-version" };
   }

@@ -112,7 +112,7 @@ function buildChatSendPromptMedia(
 }
 
 /** Assemble transcript media and the portable inbound context after attachment preparation. */
-export function prepareChatSendUserTurn(params: {
+export async function prepareChatSendUserTurn(params: {
   request: Pick<
     NormalizedChatSendRequest,
     | "clientInfo"
@@ -208,11 +208,12 @@ export function prepareChatSendUserTurn(params: {
     admission.originatingRoute;
   const creation = request.systemInputProvenance
     ? resolveOperatorSessionCreation(client)
-    : prepareSkillLibrarySessionCreation(
+    : await prepareSkillLibrarySessionCreation(
         client,
         params.getConfig ?? session.cfg ?? {},
         resolveOperatorSessionCreation(client),
       );
+  admission.assertWorkAdmissionCurrent?.();
   const sandbox = session.cfg ? resolveCreatorSandbox(session.cfg, creation) : undefined;
   // Current and historical turns must reach the single LLM timestamp boundary
   // with identical bare text. Stamping this live turn would bust the prompt cache.

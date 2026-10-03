@@ -1,5 +1,4 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import type { Selectable } from "kysely";
 import { isRedactedSecretValue } from "../../config/redact-sentinel.js";
 import {
   executeSqliteQuerySync,
@@ -10,15 +9,20 @@ import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../../state/openclaw-state-db-readonly.js";
 import { ensureSecretStoreSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateReadWorkerContext,
+  captureOpenClawStateWorkerContext,
+} from "../../state/openclaw-state-worker-context.js";
 import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
@@ -33,7 +37,6 @@ import { isMissingSecretStoreTableError } from "./secret-store-sqlite.js";
 import { SecretStoreValidationError } from "./secret-store-validation-error.js";
 import {
   assertSecretStoreEnvName,
-  assertSecretStoreMutationName,
   assertSecretStoreValue,
   normalizeScope,
   normalizeSecretAllowedHosts,
@@ -41,6 +44,7 @@ import {
   type SecretStoreKind,
   type SecretStoreScope,
 } from "./secret-store-validation.js";
+import type { SecretStoreListInput, SecretStoreRow } from "./secret-store.types.js";
 
 export {
   assertSecretStoreValue,
@@ -49,13 +53,14 @@ export {
   type SecretStoreScope,
 } from "./secret-store-validation.js";
 export {
+  deleteSecretStoreEntry,
   writeSecretStoreEntry,
   writeSecretStoreEntries,
   writeSecretStoreEntryWithRollback,
   type SecretStoreBatchWriteParams,
   type SecretStoreWriteEntry,
   type SecretStoreWriteParams,
-} from "./secret-store-write.js";
+} from "./secret-store-mutations.js";
 
 export {
   deleteHiddenGitHubSecretRecord,
@@ -70,7 +75,6 @@ export {
 } from "./secret-store-validation-error.js";
 
 type SecretStoreDatabase = Pick<OpenClawStateKyselyDatabase, "secret_store_entries">;
-type SecretStoreRow = Selectable<OpenClawStateKyselyDatabase["secret_store_entries"]>;
 
 export type SecretStoreEntryMetadata = {
   name: string;
@@ -120,41 +124,34 @@ function toMetadata(row: SecretStoreRow): SecretStoreEntryMetadata {
   };
 }
 
-export function listSecretStoreEntries(params: {
-  scope: SecretStoreScope;
-  includeDeleted?: boolean;
-  redactedOnly?: boolean;
-  database?: OpenClawStateDatabaseOptions;
-}): SecretStoreEntryMetadata[] {
-  const { scopeKind, scopeId } = normalizeScope(params.scope);
-  try {
-    return (
-      withExistingOpenClawStateDatabaseReadOnly(({ db: sqlite }) => {
-        const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-        let query = db
-          .selectFrom("secret_store_entries")
-          .selectAll()
-          .where("scope_kind", "=", scopeKind)
-          .where("scope_id", "=", scopeId)
-          .orderBy("name", "asc");
-        if (!params.includeDeleted) {
-          query = query.where("deleted_at_ms", "is", null);
-        }
-        return executeSqliteQuerySync(sqlite, query)
-          .rows.filter(
-            (row) =>
-              classifyHiddenGitHubStoreName(row.name) === undefined &&
-              (!params.redactedOnly || isRedactedSecretValue(row.value)),
-          )
-          .map(toMetadata);
-      }, params.database ?? {}) ?? []
-    );
-  } catch (error) {
-    if (isMissingSecretStoreTableError(error)) {
-      return [];
-    }
-    throw error;
+export async function listSecretStoreEntries(
+  params: SecretStoreListInput & {
+    database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+    assertCurrent?: () => void;
+  },
+): Promise<SecretStoreEntryMetadata[]> {
+  const context = captureOpenClawStateReadWorkerContext(params.database);
+  params.assertCurrent?.();
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    {
+      type: "secrets.metadata",
+      input: {
+        scope: { ...params.scope },
+        includeDeleted: params.includeDeleted,
+        redactedOnly: params.redactedOnly,
+      },
+    },
+    { context, current: true },
+  );
+  if (reply && (!reply.ok || reply.type !== "secrets.metadata")) {
+    throw new Error("Unexpected secret store metadata result.");
   }
+  // Returned values reach the host redaction owner before any caller can consume them.
+  const entries = (reply?.rows ?? []).map(toMetadata);
+  context.admission.assertCurrent();
+  params.assertCurrent?.();
+  return entries;
 }
 
 /** Atomically returns and hard-deletes one exact fresh, non-egress GitHub setup handoff. */
@@ -416,45 +413,6 @@ export function updateSecretStoreAllowedHosts(params: {
     params.database,
     { operationLabel: "secrets.store.allowed-hosts" },
   );
-}
-
-export function deleteSecretStoreEntry(params: {
-  scope: SecretStoreScope;
-  name: string;
-  database?: OpenClawStateDatabaseOptions;
-}): void {
-  assertSecretStoreMutationName(params.name);
-  const { scopeKind, scopeId } = normalizeScope(params.scope);
-  const state = openOpenClawStateDatabase(params.database);
-  const now = Date.now();
-  try {
-    runOpenClawStateWriteTransaction(
-      ({ db: sqlite }) => {
-        const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-        const query =
-          classifyHiddenGitHubStoreName(params.name) === "setup"
-            ? db
-                .deleteFrom("secret_store_entries")
-                .where("scope_kind", "=", scopeKind)
-                .where("scope_id", "=", scopeId)
-                .where("name", "=", params.name)
-            : db
-                .updateTable("secret_store_entries")
-                .set({ deleted_at_ms: now, updated_at_ms: now })
-                .where("scope_kind", "=", scopeKind)
-                .where("scope_id", "=", scopeId)
-                .where("name", "=", params.name)
-                .where("deleted_at_ms", "is", null);
-        executeSqliteQuerySync(sqlite, query);
-      },
-      { ...params.database, database: state },
-      { operationLabel: "secrets.store.delete" },
-    );
-  } catch (error) {
-    if (!isMissingSecretStoreTableError(error)) {
-      throw error;
-    }
-  }
 }
 
 export async function purgeExpiredSecretStoreEntries(

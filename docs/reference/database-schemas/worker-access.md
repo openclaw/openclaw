@@ -586,7 +586,40 @@ another registered path observes the executor's single maintenance claim. Alias
 registrations retain cleanup locators without creating independent maintenance
 owners, so a nested scope cannot close an executor retained by its parent.
 
+Personal skill-library catalog, revision disclosure, and fresh selection reads use
+the shared-state read worker. The host captures the physical store, profile and
+role authority before yielding; prepared defaults and activation check the
+library writer's committed revision before session admission commits. Native
+library writes publish that revision before observers and preserve it on rollback.
+Copied durable session pins retain their existing revision access. The released
+synchronous skill-command and harness tool-surface SDKs retain their native
+metadata reader; Gateway status, embedded skill preparation, and sandbox
+synchronization use prepared reads. Import, upload, mutation, and
+authoring mutation guards remain for the next cutover. Schemas, quotas, retention,
+publication security checks, and update behavior are unchanged.
+
 ## Carry facts, publish after commit
+
+Message-tool-only completion records use the canonical per-agent writer. The
+host captures the original store and run facts before waiting; configured-store
+discovery uses the existing reader. First-use schema admission commits separately
+before the outcome insert and bounded prune, with current host grants at each
+transaction and commit. Recording retains the agent writer's FIFO and settles
+before the turn returns. Failures remain best-effort warnings and never replay
+the model or tool action. Process-held incognito side data retains its native
+owner. Schemas, outcome semantics, the 10,000-row bound, and update behavior are
+unchanged.
+
+Sandbox-browser workspace reservations, activity/port upserts, and browser row
+removal use the existing shared-state writer. Exact-generation retirement shares
+that queue and validates the inspected allocation inside its transaction. Each command captures its database
+and input before yielding; the worker rereads the current row and preserves its
+creation and image fields. Removal shares the writer FIFO so an earlier queued
+activity update cannot restore a removed row. Browser allocation awaits the
+reservation, and transaction/commit grants retain the live workspace assertion.
+That assertion still performs the existing synchronous session and worktree
+authority reads; those other owners remain separate migration work. Schemas,
+stored bytes, retention, and update behavior are unchanged.
 
 Workspace snapshots and conditional alias registration, first-writer setup merges,
 and exact expired-state deletion use the shared-state writer. Read-only snapshots
@@ -1429,8 +1462,16 @@ shutdown stops scheduling and joins accepted cleanup. An OpenClaw chat that save
 a key for a config path writes its store entry in the same worker: one
 transaction mints a random entry name, inserts a new row without touching
 existing ones, and admits the write through the requester's live
-authority at transaction and commit. Other secret-store set/delete operations
-remain separate synchronous migration debt.
+authority at transaction and commit. Ordinary settings set, batch import, delete,
+and exact-writer rollback now use that same writer, and metadata listings use the
+existing reader. Store-bound questions retain authority through persistence and
+publish only an acknowledged safe answer. Reset hides their public entries
+immediately while accepted work settles privately. Runtime refresh follows the
+commit; failed refresh never invites replay of a saved answer. The released
+synchronous question SDK methods retain their contracts. Runtime value and exec
+environment reads, hidden GitHub operations, and the CLI allowed-host setter
+remain with their existing owners. Schemas, retention, stored bytes, and update
+behavior are unchanged.
 
 Placement change reporting reads its before/after snapshots in the shared-state
 read worker using the placement store's row codec. It transfers only session

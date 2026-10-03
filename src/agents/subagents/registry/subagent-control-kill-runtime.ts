@@ -39,10 +39,6 @@ const subagentKillRuntimeLoader = createLazyImportLoader(
   () => import("./subagent-control.runtime.js"),
 );
 
-function formatKillPersistenceError(error: unknown): string {
-  return formatErrorMessage(error instanceof SubagentRegistryWriteError ? error.cause : error);
-}
-
 async function markSubagentRunTerminatedBestEffort(
   params: Parameters<typeof markSubagentRunTerminated>[0],
 ): Promise<number> {
@@ -199,7 +195,9 @@ export async function mutateSubagentRunForKill(
       return {
         failure: {
           killed: false,
-          error: `Failed to persist subagent kill intent: ${formatKillPersistenceError(error)}`,
+          error: `Failed to persist subagent kill intent: ${formatErrorMessage(
+            error instanceof SubagentRegistryWriteError ? error.cause : error,
+          )}`,
         },
       };
     }
@@ -267,6 +265,10 @@ export async function mutateSubagentRunForKill(
       return cancellationFailure(error, true);
     }
   };
+  const isKilledTarget = (target: SubagentKillTargetState) =>
+    target.state === "terminal" &&
+    target.task.status === "cancelled" &&
+    target.task.error === SUBAGENT_KILL_TASK_ERROR;
   const ownsKillIntent = (
     current: SubagentRunRecord | undefined,
     claim: NonNullable<typeof killClaim>,
@@ -499,10 +501,7 @@ export async function mutateSubagentRunForKill(
       }
       const targetStateAfterRuntimeLoad = targetState();
       if (targetStateAfterRuntimeLoad) {
-        const killedTarget =
-          targetStateAfterRuntimeLoad.state === "terminal" &&
-          targetStateAfterRuntimeLoad.task.status === "cancelled" &&
-          targetStateAfterRuntimeLoad.task.error === SUBAGENT_KILL_TASK_ERROR;
+        const killedTarget = isKilledTarget(targetStateAfterRuntimeLoad);
         const claimedCurrentKill = killClaim !== undefined && killOwnerCurrent();
         if (killedTarget && (!killClaim || claimedCurrentKill)) {
           await markKilledBestEffort();
@@ -674,10 +673,7 @@ export async function mutateSubagentRunForKill(
         }
         const settledTarget = targetState();
         if (settledTarget) {
-          const killedTarget =
-            settledTarget.state === "terminal" &&
-            settledTarget.task.status === "cancelled" &&
-            settledTarget.task.error === SUBAGENT_KILL_TASK_ERROR;
+          const killedTarget = isKilledTarget(settledTarget);
           if (killedTarget) {
             await markKilledBestEffort();
           } else {

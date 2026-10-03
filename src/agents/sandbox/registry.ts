@@ -19,7 +19,6 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   assertSandboxRegistryReservationCurrent,
-  browserEntryToRow,
   containerEntryToRow,
   insertSandboxRegistryRowInDatabase,
   type SandboxRegistryWrite,
@@ -44,12 +43,16 @@ function getSandboxRegistryKysely(db: import("node:sqlite").DatabaseSync) {
   return getNodeSqliteKysely<SandboxRegistryDatabase>(db);
 }
 
-async function writeRegistry(write: SandboxRegistryWrite): Promise<void> {
+async function writeRegistry(
+  write: SandboxRegistryWrite,
+  assertCallerCurrent?: () => void,
+): Promise<void> {
   const context = captureOpenClawStateWorkerContext();
   const input = structuredClone(write);
   const assertCurrent = () => {
     context.admission.assertCurrent();
     context.maintenanceScope?.assertAdmission();
+    assertCallerCurrent?.();
   };
   const { runOpenClawStateWorkerOperation } =
     await import("../../state/openclaw-state-worker-store.js");
@@ -63,19 +66,6 @@ async function writeRegistry(write: SandboxRegistryWrite): Promise<void> {
       ]),
     },
   );
-}
-
-function removeRegistryRow(kind: SandboxRegistryKind, containerName: string): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const stateDb = getSandboxRegistryKysely(db);
-    executeSqliteQuerySync(
-      db,
-      stateDb
-        .deleteFrom("sandbox_registry_entries")
-        .where("registry_kind", "=", kind)
-        .where("container_name", "=", containerName),
-    );
-  });
 }
 
 /** Reads all registered sandbox runtime containers from SQLite. */
@@ -310,49 +300,23 @@ export function assertSandboxBrowserRegistryEntryCurrent(entry: SandboxBrowserRe
 }
 
 /** Creates or updates one browser sandbox registry entry, preserving immutable creation fields. */
-export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const existingRow = readSandboxRegistryRowInDatabase(db, "browser", entry.containerName);
-    const existing = existingRow ? rowToBrowserEntry(existingRow) : null;
-    insertSandboxRegistryRowInDatabase(db, browserEntryToRow(entry, existing));
-  });
-}
-
-// Activity stamps can advance without changing custody; all allocation facts must match.
-function sameSandboxRegistryGeneration(
-  current: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
-  expected: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
-): boolean {
-  const { lastUsedAtMs: _currentUse, ...currentGeneration } = current;
-  const { lastUsedAtMs: _expectedUse, ...expectedGeneration } = expected;
-  return isDeepStrictEqual(currentGeneration, expectedGeneration);
+export async function updateBrowserRegistry(
+  entry: SandboxBrowserRegistryEntry,
+  assertCurrent?: () => void,
+) {
+  await writeRegistry({ operation: "updateBrowser", entry }, assertCurrent);
 }
 
 /** Forget only the inspected allocation, under the caller's still-live settlement lease. */
-export function removeSandboxRegistryGeneration(
+export async function removeSandboxRegistryGeneration(
   kind: SandboxRegistryKind,
   entry: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
-  assertCurrent: () => void,
-): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    assertCurrent();
-    const row = readSandboxRegistryRowInDatabase(db, kind, entry.containerName);
-    const current = row && (kind === "browser" ? rowToBrowserEntry(row) : rowToContainerEntry(row));
-    if (!current || !sameSandboxRegistryGeneration(current, entry)) {
-      throw new Error("Sandbox runtime generation changed during retirement");
-    }
-    const stateDb = getSandboxRegistryKysely(db);
-    executeSqliteQuerySync(
-      db,
-      stateDb
-        .deleteFrom("sandbox_registry_entries")
-        .where("registry_kind", "=", kind)
-        .where("container_name", "=", entry.containerName),
-    );
-  });
+  assertCurrent?: () => void,
+): Promise<void> {
+  await writeRegistry({ operation: "removeGeneration", kind, entry }, assertCurrent);
 }
 
 /** Removes one browser sandbox registry entry by container name. */
 export async function removeBrowserRegistryEntry(containerName: string) {
-  removeRegistryRow("browser", containerName);
+  await writeRegistry({ operation: "removeBrowser", containerName });
 }

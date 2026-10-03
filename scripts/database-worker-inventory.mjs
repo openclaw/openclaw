@@ -402,6 +402,21 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/secrets/store/secret-store-write.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "writeSecretStoreEntriesInDatabase",
+          "rollbackSecretStoreEntryWriteInDatabase",
+          "deleteSecretStoreEntryInDatabase",
+        ],
+        evidence:
+          "Only openclaw-state-worker-runtime.ts calls these ordinary secret mutation kernels",
+      },
+    ],
+  ],
+  [
     "src/cron/store/run-receipt-store.ts",
     [
       {
@@ -488,6 +503,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
   "src/config/sessions/conversation-delivery-store.kernel.ts", // Agent execution registry writes and session transcript worker reads only.
   "extensions/memory-core/src/memory-entry-origin-reads.ts", // Memory search worker origin-read commands only.
   "extensions/memory-core/src/memory-entry-origins-delete.ts", // Memory origin worker delete command only.
@@ -582,6 +598,7 @@ const workerModules = new Set([
 
   "src/secrets/store/secret-store-config-ref.kernel.ts", // Config-ref writes are called only by the shared-state worker runtime.
   "src/secrets/store/secret-store-expiry.kernel.ts", // Expiry SQL uses shared-state worker dispatch; host captures cutoffs only.
+  "src/secrets/store/secret-store-metadata.kernel.ts", // Metadata listing only runs through stateReadRegistry in the shared-state reader.
 
   "src/sessions/session-upstream-links.kernel.ts", // openclaw-state.worker.ts dispatches sessionUpstream.listWatched; host imports only the codec.
 
@@ -618,6 +635,10 @@ const cliModules = new Map([
   [
     "src/claws/provenance-adopted.ts",
     "Only claws migrate/remove CLI one-shots call these writers via migrate.ts and lifecycle-adopted-removal.ts; no Gateway caller",
+  ],
+  [
+    "src/infra/package-update-activation-immutable.ts",
+    "Adoption/preparation writers are called only by update-command-immutable.ts through update-immutable-install.ts; Gateway inspection dispatches immutableInstall.read through the SQLite read-only worker",
   ],
 ]);
 

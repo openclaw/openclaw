@@ -63,6 +63,7 @@ import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operatio
 import { assertSqliteIntegrity, isTerminalSqliteIntegrityError } from "./sqlite-integrity.js";
 import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { readSqliteDataVersion } from "./sqlite-schema-facts.js";
 import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
@@ -71,8 +72,6 @@ import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { createMigrationDatabaseHandle } from "./state-migrations.agent-database.js";
 import { recoverMisplacedAgentDatabaseCopies } from "./state-migrations.agent-owner-recovery.js";
 import {
-  mediaSourceDriftMessage,
-  readMediaSourceVersion,
   scanTranscriptRows,
   scanTrajectoryRows,
 } from "./state-migrations.media-persistence-database.js";
@@ -276,7 +275,7 @@ async function migrateAgentDatabase(params: {
       }
     }
 
-    const sourceVersion = readMediaSourceVersion(database, legacyTextStorage);
+    const sourceVersion = readSqliteDataVersion(database);
     const changedLegacySessions = new Set<string>();
     params.beforeTransaction?.();
     const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
@@ -284,11 +283,8 @@ async function migrateAgentDatabase(params: {
       database,
       () => {
         assertMediaSchemaMigration();
-        const currentSourceVersion = readMediaSourceVersion(database, legacyTextStorage);
-        if (currentSourceVersion.dataVersion !== sourceVersion.dataVersion) {
-          throw new Error(
-            mediaSourceDriftMessage(params.pathname, sourceVersion, currentSourceVersion),
-          );
+        if (readSqliteDataVersion(database) !== sourceVersion) {
+          throw new Error(`${params.pathname} source changed before migration transaction`);
         }
         const rewrittenSessions = scanTranscriptRows({
           database,
