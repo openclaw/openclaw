@@ -105,11 +105,3 @@ export type TelegramInboundDisposition =
 export interface TelegramInboundPipeline {
   handle: (ctx: Context) => Promise<TelegramInboundDisposition>;
 }
-
-export interface TelegramEventBindings {
-  registerChatMembership(): void;
-  registerReaction(): void;
-  registerPolls(): void;
-  registerMigration(): void;
-  registerMessages(): void;
-}

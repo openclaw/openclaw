@@ -114,7 +114,6 @@ function registerHandler(
       resolveCachedMessageThreadSpec,
     },
     authorization: createTelegramHandlerAuthorization(params),
-    registerMessages: () => {},
   }).registerReaction();
   const handler = handlers.get("message_reaction");
   if (!handler) {

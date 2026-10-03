@@ -1,5 +1,4 @@
 import type { WebClient } from "@slack/web-api";
-import { resolveDirectoryAllowlistEntries } from "openclaw/plugin-sdk/directory-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -92,45 +91,8 @@ function matchesSlackUserName(user: SlackUserLookup, name: string): boolean {
   });
 }
 
-function scoreSlackUser(user: SlackUserLookup, match: { name?: string; email?: string }): number {
-  let score = 0;
-  if (!user.deleted) {
-    score += 3;
-  }
-  if (!user.isBot && !user.isAppUser) {
-    score += 2;
-  }
-  if (match.email && user.email === match.email) {
-    score += 5;
-  }
-  if (match.name && matchesSlackUserName(user, match.name)) {
-    score += 2;
-  }
-  return score;
-}
-
-function resolveSlackUserFromMatches(
-  input: string,
-  matches: SlackUserLookup[],
-  parsed: { name?: string; email?: string },
-): SlackUserResolution {
-  const scored = matches
-    .map((user) => ({ user, score: scoreSlackUser(user, parsed) }))
-    .toSorted((a, b) => b.score - a.score);
-  const best = scored[0]?.user;
-  if (!best) {
-    return { input, resolved: false };
-  }
-  return {
-    input,
-    resolved: true,
-    id: best.id,
-    name: best.displayName ?? best.realName ?? best.name,
-    email: best.email,
-    deleted: best.deleted,
-    isBot: best.isBot,
-    note: matches.length > 1 ? "multiple matches; chose best" : undefined,
-  };
+function scoreSlackUser(user: SlackUserLookup): number {
+  return (user.deleted ? 0 : 3) + (user.isBot || user.isAppUser ? 0 : 2);
 }
 
 export async function resolveSlackUserAllowlist(params: {
@@ -138,51 +100,45 @@ export async function resolveSlackUserAllowlist(params: {
   entries: string[];
   client?: WebClient;
 }): Promise<SlackUserResolution[]> {
-  const workspaceResolved = params.entries.map((input) =>
-    resolveWorkspaceQualifiedSlackTarget(input, "user"),
-  );
-  const lookupEntries = params.entries.filter((_, index) => !workspaceResolved[index]);
-  if (lookupEntries.length === 0) {
-    return workspaceResolved.filter((entry) => entry !== undefined);
-  }
-  const client = params.client ?? createSlackLookupClient(params.token);
-  const users = await listSlackUsers(client);
-  const resolved = resolveDirectoryAllowlistEntries<
-    { id?: string; name?: string; email?: string },
-    SlackUserLookup,
-    SlackUserResolution
-  >({
-    entries: lookupEntries,
-    lookup: users,
-    parseInput: parseSlackUserInput,
-    findById: (lookup, id) => lookup.find((user) => user.id === id),
-    buildIdResolved: ({ input, parsed, match }) => ({
-      input,
-      resolved: true,
-      id: parsed.id,
-      name: match?.displayName ?? match?.realName ?? match?.name,
-      email: match?.email,
-      deleted: match?.deleted,
-      isBot: match?.isBot,
-    }),
-    resolveNonId: ({ input, parsed, lookup }) => {
-      if (parsed.email) {
-        const matches = lookup.filter((user) => user.email === parsed.email);
-        if (matches.length > 0) {
-          return resolveSlackUserFromMatches(input, matches, parsed);
+  const entries = params.entries.map((input) => ({
+    input,
+    workspace: resolveWorkspaceQualifiedSlackTarget(input, "user"),
+    parsed: parseSlackUserInput(input),
+  }));
+  const users = entries.some(({ workspace }) => !workspace)
+    ? await listSlackUsers(params.client ?? createSlackLookupClient(params.token))
+    : [];
+  return entries.map(({ input, workspace, parsed }) => {
+    if (workspace) {
+      return workspace;
+    }
+    const matches = users.filter((user) =>
+      parsed.id
+        ? user.id === parsed.id
+        : parsed.email
+          ? user.email === parsed.email
+          : parsed.name
+            ? matchesSlackUserName(user, parsed.name)
+            : false,
+    );
+    // Every candidate already matches the same id, email, or name. Only account
+    // health ranks candidates; equal scores retain Slack's directory order.
+    const match = parsed.id
+      ? matches[0]
+      : matches.toSorted((a, b) => scoreSlackUser(b) - scoreSlackUser(a))[0];
+    return parsed.id || match
+      ? {
+          input,
+          resolved: true,
+          id: parsed.id ?? match?.id,
+          name: match?.displayName ?? match?.realName ?? match?.name,
+          email: match?.email,
+          deleted: match?.deleted,
+          isBot: match?.isBot,
+          ...(!parsed.id
+            ? { note: matches.length > 1 ? "multiple matches; chose best" : undefined }
+            : {}),
         }
-      }
-      const name = parsed.name;
-      if (name) {
-        const matches = lookup.filter((user) => matchesSlackUserName(user, name));
-        if (matches.length > 0) {
-          return resolveSlackUserFromMatches(input, matches, parsed);
-        }
-      }
-      return undefined;
-    },
-    buildUnresolved: (input) => ({ input, resolved: false }),
+      : { input, resolved: false };
   });
-  let resolvedIndex = 0;
-  return workspaceResolved.map((entry) => entry ?? resolved[resolvedIndex++]!);
 }

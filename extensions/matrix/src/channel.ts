@@ -9,17 +9,20 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/channel-outbound";
+import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderOpenWarningCollector,
   createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { createScopedAccountReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createChannelDirectoryAdapter,
   createResolvedDirectoryEntriesLister,
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createLazyRuntimeNamedExport,
   createLazyRuntimeModule,
@@ -40,7 +43,6 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import { matrixMessageActions } from "./actions.js";
 import { matrixApprovalCapability } from "./approval-native.js";
-import { createMatrixPairingText, createMatrixProbeAccount } from "./channel-account-paths.js";
 import { createMatrixMessageAdapter } from "./channel-message-adapter.js";
 import { matrixPluginBase } from "./channel.setup.js";
 import {
@@ -494,17 +496,28 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("matrix", accounts),
         buildChannelSummary: ({ snapshot }) =>
           buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
-        probeAccount: async ({ account, timeoutMs, cfg }) =>
-          await createMatrixProbeAccount({
-            resolveMatrixAuth: async (params) =>
-              (await loadMatrixChannelRuntime()).resolveMatrixAuth(params),
-            probeMatrix: async (params) =>
-              await (await loadMatrixChannelRuntime()).probeMatrix(params),
-          })({
-            account,
-            timeoutMs,
-            cfg,
-          }),
+        probeAccount: async ({ account, timeoutMs, cfg }) => {
+          try {
+            const runtime = await loadMatrixChannelRuntime();
+            const auth = await runtime.resolveMatrixAuth({
+              cfg: cfg as CoreConfig,
+              accountId: account.accountId,
+            });
+            return await runtime.probeMatrix({
+              homeserver: auth.homeserver,
+              accessToken: auth.accessToken,
+              userId: auth.userId,
+              deviceId: auth.deviceId,
+              timeoutMs: timeoutMs ?? 5_000,
+              accountId: account.accountId,
+              allowPrivateNetwork: auth.allowPrivateNetwork,
+              ssrfPolicy: auth.ssrfPolicy,
+              dispatcherPolicy: auth.dispatcherPolicy,
+            });
+          } catch (err) {
+            return { ok: false, error: formatErrorMessage(err), elapsedMs: 0 };
+          }
+        },
         resolveAccountSnapshot: ({ account, runtime }) => ({
           accountId: account.accountId,
           name: account.name,
@@ -568,10 +581,19 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         collectMatrixSecurityWarningsForAccount({ account, cfg: cfg as CoreConfig }),
     },
     pairing: {
-      text: createMatrixPairingText(
-        async (to, message, options) =>
-          await (await loadMatrixChannelRuntime()).sendMessageMatrix(to, message, options),
-      ),
+      text: {
+        idLabel: "matrixUserId",
+        message: PAIRING_APPROVED_MESSAGE,
+        normalizeAllowEntry: createPairingPrefixStripper(/^matrix:/i),
+        notify: async ({ id, message, cfg, accountId }) => {
+          await (
+            await loadMatrixChannelRuntime()
+          ).sendMessageMatrix(`user:${id}`, message, {
+            cfg: cfg as CoreConfig,
+            ...(accountId ? { accountId } : {}),
+          });
+        },
+      },
     },
     threading: {
       matchesToolContextTarget: matchesMatrixToolContextRoom,
