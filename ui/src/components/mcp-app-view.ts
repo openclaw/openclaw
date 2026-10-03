@@ -646,7 +646,9 @@ export class McpAppView extends LitElement {
 
   override render() {
     const error =
-      !this.inactive && this.setupTask.status === TaskStatus.ERROR ? this.setupTask.error : null;
+      this.inactive !== "ended" && this.setupTask.status === TaskStatus.ERROR
+        ? this.setupTask.error
+        : null;
     const relaunch = this.inactive === "ended" && this.onRelaunch;
     return html`${
         this.displayMode === "fullscreen"

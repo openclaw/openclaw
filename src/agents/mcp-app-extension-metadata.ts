@@ -90,7 +90,10 @@ export function readMcpAppSettings(value: unknown): McpAppSettings {
 }
 export function readMcpAppSettingsCapability(capabilities: unknown) {
   const record = asOptionalRecord(capabilities);
-  const value = asOptionalRecord(record?.extensions)?.["openai/settings"];
+  // MCP 2025-11-25 and earlier also allow the experimental capability placement.
+  const value =
+    asOptionalRecord(record?.extensions)?.["openai/settings"] ??
+    asOptionalRecord(record?.experimental)?.["openai/settings"];
   const parsed = settingsCapabilitySchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
 }

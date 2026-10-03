@@ -169,8 +169,11 @@ function invoke() {
 }
 
 describe("MCP extension contracts", () => {
-  it("does not advertise settings from the unshipped experimental placement", async () => {
-    expect((await runtime.getCatalog()).servers.demo?.settings).toBeUndefined();
+  it("advertises settings from the documented experimental placement", async () => {
+    expect((await runtime.getCatalog()).servers.demo?.settings).toEqual({
+      readTool: "read",
+      updateTool: "update",
+    });
   });
 
   it("ignores the unshipped thumbnail alias in a registered app form", async () => {

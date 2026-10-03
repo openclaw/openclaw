@@ -890,7 +890,7 @@ describe("mcp-app-view localization", () => {
     ["same gateway port", "/mcp-app-sandbox", 8443, undefined],
     ["host origin", "/mcp-app-sandbox", 8444, "host"],
   ])(
-    "rejects a %s sandbox URL through the mounted view",
+    "rejects a %s sandbox URL through a reconstructed view",
     async (_label, sandboxUrl, sandboxPort, sandboxOrigin) => {
       const resolvedSandboxOrigin =
         sandboxOrigin === "host" ? window.location.origin : sandboxOrigin;
@@ -901,6 +901,7 @@ describe("mcp-app-view localization", () => {
         html: "<p>unsafe</p>",
         toolInput: null,
         toolResult: null,
+        messageSupported: false,
       }));
       const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
       Reflect.set(view, "context", {
