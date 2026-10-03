@@ -1,4 +1,5 @@
 import { createDeferredCore } from "../shared/deferred.js";
+import { registerListener } from "../shared/listeners.js";
 import type { AsyncDebugProxyCaptureStore } from "./store.types.js";
 
 // Capture sessions must settle while their exact store is still writable.
@@ -15,8 +16,7 @@ export function registerCaptureStoreFinalizer(store: object, finalize: () => voi
     callbacks = new Set();
     finalizers.set(store, callbacks);
   }
-  callbacks.add(finalize);
-  return () => callbacks.delete(finalize);
+  return registerListener(callbacks, finalize);
 }
 
 export function finalizeCaptureStore(store: object): void {
@@ -55,8 +55,7 @@ export function registerAsyncCaptureStoreFinalizer(
     callbacks = new Set();
     asyncFinalizers.set(store, callbacks);
   }
-  callbacks.add(finalize);
-  return () => callbacks.delete(finalize);
+  return registerListener(callbacks, finalize);
 }
 
 export function finalizeCaptureStoreAsync(

@@ -1,6 +1,6 @@
 // Gateway HTTP listener tests cover retry behavior for lock contention and listen failures.
 import { EventEmitter } from "node:events";
-import type { Server as HttpServer } from "node:http";
+import { createServer, type Server as HttpServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { listenGatewayHttpServer } from "./http-listen.js";
@@ -48,6 +48,30 @@ function createFakeHttpServer(outcomes: ListenOutcome[]) {
 }
 
 describe("listenGatewayHttpServer", () => {
+  it("releases its listeners when native listen throws synchronously", async () => {
+    const server = createServer();
+    const onError = vi.fn();
+    const onListening = vi.fn();
+    server.on("error", onError);
+    server.on("listening", onListening);
+
+    await expect(
+      listenGatewayHttpServer({
+        httpServer: server,
+        bindHost: "127.0.0.1",
+        port: 65_536,
+      }),
+    ).rejects.toMatchObject({
+      name: "GatewayLockError",
+      cause: { code: "ERR_SOCKET_BAD_PORT" },
+    });
+
+    expect(server.listeners("error")).toEqual([onError]);
+    expect(server.listeners("listening")).toEqual([onListening]);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onListening).not.toHaveBeenCalled();
+  });
+
   it("retries EADDRINUSE and closes server handle before retry", async () => {
     sleepMock.mockClear();
     const fake = createFakeHttpServer([

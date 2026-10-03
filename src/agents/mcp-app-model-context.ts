@@ -36,7 +36,7 @@ export function subscribeMcpAppModelContext(
   listeners.set(view, subscribed);
   return () => {
     subscribed.delete(listener);
-    if (!subscribed.size) {
+    if (!subscribed.size && listeners.get(view) === subscribed) {
       listeners.delete(view);
     }
   };

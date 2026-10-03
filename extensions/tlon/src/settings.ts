@@ -196,18 +196,6 @@ type SettingsLogger = {
 export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogger) {
   let current: TlonSettingsStore = {};
 
-  const listeners = new Set<(settings: TlonSettingsStore) => void>();
-
-  const notify = () => {
-    for (const listener of listeners) {
-      try {
-        listener(current);
-      } catch (err) {
-        logger?.error?.(`[settings] Listener error: ${String(err)}`);
-      }
-    }
-  };
-
   return {
     async load(): Promise<TlonSettingsStore> {
       try {
@@ -226,7 +214,7 @@ export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogg
       }
     },
 
-    async startSubscription(): Promise<void> {
+    async startSubscription(onChange: (settings: TlonSettingsStore) => void): Promise<void> {
       await api.subscribe({
         app: "settings",
         path: "/desk/" + SETTINGS_DESK,
@@ -238,7 +226,11 @@ export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogg
 
           logger?.log?.(`[settings] Update: ${update.key} = ${JSON.stringify(update.value)}`);
           current = applySettingsUpdate(current, update.key, update.value);
-          notify();
+          try {
+            onChange(current);
+          } catch (err) {
+            logger?.error?.(`[settings] Listener error: ${String(err)}`);
+          }
         },
         err: (error) => {
           logger?.error?.(`[settings] Subscription error: ${String(error)}`);
@@ -248,11 +240,6 @@ export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogg
         },
       });
       logger?.log?.("[settings] Subscribed to settings updates");
-    },
-
-    onChange(listener: (settings: TlonSettingsStore) => void): () => void {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
     },
   };
 }

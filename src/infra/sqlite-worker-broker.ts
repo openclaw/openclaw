@@ -2,6 +2,7 @@ import { availableParallelism } from "node:os";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { getChildLogger } from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { notifyListeners } from "../shared/listeners.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { captureSqliteWorkerClosePolicy } from "./bun-sqlite-library.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
@@ -661,13 +662,7 @@ export class SqliteWorkerBroker {
       if (actor.backendClosed) {
         continue;
       }
-      for (const observe of actor.nativeLostObservers ?? []) {
-        try {
-          observe(slot.failed);
-        } catch {
-          // Observer failure cannot interrupt native custody or queued settlement.
-        }
-      }
+      notifyListeners(actor.nativeLostObservers ?? [], slot.failed);
     }
     for (const resume of this.waiters.get(slot) ?? []) {
       resume(slot.failed);

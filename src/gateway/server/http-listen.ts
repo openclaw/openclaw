@@ -38,7 +38,7 @@ export async function listenGatewayHttpServer(params: {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       await new Promise<void>((resolve, reject) => {
-        const onError = (err: NodeJS.ErrnoException) => {
+        const onError = (err: unknown) => {
           httpServer.off("listening", onListening);
           reject(err);
         };
@@ -48,7 +48,12 @@ export async function listenGatewayHttpServer(params: {
         };
         httpServer.once("error", onError);
         httpServer.once("listening", onListening);
-        httpServer.listen(port, bindHost);
+        try {
+          httpServer.listen(port, bindHost);
+        } catch (error) {
+          httpServer.off("error", onError);
+          onError(error);
+        }
       });
       return;
     } catch (err) {

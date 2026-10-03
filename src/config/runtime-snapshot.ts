@@ -4,7 +4,7 @@ import { clearExecutablePathCache } from "../infra/executable-path.js";
 import { prepareRuntimePluginsConfig } from "../plugins/config-state.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
-import { notifyListeners } from "../shared/listeners.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import {
   resetPublishedConfigRuntimeEnv,
   type PreparedConfigRuntimeEnv,
@@ -440,10 +440,7 @@ export function getRuntimeConfigSnapshotRefreshHandler(): RuntimeConfigSnapshotR
 export function registerRuntimeConfigWriteListener(
   listener: (event: RuntimeConfigWriteNotification) => void,
 ): () => void {
-  runtimeConfigWriteListeners.add(listener);
-  return () => {
-    runtimeConfigWriteListeners.delete(listener);
-  };
+  return registerListener(runtimeConfigWriteListeners, listener);
 }
 
 export function registerManagedRuntimeConfigWriteOwner(

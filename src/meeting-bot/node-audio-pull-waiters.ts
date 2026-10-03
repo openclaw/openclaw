@@ -11,19 +11,14 @@ export class MeetingNodeAudioPullWaiters {
   async wait(timeoutMs: number): Promise<void> {
     const { promise: ready, resolve: wake } = createDeferredCore();
     this.#waiters.add(wake);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, timeoutMs);
-    });
+    const timer = setTimeout(wake, timeoutMs);
     try {
-      await Promise.race([timeout, ready]);
+      await ready;
     } finally {
       // A stalled bridge can be polled indefinitely. Timeout must release its
       // resolver instead of retaining one waiter per empty pull.
       this.#waiters.delete(wake);
-      if (timer !== undefined) {
-        clearTimeout(timer);
-      }
+      clearTimeout(timer);
     }
   }
 
