@@ -1,3 +1,4 @@
+import { parseProjectGitUrl } from "../../../../src/projects/project-git-url.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { DraftRepositoryController } from "./draft-repository-state.ts";
@@ -105,6 +106,7 @@ export function restoreDraftPlacePreferences(params: {
   state: DraftPlaceRestoreState;
   browser: DraftPlaceBrowser;
   gateway: DraftGatewayState;
+  where: NewSessionWhere;
   modelControl: NewSessionModelControl;
   repositoryState: DraftRepositoryController;
   isAdmin: () => boolean;
@@ -138,7 +140,7 @@ export function restoreDraftPlacePreferences(params: {
   const activeRemote = browser.remoteProject;
   if ((savedRemote || activeRemote) && browser.projectsReady && browser.githubHost) {
     const matchesHost = (project: DraftRemoteProject) =>
-      URL.canParse(project.cloneUrl) && new URL(project.cloneUrl).hostname === browser.githubHost;
+      parseProjectGitUrl(project.cloneUrl, browser.githubHost) !== null;
     const staleSaved = savedRemote && !matchesHost(savedRemote);
     const staleActive = activeRemote && !matchesHost(activeRemote);
     if (staleSaved || staleActive) {
@@ -209,7 +211,9 @@ export function restoreDraftPlacePreferences(params: {
       configuredProfileId &&
       selectingConfiguredRemoteProject &&
       configuredDefaultAllowed &&
-      !preferredWhere
+      !state.whereSelectedByUser &&
+      !preferredWhere &&
+      params.where.kind === "local"
     ) {
       setDeviceId("");
       setAutoDevice(false);

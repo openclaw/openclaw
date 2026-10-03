@@ -14,6 +14,7 @@ export function createRepositoryFixture(
     unavailable?: boolean;
     data?: NewSessionRouteData;
     models?: ModelCatalogEntry[];
+    cloudProfiles?: DraftGatewayState["cloudProfiles"];
   } = {},
 ) {
   const requestUpdate = vi.fn();
@@ -51,7 +52,7 @@ export function createRepositoryFixture(
     sessions: { state: { result: null } },
   } as unknown as ApplicationContext;
   const gateway = {
-    cloudProfiles: [{ id: "aws", providerId: "crabbox" }],
+    cloudProfiles: options.cloudProfiles ?? [{ id: "aws", providerId: "crabbox" }],
     cloudProfilesReady: true,
     environments: [
       {

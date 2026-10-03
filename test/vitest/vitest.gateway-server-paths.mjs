@@ -326,6 +326,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/prepared-pool-expiry.test.ts",
   "src/gateway/worker-environments/prepared-pool-local-project.test.ts",
   "src/gateway/worker-environments/prepared-pool-maintenance.test.ts",
+  "src/gateway/worker-environments/prepared-pool-presence-activation.test.ts",
   "src/gateway/worker-environments/prepared-pool-presence-effects.test.ts",
   "src/gateway/worker-environments/prepared-pool-presence-store.test.ts",
   "src/gateway/worker-environments/prepared-pool-presence.test.ts",

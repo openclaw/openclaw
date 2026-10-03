@@ -513,6 +513,8 @@ async function prepareSharedGitHubIdentity(
     allowAnonymous?: boolean;
   },
   readNativeToken = readNativeGitHubToken,
+  host = resolveGitHubHost(),
+  apiBaseUrl = resolveGitHubApiBaseUrl(),
 ) {
   const identity = resolveGitHubToolIdentity(params);
   const managed = identity.source !== "system-detected";
@@ -521,8 +523,6 @@ async function prepareSharedGitHubIdentity(
     GH_PROMPT_DISABLED: "1",
   });
   const env = currentEnvironment();
-  const host = resolveGitHubHost();
-  const apiBaseUrl = resolveGitHubApiBaseUrl();
   if (managed && (host !== GITHUB_HOST || apiBaseUrl !== resolveConfiguredGitHubApiBaseUrl())) {
     const error = new GitHubIdentityError("unavailable");
     error.message =
@@ -615,6 +615,8 @@ export async function prepareGitHubReadIdentity(
   const { token, readToken, prepared } = await prepareSharedGitHubIdentity(
     { ...params, ...caller },
     readCachedNativeGitHubToken,
+    params.issuer,
+    params.issuer ? resolveConfiguredGitHubApiBaseUrl() : undefined,
   );
   assertSelected();
   return createGitHubReadIdentity({

@@ -254,6 +254,8 @@ export type GitHubIdentityPreparation = {
 export type GitHubReadIdentityStarter = <T>(start: () => T) => Promise<Awaited<T>>;
 
 export type GitHubReadIdentityPreparation = GitHubIdentityPreparation & {
+  /** Fixed public capabilities ignore the repository host; other reads use its configured issuer. */
+  issuer?: "github.com";
   getCurrentConfig: () => OpenClawConfig;
   assertActive: () => void;
   startActive?: GitHubReadIdentityStarter;

@@ -55,6 +55,8 @@ export function createPreparedWorkerPool(options: PoolOptions) {
   const { store, signal, now } = options;
   let inFlight: Promise<void> | undefined;
   let requested = false;
+  let presenceInFlight: Promise<void> | undefined;
+  let presenceAdmitted = false;
   const preparations = new Map<string, AbortController>();
   const current = () => signal.throwIfAborted();
   const configuredPolicy = (profileId: string) => {
@@ -106,10 +108,11 @@ export function createPreparedWorkerPool(options: PoolOptions) {
   const runPass = async () => {
     await store.ready();
     current();
-    const activePresenceDemand = await presence.maintain();
-    current();
+    const activePresenceDemand = presence.current();
+    const presenceDeferred = !presenceAdmitted;
     const inventory = store.list();
     const sources = new Map<string, { record: WorkerEnvironmentRecord; demandAtMs: number }>();
+    const activationByGeneration = new Map<string, number>();
     const buildingKeys = new Set<string>();
     for (const record of inventory) {
       const demandAtMs = demandAt(record);
@@ -139,11 +142,18 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       if (isSupersededPresenceReserve(record, activePresenceDemand)) {
         continue;
       }
-      if (
-        key &&
-        demandAtMs !== undefined &&
-        readWorkerProjectPreparation(record.profileSnapshot.project)
-      ) {
+      const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
+      if (key && demandAtMs !== undefined && preparation) {
+        if (record.lastActivatedAtMs !== null) {
+          const generationKey = JSON.stringify([key, preparation.key]);
+          activationByGeneration.set(
+            generationKey,
+            Math.max(
+              activationByGeneration.get(generationKey) ?? record.lastActivatedAtMs,
+              record.lastActivatedAtMs,
+            ),
+          );
+        }
         const previous = sources.get(key);
         if (
           !previous ||
@@ -198,18 +208,21 @@ export function createPreparedWorkerPool(options: PoolOptions) {
           activePresenceDemand.project.key ===
             readWorkerProjectSnapshot(record.profileSnapshot.project)?.key;
         const presenceExpiresAtMs = activePresenceDemand?.retireAtMs ?? Number.MAX_SAFE_INTEGER;
-        // Presence renewal is not evidence that a foreground session activated this worker.
+        // A newer spare may supply the snapshot, but only this exact generation's
+        // real activation can supply its independent foreground demand deadline.
+        const activationDemandAtMs = presenceOwned
+          ? activationByGeneration.get(JSON.stringify([key, preparationKey]))
+          : demandAtMs;
         const activationExpiresAtMs =
-          (!presenceOwned || typeof record.lastActivatedAtMs === "number") &&
+          activationDemandAtMs !== undefined &&
           Number.isSafeInteger(timeout) &&
           timeout &&
           timeout > 0
-            ? demandAtMs + timeout
+            ? activationDemandAtMs + timeout
             : undefined;
-        if (
-          (presenceOwned && presenceExpiresAtMs > now()) ||
-          (activationExpiresAtMs !== undefined && activationExpiresAtMs > now())
-        ) {
+        const activationEligible =
+          activationExpiresAtMs !== undefined && activationExpiresAtMs > now();
+        if ((presenceOwned && presenceExpiresAtMs > now()) || activationEligible) {
           eligible.set(key, {
             source: record,
             preparationKey,
@@ -221,8 +234,8 @@ export function createPreparedWorkerPool(options: PoolOptions) {
               activationExpiresAtMs ?? 0,
             ),
             presenceOwned: Boolean(presenceOwned),
-            activationEligible:
-              activationExpiresAtMs !== undefined && activationExpiresAtMs > now(),
+            deferred: Boolean(presenceOwned && presenceDeferred && !activationEligible),
+            activationEligible,
           });
         }
       } catch (error) {
@@ -253,6 +266,13 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         (!activePresenceDemand || !presence.matchesCurrentPolicy(activePresenceDemand))
       ) {
         return false;
+      }
+      if (
+        generation.presenceOwned &&
+        !generation.activationEligible &&
+        (!presenceAdmitted || !presence.isPresent())
+      ) {
+        throw new Error("Authenticated human presence is unavailable for preparation");
       }
       if (
         !isDeepStrictEqual(
@@ -407,7 +427,10 @@ export function createPreparedWorkerPool(options: PoolOptions) {
             cleaned.add(record.environmentId);
             cleanup.push(latest);
           }
-        } else if (!generation?.deferred) {
+        } else if (
+          !generation?.deferred &&
+          (!generation?.presenceOwned || generation.activationEligible || presence.isPresent())
+        ) {
           work.push(latest);
         }
       }
@@ -417,6 +440,9 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     // Drain that cleanup first so unrelated GitHub latency cannot hold its owner.
     await reconcileAll((await retain(false)).cleanup);
     for (const [key, generation] of eligible) {
+      if (presenceDeferred && generation.presenceOwned && !generation.activationEligible) {
+        continue;
+      }
       try {
         generation.retention = await options.prepareRetention(generation.source, signal);
         current();
@@ -534,7 +560,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     }
     await reconcileAll(work);
   };
-  const schedule = () => {
+  const scheduleInventory = () => {
     if (signal.aborted) {
       return Promise.resolve();
     }
@@ -549,6 +575,35 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         inFlight = undefined;
       }
     })());
+  };
+  const schedule = async () => {
+    if (signal.aborted) {
+      return;
+    }
+    await store.ready();
+    await presence.ready();
+    current();
+    // Repository admission has one owner and one in-flight operation, but cannot
+    // hold inventory cleanup or independently authorized project refill hostage.
+    const admission = (presenceInFlight ??= (async () => {
+      presenceAdmitted = false;
+      const previousDemand = presence.current();
+      try {
+        await presence.maintain();
+        presenceAdmitted = true;
+      } finally {
+        presenceInFlight = undefined;
+        if (previousDemand || presence.current()) {
+          await scheduleInventory();
+        }
+      }
+    })());
+    const results = await Promise.allSettled([admission, scheduleInventory()]);
+    for (const result of results) {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+    }
   };
   const noteDemand = async (environmentId: string) => {
     current();

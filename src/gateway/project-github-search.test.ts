@@ -34,8 +34,70 @@ function json(value: unknown, status = 200): Response {
 
 describe("project GitHub search", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     clearRuntimeConfigSnapshot();
+  });
+
+  it.each([false, true])(
+    "retains quota cooldown across repeated and different queries (authenticated=%s)",
+    async (authenticated) => {
+      const token = authenticated ? "synthetic-search-quota-token" : undefined;
+      let now = 1_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const fetchImpl = vi
+        .fn<typeof fetch>()
+        .mockImplementation(
+          async () => new Response(null, { status: 429, headers: { "retry-after": "60" } }),
+        );
+      const options = { env: {}, fetchImpl, token };
+      const query = `quota-query-${token === undefined ? "anonymous" : "authenticated"}`;
+      await expect(searchRemoteProjects(query, options)).rejects.toMatchObject({
+        statusCode: 429,
+        retryAfterMs: 60_000,
+      });
+      const calls = fetchImpl.mock.calls.length;
+      now += 1_000;
+      await expect(searchRemoteProjects(query, options)).rejects.toMatchObject({
+        statusCode: 429,
+        retryAfterMs: 59_000,
+      });
+      await expect(searchRemoteProjects(`${query}-other`, options)).rejects.toMatchObject({
+        statusCode: 429,
+        retryAfterMs: 59_000,
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(calls);
+      now += 59_000;
+      fetchImpl.mockImplementation(async () => json({ items: [] }));
+      await expect(searchRemoteProjects(query, options)).resolves.toMatchObject({ projects: [] });
+      expect(fetchImpl.mock.calls.length).toBeGreaterThan(calls);
+    },
+  );
+
+  it.each([302, 401])("rechecks reader authority before retrying HTTP %s", async (status) => {
+    let current = true;
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      if (requestUrl(input).includes("/user/repos")) {
+        return json([]);
+      }
+      current = false;
+      return new Response(null, {
+        status,
+        headers: { location: "https://api.github.com/search/repositories?q=redirected" },
+      });
+    });
+    await expect(
+      searchRemoteProjects(`authority-retry-${status}`, {
+        token: "synthetic-retry-token",
+        fetchImpl,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Search authority retired");
+          }
+        },
+      }),
+    ).rejects.toThrow("Search authority retired");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it.each([true, false])(

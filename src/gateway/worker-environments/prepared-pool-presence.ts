@@ -74,6 +74,7 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
   let humanPresenceChangedAtMs = now();
   let version = 0;
   let loaded = false;
+  let loading: Promise<void> | undefined;
   let demand: PreparedPoolPresenceDemand | undefined;
   let refResolvedAtMs: number | undefined;
   const current = () => signal.throwIfAborted();
@@ -86,8 +87,14 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
   };
   const read = async () => {
     if (!loaded) {
-      demand = await options.presenceDemandStore?.read();
-      loaded = true;
+      await (loading ??= (async () => {
+        try {
+          demand = await options.presenceDemandStore?.read();
+          loaded = true;
+        } finally {
+          loading = undefined;
+        }
+      })());
     }
     return demand;
   };
@@ -242,7 +249,18 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
 
   return {
     maintain,
-    current: () => demand,
+    ready: read,
+    current: () => {
+      // A held repository admission must not extend the last browser's grace.
+      // Persistence catches up through maintain; reads use the same observed departure.
+      if (demand?.retireAtMs === null && !humanPresent) {
+        const absentAtMs = humanPresenceObserved
+          ? humanPresenceChangedAtMs
+          : demand.lastPresentAtMs;
+        return { ...demand, retireAtMs: absentAtMs + HUMAN_PRESENCE_RETIRE_AFTER_MS };
+      }
+      return demand;
+    },
     matchesCurrentPolicy: (state: PreparedPoolPresenceDemand) => {
       const source = policy();
       return Boolean(source && matches(state, source));

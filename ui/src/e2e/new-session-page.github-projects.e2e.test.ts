@@ -36,6 +36,124 @@ const remoteSearchResult = {
 };
 
 suite.define(() => {
+  it.each(["saved", "explicit"] as const)(
+    "keeps a %s worker selection after late default repository discovery",
+    async (source) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+        async ({ page }) => {
+          const appUrl = new URL(suite.server.baseUrl);
+          const gatewayUrl = `${appUrl.protocol === "https:" ? "wss:" : "ws:"}//${appUrl.host}`;
+          const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(gatewayUrl)}`;
+          if (source === "saved") {
+            await page.addInitScript((key) => {
+              localStorage.setItem(
+                key,
+                JSON.stringify({
+                  agents: { main: { where: { kind: "cloud", id: "selected-worker" } } },
+                }),
+              );
+            }, storageKey);
+          }
+          const gateway = await installMockGateway(page, {
+            workspace: WORKSPACE,
+            workspaceGit: false,
+            agentModel: "openai/gpt-4.1",
+            models: [{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }],
+            featureMethods: [
+              "projects.list",
+              "environments.list",
+              "sessions.create",
+              "sessions.dispatch",
+            ],
+            deferredMethods: ["projects.list", "sessions.dispatch"],
+            methodResponses: {
+              "projects.list": {
+                projects: [],
+                githubHost: "ghe.example.test",
+                defaultRepository: {
+                  identity: "acme/private-repo",
+                  url: "https://ghe.example.test/acme/private-repo.git",
+                  ref: "main",
+                  profileId: "default-worker",
+                },
+              },
+              "environments.list": {
+                environments: [],
+                profiles: [
+                  { id: "default-worker", providerId: "crabbox" },
+                  { id: "selected-worker", providerId: "crabbox" },
+                ],
+              },
+              "sessions.create": { key: "agent:main:late-repository-default" },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}new`);
+          await gateway.waitForRequest("projects.list");
+          const where = page.locator("#new-session-where-trigger");
+          if (source === "explicit") {
+            await where.click();
+            await page
+              .locator("wa-popover.new-session-page__where-popover")
+              .getByRole("button", { name: "selected-worker", exact: true })
+              .click();
+            await page.keyboard.press("Escape");
+          }
+          await expect.poll(() => where.getAttribute("data-cloud-profile")).toBe("selected-worker");
+          await page
+            .locator(".new-session-page__message")
+            .fill("Inspect the repository on my selected worker");
+          await gateway.resolveDeferred("projects.list");
+          await pollLocatorText(page.locator("#new-session-project-trigger")).toContain(
+            "acme/private-repo",
+          );
+          await captureProjectUiProof(suite, page, `late-repository-${source}-destination.png`);
+          expect(await where.getAttribute("data-cloud-profile")).toBe("selected-worker");
+          await page.getByRole("button", { name: "Start session" }).click();
+          const created = await gateway.waitForRequest("sessions.create");
+          expect(created.params).toMatchObject({
+            repository: { url: "https://ghe.example.test/acme/private-repo.git", ref: "main" },
+          });
+          const dispatched = await gateway.waitForRequest("sessions.dispatch");
+          expect(dispatched.params).toMatchObject({ profileId: "selected-worker" });
+        },
+      );
+    },
+  );
+
+  it("keeps a pasted SCP repository through catalog refresh and submission", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const cloneUrl = "git@ghe.example.test:acme/private-repo.git";
+      const gateway = await installMockGateway(page, {
+        workspace: WORKSPACE,
+        workspaceGit: false,
+        featureMethods: ["projects.list", "projects.add", "sessions.create"],
+        methodResponses: {
+          "projects.list": { projects: [], githubHost: "ghe.example.test" },
+          "sessions.create": { key: "agent:main:scp-repository" },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("projects.list");
+      const project = page.locator("#new-session-project-trigger");
+      await project.click();
+      const picker = page.locator("wa-popover.new-session-page__project-popover");
+      await picker
+        .getByRole("searchbox", { name: "Search projects or paste a Git URL" })
+        .fill(cloneUrl);
+      await picker.locator('[data-value="project-clone-url"]').click();
+      await pollLocatorText(project).toContain(cloneUrl);
+      const requests = (await gateway.getRequests("projects.list")).length;
+      await gateway.emitGatewayEvent("config.changed", {});
+      await gateway.waitForRequest("projects.list", { after: requests });
+      await page.locator(".new-session-page__message").fill("Inspect this SCP repository");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const created = await gateway.waitForRequest("sessions.create");
+      expect(created.params).toHaveProperty("projectGitUrl", cloneUrl);
+      expect(await gateway.getRequests("projects.add")).toHaveLength(0);
+    });
+  });
+
   it("retires a selected remote repository after a live GitHub host change", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },

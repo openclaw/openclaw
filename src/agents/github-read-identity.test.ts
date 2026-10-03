@@ -354,6 +354,7 @@ describe("prepared GitHub read authority", () => {
     });
   });
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -365,6 +366,31 @@ describe("prepared GitHub read authority", () => {
     getCurrentConfig: () => config,
     assertActive: () => {},
     refresh: async () => {},
+  });
+
+  it("keeps default read preparation bound to the configured Enterprise issuer", async () => {
+    const config = {
+      gateway: {
+        github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+      },
+    };
+    const env = {
+      GH_HOST: "ghe.example.test",
+      GH_TOKEN: "synthetic-public-only",
+      GH_ENTERPRISE_TOKEN: "native-enterprise-only",
+    };
+    setRuntimeConfigSnapshot(config);
+    const identity = await prepareGitHubReadIdentity(readOptions(env, config));
+    expect(identity.token).toBe(env.GH_ENTERPRISE_TOKEN);
+    expect(fetch).toHaveBeenCalledWith(
+      "https://ghe.example.test/api/v3/user",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: `Bearer ${env.GH_ENTERPRISE_TOKEN}` }),
+      }),
+    );
+    await expect(identity.revalidate()).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
   });
 
   it("reuses the native credential across consecutive read preparations until invalidation", async () => {

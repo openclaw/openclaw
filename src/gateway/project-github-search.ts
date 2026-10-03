@@ -85,25 +85,23 @@ function matchesAffiliatedQuery(project: RemoteProject, query: string): boolean 
     .includes(needle);
 }
 
+type GitHubSearchRequest = (url: string, optionalAuth?: boolean) => Promise<unknown>;
+
 async function loadExactRepository(
   query: string,
-  fetchImpl: typeof fetch,
-  token: string | undefined,
+  request: GitHubSearchRequest,
 ): Promise<RemoteProject | null> {
   const url = new URL(`repos/${query}`, `${gitHubPublicApi.GITHUB_API_BASE_URL}/`);
   // Optional enrichment lane: a miss, API error, or transport rejection must
   // degrade to search-only results, never sink the whole picker query.
   try {
-    return parseRepository(await gitHubPublicApi.fetchGitHubJson(url.href, fetchImpl, token));
+    return parseRepository(await request(url.href));
   } catch {
     return null;
   }
 }
 
-async function loadAffiliatedRepositories(
-  fetchImpl: typeof fetch,
-  token: string,
-): Promise<RemoteProject[]> {
+async function loadAffiliatedRepositories(request: GitHubSearchRequest): Promise<RemoteProject[]> {
   const url = new URL("user/repos", `${gitHubPublicApi.GITHUB_API_BASE_URL}/`);
   url.searchParams.set("affiliation", "owner,collaborator,organization_member");
   url.searchParams.set("sort", "updated");
@@ -112,8 +110,7 @@ async function loadAffiliatedRepositories(
   // Optional enrichment lane: see loadExactRepository — failures degrade to
   // global-search-only results instead of failing the picker query.
   try {
-    const response = await gitHubPublicApi.fetchGitHubApi(url.href, fetchImpl, token);
-    return repositoryArray(await gitHubPublicApi.readGitHubJsonResponse(response));
+    return repositoryArray(await request(url.href, false));
   } catch {
     return [];
   }
@@ -121,26 +118,23 @@ async function loadAffiliatedRepositories(
 
 async function loadRepositorySearch(
   query: string,
-  fetchImpl: typeof fetch,
-  token: string | undefined,
+  request: GitHubSearchRequest,
 ): Promise<RemoteProject[]> {
   const url = new URL("search/repositories", `${gitHubPublicApi.GITHUB_API_BASE_URL}/`);
   url.searchParams.set("q", `${query} in:name,description`);
   url.searchParams.set("per_page", String(SEARCH_RESULT_LIMIT));
-  return repositoryArray(await gitHubPublicApi.fetchGitHubJson(url.href, fetchImpl, token));
+  return repositoryArray(await request(url.href));
 }
 
 async function searchProjectsUncached(params: {
   query: string;
-  fetchImpl: typeof fetch;
+  request: GitHubSearchRequest;
   token?: string;
 }): Promise<ProjectsSearchRemoteResult> {
   const [exact, affiliated, global] = await Promise.all([
-    EXACT_REPO_QUERY.test(params.query)
-      ? loadExactRepository(params.query, params.fetchImpl, params.token)
-      : null,
-    params.token ? loadAffiliatedRepositories(params.fetchImpl, params.token) : [],
-    loadRepositorySearch(params.query, params.fetchImpl, params.token),
+    EXACT_REPO_QUERY.test(params.query) ? loadExactRepository(params.query, params.request) : null,
+    params.token ? loadAffiliatedRepositories(params.request) : [],
+    loadRepositorySearch(params.query, params.request),
   ]);
   // Order is the ranking: exact owner/name hit, then affiliated repositories
   // (API-sorted by recency), then global search in GitHub best-match order.
@@ -217,17 +211,33 @@ export async function searchRemoteProjects(
       };
   const release = entry.access.add(assertSelected, options.signal);
   if (!reusable) {
-    const networkFetch = options.fetchImpl ?? fetch;
-    const fetchImpl: typeof fetch = (input, init) => {
-      entry.access.assertCurrent();
-      return networkFetch(input, {
-        ...init,
-        signal: init?.signal
-          ? AbortSignal.any([init.signal, entry.access.signal])
-          : entry.access.signal,
-      });
+    // Keep transport identity stable so the API owner retains quota cooldowns.
+    // The coalesced reader group owns per-request authority and cancellation.
+    const fetchImpl = options.fetchImpl ?? fetch;
+    const identity = {
+      assertSelected: entry.access.assertCurrent,
+      revalidate: async () => entry.access.assertCurrent(),
     };
-    entry.promise = searchProjectsUncached({ query: query.trim(), fetchImpl, token }).catch(
+    const request: GitHubSearchRequest = (url, optionalAuth = true) => {
+      const readJson = async (requestToken: string | undefined) =>
+        gitHubPublicApi.readGitHubJsonResponse(
+          await gitHubPublicApi.fetchGitHubApi(
+            url,
+            fetchImpl,
+            requestToken,
+            undefined,
+            identity,
+            undefined,
+            entry.access.signal,
+            undefined,
+            apiBaseUrl,
+          ),
+        );
+      return optionalAuth
+        ? gitHubPublicApi.withOptionalGitHubAuth(token, readJson)
+        : readJson(token);
+    };
+    entry.promise = searchProjectsUncached({ query: query.trim(), request, token }).catch(
       (error: unknown) => {
         if (searchCache.get(cacheKey) === entry) {
           searchCache.delete(cacheKey);

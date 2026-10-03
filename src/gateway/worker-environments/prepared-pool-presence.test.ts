@@ -1,9 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { startWorkerHumanPresence } from "../server/client-human-presence.js";
+import { GatewayClientRegistry } from "../server/client-registry.js";
+import {
+  invalidateGatewayPolicyClient,
+  registerGatewayPolicyResponse,
+} from "../server/ws-policy-close.js";
+import type { GatewayWsClient } from "../server/ws-types.js";
 import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.js";
 import {
   PREPARATION_KEY,
@@ -11,6 +19,7 @@ import {
   usePreparedPoolFixture,
   type PoolOptions,
 } from "./prepared-pool.test-support.js";
+import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 
 describe("authenticated human prepared-pool demand", () => {
@@ -93,6 +102,234 @@ describe("authenticated human prepared-pool demand", () => {
       },
     };
   }
+
+  it.each(["admission", "effect"] as const)(
+    "fences presence %s before a held policy response closes the last browser",
+    async (boundary) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const effect = vi.fn();
+      const close = vi.fn();
+      let hold = false;
+      const presence = presencePool(undefined, "worker-turn", {
+        reconcile: async (record, _signal, beforeReconcile) => {
+          if (record.destroyRequestedAtMs !== null || !hold) {
+            return;
+          }
+          entered.resolve();
+          await release.promise;
+          beforeReconcile();
+          effect(record.environmentId);
+        },
+      });
+      const client: GatewayWsClient = {
+        connId: "presence-browser",
+        usesSharedGatewayAuth: false,
+        authenticatedUserId: "presence-person",
+        internal: { authenticatedControlUi: true },
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          role: "operator",
+          scopes: ["operator.sessions.write"],
+          client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+        },
+        socket: {
+          readyState: 1,
+          bufferedAmount: 0,
+          send: vi.fn(),
+          close,
+          terminate: vi.fn(),
+          on: vi.fn(),
+          off: vi.fn(),
+          once: vi.fn(),
+        },
+      };
+      const clients = new GatewayClientRegistry([client]);
+      const sidecars: Array<{ stop: () => void }> = [];
+      await startWorkerHumanPresence({
+        clients,
+        service: presence.owner,
+        log: { warn: vi.fn() },
+        registerSidecar: (sidecar) => sidecars.push(sidecar),
+      });
+      const ready = await Promise.all(fixture.reserves().map((record) => fixture.ready(record)));
+      const active = await fixture.attach(ready[0]!);
+      // Keep activation authority separate from this presence-only generation.
+      fixture.nowMs = 3_000;
+      hold = boundary === "effect";
+      if (boundary === "admission") {
+        const ensure = fixture.store.ensurePreparedIntent.bind(fixture.store);
+        vi.spyOn(fixture.store, "ensurePreparedIntent").mockImplementationOnce(async (request) => {
+          entered.resolve();
+          await release.promise;
+          return ensure(request);
+        });
+      }
+      const response = registerGatewayPolicyResponse("config.patch", client, vi.fn())!;
+      response.hold();
+      const running = fixture.schedule(presence.owner);
+      const settled = running.catch(() => {});
+      try {
+        await entered.promise;
+        invalidateGatewayPolicyClient(client, {
+          reason: "test revocation",
+          code: 1008,
+          message: "revoked",
+        });
+        expect(close).not.toHaveBeenCalled();
+        expect(clients.has(client)).toBe(true);
+        release.resolve();
+        await settled;
+        hold = false;
+        await fixture.schedule(presence.owner);
+        expect(effect).not.toHaveBeenCalled();
+        expect(fixture.reserves()).toHaveLength(boundary === "admission" ? 3 : 4);
+        expect(presence.read()?.retireAtMs).toBe(903_000);
+        expect(fixture.store.get(active.environmentId)).toEqual(active);
+        expect(ready.slice(1).map((record) => fixture.store.get(record.environmentId))).toEqual(
+          ready.slice(1),
+        );
+      } finally {
+        release.resolve();
+        await settled;
+        sidecars.forEach((sidecar) => sidecar.stop());
+        response.finish();
+      }
+    },
+  );
+
+  it.each(["rejected", "held"] as const)(
+    "cleans unrelated expiry and refills a healthy sibling before %s presence admission",
+    async (failure) => {
+      const healthyKey = "2".repeat(64);
+      const progressed = createDeferredCore();
+      const expiredAgain = createDeferredCore();
+      const presenceExpired = createDeferredCore();
+      const presence = presencePool(undefined, "worker-turn", {
+        reconcile: async (record, _signal, beforeReconcile) => {
+          beforeReconcile();
+          if (readWorkerProjectSnapshot(record.profileSnapshot.project)?.key === healthyKey) {
+            progressed.resolve();
+          }
+          if (record.environmentId === "expired-again" && record.destroyRequestedAtMs !== null) {
+            expiredAgain.resolve();
+          }
+          if (
+            readWorkerProjectSnapshot(record.profileSnapshot.project)?.key === PROJECT_KEY &&
+            record.destroyRequestedAtMs !== null
+          ) {
+            presenceExpired.resolve();
+          }
+        },
+      });
+      await presence.owner.setHumanPresence(true);
+      const ready = await Promise.all(fixture.reserves().map((record) => fixture.ready(record)));
+      await fixture.destroy(ready[0]!);
+      const expired = await fixture.ready(
+        await fixture.seed("expired-other", { reserve: true, projectKey: "1".repeat(64) }),
+      );
+      fixture.nowMs = 1_500;
+      await fixture.attach(
+        await fixture.ready(await fixture.seed("healthy-source", { projectKey: healthyKey })),
+      );
+      fixture.nowMs = 2_000;
+      fixture.config.cloudWorkers!.preparedPool!.maxTotal = 8;
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const prepare = presence.prepareIntent.getMockImplementation()!;
+      presence.prepareIntent.mockClear();
+      fixture.releases.push(() => release.resolve());
+      presence.prepareIntent.mockImplementation(async (_profileId, options) => {
+        if (options.projectPath) {
+          return {
+            providerId: fixture.provider.id,
+            profileSnapshot: fixture.profile(healthyKey),
+            preparationKey: PREPARATION_KEY,
+          };
+        }
+        entered.resolve();
+        if (failure === "held") {
+          await release.promise;
+        }
+        throw new Error("Presence repository unavailable");
+      });
+      const running = fixture.schedule(presence.owner);
+      const settled = running.catch(() => {});
+      try {
+        await entered.promise;
+        if (failure === "rejected") {
+          await settled;
+        } else {
+          await awaitGateBeforeSettlement(
+            progressed.promise,
+            running,
+            "Healthy refill did not progress",
+          );
+        }
+        expect(fixture.store.get(expired.environmentId)?.destroyRequestedAtMs).toBe(2_000);
+        const healthy = fixture
+          .reserves()
+          .filter(
+            (record) =>
+              readWorkerProjectSnapshot(record.profileSnapshot.project)?.key === healthyKey,
+          );
+        expect(healthy).toHaveLength(3);
+        expect(ready.slice(1).map((record) => fixture.store.get(record.environmentId))).toEqual(
+          ready.slice(1),
+        );
+        expect(
+          fixture
+            .reserves()
+            .filter(
+              (record) =>
+                readWorkerProjectSnapshot(record.profileSnapshot.project)?.key === PROJECT_KEY,
+            ),
+        ).toHaveLength(3);
+        if (failure === "held") {
+          await fixture.ready(
+            await fixture.seed("expired-again", {
+              reserve: true,
+              projectKey: "3".repeat(64),
+              expiresAtMs: 2_100,
+            }),
+          );
+          fixture.nowMs = 2_100;
+          const repeated = fixture.schedule(presence.owner).catch(() => {});
+          await awaitGateBeforeSettlement(
+            expiredAgain.promise,
+            repeated,
+            "Later cleanup did not progress",
+          );
+          expect(
+            presence.prepareIntent.mock.calls.filter(([, options]) => !options.projectPath),
+          ).toHaveLength(1);
+          expect(fixture.store.get("expired-again")?.destroyRequestedAtMs).toBe(2_100);
+          const departure = presence.owner.setHumanPresence(false).catch(() => {});
+          fixture.operations.add(departure);
+          fixture.nowMs = 902_100;
+          const retiring = fixture.schedule(presence.owner).catch(() => {});
+          await awaitGateBeforeSettlement(
+            presenceExpired.promise,
+            retiring,
+            "Departure grace did not expire during held admission",
+          );
+          expect(
+            ready
+              .slice(1)
+              .map((record) => fixture.store.get(record.environmentId)?.destroyRequestedAtMs),
+          ).toEqual([902_100, 902_100]);
+          expect(
+            presence.prepareIntent.mock.calls.filter(([, options]) => !options.projectPath),
+          ).toHaveLength(1);
+        }
+      } finally {
+        release.resolve();
+        await settled;
+        presence.prepareIntent.mockImplementation(prepare);
+      }
+    },
+  );
 
   it("fills three exact-repository reserves, stops refill on departure, and retires after 15m", async () => {
     const presence = presencePool();

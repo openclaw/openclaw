@@ -627,6 +627,8 @@ export class DraftPlaceState {
     ) {
       return;
     }
+    this.restoreState.whereSelectedByUser = true;
+    this.restoreState.preferredWhereRestore = null;
     if (
       deviceId === this.deviceIdValue &&
       autoDevice === this.autoDeviceValue &&
@@ -638,8 +640,6 @@ export class DraftPlaceState {
     this.deviceIdValue = deviceId;
     this.autoDeviceValue = autoDevice;
     this.cloudProfileIdValue = "";
-    this.restoreState.whereSelectedByUser = true;
-    this.restoreState.preferredWhereRestore = null;
     this.persistPreference({
       where: resolveNewSessionWhere({ cloudProfileId: "", deviceId, autoDevice }),
       projectId: this.browser.projectId,
@@ -711,6 +711,7 @@ export class DraftPlaceState {
       state: this.restoreState,
       browser: this.browser,
       gateway: this.gateway,
+      where: resolveNewSessionWhere(this),
       modelControl: this.modelControl,
       repositoryState: this.repositoryState,
       isAdmin: () => this.isAdmin(),

@@ -20,6 +20,7 @@ import {
   createGatewayWsTestRequestContext,
 } from "./ws-connection.test-helpers.js";
 import type { GatewayWsMessageHandlerParams } from "./ws-connection/message-handler.js";
+import { invalidateGatewayPolicyClient, registerGatewayPolicyResponse } from "./ws-policy-close.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
 const { attachMessageHandler } = vi.hoisted(() => ({
@@ -161,6 +162,26 @@ describe("live person presence timing", () => {
     verified.client.connect.scopes = ["operator.sessions.write"];
     expect(verified.handler.setClient(verified.client)).toBe(true);
     expect(changes).toHaveBeenLastCalledWith(true);
+    const overlapping = await connect("other@presence.test", "other-person");
+    overlapping.client.internal = { authenticatedControlUi: true };
+    overlapping.client.connect.scopes = ["operator.sessions.write"];
+    expect(overlapping.handler.setClient(overlapping.client)).toBe(true);
+    const response = registerGatewayPolicyResponse("config.patch", verified.client, vi.fn())!;
+    response.hold();
+    invalidateGatewayPolicyClient(verified.client, {
+      reason: "test",
+      code: 1008,
+      message: "revoked",
+    });
+    expect(changes).toHaveBeenLastCalledWith(true);
+    expect(clients.has(verified.client)).toBe(true);
+    invalidateGatewayPolicyClient(overlapping.client, {
+      reason: "test",
+      code: 1008,
+      message: "revoked",
+    });
+    expect(changes).toHaveBeenLastCalledWith(false);
+    response.finish();
     verified.socket.readyState = 3;
     verified.socket.emit("close", 1000, Buffer.alloc(0));
     expect(changes).toHaveBeenLastCalledWith(false);

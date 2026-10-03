@@ -3,6 +3,8 @@ import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "../server-constants.js";
 import type { WorkerEnvironmentService } from "../worker-environments/service.js";
 import type { GatewayClientRegistry } from "./client-registry.js";
+import { onGatewayPolicyClientInvalidated } from "./ws-policy-close.js";
+import type { GatewayWsClient } from "./ws-types.js";
 
 function hasAuthenticatedControlUiIdentity(clients: GatewayClientRegistry): boolean {
   return [...clients].some(
@@ -25,14 +27,41 @@ function createAuthenticatedControlUiPresenceProjection(
   onChanged: (present: boolean) => void,
 ) {
   let present = hasAuthenticatedControlUiIdentity(clients);
-  const unsubscribe = clients.subscribe(() => {
+  const invalidationSubscriptions = new Map<GatewayWsClient, () => void>();
+  const refresh = () => {
     const next = hasAuthenticatedControlUiIdentity(clients);
     if (next !== present) {
       present = next;
       onChanged(next);
     }
-  });
-  return { current: () => present, stop: unsubscribe };
+  };
+  const observeClients = () => {
+    for (const [client, unsubscribe] of invalidationSubscriptions) {
+      if (!clients.has(client)) {
+        unsubscribe();
+        invalidationSubscriptions.delete(client);
+      }
+    }
+    for (const client of clients) {
+      if (!invalidationSubscriptions.has(client)) {
+        // Source revocation precedes transport removal while a policy response is held.
+        invalidationSubscriptions.set(client, onGatewayPolicyClientInvalidated(client, refresh));
+      }
+    }
+    refresh();
+  };
+  const unsubscribe = clients.subscribe(observeClients);
+  observeClients();
+  return {
+    current: () => present,
+    stop: () => {
+      unsubscribe();
+      for (const stop of invalidationSubscriptions.values()) {
+        stop();
+      }
+      invalidationSubscriptions.clear();
+    },
+  };
 }
 
 /** Bind pool demand and cleanup before WebSocket requests and reconciliation start. */
