@@ -92,32 +92,34 @@ const expected = { uid: 1000, pid: 1234, startTime: 100 };
 const address = "unix:path=/synthetic-systemd-peer/private";
 
 it.each([
-  { name: "UID", change: { uid: 2001 } },
-  { name: "PID", change: { pid: 4321 } },
-  { name: "process generation", change: { startTime: 200 } },
-])("preserves an observed native $name refusal", async ({ change }) => {
-  Object.assign(kernel, change);
-  await expect(
-    openSystemdPrivatePeer(address, expected, performance.now() + 1000),
-  ).rejects.toMatchObject({
-    reason: "systemd-manager-changed",
-  });
-  expect(kernel.closes).toBe(1);
-});
-
-it.each([
-  { name: "unreadable process", change: { startTime: null } },
-  { name: "unavailable process", change: { alive: false } },
-  { name: "invalid credentials", change: { pid: 0 } },
-])("keeps $name diagnostic instead of reporting changed ownership", async ({ change }) => {
-  Object.assign(kernel, change);
-  const failure = await openSystemdPrivatePeer(address, expected, performance.now() + 1000).catch(
-    (error: unknown) => error,
-  );
-  expect(failure).toBeInstanceOf(Error);
-  expect(failure).not.toBeInstanceOf(ServiceOwnershipRefusalError);
-  expect(kernel.closes).toBe(1);
-});
+  { name: "UID", change: { uid: 2001 }, ownership: true, initial: false },
+  { name: "PID", change: { pid: 4321 }, ownership: true, initial: false },
+  { name: "process generation", change: { startTime: 200 }, ownership: true, initial: false },
+  { name: "unreadable process", change: { startTime: null }, ownership: false, initial: false },
+  { name: "unavailable process", change: { alive: false }, ownership: false, initial: false },
+  { name: "invalid credentials", change: { pid: 0 }, ownership: false, initial: false },
+  { name: "initial account", change: { uid: 2001 }, ownership: true, initial: true },
+])(
+  "distinguishes observed ownership refusals from unavailable peers: $name",
+  async ({ change, ownership, initial }) => {
+    Object.assign(kernel, change);
+    if (initial) {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(process, "geteuid").mockReturnValue(1000);
+    }
+    const operation = initial
+      ? openSystemdUserManager(address, performance.now() + 1000)
+      : openSystemdPrivatePeer(address, expected, performance.now() + 1000);
+    if (ownership) {
+      await expect(operation).rejects.toMatchObject({ reason: "systemd-manager-changed" });
+    } else {
+      const failure = await operation.catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).not.toBeInstanceOf(ServiceOwnershipRefusalError);
+    }
+    expect(kernel.closes).toBe(1);
+  },
+);
 
 it("revalidates a retained peer without misclassifying a closed connection", async () => {
   const peer = await openSystemdPrivatePeer(address, expected, performance.now() + 1000);
@@ -126,15 +128,6 @@ it("revalidates a retained peer without misclassifying a closed connection", asy
   await peer.close();
   expect(() => peer.verify()).toThrow("peer inspection is unavailable");
   expect(kernel.closes).toBe(1);
-});
-
-it("rejects an initial private manager authenticated as another account", async () => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-  vi.spyOn(process, "geteuid").mockReturnValue(1000);
-  kernel.uid = 2001;
-  await expect(openSystemdUserManager(address, performance.now() + 1000)).rejects.toMatchObject({
-    reason: "systemd-manager-changed",
-  });
 });
 
 it("checks inherited update authority before loading or opening a native transport", async () => {
