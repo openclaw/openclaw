@@ -95,8 +95,8 @@ function hostContext(
   element: Element | undefined,
   height: number,
   fillContainer: boolean,
-  displayMode: "inline" | "fullscreen" = "inline",
-  availableDisplayModes: Array<"inline" | "fullscreen"> = ["inline", "fullscreen"],
+  displayMode: "inline" | "fullscreen",
+  availableDisplayModes: Array<"inline" | "fullscreen">,
 ): HostContext {
   const rect = element?.getBoundingClientRect();
   const touch = navigator.maxTouchPoints > 0 || window.matchMedia?.("(pointer: coarse)").matches;

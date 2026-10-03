@@ -65,7 +65,6 @@ export class OpenClawAppBridge extends AppBridge {
   }
 }
 
-/** One protocol adapter owns App tool/resource forwarding and its subscription lifetime. */
 export function bindMcpAppResourceHandlers(owner: {
   bridge: OpenClawAppBridge;
   request: (method: string, params: Record<string, unknown>) => Promise<unknown>;
