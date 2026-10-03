@@ -1,5 +1,4 @@
 import { HTTPFetchError } from "@line/bot-sdk";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
@@ -70,10 +69,6 @@ function expectBatch(messages: readonly unknown[], target = to) {
   expect(mocks.pushMessagesLine).toHaveBeenCalledWith(target, messages, sendOptions);
 }
 
-function order(mock: { mock: { invocationCallOrder: number[] } }) {
-  return expectDefined(mock.mock.invocationCallOrder[0], "delivery invocation");
-}
-
 function delivery(messageIds: readonly string[], threadId = "c1") {
   return expect.objectContaining({
     channel: "line",
@@ -125,19 +120,50 @@ it("sends oversized tables in source order with quick replies on the final card"
   mocks.chunkMarkdownText.mockImplementation(chunkMarkdownTextForLine);
   const markdown = `First\n\n| Small | Value |\n|---|---|\n| Kept | card |\n\nBetween\n\n| Name | Value |\n|---|---|\n| Large | ${"x".repeat(30_000)} |\n\nAfter\n\n\`\`\`js\nconsole.log("still a card")\n\`\`\``;
   await send({ text: markdown, line: { quickReplies: ["Continue"] } });
-  expect(mocks.pushFlexMessage).toHaveBeenCalledOnce();
-  const oversized = mocks.pushMessageLine.mock.calls.flatMap((args, index) =>
-    args[1].includes("Large") ? [mocks.pushMessageLine.mock.invocationCallOrder[index]] : [],
-  );
+  const messages = [
+    ...mocks.pushFlexMessage.mock.calls.map((args, index) => ({
+      position: mocks.pushFlexMessage.mock.invocationCallOrder[index]!,
+      type: args[1] === "Code" ? "code-card" : "table-card",
+    })),
+    ...mocks.pushMessageLine.mock.calls.map((args, index) => ({
+      position: mocks.pushMessageLine.mock.invocationCallOrder[index]!,
+      type: args[1].includes("Large") ? "oversized-table-text" : "text",
+    })),
+    ...mocks.pushMessagesLine.mock.calls.flatMap((args, index) =>
+      args[1].map((message) => ({
+        position: mocks.pushMessagesLine.mock.invocationCallOrder[index]!,
+        type:
+          "altText" in message && message.altText === "Code"
+            ? "code-card"
+            : "altText" in message && message.altText === "Table"
+              ? "table-card"
+              : message.type === "text" && message.text?.includes("Large")
+                ? "oversized-table-text"
+                : message.type,
+      })),
+    ),
+  ]
+    .toSorted((left, right) => left.position - right.position)
+    .map((message) => message.type)
+    .filter((type) => type !== "text");
+  expect(messages).toEqual(["table-card", "oversized-table-text", "code-card"]);
+  const textParts = [
+    ...mocks.pushMessageLine.mock.calls.map((args) => args[1]),
+    ...mocks.pushMessagesLine.mock.calls.flatMap((args) =>
+      args[1].flatMap((message) => (message.type === "text" ? [message.text ?? ""] : [])),
+    ),
+  ];
+  const oversized = textParts.filter((text) => text.includes("Large"));
   expect(oversized).toHaveLength(1);
-  expect(oversized[0]).toBeGreaterThan(order(mocks.pushFlexMessage));
-  expect(oversized[0]).toBeLessThan(order(mocks.pushMessagesLine));
-  expect(mocks.pushMessageLine.mock.calls.every((args) => args[1].length <= 5000)).toBe(true);
-  expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+  expect(textParts.every((text) => text.length <= 5000)).toBe(true);
+  expect(mocks.pushMessagesLine.mock.calls.at(-1)).toEqual([
     to,
-    [expect.objectContaining({ altText: "Code", quickReply: createQuickReply("Continue") })],
+    [
+      expect.objectContaining({ type: "text", text: "After" }),
+      expect.objectContaining({ altText: "Code", quickReply: createQuickReply("Continue") }),
+    ],
     expect.any(Object),
-  );
+  ]);
   expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
 });
 
@@ -150,8 +176,10 @@ it("rejects whitespace instead of fabricating a delivery", async () => {
 it("delivers a blank-title location instead of dropping it", async () => {
   const location = { ...locationFixture, title: " " };
   await send({ text: "Meet me there.", line: { location } });
-  expect(mocks.pushLocationMessage).toHaveBeenCalledWith(to, location, expect.any(Object));
-  expect(mocks.pushMessageLine).toHaveBeenCalledWith(to, "Meet me there.", expect.any(Object));
+  expectBatch([
+    { type: "text", text: "1 Main Street\n35.6895, 139.6917" },
+    { type: "text", text: "Meet me there." },
+  ]);
 });
 
 it("keeps a degraded location in the quick-reply inline batch", async () => {
@@ -189,30 +217,35 @@ it("preserves the finalized receipt when its delivery observer rejects", async (
   expect(onDeliveryResult).toHaveBeenCalledOnce();
 });
 
-it("publishes completed Flex receipts before a later legacy text send fails", async () => {
-  const tokenCfg = lineConfig({ channelAccessToken: "line-fixture-token" });
-  const laterFailure = new Error("second LINE Flex send failed");
-  const fetch = vi
-    .fn()
-    .mockResolvedValueOnce(Response.json({ sentMessages: [{ id: "m-first-flex" }] }))
-    .mockRejectedValueOnce(laterFailure);
-  vi.stubGlobal("fetch", fetch);
-  mocks.pushFlexMessage
-    .mockResolvedValueOnce(lineResult("m-first-flex"))
+it("publishes completed batch receipts before a later batch send fails", async () => {
+  const laterFailure = new Error("second LINE batch send failed");
+  mocks.pushMessagesLine
+    .mockResolvedValueOnce(lineResult("m-first-batch"))
     .mockRejectedValueOnce(laterFailure);
   const onDeliveryResult = vi.fn();
+  const text = Array.from(
+    { length: 6 },
+    (_, index) => `\`\`\`js\nmessage${index + 1}()\n\`\`\``,
+  ).join("\n\n");
   await expect(
     lineOutboundAdapter.sendText!({
       to,
-      text: "```js\nfirst()\n```\n\n```js\nsecond()\n```",
+      text,
       accountId: "default",
-      cfg: tokenCfg,
+      cfg,
       onDeliveryResult,
     }),
-  ).rejects.toThrow("second LINE Flex send failed");
+  ).rejects.toThrow("second LINE batch send failed");
+  expect(mocks.pushMessagesLine).toHaveBeenCalledTimes(2);
+  expect(mocks.pushMessagesLine.mock.calls[0]?.[1]).toHaveLength(5);
+  expect(mocks.pushMessagesLine.mock.calls[1]?.[1]).toHaveLength(1);
   expect(onDeliveryResult).toHaveBeenCalledOnce();
-  expect(onDeliveryResult).toHaveBeenCalledWith(delivery(["m-first-flex"]));
-  expect(fetch).not.toHaveBeenCalled();
+  expect(onDeliveryResult).toHaveBeenCalledWith(
+    expect.objectContaining({
+      messageId: "m-first-batch",
+      receipt: expect.objectContaining({ platformMessageIds: ["m-first-batch"] }),
+    }),
+  );
 });
 
 it("sends flex message without dropping text", async () => {
@@ -225,8 +258,13 @@ it("sends flex message without dropping text", async () => {
     },
     { to: "line:group:1" },
   );
-  expect(mocks.pushFlexMessage).toHaveBeenCalledOnce();
-  expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:group:1", "Now playing:", sendOptions);
+  expectBatch(
+    [
+      { type: "flex", altText: "Now playing", contents: { type: "bubble" } },
+      { type: "text", text: "Now playing:" },
+    ],
+    "line:group:1",
+  );
 });
 
 it("preserves inline batch receipts and bounds the Flex alternative text", async () => {
@@ -284,8 +322,10 @@ it("sends template message without dropping text", async () => {
     },
   });
   expect(mocks.buildTemplateMessageFromPayload).toHaveBeenCalledOnce();
-  expect(mocks.pushTemplateMessage).toHaveBeenCalledOnce();
-  expect(mocks.pushMessageLine).toHaveBeenCalledWith(to, "Choose one:", sendOptions);
+  expectBatch([
+    expect.objectContaining({ type: "template" }),
+    { type: "text", text: "Choose one:" },
+  ]);
 });
 
 it("sends quick-reply-only payloads with fallback text", async () => {
@@ -366,7 +406,7 @@ it("returns a receipt for a quoted send through the registered text adapter", as
     ...primaryOptions,
     quoteToken: "q-answered",
   });
-  expect(result.receipt.platformMessageIds).toEqual(["m-text"]);
+  expect(result.receipt?.platformMessageIds).toEqual(["m-text"]);
 });
 
 it("reports caption and media receipts through the registered media adapter", async () => {
@@ -377,16 +417,85 @@ it("reports caption and media receipts through the registered media adapter", as
     mediaUrl: imageUrl,
     onDeliveryResult,
   });
-  expect(mocks.sendMessageLine).toHaveBeenCalledWith(to, "", {
+  expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+    to,
+    [
+      { type: "text", text: "image" },
+      { type: "image", originalContentUrl: imageUrl, previewImageUrl: imageUrl },
+    ],
+    primaryOptions,
+  );
+  expect(result.receipt.platformMessageIds).toEqual(["m-batch"]);
+  expect(onDeliveryResult).toHaveBeenCalledOnce();
+  expect(onDeliveryResult.mock.calls.map(([receipt]) => receipt.messageId)).toEqual(["m-batch"]);
+});
+
+it("sends media-only payloads through the declared outbound runtime", async () => {
+  const result = await linePlugin.message!.send!.media!({
+    ...primaryContext,
+    text: "",
+    mediaUrl: imageUrl,
+  });
+  expect(mocks.sendMessageLine).toHaveBeenCalledExactlyOnceWith(to, "", {
     ...primaryOptions,
     mediaUrl: imageUrl,
   });
   expect(result.receipt.platformMessageIds).toEqual(["m-media"]);
+});
+
+it("recovers every rejected mixed-batch part once after an atomic rejection", async () => {
+  mocks.pushMessagesLine
+    .mockRejectedValueOnce(refusal(400))
+    .mockResolvedValueOnce(lineResult("m-flex"))
+    .mockResolvedValueOnce(lineResult("m-location"))
+    .mockResolvedValueOnce(lineResult("m-text"));
+
+  const result = await send({
+    text: "Caption",
+    line: {
+      flexMessage: { altText: "Card", contents: { type: "bubble" } },
+      location: locationFixture,
+    },
+  });
+
+  expect(
+    mocks.pushMessagesLine.mock.calls.map(([, batch]) => batch.map(({ type }) => type)),
+  ).toEqual([["flex", "location", "text"], ["flex"], ["location"], ["text"]]);
+  expect(result.receipt?.platformMessageIds).toEqual(["m-text"]);
+});
+
+it("does not replay accepted batches while recovering rejected rich messages", async () => {
+  const codeBlocks = Array.from(
+    { length: 7 },
+    (_, index) => `\`\`\`js\nconsole.log(${index})\n\`\`\``,
+  ).join("\n\n");
+  const onDeliveryResult = vi.fn();
+  mocks.pushMessagesLine
+    .mockResolvedValueOnce(lineResult("m-first-batch"))
+    .mockRejectedValueOnce(refusal(400))
+    .mockResolvedValueOnce(lineResult("m-recovered-rich"))
+    .mockRejectedValueOnce(refusal(400));
+
+  let error: unknown;
+  try {
+    await send({ text: codeBlocks }, { onDeliveryResult });
+  } catch (caught) {
+    error = caught;
+  }
+
+  if (!isChannelPartialDeliveryError(error)) {
+    throw new Error("Expected a partial-delivery result after one rejected rich message");
+  }
+  expect(error.deliveryResult.visibleReplySent).toBe(true);
+  expect(error.deliveryResult.messageIds).toEqual(["m-recovered-rich"]);
+  const calls = mocks.pushMessagesLine.mock.calls;
+  expect(calls).toHaveLength(4);
+  expect(calls[0]?.[1]).toHaveLength(5);
+  expect(calls[1]?.[1]).toHaveLength(2);
+  expect(calls[2]?.[1]).toEqual([calls[1]![1][0]]);
+  expect(calls[3]?.[1]).toEqual([calls[1]![1][1]]);
+  expect(calls[0]?.[1]).not.toContainEqual(calls[2]?.[1][0]);
   expect(onDeliveryResult).toHaveBeenCalledTimes(2);
-  expect(onDeliveryResult.mock.calls.map(([receipt]) => receipt.messageId)).toEqual([
-    "m-text",
-    "m-media",
-  ]);
 });
 
 it.each([
@@ -457,10 +566,38 @@ it("keeps a stalled allowance from holding back a retryable refusal", async () =
   }
 });
 
-it("keeps accepted media receipts without reading quota for a later text refusal", async () => {
-  const rejection = refusal(429);
+it("batches media and quick replies into one provider delivery", async () => {
   const onDeliveryResult = vi.fn();
-  mocks.pushTextMessageWithQuickReplies.mockRejectedValueOnce(rejection);
+  mocks.pushMessagesLine.mockResolvedValueOnce(lineResult("m-batch"));
+  const fetchMock = stubLineApiFetch(
+    Response.json({ type: "limited", value: 200 }),
+    Response.json({ totalUsage: 200 }),
+  );
+  const result = await send(
+    {
+      text: "Caption",
+      mediaUrl: imageUrl,
+      line: { quickReplies: ["Continue"] },
+    },
+    { ...LINE_QUOTA_ACCOUNT, onDeliveryResult },
+  );
+  expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+    to,
+    [
+      { type: "image", originalContentUrl: imageUrl, previewImageUrl: imageUrl },
+      { type: "text", text: "Caption", quickReply: createQuickReply("Continue") },
+    ],
+    expect.objectContaining(LINE_QUOTA_ACCOUNT),
+  );
+  expect(result.receipt?.platformMessageIds).toEqual(["m-batch"]);
+  expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(delivery(["m-batch"]));
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it("preserves a failed media batch without publishing a receipt", async () => {
+  const rejection = new Error("LINE batch transport failed");
+  const onDeliveryResult = vi.fn();
+  mocks.pushMessagesLine.mockRejectedValueOnce(rejection);
   const fetchMock = stubLineApiFetch(
     Response.json({ type: "limited", value: 200 }),
     Response.json({ totalUsage: 200 }),
@@ -475,10 +612,12 @@ it("keeps accepted media receipts without reading quota for a later text refusal
       { ...LINE_QUOTA_ACCOUNT, onDeliveryResult },
     ),
   ).rejects.toBe(rejection);
-  expect(mocks.sendMessageLine).toHaveBeenCalledOnce();
-  expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledOnce();
-  expect(order(onDeliveryResult)).toBeLessThan(order(mocks.pushTextMessageWithQuickReplies));
-  expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(delivery(["m-media"]));
+  expect(mocks.pushMessagesLine).toHaveBeenCalledOnce();
+  expect(mocks.pushMessagesLine.mock.calls[0]?.[1]).toEqual([
+    { type: "image", originalContentUrl: imageUrl, previewImageUrl: imageUrl },
+    { type: "text", text: "Caption", quickReply: createQuickReply("Continue") },
+  ]);
+  expect(onDeliveryResult).not.toHaveBeenCalled();
   expect(fetchMock).not.toHaveBeenCalled();
 });
 

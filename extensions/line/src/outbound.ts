@@ -33,7 +33,11 @@ import {
 } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
-import { explainLineRefusal } from "./send-retry.js";
+import {
+  explainLineRefusal,
+  findLineHttpError,
+  resolveLineNonDispatchRetryable,
+} from "./send-retry.js";
 import type { LineChannelData, LineSendResult, ResolvedLineAccount } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
@@ -130,13 +134,55 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       ? quickReplyItems.map((item) => item.label)
       : quickReplies;
 
+    // LINE SDK expects Message[] but we build dynamically.
     const sendMessageBatch = async (messages: messagingApi.Message[]) => {
       if (messages.length === 0) {
         return;
       }
       for (let i = 0; i < messages.length; i += 5) {
-        const batch = messages.slice(i, i + 5);
-        await recordResult(sendBatch(to, batch, sendOptions));
+        const batch = messages.slice(i, i + 5) as Parameters<typeof sendBatch>[1];
+        try {
+          await recordResult(sendBatch(to, batch, sendOptions));
+        } catch (error) {
+          const httpError = findLineHttpError(error);
+          if (httpError?.status === 400 && resolveLineNonDispatchRetryable(error) !== undefined) {
+            const retryCandidates = [...batch, ...messages.slice(i + batch.length)];
+            const recoveryErrors: unknown[] = [];
+            // The 400 response proves this batch was rejected atomically. Retry
+            // each rejected or still-unsent part once so valid rich messages
+            // survive; earlier accepted batches are outside retryCandidates.
+            for (const message of retryCandidates) {
+              try {
+                await recordResult(sendBatch(to, [message], sendOptions));
+              } catch (recoveryError) {
+                // Keep trying distinct parts after one invalid item, but never
+                // replay a request that LINE already accepted.
+                recoveryErrors.push(recoveryError);
+              }
+            }
+            if (recoveryErrors.length === 0) {
+              return;
+            }
+            if (lastResult !== null) {
+              const recoveryError =
+                recoveryErrors.length === 1
+                  ? recoveryErrors[0]
+                  : new AggregateError(
+                      recoveryErrors,
+                      "LINE could not recover every rejected message",
+                    );
+              throw createChannelPartialDeliveryError(recoveryError, {
+                messageIds: listMessageReceiptPlatformIds(lastResult.receipt),
+                receipt: lastResult.receipt,
+                visibleReplySent: true,
+              });
+            }
+            // Preserve the provider's retry classification when no part was
+            // accepted; wrapping it in AggregateError would hide that signal.
+            throw recoveryErrors[0];
+          }
+          throw error;
+        }
       }
     };
 
@@ -149,6 +195,10 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       messageId: replyToId,
     });
     const sendTextWithQuickReply = async (text: string, quoteToken?: string) => {
+      if (shouldBatchMixedPayload && quickReply) {
+        pendingMessages.push({ type: "text", text, quickReply, ...quotedOption(quoteToken) });
+        return;
+      }
       if (quickReplyItems.length > 0 && quickReply) {
         await sendMessageBatch([{ type: "text", text, quickReply, ...quotedOption(quoteToken) }]);
         return;
@@ -189,47 +239,95 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       trackingId: lineData.trackingId,
     };
     const shouldSendQuickRepliesInline = chunks.length === 0 && hasQuickReplies;
+    const templateMessage = lineData.templateMessage
+      ? buildTemplate(lineData.templateMessage)
+      : undefined;
+    const richMessageCount =
+      Number(Boolean(lineData.flexMessage)) +
+      Number(Boolean(templateMessage)) +
+      Number(Boolean(location)) +
+      (orderedMessages ? 0 : processed.flexMessages.length);
+    const textMessageCount = orderedMessages?.length ?? chunks.length;
+    const mediaMessageCount = mediaUrls.filter((url) => Boolean(url?.trim())).length;
+    const shouldBatchMixedPayload =
+      !shouldSendQuickRepliesInline && richMessageCount + textMessageCount + mediaMessageCount > 1;
+    const pendingMessages: messagingApi.Message[] = [];
+    let mediaPreparationError: unknown;
     const sendMediaMessages = async () => {
       for (const url of mediaUrls) {
         const trimmed = url?.trim();
         if (!trimmed) {
           continue;
         }
-        await recordResult(
-          outboundRuntime.sendMessageLine(to, "", {
-            ...sendOptions,
-            ...mediaOptions,
-            mediaUrl: trimmed,
-          }),
-        );
+        if (shouldBatchMixedPayload) {
+          try {
+            pendingMessages.push(await buildLineMediaMessage(trimmed, mediaOptions, to));
+          } catch (error) {
+            // Keep valid parts in the batch; report the failed media after they land.
+            mediaPreparationError ??= error;
+          }
+        } else {
+          await recordResult(
+            outboundRuntime.sendMessageLine(to, "", {
+              ...sendOptions,
+              ...mediaOptions,
+              mediaUrl: trimmed,
+            }),
+          );
+        }
       }
     };
 
     if (!shouldSendQuickRepliesInline) {
       if (lineData.flexMessage) {
         const flexContents = lineData.flexMessage.contents as Parameters<typeof sendFlex>[2];
-        await recordResult(sendFlex(to, lineData.flexMessage.altText, flexContents, sendOptions));
+        if (shouldBatchMixedPayload) {
+          pendingMessages.push(
+            outboundRuntime.createFlexMessage(lineData.flexMessage.altText, flexContents),
+          );
+        } else {
+          await recordResult(sendFlex(to, lineData.flexMessage.altText, flexContents, sendOptions));
+        }
       }
 
-      if (lineData.templateMessage) {
-        const template = buildTemplate(lineData.templateMessage);
+      if (templateMessage) {
+        const template = templateMessage;
         if (template?.type === "template") {
-          await recordResult(sendTemplate(to, template, sendOptions));
+          if (shouldBatchMixedPayload) {
+            pendingMessages.push(template);
+          } else {
+            await recordResult(sendTemplate(to, template, sendOptions));
+          }
         } else if (template) {
-          await recordResult(
-            sendText(to, template.text, { ...sendOptions, ...quotedOption(replyQuoteToken) }),
-          );
-          replyQuoteToken = undefined;
+          if (shouldBatchMixedPayload) {
+            pendingMessages.push({ ...template, ...quotedOption(replyQuoteToken) });
+            replyQuoteToken = undefined;
+          } else {
+            await recordResult(
+              sendText(to, template.text, { ...sendOptions, ...quotedOption(replyQuoteToken) }),
+            );
+            replyQuoteToken = undefined;
+          }
         }
       }
 
       if (location) {
-        await recordResult(sendLocation(to, location, sendOptions));
+        if (shouldBatchMixedPayload) {
+          pendingMessages.push(locationMessage!);
+        } else {
+          await recordResult(sendLocation(to, location, sendOptions));
+        }
       }
 
       if (!orderedMessages) {
         for (const flexMsg of processed.flexMessages) {
-          await recordResult(sendFlex(to, flexMsg.altText, flexMsg.contents, sendOptions));
+          if (shouldBatchMixedPayload) {
+            pendingMessages.push(
+              outboundRuntime.createFlexMessage(flexMsg.altText, flexMsg.contents),
+            );
+          } else {
+            await recordResult(sendFlex(to, flexMsg.altText, flexMsg.contents, sendOptions));
+          }
         }
       }
     }
@@ -249,12 +347,20 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         const quoteToken = index === quotedIndex ? replyQuoteToken : undefined;
         if (message.type === "flex") {
           if (isLast && quickReply) {
-            await sendMessageBatch([{ ...message, quickReply }]);
+            if (shouldBatchMixedPayload) {
+              pendingMessages.push({ ...message, quickReply });
+            } else {
+              await sendMessageBatch([{ ...message, quickReply }]);
+            }
+          } else if (shouldBatchMixedPayload) {
+            pendingMessages.push(message);
           } else {
             await recordResult(sendFlex(to, message.altText, message.contents, sendOptions));
           }
         } else if (isLast && hasQuickReplies) {
           await sendTextWithQuickReply(message.text, quoteToken);
+        } else if (shouldBatchMixedPayload) {
+          pendingMessages.push({ ...message, ...quotedOption(quoteToken) });
         } else {
           await recordResult(
             sendText(to, message.text, { ...sendOptions, ...quotedOption(quoteToken) }),
@@ -267,6 +373,8 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         const quoteToken = i === 0 ? replyQuoteToken : undefined;
         if (isLast && hasQuickReplies) {
           await sendTextWithQuickReply(chunk, quoteToken);
+        } else if (shouldBatchMixedPayload) {
+          pendingMessages.push({ type: "text", text: chunk, ...quotedOption(quoteToken) });
         } else {
           await recordResult(sendText(to, chunk, { ...sendOptions, ...quotedOption(quoteToken) }));
         }
@@ -283,8 +391,8 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           ),
         );
       }
-      if (lineData.templateMessage) {
-        const template = buildTemplate(lineData.templateMessage);
+      if (templateMessage) {
+        const template = templateMessage;
         if (template) {
           quickReplyMessages.push(
             template.type === "text" ? { ...template, ...quotedOption(replyQuoteToken) } : template,
@@ -304,7 +412,11 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         if (!trimmed) {
           continue;
         }
-        quickReplyMessages.push(await buildLineMediaMessage(trimmed, mediaOptions, to));
+        try {
+          quickReplyMessages.push(await buildLineMediaMessage(trimmed, mediaOptions, to));
+        } catch (error) {
+          mediaPreparationError ??= error;
+        }
       }
       const lastMessage = quickReplyMessages.at(-1);
       if (lastMessage && quickReply) {
@@ -314,7 +426,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           quickReply,
         };
         await sendMessageBatch(quickReplyMessages);
-      } else if (quickReply) {
+      } else if (quickReply && mediaPreparationError === undefined) {
         await sendTextWithQuickReply(
           buildLineQuickReplyFallbackText(quickReplyLabels),
           replyQuoteToken,
@@ -326,7 +438,24 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       await sendMediaMessages();
     }
 
+    if (shouldBatchMixedPayload) {
+      await sendMessageBatch(pendingMessages);
+    }
+
     const completedResult = lastResult as LineSendResult | null;
+    if (mediaPreparationError !== undefined) {
+      if (completedResult) {
+        throw createChannelPartialDeliveryError(mediaPreparationError, {
+          messageIds: listMessageReceiptPlatformIds(completedResult.receipt),
+          receipt: completedResult.receipt,
+          visibleReplySent: true,
+        });
+      }
+      throw mediaPreparationError instanceof Error
+        ? mediaPreparationError
+        : new Error("LINE media preparation failed", { cause: mediaPreparationError });
+    }
+
     if (!completedResult) {
       throw new Error("Message must be non-empty for LINE sends");
     }
