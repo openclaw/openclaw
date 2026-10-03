@@ -44,6 +44,19 @@ function readHookPackagePaths(dir: string, warn?: HookDiscoveryWarning): string[
   return normalizeTrimmedStringList(asOptionalObjectRecord(manifest?.[MANIFEST_KEY])?.hooks);
 }
 
+function resolveContainedDir(baseDir: string, targetDir: string): string | null {
+  const base = path.resolve(baseDir);
+  const resolved = path.resolve(baseDir, targetDir);
+  if (
+    !isPathInsideWithRealpath(base, resolved, {
+      requireRealpath: true,
+    })
+  ) {
+    return null;
+  }
+  return resolved;
+}
+
 function loadHookFromDir(
   params: { hookDir: string; source: HookSource; pluginId?: string },
   warn?: HookDiscoveryWarning,
@@ -134,10 +147,8 @@ function loadHooksFromCandidate(
 
   const hooks: DiscoveredHookEntry[] = [];
   for (const hookPath of packageHooks) {
-    const resolvedHookDir = path.resolve(hookDir, hookPath);
-    if (
-      !isPathInsideWithRealpath(path.resolve(hookDir), resolvedHookDir, { requireRealpath: true })
-    ) {
+    const resolvedHookDir = resolveContainedDir(hookDir, hookPath);
+    if (!resolvedHookDir) {
       warn?.(
         `Ignoring out-of-package hook path "${hookPath}" in ${hookDir} (must be within package directory)`,
       );

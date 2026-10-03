@@ -20,6 +20,10 @@ export type ExtraGatewayService = {
 
 type ScannedGatewayService = ExtraGatewayService & { extra: boolean; managedGateway: boolean };
 
+export async function readServiceFile(filePath: string): Promise<Buffer | null> {
+  return fs.readFile(filePath).catch(() => null);
+}
+
 export function isPotentialGatewayServiceName(
   name: string,
   platform: "darwin" | "linux",
