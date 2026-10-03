@@ -316,9 +316,7 @@ const ConfigSchemaLookupChildSchema = closedObject({
 export const ConfigSchemaLookupResultSchema = closedObject({
   path: NonEmptyString,
   schema: Type.Unknown(),
-  reloadKind: Type.Optional(
-    Type.Union([Type.Literal("restart"), Type.Literal("hot"), Type.Literal("none")]),
-  ),
+  reloadKind: ConfigSchemaLookupChildSchema.properties.reloadKind,
   hint: Type.Optional(ConfigUiHintSchema),
   hintPath: Type.Optional(Type.String()),
   children: Type.Array(ConfigSchemaLookupChildSchema),

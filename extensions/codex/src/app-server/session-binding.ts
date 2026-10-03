@@ -18,7 +18,10 @@ import {
   type NativeSessionGenerationReclaimPlan,
 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateKeyedStore,
+  PluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeCodexAppServerBindingModelProvider,
@@ -214,13 +217,10 @@ export function createStoredCodexAppServerBinding(
     return undefined;
   }
   const record = normalizeLegacyBindingFingerprints(rawRecord);
-  if (record.schemaVersion !== 1 && record.schemaVersion !== 2) {
+  if (record.schemaVersion !== 2) {
     return undefined;
   }
-  const pluginAppPolicyContext = readPluginAppPolicyContext(
-    record.pluginAppPolicyContext,
-    record.schemaVersion,
-  );
+  const pluginAppPolicyContext = readPluginAppPolicyContext(record.pluginAppPolicyContext);
   const historyCoveredThrough =
     readCodexBindingTimestamp(record.historyCoveredThrough) ??
     readCodexBindingTimestamp(record.updatedAt) ??
@@ -249,7 +249,9 @@ export function createStoredCodexAppServerBinding(
 }
 
 export type CodexBindingStateStore = NativeSessionBindingStateStore<StoredCodexAppServerBinding> &
-  Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "entries" | "lookupMany">;
+  Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "entries"> & {
+    asyncReads: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding>, "lookup" | "lookupMany">;
+  };
 
 function bindingLeaseLostError(key: string, cause?: unknown): Error {
   return new Error(`Lost Codex binding lease: ${key}`, cause === undefined ? undefined : { cause });
@@ -259,10 +261,10 @@ export type CodexAppServerBindingStore = {
   /** Durable ownership rows kept separate from replaceable session bindings. */
   managedThreads?: CodexManagedThreadStore;
   read(identity: CodexAppServerBindingIdentity): CodexAppServerThreadBinding | undefined;
-  /** Available when the host provides positional bulk state reads. */
-  readMany?: (
+  /** Fresh worker-backed acquisition with row-ordered binding validation. */
+  readMany: (
     identities: readonly CodexAppServerBindingIdentity[],
-  ) => Generator<CodexAppServerThreadBinding | undefined, undefined, void>;
+  ) => AsyncGenerator<CodexAppServerThreadBinding | undefined, undefined, void>;
   readNativeSubagentAssignments?(
     identity: CodexAppServerBindingIdentity,
     owner: CodexNativeSubagentHistoryOwner,
@@ -475,12 +477,7 @@ export function createCodexAppServerBindingStore(
 
   return {
     read: (identity) => readCurrentCodexAppServerBinding(state, identity),
-    ...(state.lookupMany
-      ? {
-          readMany: (identities: readonly CodexAppServerBindingIdentity[]) =>
-            readCurrentCodexAppServerBindings(state, identities),
-        }
-      : {}),
+    readMany: (identities) => readCurrentCodexAppServerBindings(state.asyncReads, identities),
     readNativeSubagentAssignments: (identity, owner) =>
       readCurrentNativePendingAssignments(state, identity, owner),
     readNativeSubagentSubmissions: (identity, owner) =>
@@ -650,26 +647,23 @@ export function createCodexAppServerBindingStore(
             }
             let binding: CodexAppServerThreadBinding;
             if (mutation.kind === "set" || mutation.kind === "replace-thread") {
-              binding = validateBindingForWrite(mutation.binding);
+              binding = mutation.binding;
             } else if (mutation.kind === "patch-pending-supervision-branch") {
-              binding = validateBindingForWrite({
+              binding = {
                 ...active!.binding,
                 pendingSupervisionBranch: mutation.pending,
-              });
-            } else if (mutation.kind === "commit-pending-supervision-branch") {
-              binding = validateBindingForWrite({
-                ...active!.binding,
-                ...mutation.patch,
-                threadId: mutation.threadId,
-                pendingSupervisionBranch: undefined,
-              });
+              };
             } else {
-              binding = validateBindingForWrite({
+              binding = {
                 ...active!.binding,
                 ...mutation.patch,
                 threadId: mutation.threadId,
-              });
+                ...(mutation.kind === "commit-pending-supervision-branch"
+                  ? { pendingSupervisionBranch: undefined }
+                  : {}),
+              };
             }
+            binding = validateBindingForWrite(binding);
             const nativeSubagentSubmissions = active
               ? preserveCodexNativeSubagentSubmissions(
                   active.binding,

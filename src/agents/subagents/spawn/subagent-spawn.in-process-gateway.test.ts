@@ -32,13 +32,13 @@ import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
+import {
+  configureMockSubagentRegistryPersistence,
+  type MockSubagentRegistryRows,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import {
-  persistSubagentRunsToDisk,
-  persistSubagentRunsToDiskOrThrow,
-  restoreSubagentRunsFromDisk,
-} from "../registry/subagent-registry-state.js";
+import { restoreSubagentRunsFromDisk } from "../registry/subagent-registry-persistence.js";
 import { markSubagentRunTerminated } from "../registry/subagent-registry.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
@@ -54,9 +54,11 @@ vi.mock("../../runtime-plugins.js", () => ({
     vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
 }));
 vi.mock("../registry/subagent-registry-state.js", { spy: true });
+vi.mock("../registry/subagent-registry-persistence.js", { spy: true });
 
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
 let stateDir = "";
+const persistRegistryRows = vi.fn<MockSubagentRegistryRows>();
 
 function externalCliClient(): GatewayRequestOptions["client"] {
   return {
@@ -109,13 +111,13 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
   beforeEach(async () => {
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(createTestRegistry([]));
-    vi.mocked(persistSubagentRunsToDisk).mockImplementation(() => {});
-    vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {});
-    vi.mocked(restoreSubagentRunsFromDisk).mockReturnValue(0);
+    persistRegistryRows.mockReset();
+    await configureMockSubagentRegistryPersistence({ persistRegistryRows });
+    vi.mocked(restoreSubagentRunsFromDisk).mockResolvedValue(0);
 
     stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-swarm-gateway-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -138,10 +140,9 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
   afterEach(async () => {
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
-    vi.mocked(persistSubagentRunsToDisk).mockReset();
-    vi.mocked(persistSubagentRunsToDiskOrThrow).mockReset();
+    persistRegistryRows.mockReset();
     vi.mocked(restoreSubagentRunsFromDisk).mockReset();
     subagentSpawnTesting.setDepsForTest();
     clearRuntimeConfigSnapshot();
@@ -244,9 +245,10 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         session: { scope: "global" },
         tools: { swarm: { enabled: true, maxConcurrent: 1 } },
         agents: {
+          ownership: "explicit",
           defaults: { workspace: stateDir },
           entries: {
-            main: { default: true, workspace: stateDir },
+            main: { workspace: stateDir },
             worker: { workspace: stateDir },
           },
         },
@@ -631,7 +633,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     });
     // The registry never takes ownership, which is exactly when the suppressed
     // gateway CLI row would have been the only record of the accepted run.
-    vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
+    persistRegistryRows.mockImplementation(() => {
       throw new Error("state db unavailable");
     });
 
@@ -674,7 +676,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         } as T;
       },
     });
-    vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
+    persistRegistryRows.mockImplementation(() => {
       throw new Error("state db unavailable");
     });
 

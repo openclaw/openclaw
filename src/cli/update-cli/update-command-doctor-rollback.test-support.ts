@@ -414,9 +414,11 @@ export function registerDoctorRestorationRollbackTests(
         throw new Error("Expected terminal rollback report");
       }
       const report = renderUpdateRunReport(recorded);
-      expect(report.headline).toContain(
-        `rolled back to ${transport === "stale-git-graph" ? updateResult.before?.sha?.slice(0, 8) : installedVersion}`,
-      );
+      const restoredIdentity =
+        transport === "stale-git-graph"
+          ? `${installedVersion} (${updateResult.before?.sha?.slice(0, 8)})`
+          : installedVersion;
+      expect(report.headline).toContain(`rolled back to ${restoredIdentity}:`);
       if (transport === "stale-git-graph") {
         expect(recorded.verification.runningBuildId).toBe("previous-build");
         expect(failure?.detail).toContain("io.write-previous.mjs");

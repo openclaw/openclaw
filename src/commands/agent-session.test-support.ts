@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, onTestFinished, vi } from "vitest";
-import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   listSessionEntriesCore,
   loadSessionEntryReadOnly,
@@ -53,22 +52,6 @@ export function readSessionStore<T>(storePath: string): Record<string, T> {
   return Object.fromEntries(
     listSessionEntriesCore({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry as T]),
   );
-}
-
-export function expectSqliteSessionFileMarker(params: {
-  agentId: string;
-  sessionFile: string | undefined;
-  sessionId?: string;
-  storePath: string;
-}): void {
-  const marker = parseSqliteSessionFileMarker(params.sessionFile);
-  expect(marker?.agentId).toBe(params.agentId);
-  if (params.sessionId) {
-    expect(marker?.sessionId).toBe(params.sessionId);
-  } else {
-    expect(marker?.sessionId).toBeTruthy();
-  }
-  expect(marker?.storePath).toBe(path.resolve(params.storePath));
 }
 
 export function expectOwnedCommandSession(params: {

@@ -53,18 +53,15 @@ describe("Code Mode JavaScript config migration", () => {
     },
   );
 
-  it.each([[], null, "typescript"])(
-    "removes an empty or malformed language setting %j without enabling Code Mode",
-    (languages) => {
-      const raw = { tools: { codeMode: { languages } } };
-      const migrated = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+  it("removes a null language setting without enabling Code Mode", () => {
+    const raw = { tools: { codeMode: { languages: null } } };
+    const migrated = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
-      expect(migrated.partiallyValid).toBeUndefined();
-      expect(migrated.config?.tools?.codeMode).toEqual({});
-      expect(migrated.sourceConfig).toBeDefined();
-      expect(findLegacyConfigIssues(migrated.sourceConfig)).toEqual([]);
-    },
-  );
+    expect(migrated.partiallyValid).toBeUndefined();
+    expect(migrated.config?.tools?.codeMode).toEqual({});
+    expect(migrated.sourceConfig).toBeDefined();
+    expect(findLegacyConfigIssues(migrated.sourceConfig)).toEqual([]);
+  });
 });
 
 describe("Code Mode executor config migration", () => {

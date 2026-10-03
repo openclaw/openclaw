@@ -334,7 +334,7 @@ export async function startWhatsAppQaDriverSession(params: {
     sock.ev.off("connection.update", onConnectionUpdate);
   };
 
-  const closeSessionResources = (waiterError?: Error) => {
+  const closeSessionResources = (waiterError: Error) => {
     if (closed) {
       return;
     }
@@ -343,9 +343,7 @@ export async function startWhatsAppQaDriverSession(params: {
     settlePendingNotifications(waiterError);
     for (const waiter of waiters) {
       removeWaiter(waiter);
-      if (waiterError) {
-        waiter.reject(waiterError);
-      }
+      waiter.reject(waiterError);
     }
     removeMessageListener();
     void sock.end(undefined);

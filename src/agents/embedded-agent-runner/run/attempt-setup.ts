@@ -28,7 +28,7 @@ import {
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
-import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
+import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -38,7 +38,11 @@ import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
-import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
+import {
+  getEmbeddedSessionPromptState,
+  type ToolResultPromptProjectionState,
+} from "../session-prompt-state.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -252,11 +256,10 @@ export function installEmbeddedAttemptContextGuards(input: {
     : null;
   if (cacheTtlSettings) {
     activeSession.agent.transformContext = async (messages, signal) => {
-      const transformed = previousCacheTtlTransform
+      const sourceMessages = previousCacheTtlTransform
         ? await previousCacheTtlTransform.call(activeSession.agent, messages, signal)
         : messages;
-      const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-      const projected = pruneExpiredCacheTtlToolResults({
+      return pruneExpiredCacheTtlToolResults({
         messages: sourceMessages,
         settings: cacheTtlSettings,
         contextWindowTokens: contextTokenBudget,
@@ -268,10 +271,10 @@ export function installEmbeddedAttemptContextGuards(input: {
         // replay so the prefix already sent for this session does not change.
         pruneNewRounds: !input.getServerToolClearingEnabled(),
         onPruned: () => {
+          declarePromptHistoryRewrite({ ...attempt, reason: "pruning" });
           lastCacheTouchAt = Date.now();
         },
       });
-      return projected;
     };
   }
 
@@ -364,13 +367,22 @@ export function installEmbeddedAttemptContextGuards(input: {
           : undefined,
       onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
     },
+    (pruned) => {
+      const promptState = getEmbeddedSessionPromptState(attempt.sessionId);
+      const keys = new Set(
+        [...pruned].map(([index, message]) => `${index}:${message.role}:${message.timestamp}`),
+      );
+      if ([...keys].some((key) => !promptState.prunedImageMessages?.has(key))) {
+        declarePromptHistoryRewrite({ ...attempt, reason: "imageCleanup" });
+      }
+      promptState.prunedImageMessages = keys;
+    },
   );
   const previousComputerFrameTransform = activeSession.agent.transformContext;
   activeSession.agent.transformContext = async (messages, signal) => {
-    const transformed = previousComputerFrameTransform
+    const modelContext = previousComputerFrameTransform
       ? await previousComputerFrameTransform.call(activeSession.agent, messages, signal)
       : messages;
-    const modelContext = Array.isArray(transformed) ? transformed : messages;
     invalidateComputerFrameIfMissing({
       contextEpoch: input.computerContextEpoch,
       messages: modelContext,

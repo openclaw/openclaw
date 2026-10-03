@@ -73,7 +73,7 @@ function makeInput(overrides: Partial<RecoveryInput> = {}): RecoveryInput {
         },
       };
     },
-    prepareRecoverySession: () => ({
+    prepareRecoverySession: async () => ({
       sessionManager: undefined,
       assertActive: vi.fn(),
       withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>

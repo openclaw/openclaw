@@ -1,25 +1,21 @@
 // Doctor heartbeat session-target tests cover heartbeat target checks and repair output.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-heartbeat-doctor-");
 
 describe("describeHeartbeatSessionTargetIssues", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-doctor-")));
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    tmpDir = sessionDirs.make();
   });
 
   function cfgWithSession(session: string, target: string | null = "slack"): OpenClawConfig {

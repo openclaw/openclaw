@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
+import { resolveRuntimeArgs, resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 
 const requireFromHere = createRequire(import.meta.url);
@@ -67,7 +67,7 @@ function buildPackageRootCliArgs(packageRoot: string, execPath: string): string[
       // A checkout without TSX can still use its built package launcher.
     }
   }
-  return [path.join(packageRoot, "openclaw.mjs")];
+  return [...resolveRuntimeArgs(execPath), path.join(packageRoot, "openclaw.mjs")];
 }
 
 export function resolveCurrentOpenClawCliInvocation(

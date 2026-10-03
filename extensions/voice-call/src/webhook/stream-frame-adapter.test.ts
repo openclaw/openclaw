@@ -26,7 +26,6 @@ describe("TwilioStreamFrameAdapter", () => {
       kind: "media",
       payloadBase64: "AAA=",
       timestampMs: 20,
-      track: "inbound",
     });
 
     expect(
@@ -143,7 +142,6 @@ describe("TelnyxStreamFrameAdapter", () => {
       kind: "media",
       payloadBase64: "AAA=",
       timestampMs: 40,
-      track: "inbound_track",
     });
 
     expect(

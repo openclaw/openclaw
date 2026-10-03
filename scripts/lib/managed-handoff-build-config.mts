@@ -1,4 +1,3 @@
-import { isBuiltin } from "node:module";
 import { fileURLToPath } from "node:url";
 import type { UserConfig } from "tsdown";
 import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.ts";
@@ -47,7 +46,7 @@ function createSealedRecoveryBuildConfig(entry: typeof managedHandoffRuntimeEntr
         },
       },
     ],
-    deps: { alwaysBundle: (id) => !isBuiltin(id), onlyBundle: false },
+    deps: { alwaysBundle: () => true, onlyBundle: false },
     outExtensions: () => ({ js: ".mjs" }),
     outputOptions: { codeSplitting: false },
     shims: true,

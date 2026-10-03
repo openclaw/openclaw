@@ -130,15 +130,9 @@ function loadGatewaySessionLookupStoreUncached(
       ...target,
       projection: options.projection,
       sessionKeys: options.exactKeys,
-      onReadSource: (source, physical) => {
-        readSource = source;
-        capturedReadSource = physical
-          ? {
-              ...source,
-              databaseIdentity: physical.identity,
-              databaseBirthtime: physical.birthtime,
-            }
-          : undefined;
+      onReadSource: (source) => {
+        readSource = { agentId: source.agentId, path: source.path };
+        capturedReadSource = source;
       },
     });
     return {

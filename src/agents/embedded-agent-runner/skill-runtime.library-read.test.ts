@@ -342,6 +342,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
         );
         const child = await createInitialSubagentSession({
           cfg: config,
+          requesterAgentId: "main",
           targetAgentId: "main",
           childSessionKey: childKey,
           incognito: false,

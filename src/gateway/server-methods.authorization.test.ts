@@ -19,7 +19,10 @@ import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils.js";
 
 const METHOD = "workboard.cards.dispatch";
-const ensureProfileForEmail = vi.hoisted(() => vi.fn());
+const ensureProfileIdForEmail = vi.hoisted(() => vi.fn());
+const prepareUserProfileRoleAuthority = vi.hoisted(() =>
+  vi.fn(async (profileId: string) => ({ profileId, isCurrent: () => true })),
+);
 const getUserProfileDisplay = vi.hoisted(() =>
   vi.fn((profileId: string) => ({
     id: profileId,
@@ -28,27 +31,32 @@ const getUserProfileDisplay = vi.hoisted(() =>
     hasAvatar: false,
   })),
 );
-const resolveUserProfileId = vi.hoisted(() => vi.fn());
-const setDisplayName = vi.hoisted(() => vi.fn());
+const setCanonicalUserProfileDisplayName = vi.hoisted(() => vi.fn());
+
+vi.mock("../state/user-profile-email.js", () => ({ ensureProfileIdForEmail }));
+vi.mock("../state/user-channel-identity-operations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-channel-identity-operations.js")>()),
+  prepareUserProfileRoleAuthority,
+}));
+
+vi.mock("../state/user-profile-writes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profile-writes.js")>()),
+  setCanonicalUserProfileDisplayName,
+}));
 
 vi.mock("../state/user-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profiles.js")>()),
-  ensureProfileForEmail,
   getUserProfileDisplay,
   getUserProfileListItem: vi.fn(),
-  linkEmail: vi.fn(),
-  resolveUserProfileId,
-  setAvatar: vi.fn(),
-  setDisplayName,
   UserProfileNotFoundError: class UserProfileNotFoundError extends Error {},
 }));
 
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
-  ensureProfileForEmail.mockReset();
+  ensureProfileIdForEmail.mockReset();
+  prepareUserProfileRoleAuthority.mockClear();
   getUserProfileDisplay.mockClear();
-  resolveUserProfileId.mockReset();
-  setDisplayName.mockReset();
+  setCanonicalUserProfileDisplayName.mockReset();
 });
 
 describe("gateway method authorization", () => {
@@ -242,9 +250,8 @@ describe("gateway method authorization", () => {
 
   it("allows an identified write caller to edit its own profile", async () => {
     const profile = { id: "profile-1" };
-    ensureProfileForEmail.mockReturnValue(profile);
-    resolveUserProfileId.mockReturnValue(profile.id);
-    setDisplayName.mockReturnValue(profile);
+    ensureProfileIdForEmail.mockResolvedValue(profile.id);
+    setCanonicalUserProfileDisplayName.mockResolvedValue({ profile });
 
     expect(
       await dispatchProfileMutation({
@@ -256,8 +263,7 @@ describe("gateway method authorization", () => {
   });
 
   it("requires admin when an identified write caller targets another profile", async () => {
-    ensureProfileForEmail.mockReturnValue({ id: "profile-1" });
-    resolveUserProfileId.mockReturnValue("profile-2");
+    ensureProfileIdForEmail.mockResolvedValue("profile-1");
 
     expect(
       await dispatchProfileMutation({
@@ -270,7 +276,7 @@ describe("gateway method authorization", () => {
 
   it("allows an admin caller to edit any profile", async () => {
     const profile = { id: "profile-2" };
-    setDisplayName.mockReturnValue(profile);
+    setCanonicalUserProfileDisplayName.mockResolvedValue({ profile });
 
     expect(
       await dispatchProfileMutation({

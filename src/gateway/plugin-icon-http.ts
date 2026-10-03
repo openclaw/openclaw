@@ -8,7 +8,7 @@ import { startsWithSvgRootElement } from "../../packages/gateway-protocol/src/sv
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFile, readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { fetchClawHubPluginIconUrls } from "../infra/clawhub-plugin-icons.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { readRemoteMediaBuffer } from "../media/fetch.js";
@@ -58,7 +58,7 @@ type PluginIconCacheEntry = {
   promise: Promise<HttpImageRepresentation | null>;
 };
 
-let pluginIconCache = new Map<string, PluginIconCacheEntry>();
+let pluginIconCache = new LruCache<PluginIconCacheEntry>(PLUGIN_ICON_CACHE_MAX_ENTRIES);
 const pluginIconImageProcessor = createImageProcessor();
 
 function normalizeLinkFaviconHostname(value: string): string | null {
@@ -95,11 +95,9 @@ function rememberIcon(
   retainFailureForMs?: number,
 ): PluginIconCacheEntry["promise"] {
   const entry = { expiresAt, promise };
-  pluginIconCache.delete(cacheKey);
   pluginIconCache.set(cacheKey, entry);
-  pruneMapToMaxSize(pluginIconCache, PLUGIN_ICON_CACHE_MAX_ENTRIES);
   return promise.then((result) => {
-    if (!result && pluginIconCache.get(cacheKey) === entry) {
+    if (!result && pluginIconCache.peek(cacheKey) === entry) {
       if (retainFailureForMs) {
         entry.expiresAt = Date.now() + retainFailureForMs;
       } else {
@@ -112,11 +110,10 @@ function rememberIcon(
 
 function readCachedIcon(cacheKey: string, now: number): PluginIconCacheEntry | undefined {
   const cached = pluginIconCache.get(cacheKey);
-  pluginIconCache.delete(cacheKey);
   if (cached && cached.expiresAt > now) {
-    pluginIconCache.set(cacheKey, cached);
     return cached;
   }
+  pluginIconCache.delete(cacheKey);
   return undefined;
 }
 
@@ -279,7 +276,7 @@ async function loadCatalogIcon(params: {
 }
 
 export function clearPluginIconCacheForTest(): void {
-  pluginIconCache = new Map();
+  pluginIconCache = new LruCache(PLUGIN_ICON_CACHE_MAX_ENTRIES);
 }
 
 async function loadPluginIcon(
@@ -287,7 +284,7 @@ async function loadPluginIcon(
   sources: Awaited<ReturnType<typeof resolveManagedPluginIconSources>>,
 ): Promise<HttpImageRepresentation | null> {
   const cacheKey = `${cacheScope}\0sources:${JSON.stringify(sources)}`;
-  const cached = pluginIconCache.get(cacheKey);
+  const cached = pluginIconCache.peek(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return await cached.promise;
   }

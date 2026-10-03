@@ -42,7 +42,7 @@ function deriveApprovalRequestKind(request: { request: object }): ChannelApprova
   }
   const isExec = "command" in request.request;
   const isPlugin = "title" in request.request && "description" in request.request;
-  if ([isSystemAgent, isExec, isPlugin].filter(Boolean).length !== 1) {
+  if (isExec === isPlugin) {
     throw new Error("approval request payload does not identify exactly one owner");
   }
   return isExec ? "exec" : "plugin";

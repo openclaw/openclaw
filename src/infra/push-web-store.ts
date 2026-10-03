@@ -96,7 +96,7 @@ export function withBoundWebPushSubscriptionByEndpoint<T>(
   },
   prepare: (
     subscription: WebPushWorkerOperations["webPush.findBoundWebPushSubscriptionByEndpoint"]["output"],
-  ) => WebPushSnapshotAction<T> | undefined,
+  ) => WebPushSnapshotAction<T> | undefined | Promise<WebPushSnapshotAction<T> | undefined>,
 ) {
   const { stateDir, ...input } = params;
   const captured = context(stateDir);

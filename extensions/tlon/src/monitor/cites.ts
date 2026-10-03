@@ -1,7 +1,9 @@
-// Tlon plugin module implements cites behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import { asNullableRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { extractCites, extractMessageText, type ParsedCite } from "./utils.js";
+import {
+  asNullableRecord as asRecord,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractMessageText } from "./utils.js";
 
 type TlonScryApi = {
   scry: (path: string) => Promise<unknown>;
@@ -48,12 +50,8 @@ function buildCitedPostScryPath(nest: string, postId: string): string | null {
 export function createTlonCitationResolver(params: { api: TlonScryApi; runtime: RuntimeEnv }) {
   const { api, runtime } = params;
 
-  const resolveCiteContent = async (cite: ParsedCite): Promise<string | null> => {
-    if (cite.type !== "chan" || !cite.nest || !cite.postId) {
-      return null;
-    }
-
-    const scryPath = buildCitedPostScryPath(cite.nest, cite.postId);
+  const resolveCiteContent = async (nest: string, postId: string): Promise<string | null> => {
+    const scryPath = buildCitedPostScryPath(nest, postId);
     if (!scryPath) {
       runtime.log?.("[tlon] Skipping cited post: citation does not name a channel post");
       return null;
@@ -76,16 +74,23 @@ export function createTlonCitationResolver(params: { api: TlonScryApi; runtime: 
   };
 
   const resolveAllCites = async (content: unknown): Promise<string> => {
-    const cites = extractCites(content);
-    if (cites.length === 0) {
+    if (!Array.isArray(content)) {
       return "";
     }
 
     const resolved: string[] = [];
-    for (const cite of cites) {
-      const text = await resolveCiteContent(cite);
+    for (const verse of content) {
+      const block = asRecord(asRecord(verse)?.block);
+      const chan = asRecord(asRecord(block?.cite)?.chan);
+      const nest = readStringField(chan, "nest");
+      const whereMatch = readStringField(chan, "where")?.match(/\/msg\/(~[a-z-]+)\/(.+)/);
+      const postId = whereMatch?.[2];
+      if (!nest || !postId) {
+        continue;
+      }
+      const text = await resolveCiteContent(nest, postId);
       if (text) {
-        resolved.push(`> ${cite.author || "unknown"} wrote: ${text}`);
+        resolved.push(`> ${whereMatch?.[1] || "unknown"} wrote: ${text}`);
       }
     }
 
@@ -93,7 +98,6 @@ export function createTlonCitationResolver(params: { api: TlonScryApi; runtime: 
   };
 
   return {
-    resolveCiteContent,
     resolveAllCites,
   };
 }

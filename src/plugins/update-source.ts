@@ -440,7 +440,8 @@ export function isTrustedSourceLinkedOfficialNpmUpdate(params: {
   spec: string | undefined;
   record: PluginInstallRecord;
 }): boolean {
-  const officialSpec = officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmSpec(params);
+  const officialSpec =
+    officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall(params)?.npmSpec;
   const officialPackageName = resolveNpmSpecPackageName(officialSpec);
   const requestedPackageName = resolveNpmSpecPackageName(params.spec);
   return Boolean(officialPackageName && requestedPackageName === officialPackageName);

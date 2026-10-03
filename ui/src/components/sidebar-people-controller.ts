@@ -7,10 +7,32 @@ import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-n
 import { PersonActivityDataController } from "./person-activity-data.ts";
 import type { SidebarPeopleRuntime } from "./sidebar-people.runtime.ts";
 
+export type SidebarPeopleStatusFilter = "all" | "running";
+export type SidebarPeopleSortMode = "presence" | "running" | "open" | "name";
+
 const EVENTS = ["pointerover", "pointerout", "focusin", "focusout", "click", "keydown"] as const;
 
 /** One lazy interaction owner per sidebar; the data stays in SessionDataController. */
 export class SidebarPeopleController implements ReactiveController {
+  statusFilter: SidebarPeopleStatusFilter = "all";
+  sortMode: SidebarPeopleSortMode = "presence";
+
+  setStatusFilter(value: SidebarPeopleStatusFilter): void {
+    this.statusFilter = value;
+    this.host.requestUpdate();
+  }
+
+  setSortMode(value: SidebarPeopleSortMode): void {
+    this.sortMode = value;
+    this.host.requestUpdate();
+  }
+
+  resetView(): void {
+    this.statusFilter = "all";
+    this.sortMode = "presence";
+    this.host.requestUpdate();
+  }
+
   private runtime: SidebarPeopleRuntime | null = null;
   private readonly activityExpiry: ReturnType<typeof createPresenceActivityController>;
   private loading: Promise<typeof import("./sidebar-people.runtime.ts")> | null = null;

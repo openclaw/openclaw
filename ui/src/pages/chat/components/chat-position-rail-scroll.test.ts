@@ -6,7 +6,10 @@ import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
 import { renderChatPositionRail } from "./chat-position-rail.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
-import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
+import {
+  publishTranscriptScroll,
+  subscribeTranscriptScroll,
+} from "./chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -96,9 +99,13 @@ describe("conversation position rail scroll rendering", () => {
       renderRows();
       await Promise.resolve();
       const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks")!;
-      Object.defineProperty(marks, "clientHeight", { configurable: true, value: 240 });
+      const readRailHeight = vi.fn(() => 240);
+      Object.defineProperty(marks, "clientHeight", { configurable: true, get: readRailHeight });
+      const readRailOffset = vi.spyOn(marks, "scrollTop", "get");
+      const computedStyle = vi.spyOn(window, "getComputedStyle");
       for (const observer of resizeObservers) {
         observer.emitTarget(container, 800, 600);
+        observer.emitTarget(marks, 44, 240);
       }
       scrollTo(50);
       renderRows();
@@ -117,10 +124,46 @@ describe("conversation position rail scroll rendering", () => {
       expect(readOffset).not.toHaveBeenCalled();
       requestUpdate.mockClear();
 
+      const clearRailReads = () => {
+        readRailHeight.mockClear();
+        readRailOffset.mockClear();
+        computedStyle.mockClear();
+      };
+      const expectNoRailFrameReads = () => {
+        expect(readRailHeight).not.toHaveBeenCalled();
+        expect(readRailOffset).not.toHaveBeenCalled();
+        expect(computedStyle.mock.calls.filter(([element]) => element === marks)).toEqual([]);
+      };
+      // A stream commit can dirty the transcript without changing any markers.
+      rows[0]!.content = html`<div class="chat-bubble" data-entry-id="row-0">Updated content</div>`;
+      renderRows();
+      clearRailReads();
+      flushFrame();
+      expectNoRailFrameReads();
+      requestUpdate.mockClear();
+
+      // Programmatic and resize receipts can follow DOM writes. Their readers
+      // must wait for observer delivery rather than moving the forced layout.
+      clearRailReads();
+      publishTranscriptScroll(container, {
+        type: "offset",
+        delta: 0,
+        scrolling: false,
+        touching: false,
+        programmatic: true,
+      });
+      publishTranscriptScroll(container, {
+        type: "resize",
+        viewport: { clientHeight: 600, scrollHeight: 4800, scrollTop: 50 },
+      });
+      expectNoRailFrameReads();
+
       offsets.length = 0;
       scrollTo(55);
       expect(offsets).toEqual([5]);
+      clearRailReads();
       flushFrame();
+      expectNoRailFrameReads();
       expect(requestUpdate).not.toHaveBeenCalled();
       expect(current()?.dataset.positionMarkerId).toBe("row-2");
       expect(tabStops()).toEqual([current()]);

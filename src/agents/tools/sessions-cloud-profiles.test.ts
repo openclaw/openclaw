@@ -12,7 +12,7 @@ it("pages cloud profile summaries and returns the selected OS/machine catalog", 
   const callGateway = vi
     .fn()
     .mockResolvedValue({ environments: [{ id: "private-worker" }], profiles });
-  const tool = createSessionsTool({ callGateway });
+  const tool = createSessionsTool({ senderIsOwner: true, callGateway });
   const first = await tool.execute("catalog", { action: "cloud_profiles" });
   expect(first.details).toMatchObject({
     profiles: profiles.slice(0, 32).map(({ id, providerId }) => ({ id, providerId })),
@@ -45,7 +45,7 @@ it("round-trips a listed maximum-length profile ID through argument validation",
     machines: [{ id: "tiny", label: "Tiny", os: "linux", cpu: 2 }],
   };
   const callGateway = vi.fn().mockResolvedValue({ profiles: [profile] });
-  const tool = createSessionsTool({ callGateway });
+  const tool = createSessionsTool({ senderIsOwner: true, callGateway });
   const listed = await tool.execute("catalog", { action: "cloud_profiles" });
   expect(listed.details).toMatchObject({ profiles: [{ id: profile.id }] });
   const args = validateToolArguments(tool, {
@@ -59,7 +59,7 @@ it("round-trips a listed maximum-length profile ID through argument validation",
 });
 
 it("rejects profile IDs beyond the placement identifier limit", () => {
-  const tool = createSessionsTool({ callGateway: vi.fn() });
+  const tool = createSessionsTool({ senderIsOwner: true, callGateway: vi.fn() });
   expect(() =>
     validateToolArguments(tool, {
       type: "toolCall",

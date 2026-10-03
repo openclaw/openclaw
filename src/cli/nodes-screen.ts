@@ -1,4 +1,3 @@
-// Screen-recording payload helpers for node media commands.
 import * as path from "node:path";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";

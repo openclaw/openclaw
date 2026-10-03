@@ -1,4 +1,6 @@
 import { resolveCronTriggerMinIntervalMs } from "../config/cron-limits.js";
+import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
+import { assertCanonicalCronDeliveryMode } from "../cron/store/delivery-codec.js";
 import type { CronJob, CronJobState } from "../cron/types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
@@ -83,6 +85,7 @@ export function createCronStreamWatchers(
 
   const ownerParams: CronStreamOwnerParams = {
     scheduler: params.scheduler,
+    getDefaultAgentId: params.getDefaultAgentId,
     getProcessSupervisor: params.getProcessSupervisor,
     minIntervalMs: params.minIntervalMs ?? resolveCronTriggerMinIntervalMs(),
     retryBackoffMs: params.retryBackoffMs,
@@ -195,6 +198,15 @@ export function createCronStreamWatchers(
     if (!isCronStreamJob(job)) {
       await stop(job.id, "schedule-update");
       return;
+    }
+    try {
+      assertCanonicalCronDeliveryMode(job.delivery);
+      resolveCronJobEffectiveAgentId(job, params.getDefaultAgentId?.());
+    } catch (error) {
+      if (owners.has(job.id)) {
+        await stop(job.id, "disabled", job);
+      }
+      throw error;
     }
     const owner = await getOrCreateOwner(job, isCurrent);
     if (!owner || !isCurrent()) {

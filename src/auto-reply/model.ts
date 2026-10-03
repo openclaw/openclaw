@@ -1,4 +1,3 @@
-// `/model` directive parser for auto-reply messages.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -42,14 +41,6 @@ function parseModelScope(raw: string | undefined): ModelSelectionScope | undefin
     default:
       return undefined;
   }
-}
-
-function parseModelDirectiveMatch(match: RegExpMatchArray | null) {
-  return {
-    rawModel: match?.[1]?.trim(),
-    rawRuntime: (match?.[2] ?? match?.[5])?.trim(),
-    scope: parseModelScope(match?.[3] ?? match?.[4]),
-  };
 }
 
 function hasAdditionalModelScope(body: string, match: RegExpMatchArray | null): boolean {
@@ -113,14 +104,17 @@ export function extractModelDirective(
         ).exec(body);
 
   const match = modelMatch ?? aliasMatch;
-  const parsed = modelOptionsOnlyMatch
-    ? {
-        rawModel: undefined,
-        rawRuntime: (modelOptionsOnlyMatch[1] ?? modelOptionsOnlyMatch[4])?.trim(),
-        scope: parseModelScope(modelOptionsOnlyMatch[2] ?? modelOptionsOnlyMatch[3]),
-      }
-    : parseModelDirectiveMatch(match);
-  const { rawModel: raw, rawRuntime, scope } = parsed;
+  const raw = modelOptionsOnlyMatch ? undefined : match?.[1]?.trim();
+  const rawRuntime = (
+    modelOptionsOnlyMatch
+      ? (modelOptionsOnlyMatch[1] ?? modelOptionsOnlyMatch[4])
+      : (match?.[2] ?? match?.[5])
+  )?.trim();
+  const scope = parseModelScope(
+    modelOptionsOnlyMatch
+      ? (modelOptionsOnlyMatch[2] ?? modelOptionsOnlyMatch[3])
+      : (match?.[3] ?? match?.[4]),
+  );
 
   let rawModel = raw;
   let rawProfile: string | undefined;

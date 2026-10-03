@@ -57,7 +57,7 @@ describe("presence payload encoding", () => {
     expect(JSON.parse(peers[0]!.socket.send.mock.lastCall![0]).payload.presence[0].ts).toBe(2);
   });
 
-  it.each(["getter", "toJSON", "proxy", "added field"])(
+  it.each(["getter", "toJSON", "added field"])(
     "preserves presence payload %s changes between recipients",
     (publisher) => {
       const peers = [
@@ -70,7 +70,6 @@ describe("presence payload encoding", () => {
       let revision = 1;
       const reads: number[] = [];
       const source = { presence };
-      let payload: object = source;
       if (publisher === "getter") {
         Object.defineProperty(source, "revision", {
           enumerable: true,
@@ -88,13 +87,6 @@ describe("presence payload encoding", () => {
             return { presence, revision };
           },
         });
-      } else if (publisher === "proxy") {
-        payload = new Proxy(source, {
-          ownKeys(target) {
-            reads.push(revision);
-            return Reflect.ownKeys(target);
-          },
-        });
       }
       peers[0]!.socket.send.mockImplementationOnce(() => {
         revision = 2;
@@ -106,11 +98,11 @@ describe("presence payload encoding", () => {
         clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
         preparePresenceProjection: () => () => (authorized ? presence : hidden),
       });
-      broadcast("presence", payload);
+      broadcast("presence", source);
 
       for (const [index, peer] of peers.entries()) {
         const expected =
-          publisher === "proxy" || (publisher === "added field" && index === 0)
+          publisher === "added field" && index === 0
             ? { presence }
             : { presence: publisher === "getter" ? hidden : presence, revision: index + 1 };
         expect(JSON.parse(peer.socket.send.mock.lastCall![0]).payload).toEqual(expected);

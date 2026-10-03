@@ -409,7 +409,7 @@
             "enum": ["user", "auto_review", "guardian_subagent"]
           },
           "serviceTier": { "type": ["string", "null"] },
-          "enableUltrafast": { "type": "boolean", "default": false },
+          "enableUltrafast": { "type": "boolean", "default": true },
           "cyberFailover": {
             "type": "object",
             "additionalProperties": false,
@@ -749,7 +749,7 @@
     },
     "appServer.enableUltrafast": {
       "label": "Enable Ultrafast (for supported models)",
-      "help": "Use Ultrafast when the selected model advertises access; otherwise keep the current tier. Shared Fast off remains off.",
+      "help": "Automatically prefer Ultrafast when the shared Fast-mode control is on, active Auto, or unspecified, and the authenticated app-server catalog advertises it for the selected native model. Enabled by default; set false to opt out of automatic upgrades. Standard and inactive Auto remain off; an explicit shared Ultrafast preference still requests the supported tier.",
       "advanced": true
     },
     "appServer.networkProxy": {

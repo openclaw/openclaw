@@ -11,24 +11,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
 IMAGE_NAME="${OPENCLAW_CLEANUP_SMOKE_IMAGE:-openclaw-cleanup-smoke:local}"
 DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_CLEANUP_SMOKE_DOCKER_TIMEOUT:-600s}}"
 
-resolve_default_cleanup_platform() {
-  local host_arch
-  if [[ -n "${OPENCLAW_CLEANUP_SMOKE_PLATFORM:-}" ]]; then
-    printf "%s" "$OPENCLAW_CLEANUP_SMOKE_PLATFORM"
-    return
-  fi
-  host_arch="$(uname -m)"
-  case "$host_arch" in
-    arm64 | aarch64)
-      printf "linux/arm64"
-      ;;
-    *)
-      printf "linux/amd64"
-      ;;
-  esac
-}
-
-PLATFORM="$(resolve_default_cleanup_platform)"
+PLATFORM="$(docker_build_resolve_platform "${OPENCLAW_CLEANUP_SMOKE_PLATFORM:-}")"
 
 echo "==> Build image: $IMAGE_NAME"
 docker_build_run cleanup-build \

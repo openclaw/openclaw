@@ -302,9 +302,9 @@ vi.mock("../gateway/server-constants.js", () => ({
   getMaxChatHistoryMessagesBytes: () => 100_000,
 }));
 
-vi.mock("../gateway/server-methods/chat.js", () => ({
+vi.mock("../gateway/server-methods/chat-history-budget.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/server-methods/chat-history-budget.js")>()),
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
-  augmentChatHistoryWithCanvasBlocks: (messages: unknown[]) => messages,
   replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
 }));
 

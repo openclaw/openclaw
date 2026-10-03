@@ -1,6 +1,8 @@
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { vi } from "vitest";
@@ -9,12 +11,18 @@ import { createQaChannelTransport } from "../src/qa-channel-transport.js";
 import { runRuntimeToolFixture } from "../src/runtime-tool-fixture.js";
 import type { QaSuiteRuntimeEnv } from "../src/suite-runtime-types.js";
 
+let suiteRoot: string | undefined;
+let fixtureIndex = 0;
 const tempRoots: string[] = [];
 
 async function makeEnv(overrides: Partial<QaSuiteRuntimeEnv> = {}): Promise<QaSuiteRuntimeEnv> {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "runtime-tool-fixture-"));
+  // openclaw-temp-dir: allow suite-owned session stores drain once before removal
+  suiteRoot ??= await fs.mkdtemp(
+    path.join(realpathSync.native(os.tmpdir()), "runtime-tool-fixture-"),
+  );
+  const tempRoot = path.join(suiteRoot, `case-${++fixtureIndex}`);
   const workspaceDir = path.join(tempRoot, "workspace");
-  await fs.mkdir(workspaceDir);
+  await fs.mkdir(workspaceDir, { recursive: true });
   tempRoots.push(tempRoot);
   return {
     outputDir: tempRoot,
@@ -271,9 +279,13 @@ export async function writeRuntimeToolTranscripts(
 }
 
 export async function cleanupRuntimeToolFixtureTempRoots() {
-  await Promise.all(
-    tempRoots.splice(0).map((tempRoot) => fs.rm(tempRoot, { recursive: true, force: true })),
-  );
+  if (!suiteRoot) {
+    return;
+  }
+  await Promise.all(tempRoots.map((root) => closeQaRuntimeStores(root)));
+  await fs.rm(suiteRoot, { recursive: true, force: true });
+  tempRoots.length = 0;
+  suiteRoot = undefined;
 }
 
 export {

@@ -21,6 +21,46 @@ afterEach(async () => {
 });
 
 describe("plugin async iterable protocol", () => {
+  it.each(["promise", "thenable"] as const)(
+    "awaits a next() %s with native assimilation and live admission",
+    async (kind) => {
+      const instance = owner();
+      const result = { done: false, value: { text: "chunk" } };
+      const receivers: unknown[] = [];
+      const thenable = {
+        // oxlint-disable-next-line unicorn/no-thenable -- Exercise native async-iterator result assimilation.
+        then(resolve: (value: typeof result) => void) {
+          receivers.push(this);
+          expect(instance.hasActiveCall).toBe(true);
+          resolve(result);
+        },
+      };
+      const promise = Promise.resolve(result);
+      // oxlint-disable-next-line unicorn/no-thenable -- Native await must bypass this fulfilled Promise's override.
+      void Object.defineProperty(promise, "then", {
+        get() {
+          throw new Error("Native await must not inspect this Promise's then override");
+        },
+      });
+      const source = instance.wrap({
+        [Symbol.asyncIterator]() {
+          return {
+            next: () => (kind === "promise" ? promise : thenable),
+            return: async () => ({ done: true, value: undefined }),
+          };
+        },
+      });
+      const iterator = source[Symbol.asyncIterator]();
+      try {
+        const next = await iterator.next();
+        expect(next.value).toBe(result.value);
+        expect(receivers).toEqual(kind === "thenable" ? [thenable] : []);
+      } finally {
+        await iterator.return();
+      }
+    },
+  );
+
   it.each(["next", "throw"] as const)(
     "preserves native %s completion after exhaustion while its owner is live",
     async (method) => {
@@ -201,7 +241,7 @@ describe("plugin async iterable protocol", () => {
     },
   );
 
-  it("classifies data once per nested read and fences methods added between reads", async () => {
+  it("classifies nested data only when read and fences methods added between reads", async () => {
     const instance = owner();
     const inner = instance.retainConsumer();
     const outer = instance.retainConsumer();
@@ -212,12 +252,13 @@ describe("plugin async iterable protocol", () => {
       })(),
     );
     const iterator = outer.wrap(inner.wrap(source))[Symbol.asyncIterator]();
+    const ownKeys = vi.spyOn(Reflect, "ownKeys");
     try {
       const next = await iterator.next();
       if (next.done) {
         throw new Error("Expected a data chunk");
       }
-      const ownKeys = vi.spyOn(Reflect, "ownKeys");
+      expect(ownKeys.mock.calls.filter(([value]) => value === payload)).toHaveLength(0);
       try {
         expect(next.value).toBe(payload);
         // Payload traversal must not multiply with the number of managed readers.
@@ -232,6 +273,7 @@ describe("plugin async iterable protocol", () => {
       outer.release();
       expect(() => changed.read?.()).toThrow(/closed/);
     } finally {
+      ownKeys.mockRestore();
       await iterator.return();
       inner.release();
       outer.release();
@@ -264,6 +306,76 @@ describe("plugin async iterable protocol", () => {
       consumer.release();
     }
   });
+
+  it("keeps native result exemptions from admitting a nested callable payload", async () => {
+    const instance = owner();
+    const outer = instance.retainConsumer();
+    const payload = { read: () => "chunk" };
+    const result = Object.assign(Object.setPrototypeOf(new Date(), Object.prototype), {
+      done: false,
+      value: payload,
+    });
+    const source = instance.wrap({
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => result,
+          return: async () => ({ done: true, value: undefined }),
+        };
+      },
+    });
+    const iterator = outer.wrap(source)[Symbol.asyncIterator]();
+    try {
+      const next = await iterator.next();
+      const chunk = next.value;
+      expect(chunk?.read()).toBe("chunk");
+      await iterator.return();
+      outer.release();
+      expect(() => chunk?.read()).toThrow(/closed/);
+    } finally {
+      await iterator.return();
+      outer.release();
+    }
+  });
+
+  it.each(["record", "callable", "proxy"] as const)(
+    "preserves unread terminal %s results after self-retirement",
+    async (kind) => {
+      const instance = owner();
+      const payload = { content: [{ text: "complete" }] };
+      const result = { done: true, value: payload };
+      const callable = Object.assign(() => {}, result);
+      Object.defineProperty(callable, "length", {
+        get() {
+          expect(instance.hasActiveCall).toBe(true);
+          return 0;
+        },
+      });
+      const source = instance.wrap({
+        [Symbol.asyncIterator]() {
+          return {
+            async next() {
+              await instance.dispose();
+              return kind === "callable"
+                ? callable
+                : kind === "proxy"
+                  ? Object.create(new Proxy(result, {}))
+                  : result;
+            },
+          };
+        },
+      });
+      const iterator = source[Symbol.asyncIterator]();
+      const next = await iterator.next();
+      expect(next.done).toBe(true);
+      await instance.dispose();
+      if (kind === "proxy") {
+        expect(() => next.value).toThrow(/reloaded or disabled/);
+      } else {
+        expect(next.value).toBe(payload);
+        expect(structuredClone(next.value)).toEqual(payload);
+      }
+    },
+  );
 
   it("admits a replacement getter on an otherwise core-owned iterator result", async () => {
     const instance = owner();
@@ -386,21 +498,18 @@ describe("plugin async iterable protocol", () => {
     },
   );
 
-  it.each([undefined, null, 1])(
-    "releases admission after an invalid protocol result %s",
-    async (value) => {
-      const instance = owner();
-      const stream = instance.wrap({
-        [Symbol.asyncIterator]() {
-          return { next: async () => value };
-        },
-      });
-      const iterator = stream[Symbol.asyncIterator]();
+  it.each([null, 1])("releases admission after an invalid protocol result %s", async (value) => {
+    const instance = owner();
+    const stream = instance.wrap({
+      [Symbol.asyncIterator]() {
+        return { next: async () => value };
+      },
+    });
+    const iterator = stream[Symbol.asyncIterator]();
 
-      await expect(iterator.next()).rejects.toThrow("iterator result must be an object");
-      await instance.dispose();
-    },
-  );
+    await expect(iterator.next()).rejects.toThrow("iterator result must be an object");
+    await instance.dispose();
+  });
 
   it("does not read an iterator getter until the consumer requests it", () => {
     const instance = owner();

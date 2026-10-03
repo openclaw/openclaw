@@ -1,6 +1,6 @@
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { isCliTerminalStopCode } from "../../failover-error.js";
+import type { FailoverReason } from "../../failover/signal.js";
 
 type ProfileDecision = {
   action: "rotate_profile" | "surface_error";

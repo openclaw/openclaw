@@ -59,8 +59,9 @@ visible for a short recent window, and stale store-only child links are
 ignored after their freshness window. This prevents old `spawnedBy` /
 `parentSessionKey` metadata from resurrecting ghost children after
 restart. If a child completion event arrives after you already sent the
-final answer, the correct follow-up is the exact silent token
-`NO_REPLY` / `no_reply`.
+final answer, review it and continue any unfinished work. Avoid repeating an
+already delivered update. Internal orchestration still requires a meaningful
+result; a silent token cannot settle the child task.
 </Note>
 
 ### Tool policy by depth

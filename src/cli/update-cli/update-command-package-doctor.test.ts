@@ -28,15 +28,16 @@ import {
 import * as processRunner from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { runUpdateStep } from "./shared.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
 import { createUpdateRunProgress } from "./update-command-run.js";
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   vi.restoreAllMocks();
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -231,11 +232,13 @@ it.each([
       };
     });
 
+    const run = { runId, env };
+    const guards = createUpdateCommandExecutionGuards({ run }, root);
     const step = await runPackageUpdateDoctor({
       root,
       timeoutMs: 1_000,
       managedServiceEnv: env,
-      progress: createUpdateRunProgress({ runId, env }, { onStepComplete }),
+      progress: createUpdateRunProgress(run, { onStepComplete }, guards.recordStep),
     });
 
     expect(step).toMatchObject({ exitCode, outputLimitExceeded });
@@ -340,7 +343,9 @@ it("leaves the run ledger unchanged while the activation Doctor child is pending
   const spawned = createDeferredCore();
   const exited = createDeferredCore();
   const onStepComplete = vi.fn();
-  const progress = createUpdateRunProgress({ runId, env }, { onStepComplete });
+  const run = { runId, env };
+  const guards = createUpdateCommandExecutionGuards({ run }, root);
+  const progress = createUpdateRunProgress(run, { onStepComplete }, guards.recordStep);
   let doctorEnv: NodeJS.ProcessEnv | undefined;
   vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation(async (_argv, options) => {
     doctorEnv = typeof options === "object" ? options.env : undefined;
@@ -429,7 +434,7 @@ it.each([
     let resultPath: string | undefined;
     let receiptBytes: string | undefined;
     const reportingError = new Error("Doctor progress could not be recorded.");
-    const onStepComplete = vi.fn(() => {
+    const onStepComplete = vi.fn(async () => {
       if (reportingFails) {
         throw reportingError;
       }
@@ -578,12 +583,14 @@ it("still refreshes the run ledger for a step that spawns no Doctor", async () =
   expect(adoptUpdateRun(runId, { env }).origin.driver?.pid).toBe(process.pid);
   const spawned = createDeferredCore();
   const exited = createDeferredCore();
+  const run = { runId, env };
+  const guards = createUpdateCommandExecutionGuards({ run }, root);
   const running = runUpdateStep({
     name: "git-fetch",
     argv: ["git", "fetch"],
     cwd: root,
     timeoutMs: ABANDONED_UPDATE_RUN_MS * 2,
-    progress: createUpdateRunProgress({ runId, env }, {}),
+    progress: createUpdateRunProgress(run, {}, guards.recordStep),
     runCommand: async () => {
       spawned.resolve();
       await exited.promise;

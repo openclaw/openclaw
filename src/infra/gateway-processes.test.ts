@@ -1,7 +1,7 @@
 // Covers gateway process discovery across platform process listings.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.js";
+import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.types.js";
 import { getWindowsPowerShellExePath, getWindowsSystem32ExePath } from "./windows-install-roots.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());

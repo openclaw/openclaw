@@ -36,16 +36,8 @@ export type {
   SessionCapabilityStore,
 } from "./subagent-session-store.js";
 
-/** Resolved role for a main session, orchestrating subagent, or leaf subagent. */
 export type SubagentSessionRole = "main" | "orchestrator" | "leaf";
-const SUBAGENT_SESSION_ROLES: readonly SubagentSessionRole[] = [
-  "main",
-  "orchestrator",
-  "leaf",
-] as const;
-
 type SubagentControlScope = "children" | "none";
-const SUBAGENT_CONTROL_SCOPES: readonly SubagentControlScope[] = ["children", "none"] as const;
 
 type PersistedSubagentToolPolicyEnvelope = {
   sessionKey: string;
@@ -57,12 +49,14 @@ type PersistedSubagentToolPolicyEnvelope = {
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
-  return SUBAGENT_SESSION_ROLES.find((entry) => entry === trimmed);
+  return trimmed === "main" || trimmed === "orchestrator" || trimmed === "leaf"
+    ? trimmed
+    : undefined;
 }
 
 function normalizeSubagentControlScope(value: unknown): SubagentControlScope | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
-  return SUBAGENT_CONTROL_SCOPES.find((entry) => entry === trimmed);
+  return trimmed === "children" || trimmed === "none" ? trimmed : undefined;
 }
 
 function shouldInspectStoredSubagentEnvelope(sessionKey: string): boolean {
@@ -118,7 +112,6 @@ function resolveSessionCapabilityEntry(params: {
   return store.get(params.sessionKey) ?? store.getById(params.sessionKey);
 }
 
-/** Resolve the session-store subset used for subagent capability lookup. */
 export function resolveSubagentCapabilityStore(
   sessionKey: string | undefined | null,
   opts?: {
@@ -160,7 +153,6 @@ export function resolveSubagentCapabilityStore(
   );
 }
 
-/** Resolve depth-derived role, scope, and spawn/control booleans. */
 export function resolveSubagentCapabilities(params: { depth: number; maxSpawnDepth?: number }) {
   const depth = resolveNonNegativeIntegerOption(params.depth, 0);
   const maxSpawnDepth = resolveIntegerOption(
@@ -250,7 +242,6 @@ function isStoredSubagentEnvelopeSession(
   );
 }
 
-/** Return true when a session key or persisted ACP envelope represents a subagent. */
 export function isSubagentEnvelopeSession(
   sessionKey: string | undefined | null,
   opts?: {
@@ -325,10 +316,6 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
   };
 }
 
-/**
- * Resolve the effective subagent role/scope, combining stored envelope metadata
- * with depth-derived fallback behavior.
- */
 export function resolveStoredSubagentCapabilities(
   sessionKey: string | undefined | null,
   opts?: {
@@ -394,7 +381,6 @@ function resolveStoredSubagentToolPolicy(
   return { sessionKey: normalizedSessionKey, store, entry };
 }
 
-/** Resolve inherited tool deny rules stored on a subagent envelope. */
 export function resolveStoredSubagentInheritedToolDenylist(
   sessionKey: string | undefined | null,
   opts?: { cfg?: OpenClawConfig; store?: SessionCapabilityStore },
@@ -404,7 +390,6 @@ export function resolveStoredSubagentInheritedToolDenylist(
   );
 }
 
-/** Resolve inherited tool allow rules stored on a subagent envelope. */
 export function resolveStoredSubagentInheritedToolAllowlist(
   sessionKey: string | undefined | null,
   opts?: { cfg?: OpenClawConfig; store?: SessionCapabilityStore },

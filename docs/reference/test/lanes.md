@@ -30,6 +30,14 @@ read_when:
 
 ### Real-Gateway Control UI fixture lifetimes
 
+Use `pairControlUiPage` from `ui/src/test-helpers/control-ui-browser-pairing.ts`
+with the isolated Gateway's CLI runner to authenticate each new page. It obtains
+and consumes a fresh `dashboard --json` browser handoff and waits for the Gateway
+handshake. Dashboard pairing links are single-use; do not reuse a captured URL
+for another tab or browser context. Pass this operation as `preparePage` to
+`withControlUiRunInspector` so collection authenticates its own page while leaving
+the caller's Chat and draft in place. Reload uses the browser's paired credential.
+
 Use `createControlUiE2eSuite` from
 `ui/src/e2e/control-ui-e2e-suite.test-support.ts` for real-Gateway browser fixtures.
 `suite.define(...)` owns the native hooks. Each native `it` passes its test context
@@ -134,6 +142,15 @@ five-second budget. If the renderer stalls, it records incomplete diagnostics an
 returns so the caller can rethrow the original failure. A late browser response
 cannot publish a screenshot after that budget expires; test action deadlines and
 caller-owned browser cleanup remain unchanged.
+
+Pages from the shared suite's `withPage` also arm a renderer stall probe before the
+test runs. When the renderer misses that read deadline, the public summary's
+`rendererStall` records main-thread busy time by kind and the paused JavaScript
+stack, then resumes the page, within a further three-second budget. A stall that
+ended before a responsive read appears in `browser.longFrames` as frames of at
+least one second with their script attribution. Both keep only bundle paths,
+positions, function names, and listener tag and event names; map positions with
+the same commit's bundled build sourcemaps.
 
 The private JSON report's `ci.shardIndex` and `ci.vitestShardCount` fields record
 `VITEST_SHARD_INDEX` and `VITEST_SHARD_COUNT`, respectively, as supplied by normal CI.

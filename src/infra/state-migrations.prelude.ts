@@ -29,7 +29,7 @@ export function buildUnresolvedBlockedPreludeSteps(
   invocationPurpose: LegacyStateMigrationInvocationPurpose,
 ): LegacyStateMigrationStep[] {
   const ids = [
-    ...(mode === "doctor" ? ["media-persistence"] : []),
+    ...(mode === "doctor" ? ["media-persistence", "session-entry-state"] : []),
     ...(invocationPurpose === "doctor" ? ["transcript-directives"] : []),
     ...(mode === "doctor"
       ? ["profile-workspace", "plugin-migration-preparation", "orphan-session-keys"]
@@ -40,7 +40,7 @@ export function buildUnresolvedBlockedPreludeSteps(
     phase: "shared",
     source: [],
     target: [],
-    requiredness: "conditional",
+    requiredness: id === "session-entry-state" ? "required" : "conditional",
     reversibility: "checkpoint-required",
     run: () => ({ changes: [], warnings: [] }),
   }));
@@ -215,6 +215,29 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
             preparedTargets = targets;
           },
         }),
+      ),
+      sharedStep(
+        "session-entry-state",
+        agentPersistence,
+        agentPersistence,
+        async () => {
+          const { repairLegacySessionEntryStates } =
+            await import("../commands/doctor-session-delivery-state.js");
+          const report = await repairLegacySessionEntryStates({
+            apply: true,
+            cfg: params.config,
+            env: stateEnv,
+          });
+          return {
+            changes:
+              report.repaired > 0
+                ? [`Canonicalized entry state for ${report.repaired} durable session row(s).`]
+                : [],
+            warnings: [],
+          };
+        },
+        undefined,
+        "required",
       ),
     );
   }

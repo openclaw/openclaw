@@ -6,11 +6,15 @@ import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
-import { AGENT_DATABASE_MAINTENANCE_LEASE } from "./openclaw-agent-db-lease.js";
+import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
+import {
+  AGENT_DATABASE_MAINTENANCE_LEASE,
+  assertNoOpenClawAgentDatabaseLeases,
+} from "./openclaw-agent-db-lease.js";
+import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
-  withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -74,32 +78,30 @@ it.each(["timer", "worker"] as const)(
   async (heartbeat) => {
     const f = source();
     const before = inspect(f.pathname);
-    let entered: ReturnType<typeof inspect> | undefined;
-    await withOpenClawStateLease(
+    const entered = await withOpenClawStateLease(
       { ...f.lease, ...(heartbeat === "worker" ? { heartbeat } : {}) },
       async (lease) => {
         lease.assertOwned();
         lease.renew?.();
-        entered = inspect(f.pathname);
+        return inspect(f.pathname);
       },
     );
-    expect(entered?.version).toEqual(before.version);
-    expect(entered?.schema).toEqual(before.schema);
-    expect(entered?.leases).toHaveLength(1);
+    expect(entered.version).toEqual(before.version);
+    expect(entered.schema).toEqual(before.schema);
+    expect(entered.leases).toHaveLength(1);
     expect(inspect(f.pathname)).toEqual(before);
   },
 );
 it("takes plugin and agent writer ownership before allowing the candidate migration", async () => {
   const f = source();
-  let atEntry: ReturnType<typeof inspect> | undefined;
-  await withPluginLifecycleLease(f.options, () =>
+  const atEntry = await withPluginLifecycleLease(f.options, () =>
     withAgentDatabaseMaintenanceLease(f.options, async (maintenance) => {
       maintenance.assertOwned();
-      atEntry = inspect(f.pathname);
+      return inspect(f.pathname);
     }),
   );
-  expect(atEntry?.version).toEqual({ user_version: 15 });
-  expect(atEntry?.leases).toHaveLength(2);
+  expect(atEntry.version).toEqual({ user_version: 15 });
+  expect(atEntry.leases).toHaveLength(2);
   expect(inspect(f.pathname).version).toEqual({ user_version: 15 });
   expect(inspect(f.pathname).leases).toEqual([]);
 });
@@ -157,38 +159,34 @@ it("does not create missing existing-only lease state", async () => {
 });
 it("keeps the maintenance lease live across an explicitly owned migration", async () => {
   const f = source();
-  const ready = createDeferred();
-  const release = createDeferred();
-  let beforeMigration: ReturnType<typeof inspect>["version"] | undefined;
-  const run = withOpenClawStateLease(f.lease, async (lease) => {
-    beforeMigration = inspect(f.pathname).version;
-    ready.resolve();
-    await release.promise;
+  const beforeMigration = await withOpenClawStateLease(f.lease, async (lease) => {
+    const version = inspect(f.pathname).version;
     lease.assertOwned();
     openOpenClawStateDatabase(f.options);
     lease.assertOwned();
+    return version;
   });
-  try {
-    await withTestTimeout(ready.promise, 10_000, "lease admission did not complete");
-  } finally {
-    release.resolve();
-  }
-  await run;
   expect(beforeMigration).toEqual({ user_version: 15 });
   expect(inspect(f.pathname).version).toEqual({ user_version: OPENCLAW_STATE_SCHEMA_VERSION });
   expect(inspect(f.pathname).leases).toEqual([]);
 });
 
-it("drains an existing agent handle without migrating while its lease is released", async () => {
-  const f = source(true);
-  let atEntry: ReturnType<typeof inspect> | undefined;
-  await withAgentDatabaseMaintenanceLease(f.options, async (lease) => {
-    lease.assertOwned();
-    atEntry = inspect(f.pathname);
-  });
-  expect(f.agent?.db.isOpen).toBe(false);
-  expect(atEntry?.version).toEqual({ user_version: 15 });
-  expect(inspect(f.pathname).version).toEqual({ user_version: 15 });
+it("waits through transient state contention before admitting existing-schema maintenance", async () => {
+  const f = source();
+  await withOpenClawStateLease(
+    { ...f.lease, ...AGENT_DATABASE_MAINTENANCE_LEASE, heartbeat: "worker" },
+    async (maintenance) => {
+      const holder = holdStateDatabaseWriteTransaction(f.pathname, 250);
+      try {
+        await holder.ready;
+        assertNoOpenClawAgentDatabaseLeases(maintenance, f.options);
+      } finally {
+        holder.release();
+        await holder.joined;
+      }
+    },
+  );
+  expect(inspect(f.pathname).leases).toEqual([]);
 });
 
 it("drains cached agent handles from another profile using their own lease database", async () => {
@@ -204,6 +202,7 @@ it("drains cached agent handles from another profile using their own lease datab
     entered = true;
     expect(target.agent?.db.isOpen).toBe(false);
     expect(otherAgent.db.isOpen).toBe(false);
+    expect(inspect(target.pathname).version).toEqual({ user_version: 15 });
   });
   expect(entered).toBe(true);
   expect(inspect(target.pathname).version).toEqual({ user_version: 15 });
@@ -338,50 +337,45 @@ it("reports a failed detached maintenance child before releasing its real owner"
   expect(inspect(f.pathname).leases).toEqual([]);
 });
 
-it.each([false, true])(
-  "retains the first actual ownership failure through maintenance drainage (nested=%s)",
-  async (nested) => {
-    const f = source();
-    let first: unknown;
-    const operation = withAgentDatabaseMaintenanceLease(f.options, async (owner) => {
-      const db = openNodeSqliteDatabase(f.pathname);
-      try {
-        const deleted = db
-          .prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
-          .run(AGENT_DATABASE_MAINTENANCE_LEASE.scope, AGENT_DATABASE_MAINTENANCE_LEASE.key);
-        expect(deleted.changes).toBe(1);
-      } finally {
-        db.close();
-      }
-      try {
-        owner.assertOwned();
-      } catch (error) {
-        first = error;
-      }
-      expect(first).toBeInstanceOf(Error);
-      let repeated: unknown;
-      try {
-        owner.assertOwned();
-      } catch (error) {
-        repeated = error;
-      }
-      expect(repeated).toBe(first);
-      if (nested) {
-        let entered = false;
-        await expect(
-          withAgentDatabaseMaintenanceLease(f.options, async () => {
-            entered = true;
-          }),
-        ).rejects.toBe(first);
-        expect(entered).toBe(false);
-      }
-      throw first;
-    });
-    const outcome = await operation.catch((error: unknown) => error);
-    expect(outcome).toBe(first);
-    expect(outcome).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
-  },
-);
+it("retains the first actual ownership failure through nested maintenance drainage", async () => {
+  const f = source();
+  let first: unknown;
+  const operation = withAgentDatabaseMaintenanceLease(f.options, async (owner) => {
+    const db = openNodeSqliteDatabase(f.pathname);
+    try {
+      const deleted = db
+        .prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
+        .run(AGENT_DATABASE_MAINTENANCE_LEASE.scope, AGENT_DATABASE_MAINTENANCE_LEASE.key);
+      expect(deleted.changes).toBe(1);
+    } finally {
+      db.close();
+    }
+    try {
+      owner.assertOwned();
+    } catch (error) {
+      first = error;
+    }
+    expect(first).toBeInstanceOf(Error);
+    let repeated: unknown;
+    try {
+      owner.assertOwned();
+    } catch (error) {
+      repeated = error;
+    }
+    expect(repeated).toBe(first);
+    let entered = false;
+    await expect(
+      withAgentDatabaseMaintenanceLease(f.options, async () => {
+        entered = true;
+      }),
+    ).rejects.toBe(first);
+    expect(entered).toBe(false);
+    throw first;
+  });
+  const outcome = await operation.catch((error: unknown) => error);
+  expect(outcome).toBe(first);
+  expect(outcome).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+});
 
 it("shares a child-first lease loss with its parent and sibling scopes", async () => {
   const f = source();

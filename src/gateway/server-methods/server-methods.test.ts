@@ -31,8 +31,8 @@ import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
   projectChatDisplayMessages,
-  sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
+import { sanitizeChatHistoryMessages } from "../chat-display-projection.sanitize.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import type { HealthSummary } from "../health/types.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
@@ -754,7 +754,8 @@ describe("projectChatDisplayMessages", () => {
   const safeFailureContent = [
     { type: "text", text: "The agent run failed before producing a reply." },
   ];
-  const networkFailureText = "LLM request failed: network connection error.";
+  const networkFailureText =
+    "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
   const networkFailureContent = (reply?: string, type = "text") => [
     { type, text: [networkFailureText, reply].filter(Boolean).join("\n\n") },
   ];
@@ -934,7 +935,7 @@ describe("projectChatDisplayMessages", () => {
           content: [
             {
               type: "text",
-              text: "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit.",
+              text: "This conversation is too long for the model. Try /compact, or start a new conversation with /new.",
             },
           ],
           stopReason: "error",
@@ -2493,7 +2494,7 @@ describe("gateway healthHandlers.status scope handling", () => {
 
 describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
-  let restoreContextEngineRegistryState: () => void;
+  let restoreContextEngineRegistryState: () => Promise<void>;
   const contextEngineTestOwner = "plugin:health-test";
   const healthyChildRuntime = { execPath: "/test/node", available: true };
   let restoreChildRuntime: () => void;
@@ -2593,20 +2594,20 @@ describe("gateway healthHandlers.health cache freshness", () => {
     ({ healthHandlers } = await import("./health.js"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     const runtimeSpy = vi
       .spyOn(childRuntime, "readChildRuntimeViability")
       .mockReturnValue(healthyChildRuntime);
     restoreChildRuntime = () => runtimeSpy.mockRestore();
     restoreContextEngineRegistryState = captureContextEngineRegistryStateForTests();
-    registerLegacyContextEngine();
-    resetContextEngineRuntimeQuarantineForTests();
+    await registerLegacyContextEngine();
+    await resetContextEngineRuntimeQuarantineForTests();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     restoreChildRuntime();
     vi.useRealTimers();
-    restoreContextEngineRegistryState();
+    await restoreContextEngineRegistryState();
   });
 
   it("rate-limits request-driven refreshes for fresh cached health", async () => {
@@ -2794,7 +2795,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
   it("merges live context-engine quarantine state into cached health responses", async () => {
     const engineId = `health-context-engine-${Date.now()}`;
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    registerContextEngineForOwner(
+    await registerContextEngineForOwner(
       engineId,
       () => ({
         info: { id: "lcm", name: "Lossless Claw Memory" },

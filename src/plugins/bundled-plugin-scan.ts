@@ -7,7 +7,7 @@ import {
   uniqueStrings,
 } from "../../packages/normalization-core/src/string-normalization.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 
 export type BundledPluginPathPair = {
   source: string;

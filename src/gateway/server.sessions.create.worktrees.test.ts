@@ -536,6 +536,8 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
 
 test("sessions.create runs an existing managed worktree cwd for initial and follow-up turns", async () => {
   const openClawState = await createOpenClawTestState({
+    // The shared Gateway retains its startup state root.
+    applyEnv: false,
     layout: "state-only",
     prefix: "openclaw-session-existing-worktree-cwd-",
   });

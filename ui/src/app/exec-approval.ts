@@ -5,6 +5,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
+import type { ExecApprovalCommandSpan } from "../../../src/infra/exec-approvals-core.ts";
 
 export type ExecApprovalRequestPayload = {
   command: string;
@@ -17,10 +18,7 @@ export type ExecApprovalRequestPayload = {
   resolvedPath?: string | null;
   sessionKey?: string | null;
   runId?: string | null;
-  commandSpans?: readonly {
-    startIndex: number;
-    endIndex: number;
-  }[];
+  commandSpans?: readonly ExecApprovalCommandSpan[];
   allowedDecisions?: readonly ExecApprovalDecision[];
 };
 
@@ -284,19 +282,6 @@ function pruneExecApprovalQueue(queue: ExecApprovalRequest[]): ExecApprovalReque
   return queue.filter((entry) => entry.expiresAtMs > now);
 }
 
-function addExecApproval(
-  queue: ExecApprovalRequest[],
-  entry: ExecApprovalRequest,
-): ExecApprovalRequest[] {
-  const next = pruneExecApprovalQueue(queue).filter((item) => item.id !== entry.id);
-  next.push(entry);
-  return sortApprovalsOldestFirst(next);
-}
-
-function removeExecApproval(queue: ExecApprovalRequest[], id: string): ExecApprovalRequest[] {
-  return pruneExecApprovalQueue(queue).filter((entry) => entry.id !== id);
-}
-
 export function isStaleApprovalResolutionError(err: unknown): boolean {
   if (!(err instanceof Error)) {
     return false;
@@ -388,7 +373,9 @@ function scheduleApprovalExpiryPrune(
 
 function removeExecApprovalFromState(state: ExecApprovalPromptState, id: string): void {
   clearApprovalExpiryTimer(state, id);
-  state.execApprovalQueue = removeExecApproval(state.execApprovalQueue, id);
+  state.execApprovalQueue = pruneExecApprovalQueue(state.execApprovalQueue).filter(
+    (entry) => entry.id !== id,
+  );
   state.execApprovalErrors.delete(id);
 }
 
@@ -412,7 +399,11 @@ export function enqueueExecApprovalPrompt(
   state: ExecApprovalPromptState,
   entry: ExecApprovalRequest,
 ): void {
-  state.execApprovalQueue = addExecApproval(state.execApprovalQueue, entry);
+  const next = pruneExecApprovalQueue(state.execApprovalQueue).filter(
+    (item) => item.id !== entry.id,
+  );
+  next.push(entry);
+  state.execApprovalQueue = sortApprovalsOldestFirst(next);
   scheduleApprovalExpiryPrune(state, entry);
 }
 

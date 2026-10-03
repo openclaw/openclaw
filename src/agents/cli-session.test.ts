@@ -9,6 +9,7 @@ import type {
   SessionEntry,
 } from "../config/sessions.js";
 import {
+  forkCliSessionBindings,
   normalizeCliSessionReseedReceipt,
   rebindCliSessionReseedReceiptsForReset,
 } from "../config/sessions/cli-session-binding.js";
@@ -315,6 +316,59 @@ describe("cli-session helpers", () => {
         mcpConfigHash: "mcp-b",
       }),
     ).toEqual({ mode: "invalidate", invalidatedReason: "mcp" });
+  });
+
+  it("validates a forked binding against the child's account before resuming it", () => {
+    const forked = forkCliSessionBindings(
+      {
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "native-parent",
+            resumeCheckpointId: "parent-checkpoint",
+            forceReuse: true,
+            authProfileId: "anthropic:work",
+            authEpoch: "auth-epoch-a",
+            authEpochVersion: 2,
+          },
+        },
+      },
+      () => true,
+    );
+    const binding = forked?.["claude-cli"];
+
+    // The fork marker never bypasses the fingerprint checks.
+    expect(binding).toEqual({
+      sessionId: "native-parent",
+      resumeCheckpointId: "parent-checkpoint",
+      forkNextResume: true,
+      authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
+      authEpochVersion: 2,
+    });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:personal",
+        authEpoch: "auth-epoch-b",
+        authEpochVersion: 2,
+      }),
+    ).toEqual({ mode: "invalidate", invalidatedReason: "auth-profile" });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-b",
+        authEpochVersion: 2,
+      }),
+    ).toEqual({ mode: "invalidate", invalidatedReason: "auth-epoch" });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
+      }),
+    ).toMatchObject({ mode: "reuse", sessionId: "native-parent" });
   });
 
   it("keeps content-drift bindings reusable for queued turns until hashes refresh", () => {

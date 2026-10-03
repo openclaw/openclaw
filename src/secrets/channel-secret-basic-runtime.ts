@@ -81,6 +81,45 @@ export function createChannelSecretTargetRegistryEntries(params: {
   ];
 }
 
+type ChannelSecretCollectorParams = {
+  config: { channels?: Record<string, unknown> };
+  defaults?: SecretDefaults;
+  context: ResolverContext;
+};
+
+/** Keeps registry discovery and account-surface resolution shared while channels own activation. */
+export function createChannelSecretContract(
+  params: Parameters<typeof createChannelSecretTargetRegistryEntries>[0] & {
+    collect: (
+      params: ChannelSecretCollectorParams & {
+        channelKey: string;
+        channel: Record<string, unknown>;
+        surface: ChannelAccountSurface;
+        defaults: SecretDefaults | undefined;
+      },
+    ) => void;
+  },
+) {
+  return {
+    secretTargetRegistryEntries: createChannelSecretTargetRegistryEntries(params),
+    collectRuntimeConfigAssignments(
+      this: void,
+      collectorParams: ChannelSecretCollectorParams,
+    ): void {
+      const resolved = getChannelSurface(collectorParams.config, params.channelKey);
+      if (!resolved) {
+        return;
+      }
+      params.collect({
+        ...collectorParams,
+        channelKey: params.channelKey,
+        ...resolved,
+        defaults: collectorParams.defaults,
+      });
+    },
+  };
+}
+
 /** Builds the common registry and runtime collector used by simple channel secrets. */
 export function createSimpleChannelSecretContract(params: {
   channelKey: string;

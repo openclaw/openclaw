@@ -17,6 +17,7 @@ export function createGatewayWorkerDispatchAdmission(
         cfg: getRuntimeConfig(),
         key: request.sessionKey,
         agentId: request.agentId,
+        preserveQualifiedAddress: true,
         clone: false,
         exactRead: true,
       });

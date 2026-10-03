@@ -8,23 +8,22 @@ import {
 } from "@openclaw/fs-safe/watch";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  resolveFsObservationMode,
-  resolveFsObservationIntervalMs,
-} from "../../infra/fs-observation-mode.js";
+import { resolveFsObservationMode } from "../../infra/fs-observation-mode.js";
 import { admitObservationRoot } from "../../infra/fs-observation-root.js";
 import { readObservationSnapshot } from "../../infra/fs-observation-snapshot.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 import {
   resolveWorkspaceSkillSourcePlan,
   splitSkillSourcePlan,
   type WorkspaceSkillSourcePlan,
 } from "../loading/workspace-skill-sources.js";
 import { createSkillFileScheduler } from "./refresh-file-stability.js";
-import { skillsObservationScope } from "./refresh-observation-source.js";
+import {
+  skillsObservationScope,
+  skillsObservationTransport,
+} from "./refresh-observation-source.js";
 import {
   closeRemoteSkillsWatchers,
   disposeRemoteSkillsWatcher,
@@ -38,6 +37,7 @@ import {
 import { isIgnoredSkillsWatchPath, isSkillDiscoveryFileWatchPath } from "./refresh-watch-path.js";
 import {
   evictWorkspaceWatchStates,
+  resolveSkillsWatchScope,
   flushSkillsWatchChanges,
   hasUnreadySharedTargets,
   hasVerifiedCoverage,
@@ -89,7 +89,8 @@ function createSkillsPathWatcher(
   let entryDirectoryObserved = false;
   // true means a directory/link/other entry was seen. Keep both sides of a
   // reconciliation so directory -> file and deletion cannot look supporting-only.
-  // Unioning scan passes is intentionally conservative for transient structure.
+  // Exclusion callbacks can cover only a directory slice, so omitted names do
+  // not imply deletion. Retain their kinds until observed again or detail fills.
   let entryKinds: Map<string, boolean> | undefined = new Map();
   let scannedKinds: Map<string, boolean> | undefined = new Map();
   let starting = Promise.resolve();
@@ -126,6 +127,22 @@ function createSkillsPathWatcher(
               if (!isCurrent()) {
                 return;
               }
+              if (
+                scope.path === plannedScope?.path &&
+                scope.kind === plannedScope.kind &&
+                scope.depth === plannedScope.depth
+              ) {
+                publishReady();
+                continue;
+              }
+              state.verified = false;
+              if (!state.unavailable) {
+                state.unavailable = true;
+                publishSkillsWatchChanges([{ ...targetChange, change: "unavailable" }]);
+              }
+              if (!isCurrent()) {
+                return;
+              }
               plannedScope = scope;
               entryDirectoryObserved = false;
               subscriptionReady = false;
@@ -138,7 +155,10 @@ function createSkillsPathWatcher(
               }
             }
           })
-          .catch((error: unknown) => failed(error, subscription?.health().failure))
+          .catch((error: unknown) => {
+            updateRequested = false;
+            failed(error, subscription?.health().failure);
+          })
           .finally(() => {
             updating = undefined;
             if (updateRequested && isCurrent()) {
@@ -237,12 +257,9 @@ function createSkillsPathWatcher(
     if (state.initialScan === "pending") {
       state.initialScan = "error";
     }
-    if (!state.unavailable) {
-      state.unavailable = true;
-      publishSkillsWatchChanges([{ ...targetChange, change: "unavailable" }]);
-    } else {
-      publishSkillsWatchChanges([{ ...targetChange, change: "skills" }]);
-    }
+    const change = state.unavailable ? "skills" : "unavailable";
+    state.unavailable = true;
+    publishSkillsWatchChanges([{ ...targetChange, change }]);
     // A fresh subscription gets one automatic recovery attempt. Each replacement
     // re-admits its source after joined retirement; close failure never rearms.
     const subscriber = state.subscribers.values().next().value;
@@ -303,11 +320,11 @@ function createSkillsPathWatcher(
       if (!isCurrent()) {
         return;
       }
-      const mode = resolveFsObservationMode();
+      const { mode, pollIntervalMs, reportHealth } = skillsObservationTransport(target.path);
       subscription = watch(authority, {
         scopes: [scope],
         mode,
-        pollIntervalMs: resolveFsObservationIntervalMs(),
+        pollIntervalMs,
         signal: lifetime.signal,
         exclude: (entry) => {
           if (plannedScope?.kind === "entry" && entry.path === plannedScope.path) {
@@ -347,9 +364,8 @@ function createSkillsPathWatcher(
             publishSkillsWatchChanges([
               { ...targetChange, changedPath: target.path, change: "skills" },
             ]);
-            const subscriber = state.subscribers.values().next().value;
-            if (isCurrent() && subscriber !== undefined) {
-              subscribeWorkspaceToPath(subscriber, target, true);
+            if (isCurrent()) {
+              void state.refreshScope();
             }
             return;
           }
@@ -401,10 +417,23 @@ function createSkillsPathWatcher(
           }
         },
         onHealth: (health) => {
+          if (isCurrent()) {
+            reportHealth(health);
+          }
           if (health.state === "starting" || health.state === "reconciling") {
             scannedKinds = new Map();
           } else if (health.state === "ready") {
-            entryKinds = scannedKinds;
+            if (!scannedKinds) {
+              entryKinds = undefined;
+            } else if (entryKinds) {
+              for (const [name, kind] of scannedKinds) {
+                if (!entryKinds.has(name) && entryKinds.size >= MAX_SKILLS_WATCH_ENTRY_KINDS) {
+                  entryKinds = undefined;
+                  break;
+                }
+                entryKinds.set(name, kind);
+              }
+            }
             scannedKinds = new Map();
           }
           if (health.state === "unavailable") {
@@ -419,10 +448,7 @@ function createSkillsPathWatcher(
       subscriptionReady = true;
       if (plannedScope?.kind === "entry" && entryDirectoryObserved) {
         // The baseline can see a directory that replaced the planned blocking entry.
-        const subscriber = state.subscribers.values().next().value;
-        if (subscriber !== undefined) {
-          subscribeWorkspaceToPath(subscriber, target, true);
-        }
+        void state.refreshScope();
         return;
       }
       publishReady();
@@ -432,21 +458,22 @@ function createSkillsPathWatcher(
   return state;
 }
 
-function subscribeWorkspaceToPath(
-  workspaceDir: string,
-  target: WatchTarget,
-  changedScope = false,
-): void {
+function subscribeWorkspaceToPath(workspaceDir: string, target: WatchTarget): void {
   const existing = pathWatchers.get(target.path);
   if (existing) {
     existing.subscribers.add(workspaceDir);
     const healthy = !existing.closed && !existing.failed;
-    const reusable = !changedScope && healthy && existing.depth >= target.depth;
+    const reusable = healthy && existing.depth >= target.depth;
     existing.depth = Math.max(existing.depth, target.depth);
     if (reusable || existing.replacing) {
       return;
     }
     existing.verified = false;
+    if (healthy) {
+      // A deeper subscriber cannot claim coverage while scope expansion is pending.
+      void existing.refreshScope();
+      return;
+    }
     if (!existing.unavailable) {
       existing.unavailable = true;
       publishSkillsWatchChanges([
@@ -457,10 +484,6 @@ function subscribeWorkspaceToPath(
           change: "unavailable",
         },
       ]);
-    }
-    if (healthy) {
-      void existing.refreshScope();
-      return;
     }
     existing.replacing = true;
     const replacement = existing
@@ -512,6 +535,7 @@ function disposeWorkspaceWatchState(
 export function ensureSkillsWatcher(params: {
   workspaceDir: string;
   executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
   config?: OpenClawConfig;
   agentId?: string;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
@@ -521,16 +545,11 @@ export function ensureSkillsWatcher(params: {
   if (watchersClosing) {
     return;
   }
-  const workspaceDir = params.workspaceDir.trim();
+  const { workspaceDir, executionWorkspaceDir, watcherKey, sourceScope } =
+    resolveSkillsWatchScope(params);
   if (!workspaceDir) {
     return;
   }
-  const { executionWorkspaceDir } = normalizeWorkspaceSkillRoots({
-    agentWorkspaceDir: workspaceDir,
-    executionWorkspaceDir: params.executionWorkspaceDir,
-  });
-  const watcherKey = JSON.stringify([workspaceDir, executionWorkspaceDir, params.agentId]);
-  const sourceScope = { executionWorkspaceDir };
   const owner: SkillsWatchOwner = {
     workspaceDir,
     sourceScope,
@@ -545,8 +564,7 @@ export function ensureSkillsWatcher(params: {
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
   };
   const now = Date.now();
-  const watchEnabled = params.config?.skills?.load?.watch !== false;
-  if (!watchEnabled) {
+  if (params.config?.skills?.load?.watch === false) {
     disposeWorkspaceWatchState(watcherKey);
     evictWorkspaceWatchStates(now, disposeWorkspaceWatchState);
     return;
@@ -561,14 +579,19 @@ export function ensureSkillsWatcher(params: {
   }
   const access = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
   let localPlan = params.sourcePlan;
+  let localExecutionWorkspaceDir = executionWorkspaceDir;
   if (access?.loadSkills) {
-    const { gatewayPlan, workspacePlan } = splitSkillSourcePlan(
-      resolveWorkspaceSkillSourcePlan(workspaceDir, params),
-    );
+    const {
+      gatewayPlan,
+      workspacePlan,
+      gatewayExecutionWorkspaceDir,
+      workspaceExecutionWorkspaceDir,
+    } = splitSkillSourcePlan(resolveWorkspaceSkillSourcePlan(workspaceDir, params), sourceScope);
+    localExecutionWorkspaceDir = gatewayExecutionWorkspaceDir;
     ensureRemoteSkillsWatcher({
       watcherKey,
       workspaceDir,
-      executionWorkspaceDir,
+      executionWorkspaceDir: workspaceExecutionWorkspaceDir,
       access,
       sourcePlan: workspacePlan,
     });
@@ -601,7 +624,7 @@ export function ensureSkillsWatcher(params: {
       workspaceDir,
       params.config,
       params.agentId,
-      access?.loadSkills ? undefined : executionWorkspaceDir,
+      localExecutionWorkspaceDir,
       params.pluginMetadataSnapshot,
       localPlan,
       cachedTargets,
@@ -687,12 +710,7 @@ export function reconcileSkillsWatcherCoverage(
   params: Parameters<typeof ensureSkillsWatcher>[0],
 ): boolean {
   ensureSkillsWatcher(params);
-  const workspaceDir = params.workspaceDir.trim();
-  const { executionWorkspaceDir } = normalizeWorkspaceSkillRoots({
-    agentWorkspaceDir: workspaceDir,
-    executionWorkspaceDir: params.executionWorkspaceDir,
-  });
-  const watcherKey = JSON.stringify([workspaceDir, executionWorkspaceDir, params.agentId]);
+  const { watcherKey } = resolveSkillsWatchScope(params);
   const owner = workspaceWatchOwners.get(watcherKey);
   const covered = !watchersClosing && !nativeWatchCapacityFailed && hasVerifiedCoverage(watcherKey);
   if (owner && !covered) {
@@ -715,9 +733,7 @@ export async function closeSkillsWatchers(resetState = false): Promise<void> {
   workspaceWatchOwners.clear();
   workspaceWatchTargetCache.clear();
   workspaceWatchLastEnsuredAt.clear();
-  for (const state of active) {
-    void state.close().catch(() => {});
-  }
+  active.forEach((state) => void state.close());
   const results = await Promise.allSettled([
     ...replacingWatchers,
     ...retiringWatchers,

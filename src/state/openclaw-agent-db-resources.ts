@@ -1,6 +1,10 @@
 import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import {
+  matchesAgentDatabaseReadCandidatePath,
+  registerAgentDatabaseReaderCloser,
+} from "../infra/agent-database-readers.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -53,27 +57,23 @@ export function captureAgentDatabaseCloseFence(
   return pending.length ? Promise.all(pending).then(() => undefined) : undefined;
 }
 
-/** Match captured read custody without inspecting files or inferring their owners. */
-export function matchesAgentDatabaseReadCandidatePath(
-  candidate: Pick<OpenClawAgentDatabaseReadCandidateResource, "path" | "scope">,
-  pathname: string,
-): boolean {
-  const capturedPath = path.resolve(candidate.path);
-  const resolvedPath = path.resolve(pathname);
-  if (capturedPath === resolvedPath) {
-    return true;
-  }
-  if (candidate.scope !== "sibling-family") {
-    return false;
-  }
-  const captured = path.parse(capturedPath);
-  const selected = path.parse(resolvedPath);
-  return (
-    selected.dir === captured.dir &&
-    selected.base.startsWith(`${captured.name}.`) &&
-    selected.base.endsWith(captured.ext)
+export { matchesAgentDatabaseReadCandidatePath };
+
+registerAgentDatabaseReaderCloser(async (candidates) => {
+  const results = await Promise.allSettled(
+    [...new Set([...resources.active, ...resources.closing.keys()])]
+      .filter((resource) =>
+        candidates.some((candidate) =>
+          matchesAgentDatabaseReadCandidatePath(candidate, resource.path),
+        ),
+      )
+      .map((resource) => closeAgentDatabaseResource(resource)),
   );
-}
+  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Agent database resource cleanup failed");
+  }
+});
 
 export function matchesAgentDatabaseClose(
   selection: AgentDatabaseCloseSelection,

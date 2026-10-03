@@ -1,4 +1,3 @@
-// Gateway method runtime helpers dispatch plugin calls through the in-process gateway.
 import { dispatchGatewayMethodInProcessRaw } from "../gateway/server-plugins.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 

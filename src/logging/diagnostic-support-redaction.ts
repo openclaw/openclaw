@@ -310,58 +310,39 @@ export function redactKnownPathPrefixesForSupport(
 }
 
 export function redactTextForSupport(value: string): string {
-  let redacted = redactCommonCredentialTextForSupport(value);
-  redacted = redactSensitiveTextForSupport(redacted);
-  redacted = redactUrlSecretsForSupport(redacted);
-  redacted = redactServiceIdentifiersForSupport(redacted);
-  redacted = redactContactIdentifiersForSupport(redacted);
-  return redactLongIdentifiersForSupport(redacted);
-}
-
-function redactSensitiveTextForSupport(value: string): string {
-  return redactSensitiveText(value, { mode: "tools" });
-}
-
-function redactCommonCredentialTextForSupport(value: string): string {
   const redacted = value
     .replace(BASIC_AUTH_RE, "Basic <redacted>")
     .replace(COOKIE_HEADER_RE, "$1: <redacted>")
     .replace(AWS_ACCESS_KEY_ID_RE, "<redacted-aws-key>")
     .replace(JWT_RE, "<redacted-jwt>");
   // Whole vendor tokens precede bare keys; field masking must not consume the full support mask.
-  return replaceRedactPattern(
+  const credentialsRedacted = replaceRedactPattern(
     redactText(redacted, vendorTokenPatterns, { fullContext: true }),
     AWS_SECRET_ACCESS_KEY_MATCHER,
     () => "<redacted-aws-secret-key>",
   );
+  return (
+    redactSensitiveTextForSupport(credentialsRedacted)
+      .replace(URL_USERINFO_RE, (_match, scheme: string, _username: string, password?: string) =>
+        password ? `${scheme}<redacted>:<redacted>@` : `${scheme}<redacted>@`,
+      )
+      .replace(URL_PARAM_RE, (match, prefix: string, key: string) =>
+        isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=<redacted>` : match,
+      )
+      .replace(MATRIX_USER_ID_RE, "<redacted-matrix-user>")
+      .replace(MATRIX_ROOM_ID_RE, "<redacted-matrix-room>")
+      // Saved support artifacts can pass through redaction again; preserve our exact path marker.
+      .replace(MATRIX_EVENT_ID_RE, (eventId) =>
+        eventId === "$OPENCLAW_STATE_DIR" ? eventId : "<redacted-matrix-event>",
+      )
+      .replace(EMAIL_RE, "<redacted-email>")
+      .replace(HANDLE_RE, "$1<redacted-handle>")
+      .replace(LONG_DECIMAL_ID_RE, "<redacted-id>")
+  );
 }
 
-function redactUrlSecretsForSupport(value: string): string {
-  return value
-    .replace(URL_USERINFO_RE, (_match, scheme: string, _username: string, password?: string) =>
-      password ? `${scheme}<redacted>:<redacted>@` : `${scheme}<redacted>@`,
-    )
-    .replace(URL_PARAM_RE, (match, prefix: string, key: string) =>
-      isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=<redacted>` : match,
-    );
-}
-
-function redactContactIdentifiersForSupport(value: string): string {
-  return value.replace(EMAIL_RE, "<redacted-email>").replace(HANDLE_RE, "$1<redacted-handle>");
-}
-
-function redactServiceIdentifiersForSupport(value: string): string {
-  // Saved support artifacts can pass through redaction again; preserve our exact path marker.
-  return value
-    .replace(MATRIX_USER_ID_RE, "<redacted-matrix-user>")
-    .replace(MATRIX_ROOM_ID_RE, "<redacted-matrix-room>")
-    .replace(MATRIX_EVENT_ID_RE, (eventId) =>
-      eventId === "$OPENCLAW_STATE_DIR" ? eventId : "<redacted-matrix-event>",
-    );
-}
-
-function redactLongIdentifiersForSupport(value: string): string {
-  return value.replace(LONG_DECIMAL_ID_RE, "<redacted-id>");
+function redactSensitiveTextForSupport(value: string): string {
+  return redactSensitiveText(value, { mode: "tools" });
 }
 
 export function redactSupportString(
@@ -435,6 +416,10 @@ const PUBLIC_ERROR_CODES = new Set([
   "EUNSUPPORTEDPROTOCOL",
   "EBADENGINE",
   "EINTEGRITY",
+  "CERT_HAS_EXPIRED",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
   "ERR_MODULE_NOT_FOUND",
   "ERR_PACKAGE_PATH_NOT_EXPORTED",
 ]);
@@ -472,6 +457,22 @@ export function redactPublicSupportDiagnosticLine(
   context: SupportRedactionContext,
 ): string {
   const line = redactSupportDiagnosticLine(value, context);
+  // Package drift reports carry only a bounded relative entry and closed field names,
+  // never contents, hash values, absolute installation paths, or arbitrary error prose.
+  const packageEntry =
+    /^Package rollback entry "([A-Za-z0-9_@.+/-]{1,90})": fields=((?:added|removed|dev:ino|mode|uid|gid|nlink|size|mtimeNs|ctimeNs|target|sha256)(?:,(?:dev:ino|mode|uid|gid|nlink|size|mtimeNs|ctimeNs|target|sha256))*)$/u.exec(
+      line,
+    );
+  const packagePath = packageEntry?.[1];
+  if (
+    packagePath &&
+    !packagePath.startsWith("/") &&
+    packagePath
+      .split("/")
+      .every((part) => part !== ".." && (!part.includes("@") || part === "@openclaw"))
+  ) {
+    return line;
+  }
   if (line === "Invalid configuration field" || line === "Configuration could not be read.") {
     return line;
   }

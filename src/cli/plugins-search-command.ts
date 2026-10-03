@@ -1,4 +1,3 @@
-// ClawHub-backed plugin search command; queries installable plugin families and merges scores.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { ClawHubPackageSearchResult } from "../infra/clawhub-packages.js";

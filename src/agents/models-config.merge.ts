@@ -6,6 +6,7 @@ import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-co
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { mergeModelCost } from "../config/model-cost.js";
 import type {
@@ -117,14 +118,8 @@ export function mergeProviderModels(
 ): ProviderModelCatalog {
   const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
   const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
-  const implicitHeaders =
-    implicit.headers && typeof implicit.headers === "object" && !Array.isArray(implicit.headers)
-      ? implicit.headers
-      : undefined;
-  const explicitHeaders =
-    explicit.headers && typeof explicit.headers === "object" && !Array.isArray(explicit.headers)
-      ? explicit.headers
-      : undefined;
+  const implicitHeaders = isRecord(implicit.headers) ? implicit.headers : undefined;
+  const explicitHeaders = isRecord(explicit.headers) ? explicit.headers : undefined;
   const mergeProviderFields = () => ({
     ...implicit,
     ...explicit,

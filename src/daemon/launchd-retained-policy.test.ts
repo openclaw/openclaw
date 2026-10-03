@@ -43,7 +43,9 @@ it.each(
         return success;
       }
       if (command === "print") {
-        return loaded ? success : { ...success, code: 1, stderr: "Could not find service" };
+        return loaded
+          ? { ...success, stdout: `${args[1]} = {\n\tstate = waiting\n}` }
+          : { ...success, code: 1, stderr: "Could not find service" };
       }
       if (command === "bootstrap") {
         if (firstBootstrap && scenario === "bootstrap-failure") {
@@ -129,7 +131,7 @@ it.each(
       if (command === "print") {
         inspections += 1;
         return inspections === 1 && phase !== "disabled-bootstrap"
-          ? success
+          ? { ...success, stdout: `${args[1]} = {\n\tstate = waiting\n}` }
           : { ...success, code: 1, stderr: "Could not find service" };
       }
       if (command === "print-disabled") {

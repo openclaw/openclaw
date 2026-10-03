@@ -483,6 +483,43 @@ describe("Codex app inventory cache", () => {
     });
   });
 
+  it.each(["clear", "invalidate", "forced successor"] as const)(
+    "keeps an obsolete refresh rejection out of cache state after %s",
+    async (replacement) => {
+      const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+      const key = "runtime";
+      const deferred = Promise.withResolvers<never>();
+      const failure = new Error("obsolete inventory refresh failed");
+      const request = vi.fn(async (method, params) =>
+        codexAppInventoryResponse(method, [app("fresh-app")], params),
+      );
+      const obsolete = cache.refreshNow({ key, request: () => deferred.promise, nowMs: 0 });
+      const obsoleteRejection = expect(obsolete).rejects.toBe(failure);
+
+      if (replacement === "clear") {
+        cache.clear();
+      } else if (replacement === "invalidate") {
+        cache.invalidate(key, "apps changed", 1);
+      } else {
+        await cache.refreshNow({ key, request, nowMs: 2, forceRefetch: true });
+      }
+      deferred.reject(failure);
+      await obsoleteRejection;
+
+      const current = cache.read({ key, request, nowMs: 3, suppressRefresh: true });
+      expect(current.state).toBe(replacement === "forced successor" ? "fresh" : "missing");
+      expect(current.diagnostic).toEqual(
+        replacement === "invalidate" ? { message: "apps changed", atMs: 1 } : undefined,
+      );
+      if (replacement === "forced successor") {
+        expect(current.snapshot?.apps).toEqual([app("fresh-app")]);
+        expect(current.snapshot?.lastError).toBeUndefined();
+      } else {
+        expect(current.snapshot).toBeUndefined();
+      }
+    },
+  );
+
   it("forces a post-install refresh past an older in-flight runtime snapshot", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
     const key = "runtime";

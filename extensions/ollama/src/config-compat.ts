@@ -35,11 +35,7 @@ function isRetiredOllamaCloudBaseUrl(value: unknown): value is string {
   if (typeof value !== "string" || !value.trim()) {
     return false;
   }
-  try {
-    return new URL(value.trim()).hostname.toLowerCase() === "ai.ollama.com";
-  } catch {
-    return false;
-  }
+  return URL.parse(value.trim())?.hostname.toLowerCase() === "ai.ollama.com";
 }
 
 function findRetiredOllamaCloudBaseUrl(provider: unknown): { key: "baseUrl" | "baseURL" } | null {

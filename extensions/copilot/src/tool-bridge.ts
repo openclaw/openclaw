@@ -23,6 +23,8 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { toStringifiedError as toCopilotToolError } from "openclaw/plugin-sdk/error-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { isRawCopilotModelRun } from "./attempt-mode.js";
 
 type CreateOpenClawCodingTools =
@@ -422,10 +424,7 @@ function convertOpenClawToolToSdkTool(
       ...(ownerMutation ? { ownerMutation } : {}),
     });
     notifyToolResult(
-      sanitizeToolResult({
-        content: [{ type: "text", text: message }],
-        details: { status: "failed", error: errorMessage },
-      }),
+      sanitizeToolResult(textResult(message, { status: "failed", error: errorMessage })),
       true,
     );
     notifyToolCompleted({
@@ -599,10 +598,7 @@ async function executeCatalogTool(
       });
       preparedArgs = terminal?.executedArguments ?? preparedArgs;
     }
-    const failure = sanitizeToolResult({
-      content: [{ type: "text", text: message }],
-      details: { status: "failed", error: message },
-    });
+    const failure = sanitizeToolResult(textResult(message, { status: "failed", error: message }));
     input.attemptParams?.onAgentToolResult?.({
       toolName: params.toolName,
       result: failure,
@@ -622,9 +618,7 @@ async function executeCatalogTool(
 }
 
 function toToolStartArgs(args: unknown): Record<string, unknown> {
-  return args && typeof args === "object" && !Array.isArray(args)
-    ? (args as Record<string, unknown>)
-    : { value: args };
+  return asOptionalRecord(args) ?? { value: args };
 }
 
 function createFailureResult(message: string, error: unknown): ToolResultObject {

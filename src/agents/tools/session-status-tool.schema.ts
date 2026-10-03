@@ -1,12 +1,8 @@
 import { Type, type Static } from "typebox";
+import { requesterProfileSchema } from "../schema/typebox.js";
 
 export const SessionStatusToolSchema = Type.Object({
-  user: Type.Optional(
-    Type.String({
-      description:
-        "The person's requester_profile.id, required when several people have steered this turn.",
-    }),
-  ),
+  user: requesterProfileSchema(),
   sessionKey: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
   changesSince: Type.Optional(Type.Integer({ minimum: 0 })),

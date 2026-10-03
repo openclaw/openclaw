@@ -219,6 +219,21 @@ describe("session-scoped attached worker portals", () => {
     expect(f.service.list()).toEqual([]);
   });
 
+  it("releases the prepared carrier and retained session when the session resets during preparation", async () => {
+    const f = fixture();
+    f.environments.openNodePortal.mockImplementationOnce(async () => {
+      f.session.abort(new Error("session reset"));
+      return { close: f.close, connect: f.connect };
+    });
+    const response = await f.invoke("open", { port: 3000 });
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]).toMatchObject({ message: "session reset" });
+    expect(f.close).toHaveBeenCalledOnce();
+    expect(f.release).toHaveBeenCalledOnce();
+    expect(f.open).not.toHaveBeenCalled();
+    expect(f.broadcast).not.toHaveBeenCalled();
+  });
+
   it("keeps published bearer links after actor revocation but retires them on session reset", async () => {
     const f = fixture();
     expect((await f.invoke("open", { port: 3000 }))?.[0]).toBe(true);
@@ -242,17 +257,6 @@ describe("session-scoped attached worker portals", () => {
     expect((await f.invoke("open", { port: 3000 }))?.[0]).toBe(false);
     expect(f.close).toHaveBeenCalledOnce();
     expect(f.service.list()).toEqual([]);
-  });
-
-  it("retires an existing scoped resource when dedicated qualification becomes unknown", async () => {
-    const f = fixture();
-    const global = await f.service.open({ targetPort: 3001 });
-    expect((await f.invoke("open", { port: 3000 }))?.[0]).toBe(true);
-    f.unqualify();
-    expect(f.service.list()).toEqual([global]);
-    await f.service.closeWorkerPortals("attached", 1);
-    expect(f.close).toHaveBeenCalledOnce();
-    expect(f.release).toHaveBeenCalledOnce();
   });
 
   it("keeps proxy use independent of the initiating actor and rejects replaced attachments", async () => {

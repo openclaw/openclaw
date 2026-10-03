@@ -1,4 +1,4 @@
-import { clearSessionQueues } from "../auto-reply/reply/queue/cleanup.js";
+import { clearSessionLifecycleQueues } from "../auto-reply/reply/queue/cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
@@ -45,6 +45,7 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
       cfg: getRuntimeConfig(),
       key: sessionKey,
       agentId,
+      preserveQualifiedAddress: true,
       clone: false,
       exactRead: true,
     });
@@ -60,7 +61,8 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
           target: currentTarget,
           entry: currentEntry,
           workspace,
-        } = resolveWorkerPlacementSessionTarget({
+          assertCurrent,
+        } = await resolveWorkerPlacementSessionTarget({
           sessionRuntime,
           config: getRuntimeConfig(),
           sessionId,
@@ -69,6 +71,7 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
           expectedTarget: target,
           errorMessage: `Session ${sessionKey} changed before cloud worker dispatch. Retry.`,
         });
+        assertCurrent(getRuntimeConfig());
         if (currentEntry.archivedAt !== undefined) {
           throw new WorkerDispatchTargetChangedError(
             `Session ${sessionKey} was archived before cloud worker dispatch. Retry.`,
@@ -89,9 +92,17 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
           const preflightWorkerWorkspace = await loadWorkerWorkspacePreflight();
           await preflightWorkerWorkspace({ localPath: workspace.path, signal });
         }
+        assertCurrent(getRuntimeConfig());
         authorize?.();
         placement = await startDispatch();
-        clearSessionQueues(lifecycleIdentities);
+        clearSessionLifecycleQueues({
+          keys: lifecycleIdentities,
+          agentId: currentTarget.agentId,
+          sessionKey: currentTarget.canonicalKey,
+          sessionId,
+          // Dispatch committed; settling its old local queues must survive authority changes.
+          assertCurrent: () => {},
+        });
         params.revokeSessionAuthority({
           sessionId,
           sessionKeys: lifecycleIdentities,

@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import { acknowledgeInternalToolResult } from "../agents/runtime/internal-hooks.js";
 import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
@@ -136,9 +135,14 @@ async function startMcpLoopbackServer(
   work: AsyncWorkScope,
 ): Promise<() => Promise<void>> {
   // Shutdown preloads this module even when no MCP listener is needed.
-  const [{ handleMcpJsonRpc }, { McpLoopbackToolCache }] = await Promise.all([
+  const [
+    { handleMcpJsonRpc },
+    { McpLoopbackToolCache },
+    { createCompletionGrantLineageAdmission },
+  ] = await Promise.all([
     import("./mcp-http.handlers.js"),
     import("./mcp-http.runtime.js"),
+    import("./tool-resolution-completion.js"),
   ]);
   const ownerToken = crypto.randomBytes(32).toString("hex");
   const nonOwnerToken = crypto.randomBytes(32).toString("hex");
@@ -235,10 +239,16 @@ async function startMcpLoopbackServer(
         }
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
+        // A completion grant is current only while its requester lineage verifies. The
+        // child entry can go away while preparation, hooks or approvals await, so the
+        // dispatch authorization and the tools' source-effect guard both re-check it.
+        const lineage = createCompletionGrantLineageAdmission({ cfg, context: requestContext });
+        const isGrantAndLineageCurrent = () =>
+          (boundClientGrant?.isCurrent() ?? true) && lineage.isCurrent();
         const authorizeToolCall = () =>
           !work.isClosing &&
           getActiveMcpLoopbackRuntime()?.ownerToken === ownerToken &&
-          (boundClientGrant?.isCurrent() ?? true);
+          isGrantAndLineageCurrent();
         const harnessEntry = isAgentHarnessSessionKey(requestContext.sessionKey)
           ? resolveSessionEntryAccessTarget({ cfg, sessionKey: requestContext.sessionKey }).entry
           : undefined;
@@ -268,38 +278,47 @@ async function startMcpLoopbackServer(
         }
         const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
         // Tools capture their creator at construction, not the later HTTP execution scope.
-        const scopedTools = await withAgentQuestionAnswerAuthority(
-          boundClientGrant?.questionAnswerAuthority,
-          () =>
-            toolCache.resolve({
-              context: requestContext,
-              sessionControlAuthority: readAdmittedRunOperatorAuthority(
-                boundClientGrant?.admittedRunContext,
-              ),
-              rootedExecution: boundClientGrant?.rootedExecution,
-              messageActionTurnCapability: boundClientGrant?.messageActionTurnCapability,
-              cfg,
-              signal: requestAbort.signal,
-              ...(boundClientGrant?.toolAuth
-                ? {
-                    authProfileStore: boundClientGrant.toolAuth.store,
-                    ...(boundClientGrant.toolAuth.agentDir
-                      ? { authProfileStoreAgentDir: boundClientGrant.toolAuth.agentDir }
-                      : {}),
-                  }
-                : {}),
-              ...(boundGrantToken ? { grantToken: boundGrantToken } : {}),
-              // Same liveness check `authorizeToolCall` applies after the hook,
-              // handed to run-contract tools so a revocation that lands while a
-              // call is in flight also fails the durable write.
-              isGrantCurrent: authorizeToolCall,
-              yieldContextCacheKey: yieldContext?.cacheKey,
-              onYield: yieldContext?.onYield,
-              ...(boundClientGrant?.skillLibraryAuthoring
-                ? { skillLibraryAuthoring: boundClientGrant.skillLibraryAuthoring }
-                : {}),
-            }),
-        );
+        let scopedTools: Awaited<ReturnType<typeof toolCache.resolve>>;
+        try {
+          scopedTools = await withAgentQuestionAnswerAuthority(
+            boundClientGrant?.questionAnswerAuthority,
+            () =>
+              toolCache.resolve({
+                context: requestContext,
+                admittedRunContext: boundClientGrant?.admittedRunContext,
+                rootedExecution: boundClientGrant?.rootedExecution,
+                messageActionTurnCapability: boundClientGrant?.messageActionTurnCapability,
+                cfg,
+                signal: requestAbort.signal,
+                ...(boundClientGrant?.toolAuth
+                  ? {
+                      authProfileStore: boundClientGrant.toolAuth.store,
+                      ...(boundClientGrant.toolAuth.agentDir
+                        ? { authProfileStoreAgentDir: boundClientGrant.toolAuth.agentDir }
+                        : {}),
+                    }
+                  : {}),
+                ...(boundGrantToken ? { grantToken: boundGrantToken } : {}),
+                // Same liveness check `authorizeToolCall` applies after the hook,
+                // handed to run-contract tools so a revocation that lands while a
+                // call is in flight also fails the durable write.
+                isGrantCurrent: authorizeToolCall,
+                yieldContextCacheKey: yieldContext?.cacheKey,
+                onYield: yieldContext?.onYield,
+                ...(boundClientGrant?.skillLibraryAuthoring
+                  ? { skillLibraryAuthoring: boundClientGrant.skillLibraryAuthoring }
+                  : {}),
+              }),
+          );
+        } catch (error) {
+          requestAbort.signal.throwIfAborted();
+          if (boundClientGrant && !boundClientGrant.isCurrent()) {
+            res.writeHead(401, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "unauthorized" }));
+            return;
+          }
+          throw error;
+        }
 
         // Discovery may outlive the requesting connection or grant.
         requestAbort.signal.throwIfAborted();
@@ -395,7 +414,8 @@ async function startMcpLoopbackServer(
             const callerIdentity = boundClientGrant
               ? createAdmittedGatewayToolCallerIdentity({
                   admittedRunContext: boundClientGrant.admittedRunContext,
-                  receiptAuthority: boundClientGrant.isCurrent,
+                  receiptAuthority: isGrantAndLineageCurrent,
+                  receiptAdmission: lineage.admission,
                   cronAuthorityCheck: boundClientGrant.cronAuthorityCheck,
                   mintCronRequesterGrant: boundClientGrant.mintCronRequesterGrant,
                   agentId: scopedTools.agentId,

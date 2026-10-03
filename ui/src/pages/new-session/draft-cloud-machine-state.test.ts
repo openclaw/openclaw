@@ -3,43 +3,37 @@ import type { DraftCloudProfile } from "./discovery.ts";
 import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
 
 describe("cloud selection intent", () => {
-  it.each([false, true])(
-    "retains a selected machine and its OS after catalog refresh (explicit OS: %s)",
-    (selectOs) => {
-      const profile: DraftCloudProfile = {
-        id: "aws",
-        providerId: "crabbox",
-        operatingSystems: [
-          { id: "linux", label: "Linux", default: true },
-          { id: "windows/wsl2", label: "Windows" },
-        ],
-        machines: [
-          { id: "small", label: "Small", os: "linux", default: true },
-          { id: "standard", label: "Standard", os: "linux" },
-        ],
-      };
-      const state = new DraftCloudMachineState();
-      if (selectOs) {
-        state.selectOs(profile.id, "linux", [profile]);
-      }
-      state.select(profile.id, "small", [profile]);
-      profile.operatingSystems = [
-        { id: "linux", label: "Linux" },
-        { id: "windows/wsl2", label: "Windows", default: true },
-      ];
-      profile.machines = [
-        { id: "standard", label: "Standard", os: "linux", default: true },
-        { id: "small", label: "Small", os: "linux" },
-      ];
+  it("retains a selected machine and its OS after catalog refresh", () => {
+    const profile: DraftCloudProfile = {
+      id: "aws",
+      providerId: "crabbox",
+      operatingSystems: [
+        { id: "linux", label: "Linux", default: true },
+        { id: "windows/wsl2", label: "Windows" },
+      ],
+      machines: [
+        { id: "small", label: "Small", os: "linux", default: true },
+        { id: "standard", label: "Standard", os: "linux" },
+      ],
+    };
+    const state = new DraftCloudMachineState();
+    state.select(profile.id, "small", [profile]);
+    profile.operatingSystems = [
+      { id: "linux", label: "Linux" },
+      { id: "windows/wsl2", label: "Windows", default: true },
+    ];
+    profile.machines = [
+      { id: "standard", label: "Standard", os: "linux", default: true },
+      { id: "small", label: "Small", os: "linux" },
+    ];
 
-      expect(state.selectedOs(profile)).toBe("linux");
-      expect(state.resolve(profile.id)).toBe("small");
-      expect(state.selection(profile.id, [profile])).toEqual({
-        os: "linux",
-        machineClass: "small",
-      });
-    },
-  );
+    expect(state.selectedOs(profile)).toBe("linux");
+    expect(state.resolve(profile.id)).toBe("small");
+    expect(state.selection(profile.id, [profile])).toEqual({
+      os: "linux",
+      machineClass: "small",
+    });
+  });
 
   it("uses OS-scoped configured defaults without substituting a class named Small", () => {
     const profile: DraftCloudProfile = {

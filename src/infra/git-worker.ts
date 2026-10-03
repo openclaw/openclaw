@@ -8,6 +8,7 @@ import type {
   GitWorktreeEffectResult,
 } from "../agents/worktrees/git-worktree-operations.js";
 import { runGitBytes, runGitBuffered } from "../agents/worktrees/git.js";
+import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { restoreGitWorkerFailure, serializeGitWorkerFailure } from "./git-worker-context.js";
 import type {
@@ -35,6 +36,41 @@ type GitWorkerRuntime = {
 };
 const MAX_PENDING_OPERATIONS = 128;
 const WORKER_PHASE_TIMEOUT_MS = 30 * 60_000;
+const SPAWN_OPERATIONS = {
+  "repository.identities": "repository.identities",
+  "repository.branches": "repository.branches",
+  "checkout.revision": "checkout.revision",
+  "checkout.context": "checkout.context",
+  "checkout.diff": "checkout.diff",
+  "checkout.baseline": "checkout.baseline",
+  "pull-request.branch-facts": "pull-request.branch-facts",
+  "worktree.snapshot": "worktree.snapshot",
+  "worktree.snapshot-verify-exact": "worktree.snapshot",
+  "worktree.cleanup-inspection": "worktree.cleanup",
+  "worktree.provisioning-inspection": "worktree.provision",
+  "worktree.git-size": "worktree.inspect",
+  "worktree.checkout-transition-size": "worktree.inspect",
+  "worktree.directory-size": "worktree.inspect",
+  "workspace.artifacts": "workspace.inventory",
+  "workspace.inventory.select": "workspace.inventory",
+  "workspace.inventory.existing": "workspace.inventory",
+  "workspace.inventory.paths": "workspace.inventory",
+  "workspace.inventory.staged-directories": "workspace.inventory",
+  "workspace.manifest.capture": "workspace.manifest",
+  "workspace.manifest.snapshot": "workspace.manifest",
+  "workspace.manifest.parse": "workspace.manifest",
+  "workspace.manifest.serialize": "workspace.manifest",
+  "workspace.manifest.overlay": "workspace.manifest",
+  "workspace.manifest.pair": "workspace.manifest",
+  "workspace.manifest.staged": "workspace.manifest",
+  "workspace.manifest.entries": "workspace.manifest",
+  "workspace.manifest.file": "workspace.manifest",
+  "workspace.manifest.nodes": "workspace.manifest",
+  "workspace.manifest.stage-input": "workspace.manifest",
+  "workspace.manifest.tree-input": "workspace.manifest",
+  "workspace.manifest.remote-capture": "workspace.manifest",
+  "workspace.reconcile.preflight": "workspace.manifest",
+} satisfies Record<keyof GitWorkerOperations, GitProcessOperation>;
 
 function runtime(): GitWorkerRuntime {
   return resolveGlobalSingleton<GitWorkerRuntime>(
@@ -73,6 +109,7 @@ function poolFor(state: GitWorkerRuntime, command: GitWorkerCommand): GitPool {
         : command.type.startsWith("workspace.")
           ? "workspace"
           : command.type === "repository.branches" ||
+              command.type === "repository.identities" ||
               command.type === "checkout.context" ||
               command.type === "checkout.revision"
             ? "reads"
@@ -178,13 +215,17 @@ async function executeOperation(
           effect.type === "git.text"
             ? (options.git?.text ?? runGitBytes)
             : (options.git?.buffered ?? runGitBuffered);
-        const output = await run(effect.input.cwd, effect.input.args, {
-          ...effect.input.options,
-          baseEnv,
-          signal,
-          beforeRun: options.assertCurrent,
-          killProcessTree: true,
-        });
+        // The parent owns the operation identity; worker batches cannot relabel their launches.
+        const output = await withGitProcessOperation(SPAWN_OPERATIONS[command.type], () =>
+          run(effect.input.cwd, effect.input.args, {
+            ...effect.input.options,
+            operation: SPAWN_OPERATIONS[command.type],
+            baseEnv,
+            signal,
+            beforeRun: options.assertCurrent,
+            killProcessTree: true,
+          }),
+        );
         const stdout = ownedWorkerBytes(output.stdout);
         const stderr = ownedWorkerBytes(output.stderr);
         result = { ...output, stdout, stderr };

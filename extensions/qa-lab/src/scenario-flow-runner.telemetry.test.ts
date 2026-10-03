@@ -212,7 +212,31 @@ describe("task telemetry evidence", () => {
       "overclaim",
       "repeat-write",
     ])("rejects %s despite a plausible start trace and artifact", async (fault) => {
-      await expect(runTaskEvidence(codeMode, fault)).rejects.toThrow(/task|artifact|claim/);
+      const result = runTaskEvidence(codeMode, fault);
+      await expect(result).rejects.toThrow(/task|artifact|claim/);
+      if (fault === "parallel" || fault === "tied-parallel") {
+        const error = await result.catch((failure: unknown) => failure);
+        expect(error).toBeInstanceOf(Error);
+        const message = String(error);
+        expect(message).toContain('{"inbound":');
+        const evidence = JSON.parse(message.slice(message.indexOf('{"inbound":')));
+        expect(evidence).toEqual({
+          inbound: expect.any(Number),
+          outbound: expect.any(Number),
+          logical: ["read", "read", "write"].map((toolName) => ({
+            toolName,
+            startedAt: expect.any(Number),
+            timestamp: expect.any(Number),
+            startAfterIndex: expect.any(Number),
+            resultIndex: expect.any(Number),
+            completed: true,
+            successful: true,
+          })),
+        });
+        expect(message).not.toContain(paths.ledger);
+        expect(message).not.toContain(paths.note);
+        expect(message).not.toContain(paths.artifact);
+      }
     });
   });
 });

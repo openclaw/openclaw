@@ -6,6 +6,7 @@ import { createServer, type Socket } from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { withRuntimePreload } from "../../../test/helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
@@ -16,6 +17,7 @@ import {
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const PADDED_PROCESS_START = "Thu Oct  1 00:11:43 2026";
 
 async function fixture(
   probeClock?: "exhaust" | "budget" | "census" | "identity" | "recovery" | "prefix" | "retry",
@@ -36,7 +38,7 @@ async function fixture(
   await fs.chmod(path.join(bin, "ps"), 0o755);
   const clockPath = path.join(root, "probe-clock.cjs");
   if (probeClock) {
-    // Model slow probes on the budget clock; real ps still supplies process identities.
+    // Model slow probes on the budget clock; real ps still supplies PIDs and states.
     // Exhaustion cases retain their real killable timeout, and lease expiry uses wall time.
     await fs.writeFile(
       clockPath,
@@ -88,7 +90,13 @@ childProcess.execFileSync = (command, args, options) => {
     }
     slowProbePending = false;
   }
-  try { return execFileSync(command, args, options); }
+  try {
+    const output = execFileSync(command, args, options);
+    // Exercise ps day padding regardless of the host's date or timezone.
+    return mode === "recovery" && command === "ps"
+      ? output.replace(/\\w{3} \\w{3} [ \\d]\\d \\d{2}:\\d{2}:\\d{2} \\d{4}/gu, ${JSON.stringify(PADDED_PROCESS_START)})
+      : output;
+  }
   catch (error) {
     if (mode === "budget" && error.code === "ETIMEDOUT") {
       elapsed += 30000;
@@ -122,15 +130,10 @@ childProcess.execFileSync = (command, args, options) => {
     workspace,
     extraProcessPath,
     env: {
-      ...process.env,
+      ...(probeClock ? withRuntimePreload(process.env, clockPath) : process.env),
       HOME: home,
       OPENCLAW_TEST_PS_EXTRA: extraProcessPath,
       PATH: `${bin}:${process.env.PATH ?? ""}`,
-      ...(probeClock
-        ? {
-            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(clockPath)}`,
-          }
-        : {}),
     },
   };
 }
@@ -874,11 +877,14 @@ esac
       expect(exhausted.processes).toEqual(lease.processes);
       expect(exhausted.recoveryError).toContain("recovery exhausted after 4 probe passes");
       expect(exhausted.recoveryError).toContain("retry workspace recovery");
+      await expect(quiescence.resume()).rejects.toThrow(exhausted.recoveryError);
       for (const entry of lease.processes) {
-        expect(exhausted.recoveryError).toContain(JSON.stringify(entry));
+        expect(entry.start).toBe(PADDED_PROCESS_START);
+        expect(exhausted.recoveryError).toContain(
+          JSON.stringify({ ...entry, start: "Thu Oct 1 00:11:43 2026" }),
+        );
         expect(await processState(entry.pid)).toMatch(/^T/u);
       }
-      await expect(quiescence.resume()).rejects.toThrow(exhausted.recoveryError);
       await fs.unlink(stallPath);
       await quiescence.resume();
       await expect(fs.stat(leaseFile)).rejects.toThrow();

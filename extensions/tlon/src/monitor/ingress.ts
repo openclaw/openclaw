@@ -31,13 +31,14 @@ type TlonIngressBody = Omit<TlonIngressPayload, "version">;
 
 type TlonIngressRaw = { source: TlonIngressSource; event: unknown };
 
-type TlonIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
-
 type TlonIngressDispatch = (
   source: TlonIngressSource,
   event: unknown,
   lifecycle: TlonIngressLifecycle,
-) => Promise<TlonIngressDispatchResult | void> | TlonIngressDispatchResult | void;
+) =>
+  | Promise<ChannelIngressMonitorDeliveryResult | void>
+  | ChannelIngressMonitorDeliveryResult
+  | void;
 
 const TlonIngressPermanentError = createChannelIngressError<"invalid-event" | "tlon-auth">(
   "TlonIngressPermanentError",

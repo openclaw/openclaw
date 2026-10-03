@@ -1,6 +1,6 @@
 // Serves channel-owned conversation images without exposing media-store paths.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { readMediaBuffer } from "../media/store.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -24,7 +24,7 @@ type ChannelAvatarCacheEntry = {
   image: HttpImageRepresentation;
 };
 
-const channelAvatarCache = new Map<string, ChannelAvatarCacheEntry>();
+const channelAvatarCache = new LruCache<ChannelAvatarCacheEntry>(CHANNEL_AVATAR_CACHE_MAX_ENTRIES);
 const channelAvatarLoads = new Map<
   string,
   {
@@ -43,10 +43,9 @@ async function loadChannelAvatar(
   if (loads) {
     loads.reference = reference;
   }
-  const cached = channelAvatarCache.get(sessionKey);
+  const cached = channelAvatarCache.peek(sessionKey);
   if (cached?.reference === reference) {
-    channelAvatarCache.delete(sessionKey);
-    channelAvatarCache.set(sessionKey, cached);
+    channelAvatarCache.get(sessionKey);
     return cached.image;
   }
   if (!loads) {
@@ -65,9 +64,7 @@ async function loadChannelAvatar(
       const image = await resolveHttpImageRepresentation(resolved.id, stored.buffer);
       // A superseded load may reply to its callers but must not replace the current avatar.
       if (image && sessionLoads.reference === reference) {
-        channelAvatarCache.delete(sessionKey);
         channelAvatarCache.set(sessionKey, { reference, image });
-        pruneMapToMaxSize(channelAvatarCache, CHANNEL_AVATAR_CACHE_MAX_ENTRIES);
       }
       return image;
     })().finally(() => {

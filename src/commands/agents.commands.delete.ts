@@ -15,6 +15,8 @@ import {
 } from "../agents/agent-delete-safety.js";
 import { normalizeAgentDirRegistryPath } from "../agents/agent-dir-registry.js";
 import {
+  AgentDeletionAuthorityRollbackError,
+  AgentDeletionCommitUncertainError,
   withAgentDeletion,
   claimCompletedAgentDeletion,
 } from "../agents/agent-lifecycle-registry.js";
@@ -336,6 +338,7 @@ export async function agentsDeleteCommand(
     const deletion = begin(
       existingJournal ?? { agentId, agentDir, workspaceDir, sessionsDir, deleteFiles },
     );
+    let rosterCommitted = !configured;
     try {
       await prepareAgentDeleteDatabases(cfg, agentId, agentDir);
       deletion.assertCurrent();
@@ -356,6 +359,7 @@ export async function agentsDeleteCommand(
                 ...(opts.json ? { skipOutputLogs: true } : {}),
               },
             });
+            rosterCommitted = true;
             if (!opts.json) {
               logConfigUpdated(runtime);
             }
@@ -369,7 +373,12 @@ export async function agentsDeleteCommand(
       }
       deletion.assertCurrent();
     } catch (error) {
-      if (!existingJournal) {
+      if (
+        !existingJournal &&
+        !rosterCommitted &&
+        !(error instanceof AgentDeletionAuthorityRollbackError) &&
+        !(error instanceof AgentDeletionCommitUncertainError)
+      ) {
         deletion.rollback();
       }
       throw error;

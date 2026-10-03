@@ -125,7 +125,13 @@ export async function normalizeEmbeddedRunAttempt(input: {
       aborted: terminalAborted,
     });
   };
-  applyEmbeddedAttemptSessionIdentity({ sessionPromptState, sessionFileUsed, sessionIdUsed });
+  await applyEmbeddedAttemptSessionIdentity({
+    sessionPromptState,
+    sessionFileUsed,
+    sessionIdUsed,
+    assertCurrent: () => runInput.laneController.throwIfAborted(),
+  });
+  runInput.laneController.throwIfAborted();
   const bootstrapPromptWarningSignaturesSeen =
     attempt.bootstrapPromptWarningSignaturesSeen ??
     (attempt.bootstrapPromptWarningSignature

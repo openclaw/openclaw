@@ -28,12 +28,18 @@ DM channels, with group activity and background work flowing into it — see
 | Cron jobs       | Fresh session per run         |
 | Webhooks        | Isolated per hook             |
 
+Native catalog source IDs, Matrix room and thread IDs, and Signal group IDs are
+case-sensitive: IDs that differ only by case identify different conversations.
+
 With `session.scope: "global"`, the selected agent still owns its session.
 The shared key `global` does not merge different agents' conversations:
 commands, skills, replies, and background task notifications retain the
 agent selected by the route or explicit request.
 Session lists, model filters, previews, and sharing controls also retain the
 stored conversation's agent, rather than the aggregate view's default agent.
+Stopping with `/stop`, deleting, resetting, or archiving a session cancels only that agent's work for
+the selected conversation. Another agent's active turn and queued messages are
+preserved even when the agents use the same session key.
 
 ## DM isolation
 
@@ -228,6 +234,10 @@ to start a replacement session.
 - **Runtime session rows and transcripts:** `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` by default
 - **Archived transcript files:** `~/.openclaw/agents/<agentId>/sessions/`
 - **Legacy row migration source:** `~/.openclaw/agents/<agentId>/sessions/sessions.json`
+
+Archive discovery uses the selected store, recorded transcript paths, and agent
+directories. The pre-agent `~/.openclaw/sessions/` directory is no longer an
+implicit fallback; explicitly configured paths still work.
 
 The session rows in the per-agent SQLite database keep separate lifecycle
 timestamps:

@@ -2,6 +2,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../../plugins/cli-backends.runtime.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   ensureAuthProfileStore,
   resolveAuthProfileOrder,
@@ -18,6 +19,7 @@ type EmbeddedCliBackendDispatchEligibilityParams = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  preparedAuthStore?: AuthProfileStore;
 };
 
 /** Reads credential metadata only; never materializes or refreshes credentials per turn. */
@@ -42,6 +44,7 @@ export function resolveEmbeddedCliBackendDispatchEligibility(
           modelId: params.model,
           // A profile pin can select the CLI runtime without agentRuntime config.
           authProfileId: params.authProfileId,
+          preparedAuthStore: params.preparedAuthStore,
         }) ?? "",
       );
   // Only the backend plugin can declare subscription passthrough unsupported.
@@ -62,11 +65,14 @@ function resolveAuthModeSafe(
     config?: OpenClawConfig;
     agentDir?: string;
     workspaceDir?: string;
+    preparedAuthStore?: AuthProfileStore;
   },
   provider: string,
 ): ReturnType<typeof resolveModelAuthMode> {
   try {
-    const store = ensureAuthProfileStore(params.agentDir, { config: params.config });
+    const store =
+      params.preparedAuthStore ??
+      ensureAuthProfileStore(params.agentDir, { config: params.config });
     // A resolved pin wins; missing pins use the passthrough's ordered selection.
     const pinnedType = params.authProfileId
       ? store.profiles[params.authProfileId.trim()]?.type

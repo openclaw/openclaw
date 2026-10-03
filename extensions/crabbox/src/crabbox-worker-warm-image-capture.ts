@@ -22,6 +22,7 @@ import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 import {
   clearCrabboxWarmImageCapture,
+  crabboxCaptureUnsupportedSentence,
   crabboxWarmImageRecoveryHint,
   sameCrabboxWarmImageGeneration,
   withoutCrabboxWarmImageOperation,
@@ -38,7 +39,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
   openStore: () => WarmImageStore;
   lookupLease: WarmImageStore["lookupLease"];
   assertCurrent: (context: LeaseContext) => void;
-  warnOnce: (action: string, error: unknown) => void;
+  warnOnce: (action: string, error: unknown, failed?: boolean) => void;
   collectImages: (context: LeaseContext, phase: "teardown") => Promise<void>;
   verifyImage: (
     context: LeaseContext,
@@ -61,6 +62,12 @@ export function createCrabboxWarmImageCapture(dependencies: {
     retireImage,
     checkpointCommand,
   } = dependencies;
+  const warnUnsupported = (message: string) =>
+    warnOnce(
+      "capture unsupported",
+      `${crabboxCaptureUnsupportedSentence(message)} Workers for this profile use an existing compatible snapshot when one is available and otherwise provision cold; each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on the profile to stop capture attempts.`,
+      false,
+    );
 
   return async function capture(
     context: LeaseContext & {
@@ -280,6 +287,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
             return undefined;
           }
           const next = withoutCrabboxWarmImageOperation(current);
+          delete next.captureUnsupported;
           // Pin mutations cannot race capture. Retain at most one previous image;
           // the displaced unpinned generation becomes durable deletion debt.
           const predecessor = current.image;
@@ -351,11 +359,32 @@ export function createCrabboxWarmImageCapture(dependencies: {
         }
       } catch (error) {
         captureError = coerceErrorMessage(error);
+        const unsupported = creating
+          ? CrabboxCheckpointCreateError.unsupportedCapture(error, context)
+          : undefined;
         const notSubmitted =
           creating && CrabboxCheckpointCreateError.wasNotSubmitted(error, context);
         let recoveryRequired = creating;
         if (claimed && key) {
           try {
+            if (unsupported) {
+              const recorded = await openStore().update(key, (current) =>
+                current?.operation?.type === "capture" && current.operation.id === captureId
+                  ? {
+                      ...withoutCrabboxWarmImageOperation(current),
+                      captureUnsupported: {
+                        atMs: Date.now(),
+                        provider: context.provider,
+                        message: unsupported.message,
+                      },
+                    }
+                  : undefined,
+              );
+              if (recorded) {
+                warnUnsupported(unsupported.message);
+                return;
+              }
+            }
             if (creating && !notSubmitted) {
               await openStore().update(key, (current) =>
                 current?.operation?.type === "capture" && current.operation.id === captureId

@@ -13,6 +13,7 @@ import {
 } from "../../infra/sqlite-schema-facts.js";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -23,6 +24,7 @@ import {
   readSessionEntrySideMetadata,
   type SessionEntrySideMetadata,
 } from "./session-accessor.sqlite-entry-cache-projection.js";
+import { recordCommittedSessionMetadataPublication } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   emitPreparedSessionSharingChange,
   publishSessionSharingEntryChange,
@@ -52,22 +54,24 @@ import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export {
+  retainPreparedSessionGenerationFacts,
+  retainPreparedSessionSharingFacts,
+} from "./session-accessor.sqlite-entry-cache-publication-state.js";
+export {
   assertSessionEntryCreationPublication,
   isPreparedSessionSharingChange,
   publishSessionEntryPlaceholderInsertion,
   publishSessionEntryWorkerMetadataInvalidation,
   publishSessionSharingMemberChange,
   readSessionEntryCreationTransition,
-  retainPreparedSessionGenerationFacts,
-  retainPreparedSessionSharingFacts,
   retainSessionEntryWorkerPublication,
   withSessionEntryCreationPublication,
   runWithSessionEntryCreationPublication,
-  type SessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
 export {
   projectSessionSharingEntry,
   type SessionEntryPlaceholder,
+  type SessionEntryReplacementPublication,
   type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 
@@ -79,7 +83,7 @@ type SqliteSessionEntryCacheWriteGeneration = {
 };
 
 type SessionEntryCacheUpdate = { sessionKey: string } & (
-  | { entry: SessionEntry; entryJson: string }
+  | { entry: SessionEntry; entryJson: string; sideMetadata: SessionEntrySideMetadata }
   | { entry?: undefined; entryJson?: never }
 );
 
@@ -227,24 +231,17 @@ export function readSessionEntryCache(
   options: SessionEntryCacheReadOptions,
 ): SessionEntryCacheSnapshot {
   return runSqliteReadOperationSync(database.db, () => {
-    const projection = options.retainFullEntry ? "full" : options.projection;
+    const projection = options.projection;
     const prepared = assertCanonicalSqliteSessionKeysCurrent(database, projection !== "full");
     if (
       !options.cache ||
       options.deferParticipants ||
-      options.retainFullEntry ||
       options.latest ||
       projection === "full" ||
       database.db.isTransaction ||
       !getAdmittedSqliteSchemaFacts(database.db)
     ) {
-      return loadSessionEntrySnapshot(
-        database,
-        projection,
-        prepared,
-        options.retainFullEntry,
-        options.deferParticipants,
-      );
+      return loadSessionEntrySnapshot(database, projection, prepared, options.deferParticipants);
     }
     const validityToken = readSessionEntryCacheValidityToken(database.db, "cached");
     const cached = sessionEntryCaches.get(database.db);
@@ -281,7 +278,7 @@ function publishSqliteSessionEntryCacheUpsert(
   database: SessionEntryCacheDatabase,
   update: SessionEntryCacheUpdate,
   writeGeneration: SqliteSessionEntryCacheWriteGeneration,
-): SessionEntrySideMetadata | undefined {
+): { sideMetadata: SessionEntrySideMetadata; entry: SessionEntry | undefined } | undefined {
   const owner = sessionEntryCaches.get(database.db);
   if (!owner) {
     return undefined;
@@ -342,7 +339,7 @@ function publishSqliteSessionEntryCacheUpsert(
     cached.entries.set(sessionKey, publishedEntry);
     advanceSessionEntryCacheGeneration(cached, writeGeneration);
   });
-  return sideMetadata;
+  return { sideMetadata, entry };
 }
 
 export function publishSessionEntryCacheInvalidation(
@@ -350,27 +347,58 @@ export function publishSessionEntryCacheInvalidation(
   update: SessionEntryCacheUpdate & {
     previousEntry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
     facts?: SessionRowFacts;
+    sharingUnchanged?: boolean;
   },
   writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
 ): void {
   let facts = update.facts;
-  publishSessionSharingEntryChange(database, update);
-  if (writeGeneration) {
-    const metadata = publishSqliteSessionEntryCacheUpsert(database, update, writeGeneration);
-    if (facts?.kind === "participants" && metadata) {
-      facts = {
-        kind: "participants",
-        projection: {
-          participants: metadata.participants,
-          participantCount: metadata.participantCount,
-        },
-      };
-    }
-  } else {
-    // A cold write has no snapshot to patch; do not hydrate owner/participants or prompt JSON.
+  const cached = writeGeneration
+    ? publishSqliteSessionEntryCacheUpsert(database, update, writeGeneration)
+    : undefined;
+  if (!writeGeneration) {
     publishTrackedCacheUpdate(database, () => sessionEntryCaches.delete(database.db));
   }
-  emitPreparedSessionSharingChange(database, update.sessionKey, database.agentId, facts);
+  if (facts?.kind === "participants" && cached) {
+    facts = {
+      kind: "participants",
+      projection: {
+        participants: cached.sideMetadata.participants,
+        participantCount: cached.sideMetadata.participantCount,
+      },
+    };
+  }
+  // The writer already acquired side-table facts. A cold cache cannot force a host reload.
+  const entry = update.entry
+    ? (cached?.entry ?? projectSessionEntryCacheUpdate(update.entryJson, update.sideMetadata))
+    : undefined;
+  publishSessionSharingEntryChange(database, entry ? { ...update, entry } : update);
+  const identity = findOpenClawAgentDatabaseIdentity(database);
+  const sharingChange =
+    update.sharingUnchanged ||
+    facts?.kind === "unchanged" ||
+    facts?.kind === "participants" ||
+    facts?.kind === "category"
+      ? "unchanged"
+      : "changed";
+  emitPreparedSessionSharingChange(
+    database,
+    update.sessionKey,
+    database.agentId,
+    facts,
+    identity && entry
+      ? {
+          kind: "metadata",
+          sharingChange,
+          prepared: {
+            source: {
+              ...identity,
+              ...(writeGeneration ? { revision: writeGeneration.after } : {}),
+            },
+            entries: new Map([[update.sessionKey, entry]]),
+          },
+        }
+      : { kind: "marker", sharingChange },
+  );
 }
 
 /** The category worker publishes only its changed field; native freshness tokens still expose other commits. */
@@ -382,6 +410,7 @@ export function publishSessionEntryCacheCategoryUpdate(
   publishTrackedCacheUpdate(database, () => {
     const cached = sessionEntryCaches.get(database.db);
     for (const { sessionKey, sessionId } of rows) {
+      recordCommittedSessionMetadataPublication(database, sessionKey);
       const current = cached?.entries.get(sessionKey);
       if (!current || current.sessionId !== sessionId) {
         continue;

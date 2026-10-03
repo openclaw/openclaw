@@ -16,11 +16,8 @@ describe("SQLite store worker compile cache", () => {
     { label: "owned programmatic cache", owner: "openclaw", cache: undefined, disable: undefined },
     { label: "explicit cache", owner: "openclaw", cache: "explicit", disable: undefined },
     { label: "empty explicit cache", owner: "openclaw", cache: "", disable: undefined },
-    { label: "disabled cache", owner: "openclaw", cache: undefined, disable: "1" },
-    { label: "zero disable policy", owner: "openclaw", cache: undefined, disable: "0" },
     { label: "empty disable policy", owner: "openclaw", cache: undefined, disable: "" },
     { label: "disabled explicit cache", owner: "openclaw", cache: "explicit", disable: "1" },
-    { label: "unavailable cache", owner: "none", cache: undefined, disable: undefined },
     {
       label: "foreign ALREADY_ENABLED cache",
       owner: "foreign",

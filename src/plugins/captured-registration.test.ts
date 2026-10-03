@@ -175,6 +175,13 @@ describe("captured plugin registration", () => {
           inspect: async () => ({ status: "active" }),
           destroy: async () => {},
         });
+        api.registerStorageProvider({
+          id: "captured-storage",
+          label: "Captured storage",
+          open: async () => {
+            throw new Error("capture must not open storage");
+          },
+        });
         api.registerModelCatalogProvider({
           provider: "captured-provider",
           kinds: ["text"],
@@ -254,6 +261,7 @@ describe("captured plugin registration", () => {
     expect(captured.tools.map((tool) => tool.name)).toEqual(["captured-tool"]);
     expect(captured.providers.map((provider) => provider.id)).toEqual(["captured-provider"]);
     expect(captured.workerProviders.map((provider) => provider.id)).toEqual(["captured-worker"]);
+    expect(captured.storageProviders.map((provider) => provider.id)).toEqual(["captured-storage"]);
     expect(captured.modelCatalogProviders.map((provider) => provider.provider)).toEqual([
       "captured-provider",
     ]);

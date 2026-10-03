@@ -1,4 +1,3 @@
-// Formats channel account summaries for CLI status surfaces.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";

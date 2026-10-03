@@ -8,25 +8,11 @@ import {
 } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema.js";
-
-export type ProjectRegistryIdentity = {
-  id: string;
-  repoRoot: string;
-  originUrl?: string;
-  source: "workspace" | "registered" | "cloned";
-};
-
-export type ProjectRegistryRecord = ProjectRegistryIdentity & {
-  displayName: string;
-  agentId?: string;
-};
-
-export type ProjectRegistryInsert = {
-  displayName: string;
-  repoRoot: string;
-  originUrl?: string;
-  source: "registered" | "cloned";
-};
+import type {
+  ProjectRegistryIdentity,
+  ProjectRegistryInsert,
+  ProjectRegistryRecord,
+} from "./project-registry.types.js";
 
 type ProjectsDatabase = Pick<OpenClawStateKyselyDatabase, "projects">;
 type ProjectRow = Selectable<ProjectsDatabase["projects"]>;

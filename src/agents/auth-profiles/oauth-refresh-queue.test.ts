@@ -1,7 +1,7 @@
 /** Tests durable ownership after an OAuth refresh failure. */
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetFileLockStateForTest } from "../../infra/file-lock.js";
+import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureEnv } from "../../test-utils/env.js";

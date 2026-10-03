@@ -229,7 +229,6 @@ async function prepareTrackedTabCleanup(
   return { dashboardClosed, durable: isCleanupCurrent(params) ? durable : undefined };
 }
 
-/** Closes and untracks tabs for the supplied session keys. */
 export async function closeTrackedBrowserTabsForSessions(
   input: CloseParams & { sessionKeys: Array<string | undefined>; now?: number },
 ): Promise<number> {

@@ -19,13 +19,12 @@ const hasVersionFlag = (argv: readonly string[]) =>
 
 export async function applyCliExecutionStartupPresentation(params: {
   argv?: string[];
-  routeLogsToStderrOnSuppress?: boolean;
   startupPolicy: CliStartupPolicy;
   showBanner?: boolean;
   version?: string;
 }) {
   // Machine-readable commands must route diagnostics away before startup can print.
-  if (params.startupPolicy.suppressDoctorStdout && params.routeLogsToStderrOnSuppress !== false) {
+  if (params.startupPolicy.suppressDoctorStdout) {
     routeLogsToStderr();
   }
   if (params.startupPolicy.hideBanner || params.showBanner === false || !params.version) {

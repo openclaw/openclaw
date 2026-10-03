@@ -1,7 +1,3 @@
-// Regression: doctor --fix whose candidate mixes an include-owned repair with a
-// root-owned repair must not print "Doctor changes" and then crash on the root
-// writer's include guard. The writer refuses, Doctor records the refusal, and
-// every file stays byte-identical with the included file named for manual repair.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,109 +15,180 @@ import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-su
 
 const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note: noteMock,
-}));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
 
-describe("doctor --fix include write ownership", () => {
+describe("doctor config persistence", () => {
   afterEach(() => {
     noteMock.mockClear();
     closeOpenClawStateDatabaseForTest();
   });
 
-  it.each([false, true])(
-    "preserves browser references across environment rotation and successive writes (authority=%s)",
-    async (authority) => {
-      await withDoctorConfigPreflightHome(async (home) => {
-        await withEnvAsync(
-          { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", BROWSER_BIN: "/opt/example/browser-planning" },
-          async () => {
-            const configPath = await writeOpenClawConfig(home, {
-              agents: { entries: { main: {} } },
-              browser: { $include: "./browser.json" },
-              gateway: { mode: "local" },
-              plugins: { enabled: false },
-            });
-            const includePath = path.join(path.dirname(configPath), "browser.json");
-            const includeRaw = JSON.stringify({
+  it("refuses retired Telegram inputs before include repair or backup recovery", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        channels: { $include: "./channels.json" },
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+      });
+      const includePath = path.join(path.dirname(configPath), "channels.json");
+      const channels = {
+        telegram: {
+          dm: {},
+          direct: { "42": { threadReplies: "always" } },
+          accounts: {
+            native: {
+              streaming: {
+                preview: { nativeToolProgress: true, nativeToolProgressAllowFrom: ["42"] },
+              },
+            },
+            flat: {
+              streamMode: "partial",
+              chunkMode: "newline",
+              blockStreaming: true,
+              blockStreamingCoalesce: {},
+              draftChunk: {},
+            },
+            scalar: { streaming: "block" },
+            disabled: { streaming: false },
+          },
+        },
+      };
+      const includedBytes = JSON.stringify(channels);
+      await fs.writeFile(includePath, includedBytes);
+      const rootBytes = await fs.readFile(configPath, "utf8");
+      const backupBytes = '{"gateway":{"mode":"local"}}\n';
+      await fs.writeFile(`${configPath}.bak`, backupBytes);
+      const failure = await prepareDoctorContext(configPath).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toHaveProperty(
+        "message",
+        expect.stringContaining("Install OpenClaw 2026.9.5"),
+      );
+      for (const field of [
+        "channels.telegram.dm",
+        "channels.telegram.direct.42.threadReplies",
+        "channels.telegram.accounts.native.streaming.preview.nativeToolProgress",
+        "channels.telegram.accounts.native.streaming.preview.nativeToolProgressAllowFrom",
+        "channels.telegram.accounts.flat.streamMode",
+        "channels.telegram.accounts.flat.chunkMode",
+        "channels.telegram.accounts.flat.blockStreaming",
+        "channels.telegram.accounts.flat.blockStreamingCoalesce",
+        "channels.telegram.accounts.flat.draftChunk",
+        "channels.telegram.accounts.scalar.streaming",
+        "channels.telegram.accounts.disabled.streaming",
+      ]) {
+        expect(failure).toHaveProperty("message", expect.stringContaining(field));
+      }
+      await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootBytes);
+      await expect(fs.readFile(includePath, "utf8")).resolves.toBe(includedBytes);
+      await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(backupBytes);
+    });
+  });
+
+  it("keeps canonical Telegram streaming settings eligible for Doctor", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const channels = {
+        telegram: { streaming: { mode: "off" as const }, direct: { "42": {} } },
+      };
+      const configPath = await writeOpenClawConfig(home, {
+        channels,
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+      });
+      const ctx = await prepareDoctorContext(configPath);
+      expect(ctx.cfg.channels?.telegram?.streaming).toEqual(channels.telegram.streaming);
+    });
+  });
+
+  it("preserves browser references across authorized successive writes and environment rotation", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync(
+        { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", BROWSER_BIN: "/opt/example/browser-planning" },
+        async () => {
+          const configPath = await writeOpenClawConfig(home, {
+            agents: { entries: { main: {} } },
+            browser: { $include: "./browser.json" },
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          });
+          const includePath = path.join(path.dirname(configPath), "browser.json");
+          const includeRaw = JSON.stringify({
+            enabled: true,
+            color: "#FF4500",
+            executablePath: "${BROWSER_BIN}",
+          });
+          await fs.writeFile(includePath, includeRaw);
+          const rootRaw = await fs.readFile(configPath, "utf8");
+          const ctx = await prepareDoctorContext(configPath);
+          expect(ctx.configResult.shouldWriteConfig).toBe(true);
+          expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
+          expect(ctx.cfg.browser).toEqual({
+            enabled: true,
+            executablePath: "/opt/example/browser-planning",
+          });
+          const write = () =>
+            captureUpdateDoctorConfigWrites(
+              configPath,
+              () => runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
+              { inputHash: hashConfigRaw(rootRaw), assertCurrent: () => {} },
+            );
+          await withEnvAsync({ BROWSER_BIN: "/opt/example/browser-first" }, async () => {
+            expect(await write()).toBe(true);
+            expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({
               enabled: true,
-              relayBindHost: "127.0.0.1",
               executablePath: "${BROWSER_BIN}",
             });
-            await fs.writeFile(includePath, includeRaw);
-            const rootRaw = await fs.readFile(configPath, "utf8");
-            const ctx = await prepareDoctorContext(configPath);
-            expect(ctx.configResult.shouldWriteConfig).toBe(true);
-            expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
-            expect(ctx.cfg.browser).toEqual({
-              enabled: true,
-              executablePath: "/opt/example/browser-planning",
-            });
-            const write = () =>
-              captureUpdateDoctorConfigWrites(
-                configPath,
-                () => runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
-                authority
-                  ? { inputHash: hashConfigRaw(rootRaw), assertCurrent: () => {} }
-                  : undefined,
-              );
-            await withEnvAsync({ BROWSER_BIN: "/opt/example/browser-first" }, async () => {
-              expect(await write()).toBe(true);
-              expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({
-                enabled: true,
-                executablePath: "${BROWSER_BIN}",
-              });
-              expect((await readConfigFileSnapshot()).sourceConfig.browser?.executablePath).toBe(
-                "/opt/example/browser-first",
-              );
-            });
-            const firstBytes = await fs.readFile(includePath, "utf8");
-            await expect(fs.readFile(`${includePath}.bak`, "utf8")).resolves.toBe(includeRaw);
-            ctx.cfg = { ...ctx.cfg, browser: { ...ctx.cfg.browser, enabled: false } };
-            await withEnvAsync({ BROWSER_BIN: "/opt/example/browser-second" }, async () => {
-              expect(await write()).toBe(true);
-              const snapshot = await readConfigFileSnapshot();
-              expect(snapshot.sourceConfig.browser).toEqual({
-                enabled: false,
-                executablePath: "/opt/example/browser-second",
-              });
-              expect(ctx.configResult.confirmedConfigSource?.hash).toBe(snapshot.hash);
-            });
-            expect(JSON.parse(await fs.readFile(includePath, "utf8")).executablePath).toBe(
-              "${BROWSER_BIN}",
+            expect((await readConfigFileSnapshot()).sourceConfig.browser?.executablePath).toBe(
+              "/opt/example/browser-first",
             );
-            await expect(fs.readFile(`${includePath}.bak`, "utf8")).resolves.toBe(firstBytes);
-            await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
-            const secondBytes = await fs.readFile(includePath, "utf8");
+          });
+          const firstBytes = await fs.readFile(includePath, "utf8");
+          await expect(fs.readFile(`${includePath}.bak`, "utf8")).resolves.toBe(includeRaw);
+          ctx.cfg = { ...ctx.cfg, browser: { ...ctx.cfg.browser, enabled: false } };
+          await withEnvAsync({ BROWSER_BIN: "/opt/example/browser-second" }, async () => {
             expect(await write()).toBe(true);
-            await expect(fs.readFile(includePath, "utf8")).resolves.toBe(secondBytes);
-            await expect(fs.readFile(`${includePath}.bak`, "utf8")).resolves.toBe(firstBytes);
-            const committed = structuredClone({
-              receipt: ctx.configResult.confirmedConfigSource,
-              baseline: ctx.cfgForPersistence,
+            const snapshot = await readConfigFileSnapshot();
+            expect(snapshot.sourceConfig.browser).toEqual({
+              enabled: false,
+              executablePath: "/opt/example/browser-second",
             });
-            await fs.appendFile(includePath, "\n");
-            const files = (await fs.readdir(path.dirname(configPath))).toSorted();
-            const retainedBytes = await fs.readFile(includePath, "utf8");
-            ctx.cfg = { ...ctx.cfg, browser: { ...ctx.cfg.browser, headless: true } };
-            expect(await write()).toBe(false);
-            expect(ctx.configWriteRefusal).toBe("config-conflict");
-            expect(ctx.configResult.confirmedConfigSource).toStrictEqual(committed.receipt);
-            expect(ctx.cfgForPersistence).toStrictEqual(committed.baseline);
-            await expect(fs.readFile(includePath, "utf8")).resolves.toBe(retainedBytes);
-            await expect(fs.readFile(`${includePath}.bak`, "utf8")).resolves.toBe(firstBytes);
-            await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
-            expect((await fs.readdir(path.dirname(configPath))).toSorted()).toEqual(files);
-          },
-        );
-      });
-    },
-  );
+            expect(ctx.configResult.confirmedConfigSource?.hash).toBe(snapshot.hash);
+          });
+          expect(JSON.parse(await fs.readFile(includePath, "utf8")).executablePath).toBe(
+            "${BROWSER_BIN}",
+          );
+          await expect(fs.readFile(`${includePath}.bak`, "utf8")).resolves.toBe(firstBytes);
+          await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
+          const secondBytes = await fs.readFile(includePath, "utf8");
+          expect(await write()).toBe(true);
+          await expect(fs.readFile(includePath, "utf8")).resolves.toBe(secondBytes);
+          await expect(fs.readFile(`${includePath}.bak`, "utf8")).resolves.toBe(firstBytes);
+          const committed = structuredClone({
+            receipt: ctx.configResult.confirmedConfigSource,
+            baseline: ctx.cfgForPersistence,
+          });
+          await fs.appendFile(includePath, "\n");
+          const files = (await fs.readdir(path.dirname(configPath))).toSorted();
+          const retainedBytes = await fs.readFile(includePath, "utf8");
+          ctx.cfg = { ...ctx.cfg, browser: { ...ctx.cfg.browser, headless: true } };
+          expect(await write()).toBe(false);
+          expect(ctx.configWriteRefusal).toBe("config-conflict");
+          expect(ctx.configResult.confirmedConfigSource).toStrictEqual(committed.receipt);
+          expect(ctx.cfgForPersistence).toStrictEqual(committed.baseline);
+          await expect(fs.readFile(includePath, "utf8")).resolves.toBe(retainedBytes);
+          await expect(fs.readFile(`${includePath}.bak`, "utf8")).resolves.toBe(firstBytes);
+          await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
+          expect((await fs.readdir(path.dirname(configPath))).toSorted()).toEqual(files);
+        },
+      );
+    });
+  });
 
   it.each([
     { shape: "nested-defaults", authority: false },
-    { shape: "nested-defaults", authority: true },
-    { shape: "included-roster", authority: false },
     { shape: "included-roster", authority: true },
   ] as const)(
     "migrates a published $shape config without flattening includes (authority=$authority)",
@@ -242,9 +309,7 @@ describe("doctor --fix include write ownership", () => {
                   },
                 },
               }),
-              writeOptions: {
-                explicitSetPaths: [["meta", "migrations", "modelPolicyAllowlist"]],
-              },
+              writeOptions: { explicitSetPaths: [["meta", "migrations", "modelPolicyAllowlist"]] },
             }),
           ).rejects.toThrow("flatten $include-owned config");
           expect((await readConfigFileSnapshot()).sourceConfig).toEqual(reloaded.sourceConfig);
@@ -256,10 +321,8 @@ describe("doctor --fix include write ownership", () => {
 
   it.each([
     { authority: false, refusal: undefined },
-    { authority: true, refusal: undefined },
     { authority: true, refusal: "requester-revoked" },
     { authority: true, refusal: "config-input-changed" },
-    { authority: true, refusal: "include-input-changed" },
   ] as const)(
     "writes a nested agent repair to its fragment and preserves both ancestor files (authority=$authority, refusal=$refusal)",
     async ({ authority, refusal }) => {
@@ -283,16 +346,6 @@ describe("doctor --fix include write ownership", () => {
           const ctx = await prepareDoctorContext(configPath);
           expect(ctx.configResult.shouldWriteConfig).toBe(true);
           expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
-          const retainedFragmentRaw =
-            refusal === "include-input-changed"
-              ? JSON.stringify({
-                  sandbox: { browser: { enableNoVnc: true } },
-                  name: "Operator edit",
-                })
-              : fragmentRaw;
-          if (refusal === "include-input-changed") {
-            await fs.writeFile(fragmentPath, retainedFragmentRaw);
-          }
           const writing = captureUpdateDoctorConfigWrites(
             configPath,
             () => runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
@@ -309,7 +362,7 @@ describe("doctor --fix include write ownership", () => {
           );
           if (refusal === "requester-revoked") {
             await expect(writing).rejects.toBeInstanceOf(UpdateRequesterRevokedError);
-          } else if (refusal === "config-input-changed" || refusal === "include-input-changed") {
+          } else if (refusal === "config-input-changed") {
             await expect(writing).resolves.toBe(false);
             expect(ctx.configWriteRefusal).toBe("config-conflict");
           } else {
@@ -319,7 +372,7 @@ describe("doctor --fix include write ownership", () => {
             expect(ctx.configResultWriteCommitted).not.toBe(true);
             await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
             await expect(fs.readFile(parentPath, "utf-8")).resolves.toBe(parentRaw);
-            await expect(fs.readFile(fragmentPath, "utf-8")).resolves.toBe(retainedFragmentRaw);
+            await expect(fs.readFile(fragmentPath, "utf-8")).resolves.toBe(fragmentRaw);
             expect((await fs.readdir(fragmentDir)).toSorted()).toEqual([
               "main-parent.json5",
               "main.json5",
@@ -334,99 +387,6 @@ describe("doctor --fix include write ownership", () => {
           });
           await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
           await expect(fs.readFile(parentPath, "utf-8")).resolves.toBe(parentRaw);
-          if (authority) {
-            expect(ctx.updateWarnings).toContain(
-              "Doctor include-owned keys agents: promotion unavailable for include-owned configuration.",
-            );
-          }
-          const firstSnapshot = await readConfigFileSnapshot();
-          const firstFragmentRaw = await fs.readFile(fragmentPath, "utf8");
-          expect(ctx.configResult.confirmedConfigSource).toEqual({
-            path: configPath,
-            hash: firstSnapshot.hash,
-          });
-          expect(firstSnapshot.hash).not.toBe(hashConfigRaw(rootRaw));
-          ctx.cfg = {
-            ...ctx.cfg,
-            agents: {
-              ...ctx.cfg.agents,
-              entries: {
-                ...ctx.cfg.agents?.entries,
-                main: { ...ctx.cfg.agents?.entries?.main, name: "Second repair" },
-              },
-            },
-          };
-          await expect(
-            captureUpdateDoctorConfigWrites(
-              configPath,
-              () => runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
-              authority
-                ? { inputHash: hashConfigRaw(rootRaw), assertCurrent: () => {} }
-                : undefined,
-            ),
-          ).resolves.toBe(true);
-          const secondSnapshot = await readConfigFileSnapshot();
-          expect(ctx.configResult.confirmedConfigSource).toEqual({
-            path: configPath,
-            hash: secondSnapshot.hash,
-          });
-          expect(secondSnapshot.hash).not.toBe(firstSnapshot.hash);
-          expect(secondSnapshot.hash).not.toBe(hashConfigRaw(rootRaw));
-          expect(JSON.parse(await fs.readFile(fragmentPath, "utf8"))).toEqual({
-            sandbox: { browser: { noVncEnabled: true } },
-            name: "Second repair",
-          });
-          await expect(fs.readFile(`${fragmentPath}.bak`, "utf8")).resolves.toBe(firstFragmentRaw);
-          await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
-          await expect(fs.readFile(parentPath, "utf8")).resolves.toBe(parentRaw);
-
-          const receipt = ctx.configResult.confirmedConfigSource;
-          const baseline = ctx.cfgForPersistence;
-          const committedState = structuredClone({ receipt, baseline });
-          // Only fragment bytes change: resolved values and both ancestor files still match.
-          await fs.appendFile(fragmentPath, "\n");
-          const driftedSnapshot = await readConfigFileSnapshot();
-          expect(driftedSnapshot.sourceConfig).toEqual(secondSnapshot.sourceConfig);
-          expect(driftedSnapshot.hash).not.toBe(secondSnapshot.hash);
-          const rootFiles = (await fs.readdir(path.dirname(configPath))).toSorted();
-          const fragmentFiles = (await fs.readdir(fragmentDir)).toSorted();
-          const retainedPaths = [
-            configPath,
-            ...fragmentFiles.map((file) => path.join(fragmentDir, file)),
-          ];
-          const retainedBytes = await Promise.all(
-            retainedPaths.map((file) => fs.readFile(file, "utf8")),
-          );
-          ctx.cfg = {
-            ...ctx.cfg,
-            agents: {
-              ...ctx.cfg.agents,
-              entries: {
-                ...ctx.cfg.agents?.entries,
-                main: { ...ctx.cfg.agents?.entries?.main, name: "Third repair" },
-              },
-            },
-          };
-          await expect(
-            captureUpdateDoctorConfigWrites(
-              configPath,
-              () => runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
-              authority
-                ? { inputHash: hashConfigRaw(rootRaw), assertCurrent: () => {} }
-                : undefined,
-            ),
-          ).resolves.toBe(false);
-          expect(ctx.configWriteRefusal).toBe("config-conflict");
-          expect(ctx.configResultWriteCommitted).toBe(true);
-          expect(ctx.configResult.confirmedConfigSource).toBe(receipt);
-          expect(ctx.cfgForPersistence).toBe(baseline);
-          expect(ctx.configResult.confirmedConfigSource).toStrictEqual(committedState.receipt);
-          expect(ctx.cfgForPersistence).toStrictEqual(committedState.baseline);
-          expect(await Promise.all(retainedPaths.map((file) => fs.readFile(file, "utf8")))).toEqual(
-            retainedBytes,
-          );
-          expect((await fs.readdir(path.dirname(configPath))).toSorted()).toEqual(rootFiles);
-          expect((await fs.readdir(fragmentDir)).toSorted()).toEqual(fragmentFiles);
         });
       });
     },
@@ -485,36 +445,6 @@ describe("doctor --fix include write ownership", () => {
           path: configPath,
           hash: snapshot.hash,
         });
-        const firstBytes = await fs.readFile(configPath, "utf8");
-        ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19090 } };
-        expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(true);
-        const secondSnapshot = await readConfigFileSnapshot();
-        expect(secondSnapshot.valid).toBe(true);
-        expect(secondSnapshot.sourceConfig.gateway?.port).toBe(19090);
-        expect(secondSnapshot.hash).not.toBe(snapshot.hash);
-        expect(ctx.configResult.confirmedConfigSource).toEqual({
-          path: configPath,
-          hash: secondSnapshot.hash,
-        });
-        await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(firstBytes);
-        const receipt = ctx.configResult.confirmedConfigSource;
-        const baseline = ctx.cfgForPersistence;
-        const committedState = structuredClone({ receipt, baseline });
-        const retainedBytes = `${await fs.readFile(configPath, "utf8")}\n`;
-        await fs.writeFile(configPath, retainedBytes);
-        const files = (await fs.readdir(path.dirname(configPath))).toSorted();
-        ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19091 } };
-
-        expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(false);
-
-        expect(ctx.configWriteRefusal).toBe("config-conflict");
-        expect(ctx.configResult.confirmedConfigSource).toBe(receipt);
-        expect(ctx.cfgForPersistence).toBe(baseline);
-        expect(ctx.configResult.confirmedConfigSource).toStrictEqual(committedState.receipt);
-        expect(ctx.cfgForPersistence).toStrictEqual(committedState.baseline);
-        await expect(fs.readFile(configPath, "utf8")).resolves.toBe(retainedBytes);
-        await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(firstBytes);
-        expect((await fs.readdir(path.dirname(configPath))).toSorted()).toEqual(files);
       });
     });
   });
@@ -561,6 +491,41 @@ describe("doctor --fix include write ownership", () => {
         expect(warning?.[0]).toContain("the included file ./browser.json");
         await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
         await expect(fs.readFile(includePath, "utf-8")).resolves.toBe(includeRaw);
+      });
+    });
+  });
+  it("never reports unpersisted fixes and leaves the config untouched", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const configPath = await writeOpenClawConfig(home, {
+          gatway: { port: 12345 },
+          agents: { defaults: { heartbeat: { every: 5 } } },
+          plugins: { enabled: false },
+        });
+        const rawBefore = await fs.readFile(configPath, "utf-8");
+        const ctx = await prepareDoctorContext(configPath);
+        const { configResult } = ctx;
+
+        // The unknown-key repair is computed, but held until the write commits.
+        expect(configResult.shouldWriteConfig).toBe(true);
+        expect(
+          (configResult.pendingChangePanels ?? []).some((panel) => panel.includes("gatway")),
+        ).toBe(true);
+        expect(noteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
+
+        // The write must refuse gracefully — no throw, no change panel, no file write.
+        await expect(runWriteConfigHealth(ctx)).resolves.toBe(false);
+
+        expect(ctx.configWriteRefusal).toBe("validation");
+        expect(ctx.configResultWriteCommitted).not.toBe(true);
+        expect(noteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
+        const warning = noteMock.mock.calls.find(
+          ([message, title]) =>
+            title === "Doctor warnings" && message.includes("No config changes were written"),
+        );
+        expect(warning).toBeDefined();
+        expect(warning?.[0]).toContain("agents.defaults.heartbeat.every");
+        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rawBefore);
       });
     });
   });

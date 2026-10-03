@@ -14,7 +14,7 @@ describe("live model error helpers", () => {
     expect(isModelNotFoundErrorMessage("The model gpt-foo does not exist.")).toBe(true);
     expect(
       isModelNotFoundErrorMessage(
-        "The selected model was not found by the provider. Check the model id or choose a different model.",
+        "This model was not found. Choose another model in the Control UI.",
       ),
     ).toBe(true);
     expect(isModelNotFoundErrorMessage('{"code":404,"message":"model not found"}')).toBe(true);

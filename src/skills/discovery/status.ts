@@ -22,6 +22,7 @@ import {
 } from "../loading/workspace-skill-loader.js";
 import type { WorkspaceSkillSources } from "../loading/workspace-skill-sources.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
+import { resolveSkillFileHost } from "../skill-file-host.js";
 import type {
   SkillEntry,
   SkillEligibilityContext,
@@ -160,23 +161,14 @@ function normalizeInstallOptions(
     return { id, kind: spec.kind, label, bins };
   };
 
-  const allDownloads = filtered.every((spec) => spec.kind === "download");
-  if (allDownloads) {
-    const options: SkillInstallOption[] = [];
-    for (const [index, spec] of install.entries()) {
-      if (supportsPlatform(spec)) {
-        options.push(toOption(spec, index));
-      }
-    }
-    return options;
+  if (filtered.every((spec) => spec.kind === "download")) {
+    return install.flatMap((spec, index) =>
+      supportsPlatform(spec) ? [toOption(spec, index)] : [],
+    );
   }
-
   const preferred = selectPreferredInstallSpec(filtered, prefs, hasLocalBin);
-  if (!preferred) {
-    return [];
-  }
   // installSkill resolves implicit IDs in the original metadata list, before OS filtering.
-  return [toOption(preferred, install.indexOf(preferred))];
+  return preferred ? [toOption(preferred, install.indexOf(preferred))] : [];
 }
 
 type SkillRequirementsContext = {
@@ -364,7 +356,7 @@ export async function prepareWorkspaceSkillStatus(
   const localEntries = sources.status
     ? [
         ...loadSkillLibrarySelection(opts?.librarySelections ?? []),
-        ...sources.entries.filter((entry) => entry.skill.fileHost === "gateway"),
+        ...sources.entries.filter((entry) => resolveSkillFileHost(entry.skill) === "gateway"),
       ]
     : sources.entries;
   const localFacts =
@@ -378,7 +370,7 @@ export async function prepareWorkspaceSkillStatus(
       : undefined;
   const hostPaths = new Set(
     sources.entries
-      .filter((entry) => entry.skill.fileHost === "workspace")
+      .filter((entry) => resolveSkillFileHost(entry.skill) === "workspace")
       .map((entry) => entry.skill.filePath),
   );
   const files = [

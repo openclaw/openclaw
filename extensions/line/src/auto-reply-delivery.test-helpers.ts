@@ -1,7 +1,8 @@
 // Shared fixtures for LINE auto-reply delivery tests.
 import type { messagingApi } from "@line/bot-sdk";
 import * as replyRuntime from "openclaw/plugin-sdk/reply-runtime";
-import { afterEach, vi, type Mock, type MockInstance } from "vitest";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
+import { afterEach, vi, type Mock } from "vitest";
 import { lineResult } from "./channel.sendPayload.test-support.js";
 import * as markdown from "./markdown-to-line.js";
 import * as media from "./outbound-media.js";
@@ -27,7 +28,7 @@ type LineAutoReplyTestDeps = {
   pushMessagesLine: Mock<LineAutoReplyDeps["pushMessagesLine"]>;
 };
 
-const moduleMocks: MockInstance[] = [];
+const moduleMocks: Array<{ mockRestore(): void }> = [];
 
 afterEach(() => {
   for (const mock of moduleMocks.splice(0).toReversed()) {
@@ -75,32 +76,9 @@ const createLocationMessage: LineAutoReplyDeps["createLocationMessage"] = (locat
 });
 
 export function createDeps(overrides?: Partial<LineAutoReplyDeps>): LineAutoReplyTestDeps {
+  moduleMocks.push(mockPinnedHostnameResolution());
   const replyMessageLine = vi.fn<LineAutoReplyDeps["replyMessageLine"]>(async () => {});
-  const buildMediaMessage: LineAutoReplyDeps["buildMediaMessage"] = vi.fn(
-    async (mediaUrl, options) => {
-      switch (options.mediaKind) {
-        case "video":
-          if (!options.previewImageUrl) {
-            throw new Error(
-              "LINE video messages require previewImageUrl to reference an image URL",
-            );
-          }
-          return {
-            type: "video" as const,
-            originalContentUrl: mediaUrl,
-            previewImageUrl: options.previewImageUrl,
-          };
-        case "audio":
-          return {
-            type: "audio" as const,
-            originalContentUrl: mediaUrl,
-            duration: options.durationMs ?? 60_000,
-          };
-        default:
-          return createImageMessage(mediaUrl);
-      }
-    },
-  );
+  const buildMediaMessage = vi.fn(media.buildLineMediaMessage);
   const pushMessagesLine = vi.fn<LineAutoReplyDeps["pushMessagesLine"]>(async () =>
     lineResult("push", "u1"),
   );

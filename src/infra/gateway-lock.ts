@@ -29,11 +29,8 @@ import {
   readGatewayLockProcessCmdline,
   readGatewayLockProcessStartTime,
 } from "./gateway-lock-process.js";
-import {
-  acquireGatewayOwnerLease,
-  type GatewayOwnerLease,
-  type GatewayOwnerSupervisor,
-} from "./gateway-owner-lease.js";
+import { acquireGatewayOwnerLease, type GatewayOwnerLease } from "./gateway-owner-lease.js";
+import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import {
   acquireGatewayStateOwner,

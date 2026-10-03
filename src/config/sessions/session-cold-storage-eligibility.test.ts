@@ -49,62 +49,55 @@ function protect(beforeMs = cutoff) {
 }
 
 describe("cold-storage protection selection", () => {
-  it.each(["none", "recovery", "unreadable"] as const)(
-    "hydrates only protected windows and decodes each node once (busy=%s)",
-    (busy) => {
-      const idle = addNode("idle", { archivedAt: 2, pinnedAt: 3 });
-      const nodes = [idle];
-      for (let i = 0; i < 1_000; i++) {
-        addWindow(idle.key, `history-${i}`, cutoff - 1, i % 2 === 0 ? null : cutoff - 1);
+  it("hydrates only protected windows and decodes each node once", () => {
+    const idle = addNode("idle", { archivedAt: 2, pinnedAt: 3 });
+    for (let i = 0; i < 1_000; i++) {
+      addWindow(idle.key, `history-${i}`, cutoff - 1, i % 2 === 0 ? null : cutoff - 1);
+    }
+    addWindow(idle.key, "recent-history", cutoff, null);
+    addWindow(idle.key, "recent-transcript", cutoff - 1, cutoff);
+    addWindow(idle.key, "running-history", cutoff - 1, null);
+    database
+      .prepare("UPDATE session_windows SET status = 'running' WHERE session_id = ?")
+      .run("running-history");
+    const protectedNode = addNode("busy", { restartRecoveryBeforeAgentReplyState: "pending" });
+    addWindow(protectedNode.key, "old-busy-history", cutoff - 1, null);
+    const expected = new Set([
+      "recent-history",
+      "recent-transcript",
+      "running-history",
+      "busy",
+      "old-busy-history",
+    ]);
+    let hydratedWindows = 0;
+    const prepare = database.prepare.bind(database);
+    vi.spyOn(database, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (sql.includes('from "session_windows"')) {
+        const all = statement.all.bind(statement);
+        const iterate = statement.iterate.bind(statement);
+        vi.spyOn(statement, "all").mockImplementation((...args) => {
+          const rows = all(...args);
+          hydratedWindows += rows.length;
+          return rows;
+        });
+        vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
+          for (const row of iterate(...args)) {
+            hydratedWindows++;
+            yield row;
+          }
+          return undefined;
+        });
       }
-      addWindow(idle.key, "recent-history", cutoff, null);
-      addWindow(idle.key, "recent-transcript", cutoff - 1, cutoff);
-      addWindow(idle.key, "running-history", cutoff - 1, null);
-      database
-        .prepare("UPDATE session_windows SET status = 'running' WHERE session_id = ?")
-        .run("running-history");
-      const expected = new Set(["recent-history", "recent-transcript", "running-history"]);
-      if (busy !== "none") {
-        const protectedNode = addNode(
-          "busy",
-          { restartRecoveryBeforeAgentReplyState: "pending" },
-          busy === "unreadable" ? "not-json" : undefined,
-        );
-        nodes.push(protectedNode);
-        addWindow(protectedNode.key, "old-busy-history", cutoff - 1, null);
-        expected.add("busy");
-        expected.add("old-busy-history");
-      }
-      let hydratedWindows = 0;
-      const prepare = database.prepare.bind(database);
-      vi.spyOn(database, "prepare").mockImplementation((sql) => {
-        const statement = prepare(sql);
-        if (sql.includes('from "session_windows"')) {
-          const all = statement.all.bind(statement);
-          const iterate = statement.iterate.bind(statement);
-          vi.spyOn(statement, "all").mockImplementation((...args) => {
-            const rows = all(...args);
-            hydratedWindows += rows.length;
-            return rows;
-          });
-          vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
-            for (const row of iterate(...args)) {
-              hydratedWindows++;
-              yield row;
-            }
-            return undefined;
-          });
-        }
-        return statement;
-      });
-      const parsed = vi.spyOn(JSON, "parse");
-      expect(protect()).toEqual(expected);
-      expect(hydratedWindows).toBe(expected.size);
-      for (const { entryJson } of nodes) {
-        expect(parsed.mock.calls.filter(([text]) => text === entryJson)).toHaveLength(1);
-      }
-    },
-  );
+      return statement;
+    });
+    const parsed = vi.spyOn(JSON, "parse");
+    expect(protect()).toEqual(expected);
+    expect(hydratedWindows).toBe(expected.size);
+    for (const { entryJson } of [idle, protectedNode]) {
+      expect(parsed.mock.calls.filter(([text]) => text === entryJson)).toHaveLength(1);
+    }
+  });
 
   it("preserves each running and recent node/window protection source at the cutoff", () => {
     for (const column of ["updated_at", "last_activity_at", "last_interaction_at"]) {
@@ -184,7 +177,6 @@ describe("cold-storage protection selection", () => {
 
   it.each([
     { restartRecoveryBeforeAgentReplyState: "admitted" },
-    { restartRecoveryBeforeAgentReplyState: "pending" },
     { restartRecoveryBeforeAgentReplyState: "continue" },
     { restartRecoveryDeliveryReceiptState: "terminal-pending" },
     { mainRestartRecovery: { reservation: { id: "claim" } } },

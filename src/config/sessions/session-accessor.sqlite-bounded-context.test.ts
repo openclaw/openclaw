@@ -17,13 +17,15 @@ import {
 } from "./session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import {
-  readSessionTranscriptActiveStats,
   readRecentSessionTranscriptActiveEvents,
   readSessionTranscriptMessageEventPage,
-  withRecentSessionTranscriptActiveEvents,
   readSessionTranscriptBoundedMessageTailPage,
 } from "./session-accessor.sqlite-active-events.js";
-import { readSessionTranscriptHistoryEventById } from "./session-accessor.sqlite-history.test-support.js";
+import {
+  readActiveTranscriptStats,
+  readSessionTranscriptHistoryEventById,
+  withRecentActiveTranscriptEvents,
+} from "./session-accessor.sqlite-history.test-support.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
@@ -384,12 +386,12 @@ it.each(["cold", "warm"])(
         { role: "compactionSummary", summary: "fresh-only summary" },
         { role: "user", content: "fresh user" },
       ]);
-      expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(2);
+      expect(readActiveTranscriptStats(scope).eventCount).toBe(2);
 
       const nextUserId = appendUser("after compaction");
       await settle();
       expectHistory([freshUserId, nextUserId]);
-      expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(3);
+      expect(readActiveTranscriptStats(scope).eventCount).toBe(3);
 
       // A newer reset wins for both scopes; another compaction must not revive older resets.
       manager.appendResetBoundary("new", nextUserId);
@@ -400,7 +402,7 @@ it.each(["cold", "warm"])(
         { role: "user", content: "after compaction" },
         { role: "user", content: "after second reset" },
       ]);
-      expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(2);
+      expect(readActiveTranscriptStats(scope).eventCount).toBe(2);
 
       manager.appendCompaction("newest-only summary", newestUserId, 100);
       await settle();
@@ -410,7 +412,7 @@ it.each(["cold", "warm"])(
         { role: "compactionSummary", summary: "newest-only summary" },
         { role: "user", content: "after second reset" },
       ]);
-      expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(2);
+      expect(readActiveTranscriptStats(scope).eventCount).toBe(2);
     });
   },
 );
@@ -463,7 +465,7 @@ it("counts paired reset tool results without counting discarded orphan results",
       touchSessionEntry: false,
     });
 
-    const stats = readSessionTranscriptActiveStats(scope);
+    const stats = readActiveTranscriptStats(scope);
     expect(stats.eventCount).toBe(4);
     expect(stats.sizeBytes).toBeGreaterThan(3_000);
     expect(stats.sizeBytes).toBeLessThan(8_000);
@@ -480,7 +482,7 @@ it("counts paired reset tool results without counting discarded orphan results",
     });
     const parseSpy = vi.spyOn(JSON, "parse");
     try {
-      expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(5);
+      expect(readActiveTranscriptStats(scope).eventCount).toBe(5);
       expect(parseSpy).not.toHaveBeenCalled();
     } finally {
       parseSpy.mockRestore();
@@ -503,8 +505,8 @@ it("counts paired reset tool results without counting discarded orphan results",
       "post-reset",
       "second-post-reset",
     ]);
-    expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(3);
-    expect(readSessionTranscriptActiveStats(scope).sizeBytes).toBeLessThan(8_000);
+    expect(readActiveTranscriptStats(scope).eventCount).toBe(3);
+    expect(readActiveTranscriptStats(scope).sizeBytes).toBeLessThan(8_000);
   });
 });
 
@@ -529,7 +531,7 @@ it("resolves reset history and raw-byte stats without acquiring unrelated reset 
       const history = readHistory(scope, 1024);
       expect(history.totalMessages).toBe(1);
       expect(history.events.map(({ event }) => (event as { id: string }).id)).toEqual([kept]);
-      expect(readSessionTranscriptActiveStats(scope)).toEqual({
+      expect(readActiveTranscriptStats(scope)).toEqual({
         eventCount: 1,
         sizeBytes: history.serializedBytes,
       });
@@ -560,7 +562,7 @@ it("counts retained raw bytes without hydrating private native payloads", async 
       return originalParse(text, reviver);
     });
     try {
-      const stats = readSessionTranscriptActiveStats(scope);
+      const stats = readActiveTranscriptStats(scope);
       expect(stats.eventCount).toBe(1);
       expect(stats.sizeBytes).toBeGreaterThan(privateText.length);
       expect(privateBytes).toBe(0);
@@ -678,7 +680,7 @@ it.each(["append", "rebuild"])(
       expect(tail.map((event) => (event as { id: string }).id)).toEqual(["bootstrap", "usage"]);
       expect(tail[1]).toMatchObject({ message: { usage: { input: 86_000, output: 2_000 } } });
       const visited: unknown[] = [];
-      withRecentSessionTranscriptActiveEvents(scope, 2, (visit) => {
+      withRecentActiveTranscriptEvents(scope, 2, (visit) => {
         visit((event) => visited.push(event));
       });
       expect(visited).toEqual(tail.toReversed());
@@ -700,7 +702,7 @@ it("keeps repeated visits on one snapshot and expires their reader on return", a
     const first: unknown[] = [];
     const second: unknown[] = [];
     try {
-      withRecentSessionTranscriptActiveEvents(scope, 1, (visit) => {
+      withRecentActiveTranscriptEvents(scope, 1, (visit) => {
         savedVisit = visit;
         visit((event) => first.push(event));
         writer.prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?").run(
@@ -767,7 +769,7 @@ it.each(["json", "sql", "consumer"] as const)(
       try {
         if (failureKind === "consumer") {
           expect(() =>
-            withRecentSessionTranscriptActiveEvents(scope, 3, (visit) => {
+            withRecentActiveTranscriptEvents(scope, 3, (visit) => {
               visit(() => {
                 throw failure;
               });
@@ -845,7 +847,7 @@ it.each(["unbounded", "reset", "compaction"] as const)(
           0,
         ),
       };
-      expect(readSessionTranscriptActiveStats(scope)).toEqual(expected);
+      expect(readActiveTranscriptStats(scope)).toEqual(expected);
       const physicalBefore = readTranscriptStatsSync(scope);
       const historyBefore = readSessionTranscriptMessageEventCount(scope);
       await persistSessionTranscriptTurn(scope, {
@@ -853,7 +855,7 @@ it.each(["unbounded", "reset", "compaction"] as const)(
         touchSessionEntry: false,
       });
 
-      expect(readSessionTranscriptActiveStats(scope)).toEqual(expected);
+      expect(readActiveTranscriptStats(scope)).toEqual(expected);
       expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(
         physicalBefore.sizeBytes + 32_000,
       );

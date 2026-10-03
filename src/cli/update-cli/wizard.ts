@@ -12,6 +12,7 @@ import { resolveUpdateInstallIdentity } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
 import { pathExists } from "../../utils.js";
 import { VERSION } from "../../version.js";
+import { reportHostOwnedUpdate } from "./host-owned.js";
 import {
   isEmptyDir,
   isGitCheckout,
@@ -40,6 +41,10 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     }),
     readConfigFileSnapshot({ observe: false }),
   ]);
+
+  if (updateStatus.installKind === "host") {
+    reportHostOwnedUpdate(updateStatus.installOwner ?? null, {});
+  }
 
   const configChannel = configSnapshot.valid
     ? normalizeUpdateChannel(configSnapshot.config.update?.channel)

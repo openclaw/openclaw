@@ -765,7 +765,7 @@ export function desktopProofAssets(value: unknown) {
   return Object.fromEntries(
     Object.entries(value).map(([name, hash]) => {
       if (
-        !/^(?:index|desktop)[\w.-]*\.js$/u.test(name) ||
+        !/^(?:index|desktop|novnc-)[\w.-]*\.js$/u.test(name) ||
         typeof hash !== "string" ||
         !digest.test(hash)
       ) {

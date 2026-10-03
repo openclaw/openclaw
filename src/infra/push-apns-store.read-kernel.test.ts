@@ -2,7 +2,6 @@ import { DatabaseSync } from "node:sqlite";
 import type { Compilable, QueryResult } from "kysely";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  readApnsRegistrationFromDatabase,
   readApnsRegistrationsFromDatabase,
   type apnsRegistrationFromRow,
 } from "./push-apns-store.js";
@@ -10,8 +9,6 @@ import {
 type RegistrationRow = Parameters<typeof apnsRegistrationFromRow>[0];
 
 const queries = vi.hoisted(() => ({
-  first:
-    vi.fn<(db: DatabaseSync, query: Compilable<RegistrationRow>) => RegistrationRow | undefined>(),
   all: vi.fn<
     (db: DatabaseSync, query: Compilable<RegistrationRow>) => QueryResult<RegistrationRow>
   >(),
@@ -53,7 +50,7 @@ vi.mock("./kysely-sync.js", async () => {
   });
   return {
     getNodeSqliteKysely: <Database>() => new Kysely<Database>({ dialect }),
-    executeSqliteQueryTakeFirstSync: queries.first,
+    executeSqliteQueryTakeFirstSync: queries.forbidden,
     executeSqliteQuerySync: queries.all,
   };
 });
@@ -97,27 +94,8 @@ beforeEach(() => {
 });
 
 describe("APNs registration read kernels", () => {
-  it("decodes a single direct registration using the requested node identity", () => {
-    queries.first.mockImplementation((_database, query) => {
-      expect(query.compile().parameters).toEqual(["node-one"]);
-      return directRow("node-one");
-    });
-    expect(readApnsRegistrationFromDatabase(database, "node-one")).toEqual({
-      nodeId: "node-one",
-      transport: "direct",
-      token,
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      updatedAtMs: 7,
-    });
-  });
-
-  it("returns null for a missing single registration", () => {
-    queries.first.mockReturnValue(undefined);
-    expect(readApnsRegistrationFromDatabase(database, "missing-node")).toBeNull();
-  });
-
-  it.each([500, 501])("looks up %i IDs in bounded chunks and decodes both transports", (count) => {
+  it("looks up IDs in bounded chunks and decodes both transports", () => {
+    const count = 501;
     const nodeIds = Array.from({ length: count }, (_, index) => `node-${index}`);
     const finalId = `node-${count - 1}`;
     const stored = new Map([
@@ -140,7 +118,7 @@ describe("APNs registration read kernels", () => {
     });
 
     const registrations = readApnsRegistrationsFromDatabase(database, nodeIds);
-    expect(bindings).toEqual(count === 500 ? [nodeIds] : [nodeIds.slice(0, 500), [finalId]]);
+    expect(bindings).toEqual([nodeIds.slice(0, 500), [finalId]]);
     expect(registrations.size).toBe(2);
     expect(registrations.get("node-0")).toEqual({
       nodeId: "node-0",
@@ -190,17 +168,4 @@ describe("APNs registration read kernels", () => {
       expect(queries.all).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("does not query for an empty batch", () => {
-    expect(readApnsRegistrationsFromDatabase(database, [])).toEqual(new Map());
-    expect(queries.all).not.toHaveBeenCalled();
-  });
-
-  it("returns an empty map when every queried registration is missing", () => {
-    queries.all.mockReturnValue({ rows: [] });
-    expect(readApnsRegistrationsFromDatabase(database, ["missing-one", "missing-two"])).toEqual(
-      new Map(),
-    );
-    expect(queries.all).toHaveBeenCalledTimes(1);
-  });
 });

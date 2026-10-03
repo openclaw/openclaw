@@ -19,8 +19,10 @@ import {
 } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { clearSessionQueues, enqueueFollowupRun } from "../../auto-reply/reply/queue.js";
+import { enqueueFollowupRun } from "../../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
+import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.js";
+import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionEntry,
@@ -86,14 +88,14 @@ async function seedYieldedParent() {
     expectsCompletionMessage: true,
   });
   expect(
-    markRequesterTurnYielded({
+    await markRequesterTurnYielded({
       requesterSessionKey: parentKey,
       requesterAgentId: "main",
       requesterTurnRunId: parentRunId,
     }),
   ).toBe(1);
   expect(
-    settleRequesterAfterSessionSpawns({
+    await settleRequesterAfterSessionSpawns({
       requesterSessionKey: parentKey,
       requesterAgentId: "main",
       requesterTurnRunId: parentRunId,
@@ -328,6 +330,9 @@ it("does not cancel a yielded parent when Stop only clears a queued follow-up", 
     ]);
     expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(before);
   } finally {
-    clearSessionQueues([parentKey, parentId]);
+    for (const key of [parentKey, parentId]) {
+      clearFollowupQueue(key);
+      clearFollowupDrainCallback(key);
+    }
   }
 });

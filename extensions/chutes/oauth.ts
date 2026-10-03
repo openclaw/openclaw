@@ -1,6 +1,3 @@
-/**
- * Chutes OAuth PKCE login flow.
- */
 import { randomBytes } from "node:crypto";
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -15,25 +12,17 @@ import {
   assertOkOrThrowProviderError,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { buildOAuthRequestSignal } from "openclaw/plugin-sdk/provider-oauth-runtime";
+import {
+  buildOAuthRequestSignal,
+  type OAuthCredentials,
+  type OAuthPrompt,
+} from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
 const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
 const CHUTES_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
-
-type OAuthPrompt = {
-  message: string;
-  placeholder?: string;
-};
-
-type OAuthCredentials = {
-  refresh: string;
-  access: string;
-  expires: number;
-  [key: string]: unknown;
-};
 
 type ChutesOAuthAppConfig = {
   clientId: string;
@@ -61,7 +50,7 @@ function parseRedirectUri(redirectUri: string): {
   if (url.protocol !== "http:") {
     throw new Error(`Chutes OAuth redirect URI must be http:// (got ${redirectUri})`);
   }
-  const hostname = url.hostname || "127.0.0.1";
+  const hostname = url.hostname === "[::1]" ? "::1" : url.hostname || "127.0.0.1";
   if (hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "::1") {
     throw new Error(
       `Chutes OAuth redirect hostname must be loopback (got ${hostname}). Use http://127.0.0.1:<port>/...`,
@@ -227,7 +216,7 @@ async function exchangeChutesCodeForTokens(params: {
     email: info?.username,
     accountId: info?.sub,
     clientId: params.app.clientId,
-  } as ChutesStoredOAuth;
+  };
 }
 
 /** Refreshes a stored Chutes OAuth credential through the provider token endpoint. */

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onAgentEvent } from "../infra/agent-events.js";
-import { saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import { pathLooksMutableForShellPayloadSync } from "../infra/system-run-mutable-file-policy.js";

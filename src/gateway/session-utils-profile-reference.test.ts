@@ -8,7 +8,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail, resolveUserProfileId } from "../state/user-profiles.js";
+import { linkEmail } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail, resolveUserProfileId } from "../state/user-profiles.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";

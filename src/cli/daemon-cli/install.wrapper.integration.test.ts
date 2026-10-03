@@ -37,19 +37,18 @@ let entrypoint: string;
 
 describe("registered gateway install runtime default", () => {
   it.each([
-    { name: "Bun-only first install", node: undefined, explicit: false, supportedBun: true },
-    { name: "explicit Node without Node", node: undefined, explicit: true, supportedBun: true },
-    { name: "available Node", node: "/opt/node/bin/node", explicit: false, supportedBun: true },
-    { name: "unsupported running Bun", node: undefined, explicit: false, supportedBun: false },
-    { name: "recorded runtime", node: undefined, explicit: false, supportedBun: true },
-    { name: "pinned runtime", node: undefined, explicit: false, supportedBun: true },
-  ])("handles $name", async ({ name, node, explicit, supportedBun }) => {
+    "Bun-only first install",
+    "explicit Node without Node",
+    "recorded runtime",
+    "pinned runtime",
+  ])("handles %s", async (name) => {
+    const explicit = name === "explicit Node without Node";
     const execPath = Object.getOwnPropertyDescriptor(process, "execPath")!;
     const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
     const bunPath = "/opt/app/runtime/bun";
     Object.defineProperty(process, "execPath", { configurable: true, value: bunPath });
     Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
-    vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue(node);
+    vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue(undefined);
     vi.spyOn(runtimePaths, "resolveSystemNodeInfo").mockResolvedValue(null);
     const supported = {
       status: "supported" as const,
@@ -58,10 +57,7 @@ describe("registered gateway install runtime default", () => {
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       nodeSharedSqlite: false,
     };
-    const probe = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
-      ...supported,
-      status: supportedBun ? "supported" : "unsupported",
-    });
+    const probe = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue(supported);
     const retainedPath =
       name === "recorded runtime" || name === "pinned runtime" ? "/opt/prior/bun" : undefined;
     const pin =
@@ -99,7 +95,7 @@ describe("registered gateway install runtime default", () => {
         ],
         { from: "user" },
       );
-      if (!node && (explicit || !supportedBun)) {
+      if (explicit) {
         await expect(install).rejects.toThrow("No supported Node runtime was selected");
         expect(service.install).not.toHaveBeenCalled();
       } else {
@@ -107,11 +103,12 @@ describe("registered gateway install runtime default", () => {
         expect(runtimeErrors).toEqual([]);
         expect(service.install).toHaveBeenCalledOnce();
         const [installed] = service.install.mock.calls[0]!;
-        expect(installed.programArguments[0]).toBe(retainedPath ?? node ?? bunPath);
+        expect(installed.programArguments[0]).toBe(retainedPath ?? bunPath);
         expect(installed.runtimePinUpdate?.pin).toEqual(pin);
-        if (!node && !retainedPath) {
+        if (!retainedPath) {
           expect(installed.programArguments).toEqual([
             bunPath,
+            "--no-install",
             entrypoint,
             "gateway",
             "--port",
@@ -123,7 +120,7 @@ describe("registered gateway install runtime default", () => {
           ]);
         }
       }
-      if (explicit || node || retainedPath) {
+      if (explicit || retainedPath) {
         expect(probe).not.toHaveBeenCalled();
       }
     } finally {

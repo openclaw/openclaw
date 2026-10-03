@@ -19,7 +19,6 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
-import { ADMIN_SCOPE } from "../method-scopes.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
@@ -251,9 +250,4 @@ export function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]
     info?.displayName === "ACP" &&
     info?.version === "acp"
   );
-}
-
-export function hasGatewayAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
 }

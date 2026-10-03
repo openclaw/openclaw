@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { validateWorkerSkillWorkshopParams } from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import { bindAgentToolExecutionLocation } from "../agents/agent-tool-metadata.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   libraryAuthority,
   type SkillLibraryRequestOwner,
@@ -303,9 +305,11 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
   const { alice, request } = setup();
   const capability = prepareGatewaySkillAuthoring(request(alice.id), "agent:main:shared", true)!;
   const run = await admitted(capability, "worker-personal-turn");
-  const { registerWorkerSkillAuthoring, invokeWorkerSkillAuthoring } =
-    await import("./worker-environments/worker-skill-authoring.js");
-  const { createWorkerSessionTools } = await import("../worker/worker-session-tools.js");
+  const { createWorkerGatewayToolRuntime } =
+    await import("./worker-environments/worker-gateway-tool-runtime.js");
+  const { createWorkerWorkshopCallRetention } =
+    await import("./worker-environments/worker-session-tool-executor.js");
+  const { createWorkerGatewayToolProxies } = await import("../worker/worker-gateway-tools.js");
   const claim = {
     sessionId: "shared",
     runId: "worker-personal-turn",
@@ -336,28 +340,55 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
         () => capability.invoke(input),
       ),
   });
-  const revoke = registerWorkerSkillAuthoring(claim, hostTool, assertCurrent);
-  const unused = async () => {
-    throw new Error("Unexpected unrelated RPC");
+  const retainCall = createWorkerWorkshopCallRetention();
+  const retainedTool: AnyAgentTool = {
+    ...hostTool,
+    execute: (id, args, signal, onUpdate) =>
+      retainCall(id, args, () => hostTool.execute(id, args, signal, onUpdate)),
   };
-  const proxy = createWorkerSessionTools(
-    {
-      requestSessionsSend: unused,
-      requestSessionsSpawn: unused,
-      requestPortal: unused,
-      requestPresence: unused,
-      requestSkillWorkshop: async (input) => {
-        expect(validateWorkerSkillWorkshopParams(input)).toBe(true);
-        return {
-          type: "res",
-          id: "test",
-          ok: true,
-          payload: { resultJson: JSON.stringify(await invokeWorkerSkillAuthoring(claim, input)) },
-        };
+  bindAgentToolExecutionLocation(retainedTool, { kind: "gateway" });
+  const runtime = createWorkerGatewayToolRuntime({
+    assertCurrent,
+    signal: new AbortController().signal,
+    prepare: async () => ({
+      tools: [retainedTool],
+      policy: {
+        workspaceOnly: true,
+        readOnly: false,
+        applyPatchEnabled: false,
+        applyPatchWorkspaceOnly: true,
+        imageSanitization: {},
       },
-    },
-    { multipleProfiles: true },
-  ).find((tool) => tool.name === "skill_workshop")!;
+    }),
+  });
+  const identity = {
+    environmentId: "environment",
+    credentialHash: "synthetic",
+    bundleHash: "a".repeat(64),
+    sessionId: claim.sessionId,
+    runId: claim.runId,
+    turnClaim: claim,
+    ownerEpoch: 1,
+    rpcSetVersion: 1,
+    protocolFeatures: [],
+    credentialExpiresAtMs: 1,
+  };
+  const proxy = createWorkerGatewayToolProxies(await runtime.getSurface(identity), {
+    invokeGatewayTool: async (input, options) => ({
+      type: "res",
+      id: "test",
+      ok: true,
+      payload: await runtime.invoke(identity, input, {
+        send: (frame) => options?.onUpdate?.(frame.payload.result),
+      }),
+    }),
+    cancelGatewayTool: async (input) => ({
+      type: "res",
+      id: "test",
+      ok: true,
+      payload: runtime.cancel(input),
+    }),
+  })[0]!;
   try {
     const result = await proxy.execute("create-1", {
       action: "create",
@@ -429,14 +460,14 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
         }),
       ]),
     );
-    await expect(
-      proxy.execute("stale-edit", {
+    expect(
+      await proxy.execute("stale-edit", {
         action: "update",
         skill_id: entry.skillId,
         expected_revision: entry.revision,
         files: [{ path: "scripts/edit.sh", content: "stale" }],
       }),
-    ).rejects.toMatchObject({ code: "CONFLICT" });
+    ).toMatchObject({ details: { status: "error" } });
     for (const [index, patch] of [
       { files: [{ path: "SKILL.md", content: "wrong channel" }] },
       {
@@ -453,14 +484,14 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
       { delete_files: ["../escape"] },
       { delete_files: ["data.bin", "data.bin"] },
     ].entries()) {
-      await expect(
-        proxy.execute(`invalid-${index}`, {
+      expect(
+        await proxy.execute(`invalid-${index}`, {
           action: "update",
           skill_id: entry.skillId,
           expected_revision: edited.entry.revision,
           ...patch,
         }),
-      ).rejects.toThrow();
+      ).toMatchObject({ details: { status: "error" } });
     }
     await proxy.execute("delete-helper", {
       action: "update",
@@ -488,7 +519,7 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
       }),
     ).rejects.toThrow("claim lost");
   } finally {
-    revoke();
+    await runtime.close();
     run.close();
   }
 });

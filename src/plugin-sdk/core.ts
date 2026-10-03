@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ResolvedConfiguredAcpBinding } from "../acp/persistent-bindings.types.js";
 import {
   findChatChannelMeta,
@@ -7,6 +6,7 @@ import {
 import type { ChatChannelId } from "../channels/ids.js";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
+import { createTextPairingAdapter } from "../channels/plugins/pairing-adapters.js";
 import {
   createScopedAccountReplyToModeResolver,
   createTopLevelChannelReplyToModeResolver,
@@ -114,6 +114,7 @@ export type {
   ProviderReplayPolicyContext,
   ProviderReplaySessionEntry,
   ProviderReplaySessionState,
+  ProviderReplaySessionStateV2,
   ProviderResolveDynamicModelContext,
   ProviderResolveTransportTurnStateContext,
   ProviderResolveWebSocketSessionPolicyContext,
@@ -121,6 +122,7 @@ export type {
   ProviderUsageAuthToken,
   RealtimeTranscriptionProviderPlugin,
   ProviderSanitizeReplayHistoryContext,
+  ProviderSanitizeReplayHistoryContextV2,
   ProviderTransportTurnState,
   ProviderToolSchemaDiagnostic,
   ProviderResolveUsageAuthContext,
@@ -304,22 +306,10 @@ function getChatChannelMetaForSdk(id: ChatChannelId): ChannelMeta {
 
 export { getChatChannelMetaForSdk as getChatChannelMeta };
 
-/** Remove one of the known provider prefixes from a free-form target string. */
-export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
-  const trimmed = raw.trim();
-  for (const provider of providers) {
-    const prefix = `${normalizeLowercaseStringOrEmpty(provider)}:`;
-    if (normalizeLowercaseStringOrEmpty(trimmed).startsWith(prefix)) {
-      return trimmed.slice(prefix.length).trim();
-    }
-  }
-  return trimmed;
-}
-
-/** Remove generic target-kind prefixes such as `user:` or `group:`. */
-export function stripTargetKindPrefix(raw: string): string {
-  return raw.replace(/^(user|channel|group|conversation|room|dm):/i, "").trim();
-}
+export {
+  stripChannelTargetPrefix,
+  stripTargetKindPrefix,
+} from "../channels/plugins/chat-target-prefixes.js";
 
 /**
  * Build the canonical outbound session route payload returned by channel
@@ -680,17 +670,7 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
 function resolveChatChannelPairing(
   pairing: ChannelPairingAdapter | ChatChannelPairingOptions,
 ): ChannelPairingAdapter {
-  if (!("text" in pairing)) {
-    return pairing;
-  }
-  const text = pairing.text;
-  return {
-    idLabel: text.idLabel,
-    normalizeAllowEntry: text.normalizeAllowEntry,
-    notifyApproval: async (ctx) => {
-      await text.notify({ ...ctx, message: text.message });
-    },
-  };
+  return "text" in pairing ? createTextPairingAdapter(pairing.text) : pairing;
 }
 
 function resolveChatChannelThreading<TResolvedAccount>(
@@ -700,15 +680,12 @@ function resolveChatChannelThreading<TResolvedAccount>(
     return threading;
   }
 
-  let resolveReplyToMode: ChannelThreadingAdapter["resolveReplyToMode"];
-  if ("topLevelReplyToMode" in threading) {
-    resolveReplyToMode = createTopLevelChannelReplyToModeResolver(threading.topLevelReplyToMode);
-  } else {
-    resolveReplyToMode = createScopedAccountReplyToModeResolver<TResolvedAccount>(
-      threading.scopedAccountReplyToMode,
-    );
-  }
-
+  const resolveReplyToMode =
+    "topLevelReplyToMode" in threading
+      ? createTopLevelChannelReplyToModeResolver(threading.topLevelReplyToMode)
+      : createScopedAccountReplyToModeResolver<TResolvedAccount>(
+          threading.scopedAccountReplyToMode,
+        );
   return {
     ...threading,
     resolveReplyToMode,

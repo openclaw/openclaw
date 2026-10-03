@@ -279,11 +279,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       span.setStatus({ code: SpanStatusCode.ERROR, message: redactSensitiveText(evt.error) });
     }
     const traceContext = internalOrTrustedTraceContext(evt, metadata);
-    if (trackedSpan && traceContext?.spanId) {
-      completeTrackedLifecycleSpan(traceContext, trackedSpan, evt.ts);
-      return;
-    }
-    span.end(evt.ts);
+    completeTrackedLifecycleSpan(trackedSpan ? traceContext : undefined, span, evt.ts);
   };
 
   const messageDeliveryAttrs = (evt: MessageDeliveryDiagnosticEvent): Record<string, string> => ({

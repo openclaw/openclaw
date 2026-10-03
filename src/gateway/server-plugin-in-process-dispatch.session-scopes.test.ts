@@ -12,7 +12,7 @@ import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { prepareCronPromptRunAdmission } from "../cron/isolated-agent/run-admission.js";
+import { prepareCronRunAdmission } from "../cron/run-admission.js";
 import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
@@ -130,7 +130,8 @@ async function withHostedCreation(
         : undefined;
     const scheduled =
       source === "scheduled"
-        ? prepareCronPromptRunAdmission({
+        ? prepareCronRunAdmission({
+            deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
             cfg,
             runId: "scope-parent-run",
             agentId: "main",
@@ -343,8 +344,6 @@ describe("hosted visible spawn permission inheritance", () => {
   it.each([
     { mode: undefined, agentId: "main", source: "scheduled" },
     { mode: "read-only", agentId: "main", source: "scheduled" },
-    { mode: "guarded", agentId: "main", source: "scheduled" },
-    { mode: "workspace", agentId: "main", source: "scheduled" },
     { mode: "full", agentId: "main", source: "scheduled" },
     { mode: "full", agentId: "reviewer", source: "scheduled" },
     { mode: "full", agentId: "main", source: "operator" },

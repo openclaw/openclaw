@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { sql } from "kysely";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
 import {
   normalizeMessageClientSources,
@@ -26,7 +25,6 @@ import {
 import {
   ensureSessionPendingInputsSchema,
   ensureSessionInputCompletionsSchema,
-  hasPendingInputConsumptionColumn,
   hasSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import {
@@ -44,7 +42,6 @@ import {
   readSessionInputCompletion,
   writeSessionInputCompletion,
   parseSessionPendingInputMessage,
-  projectSessionPendingInput,
   readSessionPendingInputByKey,
   readSessionPendingInputOwnerIds,
   registerSessionPendingInputOwner,
@@ -55,7 +52,6 @@ import {
   type SessionPendingInput,
   type SessionPendingInputOwner,
   type SessionPendingInputPage,
-  type SessionPendingInputRow,
   type SessionPendingInputState,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import {
@@ -449,142 +445,10 @@ export async function stageSessionPendingInput(
   );
 }
 
-/** Record lost custody at its read boundary without resuming a pre-restart execution. */
-function readPendingInputRows(
-  scope: PendingInputScope,
-  options: { limit?: number; before?: number; id?: string },
-): { rows: SessionPendingInputRow[]; total: number | undefined; nextBefore?: number } {
-  const resolved = resolveSqliteTranscriptScope(scope);
-  const databaseOptions = toDatabaseOptions(resolved);
-  const limit = Math.max(1, Math.min(20, Math.trunc(options.limit ?? 20)));
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    if (!hasSessionPendingInputsSchema(database.db)) {
-      return { rows: [], total: 0, staleIds: [], nextBefore: undefined };
-    }
-    const db = getSessionKysely(database.db);
-    let base = db
-      .selectFrom("session_pending_inputs")
-      .where("session_key", "=", resolved.sessionKey)
-      .where("session_id", "=", scope.sessionId);
-    if (hasPendingInputConsumptionColumn(database.db)) {
-      base = base.where("consumed_event_id", "is", null);
-    }
-    const total =
-      options.id === undefined
-        ? (executeSqliteQueryTakeFirstSync(
-            database.db,
-            base.select(db.fn.count<number>("input_id").as("total")),
-          )?.total ?? 0)
-        : undefined;
-    let query = base.orderBy("seq", "desc").limit(limit + 1);
-    if (options.before !== undefined) {
-      query = query.where("seq", "<", options.before);
-    }
-    if (options.id !== undefined) {
-      query = query.where("input_id", "=", options.id);
-    }
-    const metadata = executeSqliteQuerySync(
-      database.db,
-      query.select([
-        "seq",
-        /* kysely-allow-raw: Bound the page before fetching accepted message JSON. */
-        sql<number>`OCTET_LENGTH(message_json)`.as("serialized_bytes"),
-      ]),
-    ).rows;
-    const selected: number[] = [];
-    let bytes = 0;
-    for (const row of metadata) {
-      if (selected.length === limit || bytes + row.serialized_bytes > MAX_PAYLOAD_BYTES) {
-        break;
-      }
-      selected.push(row.seq);
-      bytes += row.serialized_bytes;
-    }
-    if (metadata.length && !selected.length) {
-      throw new Error("Stored pending input exceeds the Gateway payload limit");
-    }
-    // Sort the bounded page in memory instead of spilling full message bodies to a temp B-tree.
-    const rows = selected.length
-      ? executeSqliteQuerySync(
-          database.db,
-          base.selectAll().where("seq", "in", selected),
-        ).rows.toSorted((left, right) => right.seq - left.seq)
-      : [];
-    // An aborted but registered owner still owns the terminal disposition. Reads
-    // must not race its finish(cancelled) by recording an inferred interruption.
-    const ownedIds = readSessionPendingInputOwnerIds(database, rows);
-    const staleIds = rows
-      .filter((row) => row.state === "queued" && !ownedIds.has(row.input_id))
-      .map((row) => row.input_id);
-    return {
-      rows,
-      total,
-      staleIds,
-      nextBefore: selected.length < metadata.length ? selected.at(-1) : undefined,
-    };
-  }, databaseOptions);
-  if (!result.found) {
-    return { rows: [], total: 0 };
-  }
-  const snapshot = result.value;
-  if (snapshot.staleIds.length) {
-    const interrupted = runOpenClawAgentWriteTransaction(
-      (database) => {
-        const db = getSessionKysely(database.db);
-        const candidates = executeSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("session_pending_inputs")
-            .select(["input_id", "session_key", "session_id", "lifecycle_generation"])
-            .where("input_id", "in", snapshot.staleIds)
-            .where("state", "=", "queued")
-            .where("consumed_event_id", "is", null),
-        ).rows;
-        const ownedIds = readSessionPendingInputOwnerIds(database, candidates);
-        const ids = candidates.flatMap((row) => (ownedIds.has(row.input_id) ? [] : [row.input_id]));
-        if (ids.length) {
-          executeSqliteQuerySync(
-            database.db,
-            db
-              .updateTable("session_pending_inputs")
-              .set({ state: "interrupted" })
-              .where("input_id", "in", ids)
-              .where("consumed_event_id", "is", null),
-          );
-        }
-        return new Set(ids);
-      },
-      databaseOptions,
-      { operationLabel: "session.pending-input.interrupt-stale" },
-    );
-    for (const row of snapshot.rows) {
-      if (interrupted.has(row.input_id)) {
-        row.state = "interrupted";
-      }
-    }
-  }
-  return { rows: snapshot.rows, total: snapshot.total, nextBefore: snapshot.nextBefore };
-}
-
-export function listSessionPendingInputs(
-  scope: PendingInputScope,
-  options: { limit?: number; before?: number } = {},
-): SessionPendingInputPage {
-  const { rows, total, nextBefore } = readPendingInputRows(scope, options);
-  return {
-    items: rows.toReversed().map(projectSessionPendingInput),
-    total: total ?? 0,
-    ...(nextBefore !== undefined ? { nextBefore } : {}),
-  };
-}
-
-export function readSessionPendingInput(
-  scope: PendingInputScope,
-  id: string,
-): SessionPendingInput | undefined {
-  const row = readPendingInputRows(scope, { id, limit: 1 }).rows[0];
-  return row ? projectSessionPendingInput(row) : undefined;
-}
+export {
+  listSessionPendingInputs,
+  readSessionPendingInput,
+} from "./session-pending-input-history.js";
 
 /** Verify source custody before replacing a stale process-local completed receipt. */
 export function claimSessionPendingInputDedupeRecovery(

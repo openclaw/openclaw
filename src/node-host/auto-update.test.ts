@@ -159,6 +159,7 @@ describe("node auto-update controller", () => {
   it.each([
     { label: "unmanaged process", launcher: false, kind: "package" },
     { label: "source checkout", launcher: true, kind: "git" },
+    { label: "host-owned installation", launcher: true, kind: "host" },
     { label: "unknown installation", launcher: true, kind: "unknown" },
   ])("does not schedule package updates for $label", async ({ launcher, kind }) => {
     mocks.launcherChild.mockReturnValue(launcher);

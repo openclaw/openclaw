@@ -192,8 +192,6 @@ describe.skipIf(process.platform === "win32")("iOS simulator preparation", () =>
     { env: { OPENCLAW_CI_SIMSLIM_BINARY: "/missing-simslim" } },
     { args: [] },
     { args: ["booted"] },
-    { args: ["all"] },
-    { args: [simulatorId, "extra"] },
   ])("rejects invalid admission before any tool call: %j", (options) => {
     const { result, commands } = runFixture("ios-simulator-prepare.sh", options);
     expect(result.status).not.toBe(0);

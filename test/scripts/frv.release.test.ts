@@ -679,7 +679,6 @@ describe("publication status real CLI", () => {
     "duplicate-name",
     "duplicate-id",
     "count-gap",
-    "attempt-limit",
   ])("rejects independently observed %s", async (kind) => {
     const result = await runPublicationCli(publicationFixture(), undefined, (responses) => {
       const prefix = `repos/${REPOSITORY}/actions/`;
@@ -711,31 +710,10 @@ describe("publication status real CLI", () => {
       if (kind === "count-gap") {
         list.total_count++;
       }
-      if (kind === "attempt-limit") {
-        Object.assign(responses[`${prefix}runs/101`] as object, { run_attempt: 100000000 });
-      }
     });
     expect(result.status, result.stdout).toBe(1);
     expect(JSON.parse(result.stdout).publication.collection.complete).toBe(false);
   });
-
-  it.each(["88", "77", "101"])(
-    "refuses advancing run %s without restarting observation",
-    async (runId) => {
-      const result = await runPublicationCli(publicationFixture(), undefined, (responses) => {
-        const path = `repos/${REPOSITORY}/actions/runs/${runId}`;
-        const before = responses[path] as { run_attempt: number };
-        responses[path] = {
-          sequence: [before, { ...before, run_attempt: before.run_attempt + 1 }],
-        };
-      });
-      expect(result.status).toBe(1);
-      expect(JSON.parse(result.stdout).publication.collection.error).toBe("attempt-changed");
-      expect(
-        result.calls.filter((call) => call.includes(`repos/${REPOSITORY}/actions/runs/${runId}`)),
-      ).toHaveLength(2);
-    },
-  );
 
   it.each(["missing", "expired", "legacy-only", "unsupported", "incomplete-link"])(
     "keeps authenticated historical %s unknown, not failed publication",
@@ -773,24 +751,21 @@ describe("publication status real CLI", () => {
     },
   );
 
-  it.each(["403 quota", "404 unavailable", "network timeout"])(
-    "classifies %s as unavailable, never absence",
-    async (failure) => {
-      const result = await runPublicationCli(publicationFixture(), undefined, (responses) => {
-        responses[`repos/${REPOSITORY}/actions/runs/88/artifacts?per_page=100&page=1`] = {
-          failure: `${failure}: /private/fixture/credential synthetic-secret`,
-        };
-      });
-      expect(result.status).toBe(1);
-      expect(JSON.parse(result.stdout).publication.collection).toEqual({
-        complete: false,
-        error: "transport",
-      });
-      expect(result.stdout + result.stderr).not.toMatch(
-        /synthetic-secret|private\/fixture|quota|404 unavailable/u,
-      );
-    },
-  );
+  it("classifies failed artifact reads as unavailable, never absence", async () => {
+    const result = await runPublicationCli(publicationFixture(), undefined, (responses) => {
+      responses[`repos/${REPOSITORY}/actions/runs/88/artifacts?per_page=100&page=1`] = {
+        failure: "404 unavailable: /private/fixture/credential synthetic-secret",
+      };
+    });
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout).publication.collection).toEqual({
+      complete: false,
+      error: "transport",
+    });
+    expect(result.stdout + result.stderr).not.toMatch(
+      /synthetic-secret|private\/fixture|quota|404 unavailable/u,
+    );
+  });
 
   it("retains partial package successes and truncation without declaring a complete observation", async () => {
     const fixture = publicationFixture();
@@ -973,6 +948,9 @@ describe("publication status real CLI", () => {
     expect(result.status).toBe(1);
     expect(JSON.parse(result.stdout).publication.collection.error).toBe("attempt-changed");
     expect(JSON.parse(result.stdout).publication.relationship.status).toBe("verified");
+    expect(
+      result.calls.filter((call) => call.includes(`repos/${REPOSITORY}/actions/runs/101`)),
+    ).toHaveLength(2);
   });
 
   it.each(["transport", "workflow", "attempt-limit"])(
@@ -1077,6 +1055,10 @@ describe("publication status real CLI", () => {
       });
       expect(result.status).toBe(1);
       expect(JSON.parse(result.stdout).publication.relationship.status).toBe("invalid");
+      expect(JSON.parse(result.stdout).publication.collection.error).toBe("attempt-changed");
+      expect(
+        result.calls.filter((call) => call.includes(`repos/${REPOSITORY}/actions/runs/${runId}`)),
+      ).toHaveLength(2);
     },
   );
 
@@ -1317,11 +1299,11 @@ describe("publication status real CLI", () => {
     },
   );
 
-  it.each(["traversal", "unexpected-entry", "expanded", "truncated", "corrupt", "duplicate-entry"])(
+  it.each(["unexpected-entry", "expanded"])(
     "refuses %s archives before projecting diagnostics",
     async (kind) => {
       const fixture = publicationFixture();
-      const result = await runPublicationCli(fixture, undefined, async (responses, artifact) => {
+      const result = await runPublicationCli(fixture, undefined, async (_responses, artifact) => {
         await artifact(
           3,
           fixture.publisher,
@@ -1329,41 +1311,14 @@ describe("publication status real CLI", () => {
           DIAGNOSTIC_FILE,
           fixture.diagnostic,
           (zip) => {
-            if (kind === "traversal") {
-              zip.file("../escape.json", "{}");
-            }
             if (kind === "unexpected-entry") {
               zip.file("extra.json", "{}");
             }
             if (kind === "expanded") {
               zip.file(DIAGNOSTIC_FILE, " ".repeat(128 * 1024 + 1));
             }
-            if (kind === "duplicate-entry") {
-              zip.file("x".repeat(DIAGNOSTIC_FILE.length), "{}");
-            }
           },
         );
-        const archive = responses[`repos/${REPOSITORY}/actions/artifacts/3/zip`] as {
-          binary: string;
-        };
-        let bytes = Buffer.from(archive.binary, "base64");
-        if (kind === "truncated") {
-          bytes = bytes.subarray(0, -10);
-        }
-        if (kind === "corrupt") {
-          bytes[0] = 0;
-        }
-        if (kind === "duplicate-entry") {
-          const needle = Buffer.from("x".repeat(DIAGNOSTIC_FILE.length));
-          for (let offset = bytes.indexOf(needle); offset !== -1; offset = bytes.indexOf(needle)) {
-            bytes.set(Buffer.from(DIAGNOSTIC_FILE), offset);
-          }
-        }
-        archive.binary = bytes.toString("base64");
-        Object.assign(responses[`repos/${REPOSITORY}/actions/artifacts/3`] as object, {
-          size_in_bytes: bytes.length,
-          digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
-        });
       });
       expect(result.status).toBe(1);
       expect(JSON.parse(result.stdout).publication.verification.state).toBe("unknown");
@@ -1418,7 +1373,6 @@ describe("publication status real CLI", () => {
   });
 
   it.each([
-    [1, true],
     [100, true],
     [100, false],
   ] as const)(

@@ -1,7 +1,3 @@
-// Device-pairing setup-code method produces the connect QR/setup code a mobile
-// or companion client scans to connect to this gateway. It reuses the same
-// pairing helpers as `openclaw qr` so non-terminal clients can display the
-// connect QR that was previously only renderable in a terminal.
 import {
   ErrorCodes,
   errorShape,
@@ -15,7 +11,6 @@ import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import {
   decodePairingSetupCode,
   encodePairingSetupCode,
-  resolveConfiguredPairingPublicUrl,
   resolvePairingSetupFromConfig,
 } from "../../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -53,7 +48,6 @@ function resolveDevicePairingJoinBaseUrl(payload: PairingSetupPayload): URL {
   );
 }
 
-/** Gateway handler for producing a device-pairing setup code + connect QR. */
 export const devicePairSetupHandlers: GatewayRequestHandlers = {
   "device.pair.setupCode": async ({ params, respond, context }) => {
     if (
@@ -80,13 +74,10 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         return;
       }
       const config = context.getRuntimeConfig();
-      const requestPublicUrl = typeof params.publicUrl === "string" ? params.publicUrl : undefined;
-      const configuredPublicUrl =
-        params.preferRemoteUrl === true ? undefined : resolveConfiguredPairingPublicUrl(config);
-      const publicUrl = requestPublicUrl ?? configuredPublicUrl;
+      const requestPublicUrl = params.publicUrl;
       const resolved = await resolvePairingSetupFromConfig(config, {
         env: process.env,
-        publicUrl,
+        publicUrl: requestPublicUrl,
         preferRemoteUrl: params.preferRemoteUrl === true,
         useLocalGateway: config.gateway?.mode === "remote" && params.preferRemoteUrl !== true,
         localTlsFingerprint: context.gatewayTlsFingerprint,
@@ -167,20 +158,20 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
       const completion = await readDevicePairSetupCompletion({ setupId: params.setupId });
       // Retention bookkeeping stays server-side; the wire shape matches the
       // corresponding success or delivery-uncertain broadcast.
-      const result: DevicePairSetupStatusResult = completion
-        ? (() => {
-            const payload = {
-              setupId: completion.setupId,
-              deviceId: completion.deviceId,
-              ...(completion.deviceName ? { deviceName: completion.deviceName } : {}),
-              access: completion.access,
-              ts: completion.completedAtMs,
-            };
-            return completion.deliveryState === "confirmed"
-              ? { completion: payload }
-              : { deliveryUncertain: payload };
-          })()
-        : {};
+      let result: DevicePairSetupStatusResult = {};
+      if (completion) {
+        const payload = {
+          setupId: completion.setupId,
+          deviceId: completion.deviceId,
+          ...(completion.deviceName ? { deviceName: completion.deviceName } : {}),
+          access: completion.access,
+          ts: completion.completedAtMs,
+        };
+        result =
+          completion.deliveryState === "confirmed"
+            ? { completion: payload }
+            : { deliveryUncertain: payload };
+      }
       respond(true, result, undefined);
     });
   },

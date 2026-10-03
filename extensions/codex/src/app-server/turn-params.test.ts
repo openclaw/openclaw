@@ -16,6 +16,21 @@ afterEach(() => {
 
 describe("buildTurnStartParams active computer context", () => {
   it.each([false, true])(
+    "keeps required-root native environments disabled on warm turns (%s)",
+    (preserveNativeTurnSettings) => {
+      const params = createParams("/tmp/session.jsonl", "/repo");
+      params.requireWorkspaceOnly = true;
+      const turn = buildTurnStartParams(params, {
+        threadId: "rooted-thread",
+        cwd: "/repo/subdirectory",
+        appServer: createAppServerOptions(),
+        preserveNativeTurnSettings,
+        environmentSelection: [{ environmentId: "ambient", cwd: "/outside" }],
+      });
+      expect(turn.environments).toEqual([]);
+    },
+  );
+  it.each([false, true])(
     "refreshes and clears presence without rewriting input (native settings=%s)",
     (preserveNativeTurnSettings) => {
       const params = createParams("/tmp/session.jsonl", "/repo");

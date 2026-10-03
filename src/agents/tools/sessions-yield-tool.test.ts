@@ -70,7 +70,7 @@ describe("sessions_yield tool", () => {
     expect(details.status).toBe("yielded");
     expect(details).not.toHaveProperty("message");
     expect(onYield).toHaveBeenCalledOnce();
-    expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined);
+    expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined, undefined);
   });
 
   it.each([undefined, "Research started; results will follow."])(
@@ -91,7 +91,7 @@ describe("sessions_yield tool", () => {
       });
       expect(JSON.stringify(result)).not.toContain(message);
       expect(onYield).toHaveBeenCalledOnce();
-      expect(onYield).toHaveBeenCalledWith(message, acknowledgment);
+      expect(onYield).toHaveBeenCalledWith(message, acknowledgment, undefined);
     },
   );
 
@@ -131,7 +131,7 @@ describe("sessions_yield tool", () => {
   it.each([
     { name: "the claim callback is unavailable" },
     { name: "the turn owns no pending child completion", claimYield: () => false },
-  ])("keeps the turn active when $name", async ({ claimYield }) => {
+  ])("keeps the turn active without a tool failure when $name", async ({ claimYield }) => {
     const onYield = vi.fn();
     const tool = createSessionsYieldTool({
       sessionId: "test-session",
@@ -141,10 +141,10 @@ describe("sessions_yield tool", () => {
 
     const result = await tool.execute("call-1", {});
 
+    expect(isToolResultError(result)).toBe(false);
     expect(result.details).toMatchObject({
-      status: "error",
-      error:
-        'No pending child completion is owned by this turn. If the assigned work is complete, return its result normally. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".',
+      status: "nothing_pending",
+      message: expect.stringContaining("did not pause the turn or schedule a continuation"),
     });
     expect(onYield).not.toHaveBeenCalled();
   });

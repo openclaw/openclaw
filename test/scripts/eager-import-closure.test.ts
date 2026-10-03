@@ -14,6 +14,7 @@ import {
 import { join, relative } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
@@ -25,6 +26,20 @@ const inventoryCheck =
   'pnpm test test/scripts/eager-import-closure.test.ts -t "PR wrapper inventory"';
 const wrapperFailure = (output: string) =>
   `${output}\nCheck the inventory first: ${inventoryCheck}`;
+
+it("keeps packaged scripts closed over runtime imports", () => {
+  const files: string[] = JSON.parse(readFileSync("package.json", "utf8")).files;
+  const scripts = files.filter(
+    (file) => file.startsWith("scripts/") && !/\.d\.[cm]?ts$/.test(file),
+  );
+  const closure = collectRuntimeImportClosure(process.cwd(), scripts, {
+    includeDynamicImports: true,
+  });
+  expect(
+    closure.filter((file) => !files.includes(file)),
+    "Package lifecycle scripts must ship their guarded imports and transitive dependencies.",
+  ).toEqual([]);
+});
 
 it("keeps the PR wrapper inventory closed over runtime imports", () => {
   const components = readFileSync(wrapperInventory, "utf8").trim().split("\n");
@@ -167,7 +182,7 @@ it.each([
   const root = tempDirs.make("openclaw-eager-import-closure-");
   const entry = join(root, "entry.mts");
   writeFileSync(entry, `${source}\nconsole.log("entry executed");\n`);
-  const result = spawnSync(process.execPath, [entry], {
+  const result = spawnSync(resolveTestNodeExecPath(), [entry], {
     cwd: root,
     encoding: "utf8",
     env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
@@ -49,6 +49,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { digestClawBytes } from "./digest.js";
 import type { ClawMonitorCleanupGateway, ClawMonitorSnapshot } from "./monitor-cleanup-contract.js";
 import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
 import type { PersistedClawInstall } from "./provenance.js";
@@ -93,6 +94,7 @@ export function synthesizeOrphanInstall(params: {
     agentId: params.agentId,
     workspace: params.workspace ?? "",
     agentConfigDigest: "sha256:missing",
+    agentOrigin: "created",
     agentOwnedPaths: [],
     status: "partial",
     addedAtMs: updatedAtMs,
@@ -363,7 +365,7 @@ async function inspectDigestOwnedWorkspaceFile(
       return { state: "missing" };
     }
     const content = await workspace.readBytes(record.path, { maxBytes });
-    const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+    const digest = digestClawBytes(content);
     return {
       state: digest === record.contentDigest ? "unchanged" : "modified",
     };
@@ -468,7 +470,7 @@ export async function removeClawWorkspaceFile(
     try {
       const content = await workspace.readBytes(stagedPath, { maxBytes });
       assertCurrent();
-      const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+      const digest = digestClawBytes(content);
       if (digest === record.contentDigest) {
         await workspace.remove(stagedPath);
         return { path: record.path, action: "deleted" };

@@ -441,6 +441,8 @@ describe("update plugin lifecycle lease boundaries", () => {
         finish: vi.fn(async () => {}),
         release: vi.fn(async () => {}),
         repairSqliteNoCow: async () => {},
+        enableSqliteReclamation: async () => {},
+        cleanupRetainedRuntimes: async () => {},
         releaseState: vi.fn(async () => {}),
       };
       mocks.maintenance.mockResolvedValueOnce(maintenance);
@@ -824,6 +826,8 @@ describe("update plugin lifecycle lease boundaries", () => {
           signal: new AbortController().signal,
           run: <T>(operation: () => T): T => operation(),
           repairSqliteNoCow: async () => {},
+          enableSqliteReclamation: async () => {},
+          cleanupRetainedRuntimes: async () => {},
           releaseState: async () => {
             record("release-state");
           },
@@ -1004,6 +1008,8 @@ describe("update plugin lifecycle lease boundaries", () => {
       run: <T>(operation: () => T): T => operation(),
       release: async () => {},
       repairSqliteNoCow: async () => {},
+      enableSqliteReclamation: async () => {},
+      cleanupRetainedRuntimes: async () => {},
       releaseState: async () => {},
       finish: async () => {
         warnings.push(warning);

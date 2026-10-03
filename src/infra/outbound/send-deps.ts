@@ -8,7 +8,7 @@ export type OutboundSendDeps = { [channelId: string]: unknown };
 /**
  * Builds historical dependency keys for channel send functions.
  */
-export function resolveLegacyOutboundSendDepKeys(channelId: string): string[] {
+function resolveLegacyOutboundSendDepKeys(channelId: string): string[] {
   const compact = channelId.replace(/[^a-z0-9]+/gi, "");
   if (!compact) {
     return [];

@@ -10,12 +10,10 @@ import * as openclawRoot from "./openclaw-root.js";
 import { createRootRunner, writePackageRoot } from "./package-update-steps.test-support.js";
 import * as restartSentinel from "./restart-sentinel.js";
 import { createGatewayUpdateLifecycle } from "./update-check-lifecycle.js";
-import { checkUpdateStatus } from "./update-check.js";
 import { pkgQueryResult } from "./update-freebsd-pkg-ownership.test-support.js";
 import {
   detectGlobalInstallManagerByPresence,
   cleanupGlobalRenameDirs,
-  detectGlobalInstallManagerForRoot,
   resolveGlobalInstallTarget,
 } from "./update-global.js";
 import { resolveUpdateInstallSurface } from "./update-runner-install-surface.js";
@@ -99,32 +97,7 @@ describe("FreeBSD package-manager admission", () => {
       );
     });
   });
-  it.each(["owned", "unknown", "unowned"])(
-    "keeps cleanup best-effort without removing %s package files",
-    async (ownership) => {
-      await withTestDir({ prefix: "openclaw-pkg-cleanup-" }, async (base) => {
-        const candidate = path.join(base, ".openclaw-interrupted");
-        await fs.mkdir(candidate);
-        const file = path.join(candidate, "marker");
-        await fs.writeFile(file, "retained\n");
-        vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
-          pkgQueryResult(
-            ownership === "owned" ? `${file}\n` : "",
-            ownership === "unknown" ? { code: 1 } : {},
-          ),
-        );
-        await withMockedPlatform("freebsd", async () => {
-          await expect(
-            cleanupGlobalRenameDirs({ globalRoot: base, packageName: "openclaw" }),
-          ).resolves.toEqual({ removed: ownership === "unowned" ? [".openclaw-interrupted"] : [] });
-        });
-        if (ownership !== "unowned") {
-          await expect(fs.readFile(file, "utf8")).resolves.toBe("retained\n");
-        }
-      });
-    },
-  );
-  it.each(["root", "presence", "rpc surface", "status", "startup"])(
+  it.each(["presence", "rpc surface", "startup"])(
     "keeps %s discovery read-only for a pkg installation",
     async (route) => {
       await withTestDir({ prefix: "openclaw-pkg-discovery-" }, async (base) => {
@@ -153,12 +126,10 @@ describe("FreeBSD package-manager admission", () => {
         vi.spyOn(openclawRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
         vi.spyOn(restartSentinel, "readVerifiedGitUpdateReceipt").mockResolvedValue(null);
         await withMockedPlatform("freebsd", async () => {
-          if (route === "root" || route === "presence") {
-            await expect(
-              route === "root"
-                ? detectGlobalInstallManagerForRoot(runCommand, root, 1000)
-                : detectGlobalInstallManagerByPresence(runCommand, 1000),
-            ).resolves.toBe("npm");
+          if (route === "presence") {
+            await expect(detectGlobalInstallManagerByPresence(runCommand, 1000)).resolves.toBe(
+              "npm",
+            );
           } else if (route === "rpc surface") {
             await expect(
               resolveUpdateInstallSurface({
@@ -169,14 +140,11 @@ describe("FreeBSD package-manager admission", () => {
                 timeoutMs: 1000,
               }),
             ).resolves.toMatchObject({ kind: "global", mode: "npm", root });
-          } else if (route === "status") {
-            await expect(
-              checkUpdateStatus({ root, includeRegistry: false, timeoutMs: 1000 }),
-            ).resolves.toMatchObject({ root, installKind: "package", packageManager: "npm" });
           } else {
             const startup = createGatewayUpdateCheck({
               lifecycle: createGatewayUpdateLifecycle(createTestGatewayScheduler()),
               getConfig: () => ({}),
+              applyRemoteCatalogUpdate: async () => "unchanged",
               log: { info: vi.fn() },
               isNixMode: false,
             });

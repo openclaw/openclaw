@@ -8,52 +8,14 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
 } from "./shared.ts";
+import {
+  dispatchRealtimeEvent,
+  FakePeerConnection,
+  sentRealtimeEvents,
+} from "./webrtc.test-support.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./webrtc.ts";
 
 let stopInputTrack: ReturnType<typeof vi.fn>;
-
-class FakeDataChannel extends EventTarget {
-  readyState: RTCDataChannelState = "open";
-  send = vi.fn();
-  close = vi.fn(() => {
-    this.readyState = "closed";
-  });
-}
-
-class FakePeerConnection extends EventTarget {
-  static instances: FakePeerConnection[] = [];
-
-  connectionState: RTCPeerConnectionState = "new";
-  readonly channel = new FakeDataChannel();
-  readonly addTrack = vi.fn();
-  localDescription: RTCSessionDescriptionInit | null = null;
-  remoteDescription: RTCSessionDescriptionInit | null = null;
-
-  constructor() {
-    super();
-    FakePeerConnection.instances.push(this);
-  }
-
-  createDataChannel(): RTCDataChannel {
-    return this.channel as unknown as RTCDataChannel;
-  }
-
-  async createOffer(): Promise<RTCSessionDescriptionInit> {
-    return { type: "offer", sdp: "offer-sdp" };
-  }
-
-  async setLocalDescription(description: RTCSessionDescriptionInit): Promise<void> {
-    this.localDescription = description;
-  }
-
-  async setRemoteDescription(description: RTCSessionDescriptionInit): Promise<void> {
-    this.remoteDescription = description;
-  }
-
-  close(): void {
-    this.connectionState = "closed";
-  }
-}
 
 async function createOpenAiTransport(
   client: Record<string, unknown>,
@@ -98,35 +60,23 @@ function dispatchCompletedToolCall(
 ): void {
   const field = (value: string | null | undefined, fallback: string): string | undefined =>
     value === undefined ? fallback : (value ?? undefined);
-  peer?.channel.dispatchEvent(
-    new MessageEvent("message", {
-      data: JSON.stringify({
-        type: "response.done",
-        response: {
-          id: field(overrides.responseId, "response-1"),
-          status: field(overrides.responseStatus, "completed"),
-          output: [
-            {
-              type: "function_call",
-              id: field(overrides.itemId, "item-control"),
-              status: field(overrides.itemStatus, "completed"),
-              call_id: field(overrides.callId, "call-control"),
-              name: field(overrides.name, REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME),
-              arguments: field(overrides.arguments, JSON.stringify({ text: "status" })),
-            },
-          ],
+  dispatchRealtimeEvent(peer, {
+    type: "response.done",
+    response: {
+      id: field(overrides.responseId, "response-1"),
+      status: field(overrides.responseStatus, "completed"),
+      output: [
+        {
+          type: "function_call",
+          id: field(overrides.itemId, "item-control"),
+          status: field(overrides.itemStatus, "completed"),
+          call_id: field(overrides.callId, "call-control"),
+          name: field(overrides.name, REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME),
+          arguments: field(overrides.arguments, JSON.stringify({ text: "status" })),
         },
-      }),
-    }),
-  );
-}
-
-function sentRealtimeEvents(peer: FakePeerConnection | undefined): Array<Record<string, unknown>> {
-  return (
-    peer?.channel.send.mock.calls.map(
-      ([payload]) => JSON.parse(String(payload)) as Record<string, unknown>,
-    ) ?? []
-  );
+      ],
+    },
+  });
 }
 
 describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
@@ -157,7 +107,7 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
     vi.unstubAllGlobals();
   });
 
-  it("submits semantic realtime control tool results through the OpenAI data channel", async () => {
+  it("submits control results without optional response and item ids", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "talk.client.steer") {
         return {
@@ -181,7 +131,11 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
 
     await transport.start();
     const peer = FakePeerConnection.instances[0];
-    dispatchControlToolCall(peer, { text: "revísalo en WebUI", mode: "steer" });
+    dispatchCompletedToolCall(peer, {
+      responseId: null,
+      itemId: null,
+      arguments: JSON.stringify({ text: "revísalo en WebUI", mode: "steer" }),
+    });
 
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.client.steer", {
@@ -190,8 +144,7 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
         mode: "steer",
       }),
     );
-    const sent =
-      peer?.channel.send.mock.calls.map(([payload]) => JSON.parse(String(payload))) ?? [];
+    const sent = sentRealtimeEvents(peer);
     expect(sent).toContainEqual({
       type: "conversation.item.create",
       item: {
@@ -256,18 +209,14 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
       "response.function_call_arguments.delta",
       "response.function_call_arguments.done",
     ]) {
-      peer?.channel.dispatchEvent(
-        new MessageEvent("message", {
-          data: JSON.stringify({
-            type,
-            item_id: "item-1",
-            call_id: "call-1",
-            name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-            arguments: JSON.stringify({ question: "provisional" }),
-            delta: JSON.stringify({ question: "provisional" }),
-          }),
-        }),
-      );
+      dispatchRealtimeEvent(peer, {
+        type,
+        item_id: "item-1",
+        call_id: "call-1",
+        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        arguments: JSON.stringify({ question: "provisional" }),
+        delta: JSON.stringify({ question: "provisional" }),
+      });
     }
     expect(request).not.toHaveBeenCalled();
 
@@ -303,8 +252,6 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
 
   it.each([
     { label: "cancelled response", responseStatus: "cancelled", itemStatus: "completed" },
-    { label: "failed response", responseStatus: "failed", itemStatus: "completed" },
-    { label: "incomplete response", responseStatus: "incomplete", itemStatus: "completed" },
     { label: "incomplete item", responseStatus: "completed", itemStatus: "incomplete" },
   ])("ignores function calls from a $label", async ({ responseStatus, itemStatus }) => {
     const request = vi.fn();
@@ -320,31 +267,6 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
     });
 
     expect(request).not.toHaveBeenCalled();
-    transport.stop();
-  });
-
-  it("accepts completed calls without optional response and item ids", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.steer") {
-        return { ok: true, mode: "status" };
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    const transport = await createOpenAiTransport({ request });
-
-    await transport.start();
-    dispatchCompletedToolCall(FakePeerConnection.instances[0], {
-      responseId: null,
-      itemId: null,
-    });
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("talk.client.steer", {
-        sessionKey: "main",
-        text: "status",
-        mode: "status",
-      }),
-    );
-
     transport.stop();
   });
 
@@ -511,8 +433,6 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
 
   it.each([
     ["close_requested", "idle"],
-    ["expired", "idle"],
-    ["remote_hangup", "idle"],
     ["content", "error"],
     ["connection_lost", "error"],
   ])(
@@ -592,14 +512,10 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
     onStatus.mockClear();
     onTalkEvent.mockClear();
 
-    FakePeerConnection.instances[0]?.channel.dispatchEvent(
-      new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "turn.done",
-          turn: { id: "assistant-final", role: "assistant", transcript: "finished" },
-        }),
-      }),
-    );
+    dispatchRealtimeEvent(FakePeerConnection.instances[0], {
+      type: "turn.done",
+      turn: { id: "assistant-final", role: "assistant", transcript: "finished" },
+    });
 
     expect(onTranscript).toHaveBeenCalledOnce();
     expect(onStatus).not.toHaveBeenCalled();

@@ -6,12 +6,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveNpmJsonEntries } from "../../lib/npm-json-output.mts";
 import {
   createPackageDistContentInventoryEntry,
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   parsePackageDistContentInventory,
 } from "../../lib/package-dist-inventory-contract.mts";
 import { isUpdateCompatibilityChunk } from "../../lib/update-compat-contract.mjs";
+import { readJson } from "./fixtures/common.mjs";
 
 // Frozen candidates predating the recorded inventory retain their original fixture contract.
 export const LEGACY_UPDATE_COMPAT_CHUNKS = [
@@ -20,10 +22,6 @@ export const LEGACY_UPDATE_COMPAT_CHUNKS = [
   "shared-DFJEouXv.js",
 ];
 const FUTURE_FIXTURE_VERSION = "2026.9.99-first-hop.0";
-
-function readJson(filePath) {
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
 
 function readFirstHopReleases(packageRoot) {
   const inventoryPath = path.join(packageRoot, "dist", "update-compat-inventory.json");
@@ -399,6 +397,24 @@ function packFutureRuntimeFixture(candidateTarball, outputTarball, sequence = 0)
 
 function main() {
   const [mode, packageRoot, outputTarball, sequence] = process.argv.slice(2);
+  if (mode === "pack-filename" && packageRoot) {
+    const entries = resolveNpmJsonEntries(readJson(packageRoot));
+    const entry = entries[0];
+    if (
+      entries.length !== 1 ||
+      !entry ||
+      typeof entry !== "object" ||
+      !("filename" in entry) ||
+      typeof entry.filename !== "string" ||
+      !entry.filename
+    ) {
+      throw new Error(
+        `first-hop npm pack JSON must contain exactly one package result with a filename: ${packageRoot}`,
+      );
+    }
+    process.stdout.write(entry.filename);
+    return;
+  }
   if (mode === "sources" && packageRoot) {
     process.stdout.write(`${listFirstHopSourceVersions(packageRoot, outputTarball).join("\n")}\n`);
     return;
@@ -447,7 +463,7 @@ function main() {
   }
   if (!packageRoot || (mode !== "negative" && mode !== "future")) {
     throw new Error(
-      "usage: update-first-hop-package-fixtures.mjs <negative|future> <package-root> OR <first-hop-tarball|negative-tarball|future-tarball|unsupported-admission-tarball|future-runtime-tarball> <source.tgz> <new-output.tgz> [sequence0–9]",
+      "usage: update-first-hop-package-fixtures.mjs pack-filename <npm-pack.json> OR <negative|future> <package-root> OR <first-hop-tarball|negative-tarball|future-tarball|unsupported-admission-tarball|future-runtime-tarball> <source.tgz> <new-output.tgz> [sequence0–9]",
     );
   }
   if (mode === "negative") {

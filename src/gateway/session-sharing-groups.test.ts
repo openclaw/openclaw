@@ -21,13 +21,9 @@ import { flushPendingSessionsChangedEvents } from "./server-methods/session-chan
 import { sessionGroupHandlers } from "./server-methods/sessions-groups.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import { readSessionGroupMembership } from "./session-group-membership.read.js";
-import {
-  listSessionGroupDefaults,
-  listSessionGroups,
-  putSessionGroups,
-  updateSessionGroupDefaults,
-} from "./session-groups.js";
+import { putSessionGroups, updateSessionGroupDefaults } from "./session-groups.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import {
@@ -255,7 +251,7 @@ describe("session sharing group mutations", () => {
         });
         expect(respond).not.toHaveBeenCalled();
         expect(loadSessionEntry({ agentId: "main", sessionKey })?.category).toBe("Old");
-        expect(listSessionGroups()).toContainEqual({ name: "Old", position: 0 });
+        expect(readSessionGroupCatalog().groups).toContainEqual({ name: "Old", position: 0 });
         expect(broadcastToConnIds).toHaveBeenCalledWith(
           "sessions.changed",
           expect.objectContaining({ reason: "groups" }),
@@ -342,7 +338,7 @@ describe("session sharing group mutations", () => {
           respond: () => undefined,
         } as never),
       ).rejects.toBeInstanceOf(SessionMutationAuthorizationChangedError);
-      expect(listSessionGroups()).toEqual(groups);
+      expect(readSessionGroupCatalog().groups).toEqual(groups);
     });
   });
 
@@ -414,7 +410,7 @@ describe("session sharing group mutations", () => {
         } finally {
           admissionSpy.mockRestore();
         }
-        expect(listSessionGroupDefaults()).toEqual([
+        expect(readSessionGroupCatalog().defaults).toEqual([
           { name: "Race", cwd: "/repos/race", worktree: true },
         ]);
       });

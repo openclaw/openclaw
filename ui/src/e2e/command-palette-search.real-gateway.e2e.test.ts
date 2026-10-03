@@ -30,9 +30,9 @@ const commonMatchCount = 30;
 const commonQuery = "orchardglow";
 const uniqueQuery = "copperfinch";
 const targetKey = "agent:fifth:search-proof-12345678-0000-4000-8000-000000000001";
-const targetLabel = "Older fifth-agent conversation";
+const targetLabel = "Per-session communication controls in UI";
 const targetMessage =
-  "The copperfinch observatory has a violet lantern beside the northern window.";
+  "The copperfinch observatory uses cross-agent message routing beside the violet lantern.";
 const scope = {
   includeGlobal: false,
   includeUnknown: false,
@@ -385,7 +385,15 @@ suite.define(() => {
             .evaluateAll((elements) =>
               elements.map((element) => new URL((element as HTMLScriptElement).src).pathname),
             );
-          expect(scripts.some((script) => /\/assets\/index-[^/]+\.js$/u.test(script))).toBe(true);
+          const builtIndex = await readFile(
+            path.join(process.cwd(), "dist/control-ui/index.html"),
+            "utf8",
+          );
+          const builtScripts = [
+            ...builtIndex.matchAll(/<script[^>]+src="(?:\.\/|\/)?(assets\/[^"]+\.js)"/gu),
+          ].map((match) => `/${match[1]}`);
+          expect(builtScripts.length).toBeGreaterThan(0);
+          expect(scripts).toEqual(builtScripts);
           for (const script of scripts) {
             expect(script).toMatch(/^\/assets\/[^/]+\.js$/u);
             const served = await page.request.get(new URL(script, suite.server.baseUrl).href);
@@ -483,6 +491,19 @@ suite.define(() => {
             ).toBe(0);
             return response;
           };
+
+          await search("per session communi", 0, "00-title-punctuation-prefix.png", [targetKey]);
+          await results.getByRole("option").filter({ hasText: targetLabel }).waitFor();
+          expect(await results.getByRole("option").count()).toBe(1);
+
+          const partial = await search(
+            "cross agent message rout",
+            1,
+            "00-message-punctuation-prefix.png",
+          );
+          expect(partial.resultKeys).toEqual([targetKey]);
+          await results.getByRole("option").filter({ hasText: targetLabel }).waitFor();
+          expect(await results.textContent()).toContain(targetMessage);
 
           const common = await search(commonQuery, 25, "01-common-limited-search.png");
           expect(common.truncated).toBe(true);

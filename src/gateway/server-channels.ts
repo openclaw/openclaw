@@ -55,12 +55,9 @@ import {
   type PluginHttpRouteHandoff,
 } from "../plugins/http-registry.js";
 import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
-import { runOutsidePluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
-import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -84,6 +81,7 @@ import type {
 import { pauseChannelStarts, type ChannelStartFence } from "./server-channel-start-fence.js";
 import {
   runChannelAccountMonitor,
+  runChannelAccountStartup,
   waitForChannelStartupHandoff,
 } from "./server-channel-startup.js";
 
@@ -213,12 +211,14 @@ async function waitForDeferredAccountStart(
   if (abortSignal.aborted) {
     return;
   }
-  await Promise.race([
-    deferred,
-    new Promise<void>((resolve) => {
-      abortSignal.addEventListener("abort", () => resolve(), { once: true });
-    }),
-  ]);
+  const aborted = createDeferredCore();
+  const onAbort = () => aborted.resolve();
+  abortSignal.addEventListener("abort", onAbort, { once: true });
+  try {
+    await Promise.race([deferred, aborted.promise]);
+  } finally {
+    abortSignal.removeEventListener("abort", onAbort);
+  }
 }
 
 export type ChannelManager = {
@@ -452,10 +452,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const getChannelRuntime = async (): Promise<PluginRuntimeChannel | undefined> => {
-    if (channelRuntime) {
-      return channelRuntime;
-    }
-    return await resolveChannelRuntime?.();
+    return channelRuntime ?? (await resolveChannelRuntime?.());
   };
   const createAccountContext = (
     channelId: ChannelId,
@@ -1156,14 +1153,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return startOutcomes;
   };
 
-  // Channel tasks outlive the reload lease and request generation that started them.
   const startChannelInternal: ChannelManager["startChannel"] = (...args) =>
-    runOutsidePluginLifecycleLease(() =>
-      runOutsideGatewayRootWorkAdmission(() =>
-        runOutsidePluginRuntimeGenerationScope(() =>
-          withRegistry((registry) => startChannelProcessOwned(registry, ...args)),
-        ),
-      ),
+    runChannelAccountStartup(() =>
+      withRegistry((registry) => startChannelProcessOwned(registry, ...args)),
     );
 
   const stopChannelInRegistry = async (

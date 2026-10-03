@@ -8,8 +8,6 @@ import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts"
 
 registerModelControlsEnglish();
 
-export type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
-
 export function renderChatModelCatalogRefresh(state: ChatModelCatalogState | undefined) {
   if (
     !state ||

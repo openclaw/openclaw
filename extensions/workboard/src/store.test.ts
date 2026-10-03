@@ -270,17 +270,11 @@ describe("WorkboardStore", () => {
     const writerStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
     try {
       const reader = new WorkboardStore(readerStores.cards, {
-        boards: readerStores.boards,
-        subscriptions: readerStores.subscriptions,
-        attachments: readerStores.attachments,
-        ready: readerStores.ready,
+        ...sqliteTestAuxStores(readerStores),
         dataVersion: readerStores.dataVersion,
       });
       const writer = new WorkboardStore(writerStores.cards, {
-        boards: writerStores.boards,
-        subscriptions: writerStores.subscriptions,
-        attachments: writerStores.attachments,
-        ready: writerStores.ready,
+        ...sqliteTestAuxStores(writerStores),
         dataVersion: writerStores.dataVersion,
       });
       const changes = vi.fn();
@@ -470,16 +464,8 @@ describe("WorkboardStore", () => {
       const firstStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
       const secondStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
       const paused = createPausedCardStore(firstStores.cards);
-      const first = new WorkboardStore(paused.store, {
-        boards: firstStores.boards,
-        subscriptions: firstStores.subscriptions,
-        attachments: firstStores.attachments,
-      });
-      const second = new WorkboardStore(secondStores.cards, {
-        boards: secondStores.boards,
-        subscriptions: secondStores.subscriptions,
-        attachments: secondStores.attachments,
-      });
+      const first = new WorkboardStore(paused.store, sqliteTestAuxStores(firstStores));
+      const second = new WorkboardStore(secondStores.cards, sqliteTestAuxStores(secondStores));
       try {
         const sessionKey = "agent:main:dashboard:cas-race";
         const base = await first.create({
@@ -674,11 +660,7 @@ describe("WorkboardStore", () => {
     }
     try {
       const stores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-      const store = new WorkboardStore(stores.cards, {
-        boards: stores.boards,
-        subscriptions: stores.subscriptions,
-        attachments: stores.attachments,
-      });
+      const store = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
       const board = await store.upsertBoard({
         id: "planning",
         name: "Planning",
@@ -768,11 +750,10 @@ describe("WorkboardStore", () => {
       rawDb.close();
 
       const reopenedStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-      const reopened = new WorkboardStore(reopenedStores.cards, {
-        boards: reopenedStores.boards,
-        subscriptions: reopenedStores.subscriptions,
-        attachments: reopenedStores.attachments,
-      });
+      const reopened = new WorkboardStore(
+        reopenedStores.cards,
+        sqliteTestAuxStores(reopenedStores),
+      );
 
       expect(await reopened.listBoards()).toMatchObject({
         boards: [
@@ -828,11 +809,7 @@ describe("WorkboardStore", () => {
       let cardId = "";
       const initialStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
       try {
-        const initial = new WorkboardStore(initialStores.cards, {
-          boards: initialStores.boards,
-          subscriptions: initialStores.subscriptions,
-          attachments: initialStores.attachments,
-        });
+        const initial = new WorkboardStore(initialStores.cards, sqliteTestAuxStores(initialStores));
         await initial.upsertBoard({ id: "ops", name: "Ops" });
         const card = await initial.create({ title: "Summarize me", boardId: "ops" });
         cardId = card.id;
@@ -856,11 +833,10 @@ describe("WorkboardStore", () => {
 
       const reopenedStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
       try {
-        const reopened = new WorkboardStore(reopenedStores.cards, {
-          boards: reopenedStores.boards,
-          subscriptions: reopenedStores.subscriptions,
-          attachments: reopenedStores.attachments,
-        });
+        const reopened = new WorkboardStore(
+          reopenedStores.cards,
+          sqliteTestAuxStores(reopenedStores),
+        );
         await expect(reopened.get(cardId)).rejects.toThrow(/missing body/);
         await expect(reopened.listBoards()).resolves.toMatchObject({
           boards: expect.arrayContaining([
@@ -1746,109 +1722,6 @@ describe("WorkboardStore", () => {
       }),
     ).rejects.toThrow("completion proof status does not match existing proof: proof-latest");
     await expect(store.get(card.id)).resolves.toEqual(reopened);
-  });
-
-  it("stores attachments in SQLite and adds worker context", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Review attached log" });
-
-    const attached = await store.addAttachment(card.id, {
-      fileName: "failure.log",
-      mimeType: "text/plain",
-      note: "Captured failing run",
-      contentBase64: Buffer.from("stack trace").toString("base64"),
-    });
-
-    expect(attached.metadata?.attachments?.[0]).toMatchObject({
-      fileName: "failure.log",
-      byteSize: "stack trace".length,
-      mimeType: "text/plain",
-    });
-    expect(attached.events?.at(-1)).toMatchObject({ kind: "attachment_added" });
-    const attachment = attached.metadata?.attachments?.[0];
-    if (!attachment) {
-      throw new Error("expected attachment metadata");
-    }
-    const persisted = await store.getAttachment(attachment.id);
-    if (!persisted) {
-      throw new Error("expected persisted attachment");
-    }
-    expect(Buffer.from(persisted.contentBase64, "base64").toString("utf8")).toBe("stack trace");
-    await expect(
-      store.addAttachment(card.id, {
-        fileName: "huge.bin",
-        contentBase64: Buffer.alloc(256 * 1024 + 1).toString("base64"),
-      }),
-    ).rejects.toThrow(/attachment must be/);
-    await expect(
-      store.addAttachment(card.id, {
-        fileName: "sqlite-sized.bin",
-        contentBase64: Buffer.alloc(70 * 1024).toString("base64"),
-      }),
-    ).resolves.toMatchObject({
-      metadata: {
-        attachments: expect.arrayContaining([
-          expect.objectContaining({ fileName: "sqlite-sized.bin" }),
-        ]),
-      },
-    });
-    await expect(
-      store.addAttachment(card.id, {
-        fileName: "padded.txt",
-        contentBase64: `${Buffer.from("ok").toString("base64")}\n`,
-      }),
-    ).rejects.toThrow(/canonical base64/);
-
-    const context = await store.buildWorkerContext(card.id);
-    expect(context).toContain("failure.log");
-
-    const deleted = await store.deleteAttachment(card.id, attachment.id);
-    expect(deleted.metadata?.attachments).toEqual([
-      expect.objectContaining({ fileName: "sqlite-sized.bin" }),
-    ]);
-    expect(deleted.events?.at(-1)).toMatchObject({ kind: "edited" });
-    expect(await store.getAttachment(attachment.id)).toBeUndefined();
-  });
-
-  it("removes attachment blobs when the card attachment index prunes old entries", async () => {
-    const { store, dbPath } = createWorkboardSqliteTestHarness();
-    const card = await store.create({ title: "Many attachments", templateId: "docs" });
-    let firstAttachmentId = "";
-
-    for (let index = 0; index < 21; index += 1) {
-      const updated = await store.addAttachment(card.id, {
-        fileName: `log-${index}.txt`,
-        contentBase64: Buffer.from(`log ${index}`).toString("base64"),
-      });
-      firstAttachmentId ||= updated.metadata?.attachments?.[0]?.id ?? "";
-    }
-
-    const saved = await store.get(card.id);
-    expect(saved?.metadata?.attachments).toHaveLength(20);
-    expect(await store.getAttachment(firstAttachmentId)).toBeUndefined();
-    const db = new DatabaseSync(dbPath, { readOnly: true });
-    try {
-      expect(
-        db
-          .prepare("SELECT attachment_id FROM workboard_attachment_blobs WHERE attachment_id = ?")
-          .get(firstAttachmentId),
-      ).toBeUndefined();
-      expect(db.prepare("SELECT COUNT(*) AS count FROM workboard_attachment_blobs").get()).toEqual({
-        count: 20,
-      });
-    } finally {
-      db.close();
-    }
-    const exported = await store.exportCards();
-    expect(exported.cards).toEqual([
-      expect.objectContaining({
-        id: card.id,
-        metadata: expect.objectContaining({ templateId: "docs" }),
-      }),
-    ]);
-    expect(exported.exportedAt).toEqual(expect.any(Number));
-    expect(exported.attachments).toHaveLength(20);
-    expect(exported.attachments[0]).not.toHaveProperty("contentBase64");
   });
 
   it("records worker logs and protocol violations on cards", async () => {

@@ -46,11 +46,6 @@ vi.mock("./doctor-auth-oauth-sidecar.js", () => ({
 }));
 
 vi.mock("./doctor-browser.js", () => ({
-  detectLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue(null),
-  maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue({
-    changes: [],
-    warnings: [],
-  }),
   maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
     changes: [],
     warnings: [],
@@ -133,6 +128,7 @@ vi.mock("./doctor-platform-notes.js", () => ({
 
 vi.mock("./doctor-sandbox.js", () => ({
   maybeRepairSandboxImages: vi.fn(async (cfg: unknown) => cfg),
+  noteCodexBwrapNamespaceWarnings: vi.fn(),
   maybeRepairSandboxRegistryFiles: vi.fn().mockResolvedValue(undefined),
   noteSandboxScopeWarnings: vi.fn(),
 }));

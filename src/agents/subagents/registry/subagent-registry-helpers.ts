@@ -1,8 +1,3 @@
-/**
- * Subagent registry persistence and recovery helpers.
- *
- * Handles frozen results, attachment cleanup, timing persistence, and announce retry logging.
- */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../../config/config.js";
@@ -27,7 +22,7 @@ import {
 } from "../../../sessions/session-run-error.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
-import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
+import { getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -53,12 +48,8 @@ const ANNOUNCE_RETRY_BACKOFF = {
 
 const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
 
-/** Caps frozen completion text stored for later announce/recovery delivery. */
 export function capFrozenResultText(resultText: string): string {
   const trimmed = resultText.trim();
-  if (!trimmed) {
-    return "";
-  }
   const totalBytes = Buffer.byteLength(trimmed, "utf8");
   if (totalBytes <= FROZEN_RESULT_TEXT_MAX_BYTES) {
     return trimmed;
@@ -72,7 +63,6 @@ export function capFrozenResultText(resultText: string): string {
   return `${payload}${notice}`;
 }
 
-/** Computes bounded exponential backoff for subagent announce retries. */
 export function resolveAnnounceRetryDelayMs(retryCount: number) {
   return computeBackoff(ANNOUNCE_RETRY_BACKOFF, Math.max(1, retryCount));
 }
@@ -84,12 +74,11 @@ function formatAnnounceGiveUpLogField(value: string): string {
   );
 }
 
-/** Logs a sanitized final give-up line for failed subagent announce delivery. */
 export function logAnnounceGiveUp(
   entry: SubagentRunRecord,
   reason: "expiry" | "permanent_failure",
 ) {
-  const retryCount = getDeliveryAttemptCount(entry);
+  const retryCount = entry.delivery?.attemptCount ?? 0;
   const endedAt = entry.execution.endedAt;
   const endedAgoMs = typeof endedAt === "number" ? Math.max(0, Date.now() - endedAt) : undefined;
   const endedAgoLabel = endedAgoMs != null ? `${Math.round(endedAgoMs / 1000)}s` : "n/a";
@@ -102,7 +91,6 @@ export function logAnnounceGiveUp(
   );
 }
 
-/** Persists child session timing/status derived from the subagent registry row. */
 export async function persistSubagentSessionTiming(
   entry: SubagentRunRecord,
   options?: {
@@ -140,10 +128,7 @@ export async function persistSubagentSessionTiming(
     typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
       ? entry.execution.endedAt
       : undefined;
-  const runtimeMs =
-    endedAt !== undefined
-      ? getSubagentSessionRuntimeMs(entry, endedAt)
-      : getSubagentSessionRuntimeMs(entry);
+  const runtimeMs = getSubagentSessionRuntimeMs(entry, endedAt);
   const status = resolveSubagentSessionStatus(entry);
 
   const lastRunError = status
@@ -168,22 +153,16 @@ export async function persistSubagentSessionTiming(
     }
     const next = { ...sessionEntry };
 
-    if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
-      next.startedAt = startedAt;
-    } else {
-      delete next.startedAt;
-    }
-
-    if (typeof endedAt === "number" && Number.isFinite(endedAt)) {
-      next.endedAt = endedAt;
-    } else {
-      delete next.endedAt;
-    }
-
-    if (typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
-      next.runtimeMs = runtimeMs;
-    } else {
-      delete next.runtimeMs;
+    for (const [key, value] of [
+      ["startedAt", startedAt],
+      ["endedAt", endedAt],
+      ["runtimeMs", runtimeMs],
+    ] as const) {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        next[key] = value;
+      } else {
+        delete next[key];
+      }
     }
 
     if (status) {
@@ -300,8 +279,18 @@ export async function persistSubagentSessionTiming(
   }
 }
 
-/** Best-effort async removal for a subagent attachment directory. */
-export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<boolean> {
+/** Kept sessions may retain their attachments; every other cleanup removes them with the run. */
+export function shouldRemoveSubagentAttachments(
+  entry: SubagentRunRecord,
+  cleanup: SubagentRunRecord["cleanup"] = entry.cleanup,
+): boolean {
+  return cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+}
+
+export async function safeRemoveAttachmentsDir(
+  entry: SubagentRunRecord,
+  isCurrent?: () => boolean,
+): Promise<boolean> {
   if (!entry.attachmentId) {
     // Legacy absolute/workspace paths are untrusted and intentionally retired without traversal.
     return true;
@@ -311,6 +300,7 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
     await cleanupMaterializedSubagentAttachments({
       childSessionKey: entry.childSessionKey,
       attachmentId: entry.attachmentId,
+      isCurrent,
     });
     return true;
   } catch {
@@ -318,16 +308,12 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
   }
 }
 
-/** Resolves the completed subagent archive delay from config. */
 function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const config = cfg ?? getRuntimeConfig();
   const minutes =
     config.agents?.defaults?.subagents?.archiveAfterMinutes ??
     DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES;
-  if (!Number.isFinite(minutes) || minutes < 0) {
-    return undefined;
-  }
-  if (minutes === 0) {
+  if (!Number.isFinite(minutes) || minutes <= 0) {
     return undefined;
   }
   return Math.max(1, Math.floor(minutes)) * 60_000;

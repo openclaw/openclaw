@@ -1,6 +1,6 @@
 // tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
-import { createRequire, isBuiltin } from "node:module";
+import { createRequire } from "node:module";
 import path from "node:path";
 import type { DtsOptions, TsdownPlugin, UserConfig } from "tsdown";
 import {
@@ -243,6 +243,7 @@ function workerDeployBuildConfig(entry: Record<string, string>): UserConfig {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
     outDir: "dist",
+    platform: "node",
     dts: false,
     env,
     define: {
@@ -260,7 +261,8 @@ function workerDeployBuildConfig(entry: Record<string, string>): UserConfig {
       "utf-8-validate": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
     },
     deps: {
-      alwaysBundle: (id) => !isBuiltin(id),
+      // Rolldown's Node target owns builtin resolution, independently of the build host.
+      alwaysBundle: () => true,
       onlyBundle: false,
     },
     fixedExtension: false,
@@ -282,11 +284,12 @@ function workerHelperBuildConfig(
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
     outDir: "dist",
+    platform: "node",
     dts: false,
     env,
     define,
     deps: {
-      alwaysBundle: (id) => !isBuiltin(id),
+      alwaysBundle: () => true,
       onlyBundle: false,
     },
     fixedExtension: false,
@@ -446,6 +449,7 @@ function buildCoreDistEntries(): Record<string, string> {
     index: "src/index.ts",
     entry: "src/entry.ts",
     "infra/package-lifecycle": "src/infra/package-lifecycle.ts",
+    "commands/doctor-update-schema-guard": "src/commands/doctor-update-schema-guard.ts",
     "crabbox-wrapper": "scripts/crabbox-wrapper.mts",
     "docker-healthcheck": "src/docker-healthcheck.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
@@ -455,6 +459,9 @@ function buildCoreDistEntries(): Record<string, string> {
     // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
     // dist/ trees do not strand already-running gateways on stale hashed chunks.
     "agents/agent-bundle-mcp-runtime": "src/agents/agent-bundle-mcp-runtime.ts",
+    // Published builds lazily import these lifecycle facts from a hashed chunk; update
+    // compatibility bridges need a current chunk that still exports them.
+    "agents/provider-runtime-lifecycle": "src/agents/provider-runtime-lifecycle.ts",
     "agents/mcp-auth-profile.runtime": "src/agents/mcp-auth-profile.runtime.ts",
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",

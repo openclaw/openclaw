@@ -16,8 +16,8 @@ import {
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
-  resetSystemEventsForTest,
 } from "openclaw/plugin-sdk/system-event-runtime";
+import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import {

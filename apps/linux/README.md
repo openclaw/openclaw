@@ -446,7 +446,7 @@ Quick Chat pins its native request identity before sending, so activity from oth
 
 ## Installer resource
 
-`tauri.conf.json` bundles the repository's canonical `scripts/install-cli.sh` directly as `install-cli.sh`. The app never keeps a forked copy. Stable, beta, and dev installs select `latest`, `beta`, and a managed Git `main` checkout respectively, always under `~/.openclaw`.
+The Rust build assembles the repository's `scripts/install-cli.sh` and shared `scripts/install-policy.sh` into the standalone `install-cli.sh` resource. The app never keeps a forked copy. Stable, beta, and dev installs select `latest`, `beta`, and a managed Git `main` checkout respectively, always under `~/.openclaw`.
 
 ## Icons
 

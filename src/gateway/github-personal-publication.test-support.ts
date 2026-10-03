@@ -30,6 +30,21 @@ export const personalPublicationAccount = { accountId: 101, login: "personal-ali
 const account = personalPublicationAccount;
 const profileId = "ghp_22222222222222222222222222222222";
 
+export function readPersonalPublicationFixtureStatus(
+  fixture: Pick<
+    Awaited<ReturnType<typeof createPersonalPublicationFixture>>,
+    "coordinator" | "action"
+  >,
+  requestId: string,
+) {
+  return fixture.coordinator.personalStatus(
+    fixture.action,
+    { sessionKey: SESSION_KEY, agentId: "main", sessionId: SESSION_ID },
+    requestId,
+    undefined,
+  );
+}
+
 export async function expectPersonalPublicationReplay(
   {
     generation,
@@ -184,6 +199,7 @@ export async function callPersonalPublicationRpc(
   >,
   method: string,
   params: Record<string, unknown> = { sessionKey: SESSION_KEY },
+  hooks?: { duringPersonalStatus?: () => unknown },
 ) {
   const respond = vi.fn();
   const personal = createPersonalGitHubOAuthLifecycle();
@@ -197,7 +213,12 @@ export async function callPersonalPublicationRpc(
         githubOAuthService: {
           personal: {
             ...personal,
-            status: async (statusAction) => personalGitHubStatus(statusAction),
+            status: async (statusAction) => {
+              // Tests inject archive/restore interleavings here, inside the awaited
+              // options work that follows the request-start session snapshot.
+              await hooks?.duringPersonalStatus?.();
+              return personalGitHubStatus(statusAction);
+            },
           },
         } as GatewayRequestContext["githubOAuthService"],
       },
@@ -210,13 +231,13 @@ export async function callPersonalPublicationRpc(
   }
 }
 
-export function restartPersonalPublicationFixture(
+export async function restartPersonalPublicationFixture(
   fixture: Awaited<ReturnType<typeof createPersonalPublicationFixture>>,
 ) {
   const previous = fixture.placements;
   resetGatewayWorkAdmission();
   fixture.placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
-  fixture.placements.recoverWorkerSessionToolOperationsAfterRestart();
+  await fixture.placements.recoverWorkerSessionToolOperationsAfterRestart();
   fixture.placements.clearLocalTurnClaimsAfterRestart();
   expect(fixture.placements.workspaceResultInstanceId()).not.toBe(
     previous.workspaceResultInstanceId(),

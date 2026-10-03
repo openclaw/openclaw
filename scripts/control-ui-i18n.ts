@@ -1,5 +1,4 @@
 // Control Ui I18N script supports OpenClaw repository automation.
-import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -9,7 +8,6 @@ import { createLlmRuntime, type AssistantMessage, type Model } from "@openclaw/a
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { formatDurationCompact } from "../src/infra/format-time/format-duration.ts";
 import { isStrictAffirmativeValue } from "./lib/arg-utils.mts";
 import {
@@ -17,7 +15,7 @@ import {
   loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
 } from "./lib/control-ui-i18n-catalog-values.ts";
-import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
+import { CONTROL_UI_LOCALE_ENTRIES, controlUiLanguageLabel } from "./lib/control-ui-i18n-config.ts";
 import {
   compareStringArrays,
   createControlUiLocaleSyncPlan,
@@ -30,17 +28,11 @@ import {
 } from "./lib/control-ui-i18n-sync-plan.ts";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import { sleep } from "./lib/sleep.mjs";
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 // Translation is standalone tooling: Gateway host hooks open operator state
 // and log model identifiers before this script can redact provider failures.
 const translationRuntime = createLlmRuntime();
 registerBuiltInApiProviders(translationRuntime.registry);
-
-type RunProcessParentSignalState = {
-  done: boolean;
-  signal: NodeJS.Signals | null;
-};
 
 const CONTROL_UI_I18N_WORKFLOW = 1;
 const DEFAULT_OPENAI_MODEL = "gpt-6-astra";
@@ -55,10 +47,6 @@ const DEFAULT_BATCH_CHAR_BUDGET = 2_000;
 const TRANSLATE_MAX_ATTEMPTS = 2;
 const TRANSLATE_BASE_DELAY_MS = 15_000;
 const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
-const RUN_PROCESS_OUTPUT_MAX_CHARS = 1024 * 1024;
-const RUN_PROCESS_TIMEOUT_MS = 120_000;
-const RUN_PROCESS_KILL_GRACE_MS = 5_000;
-const activeRunProcessParentSignals = new Set<RunProcessParentSignalState>();
 const PROGRESS_HEARTBEAT_MS = 30_000;
 const ENV_PROVIDER = "OPENCLAW_CONTROL_UI_I18N_PROVIDER";
 const ENV_MODEL = "OPENCLAW_CONTROL_UI_I18N_MODEL";
@@ -177,57 +165,6 @@ function parseArgs(argv: string[]) {
     refreshKeys,
     write,
   };
-}
-
-function prettyLanguageLabel(locale: string): string {
-  switch (locale) {
-    case "en":
-      return "English";
-    case "zh-CN":
-      return "Simplified Chinese";
-    case "zh-TW":
-      return "Traditional Chinese";
-    case "pt-BR":
-      return "Brazilian Portuguese";
-    case "ja-JP":
-      return "Japanese";
-    case "ko":
-      return "Korean";
-    case "fr":
-      return "French";
-    case "hi":
-      return "Hindi";
-    case "ar":
-      return "Arabic";
-    case "it":
-      return "Italian";
-    case "tr":
-      return "Turkish";
-    case "uk":
-      return "Ukrainian";
-    case "id":
-      return "Indonesian";
-    case "pl":
-      return "Polish";
-    case "th":
-      return "Thai";
-    case "vi":
-      return "Vietnamese";
-    case "nl":
-      return "Dutch";
-    case "fa":
-      return "Persian";
-    case "ru":
-      return "Russian";
-    case "sv":
-      return "Swedish";
-    case "de":
-      return "German";
-    case "es":
-      return "Spanish";
-    default:
-      return locale;
-  }
 }
 
 function resolveConfiguredProvider(): string {
@@ -397,7 +334,7 @@ function buildSystemPrompt(targetLocale: string, glossary: readonly GlossaryEntr
   const glossaryBlock = buildGlossaryPrompt(glossary);
   const lines = [
     "You are a translation function, not a chat assistant.",
-    `Translate UI strings from ${prettyLanguageLabel(SOURCE_LOCALE)} to ${prettyLanguageLabel(targetLocale)}.`,
+    `Translate UI strings from ${controlUiLanguageLabel(SOURCE_LOCALE)} to ${controlUiLanguageLabel(targetLocale)}.`,
     "",
     "Rules:",
     "- Output ONLY valid JSON.",
@@ -511,272 +448,6 @@ function resolveBatchCharBudget(): number {
 
 function estimateBatchChars(items: readonly TranslationBatchItem[]): number {
   return JSON.stringify(buildBatchPayload(items)).length;
-}
-
-type RunProcessOptions = {
-  cwd?: string;
-  input?: string;
-  killGraceMs?: number;
-  maxOutputChars?: number;
-  rejectOnFailure?: boolean;
-  timeoutMs?: number;
-};
-
-type ProcessOutputCapture = {
-  text: string;
-  truncatedChars: number;
-};
-
-function resolveRunProcessOutputLimit(options: RunProcessOptions): number {
-  const value = options.maxOutputChars;
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return RUN_PROCESS_OUTPUT_MAX_CHARS;
-  }
-  return Math.max(1, Math.floor(value));
-}
-
-export function appendBoundedProcessOutput(
-  capture: ProcessOutputCapture,
-  chunk: unknown,
-  maxChars: number,
-): ProcessOutputCapture {
-  const nextText = capture.text + String(chunk);
-  if (nextText.length <= maxChars) {
-    return { text: nextText, truncatedChars: capture.truncatedChars };
-  }
-  const text = sliceUtf16Safe(nextText, -maxChars);
-  const truncatedChars = capture.truncatedChars + nextText.length - text.length;
-  return { text, truncatedChars };
-}
-
-function formatProcessOutput(capture: ProcessOutputCapture): string {
-  if (capture.truncatedChars === 0) {
-    return capture.text;
-  }
-  return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
-}
-
-function maybeReraiseRunProcessParentSignal(signal: NodeJS.Signals): void {
-  for (const state of activeRunProcessParentSignals) {
-    if (state.signal === null || !state.done) {
-      return;
-    }
-  }
-  process.kill(process.pid, signal);
-}
-
-export async function runProcess(
-  executable: string,
-  args: string[],
-  options: RunProcessOptions = {},
-): Promise<{ code: number; stderr: string; stdout: string }> {
-  return await new Promise((resolve, reject) => {
-    const useProcessGroup = process.platform !== "win32";
-    const child = spawn(executable, args, {
-      cwd: options.cwd ?? ROOT,
-      detached: useProcessGroup,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    const maxOutputChars = resolveRunProcessOutputLimit(options);
-    const timeoutMs = options.timeoutMs ?? RUN_PROCESS_TIMEOUT_MS;
-    const killGraceMs = options.killGraceMs ?? RUN_PROCESS_KILL_GRACE_MS;
-    let stdout: ProcessOutputCapture = { text: "", truncatedChars: 0 };
-    let stderr: ProcessOutputCapture = { text: "", truncatedChars: 0 };
-    let timedOut = false;
-    let settled = false;
-    let waitingForKillGrace = false;
-    let childClosedResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
-    let parentSignalPending: NodeJS.Signals | null = null;
-    const parentSignalState: RunProcessParentSignalState = { done: false, signal: null };
-    activeRunProcessParentSignals.add(parentSignalState);
-    const parentSignalHandlers: { handler: () => void; signal: NodeJS.Signals }[] = [];
-    const cleanupParentSignalHandlers = () => {
-      for (const { signal, handler } of parentSignalHandlers) {
-        process.off(signal, handler);
-      }
-      parentSignalHandlers.length = 0;
-    };
-    const signalWindowsProcessTree = (force: boolean): boolean => {
-      if (process.platform !== "win32" || typeof child.pid !== "number") {
-        return false;
-      }
-      const taskkillArgs = ["/PID", String(child.pid), "/T"];
-      if (force) {
-        taskkillArgs.push("/F");
-      }
-      const result = spawnSync(resolveWindowsTaskkillPath(), taskkillArgs, { stdio: "ignore" });
-      return result.status === 0;
-    };
-    const signalChild = (signal: NodeJS.Signals) => {
-      if (useProcessGroup && typeof child.pid === "number") {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-            stderr = appendBoundedProcessOutput(
-              stderr,
-              `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`,
-              maxOutputChars,
-            );
-          }
-        }
-      }
-      if (process.platform === "win32") {
-        const force = signal === "SIGKILL";
-        if (signalWindowsProcessTree(force) || (!force && signalWindowsProcessTree(true))) {
-          return;
-        }
-      }
-      child.kill(signal);
-    };
-    const relayParentSignal = (signal: NodeJS.Signals) => {
-      const handler = () => {
-        parentSignalPending = signal;
-        parentSignalState.signal = signal;
-        signalChild(signal);
-        cleanupParentSignalHandlers();
-        if (!processGroupIsAlive()) {
-          parentSignalState.done = true;
-          maybeReraiseRunProcessParentSignal(signal);
-          return;
-        }
-        if (killTimer) {
-          clearTimeout(killTimer);
-        }
-        waitingForKillGrace = true;
-        // Keep this timer ref'ed so parent signal relay can force-kill stubborn
-        // process groups before re-raising the original signal.
-        killTimer = setTimeout(() => {
-          waitingForKillGrace = false;
-          killTimer = undefined;
-          signalChild("SIGKILL");
-          parentSignalState.done = true;
-          maybeReraiseRunProcessParentSignal(signal);
-        }, killGraceMs);
-      };
-      parentSignalHandlers.push({ handler, signal });
-      process.once(signal, handler);
-    };
-    const relayedSignals: NodeJS.Signals[] =
-      process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
-    for (const signal of relayedSignals) {
-      relayParentSignal(signal);
-    }
-    const processGroupIsAlive = () => {
-      if (!useProcessGroup || typeof child.pid !== "number") {
-        return false;
-      }
-      try {
-        process.kill(-child.pid, 0);
-        return true;
-      } catch (error) {
-        return (error as NodeJS.ErrnoException).code === "EPERM";
-      }
-    };
-    const settle = (callback: () => void) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      if (!parentSignalPending && killTimer) {
-        clearTimeout(killTimer);
-      }
-      if (!parentSignalPending) {
-        activeRunProcessParentSignals.delete(parentSignalState);
-      }
-      cleanupParentSignalHandlers();
-      callback();
-    };
-    const finishClose = (code: number | null, signal: NodeJS.Signals | null) => {
-      settle(() => {
-        const stdoutText = formatProcessOutput(stdout);
-        const stderrText = formatProcessOutput(stderr);
-        if (timedOut) {
-          reject(new Error(`${executable} ${args.join(" ")} timed out after ${timeoutMs}ms`));
-          return;
-        }
-        if ((code ?? 1) !== 0 && options.rejectOnFailure) {
-          reject(
-            new Error(
-              `${executable} ${args.join(" ")} failed: ${
-                stderrText.trim() || stdoutText.trim() || (signal ? `terminated by ${signal}` : "")
-              }`,
-            ),
-          );
-          return;
-        }
-        if ((code ?? 1) === 0 && stdout.truncatedChars > 0) {
-          reject(
-            new Error(
-              `${executable} ${args.join(" ")} produced more than ${maxOutputChars} stdout chars`,
-            ),
-          );
-          return;
-        }
-        resolve({ code: code ?? 1, stderr: stderrText, stdout: stdout.text });
-      });
-    };
-    const scheduleKill = () => {
-      if (waitingForKillGrace) {
-        return;
-      }
-      waitingForKillGrace = true;
-      killTimer = setTimeout(() => {
-        waitingForKillGrace = false;
-        killTimer = undefined;
-        signalChild("SIGKILL");
-        if (childClosedResult) {
-          finishClose(childClosedResult.code, childClosedResult.signal);
-        }
-      }, killGraceMs);
-    };
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      signalChild("SIGTERM");
-      scheduleKill();
-    }, timeoutMs);
-    child.stdout.on("data", (chunk) => {
-      stdout = appendBoundedProcessOutput(stdout, chunk, maxOutputChars);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr = appendBoundedProcessOutput(stderr, chunk, maxOutputChars);
-    });
-    child.once("error", (error) => {
-      settle(() => {
-        reject(error);
-      });
-    });
-    if (options.input !== undefined) {
-      child.stdin.end(options.input);
-    } else {
-      child.stdin.end();
-    }
-    child.once("close", (code, signal) => {
-      if (parentSignalPending) {
-        if (processGroupIsAlive()) {
-          childClosedResult = { code, signal };
-          return;
-        }
-        if (killTimer) {
-          clearTimeout(killTimer);
-          killTimer = undefined;
-        }
-        parentSignalState.done = true;
-        maybeReraiseRunProcessParentSignal(parentSignalPending);
-        return;
-      }
-      if (waitingForKillGrace && processGroupIsAlive()) {
-        childClosedResult = { code, signal };
-        return;
-      }
-      finishClose(code, signal);
-    });
-  });
 }
 
 type LocaleRunContext = {

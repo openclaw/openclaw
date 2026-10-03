@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 extension OpenClawChatViewModel {
     var hasActiveRunForComposerSettings: Bool {
@@ -36,11 +37,7 @@ extension OpenClawChatViewModel {
     }
 
     private var composerCapabilitySessionID: String? {
-        let live = self.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let live, !live.isEmpty { return live }
-        let stored = self.currentSessionEntry()?.sessionId?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return stored?.isEmpty == false ? stored : nil
+        self.sessionId?.trimmedNonEmpty ?? self.currentSessionEntry()?.sessionId?.trimmedNonEmpty
     }
 
     private var composerCapabilityOwnerMatches: Bool {
@@ -158,10 +155,6 @@ extension OpenClawChatViewModel {
         return nil
     }
 
-    var composerToolOverrideMutationHint: String? {
-        self.composerToolOverrideMutationDisabledReason
-    }
-
     var composerWebSearchMutationDisabledReason: String? {
         if self.composerCapabilitiesLoading {
             return String(localized: "Loading composer capabilities.")
@@ -174,10 +167,6 @@ extension OpenClawChatViewModel {
             return String(localized: "Web Search is disabled in the Gateway configuration.")
         }
         return self.composerToolOverrideMutationDisabledReason
-    }
-
-    var composerWebSearchMutationHint: String? {
-        self.composerWebSearchMutationDisabledReason
     }
 
     func composerPermissionDisabledReason(_ mode: OpenClawChatPermissionMode?) -> String? {
@@ -236,7 +225,7 @@ extension OpenClawChatViewModel {
 
     func composerSkillEnabled(_ skill: OpenClawChatComposerSkill) -> Bool {
         guard skill.baseEnabled, !skill.missingDependencies, !skill.blocked else { return false }
-        return self.composerToolOverrides.skills[skill.key] ?? (skill.baseEnabled && !skill.agentFiltered)
+        return self.composerToolOverrides.skills[skill.key] ?? !skill.agentFiltered
     }
 
     func composerConnectorEnabled(_ connector: OpenClawChatComposerConnector) -> Bool {

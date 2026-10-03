@@ -13,12 +13,14 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseControlUiAssetManifest } from "./control-ui-asset-manifest-parse.js";
 import {
   CONTROL_UI_ASSET_MANIFEST_FILENAME,
+  CONTROL_UI_RETAINED_ASSET_MAX_BYTES,
+  hashControlUiAssetManifestEntries,
+  isControlUiRetainedAssetPath,
   type ControlUiAssetManifest,
   type ControlUiAssetManifestEntry,
 } from "./control-ui-asset-manifest.js";
 
 const CONTROL_UI_RETAINED_GENERATION_LIMIT = 3;
-const CONTROL_UI_RETAINED_ASSET_MAX_BYTES = 96 * 1024 * 1024;
 
 const CONTROL_UI_GENERATION_PATTERN = /^[a-f0-9]{64}$/u;
 const CONTROL_UI_STAGING_PATTERN = /^\.staging-[0-9]+-[a-f0-9-]+$/u;
@@ -43,7 +45,7 @@ type ResolvedRetainedControlUiAsset = {
 
 export type ControlUiAssetRetention = {
   prepare: (options?: { signal?: AbortSignal }) => Promise<void>;
-  resolveAsset: (assetPath: string) => ResolvedRetainedControlUiAsset | null;
+  resolveAsset: (assetPath: string) => Promise<ResolvedRetainedControlUiAsset | null>;
 };
 
 async function readCachedGeneration(
@@ -53,7 +55,7 @@ async function readCachedGeneration(
   try {
     signal?.throwIfAborted();
     const stats = await fs.lstat(directory);
-    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    if (!stats.isDirectory()) {
       return null;
     }
     const assetRoot = await openRoot(directory);
@@ -92,12 +94,7 @@ async function readCachedGeneration(
 }
 
 function sameDirectory(left: Stats, right: Stats): boolean {
-  return (
-    right.isDirectory() &&
-    !right.isSymbolicLink() &&
-    left.dev === right.dev &&
-    left.ino === right.ino
-  );
+  return right.isDirectory() && left.dev === right.dev && left.ino === right.ino;
 }
 
 function compareGenerations(left: RetainedGeneration, right: RetainedGeneration): number {
@@ -126,12 +123,12 @@ async function readCacheInventory(
   const known = new Map(verified.map((generation) => [generation.generation, generation]));
   for (const entry of entries) {
     signal?.throwIfAborted();
-    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+    if (!entry.isDirectory()) {
       continue;
     }
     const directory = path.join(cacheRealPath, entry.name);
     const stats = await fs.lstat(directory).catch(() => null);
-    if (!stats || !stats.isDirectory() || stats.isSymbolicLink()) {
+    if (!stats?.isDirectory()) {
       continue;
     }
     directories.set(directory, stats);
@@ -161,7 +158,7 @@ async function readAssetManifest(
   signal?.throwIfAborted();
   const stats = await fs.lstat(manifestPath);
   signal?.throwIfAborted();
-  if (stats.isSymbolicLink() || !stats.isFile() || stats.size > CONTROL_UI_MANIFEST_MAX_BYTES) {
+  if (!stats.isFile() || stats.size > CONTROL_UI_MANIFEST_MAX_BYTES) {
     throw new Error(`Invalid Control UI asset manifest: ${manifestPath}`);
   }
   const manifest = parseControlUiAssetManifest(
@@ -172,6 +169,12 @@ async function readAssetManifest(
     throw new Error(`Invalid Control UI asset manifest: ${manifestPath}`);
   }
   return manifest;
+}
+
+function selectRetainedAssets(manifest: ControlUiAssetManifest): ControlUiAssetManifest {
+  const assets = manifest.assets.filter((asset) => isControlUiRetainedAssetPath(asset.path));
+  // The retained manifest names its own generation.
+  return { ...manifest, generation: hashControlUiAssetManifestEntries(assets), assets };
 }
 
 async function verifyAsset(params: {
@@ -342,6 +345,16 @@ async function pruneRetainedGenerations(params: {
       retainedBytes += generation.bytes;
     }
   }
+  // The count limit always admits the newest prior, so only the byte budget can drop it.
+  const previous = generations.find((entry) => entry.generation !== params.currentGeneration);
+  if (previous && !retained.has(previous.generation)) {
+    log.warn("Control UI asset retention cannot keep the previous generation", {
+      generation: previous.generation,
+      bytes: previous.bytes,
+      retainedBytes,
+      maxBytes: CONTROL_UI_RETAINED_ASSET_MAX_BYTES,
+    });
+  }
 
   for (const [target, stats] of inventory.directories) {
     params.signal?.throwIfAborted();
@@ -420,18 +433,37 @@ export function createControlUiAssetRetention(root: string): ControlUiAssetReten
   const cacheDir = path.join(resolveStateDir(), "cache", "control-ui-assets");
   let generations: RetainedGeneration[] = [];
   let preparing: Promise<void> | undefined;
+  // Misses wait for the latest re-verification, so already-open documents survive Gateway start.
+  let inventory: Promise<void> | undefined;
+
+  const findAsset = (assetPath: string): ResolvedRetainedControlUiAsset | null => {
+    for (const generation of generations) {
+      if (!generation.assetPaths.has(assetPath)) {
+        continue;
+      }
+      return {
+        filePath: path.join(generation.directory, assetPath),
+        rootPath: generation.directory,
+        rootRealPath: generation.realPath,
+      };
+    }
+    return null;
+  };
 
   return {
     prepare({ signal } = {}) {
       preparing ??= (async () => {
-        signal?.throwIfAborted();
-        await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
-        await fs.chmod(cacheDir, 0o700);
-        const inventory = await readCacheInventory(cacheDir, signal);
-        signal?.throwIfAborted();
-        generations = inventory.generations;
+        inventory = (async () => {
+          signal?.throwIfAborted();
+          await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
+          await fs.chmod(cacheDir, 0o700);
+          const cached = await readCacheInventory(cacheDir, signal);
+          signal?.throwIfAborted();
+          generations = cached.generations;
+        })();
+        await inventory;
         const verified = [...generations];
-        const manifest = await readAssetManifest(root, signal);
+        const manifest = selectRetainedAssets(await readAssetManifest(root, signal));
         const manifestBytes = manifest.assets.reduce((total, asset) => total + asset.size, 0);
         if (manifestBytes <= CONTROL_UI_RETAINED_ASSET_MAX_BYTES) {
           const published = await publishGeneration({
@@ -459,18 +491,13 @@ export function createControlUiAssetRetention(root: string): ControlUiAssetReten
       });
       return preparing;
     },
-    resolveAsset(assetPath) {
-      for (const generation of generations) {
-        if (!generation.assetPaths.has(assetPath)) {
-          continue;
-        }
-        return {
-          filePath: path.join(generation.directory, assetPath),
-          rootPath: generation.directory,
-          rootRealPath: generation.realPath,
-        };
+    async resolveAsset(assetPath) {
+      const asset = findAsset(assetPath);
+      if (asset || !inventory) {
+        return asset;
       }
-      return null;
+      await inventory.catch(() => undefined);
+      return findAsset(assetPath);
     },
   };
 }

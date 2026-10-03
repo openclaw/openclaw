@@ -112,7 +112,8 @@ export function registerDefaultAuthTokenSuite(): void {
     });
 
     test("hello policy counts canonical session-sharing identities", async () => {
-      const { ensureProfileForEmail, linkEmail } = await import("../state/user-profiles.js");
+      const { ensureProfileForEmail } = await import("../state/user-profiles.js");
+      const { linkEmail } = await import("../state/user-profile-writes.worker.js");
       const suffix = `${process.pid}-${Date.now()}`;
       ensureProfileForEmail(`hello-a-${suffix}@example.invalid`);
       const target = ensureProfileForEmail(`hello-b-${suffix}@example.invalid`);

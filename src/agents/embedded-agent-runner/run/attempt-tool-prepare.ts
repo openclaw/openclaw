@@ -73,6 +73,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   skillReadResources?: Parameters<typeof createOpenClawCodingToolsInternal>[1];
   skillsSnapshot: EmbeddedRunAttemptParams["skillsSnapshot"];
   codeModeSkills: readonly CodeModeSkill[];
+  installedSkills?: OpenClawCodingToolsOptions["installedSkills"];
   reviewTranscript?: NonNullable<OpenClawCodingToolsOptions["exec"]>["reviewTranscript"];
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
@@ -211,8 +212,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     ...buildConversationContext(),
     agentId: attempt.sandboxAgentId ?? params.setup.sessionAgentId,
     conversationToolPolicy: attempt.conversationToolPolicy,
-    isCanonicalWorkspace: attempt.isCanonicalWorkspace,
-    promptMode: attempt.promptMode,
     sandboxToolPolicy: params.setup.sandbox?.tools,
     inheritRuntimeToolAllowlist: true,
     runtimePluginToolGrant: attempt.runtimePluginToolGrant,
@@ -298,6 +297,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             oneShotCliRun: attempt.oneShotCliRun,
             toolSearchCatalogRef,
             codeModeSkills,
+            installedSkills: params.installedSkills,
             preparedModelRuntime: attempt.preparedModelRuntime,
             requireWorkspaceOnly: attempt.requireWorkspaceOnly,
             sessionReadScopeKey: attempt.sessionReadScopeKey,

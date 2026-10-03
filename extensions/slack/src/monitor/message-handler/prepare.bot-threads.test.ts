@@ -5,7 +5,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mergeSlackAccountConfig } from "../../accounts.js";
 import { SlackConfigSchema } from "../../config-schema.js";
 import {
@@ -26,7 +26,6 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
   enqueueRoutedSystemEvent: vi.fn(),
 }));
 const store = createSlackSessionStoreFixture("slack-bot-thread-mentions-");
-beforeAll(() => store.setup());
 beforeEach(() => {
   clearSlackThreadParticipationCache();
   vi.mocked(enqueueRoutedSystemEvent).mockClear();
@@ -35,7 +34,6 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
 });
-afterAll(() => store.cleanup());
 
 type SlackConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>;
 let caseId = 0;
@@ -142,7 +140,7 @@ describe("Slack bot-thread mention configuration", () => {
     const test = fixture(slack, accountId);
     const prepared = await test.prepare();
     expect(prepared?.ctxPayload.RawBody).toBe("Continue here");
-    expect(prepared?.requireMention).toBe(false);
+    expect(prepared?.ctxPayload.MentionSource).toBe("none");
     expect(prepared?.ctxPayload.MessageThreadId).toBe(test.threadTs);
   });
 

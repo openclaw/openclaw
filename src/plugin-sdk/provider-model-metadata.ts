@@ -1,5 +1,8 @@
 /** Model descriptors and prompt metadata without runtime discovery or credential policy. */
-export { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+export {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 export { resolveMinimaxFastModelId } from "../llm/providers/minimax-fast-mode.js";
 export {

@@ -5,7 +5,7 @@ import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.ChatWidgetSurfaceRole
 import ai.openclaw.app.gateway.GatewayTlsParams
 import ai.openclaw.app.gateway.buildGatewayTlsConfig
-import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
+import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.AppDropdownMenu
 import ai.openclaw.app.ui.design.ClawTheme
@@ -475,8 +475,7 @@ private class InlineWidgetWebViewClient(
 private fun buildWidgetClient(rawFingerprint: String?): OkHttpClient? {
   val builder = OkHttpClient.Builder()
   if (rawFingerprint != null) {
-    val fingerprint = normalizeGatewayTlsFingerprint(rawFingerprint)
-    if (fingerprint.length != 64) return null
+    val fingerprint = normalizeGatewayTlsFingerprintInput(rawFingerprint) ?: return null
     val tls =
       buildGatewayTlsConfig(
         GatewayTlsParams(

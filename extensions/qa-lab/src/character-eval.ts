@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   filterStringEntries,
   normalizeUniqueStringEntries,
@@ -157,13 +158,6 @@ function resolveJudgeOptions(params: {
 function sanitizePathPart(value: string) {
   const sanitized = value.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "");
   return sanitized || "model";
-}
-
-function normalizeConcurrency(value: number | undefined, fallback = 1) {
-  if (value === undefined || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(1, Math.floor(value));
 }
 
 function extractTranscript(result: QaSuiteResult) {
@@ -471,9 +465,10 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
   await fs.mkdir(runsDir, { recursive: true });
 
   const runSuite = params.runSuite ?? defaultRunSuite;
-  const candidateConcurrency = normalizeConcurrency(
+  const candidateConcurrency = resolveIntegerOption(
     params.candidateConcurrency,
     DEFAULT_CHARACTER_EVAL_CONCURRENCY,
+    { min: 1 },
   );
   logCharacterEvalProgress(
     params.progress,
@@ -569,9 +564,10 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         : DEFAULT_JUDGE_MODELS,
   );
   const runJudge = params.runJudge ?? defaultRunJudge;
-  const judgeConcurrency = normalizeConcurrency(
+  const judgeConcurrency = resolveIntegerOption(
     params.judgeConcurrency,
     DEFAULT_CHARACTER_EVAL_CONCURRENCY,
+    { min: 1 },
   );
   const judgeTimeoutMs = params.judgeTimeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS;
   logCharacterEvalProgress(

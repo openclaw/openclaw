@@ -39,40 +39,24 @@ function resolveCodexRequirementsPath(env: NodeJS.ProcessEnv, platform: NodeJS.P
   return UNIX_CODEX_REQUIREMENTS_PATH;
 }
 
-export function parseAllowedSandboxModesFromCodexRequirements(
-  content: string,
-  hostName: string,
-): Set<CodexSandboxMode> | undefined {
-  const requirements = parseCodexRequirements(content);
-  const remoteSandboxModes = parseMatchingRemoteSandboxModesFromCodexRequirements(
-    requirements,
-    hostName,
-  );
-  if (remoteSandboxModes !== undefined) {
-    return remoteSandboxModes;
-  }
-  return parseRequirementsValues(
-    requirements?.allowed_sandbox_modes,
-    normalizeRequirementsSandboxMode,
-  );
-}
-
-export function parseAllowedApprovalPoliciesFromCodexRequirements(
-  content: string,
-): Set<CodexAppServerManagedApprovalPolicy> | undefined {
-  return parseRequirementsValues(
-    parseCodexRequirements(content)?.allowed_approval_policies,
-    normalizeRequirementsApprovalPolicy,
-  );
-}
-
-export function parseAllowedApprovalsReviewersFromCodexRequirements(
-  content: string,
-): Set<CodexApprovalsReviewer> | undefined {
-  return parseRequirementsValues(
-    parseCodexRequirements(content)?.allowed_approvals_reviewers,
-    (value) => resolveApprovalsReviewer(value.trim().toLowerCase()),
-  );
+export function parseCodexRequirementsPolicy(content: string | undefined, hostName = "") {
+  const requirements = content === undefined ? undefined : parseCodexRequirements(content);
+  return {
+    allowedSandboxModes:
+      parseMatchingRemoteSandboxModesFromCodexRequirements(requirements, hostName) ??
+      parseRequirementsValues(
+        requirements?.allowed_sandbox_modes,
+        normalizeRequirementsSandboxMode,
+      ),
+    allowedApprovalPolicies: parseRequirementsValues(
+      requirements?.allowed_approval_policies,
+      normalizeRequirementsApprovalPolicy,
+    ),
+    allowedApprovalsReviewers: parseRequirementsValues(
+      requirements?.allowed_approvals_reviewers,
+      (value) => resolveApprovalsReviewer(value.trim().toLowerCase()),
+    ),
+  };
 }
 
 function parseMatchingRemoteSandboxModesFromCodexRequirements(

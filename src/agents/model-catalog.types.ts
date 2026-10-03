@@ -3,19 +3,16 @@
  * Used by discovery, browsing, visibility, and provider-auth code so renderers
  * and filters agree on stable model metadata.
  */
-import type { ModelCatalogStatus } from "@openclaw/model-catalog-core/model-catalog-types";
+import type {
+  ModelCatalogContextWindowOption,
+  ModelCatalogStatus,
+} from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
 import type { ThinkingLevelMap } from "../llm/types.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 
 /** Input modalities a catalog entry can advertise. */
 export type ModelInputType = "text" | "image" | "audio" | "video" | "document";
-
-type ModelContextWindowOption = {
-  id: string;
-  label: string;
-  contextWindow: number;
-};
 
 /** Normalized model metadata exposed by the agent model catalog. */
 export type ModelCatalogEntry = {
@@ -31,7 +28,7 @@ export type ModelCatalogEntry = {
   /** Private transport provenance for route matching; never project directly to clients. */
   baseUrl?: string;
   contextWindow?: number;
-  contextWindows?: ModelContextWindowOption[];
+  contextWindows?: ModelCatalogContextWindowOption[];
   contextWindowDefault?: string;
   contextTokens?: number;
   reasoning?: boolean;

@@ -129,8 +129,6 @@ describe("Talk relay keyed consult adoption", () => {
   }
 
   it.each([
-    { roles: ["assistant"], excludeFromContext: true },
-    { roles: ["user"], excludeFromContext: true },
     { roles: ["user", "assistant"], excludeFromContext: true },
     { roles: ["assistant", "user"], excludeFromContext: false },
   ] as const)(

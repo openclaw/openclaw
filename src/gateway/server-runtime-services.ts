@@ -166,24 +166,25 @@ function startPendingOutboundDeliveryRecovery(params: {
   log: GatewayRuntimeServiceLogger;
 }): () => Promise<void> {
   const recoveryContext = captureDeliveryQueueStateContext();
-  let stopped = false;
+  const scheduler = params.scheduler.scope();
+  const { signal } = scheduler;
   let initialPass = true;
   let inFlight: Promise<void> | null = null;
   let stopPromise: Promise<void> | null = null;
   let logRecovery: ReturnType<GatewayRuntimeServiceLogger["child"]> | undefined;
 
   const recover = (): Promise<void> | undefined => {
-    if (stopped || inFlight || isGatewayWorkAdmissionClosed()) {
+    if (signal.aborted || inFlight || isGatewayWorkAdmissionClosed()) {
       return undefined;
     }
     const recovery = runWithGatewayIndependentRootWorkAdmission(async () => {
-      if (stopped) {
+      if (signal.aborted) {
         return;
       }
       const { drainPendingDeliveriesCore, recoverPendingDeliveries } =
         await import("../infra/outbound/delivery-queue-recovery.js");
       const { deliverOutboundPayloadsInternal } = await import("../infra/outbound/deliver.js");
-      if (stopped) {
+      if (signal.aborted) {
         return;
       }
       const deliverWithCurrentConversationAuthority = async (
@@ -259,7 +260,7 @@ function startPendingOutboundDeliveryRecovery(params: {
             deliver: deliverWithCurrentConversationAuthority,
             log: logRecovery,
             cfg,
-            shouldContinue: () => !stopped,
+            shouldContinue: () => !signal.aborted,
           },
           deliverWithCurrentConversationAuthority,
           recoveryContext,
@@ -276,7 +277,7 @@ function startPendingOutboundDeliveryRecovery(params: {
           log: logRecovery,
           deliver: deliverWithCurrentConversationAuthority,
           selectEntry: () => ({ match: true, bypassBackoff: false }),
-          shouldContinue: () => !stopped,
+          shouldContinue: () => !signal.aborted,
         },
         deliverWithCurrentConversationAuthority,
         recoveryContext,
@@ -295,7 +296,7 @@ function startPendingOutboundDeliveryRecovery(params: {
 
   // Match the queue's first backoff window without holding admission between
   // ticks; otherwise suspended/restarting gateways retain invisible work.
-  const retryJob = params.scheduler.schedule({
+  scheduler.schedule({
     id: "delivery:outbound-recovery",
     delayMs: computeBackoffMs(1),
     everyMs: computeBackoffMs(1),
@@ -303,14 +304,13 @@ function startPendingOutboundDeliveryRecovery(params: {
   });
   void recover();
   return () => {
-    stopped = true;
-    retryJob.cancel();
     if (stopPromise) {
       return stopPromise;
     }
+    const scheduled = scheduler.stop();
     const recovery = inFlight;
     if (!recovery) {
-      stopPromise = Promise.resolve();
+      stopPromise = scheduled;
       return stopPromise;
     }
     const stillPendingTimer = setTimeout(() => {
@@ -321,9 +321,11 @@ function startPendingOutboundDeliveryRecovery(params: {
     stillPendingTimer.unref?.();
     // Provider dispatch is not generically cancellable. Keep its runtime alive
     // until the admitted recovery settles; the process watchdog owns forced exit.
-    stopPromise = recovery.finally(() => {
-      clearTimeout(stillPendingTimer);
-    });
+    stopPromise = Promise.all([scheduled, recovery])
+      .then(() => {})
+      .finally(() => {
+        clearTimeout(stillPendingTimer);
+      });
     return stopPromise;
   };
 }
@@ -336,18 +338,17 @@ function startPendingSessionDeliveryRuntime(params: {
   resolveGatewayContext?: GatewayContextResolver;
 }): () => Promise<void> {
   const queueContext = captureOpenClawStateWorkerContext();
-  const controller = new AbortController();
-  const { signal } = controller;
-  let recovery: Promise<void> | undefined;
+  const scheduler = params.scheduler.scope();
+  const { signal } = scheduler;
   let stopPromise: Promise<void> | undefined;
   let stopRuntime: (() => Promise<void>) | undefined;
   // Delay session continuation recovery so the gateway has time to publish ready state and
   // request routing before replaying restart-sentinel deliveries.
-  const job = params.scheduler.schedule({
+  scheduler.schedule({
     id: "delivery:session-recovery",
     delayMs: 1_250,
-    run: () => {
-      recovery = runWithGatewayIndependentRootWorkAdmission(
+    run: () =>
+      runWithGatewayIndependentRootWorkAdmission(
         async () => {
           const {
             deliverQueuedSessionDelivery,
@@ -400,15 +401,11 @@ function startPendingSessionDeliveryRuntime(params: {
         if (!ownedCancellation) {
           params.log.error(`Session delivery recovery failed: ${String(err)}`);
         }
-      });
-      return recovery;
-    },
+      }),
   });
   return () => {
     // Cancel queued admission, but join imports and work already admitted before their runtime closes.
-    controller.abort();
-    job.cancel();
-    stopPromise ??= Promise.all([recovery, stopRuntime?.()]).then(() => {});
+    stopPromise ??= Promise.all([scheduler.stop(), stopRuntime?.()]).then(() => {});
     return stopPromise;
   };
 }

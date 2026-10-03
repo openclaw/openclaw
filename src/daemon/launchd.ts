@@ -13,7 +13,6 @@ export {
   isLaunchAgentLoaded,
   launchAgentPlistExists,
   parseLaunchAgentEnabled,
-  parseLaunchctlPrint,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
 } from "./launchd-runtime.js";

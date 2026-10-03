@@ -57,9 +57,11 @@ export function activateSubagentPersistenceRegistry(
   call: typeof callGateway,
 ) {
   const recoveryRuntime = createSubagentPersistenceRuntime(call);
-  registry.activateSubagentRegistry(
-    () => ({ resolveGatewayContext: () => ({ recoveryRuntime }) }) as never,
-  );
+  const gateway = {
+    recoveryRuntime,
+    resolveGatewayContext: () => gateway as never,
+  };
+  return registry.activateSubagentRegistry(gateway.resolveGatewayContext);
 }
 
 function listFixtureAgentDatabases(
@@ -122,7 +124,7 @@ export function useSubagentPersistenceFixture() {
     // Delivery results can settle before their tracked cleanup tails release the stores.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         if (tempStateDir) {
           await cleanupSessionStateForTest({ stateDir: tempStateDir });
         }

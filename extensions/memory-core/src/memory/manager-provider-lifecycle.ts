@@ -1,4 +1,3 @@
-// Memory Core plugin module owns embedding provider lifecycle.
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   formatErrorMessage,
@@ -31,12 +30,10 @@ import { MemoryManagerReloadError } from "./lifecycle.js";
 import { runMemoryIndexState } from "./manager-cpu-worker-runtime.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import {
-  createDegradedMemoryProviderLifecycle,
-  createPendingMemoryProviderLifecycle,
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
   resolveMemoryPrimaryProviderRequest,
-  resolveMemoryProviderState,
+  resolveMemoryProviderLifecycle,
 } from "./manager-provider-state.js";
 import type {
   MemoryEmbeddingProbeCacheEntry,
@@ -123,13 +120,12 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected abstract syncPublishedIndexInBackground(params: { reason: string }): Promise<void>;
 
   protected applyProviderResult(providerResult: EmbeddingProviderResult): void {
-    const providerState = resolveMemoryProviderState(providerResult);
-    this.provider = providerState.provider;
-    this.fallbackFrom = providerState.fallbackFrom;
-    this.fallbackReason = providerState.fallbackReason;
-    this.providerUnavailableReason = providerState.providerUnavailableReason;
-    this.providerLifecycle = providerState.lifecycle;
-    this.providerRuntime = providerState.providerRuntime;
+    this.provider = providerResult.provider;
+    this.fallbackFrom = providerResult.fallbackFrom;
+    this.fallbackReason = providerResult.fallbackReason;
+    this.providerUnavailableReason = providerResult.providerUnavailableReason;
+    this.providerLifecycle = resolveMemoryProviderLifecycle(providerResult);
+    this.providerRuntime = providerResult.runtime;
     this.providerInitialized = true;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
@@ -166,10 +162,11 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     }
     this.providerInitialized = true;
     this.providerUnavailableReason = reason;
-    this.providerLifecycle = createDegradedMemoryProviderLifecycle({
+    this.providerLifecycle = {
+      mode: "degraded",
       providerId: provider,
       reason,
-    });
+    };
     this.embeddingBootstrapFailure = debug;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
@@ -374,7 +371,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     this.providerInitialized = false;
     this.providerInitPromise = null;
     this.providerUnavailableReason = undefined;
-    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.settings.provider);
+    this.providerLifecycle = { mode: "pending", requestedProvider: this.settings.provider };
   }
 
   protected markLocalEmbeddingProviderDegraded(err: unknown): void {
@@ -385,10 +382,11 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     const degradedProvider = this.provider;
     void this.retireCurrentProvider();
     this.providerUnavailableReason = `Local embeddings degraded: ${message}`;
-    this.providerLifecycle = createDegradedMemoryProviderLifecycle({
+    this.providerLifecycle = {
+      mode: "degraded",
       providerId: degradedProvider.id,
       reason: message,
-    });
+    };
     this.embeddingProbeCache.delete(this.cacheKey);
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();

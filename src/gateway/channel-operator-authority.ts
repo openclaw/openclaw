@@ -136,7 +136,12 @@ function captureLinkedOperatorAdmin(
       current &&= identity.isCurrent(currentCfg) && hasCurrentGatewayOperatorAccess(access);
       if (current && original) {
         resumeGatewayOperatorAccessGrant(
-          { profileId: linked.profileId, emails: linked.emails, assignedRole: linked.role },
+          {
+            profileId: linked.profileId,
+            emails: linked.emails,
+            githubAccountIds: linked.githubAccountIds,
+            assignedRole: linked.role,
+          },
           currentCfg,
           original.grant,
         );

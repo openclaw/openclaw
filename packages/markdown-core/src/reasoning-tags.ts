@@ -128,6 +128,30 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     }
   };
 
+  const reduceSafePrefix = (
+    start: number,
+    end: number,
+    probeEnd: number,
+    output: ReasoningTagTextDelta[],
+  ) => {
+    const scan = scanReasoningTags(source.slice(start, end), false);
+    const reduceEnd = scan.pendingStart === undefined ? end : start + scan.pendingStart;
+    merge(
+      output,
+      reduceReasoningText(source.slice(start, reduceEnd), [], reduction, {
+        final: false,
+        mode: "visible",
+        scope: "all",
+      }),
+    );
+    emitted = reduceEnd;
+    fastPathCheckedThrough = reduceEnd;
+    if (scan.pendingStart !== undefined) {
+      startPendingTagProbe(reduceEnd, probeEnd);
+    }
+    holdStart = reduction.depth > 0 || scan.pendingStart !== undefined ? emitted : undefined;
+  };
+
   const emitSafePrefix = (limit: number, output: ReasoningTagTextDelta[], appended?: string) => {
     if (strictMode) {
       holdStart ??= emitted;
@@ -139,22 +163,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
       if (!fastPathCodeSafe || /[\r\n`]/u.test(segment)) {
         return;
       }
-      const scan = scanReasoningTags(segment, false);
-      const reduceEnd = scan.pendingStart === undefined ? limit : emitted + scan.pendingStart;
-      merge(
-        output,
-        reduceReasoningText(source.slice(emitted, reduceEnd), [], reduction, {
-          final: false,
-          mode: "visible",
-          scope: "all",
-        }),
-      );
-      emitted = reduceEnd;
-      fastPathCheckedThrough = reduceEnd;
-      if (scan.pendingStart !== undefined) {
-        startPendingTagProbe(reduceEnd, limit);
-      }
-      holdStart = reduction.depth > 0 || scan.pendingStart !== undefined ? emitted : undefined;
+      reduceSafePrefix(emitted, limit, limit, output);
       return;
     }
     if (holdStart !== undefined || emitted >= limit) {
@@ -236,26 +245,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         (index) => index !== -1 && index < limit,
       );
       const safeLimit = boundaries.length > 0 ? Math.min(...boundaries) : limit;
-      const safeTail = source.slice(special, safeLimit);
-      const scan = scanReasoningTags(safeTail, false);
-      const pendingAt = scan.pendingStart;
-      const reduceEnd = pendingAt === undefined ? safeLimit : special + pendingAt;
-      merge(
-        output,
-        reduceReasoningText(source.slice(special, reduceEnd), [], reduction, {
-          final: false,
-          mode: "visible",
-          scope: "all",
-        }),
-      );
-      emitted = reduceEnd;
-      fastPathCheckedThrough = reduceEnd;
-      if (pendingAt !== undefined) {
-        holdStart = reduceEnd;
-        startPendingTagProbe(reduceEnd, limit);
-      } else {
-        holdStart = reduction.depth > 0 ? emitted : undefined;
-      }
+      reduceSafePrefix(special, safeLimit, limit, output);
     }
   };
 
@@ -520,7 +510,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         const codeSpans = ownership.codeSpans;
         nonFinalRetainStart = ownership.retainStart;
         nonFinalOpenEndedCode = codeSpans.some(([, spanEnd]) => spanEnd === source.length);
-        if (!codeSpans.some(([, spanEnd]) => spanEnd === source.length)) {
+        if (!nonFinalOpenEndedCode) {
           compactCommittedSource(ownership.retainStart);
         }
       }

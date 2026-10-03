@@ -136,6 +136,8 @@ The important design boundary:
 
 That split lets OpenClaw validate config, explain missing/disabled plugins, and build UI/schema hints before the full runtime is active.
 
+Failed registrations remain visible in plugin diagnostics after their contributions are rolled back. Those records do not enter execution scopes or block healthy plugins and core context-engine admission; the loader still owns their cleanup.
+
 ### Plugin metadata snapshot and lookup table
 
 One `PluginCache` starts on the first plugin metadata access, including CLI preflight before Gateway startup, and fills progressively as metadata and artifacts are needed. Gateway startup retains that owner and builds its immutable `PluginMetadataSnapshot`. The snapshot includes plugin metadata from all configured agent workspaces, including disabled plugins, with source precedence and workspace provenance preserved. It stores the installed plugin index, manifest registry, manifest diagnostics, owner maps, and a plugin id normalizer. Package contents and lazily loaded module exports belong to other typed views of the same cache, not the snapshot itself.
@@ -170,7 +172,9 @@ Durable final channel replies can use the admitting Gateway's current registry a
 
 Replacement reserves the affected instance even when agent turns or unfinished cleanup retain it. The prepared-model replacement gate holds new runs while already admitted runs finish using their original callbacks. New top-level retained work cannot acquire the old instance; already admitted consumers can still derive work needed to finish their runs. Detailed readiness and logs report the retained-work count and drain deadline; the final RPC receipt reports application and any drain notices. Reload from the instance's own active callback still fails during preparation to avoid waiting on itself. Idle prepared publications do not block replacement.
 
-Retained work and in-flight calls share a 60-second pre-stop budget. Retained runs finish before their callbacks close; sidecars release their capability consumers before the remaining finite consumers drain. Replacement then pauses ordinary calls before stopping services and channels. Idle service and channel custody stops later with its owners. If work does not finish, the reload fails once, resumes admission, and clears the reload status; the previous plugin generation keeps serving. The deadline does not cancel agent runs or permit disposal of unfinished writes. Retry `openclaw plugins reload <id>` after that work finishes, or explicitly select `--wait` to wait until admitted work settles. The explicit wait belongs to its requesting connection: Ctrl+C or disconnect cancels the pre-publication wait and runs the same rollback. Cancellation never disposes admitted work, bypasses cleanup, or reverses a committed publication. Service shutdown and recovery retain their bounded deadlines. Successful publication logs the applied replacement and emits `plugins.changed`.
+While admitted work drains, ordinary model catalog, auth-status, and chat metadata reads continue using the active publication. Catalog refresh work, downloaded catalog adoption, and new execution still wait. Published facts retire when resource replacement begins; an admitted-work timeout keeps those facts available without rebuilding them. An unfinished startup publication still follows its existing cancellation and recovery path.
+
+Retained work and in-flight calls share a 60-second pre-stop budget. Retained runs finish before ordinary call admission closes. Existing calls then settle while published metadata remains readable. Sidecars release their capability consumers before the remaining finite consumers drain; memory teardown retains cleanup authority for its exact retiring provider instances until the raw cleanup settles. Replacement stops services and channels only after that handoff. Idle service and channel custody stops later with its owners. If work does not finish, the reload fails once, resumes admission, and clears the reload status; the previous plugin generation keeps serving. The deadline does not cancel agent runs or permit disposal of unfinished writes. Retry `openclaw plugins reload <id>` after that work finishes, or explicitly select `--wait` to wait until admitted work settles. The explicit wait belongs to its requesting connection: Ctrl+C or disconnect cancels the pre-publication wait and runs the same rollback. Cancellation never disposes admitted work, bypasses cleanup, or reverses a committed publication. Service shutdown and recovery retain their bounded deadlines. Successful publication logs the applied replacement and emits `plugins.changed`.
 
 A provider or harness plugin load failure remains recorded in its runtime generation. It makes that plugin unavailable without superseding the generation or blocking models that use healthy plugins. Inspect the failing owner with `openclaw plugins inspect <id> --runtime --json`. Use `openclaw doctor --fix` for supported installation repairs, or fix the reported problem in plugin code, then request `plugins.reload` through the admin Gateway API to load the repaired plugin.
 
@@ -178,7 +182,9 @@ Read-only model validation, effective tool inventory, and isolated model probes 
 
 Each plugin service startup attempt owns one cleanup operation, including failed starts. Hot replacement observes candidate startup and service cleanup with five-second deadlines. Candidate startup failure rejects the replacement. Replacing a loaded plugin requires successful cleanup before another registration can acquire its resources; pending cleanup or a cleanup error can therefore reject replacement and prevent automatic recovery. A pending startup retains its resources until it finishes and its one stop operation settles. Plugin removal can report deferred cleanup; Gateway shutdown joins that work before releasing the plugin's resources. Disposal stops new registered calls while physical cleanup finishes. Service cleanup is not invoked a second time merely because an observer timed out. If a command catalog refresh also stopped unchanged channels, failed replacement resumes those healthy registrations while the failed plugin remains fenced.
 
-A failed replacement automatically tries to restore the previous code and configuration. If its channels have already stopped, recovery observes pending service cleanup and admitted work once, for up to 60 seconds. Its observation has an independent Gateway-owned cancellation signal, so a disconnected reload requester cannot interrupt recovery. Only service-stop observer timeouts qualify for this wait; channel-stop failures, rejected service cleanup, and failed candidate cleanup still prevent recovery. The wait joins the original service stop promises, including services whose shared stop deadline was already exhausted. After cleanup and work settle successfully, recovery disposes the old registration, registers its captured code with fresh resource ownership, and restarts its channels. Manually stopped accounts stay stopped. A timeout never grants another registration ownership of an unfinished write's resources, and retries do not repeat service stop or resource disposal. Uncommitted failures also attempt to republish the prepared model runtime against the previous config, even when plugin recovery fails or cannot safely run, unless the Gateway is shutting down.
+A replacement that fails before publication automatically tries to restore the previous code and configuration. If its channels have already stopped, recovery observes pending service cleanup and admitted work once, for up to 60 seconds. Its observation has an independent Gateway-owned cancellation signal, so a disconnected reload requester cannot interrupt recovery. Only service-stop observer timeouts qualify for this wait; channel-stop failures, rejected service cleanup, and failed candidate cleanup still prevent recovery. The wait joins the original service stop promises, including services whose shared stop deadline was already exhausted. After cleanup and work settle successfully, recovery disposes the old registration, registers its captured code with fresh resource ownership, and restarts its channels. Manually stopped accounts stay stopped. A timeout never grants another registration ownership of an unfinished write's resources, and retries do not repeat service stop or resource disposal. Uncommitted failures also attempt to republish the prepared model runtime against the previous config, even when plugin recovery fails or cannot safely run, unless the Gateway is shutting down.
+
+For plugin-only replacements that fail after publication, the Gateway attempts to republish model catalogs and reply dispatch against the committed configuration and plugin generation. The original plugin failure remains visible, including failed channel readiness. If model publication also fails, the operation reports both failures and asks the operator to retry the plugin reload or restart the Gateway. Shutdown or Gateway replacement cancels this recovery; mixed config changes with unfinished runtime work retain their existing restart recovery.
 
 When recovery cannot safely finish, the operation settles as failed and releases its channel reload pauses. Channel health reads retain captured account facts without invoking unavailable plugin code; healthy registrations can restart normally. Detailed readiness reports `failing: ["plugin-reload"]` with the affected plugin IDs and an actionable recovery reason, instead of leaving an indefinite "reloading" state. Retry `openclaw plugins reload <id>` after admitted work and pending cleanup settle, or restart the Gateway. Permanent cleanup failures still prevent another registration from acquiring those resources.
 
@@ -210,14 +216,19 @@ unchanged plugin preserves that proof; changing its selected runtime files
 invalidates it.
 
 A managed runtime instance owns its module results, registered callables, and
-runtime-store slots. With Node's synchronous module hooks, it also owns a captured
-source artifact. Package plugins capture their package inputs when the instance
-is created. Standalone files capture their entry and statically known inputs
-without copying the surrounding workspace. Compiled bundled runtime and setup
-modules share the host's code identity; each inventory still owns its registered
-callbacks and cleanup. Replacing that compiled code requires a build and Gateway
-restart. Conditional package aliases retain their package metadata, and native
-Node conditions select the target from that captured metadata. Legacy packages
+runtime-store slots. Non-bundled instances also own a captured source artifact.
+Package plugins capture their package inputs when the instance is created.
+Standalone files capture their entry and statically known inputs
+without copying the surrounding workspace. Bundled runtime and setup modules,
+including TypeScript source entries, share the host's code identity; each inventory
+still owns its registered callbacks and cleanup. Loading edited bundled code requires
+a Gateway restart; rebuild first when the installation loads compiled output.
+Conditional package aliases retain their package metadata, and native
+Node conditions, including `module-sync`, select the target from that captured metadata.
+Source inspection uses the same synchronous-module condition without evaluating plugin code.
+Captured source retains the difference between authored imports and require calls, so Bun's
+compiler resolution previews do not acquire a deferred dependency before its first call.
+Missing selected targets remain absent for that captured generation. Legacy packages
 without an exports map also admit their existing main or index entry without
 executing unselected code. Native entries reuse the recorded admission below.
 The selected package's remaining body is captured before execution.
@@ -251,6 +262,11 @@ When file symlinks are unavailable, a generation can use hardlinks only if its
 directory preserves every captured companion and the selected host SDK. Otherwise
 that plugin reports a load error asking for file symlink support; the update
 continues with the existing plugin-failure warning behavior.
+Within a capture, admission checks each immutable namespace and companion-directory
+mapping once. Preparing more modules reuses those facts and checks newly admitted
+placements. Replacement captures, host selection, and recovery copies validate again,
+so Doctor and Gateway preparation avoid repeated walks without reusing another
+capture's verdict.
 The existing installed-index SQLite payload records directory membership, device,
 inode, mode, size, mtime, and ctime identities, SHA-256 digests, and the initial
 generation receipt. Unchanged warm startup reuses those facts. Added, removed, or
@@ -279,6 +295,8 @@ and child processes started from its modules can resolve the host SDK. This link
 does not depend on the main thread's module hooks and is recreated during recovery.
 Imports of resolved SDK file URLs and absolute paths keep the same host identity;
 they do not create a selective copy of the host package or its runtime chunks.
+Deferred SDK imports and `import.meta.resolve()` retain the generation's selected
+source or built host even after the active plugin cache changes.
 Snapshot cleanup and update source inspection do not descend through these links
 into the host package.
 
@@ -512,7 +530,9 @@ source so relative asset reads stay within that generation. Node executes compil
 JavaScript from a separate directory; its module URLs and CommonJS cache keys can
 differ from the source filenames.
 
-Bun 1.4.2 uses its native/Jiti loader with a separate captured source artifact for
+Node owns plugin resolution through `Module.registerHooks`; Bun keeps its native/Jiti loader and `Bun.plugin` resolver even when `Module.registerHooks` exists.
+
+Bun uses its native/Jiti loader with a separate captured source artifact for
 each managed instance. Reload prepares fresh TypeScript entries and helpers while
 existing consumers retain their old instance. Disposal removes that instance's
 captured cache records and files without evicting its replacement or the host SDK.

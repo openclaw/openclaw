@@ -114,9 +114,7 @@ export async function withSettledLocalWorkspace<T>(
         ? {
             prepareArchive: state.prepareArchive,
             canonicalPaths: state.canonicalPaths,
-            assertCurrent: () => {
-              state.current();
-            },
+            assertCurrent: state.current,
           }
         : undefined,
     );
@@ -265,9 +263,7 @@ function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
     return row;
   };
   const update = (patch: Parameters<typeof store.update>[1]) => {
-    row = store.update(current(), patch, () => {
-      current();
-    });
+    row = store.update(current(), patch, current);
     return row;
   };
   const sourcePath = (target: Direction) =>
@@ -280,9 +276,7 @@ function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
       root: owner.worktree.path,
       admittedPaths: selected.source_paths_json,
       signal,
-      assertCurrent: () => {
-        current();
-      },
+      assertCurrent: current,
       baseline:
         selected.baseline_json && selected.baseline_ref
           ? parseWorkerWorkspaceManifest(selected.baseline_json, selected.baseline_ref)
@@ -390,17 +384,17 @@ function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
           base: snapshot.base,
           current: snapshot.current,
           journal: {
-            load: () => undefined,
-            begin: (journal) => {
+            load: async () => undefined,
+            begin: async (journal) => {
               update({
                 journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
                 journal_pack: journal.basePack,
               });
             },
-            abort: () => {
+            abort: async () => {
               update({ journal_json: null, journal_pack: null });
             },
-            commit: () => {
+            commit: async () => {
               if (!accepted) {
                 throw new Error("Local workspace acceptance is missing");
               }
@@ -507,9 +501,7 @@ function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
           true,
           {
             signal,
-            beforeRun: () => {
-              current();
-            },
+            beforeRun: current,
           },
           (git) =>
             git.withContentEnvironment((baseEnv) =>
@@ -540,9 +532,7 @@ function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
             env: cleanEnv,
             input,
             signal,
-            beforeRun: () => {
-              current();
-            },
+            beforeRun: current,
           });
         await git([
           "init",

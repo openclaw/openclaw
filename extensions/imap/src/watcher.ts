@@ -20,6 +20,7 @@ import {
 const MAX_SOURCE_BYTES = 1_048_576;
 const MAX_ATTEMPTS = 3;
 const MAX_RECONNECT_DELAY_MS = 60_000;
+const FETCH_BATCH_SIZE = 20;
 
 type ImapWatcherOptions = {
   accountId: string;
@@ -257,34 +258,60 @@ export class ImapAccountWatcher {
     if (!cursor || this.stopping || this.client !== client) {
       return;
     }
-    const messages: FetchMessageObject[] = [];
+
+    // Enumerate UIDs without retaining message bodies, then fetch source in small
+    // batches. A mailbox can contain an arbitrarily large backlog after downtime.
+    const uids: number[] = [];
     for await (const message of client.fetch(
       `${cursor.lastSeenUid + 1}:*`,
-      { uid: true, internalDate: true, size: true, source: { maxLength: MAX_SOURCE_BYTES } },
+      { uid: true },
       { uid: true },
     )) {
       // IMAP N:* returns the mailbox's final message even when its UID is below N.
       if (message.uid > cursor.lastSeenUid) {
-        messages.push(message);
+        uids.push(message.uid);
       }
     }
-    for (const message of messages.toSorted((left, right) => left.uid - right.uid)) {
-      if (
-        this.stopping ||
-        this.client !== client ||
-        !(await this.processMessage(message, cursor.uidValidity))
-      ) {
+    uids.sort((left, right) => left - right);
+
+    let processed = 0;
+    for (let offset = 0; offset < uids.length; offset += FETCH_BATCH_SIZE) {
+      if (this.stopping || this.client !== client) {
         break;
       }
-      await advanceImapCursor(
-        this.options.state,
-        this.options.accountId,
-        cursor.uidValidity,
-        message.uid,
+      const batchUids = uids.slice(offset, offset + FETCH_BATCH_SIZE);
+      const messages = await client.fetchAll(
+        batchUids,
+        {
+          uid: true,
+          internalDate: true,
+          size: true,
+          source: { maxLength: MAX_SOURCE_BYTES },
+        },
+        { uid: true },
       );
+      messages.sort((left, right) => left.uid - right.uid);
+      for (const message of messages) {
+        if (
+          this.stopping ||
+          this.client !== client ||
+          !(await this.processMessage(message, cursor.uidValidity))
+        ) {
+          // Do not fetch or process later batches after a retryable failure.
+          offset = uids.length;
+          break;
+        }
+        await advanceImapCursor(
+          this.options.state,
+          this.options.accountId,
+          cursor.uidValidity,
+          message.uid,
+        );
+        processed++;
+      }
     }
     this.options.context.logger.debug?.(
-      `imap: account=${this.options.accountId} lastSweep=${new Date().toISOString()} messages=${messages.length}`,
+      `imap: account=${this.options.accountId} lastSweep=${new Date().toISOString()} messages=${processed}/${uids.length}`,
     );
   }
 

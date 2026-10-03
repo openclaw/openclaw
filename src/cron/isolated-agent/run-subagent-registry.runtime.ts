@@ -28,6 +28,7 @@ function withCronDescendantRuns<T>(
       };
     },
     (_selection, runs) => consume(new Map(runs)),
+    { sessionKeys: [sessionKey], descendants: true },
   );
 }
 

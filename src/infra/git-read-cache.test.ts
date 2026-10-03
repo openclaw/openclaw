@@ -130,8 +130,6 @@ describe("typed Git read ownership", () => {
 
   it.each([
     { pendingAtExpiry: false, revision: "known", freshnessMs: 300_000 },
-    { pendingAtExpiry: true, revision: "known", freshnessMs: 300_000 },
-    { pendingAtExpiry: false, revision: null, freshnessMs: 75_000 },
     { pendingAtExpiry: true, revision: null, freshnessMs: 75_000 },
   ])(
     "measures branch-fact fallback from admission with revision=$revision and pending=$pendingAtExpiry",

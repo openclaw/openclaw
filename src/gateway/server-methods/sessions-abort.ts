@@ -1,5 +1,5 @@
-// Session active-run cancellation and agent-scope resolution.
 import {
+  hasNonEmptyString,
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
@@ -18,7 +18,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { captureYieldedMainSessionContinuation } from "../../agents/main-session-recovery/main-session-restart-recovery-target.js";
 import {
-  clearSessionQueues,
+  clearSessionLifecycleQueues,
   prepareSessionFollowupCleanup,
 } from "../../auto-reply/reply/queue/cleanup.js";
 import {
@@ -35,7 +35,7 @@ import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/age
 import { waitForChatAbortTerminalPersistence } from "../chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
-import { resolveSessionKeyForRun } from "../server-session-key.js";
+import { resolveSessionForRun } from "../server-session-key.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
@@ -67,7 +67,7 @@ import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-export function resolveAbortSessionKey(params: {
+function resolveAbortSessionKey(params: {
   context: Pick<GatewayRequestContext, "chatAbortControllers">;
   requestedKey: string;
   canonicalKey: string;
@@ -231,10 +231,10 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       scopedRequestedKey ??
       scopedActiveRunSessionKey ??
       (requestedRunId
-        ? resolveSessionKeyForRun(requestedRunId, {
+        ? resolveSessionForRun(requestedRunId, {
             agentId: requestedRunAgentId,
             projection: getSessionRowProjection(context),
-          })
+          })?.sessionKey
         : undefined) ??
       workerRunTarget?.sessionKey ??
       embeddedRunSessionKey;
@@ -531,7 +531,12 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
               if (clearCapturedFollowups) {
                 queueCleared = clearCapturedFollowups() > 0;
               } else {
-                const cleared = clearSessionQueues(queueKeys);
+                const cleared = clearSessionLifecycleQueues({
+                  keys: queueKeys,
+                  agentId: targetAgentId,
+                  sessionKey: canonicalKey,
+                  assertCurrent: assertAbortCurrent,
+                });
                 queueCleared = cleared.followupCleared > 0 || cleared.laneCleared > 0;
               }
             }
@@ -631,9 +636,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
               payload &&
               typeof payload === "object" &&
               Array.isArray((payload as { runIds?: unknown[] }).runIds)
-                ? (payload as { runIds: unknown[] }).runIds.filter((value): value is string =>
-                    Boolean(normalizeOptionalString(value)),
-                  )
+                ? (payload as { runIds: unknown[] }).runIds.filter(hasNonEmptyString)
                 : [];
             const firstAbortedRunId = runIds[0] ?? null;
             abortedRunIds = runIds;

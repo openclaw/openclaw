@@ -14,8 +14,9 @@ afterEach(() => {
 
 it.each([
   {
-    name: "mixed interior and trailing",
+    name: "leading, interior, and trailing",
     layout: [
+      "notice",
       "message",
       "notice",
       "notice",
@@ -26,12 +27,7 @@ it.each([
       "notice",
       "notice",
     ],
-    expected: ["row-0", "row-1", "row-2", "row-4", "row-5", "row-6", "row-7", "row-8"],
-  },
-  {
-    name: "leading",
-    layout: ["notice", "message", "notice", "message"],
-    expected: ["row-0", "row-1", "row-2", "row-3"],
+    expected: ["row-0", "row-1", "row-2", "row-3", "row-5", "row-6", "row-7", "row-8", "row-9"],
   },
   {
     name: "message-free",

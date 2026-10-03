@@ -427,6 +427,7 @@ describe("publish model catalog v2", () => {
     const lstat = fs.lstatSync;
     const fstat = fs.fstatSync;
     const open = fs.openSync;
+    const close = fs.closeSync;
     const rename = fs.promises.rename;
     const descriptors = new Set<number>();
     let published = false;
@@ -444,6 +445,10 @@ describe("publish model catalog v2", () => {
         descriptors.add(fd);
       }
       return fd;
+    });
+    vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
+      close(fd);
+      descriptors.delete(fd);
     });
     vi.spyOn(fs, "fstatSync").mockImplementation((fd, options) => {
       const stat = fstat(fd, options);

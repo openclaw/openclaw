@@ -16,6 +16,7 @@ import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
 import { readAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.js";
 import type {
   AgentDatabaseDeletionSnapshot,
+  AgentDeletionJournalAuthority,
   AgentDeletionJournalDisposition,
   AgentDeletionJournalPurpose,
   AgentDeletionJournalStatus,
@@ -31,6 +32,29 @@ import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { prepareOpenClawStateReadSource } from "./openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
+
+export async function readAgentDeletionJournalAuthorityInWorker(
+  agentId: string,
+  context: OpenClawStateWorkerContext,
+  signal: AbortSignal,
+): Promise<AgentDeletionJournalAuthority | undefined> {
+  context.maintenanceScope?.assertAdmission();
+  context.admission.assertCurrent();
+  signal.throwIfAborted();
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "agentDeletionJournal.authority", agentId: normalizeAgentId(agentId) },
+    { context, current: true, signal },
+  );
+  context.maintenanceScope?.assertAdmission();
+  context.admission.assertCurrent();
+  signal.throwIfAborted();
+  if (reply && (!reply.ok || reply.type !== "agentDeletionJournal.authority")) {
+    throw new Error("Unexpected agent deletion journal authority result");
+  }
+  return reply?.authority;
+}
 
 /** Completed cleanup still retains a deletion tombstone. */
 export function readAgentDeletionJournalStatusInDatabase(

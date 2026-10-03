@@ -35,13 +35,12 @@ import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
-import type { CallRecord } from "./types.js";
+import { TerminalStates, type CallRecord, type ToolHandlerContext } from "./types.js";
 import {
   isProviderUnreachableWebhookUrl,
   providerRequiresPublicWebhook,
 } from "./webhook-exposure.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
-import type { ToolHandlerContext } from "./webhook/realtime-handler.js";
 import { cleanupTailscaleExposure, setupTailscaleExposure } from "./webhook/tailscale.js";
 
 export type VoiceCallRuntime = {
@@ -395,6 +394,15 @@ export async function createVoiceCallRuntime(params: {
             labels: {
               audienceLabel: "caller",
               contextName: "OpenClaw memory or session context",
+            },
+            // Memory reads for this caller stay bound to the consult and its live call.
+            liveness: {
+              signal: handlerContext.abortSignal,
+              assertCurrent() {
+                if (manager.getCall(callId) !== call || TerminalStates.has(call.state)) {
+                  throw new Error(`Call "${callId}" is no longer active`);
+                }
+              },
             },
           });
           handlerContext.abortSignal?.throwIfAborted();

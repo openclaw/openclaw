@@ -41,7 +41,6 @@ import {
   retireQueuedUserMessage,
 } from "./queued-user-message-retirement.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import type { SessionManager } from "./session-manager.js";
 import { prepareSessionToolResult } from "./session-tool-result-redaction.js";
 import type { SettingsManager } from "./settings-manager.js";
@@ -81,6 +80,7 @@ export abstract class AgentSessionBase {
   protected autoCompactionAbortController: AbortController | undefined = undefined;
   protected overflowRecoveryAttempts = 0;
   protected contextOverflowRecoveryOwner: "session" | "caller";
+  protected resolveCompactionThinkingLevel?: AgentSessionConfig["resolveCompactionThinkingLevel"];
 
   protected branchSummaryAbortController: AbortController | undefined = undefined;
   private extensionModifiedToolResultIds = new Set<string>();
@@ -112,7 +112,6 @@ export abstract class AgentSessionBase {
 
   protected sessionModelRegistry: ModelRegistry;
 
-  // Tool registry for extension getTools/setTools
   protected toolRegistry: Map<string, AgentTool> = new Map();
   protected toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
   protected toolPromptSnippets: Map<string, string> = new Map();
@@ -143,6 +142,7 @@ export abstract class AgentSessionBase {
     };
     this.withExternalSessionWriteSettlement = config.withSessionWriteSettlement;
     this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
+    this.resolveCompactionThinkingLevel = config.resolveCompactionThinkingLevel;
     this.cleanupProviderSessionResourcesOnDispose =
       config.cleanupProviderSessionResourcesOnDispose ?? true;
   }
@@ -204,12 +204,8 @@ export abstract class AgentSessionBase {
   }
 
   /**
-   * Install tool hooks once on the Agent instance.
-   *
-   * The callbacks read `this.currentExtensionRunner` at execution time, so extension reload swaps in the
-   * new runner without reinstalling hooks. Extension-specific tool wrappers are still used to adapt
-   * registered tool execution to the extension context. Tool call and tool result interception now
-   * happens here instead of in wrappers.
+   * Hooks resolve the current extension runner at execution time so reloads
+   * need no reinstall. Wrappers only adapt registered tools to extension context.
    */
   protected installAgentToolHooks(): void {
     this.agent.beforeToolCall = async ({ toolCall, args }) => {
@@ -385,13 +381,11 @@ export abstract class AgentSessionBase {
     if (event.type === "message_end") {
       if (event.message.role === "custom") {
         const message = event.message;
-        await withSessionManagerWrite(this.sessionManager, () =>
-          this.sessionManager.appendCustomMessageEntry(
-            message.customType,
-            message.content,
-            message.display,
-            message.details,
-          ),
+        await this.sessionManager.appendCustomMessageEntryAsync(
+          message.customType,
+          message.content,
+          message.display,
+          message.details,
         );
       } else if (
         event.message.role === "user" ||
@@ -423,7 +417,6 @@ export abstract class AgentSessionBase {
       }
       // Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
-      // Track assistant message for auto-compaction (checked on agent_end)
       if (event.message.role === "assistant") {
         this.lastAssistantMessage = event.message;
       }
@@ -463,7 +456,6 @@ export abstract class AgentSessionBase {
     return this.agent.state.messages.findLast((message) => message.role === "assistant");
   }
 
-  /** Emit extension events based on agent events */
   private async emitExtensionEvent(event: AgentEvent): Promise<boolean> {
     if (event.type === "agent_start") {
       this.turnIndex = 0;
@@ -566,7 +558,7 @@ export abstract class AgentSessionBase {
   protected reconnectToAgent(): void {
     if (this.unsubscribeAgent) {
       return;
-    } // Already connected
+    }
     this.unsubscribeAgent = this.agent.subscribe(this.handleAgentEvent);
   }
 
@@ -589,9 +581,7 @@ export abstract class AgentSessionBase {
       }
     }
 
-    this.currentExtensionRunner.invalidate(
-      "This extension ctx is stale after session replacement or reload. Do not use a captured api or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
-    );
+    this.currentExtensionRunner.invalidate();
     this.disconnectFromAgent();
     this.eventListeners = [];
     if (this.cleanupProviderSessionResourcesOnDispose) {
@@ -629,17 +619,12 @@ export abstract class AgentSessionBase {
     return this.retryCount;
   }
 
-  /**
-   * Get the names of currently active tools.
-   * Returns the names of tools currently set on the agent.
-   */
+  /** Names of the tools currently set on the agent. */
   getActiveToolNames(): string[] {
     return this.agent.state.tools.map((t) => t.name);
   }
 
-  /**
-   * Get all configured tools with name, description, parameter schema, and source metadata.
-   */
+  /** All configured tools with their schema and source metadata. */
   getAllTools(): ToolInfo[] {
     return Array.from(this.toolDefinitions.values()).map(({ definition, sourceInfo }) => ({
       name: definition.name,
@@ -758,18 +743,7 @@ export abstract class AgentSessionBase {
   }
 
   protected normalizePromptGuidelines(guidelines: string[] | undefined): string[] {
-    if (!guidelines || guidelines.length === 0) {
-      return [];
-    }
-
-    const unique = new Set<string>();
-    for (const guideline of guidelines) {
-      const normalized = guideline.trim();
-      if (normalized.length > 0) {
-        unique.add(normalized);
-      }
-    }
-    return Array.from(unique);
+    return [...new Set(guidelines?.map((guideline) => guideline.trim()).filter(Boolean))];
   }
 
   protected collectActiveToolPromptMetadata(toolNames: string[]): ActiveToolPromptMetadata {

@@ -1,7 +1,3 @@
-/**
- * Executes compaction while owning the transcript lock, session lifecycle,
- * hooks and optional successor transcript rotation.
- */
 import {
   preserveCompactionReplayWindow,
   resolveCompactionReplayEligibility,
@@ -68,6 +64,7 @@ import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { log } from "./logger.js";
 import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js";
+import { declarePromptHistoryRewrite } from "./prompt-cache-observability.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
@@ -120,7 +117,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
   try {
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const accountingRecorder = readCompactionAccountingRecorder(params.contextEngineRuntimeContext);
-    const recordCompaction = accountingRecorder?.recordCompaction;
     const memoryTranscript = accountingRecorder?.memoryTranscript;
     const sessionTarget =
       memoryTranscript?.sessionTarget ??
@@ -133,6 +129,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         sessionKey: params.sessionKey,
         sessionTarget: params.sessionTarget,
       }));
+    const recordCompaction =
+      accountingRecorder?.recordCompaction ??
+      (() => declarePromptHistoryRewrite({ ...sessionTarget, reason: "compaction" }));
     const assertActive =
       memoryTranscript?.assertActive ?? captureOwnedTranscriptWriteAssertion(sessionTarget);
     assertActive();
@@ -141,6 +140,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       memoryTranscript?.sessionManager ??
       (await SessionManager.openAsync(sessionTarget, undefined, undefined, params.abortSignal));
     assertActive();
+    const responsesApi =
+      effectiveModel.api === "openai-responses" ||
+      effectiveModel.api === "azure-openai-responses" ||
+      effectiveModel.api === "openai-chatgpt-responses";
     const sessionManager = guardSessionManager(preparedSessionManager, {
       agentId: sessionAgentId,
       runId: params.runId,
@@ -148,14 +151,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       config: params.config,
       contextWindowTokens: contextTokenBudget,
       allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-      missingToolResultText:
-        effectiveModel.api === "openai-responses" ||
-        effectiveModel.api === "azure-openai-responses" ||
-        effectiveModel.api === "openai-chatgpt-responses"
-          ? "aborted"
-          : undefined,
+      missingToolResultText: responsesApi ? "aborted" : undefined,
       allowedToolNames,
       withCompactionPersistence: params.transcriptByteCompactionPersistence,
+      withCompactionPersistenceAsync: params.transcriptByteCompactionPersistenceAsync,
     });
     compactionSessionManager = sessionManager;
     const recordUsage = accountingRecorder?.recordUsage
@@ -274,14 +273,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         );
         session = createdSession.session;
         session[agentSessionSetContextReplacementHook](
-          recordCompaction
-            ? (tokensAfter, tokensBefore) =>
-                recordCompaction({
-                  tokensBefore,
-                  tokensAfter,
-                  compactionKind: "context-engine",
-                })
-            : undefined,
+          (tokensAfter, tokensBefore) =>
+            recordCompaction({ tokensBefore, tokensAfter, compactionKind: "context-engine" }),
           assertActive,
         );
         session.setActiveToolsByName(sessionToolAllowlist);
@@ -328,13 +321,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           runId: diagnosticCompactionRunId,
           workKey: diagnosticCompactionRunId,
         });
-        markDiagnosticEmbeddedRunStarted({
-          sessionId: params.sessionId,
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          runId: diagnosticCompactionRunId,
-          workKey: diagnosticCompactionRunId,
-          owner: diagnosticOwner,
-        });
+        markDiagnosticEmbeddedRunStarted({ ...diagnosticOwner, owner: diagnosticOwner });
         session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
           config: params.config,
           runId: diagnosticCompactionRunId,
@@ -413,12 +400,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         // limitHistoryTurns can orphan tool_result blocks by removing the
         // assistant message that contained the matching tool_use.
         const limited = transcriptPolicy.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairingForModel(
-              truncated,
-              effectiveModel.api === "openai-responses" ||
-                effectiveModel.api === "azure-openai-responses" ||
-                effectiveModel.api === "openai-chatgpt-responses",
-            )
+          ? sanitizeToolUseResultPairingForModel(truncated, responsesApi)
           : truncated;
         if (limited.length > 0) {
           session.agent.state.messages = limited;
@@ -490,7 +472,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               enabled: compactionReplayEnabled,
             },
           });
-          recordCompaction?.({
+          recordCompaction({
             tokensBefore,
             tokensAfter: serverTokensAfter,
             compactionKind: "server-endpoint",

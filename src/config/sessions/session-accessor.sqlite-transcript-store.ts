@@ -12,6 +12,7 @@ import { redactSecrets } from "../../logging/redact.js";
 import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
 import {
   deferOpenClawAgentPostCommitPublication,
+  openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { advanceCliHistoryBoundaryInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
@@ -27,18 +28,26 @@ import {
   readTranscriptEventMessage,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
-import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  getSessionKysely,
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+  type ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope.js";
 import {
   advanceTranscriptMutationAtInTransaction,
   deleteTranscriptEventsInTransaction,
   ensureTranscriptGenerationInTransaction,
   ensureTranscriptSessionRoot,
+  pruneTranscriptReactionsInTransaction,
   readTranscriptGenerationInTransaction,
   readTranscriptMutationStateInTransaction,
   readNextTranscriptSeq,
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
+import type { SessionTranscriptRuntimeScope } from "./session-accessor.types.js";
+import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
 import {
   createTranscriptIndexAppenderInTransaction,
   deleteSessionTranscriptIndexInTransaction,
@@ -371,6 +380,8 @@ export function replaceSqliteTranscriptEventsInTransaction(
     createdAtByIndex?: readonly number[];
     /** Keep maintenance rewrites at their existing recency while invalidating stale projections. */
     preserveSessionWindowRecency?: boolean;
+    scheduleProjectionReconcile?: boolean;
+    onProjectionReconcileNeeded?: () => void;
   } = {},
 ): void {
   const rebuildSynchronously =
@@ -383,6 +394,7 @@ export function replaceSqliteTranscriptEventsInTransaction(
   const previousGeneration = readTranscriptGenerationInTransaction(database, resolved.sessionId);
   const deleted = deleteTranscriptEventsInTransaction(database, resolved.sessionId);
   if (events.length === 0) {
+    pruneTranscriptReactionsInTransaction(database, resolved);
     deleteSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
     if (deleted || previousGeneration) {
       rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
@@ -429,12 +441,14 @@ export function replaceSqliteTranscriptEventsInTransaction(
       seq += 1;
     }
   }
+  pruneTranscriptReactionsInTransaction(database, resolved);
   if (deleted || seq > 0) {
     recordTranscriptReplacementMutation(database, resolved.sessionId, preservedTranscriptUpdatedAt);
     if (rebuildSynchronously) {
       reconcileSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
     } else {
-      scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, {});
+      options.onProjectionReconcileNeeded?.();
+      scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, options);
     }
   }
 }
@@ -632,6 +646,17 @@ export function readTranscriptMessageByScopedIdempotencyKey(
   return message
     ? { messageId: readTranscriptEventId(found.event) ?? idempotencyKey, message }
     : undefined;
+}
+
+export function readSessionTranscriptMessageByEventId(
+  scope: SessionTranscriptRuntimeScope,
+  eventId: string,
+): { messageId: string; message: unknown } | undefined {
+  const resolved = resolveSqliteTranscriptScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return readHotSessionTranscriptSnapshot(database, resolved.sessionId, "identity", () =>
+    readTranscriptMessageByEventId(database, resolved, eventId),
+  );
 }
 
 export function readTranscriptMessageByEventId(

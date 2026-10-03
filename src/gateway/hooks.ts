@@ -24,7 +24,6 @@ import {
 import type { HookExternalContentSource } from "../security/external-content.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
-  commitHookTransformMappingReload,
   hasHookTemplateExpressions,
   type HookMappingResolved,
   normalizeHookMatchPath,
@@ -85,7 +84,10 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     cfg.session?.scope === "global"
       ? resolvePersistedSessionStoreOwnerForKey(cfg, "global")
       : { kind: "none" as const };
-  const knownAgentIds = resolveKnownAgentIds(cfg, defaultAgentId);
+  const knownAgentIds = new Set(listAgentIds(cfg));
+  if (defaultAgentId) {
+    knownAgentIds.add(defaultAgentId);
+  }
   const allowedAgentIds = resolveAllowedAgentIds(cfg.hooks?.allowedAgentIds);
   const defaultSessionKey = normalizeOptionalString(cfg.hooks?.defaultSessionKey);
   const allowedSessionKeyPrefixes = resolveAllowedSessionKeyPrefixes(
@@ -132,10 +134,6 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   };
 }
 
-export function commitHooksConfigReload(): void {
-  commitHookTransformMappingReload();
-}
-
 function resolveHookBodyLimitsByPath(mappings: HookMappingResolved[]): ReadonlyMap<string, number> {
   const byPath = new Map<string, number>();
   for (const mapping of mappings) {
@@ -160,27 +158,14 @@ export function resolveHookPathBodyLimit(
   return hooksConfig.maxBodyBytesByPath.get(normalized) ?? hooksConfig.maxBodyBytes;
 }
 
-function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId?: string): Set<string> {
-  const known = new Set(listAgentIds(cfg));
-  if (defaultAgentId) {
-    known.add(defaultAgentId);
-  }
-  return known;
-}
-
 function resolveAllowedSessionKeyPrefixes(raw: string[] | undefined): string[] | undefined {
   if (!Array.isArray(raw)) {
     return undefined;
   }
-  const set = new Set<string>();
-  for (const prefix of raw) {
-    const normalized = normalizeOptionalLowercaseString(prefix);
-    if (!normalized) {
-      continue;
-    }
-    set.add(normalized);
-  }
-  return set.size > 0 ? Array.from(set) : undefined;
+  const prefixes = [
+    ...new Set(raw.map(normalizeOptionalLowercaseString).filter((prefix) => prefix !== undefined)),
+  ];
+  return prefixes.length > 0 ? prefixes : undefined;
 }
 
 export function isSessionKeyAllowedByPrefix(sessionKey: string, prefixes: string[]): boolean {
@@ -200,11 +185,7 @@ export function extractHookToken(req: IncomingMessage): string | undefined {
       return token;
     }
   }
-  const headerToken = normalizeOptionalString(req.headers["x-openclaw-token"]) ?? "";
-  if (headerToken) {
-    return headerToken;
-  }
-  return undefined;
+  return normalizeOptionalString(req.headers["x-openclaw-token"]);
 }
 
 export async function readJsonBody(
@@ -248,7 +229,7 @@ function normalizeHookPayloadAgentId(raw: unknown): Result<string | undefined, s
   if (raw === undefined) {
     return { ok: true, value: undefined };
   }
-  const agentId = typeof raw === "string" ? normalizeOptionalString(raw) : undefined;
+  const agentId = normalizeOptionalString(raw);
   return agentId
     ? { ok: true, value: agentId }
     : { ok: false, error: "agentId must be a non-empty string" };
@@ -608,34 +589,24 @@ export function resolveHookSessionKey(params: {
   return { ok: true, value: generated };
 }
 
-function hasTemplatedHookSessionKey(sessionKey: string | undefined): boolean {
-  return typeof sessionKey === "string" && hasHookTemplateExpressions(sessionKey);
-}
-
 function hasEffectiveTemplatedHookSessionKeyMapping(mappings: HookMappingResolved[]): boolean {
   const effectiveMappings: HookMappingResolved[] = [];
   for (const mapping of mappings) {
-    if (isHookMappingShadowed(mapping, effectiveMappings)) {
+    if (
+      effectiveMappings.some(
+        (earlier) =>
+          (!earlier.matchPath || earlier.matchPath === mapping.matchPath) &&
+          (!earlier.matchSource || earlier.matchSource === mapping.matchSource),
+      )
+    ) {
       continue;
     }
     effectiveMappings.push(mapping);
-    if (hasTemplatedHookSessionKey(mapping.sessionKey)) {
+    if (typeof mapping.sessionKey === "string" && hasHookTemplateExpressions(mapping.sessionKey)) {
       return true;
     }
   }
   return false;
-}
-
-function isHookMappingShadowed(
-  mapping: HookMappingResolved,
-  earlierMappings: HookMappingResolved[],
-): boolean {
-  return earlierMappings.some((earlier) => {
-    if (earlier.matchPath && earlier.matchPath !== mapping.matchPath) {
-      return false;
-    }
-    return !earlier.matchSource || earlier.matchSource === mapping.matchSource;
-  });
 }
 
 /** Re-scope agent-prefixed hook session keys to the selected target agent. */

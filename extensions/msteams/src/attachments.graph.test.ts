@@ -1,11 +1,12 @@
 // Msteams tests cover attachments.graph plugin behavior.
+import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import type { PluginRuntime } from "../runtime-api.js";
 import { readRemoteMediaResponse } from "./attachments.test-helpers.js";
 import { downloadMSTeamsGraphMedia } from "./attachments/graph.js";
-import { encodeGraphShareId, resolveRequestUrl } from "./attachments/shared.js";
+import { encodeGraphShareId } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const GRAPH_HOST = "graph.microsoft.com";

@@ -615,7 +615,6 @@ function formatMissingProviderHint(providerId: string): string {
   return ` Install the official external plugin with: ${formatCliCommand(catalogHint.installCommand)}, then run ${formatCliCommand("openclaw plugins registry --refresh")} and stop and start the gateway service, or run ${formatCliCommand(catalogHint.doctorFixCommand)} to repair automatically.`;
 }
 
-/** Executes one provider-backed media-understanding entry for one attachment. */
 export async function runProviderEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
@@ -882,7 +881,6 @@ export async function runProviderEntry(params: {
   });
 }
 
-/** Executes one CLI-backed media-understanding entry for one attachment. */
 export async function runCliEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
@@ -955,39 +953,33 @@ export async function runCliEntry(params: {
     ]) {
       delete templCtx[key];
     }
-    const argv = [command, ...args].map((part, index) =>
-      index === 0 ? part : applyTemplate(part, templCtx),
-    );
+    const argv = args.map((part) => applyTemplate(part, templCtx));
     if (shouldLogVerbose()) {
-      logVerbose(`Media understanding via CLI: ${argv.join(" ")}`);
+      logVerbose(`Media understanding via CLI: ${[command, ...argv].join(" ")}`);
     }
-    const { stdout, stderr } = await runExec(
-      expectDefined(argv[0], "argv entry at 0"),
-      argv.slice(1),
-      {
-        timeoutMs,
-        maxBuffer: CLI_OUTPUT_MAX_BUFFER,
-        cwd: isAntigravityCliCommand(command) ? path.dirname(mediaPath) : undefined,
-      },
-    );
+    const { stdout, stderr } = await runExec(command, argv, {
+      timeoutMs,
+      maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+      cwd: isAntigravityCliCommand(command) ? path.dirname(mediaPath) : undefined,
+    });
     const requestedBackend =
       capability === "audio"
         ? resolveRequestedLocalAudioBackend({
             command,
-            args: argv.slice(1),
+            args: argv,
           })
         : undefined;
     const observedBackend =
       capability === "audio"
         ? recordLocalAudioBackendObservation({
             command,
-            args: argv.slice(1),
+            args: argv,
             output: `${stderr ?? ""}\n${stdout}`,
           })
         : undefined;
     const resolved = await resolveCliOutput({
       command,
-      args: argv.slice(1),
+      args: argv,
       stdout,
       mediaPath,
     });

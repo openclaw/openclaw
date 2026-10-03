@@ -1,11 +1,11 @@
 // Sandbox tool policy tests cover effective allow/deny merging and blocked-tool
 // guidance for sandboxed agent sessions.
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSandboxConfigForAgent as resolveSandboxConfigForAgentBase } from "./config.js";
 import {
   formatSandboxToolPolicyBlockedMessage as formatSandboxToolPolicyBlockedMessageBase,
@@ -16,10 +16,10 @@ import {
   resolveSandboxToolPolicyForAgent as resolveSandboxToolPolicyForAgentBase,
 } from "./tool-policy.js";
 
-const sandboxStoreDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-required-sandbox-");
 
 function loadedConfig(config: OpenClawConfig | undefined): OpenClawConfig {
-  return migratePersistedImplicitMainRoster(config ?? {}).config as OpenClawConfig;
+  return createCanonicalAgentConfigFixture(config).config;
 }
 
 function resolveSandboxConfigForAgent(config: OpenClawConfig, agentId: string) {
@@ -213,13 +213,7 @@ describe("sandbox/tool-policy", () => {
 
   it("forces a persisted sandbox requirement even when the agent sandbox mode is off", async () => {
     const sessionKey = "agent:main:guest";
-    const storePath = path.join(
-      sandboxStoreDirs.make("openclaw-required-sandbox-"),
-      "agents",
-      "main",
-      "sessions",
-      "sessions.json",
-    );
+    const storePath = path.join(sessionDirs.make(), "agents", "main", "sessions", "sessions.json");
     const entry = {
       sessionId: "guest-session",
       updatedAt: 1,
@@ -252,13 +246,7 @@ describe("sandbox/tool-policy", () => {
 
   it("does not apply guest isolation or cap writable access to unstamped sessions", async () => {
     const sessionKey = "agent:main:maintainer";
-    const storePath = path.join(
-      sandboxStoreDirs.make("openclaw-unstamped-sandbox-"),
-      "agents",
-      "main",
-      "sessions",
-      "sessions.json",
-    );
+    const storePath = path.join(sessionDirs.make(), "agents", "main", "sessions", "sessions.json");
     await replaceSessionEntry(
       { sessionKey, storePath },
       {
@@ -367,11 +355,7 @@ describe("sandbox/tool-policy", () => {
     (sessionKey) => {
       const cfg = {
         session: {
-          store: path.join(
-            sandboxStoreDirs.make("openclaw-owned-sandbox-"),
-            "{agentId}",
-            "sessions.json",
-          ),
+          store: path.join(sessionDirs.make(), "{agentId}", "sessions.json"),
         },
         agents: {
           ownership: "explicit",

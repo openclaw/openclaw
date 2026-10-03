@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
-import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveCodexAppServerLocalHomeDir } from "./app-server/auth-start-options.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
@@ -17,7 +16,6 @@ import {
   getSharedCodexAppServerClientState,
   hasActiveSharedCodexAppServerWork,
 } from "./app-server/shared-client-lifecycle.js";
-import { findCodexAppServerSpawnError } from "./app-server/spawn-error.js";
 import {
   createCodexCatalogRequestSnapshot,
   createCodexSessionCatalogControlFromRequests,
@@ -80,7 +78,7 @@ export function createCodexSessionCatalogControl(params: {
   });
   const requestOptionsByConfig = new WeakMap<
     OpenClawConfig,
-    Map<string, CodexCatalogRequestOptions>
+    { config: OpenClawConfig; byAgent: Map<string, CodexCatalogRequestOptions> }
   >();
   const indexes = new Map<string, CodexCatalogIndex>();
   const retiringState = new Map<string, Promise<void>>();
@@ -88,7 +86,6 @@ export function createCodexSessionCatalogControl(params: {
   const residentRequests = new Set<Promise<CodexCatalogIndex>>();
   let generation = params.getRuntimeConfig();
   let residentEpoch = 0;
-  let starting = 0;
   let closed = false;
   let runBackground = (run: () => Promise<void>) => run();
   let retiring: Promise<void> | undefined;
@@ -308,24 +305,25 @@ export function createCodexSessionCatalogControl(params: {
         startOptions: structuredClone(resolvedStartOptions),
       };
     }
-    let byAgent = requestOptionsByConfig.get(runtimeConfig);
+    let snapshot = requestOptionsByConfig.get(runtimeConfig);
     const cacheKey = `${agentId ?? ""}\0${source?.sourceHomeId ?? ""}`;
-    const cached = byAgent?.get(cacheKey);
+    const cached = snapshot?.byAgent.get(cacheKey);
     if (cached) {
       // Plugin start options derive from this same immutable config snapshot. Config reload changes
       // object identity; re-cloning on every poll only adds CPU and allocation to the catalog path.
       return cached;
     }
+    if (!snapshot) {
+      // The fleet-sized config belongs to the generation, not each agent/home connection.
+      snapshot = { config: structuredClone(runtimeConfig), byAgent: new Map() };
+      requestOptionsByConfig.set(runtimeConfig, snapshot);
+    }
     const resolved = {
       agentDir,
-      config: structuredClone(runtimeConfig),
+      config: snapshot.config,
       startOptions: structuredClone(resolvedStartOptions),
     };
-    if (!byAgent) {
-      byAgent = new Map();
-      requestOptionsByConfig.set(runtimeConfig, byAgent);
-    }
-    byAgent.set(cacheKey, resolved);
+    snapshot.byAgent.set(cacheKey, resolved);
     return resolved;
   };
   const createRequestSnapshot = (
@@ -476,7 +474,6 @@ export function createCodexSessionCatalogControl(params: {
   };
   return {
     hasActiveWork: () =>
-      starting > 0 ||
       residentRequests.size > 0 ||
       retiring !== undefined ||
       hasActiveSharedCodexAppServerWork() ||
@@ -493,33 +490,10 @@ export function createCodexSessionCatalogControl(params: {
       }
     },
     async start() {
-      const epoch = residentEpoch;
-      starting++;
-      try {
-        const serviceScope = AsyncLocalStorage.snapshot();
-        runBackground = (run) => serviceScope(run);
-        for (const agentId of listAgentIds(params.getRuntimeConfig() ?? params.config ?? {})) {
-          for (const source of await homeResolver.forAgent(agentId)) {
-            if (closed || residentEpoch !== epoch) {
-              return;
-            }
-            // Implicit process HOME is admitted by the Gateway's request policy.
-            // Explicit homes can hydrate at activation without bypassing that policy.
-            if (source.usesProcessHomeFallback) {
-              continue;
-            }
-            void forRequest(agentId, source)
-              .initialize()
-              .catch((error: unknown) => {
-                if (!findCodexAppServerSpawnError(error)) {
-                  embeddedAgentLog.warn("Codex catalog hydration failed", { error });
-                }
-              });
-          }
-        }
-      } finally {
-        starting--;
-      }
+      // Capture service authority without opening every configured home's native
+      // client. The first authorized catalog request owns hydration admission.
+      const serviceScope = AsyncLocalStorage.snapshot();
+      runBackground = (run) => serviceScope(run);
     },
     async stop() {
       closed = true;

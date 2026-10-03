@@ -1,6 +1,7 @@
 // Docker image tests cover sandbox image inspection and actionable setup errors
 // without invoking a real Docker daemon.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 

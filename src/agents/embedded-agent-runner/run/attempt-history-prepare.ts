@@ -3,10 +3,8 @@ import { preserveCompactionReplayWindow } from "@openclaw/ai/transports";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import {
-  listSessionEntriesReadOnly,
-  updateSessionEntry,
-} from "../../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { readSessionEntrySummariesInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
@@ -29,6 +27,7 @@ type PreparedEmbeddedAttemptHistory = {
 
 export async function prepareEmbeddedAttemptHistory(
   input: EmbeddedAttemptExecutionPhaseInput,
+  assertActive: () => void,
 ): Promise<PreparedEmbeddedAttemptHistory> {
   const { attempt, activeContextEngine, isRawModelRun } = input;
   const {
@@ -87,18 +86,19 @@ export async function prepareEmbeddedAttemptHistory(
       const storePath = resolveSessionStorePathCore(attempt.config?.session?.store, {
         agentId: sessionAgentId,
       });
-      const sessionEntry = await loadAttemptSessionEntryAfterQuotaMaintenance({
-        agentId: sessionAgentId,
-        storePath,
-        sessionKey: attempt.sessionKey,
-      });
+      const sessionEntry = await loadAttemptSessionEntryAfterQuotaMaintenance(
+        { agentId: sessionAgentId, storePath, sessionKey: attempt.sessionKey },
+        assertActive,
+      );
+      assertActive();
       const suspension = sessionEntry?.quotaSuspension;
       if (sessionEntry && suspension?.state === "resuming") {
-        const subagents = listSessionEntriesReadOnly({
+        const entries = await readSessionEntrySummariesInWorker({
           agentId: sessionAgentId,
           storePath,
-          clone: false,
-        })
+        });
+        assertActive();
+        const subagents = entries
           .map(({ entry }) => entry)
           .filter((entry) => entry.spawnedBy === sessionEntry.sessionId)
           .map((entry) => ({
@@ -112,18 +112,22 @@ export async function prepareEmbeddedAttemptHistory(
             activeSubagents: subagents,
           }),
         );
-        await updateSessionEntry(
+        await patchSessionEntryCore(
           { agentId: sessionAgentId, storePath, sessionKey: attempt.sessionKey },
-          async (entry) => {
-            if (entry.quotaSuspension?.state !== "resuming") {
+          (entry) => {
+            if (
+              entry.sessionId !== sessionEntry.sessionId ||
+              entry.quotaSuspension?.state !== "resuming"
+            ) {
               return null;
             }
             return {
               quotaSuspension: { ...entry.quotaSuspension, state: "active" },
             };
           },
-          { skipMaintenance: true, takeCacheOwnership: true },
+          { skipMaintenance: true, takeCacheOwnership: true, assertCommitAllowed: assertActive },
         );
+        assertActive();
       }
     }
 

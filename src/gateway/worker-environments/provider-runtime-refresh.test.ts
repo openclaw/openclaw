@@ -175,7 +175,7 @@ describe("worker environment runtime upgrades", () => {
           database: support.testState.stateDb,
           now: () => support.testState.nowMs,
         });
-        restarted.recoverWorkerSessionToolOperationsAfterRestart();
+        await restarted.recoverWorkerSessionToolOperationsAfterRestart();
         restarted.clearLocalTurnClaimsAfterRestart();
         return { placements: restarted, ...bindService(restarted, true) };
       },
@@ -371,7 +371,7 @@ describe("worker environment runtime upgrades", () => {
     });
   });
 
-  it.each(["unchanged build", "version", "same-version build"] as const)(
+  it.each(["unchanged build", "same-version build"] as const)(
     "recovers published Gateway Stop state after restart with %s",
     async (change) => {
       // v2026.9.6 placement-reclaim persists these shapes; current admission owns the schema.
@@ -384,12 +384,7 @@ describe("worker environment runtime upgrades", () => {
       const unchanged = change === "unchanged build";
       const targetReceipt = unchanged
         ? releasedReceipt
-        : {
-            ...currentReceipt,
-            ...(change === "same-version build"
-              ? { openclawVersion: releasedReceipt.openclawVersion }
-              : {}),
-          };
+        : { ...currentReceipt, openclawVersion: releasedReceipt.openclawVersion };
       const h = await setupUpgrade(
         unchanged ? "node" : "ssh",
         "attached",

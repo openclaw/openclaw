@@ -245,10 +245,7 @@ const CronPayloadSchema = Type.Union([
 
 /** Reported payloads include the Gateway-owned heartbeat monitor. */
 const CronReportedPayloadSchema = Type.Union([
-  CronSystemEventPayloadSchema,
-  CronAgentTurnPayloadSchema,
-  CronCommandPayloadSchema,
-  CronScriptPayloadSchema,
+  ...CronPayloadSchema.anyOf,
   closedObject({ kind: Type.Literal("heartbeat") }),
 ]);
 
@@ -583,9 +580,7 @@ export const CronScratchSetParamsSchema = cronIdOrJobIdParams({
 export const CronScratchSetResultSchema = Type.Union([
   closedObject({
     ok: Type.Literal(true),
-    scratch: Type.Union([CronScratchSchema, Type.Null()]),
-    currentRevision: Type.Integer({ minimum: 0 }),
-    maxBytes: Type.Integer({ minimum: 1 }),
+    ...CronScratchGetResultSchema.properties,
   }),
   closedObject({
     ok: Type.Literal(false),
@@ -672,6 +667,8 @@ export const CronRunParamsSchema = cronIdOrJobIdParams({
   ),
   /** Rejects the mutation if the Gateway restarted after the caller's preflight. */
   expectedProcessInstanceId: Type.Optional(NonEmptyString),
+  /** Holds the response until the queued run records its outcome or this many ms pass. */
+  waitTimeoutMs: Type.Optional(Type.Integer({ minimum: 0, maximum: 2_147_483_647 })),
 });
 
 /** Query params for cron run history. */

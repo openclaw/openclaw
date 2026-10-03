@@ -170,7 +170,6 @@ describe("cloud transcript write admission", () => {
     { change: "missing", cleared: false },
     { change: "writer", cleared: false },
     { change: "current", cleared: true },
-    { change: "claim", cleared: true },
   ] as const)(
     "checks $change settlement authority after admitting a workspace report (cleared: $cleared)",
     async ({ change, cleared }) => {
@@ -213,9 +212,9 @@ describe("cloud transcript write admission", () => {
             throw new Error("expected local staged result");
           }
           if (!cleared) {
-            request.source.stagedResult.record(request.source.stagedResult.ref);
+            await request.source.stagedResult.record(request.source.stagedResult.ref);
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,

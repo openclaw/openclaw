@@ -2,10 +2,34 @@ import { describe, expect, it } from "vitest";
 import {
   buildMcpAppHostCapabilities,
   dispatchWidgetPrompt,
+  negotiateMcpAppDisplayModes,
   resolveMcpAppSandboxUrl,
 } from "./mcp-app-security.ts";
 
 describe("MCP App sandbox security", () => {
+  it("negotiates resource hints before initialization and App capabilities afterward", () => {
+    expect(negotiateMcpAppDisplayModes(undefined)).toEqual({
+      available: ["inline", "fullscreen"],
+      initial: "inline",
+    });
+    expect(negotiateMcpAppDisplayModes({ preferredDisplayMode: "fullscreen" })).toEqual({
+      available: ["fullscreen"],
+      initial: "fullscreen",
+    });
+    expect(
+      negotiateMcpAppDisplayModes({
+        availableDisplayModes: ["inline", "fullscreen"],
+        preferredDisplayMode: "fullscreen",
+      }),
+    ).toEqual({ available: ["inline", "fullscreen"], initial: "fullscreen" });
+    expect(negotiateMcpAppDisplayModes(undefined, ["fullscreen"])).toEqual({
+      available: ["fullscreen"],
+      initial: "fullscreen",
+    });
+    expect(() => negotiateMcpAppDisplayModes(undefined, ["pip"])).toThrow(
+      "no available host display mode",
+    );
+  });
   it("advertises the CSP applied to MCP Apps", () => {
     expect(
       buildMcpAppHostCapabilities({ connectDomains: ["https://api.example.com"] }),

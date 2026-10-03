@@ -29,8 +29,6 @@ import {
 
 type ApprovalRequest = ApprovalRequestInput;
 
-export type { PreparedChannelNativeApprovalTarget } from "./approval-native-runtime-types.js";
-
 type ChannelNativeApprovalPlanDeliveryResult<TPendingEntry> = {
   entries: TPendingEntry[];
   deliveryPlan: ChannelApprovalNativeDeliveryPlan;
@@ -38,7 +36,7 @@ type ChannelNativeApprovalPlanDeliveryResult<TPendingEntry> = {
 };
 
 /** Delivers an approval request to the adapter-planned native targets and returns pending entries. */
-export async function deliverApprovalRequestViaChannelNativePlan<
+async function deliverApprovalRequestViaChannelNativePlan<
   TPreparedTarget,
   TPendingEntry,
   TRequest extends ApprovalRequest = ApprovalRequest,

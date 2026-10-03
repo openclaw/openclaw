@@ -1,4 +1,3 @@
-// Defines common channel messaging configuration types.
 import type { z } from "zod";
 import type { NativeExecApprovalEnableMode } from "./types.approvals.js";
 import type { ChannelDeliveryStreamingConfig } from "./types.base.js";
@@ -28,14 +27,12 @@ export type CommonChannelMessagingConfig<
   heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
 
-export type ChannelExecApprovalTarget = "dm" | "channel" | "both";
-
 export type ChannelExecApprovalConfig<TApprover = string | number> = {
   enabled?: NativeExecApprovalEnableMode;
   approvers?: TApprover[];
   agentFilter?: string[];
   sessionFilter?: string[];
-  target?: ChannelExecApprovalTarget;
+  target?: "dm" | "channel" | "both";
 };
 
 export type ChannelBotInteractionConfig<TAllowBots = boolean | "mentions"> = {

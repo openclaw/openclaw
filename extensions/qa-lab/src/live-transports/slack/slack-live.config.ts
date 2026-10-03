@@ -9,16 +9,10 @@ import {
   type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 
-function normalizeSlackId(value: string, label: string) {
-  const normalized = value.trim();
-  if (!/^[A-Z][A-Z0-9]+$/.test(normalized)) {
-    throw new Error(`${label} must be a Slack id like C123 or U123.`);
-  }
-  return normalized;
-}
-
 function validateSlackQaRuntimeEnv(runtimeEnv: SlackQaRuntimeEnv, label: string) {
-  normalizeSlackId(runtimeEnv.channelId, `${label} channelId`);
+  if (!/^[A-Z][A-Z0-9]+$/.test(runtimeEnv.channelId.trim())) {
+    throw new Error(`${label} channelId must be a Slack id like C123 or U123.`);
+  }
   return runtimeEnv;
 }
 

@@ -40,6 +40,7 @@ import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { spawnTerminalPty } from "../../src/process/terminal-pty.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
+import { withinTest } from "../helpers/promise.js";
 import { makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { withShimFixture } from "./direct-run-entrypoints.test-support.js";
 
@@ -69,7 +70,9 @@ const azureProviderHelp =
   "provider: hetzner, aws, azure, local-container, blacksmith-testbox, or cloudflare\n";
 const fakeRunValueOptionHelp = [
   "artifact-glob value",
+  "blacksmith-job string",
   "blacksmith-ref string",
+  "blacksmith-workflow string",
   "capture-stderr string",
   "capture-stdout string",
   "download value",
@@ -174,7 +177,7 @@ async function main() {
     if (process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_UNKNOWN_PATH) topFiles.push({ path: "not-a-source-candidate.txt" });
     process.stdout.write(JSON.stringify({ candidate: { files: topFiles.length + Number(process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_COUNT_DELTA || "0") }, topFiles })); return;
   }
-  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.67.0"); return; }
+  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.69.0"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "warmup" && args[1] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeWarmupValueOptionHelp}`)}); return; }
   if (args[0] === "actions" && args[1] === "hydrate" && args[2] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeHydrateValueOptionHelp}`)}); return; }
@@ -277,7 +280,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         '  if [ -n "${OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG:-}" ]; then',
         `    printf '%s\\n' '["--version"]' >> "$OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG"`,
         "  fi",
-        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.67.0}"`,
+        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.69.0}"`,
         "  exit 0",
         "fi",
         'if [ "$#" -eq 2 ] && [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
@@ -321,7 +324,7 @@ function makeSlowHelpCrabbox(helpText: string, delayMs: number): string {
     String.raw`
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
-  console.log("crabbox 0.67.0");
+  console.log("crabbox 0.69.0");
 } else if (args[0] === "run" && args[1] === "--help") {
   setTimeout(() => { process.stderr.write(${JSON.stringify(runHelpText)}); process.exit(0); }, ${delayMs});
 }`,
@@ -647,6 +650,24 @@ async function waitForProcessClose(
   ]);
 }
 
+async function waitForOwnedPidsToExit(pids: Iterable<number | undefined>, signal: AbortSignal) {
+  // These foreign owners can outlive pnpm/the shim, and the escaped leaf deliberately
+  // loses its parent. No retained ChildProcess can certify their extinction.
+  const ownedPids = [...pids];
+  while (ownedPids.some((pid) => pid && isProcessAlive(pid))) {
+    try {
+      await withinTest(delay(10), signal);
+    } catch (cause) {
+      throw new Error(
+        `test aborted waiting for fixture processes to exit: ${ownedPids.join(", ")}`,
+        {
+          cause,
+        },
+      );
+    }
+  }
+}
+
 type WrapperCleanupProof =
   | { kind: "signal"; entrypoint: "node" | "pnpm"; repeated: boolean; cooperative?: boolean }
   | { kind: "readiness" }
@@ -734,7 +755,10 @@ function expectIdleSourceMirror(source: string, repository: string, syncRoot: st
   );
 }
 
-async function runWrapperCleanupProof(proof: WrapperCleanupProof): Promise<void> {
+async function runWrapperCleanupProof(
+  proof: WrapperCleanupProof,
+  testSignal: AbortSignal,
+): Promise<void> {
   const entrypoint = proof.kind === "signal" ? proof.entrypoint : "node";
   const cooperative = proof.kind === "signal" && proof.cooperative;
   const scriptRemoval = proof.kind === "removal" && proof.target === "script";
@@ -1146,7 +1170,7 @@ child.once("exit", (code, signal) => {
         const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
         const wrapperPid = phases.find(({ phase }) => phase === "loading wrapper")!.pid!;
         // A pnpm interruption status is not the implementation's cleanup receipt.
-        await waitForCondition(() => !isProcessAlive(wrapperPid), 12_000);
+        await waitForOwnedPidsToExit([wrapperPid], testSignal);
         expect(JSON.parse(readFileSync(wrapperExitPath, "utf8")), output).toEqual({
           code: expectedStatus,
         });
@@ -1190,7 +1214,7 @@ child.once("exit", (code, signal) => {
           expect(readFileSync(path.join(identity!.cwd, capturePath))).toEqual(captureBytes);
           expect(existsSync(retained)).toBe(false);
           writeFileSync(releasePath, "release");
-          await waitForCondition(() => !isProcessAlive(descendantPid));
+          await waitForOwnedPidsToExit([descendantPid], testSignal);
           expect(readFileSync(releasePath + ".read", "utf8")).toBe("original source\n");
         } else {
           identity ??= JSON.parse(readFileSync(identityPath, "utf8"));
@@ -1273,6 +1297,18 @@ child.once("exit", (code, signal) => {
         if (entrypointPid !== 0 && (!Number.isSafeInteger(entrypointPid) || entrypointPid <= 1)) {
           throw new Error("invalid fixture entrypoint PID");
         }
+        const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
+        const wrapperPhase = phases.find(({ phase }) => phase === "loading wrapper");
+        const wrapperPid = wrapperPhase?.pid ?? 0;
+        if (proof.kind === "readiness" && wrapperPid) {
+          if (!Number.isSafeInteger(wrapperPid) || wrapperPid <= 1) {
+            throw new Error("invalid owned fixture PID");
+          }
+          expect(wrapperPhase?.parentPid).toBe(entrypointPid);
+          // Keep the shim alive to reap its held child before joining the shim itself.
+          process.kill(wrapperPid, "SIGKILL");
+          await entrypointClosed;
+        }
         if (entrypointPid && isProcessAlive(entrypointPid)) {
           try {
             forceStop?.();
@@ -1282,8 +1318,6 @@ child.once("exit", (code, signal) => {
             }
           }
         }
-        const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
-        const wrapperPid = phases.find(({ phase }) => phase === "loading wrapper")?.pid ?? 0;
         identity ??= existsSync(identityPath)
           ? JSON.parse(readFileSync(identityPath, "utf8"))
           : undefined;
@@ -1327,7 +1361,7 @@ child.once("exit", (code, signal) => {
           }
         }
         await entrypointClosed;
-        await waitForCondition(() => [...ownedPids].every((pid) => !pid || !isProcessAlive(pid)));
+        await waitForOwnedPidsToExit(ownedPids, testSignal);
         const runReceiptRequired =
           hasDescendant || proof.kind === "removal" || existsSync(runSpawnedPath);
         if (
@@ -1621,7 +1655,7 @@ describe("scripts/crabbox-wrapper", () => {
       const stateDir = path.join(root, "state");
       const platform = process.platform;
       const arch = process.arch === "x64" ? "amd64" : process.arch;
-      const managed = path.join(stateDir, "tools/crabbox/0.67.0", `${platform}-${arch}`, "crabbox");
+      const managed = path.join(stateDir, "tools/crabbox/0.69.0", `${platform}-${arch}`, "crabbox");
       mkdirSync(path.dirname(managed), { recursive: true });
       // Keep candidate and managed commands distinguishable at the executable boundary.
       const fake = path.join(makeFakeCrabbox(defaultProviderHelp), "crabbox-node");
@@ -1647,7 +1681,7 @@ describe("scripts/crabbox-wrapper", () => {
       };
       const result = runDefaultWrapper(["run", "--provider", provider, "--", "true"], options);
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain(`version=0.67.0 provider=${provider}`);
+      expect(result.stderr).toContain(`version=0.69.0 provider=${provider}`);
       expect(readInvocations(candidateLog)).toEqual([["--version"]]);
       const calls = readInvocations(log);
       expect(calls[0]).toEqual(["--version"]);
@@ -2286,7 +2320,7 @@ describe("scripts/crabbox-wrapper", () => {
       const env = testHomeEnv(home);
       if (customState) {
         env.XDG_STATE_HOME = path.join(home, "selected state");
-        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.67.0";
+        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.69.0";
         const legacyKey = path.join(
           testCrabboxConfigDir(home),
           "testboxes",
@@ -2310,16 +2344,16 @@ describe("scripts/crabbox-wrapper", () => {
   );
 
   it.each([
-    { id: "tbx_default", createKey: true, state: "", version: "0.67.0", selectedKey: false },
-    { id: "tbx_selected", createKey: true, state: "state", version: "0.67.0", selectedKey: true },
-    { id: "blue-hermit", createKey: false, state: "", version: "0.67.0", selectedKey: false },
+    { id: "tbx_default", createKey: true, state: "", version: "0.69.0", selectedKey: false },
+    { id: "tbx_selected", createKey: true, state: "state", version: "0.69.0", selectedKey: true },
+    { id: "blue-hermit", createKey: false, state: "", version: "0.69.0", selectedKey: false },
     ...(process.platform === "win32"
       ? [
           {
             id: "tbx_namespaced",
             createKey: true,
             state: "namespaced",
-            version: "0.67.0",
+            version: "0.69.0",
             selectedKey: true,
           },
         ]
@@ -2356,6 +2390,7 @@ describe("scripts/crabbox-wrapper", () => {
         "blacksmith-testbox",
         "--id",
         id,
+        "--blacksmith-ref=main",
         "--reclaim",
         "--shell",
         "--",
@@ -2379,7 +2414,7 @@ describe("scripts/crabbox-wrapper", () => {
         env: {
           ...testHomeEnv(home),
           XDG_STATE_HOME: stateRoot,
-          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.67.0",
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.69.0",
         },
       },
     );
@@ -2388,7 +2423,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("XDG_STATE_HOME must be absolute");
   });
 
-  it.each([{ version: "0.67.0", stateDirectory: "state " }])(
+  it.each([{ version: "0.69.0", stateDirectory: "state " }])(
     "fails before reuse when a Blacksmith Testbox is claimed by another repo ($version, $stateDirectory)",
     ({ version, stateDirectory }) => {
       const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
@@ -2488,6 +2523,7 @@ describe("scripts/crabbox-wrapper", () => {
       ...testHomeEnv(home),
       XDG_STATE_HOME: stateRoot,
       CODEX_THREAD_ID: "private-fixture-session",
+      OPENCLAW_FAKE_GIT_HEAD_SHA: "d".repeat(40),
       OPENCLAW_TESTBOX_LEASE_STATE_DIR: stateDir,
       OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID: id,
     };
@@ -3796,9 +3832,9 @@ esac
 
   it.each([
     {
-      scenario: "Blacksmith feature ref",
+      scenario: "Blacksmith maintained workflow",
       provider: "blacksmith-testbox",
-      args: ["--blacksmith-ref", "feature-branch"],
+      args: ["--blacksmith-ref", "main"],
       command: ["corepack", "pnpm", "check:changed"],
     },
     { scenario: "local container", provider: "local-container", args: [], command: ["echo ok"] },
@@ -3822,6 +3858,61 @@ esac
       if (reclaim) {
         expect(output.args).toContain("--reclaim");
       }
+    },
+  );
+
+  it.each([
+    ["warmup", "--blacksmith-ref=main", "--blacksmith-ref", "feature-branch"],
+    ["run", "-blacksmith-ref=feature-branch", "--sync-only"],
+  ])("refuses historical Testbox workflow allocation before delegation: %s", (...args) => {
+    const invocationLog = makeInvocationLog();
+    const result = runDefaultWrapper([...args, "--provider", "blacksmith-testbox"], {
+      env: { OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("Testbox workflow ref must be main");
+    expect(
+      readInvocations(invocationLog).some(
+        (invocation) =>
+          ["run", "warmup"].includes(invocation[0] ?? "") && !invocation.includes("--help"),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([[], ["--blacksmith-ref=old-workflow", "-blacksmith-ref", "main"]])(
+    "pins Testbox policy independently of configured refs and payload arguments: %j",
+    (...refs) => {
+      const { output } = runSuccessfulDefaultWrapper(
+        [
+          "run",
+          "--provider",
+          "blacksmith-testbox",
+          ...refs,
+          "--blacksmith-workflow",
+          ".github/workflows/ci-check-high-memory-testbox.yml",
+          "--blacksmith-job",
+          "check",
+          "--",
+          "echo",
+          "--blacksmith-ref",
+          "historical-source",
+        ],
+        {
+          configJson: { provider: "blacksmith-testbox", blacksmith: { ref: "old-workflow" } },
+          env: { CRABBOX_BLACKSMITH_REF: "old-environment-ref" },
+        },
+      );
+      const optionEnd = output.args.indexOf("--");
+      expect(output.args.slice(0, optionEnd)).toContain("--blacksmith-ref=main");
+      expect(output.args.slice(0, optionEnd)).toEqual(
+        expect.arrayContaining([
+          "--blacksmith-workflow",
+          ".github/workflows/ci-check-high-memory-testbox.yml",
+          "--blacksmith-job",
+          "check",
+        ]),
+      );
+      expect(output.args.at(-1)).toContain("historical-source");
     },
   );
 
@@ -3858,19 +3949,9 @@ esac
     );
   });
 
-  it("rejects changed-gate revision expressions that cannot be recreated remotely", () => {
+  it.each(["origin/main~1", "abc123"])("rejects a non-recreatable changed-gate base %s", (base) => {
     const result = runDefaultWrapper(
-      [
-        "run",
-        "--provider",
-        "aws",
-        "--",
-        "corepack",
-        "pnpm",
-        "check:changed",
-        "--base",
-        "origin/main~1",
-      ],
+      ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed", "--base", base],
       {
         gitResponses: {
           [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
@@ -3881,8 +3962,47 @@ esac
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(
-      "remote changed-gate sync requires an exact origin/<branch> base; received: origin/main~1",
+      `remote changed-gate sync requires an exact origin/<branch> or full commit SHA base; received: ${base}`,
     );
+  });
+
+  it.each(["check", "run check"])(
+    "preserves the captured base through nested pnpm %s",
+    (command) => {
+      const base = "b".repeat(40);
+      const { remoteCommand } = runSuccessfulDefaultWrapper(
+        [
+          "run",
+          "--provider",
+          "blacksmith-testbox",
+          "--",
+          "env",
+          "CI=1",
+          "/bin/bash",
+          "-c",
+          `corepack pnpm build && corepack pnpm ${command} --base ${base} && corepack pnpm test`,
+        ],
+        {
+          gitResponses: { [`merge-base\u0000${base}\u0000HEAD`]: { stdout: base + "\n" } },
+        },
+      );
+      expect(remoteCommand).toContain(`"baseSha":"${base}"`);
+      expect(remoteCommand).toContain(`pnpm ${command} --base ${base}`);
+      expect(remoteCommand).not.toContain("OPENCLAW_CHANGED_LANES_RAW_SYNC=1");
+    },
+  );
+
+  it("refuses a literal check base outside the candidate ancestry", () => {
+    const base = "b".repeat(40);
+    const result = runDefaultWrapper(
+      ["run", "--provider", "blacksmith-testbox", "--", "pnpm", "check", "--base", base],
+      {
+        gitResponses: { [`merge-base\u0000${base}\u0000HEAD`]: { stdout: "a".repeat(40) + "\n" } },
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("explicit changed-gate commit must be an ancestor of HEAD");
+    expect(result.stdout).toBe("");
   });
 
   it("rejects compound changed gates with incompatible bases", () => {
@@ -4229,6 +4349,7 @@ process.on("exit", () => {
     ["aws", false, "arbitrary"],
     ["blacksmith-testbox", true, "transport"],
     ["blacksmith-testbox", false, "transport"],
+    ["blacksmith-testbox", false, "captured-base"],
     ["blacksmith-testbox", false, "graph"],
     ["blacksmith-testbox", false, "frozen"],
     ["blacksmith-testbox", false, "lifecycle"],
@@ -4257,6 +4378,9 @@ process.on("exit", () => {
       const nodeExecPath = resolveTestNodeExecPath();
       const env = {
         ...testHomeEnv(home),
+        TMPDIR: root,
+        TMP: root,
+        TEMP: root,
         PATH: [fakeBin, path.dirname(nodeExecPath), process.env.PATH ?? ""].join(path.delimiter),
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_CONFIG_NOSYSTEM: "1",
@@ -4350,6 +4474,17 @@ process.on("exit", () => {
         path.join(origin, "scripts/check-changed.mjs"),
         path.join(origin, "scripts/source-fixture.mjs"),
       );
+      if (scenario === "captured-base") {
+        writeFileSync(
+          path.join(origin, "scripts/check.mts"),
+          [
+            'import { execFileSync } from "node:child_process";',
+            'const base = process.argv[process.argv.indexOf("--base") + 1];',
+            'const changed = execFileSync("git", ["diff", "--name-only", base, "HEAD"], { encoding: "utf8" }).trim().split("\\n");',
+            "process.stdout.write(JSON.stringify({ base, changed }));",
+          ].join("\n"),
+        );
+      }
       git(origin, ["add", "-A"]);
       git(origin, ["commit", "-qm", "base"]);
       const base = git(origin, ["rev-parse", "HEAD"]);
@@ -4547,6 +4682,31 @@ process.on("exit", () => {
         }
         return { receiver, result };
       };
+      if (scenario === "captured-base") {
+        const sharedBase = git(producer, ["rev-parse", base + "^"]);
+        git(producer, ["update-ref", "refs/remotes/origin/main", sharedBase]);
+        writeFileSync(path.join(producer, "owner.txt"), "candidate change\n");
+        git(producer, ["add", "owner.txt"]);
+        git(producer, ["commit", "-qm", "candidate change"]);
+        const candidate = runSender("direct", [
+          "run",
+          "--provider",
+          provider,
+          "--",
+          "node",
+          "scripts/check.mts",
+          "--base",
+          base,
+        ]);
+        const imported = receive("captured-base", candidate.remoteCommand, candidate.bundle);
+        expect(imported.result.status, failureDetail(imported.result)).toBe(0);
+        expect(JSON.parse(imported.result.stdout)).toEqual({ base, changed: ["owner.txt"] });
+        expect(git(imported.receiver, ["rev-parse", "origin/main"])).toBe(base);
+        expect(git(imported.receiver, ["rev-parse", "HEAD^"])).toBe(base);
+        expect(git(producer, ["rev-parse", "origin/main"])).toBe(sharedBase);
+        expect(git(producer, ["diff", "--name-only", sharedBase, "HEAD"])).toContain("mode.sh");
+        return;
+      }
       if (scenario !== "transport" && scenario !== "arbitrary") {
         const installOwner = ".github/actions/setup-node-env/install-dependencies.sh";
         const ownerPath = path.join(repoRoot, installOwner);
@@ -4648,7 +4808,11 @@ process.on("exit", () => {
         const copyOptions = { recursive: true, verbatimSymlinks: true };
         cpSync(selectedSource, producer, copyOptions);
         mkdirSync(path.dirname(path.join(producer, installOwner)), { recursive: true });
-        writeFileSync(path.join(producer, installOwner), installer);
+        writeFileSync(
+          path.join(producer, installOwner),
+          // Older selected installers can invoke pnpm before applying their install-only flag.
+          'test "${PNPM_CONFIG_FROZEN_LOCKFILE:-}" = true || exit 73\n' + installer,
+        );
         writeFileSync(
           path.join(producer, sourceCommand),
           [
@@ -5994,10 +6158,10 @@ cp.spawnSync = (command, args, options) => {
 
   it.skipIf(process.platform === "win32")(
     "reports the readiness deadline and last phase without inventing a writer failure",
-    async () => {
+    async ({ signal }) => {
       let failure: Error | undefined;
       try {
-        await runWrapperCleanupProof({ kind: "readiness" });
+        await runWrapperCleanupProof({ kind: "readiness" }, signal);
       } catch (error) {
         if (!(error instanceof Error)) {
           throw error;
@@ -6035,68 +6199,71 @@ cp.spawnSync = (command, args, options) => {
     25_000,
   );
 
-  (process.platform === "win32" ? it.skip : it).each(["node", "pnpm"] as const)(
+  (process.platform === "win32" ? it.skip : it).for(["node", "pnpm"] as const)(
     "keeps cleanup active after repeated parent signals through %s",
-    async (entrypoint) => {
-      await runWrapperCleanupProof({ kind: "signal", entrypoint, repeated: true });
+    { timeout: 25_000 },
+    async (entrypoint, { signal }) => {
+      await runWrapperCleanupProof({ kind: "signal", entrypoint, repeated: true }, signal);
     },
-    25_000,
   );
 
   (process.platform === "win32" ? it.skip : it)(
     "preserves graceful cancellation artifacts through pnpm terminal",
-    async () => {
-      await runWrapperCleanupProof({
-        kind: "signal",
-        entrypoint: "pnpm",
-        repeated: false,
-        cooperative: true,
-      });
+    async ({ signal }) => {
+      await runWrapperCleanupProof(
+        {
+          kind: "signal",
+          entrypoint: "pnpm",
+          repeated: false,
+          cooperative: true,
+        },
+        signal,
+      );
     },
     25_000,
   );
 
   it.skipIf(process.platform === "win32")(
     "cleans preparation cancellation after staging allocation without starting a run",
-    async () => {
-      await runWrapperCleanupProof({ kind: "preparation" });
+    async ({ signal }) => {
+      await runWrapperCleanupProof({ kind: "preparation" }, signal);
     },
     25_000,
   );
 
   it.skipIf(process.platform === "win32")(
     "reports capsule cleanup failure during preparation cancellation without starting a run",
-    async () => {
-      await runWrapperCleanupProof({ kind: "preparation", cleanupFails: true });
+    async ({ signal }) => {
+      await runWrapperCleanupProof({ kind: "preparation", cleanupFails: true }, signal);
     },
     25_000,
   );
 
-  it.skipIf(process.platform === "win32").each(["macos", "capsule"] as const)(
+  it.skipIf(process.platform === "win32").for(["macos", "capsule"] as const)(
     "cancels blocked wrapper stdin for %s without starting a run",
-    async (target) => {
-      await runWrapperCleanupProof({ kind: "stdin", target });
+    { timeout: 25_000 },
+    async (target, { signal }) => {
+      await runWrapperCleanupProof({ kind: "stdin", target }, signal);
     },
-    25_000,
   );
 
   it.skipIf(process.platform === "win32")(
     "retains source, claim and artifacts for escaped stderr until its writer is rescued",
-    async () => {
-      await runWrapperCleanupProof({ kind: "escaped" });
+    async ({ signal }) => {
+      await runWrapperCleanupProof({ kind: "escaped" }, signal);
     },
     25_000,
   );
 
-  it.skipIf(process.platform === "win32").each([
+  it.skipIf(process.platform === "win32").for([
     { target: "script", exitCode: 0 },
     { target: "source", exitCode: 23 },
   ] as const)(
     "reports $target removal failure without skipping independent cleanup (exit=$exitCode)",
-    async ({ target, exitCode }) => {
-      await runWrapperCleanupProof({ kind: "removal", target, exitCode });
+    { timeout: 25_000 },
+    async ({ target, exitCode }, { signal }) => {
+      await runWrapperCleanupProof({ kind: "removal", target, exitCode }, signal);
     },
-    25_000,
   );
 
   (process.platform === "win32" ? it.skip : it)(
@@ -6424,14 +6591,7 @@ cp.spawnSync = (command, args, options) => {
 
   it("uses the temporary full checkout for sparse sync-only runs", () => {
     const { output, result } = runSuccessfulDefaultWrapper(
-      [
-        "run",
-        "--provider",
-        "blacksmith-testbox",
-        "--blacksmith-ref",
-        "feature-branch",
-        "--sync-only",
-      ],
+      ["run", "--provider", "blacksmith-testbox", "--blacksmith-ref", "main", "--sync-only"],
       cleanSparseSyncOptions,
     );
 

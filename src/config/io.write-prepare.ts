@@ -1125,16 +1125,21 @@ function projectAuthoredRosterValue(params: {
   );
 }
 
-function indexAgentRosterForWrite(config: unknown, legacyIdsByIndex: ReadonlyMap<number, string>) {
+function readLegacyAgentList(config: unknown): unknown[] | undefined {
   const roster = readAgentRosterProperty(config);
-  if (roster?.kind !== "list" || !Array.isArray(roster.value)) {
+  return roster?.kind === "list" && Array.isArray(roster.value) ? roster.value : undefined;
+}
+
+function indexAgentRosterForWrite(config: unknown, legacyIdsByIndex: ReadonlyMap<number, string>) {
+  const list = readLegacyAgentList(config);
+  if (!list) {
     return toAgentEntriesRecord(listAgentEntries(config as OpenClawConfig)) as Record<
       string,
       unknown
     >;
   }
   return Object.fromEntries(
-    roster.value.flatMap((entry, index): [string, Record<string, unknown>][] => {
+    list.flatMap((entry, index): [string, Record<string, unknown>][] => {
       const id = legacyIdsByIndex.get(index);
       if (!isRecord(entry) || id === undefined) {
         return [];
@@ -1155,21 +1160,14 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
   explicitSetPaths?: readonly (readonly string[])[];
   unsetPaths?: readonly (readonly string[])[];
 }): unknown {
-  const authoredRoster = readAgentRosterProperty(params.rootAuthoredConfig);
-  const preMigrationRoster = readAgentRosterProperty(params.sourceConfigBeforeMigrations);
-  const resolvedLegacyList =
-    preMigrationRoster?.kind === "list" && Array.isArray(preMigrationRoster.value)
-      ? preMigrationRoster.value
-      : undefined;
+  const authoredList = readLegacyAgentList(params.rootAuthoredConfig);
+  const resolvedLegacyList = readLegacyAgentList(params.sourceConfigBeforeMigrations);
   // Use Doctor's original occurrences before any map can collapse duplicate or unnamed ids.
   // Reindex the three prior views without applying migrations to their field values.
   const legacyIdsByIndex = new Map(
-    projectLegacyAgentRosterEntries(
-      resolvedLegacyList ??
-        (authoredRoster?.kind === "list" && Array.isArray(authoredRoster.value)
-          ? authoredRoster.value
-          : []),
-    ).entries.map(({ sourceIndex, id }) => [sourceIndex, id]),
+    projectLegacyAgentRosterEntries(resolvedLegacyList ?? authoredList ?? []).entries.map(
+      ({ sourceIndex, id }) => [sourceIndex, id],
+    ),
   );
   const authoredEntries = indexAgentRosterForWrite(params.rootAuthoredConfig, legacyIdsByIndex);
   const runtimeEntries = indexAgentRosterForWrite(params.runtimeConfig, legacyIdsByIndex);
@@ -1177,7 +1175,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
   const nextEntries = toAgentEntriesRecord(
     listAgentEntries(params.nextConfig as OpenClawConfig),
   ) as Record<string, unknown>;
-  const explicitRoster = readAgentRosterProperty(params.valueSource);
+  const explicitList = readLegacyAgentList(params.valueSource);
   const rosterFactOwner = coerceConfig(
     params.sourceConfigBeforeMigrations ?? params.rootAuthoredConfig,
   );
@@ -1197,12 +1195,8 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     if (path[0] !== "agents" || path[1] !== "list") {
       continue;
     }
-    if (
-      path.length === 2 &&
-      explicitRoster?.kind === "list" &&
-      Array.isArray(explicitRoster.value)
-    ) {
-      explicitRoster.value.forEach((_entry, index) => structurallyExplicitLegacyIndexes.add(index));
+    if (path.length === 2 && explicitList) {
+      explicitList.forEach((_entry, index) => structurallyExplicitLegacyIndexes.add(index));
       continue;
     }
     if (path.length === 3) {
@@ -1213,10 +1207,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     }
   }
   for (const index of renamedLegacyIndexes) {
-    const entry =
-      explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value)
-        ? explicitRoster.value[index]
-        : undefined;
+    const entry = explicitList ? explicitList[index] : undefined;
     if (
       isRecord(entry) &&
       typeof entry.id === "string" &&
@@ -1236,8 +1227,8 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     if (renamedLegacyIndexes.has(index) || Object.hasOwn(nextEntries, explicitId)) {
       return explicitId;
     }
-    if (authoredRoster?.kind === "list" && Array.isArray(authoredRoster.value)) {
-      const authoredIndex = authoredRoster.value.findIndex(
+    if (authoredList) {
+      const authoredIndex = authoredList.findIndex(
         (authoredEntry) => isRecord(authoredEntry) && authoredEntry.id === explicitId,
       );
       const resolvedEntry = authoredIndex < 0 ? undefined : resolvedLegacyList?.[authoredIndex];
@@ -1250,35 +1241,34 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       ? undefined
       : explicitId;
   };
-  if (explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value)) {
-    assertUniqueNormalizedLegacyRosterIds(explicitRoster.value, resolveExplicitLegacyEntryId);
+  if (explicitList) {
+    assertUniqueNormalizedLegacyRosterIds(explicitList, resolveExplicitLegacyEntryId);
   }
-  const explicitEntries =
-    explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value)
-      ? Object.fromEntries(
-          explicitRoster.value.flatMap((entry, index) => {
-            if (!isRecord(entry)) {
-              return [];
+  const explicitEntries = explicitList
+    ? Object.fromEntries(
+        explicitList.flatMap((entry, index) => {
+          if (!isRecord(entry)) {
+            return [];
+          }
+          const id = structurallyExplicitLegacyIndexes.has(index)
+            ? resolveExplicitLegacyEntryId(entry, index)
+            : (legacyIdsByIndex.get(index) ?? entry.id);
+          if (typeof id !== "string") {
+            if (structurallyExplicitLegacyIndexes.has(index) && typeof entry.id === "string") {
+              throw new Error(
+                `Config write cannot safely resolve an explicitly replaced agent list slot for id "${entry.id}"; use a resolved literal id before writing the roster.`,
+              );
             }
-            const id = structurallyExplicitLegacyIndexes.has(index)
-              ? resolveExplicitLegacyEntryId(entry, index)
-              : (legacyIdsByIndex.get(index) ?? entry.id);
-            if (typeof id !== "string") {
-              if (structurallyExplicitLegacyIndexes.has(index) && typeof entry.id === "string") {
-                throw new Error(
-                  `Config write cannot safely resolve an explicitly replaced agent list slot for id "${entry.id}"; use a resolved literal id before writing the roster.`,
-                );
-              }
-              return [];
-            }
-            const { id: _explicitId, ...config } = entry;
-            return [[id, config]];
-          }),
-        )
-      : (toAgentEntriesRecord(listAgentEntries(params.valueSource as OpenClawConfig)) as Record<
-          string,
-          unknown
-        >);
+            return [];
+          }
+          const { id: _explicitId, ...config } = entry;
+          return [[id, config]];
+        }),
+      )
+    : (toAgentEntriesRecord(listAgentEntries(params.valueSource as OpenClawConfig)) as Record<
+        string,
+        unknown
+      >);
   const explicitPaths = (params.explicitSetPaths ?? []).flatMap((path) => {
     if (path[0] !== "agents") {
       return [];
@@ -1296,10 +1286,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       return [[]];
     }
     const index = parseConfigPathArrayIndex(path[2] ?? "");
-    const explicitEntry =
-      explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value) && index !== undefined
-        ? explicitRoster.value[index]
-        : undefined;
+    const explicitEntry = explicitList && index !== undefined ? explicitList[index] : undefined;
     const usesExplicitId =
       index !== undefined &&
       (renamedLegacyIndexes.has(index) ||
@@ -1318,18 +1305,13 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       entryIdentityByNextId.set(id, id);
     }
   }
-  if (
-    authoredRoster?.kind === "list" &&
-    Array.isArray(authoredRoster.value) &&
-    explicitRoster?.kind === "list" &&
-    Array.isArray(explicitRoster.value)
-  ) {
+  if (authoredList && explicitList) {
     for (const path of params.explicitSetPaths ?? []) {
       if (path[0] !== "agents" || path[1] !== "list" || path.length !== 4 || path[3] !== "id") {
         continue;
       }
       const index = parseConfigPathArrayIndex(path[2] ?? "");
-      const explicitEntry = index === undefined ? undefined : explicitRoster.value[index];
+      const explicitEntry = index === undefined ? undefined : explicitList[index];
       const oldId = index === undefined ? undefined : legacyIdsByIndex.get(index);
       const nextId = isRecord(explicitEntry) ? explicitEntry.id : undefined;
       if (typeof oldId === "string" && typeof nextId === "string") {
@@ -1415,15 +1397,15 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       return [id, value];
     }),
   );
-  if (authoredRoster?.kind === "list" && Array.isArray(authoredRoster.value)) {
+  if (authoredList) {
     const nextIdByPriorId = new Map(
       [...entryIdentityByNextId].map(([nextId, priorId]) => [priorId, nextId]),
     );
     const resolveExplicitLegacyIdCandidate = (index: number): string | undefined => {
-      if (explicitRoster?.kind !== "list" || !Array.isArray(explicitRoster.value)) {
+      if (!explicitList) {
         return undefined;
       }
-      const explicitEntry = explicitRoster.value[index];
+      const explicitEntry = explicitList[index];
       if (!isRecord(explicitEntry)) {
         return undefined;
       }
@@ -1432,12 +1414,12 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     };
     const resolveExplicitLegacyId = (index: number): string => {
       const resolvedId = resolveExplicitLegacyIdCandidate(index);
-      if (!resolvedId || explicitRoster?.kind !== "list" || !Array.isArray(explicitRoster.value)) {
+      if (!resolvedId || !explicitList) {
         throw new Error(
           "Config write cannot safely resolve an explicitly replaced agent list slot for unset.",
         );
       }
-      for (const [candidateIndex] of explicitRoster.value.entries()) {
+      for (const [candidateIndex] of explicitList.entries()) {
         if (candidateIndex === index) {
           continue;
         }
@@ -1493,12 +1475,12 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
 }
 
 function restoreAuthoredAgentRoster(value: unknown, rootAuthoredConfig: unknown): unknown {
-  let next = deletePathValue(value, ["agents", "entries"]);
-  next = deletePathValue(next, ["agents", "list"]);
-  const authoredRoster = readAgentRosterProperty(rootAuthoredConfig);
-  if (authoredRoster) {
-    return setPathValue(next, ["agents", authoredRoster.kind], authoredRoster.value, true);
+  const roster = readAgentRosterProperty(rootAuthoredConfig);
+  let next = deletePathValue(value, ["agents", roster?.kind === "entries" ? "list" : "entries"]);
+  if (roster) {
+    return setPathValue(next, ["agents", roster.kind], roster.value, true);
   }
+  next = deletePathValue(next, ["agents", "list"]);
   // Roster injection must not leave an unauthored parent, but empty authored sections are intent.
   return !hasPathValue(rootAuthoredConfig, ["agents"]) &&
     isDeepStrictEqual(getPathValue(next, ["agents"]), {})
@@ -1510,26 +1492,22 @@ export function projectAuthoredAgentRosterForWrite(params: {
   rootAuthoredConfig: unknown;
   sourceConfigBeforeMigrations?: unknown;
 }): unknown {
-  const authoredRoster = readAgentRosterProperty(params.rootAuthoredConfig);
-  if (authoredRoster?.kind !== "list" || !Array.isArray(authoredRoster.value)) {
+  const authoredList = readLegacyAgentList(params.rootAuthoredConfig);
+  if (!authoredList) {
     return params.rootAuthoredConfig;
   }
-  const preMigrationRoster = readAgentRosterProperty(params.sourceConfigBeforeMigrations);
-  const resolvedLegacyList =
-    preMigrationRoster?.kind === "list" && Array.isArray(preMigrationRoster.value)
-      ? preMigrationRoster.value
-      : undefined;
+  const resolvedLegacyList = readLegacyAgentList(params.sourceConfigBeforeMigrations);
   // Doctor may rename malformed or duplicate ids; includes must keep an unambiguous owner.
   if (
-    collectIncludeOwnedPaths(authoredRoster.value).length > 0 &&
-    !parseLegacyAgentRoster(resolvedLegacyList ?? authoredRoster.value)
+    collectIncludeOwnedPaths(authoredList).length > 0 &&
+    !parseLegacyAgentRoster(resolvedLegacyList ?? authoredList)
   ) {
     throw new Error(
       "Config write cannot safely match $include-owned legacy agent entries; repair their ids in the authored config first.",
     );
   }
   const legacyIdsByIndex = new Map(
-    projectLegacyAgentRosterEntries(resolvedLegacyList ?? authoredRoster.value).entries.map(
+    projectLegacyAgentRosterEntries(resolvedLegacyList ?? authoredList).entries.map(
       ({ sourceIndex, id }) => [sourceIndex, id],
     ),
   );

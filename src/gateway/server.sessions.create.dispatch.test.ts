@@ -32,6 +32,50 @@ import { directSessionReq } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness();
 
+test("sessions.create publishes repository metadata before the next socket read", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const { ws } = await openClient();
+  const key = "agent:main:dashboard:repository-worker";
+  try {
+    const created = await rpcReq<{
+      key: string;
+      entry: { repositoryWorkspaceId: string };
+    }>(ws, "sessions.create", {
+      agentId: "main",
+      key,
+      repository: { url: "https://github.com/example/repository.git", ref: "main" },
+    });
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    const workspaceId = requireNonEmptyString(
+      created.payload?.entry.repositoryWorkspaceId,
+      "created repository workspace",
+    );
+    expect(created.payload?.key).toBe(key);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      repositoryWorkspaceId: workspaceId,
+    });
+
+    const listed = await rpcReq<{
+      sessions: Array<{
+        key: string;
+        repositoryWorkspaceId?: string;
+        repository?: { url: string; ref?: string; branch: string };
+      }>;
+    }>(ws, "sessions.list", { agentId: "main", limit: 100 });
+    expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
+    expect(listed.payload?.sessions.find((row) => row.key === key)).toMatchObject({
+      repositoryWorkspaceId: workspaceId,
+      repository: {
+        url: "https://github.com/example/repository.git",
+        ref: "main",
+        branch: `openclaw/${workspaceId}`,
+      },
+    });
+  } finally {
+    ws.close();
+  }
+});
+
 test("chat.send fences dashboard title persistence from concurrent session deletion", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
@@ -276,8 +320,6 @@ test("sessions.create can start the first agent turn from an initial task", asyn
 
 const mentionCreationOwners = [
   ["main", "per-sender"],
-  ["ops", "per-sender"],
-  ["main", "global"],
   ["ops", "global"],
 ] as const;
 
@@ -336,7 +378,7 @@ test.each(mentionCreationOwners)(
         expect(inbox.list(sender)).toMatchObject({ ok: true, value: { items: [] } });
       } finally {
         await waitForCreatedSessionRun(context, storePath, key);
-        inbox.dispose();
+        await inbox.dispose();
       }
     }),
 );

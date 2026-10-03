@@ -1,8 +1,6 @@
 import type {
   AuditMessageConversationKind,
-  AuditMessageDeliveryKind,
   AuditMessageFailureStage,
-  AuditOutboundMessageSuppressedReasonCode,
 } from "../../audit/audit-event-types.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import {
@@ -22,6 +20,8 @@ import {
 } from "./channel-target-prefix.js";
 import {
   countPhysicalOutboundSends,
+  type OutboundAuditTerminal,
+  type IndexedOutboundAuditTerminal,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
@@ -42,36 +42,6 @@ type OutboundAuditDeliveryContext = {
   };
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
-};
-
-type OutboundAuditTerminal =
-  | {
-      outcome: "sent";
-      results: readonly OutboundDeliveryResult[];
-      deliveryKind?: AuditMessageDeliveryKind;
-    }
-  | {
-      outcome: "suppressed";
-      reasonCode: AuditOutboundMessageSuppressedReasonCode;
-      results?: readonly OutboundDeliveryResult[];
-    }
-  | {
-      outcome: "failed";
-      failureStage: AuditMessageFailureStage;
-      results?: readonly OutboundDeliveryResult[];
-      sentBeforeError?: boolean;
-      deliveryKind?: AuditMessageDeliveryKind;
-    }
-  | {
-      outcome: "unknown";
-      failureStage: AuditMessageFailureStage;
-      results?: readonly OutboundDeliveryResult[];
-      sentBeforeError?: boolean;
-    };
-
-export type IndexedOutboundAuditTerminal = {
-  payloadIndex: number;
-  terminal: OutboundAuditTerminal;
 };
 
 function outboundQueueAuditSourceId(

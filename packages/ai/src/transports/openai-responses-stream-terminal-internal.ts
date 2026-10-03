@@ -12,6 +12,11 @@ import {
   readResponsesReasoningTokens,
   resolveResponsesTerminalStopReason,
 } from "../providers/openai-responses-terminal-usage.js";
+import {
+  type createResponsesToolCallTracker,
+  readResponsesToolCallItemIdentity,
+  type ResponsesToolCallState,
+} from "../providers/openai-responses-tool-call-tracker.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -53,6 +58,7 @@ type TerminalOutput = AssistantMessage & {
 type TerminalOptions = Pick<
   ResponsesStreamOptions,
   | "serviceTier"
+  | "onServiceTier"
   | "resolveServiceTier"
   | "applyServiceTierPricing"
   | "reasoningReplayMetadata"
@@ -113,11 +119,24 @@ export function createResponsesTerminalController(params: {
   model: Model;
   options?: TerminalOptions;
   outputs: ResponsesOutputTracker;
+  toolCalls: Pick<
+    ReturnType<typeof createResponsesToolCallTracker<ResponsesToolCallState & { block: ToolCall }>>,
+    "resolve" | "values" | "hasActive"
+  >;
   getLastTextBlock: () => TextBlockReference | null;
   setLastTextBlock: (block: TextBlockReference | null) => void;
 }) {
   const { output, stream, model, options } = params;
   const blocks = output.content;
+  let rejectedToolCallId: string | undefined;
+  const recordIncompleteToolCall = (
+    event: { output_index?: unknown },
+    item: Extract<ResponseOutputItem, { type: "function_call" }>,
+  ) => {
+    const streamed = params.toolCalls.resolve(event, readResponsesToolCallItemIdentity(item));
+    rejectedToolCallId =
+      streamed?.block.id ?? (item.call_id ? resolveResponsesToolCallId(item) : undefined);
+  };
   const backfillReasoning = (items: ResponseOutputItem[]) => {
     for (const [outputIndex, item] of items.entries()) {
       if (item.type !== "reasoning" || !item.encrypted_content) {
@@ -305,6 +324,7 @@ export function createResponsesTerminalController(params: {
     >["response"],
     responseId = response.id,
   ) => {
+    options?.onServiceTier?.(response.service_tier);
     output.responseId = responseId || output.responseId;
     output.responseModel = options?.resolveResponseModel
       ? options.resolveResponseModel()?.trim() || undefined
@@ -332,6 +352,7 @@ export function createResponsesTerminalController(params: {
       { type: "response.completed" | "response.incomplete" }
     >["response"] & { end_turn?: unknown },
     terminalEventType: "response.completed" | "response.incomplete",
+    hasRejectedToolCall: boolean,
   ) => {
     backfillReasoning(response.output ?? []);
     finalizeTerminalFacts(response);
@@ -347,6 +368,17 @@ export function createResponsesTerminalController(params: {
       output.endTurn = response.end_turn;
     }
     const incompleteReason = response.incomplete_details?.reason;
+    const incompleteCall = response.output?.find(
+      (item) => item.type === "function_call" && item.status && item.status !== "completed",
+    );
+    const incompleteToolCallId =
+      rejectedToolCallId ??
+      (terminalEventType === "response.incomplete" && !hasRejectedToolCall
+        ? params.toolCalls.values()[0]?.block.id
+        : undefined) ??
+      (incompleteCall?.type === "function_call" && incompleteCall.call_id
+        ? resolveResponsesToolCallId(incompleteCall)
+        : undefined);
     appendAssistantMessageDiagnostic(output, {
       type: "openai_responses_terminal",
       timestamp: Date.now(),
@@ -355,6 +387,7 @@ export function createResponsesTerminalController(params: {
         // Keep the canonical status interpretation before tool validation replaces
         // output.stopReason with an error. Conflicting statuses cannot authorize retry.
         stopReason: terminal.stopReason,
+        ...(incompleteToolCallId ? { incompleteToolCallId } : {}),
         ...(terminalEventType === "response.incomplete"
           ? {
               incompleteReason:
@@ -374,10 +407,20 @@ export function createResponsesTerminalController(params: {
               : "invalid",
       },
     });
+    if (
+      !hasRejectedToolCall &&
+      terminalEventType === "response.incomplete" &&
+      params.toolCalls.hasActive()
+    ) {
+      throw output.errorMessage
+        ? new Error(output.errorMessage)
+        : new IncompleteToolCallError("Responses stream completed with unresolved tool calls");
+    }
   };
   return {
     finalizeResponse,
     finalizeFailedResponse: finalizeTerminalFacts,
+    recordIncompleteToolCall,
     recoverTerminalOutput,
     emitToolCallCompletion,
   };

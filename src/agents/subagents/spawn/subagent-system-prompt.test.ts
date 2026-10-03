@@ -26,7 +26,9 @@ describe("subagent spawn envelope", () => {
       expect(guidance).not.toMatch(
         /auto-announce|auto-reported|sessions_yield|agents_wait|`message`/,
       );
+      expect(guidance).not.toContain("NO_REPLY");
     }
+    expect(systemPrompt).toContain("Always return a meaningful result or a concrete blocker");
     expect(systemPrompt.length).toBeLessThan(4_000);
     expect(message).toContain("[Subagent Task]\n\nUNIQUE_SUBAGENT_TASK\n  preserve indentation");
     expect(systemPrompt).not.toContain("UNIQUE_SUBAGENT_TASK");
@@ -67,7 +69,7 @@ describe("subagent spawn envelope", () => {
     const envelope = buildEnvelope({ completionTarget: "parent" });
     for (const text of [envelope.systemPrompt, envelope.acceptedNote]) {
       expect(text).toContain("No result is automatically sent to a channel");
-      expect(text).toContain("remain silent");
+      expect(text).toContain("continues any unfinished work");
     }
     expect(envelope.acceptedNote).toContain("private requester turn");
     expect(envelope.acceptedNote).not.toContain("after your final answer");

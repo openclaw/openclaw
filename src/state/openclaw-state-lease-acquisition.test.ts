@@ -32,8 +32,8 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OpenClawStateLeaseAcquisitionError } from "./openclaw-state-lease-error.js";
-import * as leaseStorage from "./openclaw-state-lease-storage.js";
 import * as leaseStore from "./openclaw-state-lease-store.js";
+import * as leaseStorage from "./openclaw-state-lease-worker-storage.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
 import * as workerContext from "./openclaw-state-worker-context.js";
 

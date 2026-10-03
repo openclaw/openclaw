@@ -15,6 +15,7 @@ import { CodexAppServerRpcError } from "./client.js";
 import { threadStartResult as nativeThreadStartResult } from "./codex-app-server.test-fixtures.js";
 import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
+import { createCodexManagedThreadStore } from "./managed-thread-store.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import { buildCodexProjectDocThreadConfig } from "./project-doc-thread-config.js";
@@ -1141,24 +1142,6 @@ describe("Codex app-server turn input image sanitizing", () => {
     });
   });
 
-  it("places workspace collaboration instructions before memory", () => {
-    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
-      threadId: "thread-1",
-      cwd: "/repo",
-      appServer: createAppServerOptions() as never,
-      turnScopedDeveloperInstructions: "SOUL.md turn-only context",
-      memoryCollaborationInstructions: "MEMORY.md pointer",
-    });
-    const developerInstructions = request.collaborationMode?.settings.developer_instructions ?? "";
-    expect(developerInstructions).toContain("# Collaboration Mode: Default");
-    expect(developerInstructions).toContain("SOUL.md turn-only context");
-    expect(developerInstructions).toContain("MEMORY.md pointer");
-
-    expect(developerInstructions.indexOf("SOUL.md turn-only context")).toBeLessThan(
-      developerInstructions.indexOf("MEMORY.md pointer"),
-    );
-  });
-
   it("replaces malformed inline images before turn/start", () => {
     const request = buildTurnStartParams(
       createAttemptParams({
@@ -1264,9 +1247,7 @@ describe("Codex app-server turn params", () => {
     params.thinkLevel = "medium";
     params.trigger = "cron";
 
-    const cronCollaborationMode = buildTurnCollaborationMode(params, {
-      turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
-    });
+    const cronCollaborationMode = buildTurnCollaborationMode(params);
     expect(cronCollaborationMode.mode).toBe("default");
     expect(cronCollaborationMode.settings.model).toBe("gpt-5.4-codex");
     expect(cronCollaborationMode.settings.reasoning_effort).toBe("medium");
@@ -1278,9 +1259,6 @@ describe("Codex app-server turn params", () => {
     );
     expect(cronCollaborationMode.settings.developer_instructions).toContain(
       "Use context already provided by the runtime",
-    );
-    expect(cronCollaborationMode.settings.developer_instructions).toContain(
-      "Turn-only workspace instructions.",
     );
   });
 });
@@ -1410,14 +1388,12 @@ describe("Codex plugin binding recovery", () => {
       path.join(tempDir, "workspace-managed-failure"),
     );
     const stateStore = createCodexTestBindingStateStore();
+    const registerIfAbsent = vi.fn().mockRejectedValue(new Error("managed ownership unavailable"));
     const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
-      managedThreads: {
-        has: vi.fn(async () => false),
-        mark: vi.fn(async () => {
-          throw new Error("managed ownership unavailable");
-        }),
-        snapshot: vi.fn(async () => new Map()),
-      },
+      managedThreads: createCodexManagedThreadStore({
+        entries: async () => [],
+        registerIfAbsent,
+      }),
     });
     const request = createLifecycleRequest(async (method: string) => {
       if (method === "thread/start") {
@@ -1439,6 +1415,7 @@ describe("Codex plugin binding recovery", () => {
         bindingStore,
       }),
     ).resolves.toMatchObject({ threadId: "thread-managed-without-index" });
+    expect(registerIfAbsent).toHaveBeenCalledOnce();
   });
 
   it("applies a settled plugin denial before resume without replacing the native binding", async () => {

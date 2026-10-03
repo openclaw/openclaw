@@ -83,10 +83,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
 
   constructor() {
     super();
-    new SubscriptionsController(this).watch(
-      () => this.uploadConfig,
-      (config, notify) => config.subscribe(notify),
-    );
+    new SubscriptionsController(this).watchStore(() => this.uploadConfig);
   }
   private readonly composer = createSessionRailComposer({
     submit: () => this.submit(),
@@ -327,6 +324,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         <openclaw-chat-comment-controller
           .paneId=${`side-chat:${this.sessionKey}`}
           .props=${attachmentProps}
+          .disabled=${attachmentProps.disabled}
           .sessionKey=${this.sessionKey}
           .presented=${this.presented}
         ></openclaw-chat-comment-controller>

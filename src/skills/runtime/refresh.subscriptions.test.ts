@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import {
   bumpSkillsSnapshotVersion,
   getSkillsSnapshotVersion,
@@ -253,7 +254,6 @@ describe("skills watcher subscription lifecycle", () => {
     "keeps an idle %s source active while another consumer remains",
     async (scope) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-      const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
       const workspaceDir = fixtureWorkspaceDir;
       const executionWorkspaceDir = await createFixtureDirectory("shared-execution");
       const idleScope = {

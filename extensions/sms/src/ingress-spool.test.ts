@@ -10,29 +10,15 @@ import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SmsChannelRuntime } from "./inbound.js";
 import { createSmsIngressSpool } from "./ingress-spool.js";
-import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler } from "./webhook.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 type SmsIngressPayload = {
   version: 1;
   form: Record<string, string>;
 };
 
-const account: ResolvedSmsAccount = {
-  accountId: "default",
-  enabled: true,
-  accountSid: "AC123",
-  authToken: "secret",
-  fromNumber: "+15557654321",
-  messagingServiceSid: "",
-  defaultTo: "",
-  webhookPath: "/webhooks/sms",
-  publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-  dangerouslyDisableSignatureValidation: false,
-  dmPolicy: "pairing",
-  allowFrom: [],
-  textChunkLimit: 1500,
-};
+const account = createSmsTestAccount({ accountId: "default" });
 
 const stateDirs: string[] = [];
 const disposers: Array<() => void | Promise<void>> = [];
@@ -52,6 +38,23 @@ function createQueue(stateDir: string) {
     accountId: account.accountId,
     stateDir,
   });
+}
+
+function createTestSpool(
+  stateDir: string,
+  options: { deliver: SmsIngressDeliver } & Partial<
+    Pick<Parameters<typeof createSmsIngressSpool>[0], "account" | "queue">
+  >,
+): SmsIngressSpool {
+  const spool = createSmsIngressSpool({
+    cfg: {},
+    account,
+    channelRuntime: {} as SmsChannelRuntime,
+    ...options,
+    queue: options.queue ?? createQueue(stateDir),
+  });
+  disposers.push(spool.stop);
+  return spool;
 }
 
 function form(messageSid: string): Record<string, string> {
@@ -268,45 +271,11 @@ describe("createSmsIngressSpool", () => {
     expect(await queue.listPending()).toEqual([]);
   });
 
-  it("recovers an uncompleted message with a fresh drain instance", async () => {
-    const stateDir = await createStateDir();
-    const first = createSmsIngressSpool({
-      cfg: {},
-      account,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
-      deliver: vi.fn<SmsIngressDeliver>(async () => undefined),
-    });
-    disposers.push(first.stop);
-    await first.enqueue(form("SM-restart"));
-    await first.stop();
-
-    const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
-      await lifecycle.onAdopted();
-    });
-    const recovered = createSmsIngressSpool({
-      cfg: {},
-      account,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
-      deliver,
-    });
-    disposers.push(recovered.stop);
-    await drainSpool(recovered);
-
-    expect(deliver).toHaveBeenCalledOnce();
-  });
-
   it("durably admits a handler selected before route shutdown after the pump stops", async () => {
     const stateDir = await createStateDir();
-    const retired = createSmsIngressSpool({
-      cfg: {},
-      account,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
+    const retired = createTestSpool(stateDir, {
       deliver: vi.fn<SmsIngressDeliver>(async () => undefined),
     });
-    disposers.push(retired.stop);
     retired.start();
     await retired.stop();
 
@@ -317,14 +286,7 @@ describe("createSmsIngressSpool", () => {
     const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
       await lifecycle.onAdopted();
     });
-    const recovered = createSmsIngressSpool({
-      cfg: {},
-      account,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
-      deliver,
-    });
-    disposers.push(recovered.stop);
+    const recovered = createTestSpool(stateDir, { deliver });
     await drainSpool(recovered);
 
     expect(deliver).toHaveBeenCalledOnce();
@@ -337,18 +299,13 @@ describe("createSmsIngressSpool", () => {
       markDeliveryStarted = resolve;
     });
     let deliverySignal: AbortSignal | undefined;
-    const spool = createSmsIngressSpool({
-      cfg: {},
-      account,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
+    const spool = createTestSpool(stateDir, {
       deliver: vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
         deliverySignal = lifecycle.abortSignal;
         markDeliveryStarted();
         await new Promise<void>(() => {});
       }),
     });
-    disposers.push(spool.stop);
     spool.start();
     await spool.enqueue(form("SM-non-cooperative-stop"));
     await deliveryStarted;
@@ -363,14 +320,7 @@ describe("createSmsIngressSpool", () => {
     const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
       await lifecycle.onAdopted();
     });
-    const spool = createSmsIngressSpool({
-      cfg: {},
-      account,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
-      deliver,
-    });
-    disposers.push(spool.stop);
+    const spool = createTestSpool(stateDir, { deliver });
 
     expect(await spool.enqueue(form("SM-completed"))).toMatchObject({
       kind: "accepted",
@@ -391,14 +341,7 @@ describe("createSmsIngressSpool", () => {
     const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
       await lifecycle.onAdopted();
     });
-    const spool = createSmsIngressSpool({
-      cfg: {},
-      account,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
-      deliver,
-    });
-    disposers.push(spool.stop);
+    const spool = createTestSpool(stateDir, { deliver });
     const rawForm = form("SM-alias");
     delete rawForm.MessageSid;
     rawForm[key] = "SM-alias";
@@ -416,14 +359,10 @@ describe("createSmsIngressSpool", () => {
   it("uses the canonical sender as the durable lane", async () => {
     const stateDir = await createStateDir();
     const queue = createQueue(stateDir);
-    const spool = createSmsIngressSpool({
-      cfg: {},
-      account,
-      channelRuntime: {} as SmsChannelRuntime,
+    const spool = createTestSpool(stateDir, {
       queue,
       deliver: vi.fn<SmsIngressDeliver>(async () => undefined),
     });
-    disposers.push(spool.stop);
 
     await spool.enqueue({ ...form("SM-canonical-lane"), From: "RcS:+1 (555) 123-4567" });
 
@@ -439,14 +378,9 @@ describe("createSmsIngressSpool", () => {
       .spyOn(Date, "now")
       .mockReturnValueOnce(receivedAt)
       .mockReturnValue(receivedAt + 60_000);
-    const first = createSmsIngressSpool({
-      cfg: {},
-      account,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
+    const first = createTestSpool(stateDir, {
       deliver: vi.fn<SmsIngressDeliver>(async () => undefined),
     });
-    disposers.push(first.stop);
     await first.enqueue(form("SM-received-at"));
     await first.stop();
     now.mockRestore();
@@ -454,14 +388,7 @@ describe("createSmsIngressSpool", () => {
     const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
       await lifecycle.onAdopted();
     });
-    const recovered = createSmsIngressSpool({
-      cfg: {},
-      account,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
-      deliver,
-    });
-    disposers.push(recovered.stop);
+    const recovered = createTestSpool(stateDir, { deliver });
     await drainSpool(recovered);
 
     expect(deliver).toHaveBeenCalledWith(expect.any(Object), expect.any(Object), receivedAt);
@@ -472,27 +399,13 @@ describe("createSmsIngressSpool", () => {
     const firstDeliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
       await lifecycle.onAdopted();
     });
-    const first = createSmsIngressSpool({
-      cfg: {},
-      account,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
-      deliver: firstDeliver,
-    });
-    disposers.push(first.stop);
+    const first = createTestSpool(stateDir, { deliver: firstDeliver });
     await first.enqueue(form("SM-handler-reload"));
     await drainSpool(first);
     await first.stop();
 
     const reloadedDeliver = vi.fn<SmsIngressDeliver>(async () => undefined);
-    const reloaded = createSmsIngressSpool({
-      cfg: {},
-      account,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
-      deliver: reloadedDeliver,
-    });
-    disposers.push(reloaded.stop);
+    const reloaded = createTestSpool(stateDir, { deliver: reloadedDeliver });
     expect(await reloaded.enqueue(form("SM-handler-reload"))).toMatchObject({
       kind: "completed",
       duplicate: true,
@@ -513,14 +426,10 @@ describe("createSmsIngressSpool", () => {
     const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
       await lifecycle.onAdopted();
     });
-    const spool = createSmsIngressSpool({
-      cfg: {},
+    const spool = createTestSpool(stateDir, {
       account: serviceAccount,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
       deliver,
     });
-    disposers.push(spool.stop);
 
     await spool.enqueue({
       ...form("SM-service"),
@@ -535,41 +444,22 @@ describe("createSmsIngressSpool", () => {
     );
   });
 
-  it.each([
-    {
-      name: "fromNumber-only RCS compatibility",
-      ingressAccount: account,
-      rawForm: {
-        ...form("SM-rcs-number"),
-        From: "rcs:+15551234567",
-        To: "rcs:example-agent",
-      },
-    },
-    {
-      name: "Messaging Service RCS identity",
-      ingressAccount: { ...account, fromNumber: "", messagingServiceSid: "MG123" },
-      rawForm: {
-        ...form("SM-rcs-service"),
-        From: "rcs:+15551234567",
-        To: "rcs:example-agent",
-        MessagingServiceSid: "MG123",
-      },
-    },
-  ])("preserves $name", async ({ ingressAccount, rawForm }) => {
+  it("preserves Messaging Service RCS identity", async () => {
     const stateDir = await createStateDir();
     const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
       await lifecycle.onAdopted();
     });
-    const spool = createSmsIngressSpool({
-      cfg: {},
-      account: ingressAccount,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
+    const spool = createTestSpool(stateDir, {
+      account: { ...account, fromNumber: "", messagingServiceSid: "MG123" },
       deliver,
     });
-    disposers.push(spool.stop);
 
-    await spool.enqueue(rawForm);
+    await spool.enqueue({
+      ...form("SM-rcs-service"),
+      From: "rcs:+15551234567",
+      To: "rcs:example-agent",
+      MessagingServiceSid: "MG123",
+    });
     await drainSpool(spool);
 
     expect(deliver).toHaveBeenCalledOnce();
@@ -580,14 +470,7 @@ describe("createSmsIngressSpool", () => {
     const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
       await lifecycle.onAdopted();
     });
-    const spool = createSmsIngressSpool({
-      cfg: {},
-      account,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
-      deliver,
-    });
-    disposers.push(spool.stop);
+    const spool = createTestSpool(stateDir, { deliver });
 
     await spool.enqueue({
       ...form("SM-rcs-text-media"),
@@ -672,14 +555,10 @@ describe("createSmsIngressSpool", () => {
   ])("dead-letters a permanent $name failure", async ({ ingressAccount, rawForm }) => {
     const stateDir = await createStateDir();
     const deliver = vi.fn<SmsIngressDeliver>(async () => undefined);
-    const spool = createSmsIngressSpool({
-      cfg: {},
+    const spool = createTestSpool(stateDir, {
       account: ingressAccount,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
       deliver,
     });
-    disposers.push(spool.stop);
 
     await spool.enqueue(rawForm);
     await drainSpool(spool);

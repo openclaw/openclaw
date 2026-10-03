@@ -1,6 +1,4 @@
 import { fork, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -10,7 +8,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   confirmOpenClawAgentDatabaseIntegrity,
-  listOpenClawRegisteredAgentDatabases,
   recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
 import type {
@@ -22,7 +19,6 @@ import {
   confirmOpenClawStateDatabaseIntegrity,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const log = createSubsystemLogger("state/database-verify");
 const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
@@ -124,8 +120,8 @@ export function runDatabaseVerifyWorker(
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   let worker: ChildProcess;
   try {
-    // Snapshot preparation opens and closes raw source descriptors. Isolate it
-    // because POSIX close() can release the Gateway's process-owned SQLite locks.
+    // Closing a source reader can release the Gateway's process-owned SQLite
+    // locks, so quick checks keep their own process.
     worker = fork(fileURLToPath(workerUrl), [DATABASE_VERIFY_CHILD_ARG], {
       execArgv,
       stdio: ["ignore", "ignore", "ignore", "ipc"],
@@ -197,37 +193,6 @@ export async function terminateDatabaseVerifyWorker(worker: ChildProcess): Promi
   await lifecycle.settled;
 }
 
-/** Resolve the state database and current registered agent database paths. */
-export function collectOpenClawDatabaseVerifyTargets(options: {
-  env: NodeJS.ProcessEnv;
-}): OpenClawDatabaseVerifyTarget[] {
-  const targets = new Map<string, OpenClawDatabaseVerifyTarget>();
-  const statePath = path.resolve(resolveOpenClawStateSqlitePath(options.env));
-  if (existsSync(statePath)) {
-    targets.set(statePath, { kind: "state", label: "OpenClaw state database", path: statePath });
-  }
-  let registeredDatabases: ReturnType<typeof listOpenClawRegisteredAgentDatabases> = [];
-  try {
-    registeredDatabases = listOpenClawRegisteredAgentDatabases({ env: options.env });
-  } catch (error) {
-    log.warn("failed to collect registered agent databases for integrity verification", {
-      error: String(error),
-    });
-  }
-  for (const registered of registeredDatabases) {
-    const agentPath = path.resolve(registered.path);
-    if (!existsSync(agentPath) || targets.has(agentPath)) {
-      continue;
-    }
-    targets.set(agentPath, {
-      kind: "agent",
-      label: `OpenClaw agent database ${registered.agentId}`,
-      path: agentPath,
-    });
-  }
-  return [...targets.values()];
-}
-
 /** Reconfirm worker failures on live owners before quarantine and latching. */
 export async function applyOpenClawDatabaseVerificationResults(options: {
   env: NodeJS.ProcessEnv;
@@ -290,7 +255,6 @@ export async function applyOpenClawDatabaseVerificationResults(options: {
       reason: confirmation.error.message,
     });
     if (!recorded) {
-      // Store unavailable. Daily verification retries persistence.
       log.error("failed to persist database quarantine; quarantine is process-local", {
         kind: target.kind,
         path: result.path,

@@ -309,6 +309,8 @@ describe("native device settings wire contract", () => {
     ["appearance", { app: { appearance: "sepia" } }],
     ["notifications", { app: { notificationsEnabled: "true" } }],
     ["native experience", { app: { nativeExperienceEnabled: "true" } }],
+    ["Gateway hosting", { app: { keepGatewayRunning: "true" } }],
+    ["Gateway hosting availability", { app: { keepGatewayRunningAvailable: "true" } }],
     ["iOS capability", { capabilities: { healthSummaryEnabled: "true" } }],
     ["unattended desktop toggle", { capabilities: { unattendedDesktopEnabled: "true" } }],
     ["desktop sharing toggle", { capabilities: { desktopSharingEnabled: "true" } }],
@@ -458,10 +460,12 @@ describe("native device settings wire contract", () => {
     const listener = vi.fn();
     capability!.subscribe(listener);
     capability!.set("browser.cookieSync.targetProfile", "rejected", settled);
-    rejected.reject(new Error("Document retired"));
+    const failure = new Error("Document retired");
+    rejected.reject(failure);
     await vi.waitFor(() => expect(settled).toHaveBeenCalledTimes(1));
     expect(listener).toHaveBeenCalledWith(createNativeDeviceSettingsSnapshot());
     expect(warning).toHaveBeenCalledTimes(1);
+    expect(settled).toHaveBeenCalledWith(failure);
     const delayed = createDeferred<unknown>();
     post.mockReturnValueOnce(delayed.promise);
     capability!.set("app.showDockIcon", false, settled);
@@ -482,6 +486,7 @@ describe("native device settings wire contract", () => {
     capability?.set("app.showDockIcon", false);
     capability?.set("app.nativeExperienceEnabled", true);
     capability?.set("app.iconStyle", "origami");
+    capability?.set("app.keepGatewayRunning", true);
     capability?.set("voice.microphone", null);
     capability?.set("browser.cookieSync.domains", ["example.com"]);
     capability?.set("voice.locale.primary", "de-DE");
@@ -493,6 +498,7 @@ describe("native device settings wire contract", () => {
       { type: "set", key: "app.showDockIcon", value: false },
       { type: "set", key: "app.nativeExperienceEnabled", value: true },
       { type: "set", key: "app.iconStyle", value: "origami" },
+      { type: "set", key: "app.keepGatewayRunning", value: true },
       { type: "set", key: "voice.microphone", value: null },
       { type: "set", key: "browser.cookieSync.domains", value: ["example.com"] },
       { type: "set", key: "voice.locale.primary", value: "de-DE" },
@@ -503,5 +509,6 @@ describe("native device settings wire contract", () => {
     ]);
     expect(capability?.snapshot?.app?.showDockIcon).toBe(true);
     expect(capability?.snapshot?.app?.iconStyle?.selectedId).toBe("paper");
+    expect(capability?.snapshot?.app?.keepGatewayRunning).toBe(false);
   });
 });

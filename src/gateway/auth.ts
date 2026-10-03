@@ -13,6 +13,7 @@ import {
   type RateLimitCheckResult,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
+import { getHeader } from "./http-header-value.js";
 import {
   prepareGatewayIngressAttribution,
   PROXY_ATTRIBUTION_REQUIRED_REASON,
@@ -49,7 +50,7 @@ export type GatewayAuthResult = {
     | "trusted-proxy";
   user?: string;
   /** Full verified Tailscale identity; present only after header + WhoIs agreement. */
-  tailscaleIdentity?: VerifiedTailscaleIdentity;
+  tailscaleIdentity?: VerifiedTailscaleIngressIdentity;
   reason?: string;
   /** Present when the request was blocked by the rate limiter. */
   rateLimited?: boolean;
@@ -96,8 +97,6 @@ type AuthorizeGatewayConnectParams = {
     allowHostHeaderOriginFallback?: boolean;
   };
 };
-
-type VerifiedTailscaleIdentity = VerifiedTailscaleIngressIdentity;
 
 type GatewayAuthRequestContext = {
   authSurface: GatewayAuthSurface;
@@ -150,10 +149,6 @@ function resolveConnectSecret(
 ): string | undefined {
   // Either client field may carry the secret; the mode alone selects the configured value.
   return connectAuth?.[mode] ?? connectAuth?.[mode === "token" ? "password" : "token"];
-}
-
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
 }
 
 /** Validate that the selected gateway auth mode has the required resolved credentials/config. */
@@ -247,15 +242,13 @@ function authorizeTrustedProxy(params: {
 
   const requiredHeaders = trustedProxyConfig.requiredHeaders ?? [];
   for (const header of requiredHeaders) {
-    const value = headerValue(req.headers[normalizeLowercaseStringOrEmpty(header)]);
+    const value = getHeader(req, header);
     if (!value || value.trim() === "") {
       return { reason: `trusted_proxy_missing_header_${header}` };
     }
   }
 
-  const userHeaderValue = headerValue(
-    req.headers[normalizeLowercaseStringOrEmpty(trustedProxyConfig.userHeader)],
-  );
+  const userHeaderValue = getHeader(req, trustedProxyConfig.userHeader);
   if (!userHeaderValue || userHeaderValue.trim() === "") {
     return { reason: "trusted_proxy_user_missing" };
   }
@@ -306,10 +299,7 @@ function authorizeHttpBrowserOrigin(params: {
     allowHostHeaderOriginFallback: params.browserOriginPolicy?.allowHostHeaderOriginFallback,
     isLocalClient: params.isLocalClient,
   });
-  if (originCheck.ok) {
-    return null;
-  }
-  return { ok: false, reason: params.reason };
+  return originCheck.ok ? null : { ok: false, reason: params.reason };
 }
 
 function authorizeTrustedProxyBrowserOrigin(params: {

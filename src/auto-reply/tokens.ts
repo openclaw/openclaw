@@ -1,10 +1,11 @@
-/** Silent-reply and heartbeat tokens plus helpers for suppressing token-only model output. */
 import { escapeRegExp } from "../shared/regexp.js";
 
 /** Token that marks a heartbeat response as an acknowledgement with no user notification. */
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 /** Token that marks an auto-reply response as intentionally silent. */
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
+/** Exact first line of an unattended automation reply that records the run as failed. */
+export const AUTOMATION_FAILED_TOKEN = "AUTOMATION_FAILED";
 
 const HARMONY_CHANNEL_MARKER_RE = /^\s*(?:set-thought\s+)?<[\w]*\|[^>]*>\s*$/;
 const BOX_DRAWING_HR_ONLY_RE = /^\s*─{3,}\s*$/;
@@ -287,20 +288,11 @@ export function isSilentReplyPrefixText(
   const normalized = trimmed.toUpperCase();
   // Guard against suppressing natural-language "No..." text while still
   // catching uppercase lead fragments like "NO" from streamed NO_REPLY.
-  if (trimmed !== normalized) {
+  if (trimmed !== normalized || normalized.length < 2 || !tokenUpper.startsWith(normalized)) {
     return false;
-  }
-  if (normalized.length < 2) {
-    return false;
-  }
-  if (!tokenUpper.startsWith(normalized)) {
-    return false;
-  }
-  if (normalized.includes("_")) {
-    return true;
   }
   // Full-token match is safe for any token.
-  if (normalized === tokenUpper) {
+  if (normalized.includes("_") || normalized === tokenUpper) {
     return true;
   }
   // For custom tokens containing non-letter characters (digits, hyphens),

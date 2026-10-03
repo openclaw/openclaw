@@ -11,10 +11,15 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-context.js";
+import {
+  readLifecycleRun,
+  type createRunEntry as createLifecycleRunEntry,
+  type LifecycleControllerFixtureOptions,
+} from "./subagent-registry-lifecycle-controller.test-support.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -31,8 +36,8 @@ export function registerDetachedCleanupAuthorityTest({
   }) => SubagentRunRecord;
   createLifecycleController: (
     params: { entry: SubagentRunRecord } & Pick<
-      SubagentLifecycleOptions,
-      "runSubagentAnnounceFlow" | "persistOrThrow"
+      LifecycleControllerFixtureOptions,
+      "runSubagentAnnounceFlow" | "beforeWrite"
     >,
   ) => Pick<SubagentLifecycleController, "startSubagentAnnounceCleanupFlow">;
 }) {
@@ -91,8 +96,8 @@ export function registerDetachedCleanupAuthorityTest({
     const controller = createLifecycleController({
       entry,
       runSubagentAnnounceFlow,
-      persistOrThrow: () => {
-        if (entry.cleanupCompletedAt !== undefined) {
+      beforeWrite: ({ postimages }) => {
+        if (postimages.get(entry.runId)?.cleanupCompletedAt !== undefined) {
           cleanupFinished.resolve();
         }
       },
@@ -122,7 +127,7 @@ export function registerDetachedCleanupAuthorityTest({
     await dispatchResult;
     await cleanupFinished.promise;
     expect(freshTranscriptWrite).toHaveBeenCalledOnce();
-    expect(entry.delivery?.status).toBe("delivered");
+    expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
     expect(requesterTranscriptWrite).not.toHaveBeenCalled();
     expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
   });
@@ -132,19 +137,25 @@ export function registerDirectSessionCleanupAuthorityTests({
   createRunEntry,
   createLifecycleController,
   completeRun,
+  completeAndJoinCleanup,
   gatewayMocks,
   helperMocks,
   sessionEntryReadMocks,
   waitForLifecycleState,
 }: {
-  createRunEntry: (overrides?: Partial<SubagentRunRecord>) => SubagentRunRecord;
+  createRunEntry: typeof createLifecycleRunEntry;
   createLifecycleController: (
-    options: { entry: SubagentRunRecord } & Partial<SubagentLifecycleOptions>,
+    options: { entry: SubagentRunRecord } & Partial<LifecycleControllerFixtureOptions>,
   ) => SubagentLifecycleController;
   completeRun: (
     controller: SubagentLifecycleController,
     entry: SubagentRunRecord,
     options: Pick<SubagentCompletionRequest, "triggerCleanup" | "sessionEffects">,
+  ) => Promise<void>;
+  completeAndJoinCleanup: (
+    controller: SubagentLifecycleController,
+    entry: SubagentRunRecord,
+    options: Pick<SubagentCompletionRequest, "triggerCleanup" | "sessionEffects" | "terminalReply">,
   ) => Promise<void>;
   gatewayMocks: {
     callGateway: Mock<(options: CallGatewayOptions) => Promise<Record<string, unknown>>>;
@@ -163,8 +174,11 @@ export function registerDirectSessionCleanupAuthorityTests({
     });
     const controller = createLifecycleController({
       entry,
-      persistOrThrow: () => {
-        persisted = structuredClone(entry);
+      beforeWrite: ({ postimages }) => {
+        const postimage = postimages.get(entry.runId);
+        if (postimage) {
+          persisted = structuredClone(postimage);
+        }
       },
       cleanupBrowserSessionsForLifecycleEnd: cleanupBrowser,
     });
@@ -220,15 +234,17 @@ export function registerDirectSessionCleanupAuthorityTests({
       },
     });
     expect(prepareRecoveryCurrent).toHaveBeenCalledOnce();
-    expect(entry.execution.status).toBe("running");
+    expect(readLifecycleRun(entry).execution.status).toBe("running");
     expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
     expect(emitProgress).not.toHaveBeenCalled();
 
     await completeRun(controller, entry, { triggerCleanup: false });
 
-    expect(entry.execution.status).toBe("terminal");
+    expect(readLifecycleRun(entry).execution.status).toBe("terminal");
     expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce();
-    expect(emitProgress).toHaveBeenCalledExactlyOnceWith(entry);
+    expect(emitProgress).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ runId: entry.runId, childSessionKey: entry.childSessionKey }),
+    );
   });
 
   it("keeps direct delete cleanup root-admitted until the gateway call settles", async () => {
@@ -261,7 +277,6 @@ export function registerDirectSessionCleanupAuthorityTests({
       suppressCompletionDelivery: true,
     });
     const runs = new Map([[entry.runId, entry]]);
-    const retired = createDeferredCore();
     let current = true;
     sessionEntryReadMocks.loadSessionEntryByKey.mockImplementationOnce(async () => {
       current = false;
@@ -272,17 +287,19 @@ export function registerDirectSessionCleanupAuthorityTests({
         throw new Error("Child session changed");
       }
     };
+    let finalPostimage: SubagentRunRecord | undefined;
     const controller = createLifecycleController({
       entry,
       runs,
-      persistOrThrow: () => {
-        if (!runs.has(entry.runId)) {
-          retired.resolve();
+      beforeWrite: ({ postimages }) => {
+        const postimage = postimages.get(entry.runId);
+        if (postimage) {
+          finalPostimage = postimage;
         }
       },
     });
 
-    await completeRun(controller, entry, {
+    await completeAndJoinCleanup(controller, entry, {
       triggerCleanup: true,
       sessionEffects: {
         isCurrent: async () => current,
@@ -290,11 +307,54 @@ export function registerDirectSessionCleanupAuthorityTests({
         assertCurrentEntry: assertCurrent,
       },
     });
-    await retired.promise;
 
     expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
-    expect(entry.execution.status).toBe("terminal");
-    expect(entry.execution.suppressSessionEffects).toBe(true);
+    expect(finalPostimage?.execution.status).toBe("terminal");
+    expect(finalPostimage?.execution.suppressSessionEffects).toBe(true);
     expect(runs.has(entry.runId)).toBe(false);
+  });
+}
+
+export function registerDeliveredCleanupEndedHookTest({
+  createRunEntry,
+  createLifecycleController,
+  completeAndJoinCleanup,
+}: Pick<
+  Parameters<typeof registerDirectSessionCleanupAuthorityTests>[0],
+  "createRunEntry" | "createLifecycleController" | "completeAndJoinCleanup"
+>) {
+  it("emits ended hook while retrying cleanup after completion was already delivered", async () => {
+    const entry = createRunEntry({
+      delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+    });
+    const emitSubagentEndedHookForRun = vi.fn(async () => {});
+
+    const controller = createLifecycleController({
+      entry,
+      shouldEmitEndedHookForRun: () => true,
+      emitSubagentEndedHookForRun,
+    });
+
+    await expect(
+      completeAndJoinCleanup(controller, entry, {
+        triggerCleanup: true,
+        terminalReply: { disposition: "visible", text: "final completion reply" },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(emitSubagentEndedHookForRun).toHaveBeenCalledTimes(1);
+    expect(emitSubagentEndedHookForRun).toHaveBeenCalledWith({
+      entry: expect.objectContaining({
+        runId: entry.runId,
+        childSessionKey: entry.childSessionKey,
+        delivery: expect.objectContaining({ status: "delivered", deliveredAt: 3_500 }),
+      }),
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      sendFarewell: true,
+      isCurrent: expect.any(Function),
+      prepareCurrent: expect.any(Function),
+    });
   });
 }

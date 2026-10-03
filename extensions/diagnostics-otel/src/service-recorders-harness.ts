@@ -150,11 +150,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       span.setStatus({ code: SpanStatusCode.ERROR, message: redactedError ?? errorType });
     }
     // Aborted runs also retain their context for late children.
-    if (trackedSpan && trustedTrace?.spanId) {
-      completeTrackedLifecycleSpan(trustedTrace, trackedSpan, evt.ts);
-      return;
-    }
-    span.end(evt.ts);
+    completeTrackedLifecycleSpan(trackedSpan ? trustedTrace : undefined, span, evt.ts);
   };
 
   const recordContextAssembled = (

@@ -336,30 +336,6 @@ function createMeetingChromeTransportWithAudioPolicy<
     }
   }
 
-  async function resolveChromeNode(params: {
-    runtime: PluginRuntime;
-    requestedNode?: string;
-  }): Promise<string> {
-    return await resolveMeetingBrowserNode({
-      ...params,
-      adapter: options.browserNodeAdapter,
-    });
-  }
-
-  async function callNodeBrowser(params: {
-    runtime: PluginRuntime;
-    nodeId: string;
-    method: "GET" | "POST" | "DELETE";
-    path: string;
-    body?: unknown;
-    timeoutMs: number;
-  }) {
-    return await callMeetingBrowserProxyOnNode({
-      ...params,
-      adapter: options.browserNodeAdapter,
-    });
-  }
-
   const parseNodeResult = (raw: unknown) =>
     parseMeetingChromeNodeResult<Health>(
       raw,
@@ -371,7 +347,13 @@ function createMeetingChromeTransportWithAudioPolicy<
     nodeId?: string,
   ): Promise<MeetingBrowserRequestCaller> {
     return nodeId
-      ? async (request) => await callNodeBrowser({ runtime, nodeId, ...request })
+      ? async (request) =>
+          await callMeetingBrowserProxyOnNode({
+            runtime,
+            nodeId,
+            adapter: options.browserNodeAdapter,
+            ...request,
+          })
       : await resolveLocalMeetingBrowserRequest(runtime);
   }
 
@@ -383,7 +365,8 @@ function createMeetingChromeTransportWithAudioPolicy<
     browser?: Health;
     tab?: MeetingBrowserTab;
   }> {
-    const nodeId = await resolveChromeNode({
+    const nodeId = await resolveMeetingBrowserNode({
+      adapter: options.browserNodeAdapter,
       runtime: params.runtime,
       requestedNode: params.config.chromeNode.node,
     });
@@ -577,7 +560,8 @@ function createMeetingChromeTransportWithAudioPolicy<
     const nodeId =
       params.transport === "chrome-node"
         ? (params.nodeId ??
-          (await resolveChromeNode({
+          (await resolveMeetingBrowserNode({
+            adapter: options.browserNodeAdapter,
             runtime: params.runtime,
             requestedNode: params.config.chromeNode.node,
           })))

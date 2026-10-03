@@ -1,8 +1,3 @@
-/**
- * Channel account summary helpers.
- *
- * Builds safe status snapshots and resolves enabled/configured account state.
- */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -12,7 +7,7 @@ import { isRecord } from "../utils.js";
 import { asBoolean } from "../utils/boolean.js";
 import {
   projectSafeChannelAccountSnapshotFields,
-  redactChannelAccountSnapshotBaseUrl,
+  redactChannelStatusSummaryBaseUrl,
 } from "./account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 import type { ChannelPlugin } from "./plugins/types.plugin.js";
@@ -61,7 +56,7 @@ export function buildChannelAccountSnapshotFromInspection(params: {
     if (!enabled) {
       snapshot.running = false;
     }
-    return redactChannelAccountSnapshotBaseUrl(snapshot);
+    return redactChannelStatusSummaryBaseUrl(snapshot);
   }
   const reason = normalizeOptionalString(inspected?.stateReason);
   applyChannelAccountState(
@@ -75,12 +70,9 @@ export function buildChannelAccountSnapshotFromInspection(params: {
       unconfiguredReason: reason,
     }),
   );
-  return redactChannelAccountSnapshotBaseUrl(snapshot);
+  return redactChannelStatusSummaryBaseUrl(snapshot);
 }
 
-/**
- * Builds the safe account snapshot shown by CLI, gateway, and status summaries.
- */
 export function buildChannelAccountSummary(params: {
   plugin: ChannelPlugin;
   account: unknown;
@@ -90,7 +82,7 @@ export function buildChannelAccountSummary(params: {
   configured: boolean;
 }): ChannelAccountSnapshot {
   const described = params.plugin.config.describeAccount?.(params.account, params.cfg);
-  return redactChannelAccountSnapshotBaseUrl({
+  return redactChannelStatusSummaryBaseUrl({
     enabled: params.enabled,
     configured: params.configured,
     ...projectSafeChannelAccountSnapshotFields(params.account),
@@ -99,9 +91,6 @@ export function buildChannelAccountSummary(params: {
   });
 }
 
-/**
- * Formats allowFrom entries with a plugin formatter when one exists.
- */
 export function formatChannelAllowFrom(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -118,9 +107,6 @@ export function formatChannelAllowFrom(params: {
   return normalizeStringEntries(params.allowFrom);
 }
 
-/**
- * Resolves whether a channel account should be treated as enabled.
- */
 export function resolveChannelAccountEnabled(params: {
   plugin: ChannelPlugin;
   account: unknown;
@@ -133,9 +119,6 @@ export function resolveChannelAccountEnabled(params: {
   return enabled !== false;
 }
 
-/**
- * Resolves whether a channel account has enough configuration to run.
- */
 export async function resolveChannelAccountConfigured(params: {
   plugin: ChannelPlugin;
   account: unknown;

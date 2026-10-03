@@ -1,4 +1,3 @@
-// Matrix helper module supports config update behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { coerceSecretRef, normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
@@ -86,10 +85,7 @@ function applyNullableSecretInputField(
   target[key] = ref;
 }
 
-function cloneMatrixDmConfig(dm: MatrixConfig["dm"]): MatrixConfig["dm"] {
-  if (!dm) {
-    return dm;
-  }
+function cloneMatrixDmConfig(dm: NonNullable<MatrixConfig["dm"]>): MatrixConfig["dm"] {
   return {
     ...dm,
     ...(dm.allowFrom ? { allowFrom: [...dm.allowFrom] } : {}),

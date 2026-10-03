@@ -39,8 +39,8 @@ import {
   asOptionalObjectRecord,
   asOptionalRecord,
   normalizeOptionalString,
+  readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { z } from "zod";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
   resolveFirecrawlApiKey,
@@ -200,9 +200,7 @@ async function resolveEndpoint(
 }
 
 async function postFirecrawlJson<T>(
-  params: {
-    url: string;
-    mode?: FirecrawlEndpointMode;
+  params: FirecrawlResolvedEndpoint & {
     timeoutSeconds: number;
     apiKey?: string;
     body: Record<string, unknown>;
@@ -212,9 +210,8 @@ async function postFirecrawlJson<T>(
   parse: (response: Response) => Promise<T>,
 ): Promise<T> {
   const apiKey = normalizeSecretInput(params.apiKey);
-  const mode = params.mode ?? (await validateFirecrawlBaseUrl(params.url));
   const withEndpoint =
-    mode === "selfHosted" ? withSelfHostedWebToolsEndpoint : withStrictWebToolsEndpoint;
+    params.mode === "selfHosted" ? withSelfHostedWebToolsEndpoint : withStrictWebToolsEndpoint;
   const result = await withEndpoint(
     {
       url: params.url,
@@ -308,32 +305,6 @@ function isValidFirecrawlPublishedDate(value: string): boolean {
   return timestamp !== undefined && new Date(timestamp).toISOString().startsWith(calendarDate);
 }
 
-const optionalFirecrawlStringSchema = z.string().optional().catch(undefined);
-const firecrawlSearchMetadataSchema = z
-  .object({
-    sourceURL: optionalFirecrawlStringSchema,
-    title: optionalFirecrawlStringSchema,
-    publishedTime: optionalFirecrawlStringSchema,
-    publishedDate: optionalFirecrawlStringSchema,
-  })
-  .optional()
-  .catch(undefined);
-const firecrawlSearchItemSchema = z.object({
-  url: optionalFirecrawlStringSchema,
-  sourceURL: optionalFirecrawlStringSchema,
-  sourceUrl: optionalFirecrawlStringSchema,
-  title: optionalFirecrawlStringSchema,
-  description: optionalFirecrawlStringSchema,
-  snippet: optionalFirecrawlStringSchema,
-  summary: optionalFirecrawlStringSchema,
-  markdown: optionalFirecrawlStringSchema,
-  content: optionalFirecrawlStringSchema,
-  text: optionalFirecrawlStringSchema,
-  publishedDate: optionalFirecrawlStringSchema,
-  published: optionalFirecrawlStringSchema,
-  metadata: firecrawlSearchMetadataSchema,
-});
-
 function resolveSearchItems(
   payload: Record<string, unknown>,
   count: number,
@@ -357,27 +328,39 @@ function resolveSearchItems(
     if (inspectedObjects >= FIRECRAWL_SEARCH_MAX_RESULTS || items.length >= count) {
       break;
     }
-    const record = asOptionalRecord(rawItem);
-    if (!record) {
+    const entry = asOptionalRecord(rawItem);
+    if (!entry) {
       continue;
     }
     // The scan cap counts objects, including invalid URLs, after discarding non-object rows.
     inspectedObjects += 1;
-    const entry = firecrawlSearchItemSchema.parse(record);
-    const metadata = entry.metadata;
-    const rawUrl = entry.url || entry.sourceURL || entry.sourceUrl || metadata?.sourceURL || "";
+    const metadata = asOptionalRecord(entry.metadata);
+    const rawUrl =
+      readStringField(entry, "url") ||
+      readStringField(entry, "sourceURL") ||
+      readStringField(entry, "sourceUrl") ||
+      readStringField(metadata, "sourceURL") ||
+      "";
     const url = normalizeFirecrawlResultUrl(rawUrl);
     if (!url) {
       continue;
     }
-    const title = entry.title || metadata?.title || "";
-    const description = entry.description || entry.snippet || entry.summary || undefined;
-    const content = entry.markdown || entry.content || entry.text || undefined;
+    const title = readStringField(entry, "title") || readStringField(metadata, "title") || "";
+    const description =
+      readStringField(entry, "description") ||
+      readStringField(entry, "snippet") ||
+      readStringField(entry, "summary") ||
+      undefined;
+    const content =
+      readStringField(entry, "markdown") ||
+      readStringField(entry, "content") ||
+      readStringField(entry, "text") ||
+      undefined;
     const rawPublished =
-      entry.publishedDate ||
-      entry.published ||
-      metadata?.publishedTime ||
-      metadata?.publishedDate ||
+      readStringField(entry, "publishedDate") ||
+      readStringField(entry, "published") ||
+      readStringField(metadata, "publishedTime") ||
+      readStringField(metadata, "publishedDate") ||
       undefined;
     const published =
       rawPublished && isValidFirecrawlPublishedDate(rawPublished) ? rawPublished : undefined;
@@ -493,33 +476,15 @@ export async function runFirecrawlSearch(
   const body: Record<string, unknown> = {
     query: params.query,
     limit: count,
+    ...(sources.length > 0 ? { sources } : {}),
+    ...(categories.length > 0 ? { categories } : {}),
+    ...(includeDomains.length > 0 ? { includeDomains } : {}),
+    ...(excludeDomains.length > 0 ? { excludeDomains } : {}),
+    ...(tbs ? { tbs } : {}),
+    ...(location ? { location } : {}),
+    ...(country ? { country } : {}),
+    ...(scrapeResults ? { scrapeOptions: { formats: ["markdown"] } } : {}),
   };
-  if (sources.length > 0) {
-    body.sources = sources;
-  }
-  if (categories.length > 0) {
-    body.categories = categories;
-  }
-  if (includeDomains.length > 0) {
-    body.includeDomains = includeDomains;
-  }
-  if (excludeDomains.length > 0) {
-    body.excludeDomains = excludeDomains;
-  }
-  if (tbs) {
-    body.tbs = tbs;
-  }
-  if (location) {
-    body.location = location;
-  }
-  if (country) {
-    body.country = country;
-  }
-  if (scrapeResults) {
-    body.scrapeOptions = {
-      formats: ["markdown"],
-    };
-  }
 
   const start = Date.now();
   const endpoint = await resolveEndpoint(baseUrl, "/v2/search");
@@ -711,7 +676,6 @@ export async function runFirecrawlScrape(
 export const testing = {
   assertFirecrawlScrapeTargetAllowed,
   parseFirecrawlScrapePayload,
-  postFirecrawlJson,
   resolveEndpoint,
   resolveSearchItems,
 };

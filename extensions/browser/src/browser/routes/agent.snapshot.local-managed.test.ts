@@ -93,11 +93,7 @@ vi.mock("./agent.shared.js", () => ({
     ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
   })),
   handleRouteError: vi.fn(
-    (
-      _ctx: unknown,
-      res: { status: (code: number) => unknown; json: (body: unknown) => void },
-      err: unknown,
-    ) => {
+    (res: { status: (code: number) => unknown; json: (body: unknown) => void }, err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       res.status(400);
       res.json({ error: message });

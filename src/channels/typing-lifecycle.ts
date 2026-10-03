@@ -49,12 +49,10 @@ export function createTypingKeepaliveLoop(params: {
     // completion releases exclusivity even if the loop restarts meanwhile.
   };
 
-  const isRunning = () => timer !== undefined;
-
   return {
     tick,
     start,
     stop,
-    isRunning,
+    isRunning: () => timer !== undefined,
   };
 }

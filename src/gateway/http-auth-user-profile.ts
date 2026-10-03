@@ -8,6 +8,7 @@ import { resolveHostAccountName } from "../infra/host-account-name.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
@@ -196,6 +197,10 @@ async function prepareHttpProfile(
   cfg?: OpenClawConfig,
 ) {
   assertCurrent();
+  if (cfg && hasGatewayOperatorAccessPolicies(cfg)) {
+    (await prepareUserProfileCatalog()).release();
+    assertCurrent();
+  }
   const authority = await prepareUserProfileRoleAuthority(profileId);
   assertCurrent();
   if (!authority?.isCurrent()) {

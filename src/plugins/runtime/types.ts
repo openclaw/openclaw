@@ -6,6 +6,7 @@ import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
+import type { RuntimeSessionFactsResult } from "./types-session-facts.js";
 
 export type { RuntimeLogger };
 
@@ -142,6 +143,24 @@ export type PluginRuntime = PluginRuntimeCore & {
       method: string,
       params?: Record<string, unknown>,
       options?: RuntimeGatewayRequestOptions,
+    ) => Promise<T>;
+    /** Open this plugin's native panel in the requesting Control UI, preserving caller authority. */
+    openPluginPanel: (params: {
+      panelId: string;
+      sessionKey: string;
+      agentId?: string;
+    }) => Promise<{ ok: true }>;
+    /** Bounded redacted facts for up to 40 sessions; excludes incognito and rechecks the bound caller/lifecycle. */
+    readSessionFacts: (params: {
+      sessionKeys: readonly string[];
+    }) => Promise<RuntimeSessionFactsResult>;
+    withUserProfileIdentity?: <T>(
+      params: {
+        profileId: string;
+        emails: readonly string[];
+        githubAccountIds?: readonly number[];
+      },
+      run: (assertCurrent: () => void) => Promise<T>,
     ) => Promise<T>;
   };
   subagent: {

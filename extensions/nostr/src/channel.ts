@@ -112,9 +112,8 @@ const nostrPluginOutboundAdapter: ChannelOutboundAdapter = {
         error: missingTargetError("Nostr", NOSTR_TARGET_HINT),
       };
     }
-    const normalized = normalizeNostrTarget(trimmed);
     try {
-      return { ok: true, to: normalizePubkey(normalized) };
+      return { ok: true, to: normalizePubkey(stripNostrTargetPrefix(trimmed)) };
     } catch {
       return {
         ok: false,

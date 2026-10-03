@@ -8,21 +8,21 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import * as acpReads from "../acp/runtime/session-meta-readonly.js";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
   getSubagentSessionListReadSnapshotIdentity,
   withSubagentRunReadSnapshot,
 } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import {
   deleteSessionEntryLifecycle,
   persistSessionTranscriptTurn,
   readSessionTranscriptWatermark,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import * as canonical from "../config/sessions/session-canonical-key.js";
 import {
   addSessionMember,
@@ -455,7 +455,7 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
             ...entries[1]!,
             activitySummary: {
               version: 1,
-              formatRevision: 2,
+              formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
               text: "Stored archive summary",
               updatedAt: 1,
               sessionId: suffixScope.sessionId,
@@ -527,6 +527,7 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
               sessionKeys: [],
             }),
             (selection) => selection.runIds,
+            { sessionKeys: [previous.childSessionKey], descendants: true },
           );
           await registryPending.promise;
           expect(getSubagentSessionListReadSnapshotIdentity()).toBeUndefined();
@@ -683,15 +684,14 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
   },
 );
 
-it("lets same-generation keyed acquisition supersede accepted facts after custody release", async () => {
-  await withAcceptedSuffix(async ({ projection, suffix, query, entry, reads, resume }) => {
-    // Model a direct reader discovering a newer same-timestamp committed value.
-    vi.spyOn(entryCache, "readCommittedSessionEntryCache").mockReturnValueOnce(
-      new Map([[query.key, { ...entry, label: "keyed value" }]]),
-    );
+it("lets keyed reads supersede accepted facts after a same-generation publication", async () => {
+  await withAcceptedSuffix(async ({ projection, suffix, scope, query, entry, reads, resume }) => {
+    // Equal timestamps still require the keyed reader to consume the owner's newer publication.
+    replaceSessionEntrySync(scope, { ...entry, label: "keyed value" });
     const current = projection.describe(query)!;
     expect(current.generation).toBe(suffix.generation);
     expect(current.pendingDatabaseFacts).toBeUndefined();
+    expect(current.entry).toMatchObject({ updatedAt: entry.updatedAt, label: "keyed value" });
     expect(current.materialized.source.entry).toBe(current.entry);
     await resume();
     expect(reads).toHaveLength(1);
@@ -726,7 +726,7 @@ it("replaces the whole accepted entry, board, and watermark snapshot after a com
       label: "committed value",
       activitySummary: {
         version: 1,
-        formatRevision: 2,
+        formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
         text: "Current summary",
         updatedAt: 3,
         sessionId: entry.sessionId,

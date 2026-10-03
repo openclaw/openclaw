@@ -1,10 +1,70 @@
 # Agents API harness
 
-The `agentsapi` harness uses API-key authentication and defaults to an OpenAI-hosted
-Linux environment. Select it through `agents.defaults.agentRuntime.id` or an agent's
-`agentRuntime.id`. See the [harness configuration reference](https://docs.openclaw.ai/plugins/sdk-agent-harness/runtime-config).
+The `agentsapi` harness runs commands and file operations in an OpenAI-hosted Linux
+VM by default, while OpenClaw handles channel messaging and configured Gateway
+tools. It uses OpenAI API-key authentication.
+
+API keys authenticate requests and are not part of the native conversation's
+identity. Rotating the key used by the harness preserves existing session IDs;
+subsequent attempts use the newly resolved key. The replacement key must have API
+access to those sessions. Authentication or permission errors surface normally
+without resetting the saved binding. The hosted service currently requires the
+original API key to submit input to an existing hosted session, even when another
+key can read it. If the service rejects input for this reason, restore the
+creating key to continue the same session.
+
+Model, environment, and effective HTTP MCP configuration changes still require a
+session reset. Bindings created before this change are not migrated or supported.
+
+Start with the [setup and supported features guide](https://docs.openclaw.ai/plugins/agentsapi).
+Enable the `agentsapi` plugin and select it for the model through
+`agents.defaults.models["openai/<model>"].agentRuntime.id: "agentsapi"`.
+Replace `<model>` with a model available to your Agents API project. Enabling the
+plugin alone does not select the runtime. Provider-scoped and per-agent model
+overrides are covered in the
+[harness configuration reference](https://docs.openclaw.ai/plugins/sdk-agent-harness/runtime-config).
 
 Multi-user Gateways are not supported by the Agents API MVP.
+
+Configure native Agents API tools with
+`plugins.entries.agentsapi.config.nativeTools`. Omitting the setting uses live
+web search and programmatic tool calling, without computer use. The default list
+is equivalent to:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "agentsapi": {
+        "config": {
+          "nativeTools": [
+            { "type": "web_search", "mode": "live" },
+            { "type": "programmatic_tool_calling", "enabled": true }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+A supplied list replaces the defaults. List every native tool declaration you
+want to send. Each entry requires a `type` string; other tool options are passed
+unchanged to the session's `agent.tools`. OpenClaw does not maintain an enum of
+tool types or options; the API validates them and reports unsupported values.
+
+An empty list sends no native tool declarations and disables native web search.
+The API still enables programmatic tool calling by default. To disable both,
+set `nativeTools` to `[{ "type": "programmatic_tool_calling", "enabled": false }]`.
+See the native API's [web-search guide](https://developers.openai.com/api/docs/guides/agents-api/tools/web-search)
+and [programmatic tool calling guide](https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling#agents-api).
+
+The list does not filter OpenClaw functions, MCP servers, installed plugins, or
+environment-provided shell and file tools. Those retain their existing settings;
+shell and file tools come from the execution environment without entries here.
+Existing sessions keep the tools selected at creation. Restart the Gateway after
+editing this setting, then start or reset a session to adopt it. There is no live
+tool-list update or automatic session reset.
 
 Configure HTTP MCP servers through the shared `mcp.servers` configuration or an
 enabled plugin's MCP bundle. For example:
@@ -157,10 +217,47 @@ an executor. Input submission has a 60-second HTTP deadline, including any wait
 for the executor to connect. Configure the controller to connect promptly;
 the API's longer connection window does not extend this deadline. Session
 connection events remain visible while it connects.
-Hosted environments support input
-attachments and output file transfers. Self-hosted environments do not support
-file transfers. Gateway function availability follows the configured OpenClaw
-tool policy. Native Agents API apps and connectors are not configured by this
+Hosted environments support input attachments and output file transfers. Each
+turn transfers its admitted original files, including images, to unique hosted
+paths, so later uploads with the same filename keep their own bytes and mapping.
+Inline image preparation does not replace this original-file transfer.
+Hosted input transfer examines at most 50 attachments, with a 5 MiB per-file
+limit and a 10 MiB total limit. Files exceeding these limits are omitted with
+per-turn feedback; supplied text and accepted files still reach the model.
+The model can use available tools that can access the originals or ask for a
+smaller attachment or relevant text when needed content remains inaccessible.
+When a reused hosted environment is disconnected or an upload receives the API's
+explicit dormant-environment conflict, the harness submits the actual user input
+to the same native session with attachment-availability feedback. It omits the
+entire current batch's execution paths, including partial uploads, because native
+recovery can replace the workspace. Earlier files do not establish the contents
+of new attachments. The native service owns recovery; OpenClaw does not send a
+wake-up message or create a replacement session. Other upload errors still fail
+the attempt.
+Self-hosted input attachments use the
+registered workspace provider's existing staging service. It prepares admitted
+originals on the executor workspace and returns execution-only paths without
+changing their Gateway media references or transcript provenance. Admission
+requires a completed preparation result for every attachment; one unavailable
+file stops the request with an error. The harness does not infer availability
+from a path in the prompt. Repeated preparation reuses the same owned staging
+files. A self-hosted deployment without this provider must configure it or use
+an OpenAI-hosted environment for attachments. This does not add native image
+input or automatic self-hosted output transfer. See the
+[official files guide](https://developers.openai.com/api/docs/guides/agents-api/environments/files).
+Inline images, including rendered document pages, do not abort the turn. The
+harness tells the model that inline images were omitted so it can use supplied
+text or inspect prepared original attachments with its tools. If no originals
+have confirmed execution paths, the notice says so. Image-bearing steering follows the existing
+queue policy and is handled as a follow-up turn with its complete input.
+New native sessions also receive a system instruction describing the inline-image
+restriction and alternatives. Existing sessions retain their original system
+instructions, so the per-turn feedback remains necessary. System instructions
+guide model planning; they do not prevent host-side attachment preprocessing.
+Gateway sandbox placement is a separate unsupported configuration and produces
+a specific preflight error without retrying other models on the same harness.
+Gateway function availability follows the configured OpenClaw tool policy.
+Native Agents API apps and connectors are not configured by this
 plugin, and the Gateway image-generation tool is not exposed.
 
 For self-hosted sessions, `hostExecutorSkillDirectories` lists absolute paths on
@@ -200,7 +297,8 @@ whose backend startup remains unresolved.
 Saved sessions keep their native conversation, workspace, and original tool
 declarations when Gateway tools are added. Fresh sessions receive the current
 Gateway tool declarations. Reset an existing session to adopt the new tool
-surface; changing its model or API key still requires a reset.
+surface. Changing its model still requires a reset; changing its API key does not
+reset the saved binding and remains subject to the service permissions above.
 
 Child sessions use the same Gateway tool-policy filtering as other OpenClaw
 runtimes, including inherited restrictions and the child's role. Denied session

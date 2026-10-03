@@ -146,7 +146,7 @@ describe("device.pair.setupCode", () => {
     });
   });
 
-  it("preserves the configured device-pair public URL fallback", async () => {
+  it("delegates the configured device-pair public URL fallback to the shared resolver", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
     mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
@@ -164,7 +164,7 @@ describe("device.pair.setupCode", () => {
 
     expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
       expect.any(Object),
-      expect.objectContaining({ publicUrl: "wss://gateway.example.com" }),
+      expect.objectContaining({ publicUrl: undefined }),
     );
   });
 
@@ -312,7 +312,10 @@ describe("device.pair.setupCode", () => {
     });
   });
 
-  it("preserves a configured publicUrl context path in join-code command output", async () => {
+  it.each([
+    ["https://pair.example", "/gateway"],
+    ["https://pair.example/extra", "/extra"],
+  ])("preserves the Control UI path for configured join URL %s", async (publicUrl, basePath) => {
     const pairing = await vi.importActual<typeof import("../../pairing/setup-code.js")>(
       "../../pairing/setup-code.js",
     );
@@ -333,9 +336,13 @@ describe("device.pair.setupCode", () => {
           throw new Error("Expected pairing RPC parameters");
         }
         const respond = await runSetupCode(params, {
-          gateway: { bind: "loopback", auth: { mode: "token", token: "gateway-token" } },
+          gateway: {
+            bind: "loopback",
+            controlUi: { basePath: "/gateway" },
+            auth: { mode: "token", token: "gateway-token" },
+          },
           plugins: {
-            entries: { "device-pair": { config: { publicUrl: "https://pair.example/extra" } } },
+            entries: { "device-pair": { config: { publicUrl } } },
           },
         });
         expect(respond.mock.calls[0]?.[0]).toBe(true);
@@ -348,7 +355,7 @@ describe("device.pair.setupCode", () => {
 
     await program.parseAsync(["devices", "join-code", "--json"], { from: "user" });
 
-    const joinUrl = `https://pair.example/extra/j/${"a".repeat(22)}`;
+    const joinUrl = `https://pair.example${basePath}/j/${"a".repeat(22)}`;
     expect(writeJson).toHaveBeenCalledWith({ joinUrl, command: `npx openclaw connect ${joinUrl}` });
   });
 

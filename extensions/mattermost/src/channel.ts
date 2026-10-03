@@ -42,11 +42,15 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   chunkTextForOutbound,
   sanitizeAssistantVisibleText,
 } from "openclaw/plugin-sdk/text-chunking";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { mattermostApprovalAuth } from "./approval-auth.js";
 import {
   describeMattermostAccount,
@@ -114,17 +118,7 @@ function hasMattermostPresentationNavigation(presentation: MessagePresentation):
 function readMattermostPayloadData(payload: {
   channelData?: Record<string, unknown>;
 }): Record<string, unknown> | undefined {
-  const data = payload.channelData?.mattermost;
-  return data && typeof data === "object" && !Array.isArray(data)
-    ? (data as Record<string, unknown>)
-    : undefined;
-}
-
-function readMattermostPresentationButtons(payload: {
-  channelData?: Record<string, unknown>;
-}): Array<unknown> | undefined {
-  const buttons = readMattermostPayloadData(payload)?.presentationButtons;
-  return Array.isArray(buttons) ? buttons : undefined;
+  return asOptionalRecord(payload.channelData?.mattermost);
 }
 
 type MattermostDirectoryListParams = Parameters<
@@ -454,17 +448,12 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       throw new Error(result.error);
     }
 
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: remove
-            ? `Removed reaction :${emojiName}: from ${postId}`
-            : `Reacted with :${emojiName}: on ${postId}`,
-        },
-      ],
-      details: {},
-    };
+    return textResult(
+      remove
+        ? `Removed reaction :${emojiName}: from ${postId}`
+        : `Reacted with :${emojiName}: on ${postId}`,
+      {},
+    );
   },
 };
 
@@ -527,7 +516,7 @@ function resolveMattermostSendAttachmentMedia(params: Record<string, unknown>): 
   return mediaUrls[0];
 }
 
-async function sendMattermostMedia(
+async function sendMattermostContent(
   ctx: ChannelOutboundContext,
   content: { text: string; mediaUrl?: string; buttons?: unknown[]; attachmentText?: string } = ctx,
 ) {
@@ -597,8 +586,11 @@ const mattermostOutbound: ChannelOutboundAdapter = {
     };
   },
   sendPayload: async (ctx) => {
-    const buttons = readMattermostPresentationButtons(ctx.payload);
-    const rawAttachmentText = readMattermostPayloadData(ctx.payload)?.attachmentText;
+    const mattermostData = readMattermostPayloadData(ctx.payload);
+    const buttons = Array.isArray(mattermostData?.presentationButtons)
+      ? mattermostData.presentationButtons
+      : undefined;
+    const rawAttachmentText = mattermostData?.attachmentText;
     const attachmentText = typeof rawAttachmentText === "string" ? rawAttachmentText : undefined;
     if (buttons?.length || attachmentText !== undefined) {
       const mediaUrl = resolvePayloadMediaUrls({
@@ -607,7 +599,7 @@ const mattermostOutbound: ChannelOutboundAdapter = {
       })
         .map((url) => url.trim())
         .find(Boolean);
-      const result = await sendMattermostMedia(ctx, {
+      const result = await sendMattermostContent(ctx, {
         text: ctx.payload.text ?? ctx.text,
         mediaUrl,
         buttons,
@@ -631,20 +623,8 @@ const mattermostOutbound: ChannelOutboundAdapter = {
   },
   ...createAttachedChannelResultAdapter({
     channel: "mattermost",
-    sendText: async (ctx) =>
-      toMattermostOutboundResult(
-        await (
-          await loadMattermostChannelRuntime()
-        ).sendMessageMattermost(ctx.to, ctx.text, {
-          cfg: ctx.cfg,
-          accountId: ctx.accountId ?? undefined,
-          replyToId: ctx.replyToId ?? (ctx.threadId != null ? String(ctx.threadId) : undefined),
-          assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
-          onPlatformSendDispatch: ctx.onPlatformSendDispatch,
-          onDeliveryResult: createMattermostDeliveryProgressReporter(ctx.onDeliveryResult),
-        }),
-      ),
-    sendMedia: sendMattermostMedia,
+    sendText: (ctx) => sendMattermostContent(ctx, { text: ctx.text }),
+    sendMedia: sendMattermostContent,
   }),
 };
 

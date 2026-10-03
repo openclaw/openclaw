@@ -217,7 +217,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
             cacheLogger.error("gateway session cache rejected a mixed-agent snapshot")
             return
         }
-        let bounded = Self.boundedSessions(owned)
+        let bounded = Self.boundedSessions(owned).map(Self.sessionCacheProjection)
         let gatewayID = self.gatewayID
         do {
             let encoded = try bounded.map(Self.encodeJSON)
@@ -303,7 +303,21 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
             else { return true }
             return canonicalMessageIdempotencyKeys.contains(key)
         }
-        await writeTranscript(sessionKey: sessionKey, agentID: agentID, messages: canonicalOnly)
+        guard !self.isRetired else { return }
+        let normalizedAgentID = Self.normalizedAgentID(agentID)
+        let gatewayID = self.gatewayID
+        do {
+            try await self.databases.cacheQueue.write { db in
+                try Self.replaceTranscript(
+                    db,
+                    gatewayID: gatewayID,
+                    sessionKey: sessionKey,
+                    agentID: normalizedAgentID,
+                    messages: canonicalOnly)
+            }
+        } catch {
+            cacheLogger.error("gateway transcript cache write failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     public func mergeCanonicalTranscriptMessage(
@@ -402,28 +416,6 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
 }
 
 extension OpenClawChatSQLiteTranscriptCache {
-    private func writeTranscript(
-        sessionKey: String,
-        agentID: String?,
-        messages: [OpenClawChatMessage]) async
-    {
-        guard !self.isRetired else { return }
-        let normalizedAgentID = Self.normalizedAgentID(agentID)
-        let gatewayID = self.gatewayID
-        do {
-            try await self.databases.cacheQueue.write { db in
-                try Self.replaceTranscript(
-                    db,
-                    gatewayID: gatewayID,
-                    sessionKey: sessionKey,
-                    agentID: normalizedAgentID,
-                    messages: messages)
-            }
-        } catch {
-            cacheLogger.error("gateway transcript cache write failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
     private nonisolated static func replaceTranscript(
         _ db: Database,
         gatewayID: String,

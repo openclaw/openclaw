@@ -3,6 +3,7 @@ import { Check } from "typebox/value";
 import { SKILL_LIBRARY_MAX_SELECTIONS } from "../../packages/gateway-protocol/src/schema/skill-library.js";
 import { UserChannelIdentitySchema } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
+import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import { isPluginBlobReadCommand } from "../plugin-state/plugin-blob-worker-contract.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
@@ -27,7 +28,31 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
     ((input.command.type === "deliveryQueue.outbound" &&
       (input.command.id === undefined || typeof input.command.id === "string") &&
       (input.command.mode === "pending" || input.command.mode === "unfinished")) ||
+      (input.command.type === "sessionState.versions" &&
+        Array.isArray(input.command.input) &&
+        input.command.input.every(
+          (ref) =>
+            isRecord(ref) && typeof ref.sessionKey === "string" && typeof ref.agentId === "string",
+        )) ||
+      (input.command.type === "sessionState.events" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.sessionKey === "string" &&
+        typeof input.command.input.agentId === "string" &&
+        typeof input.command.input.afterSequence === "number" &&
+        typeof input.command.input.limit === "number") ||
+      (input.command.type === "diagnostic.latest" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.scope === "string" &&
+        Number.isSafeInteger(input.command.input.limit) &&
+        (input.command.input.beforeSequence === undefined ||
+          Number.isSafeInteger(input.command.input.beforeSequence))) ||
       input.command.type === "acpSessions.list" ||
+      input.command.type === "backup.runs" ||
+      ((input.command.type === "restartSentinel.current" ||
+        input.command.type === "restartSentinel.snapshot" ||
+        input.command.type === "restartSentinel.installReceipt") &&
+        "input" in input.command &&
+        input.command.input === undefined) ||
       (input.command.type === "acpSessions.metadata" &&
         Array.isArray(input.command.entries) &&
         input.command.entries.length <= 64 &&
@@ -70,10 +95,33 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           typeof input.command.conversation.parentConversationId === "string")) ||
       (input.command.type === "cron.activeReceiptOwners" &&
         typeof input.command.agentId === "string") ||
+      (input.command.type === "cron.scratch" &&
+        typeof input.command.storeKey === "string" &&
+        isRecord(input.command.selector) &&
+        ((input.command.selector.kind === "job" &&
+          typeof input.command.selector.jobId === "string" &&
+          typeof input.command.selector.createdAtMsFallback === "number" &&
+          Number.isFinite(input.command.selector.createdAtMsFallback)) ||
+          (input.command.selector.kind === "heartbeat" &&
+            typeof input.command.selector.agentId === "string"))) ||
       (input.command.type === "cron.jobNames" &&
         (input.command.storePath === undefined || typeof input.command.storePath === "string") &&
         Array.isArray(input.command.jobIds) &&
         input.command.jobIds.every((id) => typeof id === "string")) ||
+      (input.command.type === "cron.quarantine" && typeof input.command.storeKey === "string") ||
+      (input.command.type === "cron.currentReceipt" &&
+        isRecord(input.command.handle) &&
+        typeof input.command.handle.receiptId === "string" &&
+        typeof input.command.handle.storeKey === "string" &&
+        typeof input.command.handle.jobId === "string" &&
+        typeof input.command.handle.agentId === "string" &&
+        typeof input.command.handle.ownerPid === "number" &&
+        Number.isFinite(input.command.handle.ownerPid) &&
+        (input.command.handle.ownerStartTime === null ||
+          (typeof input.command.handle.ownerStartTime === "number" &&
+            Number.isFinite(input.command.handle.ownerStartTime))) &&
+        typeof input.command.includeJob === "boolean" &&
+        typeof input.command.includeAvailability === "boolean") ||
       (input.command.type === "cron.observeRunRecovery" &&
         typeof input.command.storeKey === "string" &&
         Array.isArray(input.command.proposals) &&
@@ -97,12 +145,14 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.input.publicKey === "string" &&
         typeof input.command.input.nowMs === "number") ||
       input.command.type === "admit" ||
+      input.command.type === "doctor.gatewayOwnerLease.read" ||
       input.command.type === "subagents.sessionList" ||
       (input.command.type === "subagents.forChildSession" &&
         typeof input.command.childSessionKey === "string") ||
       (input.command.type === "subagents.runs" &&
         isRecord(input.command.scope) &&
-        (input.command.scope.kind === "maintenance" ||
+        (input.command.scope.kind === "all" ||
+          input.command.scope.kind === "maintenance" ||
           (input.command.scope.kind === "session" &&
             typeof input.command.scope.sessionKey === "string") ||
           (input.command.scope.kind === "descendants" &&
@@ -130,7 +180,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       input.command.type === "agentDatabaseRegistry.read" ||
       (input.command.type === "agentDatabaseDeletion.snapshot" &&
         (input.command.purpose === "runtime" || input.command.purpose === "maintenance")) ||
-      (input.command.type === "agentDeletionJournal.status" &&
+      ((input.command.type === "agentDeletionJournal.status" ||
+        input.command.type === "agentDeletionJournal.authority") &&
         typeof input.command.agentId === "string") ||
       input.command.type === "sessionGroups.snapshot" ||
       (input.command.type === "sessionGroups.members" && isRecord(input.command.cfg)) ||
@@ -148,6 +199,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             typeof input.command.input.cursor.changedAtMs === "number" &&
             typeof input.command.input.cursor.environmentId === "string"))) ||
       input.command.type === "userProfiles.catalog" ||
+      (input.command.type === "userModelAccounts.links" &&
+        typeof input.command.profileId === "string") ||
       (input.command.type === "userPreferences.values" &&
         typeof input.command.key === "string" &&
         Array.isArray(input.command.profileIds) &&
@@ -194,6 +247,15 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.input.now === "number" &&
         (typeof input.command.input.runId === "string" ||
           typeof input.command.input.executionId === "string")) ||
+      (input.command.type === "githubPublication.sharedObservation" &&
+        isRecord(input.command.input) &&
+        (input.command.input.kind === "repository" || input.command.input.kind === "worktree") &&
+        isRecord(input.command.input.session) &&
+        typeof input.command.input.session.agentId === "string" &&
+        typeof input.command.input.session.sessionKey === "string" &&
+        typeof input.command.input.session.sessionId === "string" &&
+        isRecord(input.command.input.selector) &&
+        isRecord(input.command.input.entry)) ||
       (input.command.type === "sessionRepositoryWorkspaces.find" &&
         Array.isArray(input.command.owners) &&
         input.command.owners.every(
@@ -235,7 +297,9 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.input.includeRunId === undefined ||
           typeof input.command.input.includeRunId === "string")) ||
       input.command.type === "fleet.list" ||
-      (input.command.type === "operatorApprovals.history" && isRecord(input.command.input)) ||
+      ((input.command.type === "operatorApprovals.history" ||
+        input.command.type === "operatorApprovals.listCronGrants") &&
+        isRecord(input.command.input)) ||
       isTuiLastSessionReadCommand(input.command) ||
       input.command.type === "nodeHost.config" ||
       input.command.type === "operator.channelPolicy" ||
@@ -254,6 +318,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.profileIds === undefined ||
           (Array.isArray(input.command.profileIds) &&
             input.command.profileIds.every((id) => typeof id === "string")))) ||
+      isWorkspaceJournalReadCommand(input.command) ||
       input.command.type === "workers.placementRecoveryCandidates" ||
       (input.command.type === "workers.placementProjection" &&
         Array.isArray(input.command.sessionIds) &&

@@ -2,8 +2,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { disposeNodeSqliteDependents } from "../infra/kysely-sync-cache-state.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
 import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "./openclaw-state-lease-worker.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 
 vi.mock("../infra/sqlite-worker-operation-admission.js", () => ({
   requestSqliteWorkerOperationAdmission: vi.fn(),

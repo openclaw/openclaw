@@ -24,10 +24,8 @@ import {
   resolveDirectSessionTargets,
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
-import type {
-  GatewaySessionStoreCache,
-  GatewaySessionStoreDiscoveryCache,
-} from "./session-utils-store-lookup.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
+import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
 
 export const readProjectedSessionMutationTarget = (
   targetRef: SessionMutationTarget,

@@ -21,6 +21,7 @@ import type {
 } from "./registry-contribution-types.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
+  getActivePluginRegistry,
   getPluginRegistryForContext,
   getPluginRegistrationContext,
   requireActivePluginRegistry,
@@ -75,7 +76,8 @@ export function resolveMemoryCapabilityRegistration(
       Boolean(registration.capability.publicArtifacts) &&
       !registration.capability.promptBuilder &&
       !registration.capability.flushPlanResolver &&
-      !registration.capability.runtime;
+      !registration.capability.runtime &&
+      !registration.capability.providerRuntime;
     effective = {
       pluginId: registration.pluginId,
       capability: {
@@ -164,21 +166,18 @@ export function adoptRuntimeMemoryRegistrations(
   const canAdopt = (pluginId: string) => {
     const targetOwner = targetRegistry.plugins.find((plugin) => plugin.id === pluginId);
     const runtimeOwner = runtimeRegistry.plugins.find((plugin) => plugin.id === pluginId);
-    if (
-      runtimeOwner?.status !== "loaded" ||
-      !resolveEffectivePluginActivationState({
+    return (
+      runtimeOwner?.status === "loaded" &&
+      resolveEffectivePluginActivationState({
         id: runtimeOwner.id,
         origin: runtimeOwner.origin,
         config: normalizedConfig,
         rootConfig: config,
         enabledByDefault: runtimeOwner.activationSource === "default",
-      }).enabled ||
-      (targetOwner &&
-        (targetOwner.status !== "loaded" || targetOwner.source !== runtimeOwner.source))
-    ) {
-      return false;
-    }
-    return true;
+      }).enabled &&
+      (!targetOwner ||
+        (targetOwner.status === "loaded" && targetOwner.source === runtimeOwner.source))
+    );
   };
   const memoryCorpusSupplements = adoptEligibleRuntimeMemoryRegistrations(
     targetRegistry.memoryCorpusSupplements,
@@ -367,7 +366,54 @@ export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
   return getMemoryCapability()?.capability.runtime;
 }
 
+export function getMemoryProviderRuntime() {
+  return getMemoryCapability()?.capability.providerRuntime;
+}
+
 let standaloneMemoryManagerActive = false;
+// Identity of the slot owner a standalone lookup loaded outside any registry.
+let standaloneMemoryOwner: { pluginId: string; native: boolean } | undefined;
+
+/** Records, or clears, the slot owner a standalone memory lookup loaded. */
+export function setStandaloneMemoryOwner(
+  owner: { pluginId: string; native: boolean } | undefined,
+): void {
+  standaloneMemoryOwner = owner;
+}
+
+/**
+ * Classifies the configured memory slot owner from owners this process already
+ * loaded, never loading one: the current registry, then the process registry for
+ * the configured slot, then a standalone owner an earlier memory lookup loaded.
+ * Undefined means no loaded owner answers; callers then keep their legacy path
+ * and its own loading behavior.
+ */
+export function resolveLoadedMemoryProviderKind(
+  cfg: OpenClawConfig,
+): "native" | "legacy" | undefined {
+  const current = getMemoryCapability()?.capability;
+  if (current?.providerRuntime || current?.runtime) {
+    return current.providerRuntime ? "native" : "legacy";
+  }
+  const plugins = normalizePluginsConfig(cfg.plugins);
+  const slotPluginId = plugins.enabled ? plugins.slots.memory : undefined;
+  if (!slotPluginId) {
+    return undefined;
+  }
+  const processOwner = resolveMemoryCapabilityRegistration(
+    getActivePluginRegistry()?.memoryCapabilities ?? [],
+  );
+  if (
+    processOwner?.pluginId === slotPluginId &&
+    (processOwner.capability.providerRuntime || processOwner.capability.runtime)
+  ) {
+    return processOwner.capability.providerRuntime ? "native" : "legacy";
+  }
+  if (standaloneMemoryOwner?.pluginId === slotPluginId) {
+    return standaloneMemoryOwner.native ? "native" : "legacy";
+  }
+  return undefined;
+}
 
 // Standalone managers are intentionally absent from the active plugin registry.
 export function setStandaloneMemoryManagerActive(active: boolean): void {
@@ -375,7 +421,11 @@ export function setStandaloneMemoryManagerActive(active: boolean): void {
 }
 
 export function hasMemoryRuntime(): boolean {
-  return standaloneMemoryManagerActive || getMemoryRuntime() !== undefined;
+  return (
+    standaloneMemoryManagerActive ||
+    getMemoryRuntime() !== undefined ||
+    getMemoryProviderRuntime() !== undefined
+  );
 }
 
 function cloneMemoryPublicArtifact(

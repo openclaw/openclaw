@@ -4,12 +4,16 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type {
   PluginInspectSource,
   PluginsInspectResult,
+  PluginsListResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import { resolveIsConfigReadOnly } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
-import { fetchClawHubPluginVersionCategories } from "../infra/clawhub-plugin-catalog.js";
+import {
+  fetchClawHubPluginDetail,
+  fetchClawHubPluginVersionCategories,
+} from "../infra/clawhub-plugin-catalog.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { resolvePendingPluginCapabilityReview } from "./capability-consent.js";
 import {
@@ -19,6 +23,8 @@ import {
   resolvePluginInstallRecordTrust,
   resolvePluginPackageDeclaredSurface,
 } from "./capability-summary.js";
+import { projectClawHubPluginInspection } from "./catalog-discovery.js";
+import { normalizeCatalogIconUrl } from "./catalog-icon-registry.js";
 import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
@@ -46,7 +52,6 @@ import {
   resolvePluginIconSources,
   resolvePluginActivityIconSource,
   type ManagedPluginCatalogEntry,
-  type ManagedPluginCatalog,
   getManagedPluginCache,
   withManagedPluginCache,
   prepareCatalogEntry,
@@ -96,8 +101,6 @@ function resolveManagedPluginState(params: {
   }
   return params.setupMode === "missing" ? "needs-setup" : "disabled";
 }
-
-export type ManagedPluginInspection = PluginsInspectResult;
 
 const CLAWHUB_CATEGORY_BATCH_LIMIT = 200;
 
@@ -195,28 +198,13 @@ export const resolveManagedPluginActivityIconSource = withManagedPluginCache(
   },
 );
 
-function normalizeManagedCatalogIconUrl(value: unknown): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  if (!normalized || normalized.length > 2048) {
-    return undefined;
-  }
-  try {
-    const url = new URL(normalized);
-    return url.protocol === "https:" && url.hostname && !url.username && !url.password && !url.hash
-      ? url.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /** Resolve only URLs currently owned by a manifest or bundled presentation catalog. */
 export function resolveManagedSetupCatalogIconUrl(params: {
   config: OpenClawConfig;
   iconUrl: string;
   env?: NodeJS.ProcessEnv;
 }): string | undefined {
-  const requested = normalizeManagedCatalogIconUrl(params.iconUrl);
+  const requested = normalizeCatalogIconUrl(normalizeOptionalString(params.iconUrl) ?? "");
   if (!requested) {
     return undefined;
   }
@@ -230,7 +218,9 @@ export function resolveManagedSetupCatalogIconUrl(params: {
     }).map((choice) => choice.icon),
     ...listRecommendedToolInstalls().map((install) => install.icon),
   ];
-  return allowedUrls.some((iconUrl) => normalizeManagedCatalogIconUrl(iconUrl) === requested)
+  return allowedUrls.some(
+    (iconUrl) => normalizeCatalogIconUrl(normalizeOptionalString(iconUrl) ?? "") === requested,
+  )
     ? requested
     : undefined;
 }
@@ -242,7 +232,7 @@ export const listManagedPlugins = withManagedPluginCache(
     env?: NodeJS.ProcessEnv;
     officialCatalog?: OfficialCatalogResult;
     metadata?: PluginMetadataSnapshot;
-  }): Promise<ManagedPluginCatalog> => {
+  }): Promise<PluginsListResult> => {
     // Manifest schemas describe authored SecretRefs, not resolved runtime strings.
     // Retain the paired source before hosted catalog I/O can publish another generation.
     const sourceConfig = resolvePluginActivationSourceConfig({ config: params.config });
@@ -549,10 +539,23 @@ export const listManagedPlugins = withManagedPluginCache(
 export const inspectManagedPlugin = withManagedPluginCache(
   async (params: {
     config: OpenClawConfig;
-    pluginId: string;
+    pluginId?: string;
+    clawhub?: { packageName: string; version?: string };
     env?: NodeJS.ProcessEnv;
-  }): Promise<ManagedPluginInspection> => {
+  }): Promise<PluginsInspectResult> => {
     const env = params.env ?? process.env;
+    if (params.clawhub) {
+      const [remote, local] = await Promise.all([
+        fetchClawHubPluginDetail(params.clawhub),
+        listManagedPlugins({ config: params.config, env }),
+      ]);
+      return projectClawHubPluginInspection({ remote, local, config: params.config });
+    }
+    if (!params.pluginId) {
+      throw new ManagedPluginLifecycleError("A plugin inspection identity is required.", {
+        kind: "invalid-request",
+      });
+    }
     const metadata = resolveManagedPluginMetadata(params.config, env);
     const pluginId = metadata.normalizePluginId(params.pluginId);
     const record = metadata.index.plugins.find((candidate) => candidate.pluginId === pluginId);
@@ -652,7 +655,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
               const credential = inspectPluginCredentialValue(params.config, descriptor, env);
               // Public inspection carries presence only. Private values and reference
               // identifiers remain behind the administrator credential editor.
-              const status: NonNullable<ManagedPluginInspection["credentials"]>[number]["status"] =
+              const status: NonNullable<PluginsInspectResult["credentials"]>[number]["status"] =
                 credential.kind === "reference"
                   ? credential.unresolved
                     ? "unresolved"

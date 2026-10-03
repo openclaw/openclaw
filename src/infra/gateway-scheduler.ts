@@ -274,7 +274,13 @@ export class GatewayScheduler {
   }
 
   private run(job: ScheduledWork): Promise<void> {
-    log.debug(`running ${job.id}`);
+    // Cadence jobs can run every few milliseconds (event-loop sampling runs every 20ms),
+    // so only one-shot runs are worth a debug line.
+    if (job.everyMs === undefined) {
+      log.debug(`running ${job.id}`);
+    } else {
+      log.trace(`running ${job.id}`);
+    }
     const done = createDeferredCore();
     const work = new AsyncWorkScope();
     job.running = done.promise;

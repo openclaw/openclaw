@@ -30,6 +30,7 @@ import {
   scheduleFollowupDrainAfterReplyOperationClear,
 } from "./agent-runner-core.js";
 import {
+  continueStalledReplyTurn,
   createReplyAgentRestartRecoveryController,
   executePreparedReplyAgentRun,
 } from "./agent-runner-execute.js";
@@ -483,21 +484,17 @@ export async function runReplyAgent(
         }
       }
     : undefined;
-  const blockReplyCoalescing =
-    blockStreamingEnabled && (opts?.onPreparedBlockReply || opts?.onBlockReply)
-      ? resolveEffectiveBlockStreamingConfig({
-          cfg,
-          provider: sessionCtx.Provider,
-          accountId: sessionCtx.AccountId,
-          chunking: blockReplyChunking,
-        }).coalescing
-      : undefined;
   const blockReplyPipeline =
     blockStreamingEnabled && (opts?.onPreparedBlockReply || opts?.onBlockReply)
       ? createBlockReplyPipeline({
           onBlockReply: (payload, context) => deliverPreparedBlockReply(opts, payload, context),
           timeoutMs: blockReplyTimeoutMs,
-          coalescing: blockReplyCoalescing,
+          coalescing: resolveEffectiveBlockStreamingConfig({
+            cfg,
+            provider: sessionCtx.Provider,
+            accountId: sessionCtx.AccountId,
+            chunking: blockReplyChunking,
+          }).coalescing,
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
         })
       : null;
@@ -592,6 +589,19 @@ export async function runReplyAgent(
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
+  if (replyOperationRunState && !isHeartbeat && replyExpectation === "required") {
+    // Dispatch owns the stall notice; this owner holds the queue facts needed to answer
+    // instead. The same sender's next queued request inherits the guidance; otherwise one
+    // recovery run bound to this turn's route and authority is queued.
+    replyOperationRunState.continueStalledTurn = () =>
+      continueStalledReplyTurn({
+        followupRun,
+        queueKey,
+        resolvedQueue,
+        replyOperation,
+        runFollowupTurn,
+      });
+  }
   const {
     admitUserTurn,
     beginBeforeAgentReply,

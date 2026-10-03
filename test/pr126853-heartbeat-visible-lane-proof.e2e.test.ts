@@ -204,7 +204,7 @@ describe("PR #126853 real Gateway lane proof", () => {
                 },
               },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: {
             mode: "replace",

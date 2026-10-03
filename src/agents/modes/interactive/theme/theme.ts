@@ -1,7 +1,7 @@
 /**
  * Interactive terminal theme loader.
  *
- * Validates theme JSON, resolves color variables, watches custom theme files, and exposes terminal styling helpers.
+ * Validates theme JSON, resolves color variables, and exposes terminal styling helpers.
  */
 import * as fs from "node:fs";
 import { getCapabilities } from "@earendil-works/pi-tui";
@@ -10,10 +10,6 @@ import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { SourceInfo } from "../../../sessions/source-info.js";
 import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.js";
-
-// ============================================================================
-// Types & Schema
-// ============================================================================
 
 const ColorValueSchema = Type.Union([
   Type.String(), // hex "#ff0000", var ref "primary", or empty ""
@@ -27,7 +23,6 @@ const ThemeJsonSchema = Type.Object({
   name: Type.String(),
   vars: Type.Optional(Type.Record(Type.String(), ColorValueSchema)),
   colors: Type.Object({
-    // Core UI (10 colors)
     accent: ColorValueSchema,
     border: ColorValueSchema,
     borderAccent: ColorValueSchema,
@@ -39,7 +34,6 @@ const ThemeJsonSchema = Type.Object({
     dim: ColorValueSchema,
     text: ColorValueSchema,
     thinkingText: ColorValueSchema,
-    // Backgrounds & Content Text (11 colors)
     selectedBg: ColorValueSchema,
     userMessageBg: ColorValueSchema,
     userMessageText: ColorValueSchema,
@@ -51,7 +45,6 @@ const ThemeJsonSchema = Type.Object({
     toolErrorBg: ColorValueSchema,
     toolTitle: ColorValueSchema,
     toolOutput: ColorValueSchema,
-    // Markdown (10 colors)
     mdHeading: ColorValueSchema,
     mdLink: ColorValueSchema,
     mdLinkUrl: ColorValueSchema,
@@ -62,11 +55,9 @@ const ThemeJsonSchema = Type.Object({
     mdQuoteBorder: ColorValueSchema,
     mdHr: ColorValueSchema,
     mdListBullet: ColorValueSchema,
-    // Tool Diffs (3 colors)
     toolDiffAdded: ColorValueSchema,
     toolDiffRemoved: ColorValueSchema,
     toolDiffContext: ColorValueSchema,
-    // Syntax Highlighting (9 colors)
     syntaxComment: ColorValueSchema,
     syntaxKeyword: ColorValueSchema,
     syntaxFunction: ColorValueSchema,
@@ -76,14 +67,12 @@ const ThemeJsonSchema = Type.Object({
     syntaxType: ColorValueSchema,
     syntaxOperator: ColorValueSchema,
     syntaxPunctuation: ColorValueSchema,
-    // Thinking Level Borders (6 colors)
     thinkingOff: ColorValueSchema,
     thinkingMinimal: ColorValueSchema,
     thinkingLow: ColorValueSchema,
     thinkingMedium: ColorValueSchema,
     thinkingHigh: ColorValueSchema,
     thinkingXhigh: ColorValueSchema,
-    // Bash Mode (1 color)
     bashMode: ColorValueSchema,
   }),
   export: Type.Optional(
@@ -110,10 +99,6 @@ type ThemeBg =
   | "toolErrorBg";
 
 type ColorMode = "truecolor" | "256color";
-
-// ============================================================================
-// Color Utilities
-// ============================================================================
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const cleaned = hex.replace("#", "");
@@ -164,7 +149,6 @@ function colorDistance(
 }
 
 function rgbTo256(r: number, g: number, b: number): number {
-  // Find closest color in the 6x6x6 cube
   const rIdx = findClosestPaletteIndex(r, CUBE_VALUES);
   const gIdx = findClosestPaletteIndex(g, CUBE_VALUES);
   const bIdx = findClosestPaletteIndex(b, CUBE_VALUES);
@@ -177,7 +161,6 @@ function rgbTo256(r: number, g: number, b: number): number {
   const cubeIndex = 16 + 36 * rIdx + 6 * gIdx + bIdx;
   const cubeDist = colorDistance(r, g, b, cubeR, cubeG, cubeB);
 
-  // Find closest grayscale
   const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
   const grayIdx = findClosestPaletteIndex(gray, GRAY_VALUES);
   const grayValue = GRAY_VALUES[grayIdx];
@@ -202,11 +185,6 @@ function rgbTo256(r: number, g: number, b: number): number {
   return cubeIndex;
 }
 
-function hexTo256(hex: string): number {
-  const { r, g, b } = hexToRgb(hex);
-  return rgbTo256(r, g, b);
-}
-
 function colorAnsi(color: string | number, mode: ColorMode, layer: "fg" | "bg"): string {
   const code = layer === "fg" ? 38 : 48;
   if (color === "") {
@@ -216,12 +194,10 @@ function colorAnsi(color: string | number, mode: ColorMode, layer: "fg" | "bg"):
     return `\x1b[${code};5;${color}m`;
   }
   if (color.startsWith("#")) {
-    if (mode === "truecolor") {
-      const { r, g, b } = hexToRgb(color);
-      return `\x1b[${code};2;${r};${g};${b}m`;
-    }
-    const index = hexTo256(color);
-    return `\x1b[${code};5;${index}m`;
+    const { r, g, b } = hexToRgb(color);
+    return mode === "truecolor"
+      ? `\x1b[${code};2;${r};${g};${b}m`
+      : `\x1b[${code};5;${rgbTo256(r, g, b)}m`;
   }
   throw new Error(`Invalid color value: ${color}`);
 }
@@ -236,9 +212,6 @@ function resolveVarRefs(
   }
   if (visited.has(value)) {
     throw new Error(`Circular variable reference detected: ${value}`);
-  }
-  if (!(value in vars)) {
-    throw new Error(`Variable reference not found: ${value}`);
   }
   visited.add(value);
   const resolved = vars[value];
@@ -258,10 +231,6 @@ function resolveThemeColors<T extends Record<string, ColorValue>>(
   }
   return resolved as Record<keyof T, string | number>;
 }
-
-// ============================================================================
-// Theme Class
-// ============================================================================
 
 // Keep formatting independent of overridable public ANSI getters.
 function getThemeAnsi(colors: ReadonlyMap<string, string>, color: string, label: string): string {
@@ -345,7 +314,6 @@ export class Theme {
   getThinkingBorderColor(
     level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
   ): (str: string) => string {
-    // Map thinking levels to dedicated theme colors
     switch (level) {
       case "off":
         return (str: string) => this.fg("thinkingOff", str);
@@ -368,10 +336,6 @@ export class Theme {
     return (str: string) => this.fg("bashMode", str);
   }
 }
-
-// ============================================================================
-// Theme Loading
-// ============================================================================
 
 function parseThemeJson(label: string, json: unknown): ThemeJson {
   if (!validateThemeJson.Check(json)) {
@@ -456,15 +420,9 @@ export function loadThemeFromPath(themePath: string, mode?: ColorMode): Theme {
   return createTheme(themeJson, mode, themePath);
 }
 
-// ============================================================================
-// Global Theme Instance
-// ============================================================================
-
 // Use globalThis to share theme across module loaders (tsx + jiti in dev mode)
 const THEME_KEY = Symbol.for("openclaw:agent-theme");
 
-// Export theme as a getter that reads from globalThis
-// This ensures all module instances (tsx, jiti) see the same theme
 export const interactiveAgentTheme: Theme = new Proxy({} as Theme, {
   get(_target, prop) {
     const t = (globalThis as Record<symbol, Theme>)[THEME_KEY];
@@ -474,14 +432,6 @@ export const interactiveAgentTheme: Theme = new Proxy({} as Theme, {
     return (t as unknown as Record<string | symbol, unknown>)[prop];
   },
 });
-
-// ============================================================================
-// HTML Export Helpers
-// ============================================================================
-
-// ============================================================================
-// TUI Helpers
-// ============================================================================
 
 type CliHighlightTheme = Record<string, (s: string) => string>;
 

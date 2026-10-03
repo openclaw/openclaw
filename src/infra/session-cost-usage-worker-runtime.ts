@@ -37,6 +37,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution-contract.js";
 import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
@@ -230,6 +231,8 @@ export async function runUsageCostWorker(
     const assertBindingCurrent = (
       binding: (typeof bindings)[number],
       admittedDatabase?: OpenClawAgentDatabase,
+      execution?: OpenClawAgentDatabaseExecution,
+      opening?: boolean,
     ) => {
       const admittedCache =
         admittedDatabase &&
@@ -249,8 +252,17 @@ export async function runUsageCostWorker(
         return;
       }
       const current = fs.statSync(binding.options.path, { bigint: true, throwIfNoEntry: false });
-      if (!binding.identity && current && admittedCache) {
+      const admittedFile =
+        binding === cacheBinding &&
+        execution?.agentId === binding.options.agentId &&
+        execution.path === binding.options.path &&
+        execution.fileIdentity?.physicalIdentity === (current && `${current.dev}:${current.ino}`);
+      if (!binding.identity && current && (admittedCache || admittedFile)) {
         binding.identity = current;
+      }
+      if (!binding.identity && opening && execution && !execution.fileIdentity) {
+        execution.assertCurrent();
+        return;
       }
       if (
         binding.identity
@@ -260,7 +272,11 @@ export async function runUsageCostWorker(
         throw new Error("Usage database changed during worker operation");
       }
     };
-    const assertCurrent = (admittedDatabase?: OpenClawAgentDatabase) => {
+    const assertCurrent = (
+      admittedDatabase?: OpenClawAgentDatabase,
+      execution?: OpenClawAgentDatabaseExecution,
+      opening?: boolean,
+    ) => {
       scope.assertCurrent();
       signal?.throwIfAborted();
       for (const binding of bindings) {
@@ -269,7 +285,7 @@ export async function runUsageCostWorker(
         }
       }
       // Only the lock owner's admitted writer may create a previously absent cache.
-      assertBindingCurrent(cacheBinding, admittedDatabase);
+      assertBindingCurrent(cacheBinding, admittedDatabase, execution, opening);
     };
     const resolveBinding = (target: Pick<SqliteSessionFileMarker, "agentId" | "storePath">) => {
       const options = toDatabaseOptions(resolveSqliteReadScope({ ...target, env: location.env }));

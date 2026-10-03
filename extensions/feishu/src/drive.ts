@@ -13,6 +13,8 @@ import {
   extractReplyText,
   FeishuReplyCommentError,
   formatFeishuApiError,
+  type FeishuDriveCommentCard,
+  type FeishuDriveCommentReply,
 } from "./comment-shared.js";
 import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
@@ -20,8 +22,6 @@ import { withFeishuMessageDispatch } from "./send-context.js";
 import { createFeishuToolClient } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as jsonResult, unknownToolActionResult } from "./tool-result.js";
-
-// ============ Actions ============
 
 type FeishuExplorerRootFolderMetaResponse = {
   code: number;
@@ -48,31 +48,6 @@ type FeishuDriveApiResponse<T> = {
   log_id?: string;
   msg?: string;
   data?: T;
-};
-
-type FeishuDriveCommentReply = {
-  reply_id?: string;
-  user_id?: string;
-  create_time?: number;
-  update_time?: number;
-  content?: {
-    elements?: unknown[];
-  };
-};
-
-type FeishuDriveCommentCard = {
-  comment_id?: string;
-  user_id?: string;
-  create_time?: number;
-  update_time?: number;
-  is_solved?: boolean;
-  is_whole?: boolean;
-  has_more?: boolean;
-  page_token?: string;
-  quote?: string;
-  reply_list?: {
-    replies?: FeishuDriveCommentReply[];
-  };
 };
 
 type FeishuDriveListCommentsResponse = FeishuDriveApiResponse<{
@@ -618,22 +593,16 @@ export async function deliverCommentThreadText(
       `[feishu_drive] whole-comment compatibility path ` +
         `comment=${params.comment_id} file_type=${params.file_type} mode=add_comment`,
     );
-    return {
-      delivery_mode: "add_comment",
-      ...(await addComment(client, {
-        file_token: params.file_token,
-        file_type: params.file_type,
-        content: params.content,
-      })),
-    };
-  }
-  try {
-    return {
-      delivery_mode: "reply_comment",
-      ...(await replyComment(client, params)),
-    };
-  } catch (error) {
-    if (error instanceof FeishuReplyCommentError && error.feishuCode === 1069302) {
+  } else {
+    try {
+      return {
+        delivery_mode: "reply_comment",
+        ...(await replyComment(client, params)),
+      };
+    } catch (error) {
+      if (!(error instanceof FeishuReplyCommentError) || error.feishuCode !== 1069302) {
+        throw error;
+      }
       if (params.file_type !== "doc" && params.file_type !== "docx") {
         throw error;
       }
@@ -642,20 +611,17 @@ export async function deliverCommentThreadText(
           `comment=${params.comment_id} file_type=${params.file_type} mode=add_comment ` +
           `log_id=${error.feishuLogId ?? "unknown"}`,
       );
-      return {
-        delivery_mode: "add_comment",
-        ...(await addComment(client, {
-          file_token: params.file_token,
-          file_type: params.file_type,
-          content: params.content,
-        })),
-      };
     }
-    throw error;
   }
+  return {
+    delivery_mode: "add_comment",
+    ...(await addComment(client, {
+      file_token: params.file_token,
+      file_type: params.file_type,
+      content: params.content,
+    })),
+  };
 }
-
-// ============ Tool Registration ============
 
 export function registerFeishuDriveTools(api: OpenClawPluginApi) {
   registerFeishuTool(api, {

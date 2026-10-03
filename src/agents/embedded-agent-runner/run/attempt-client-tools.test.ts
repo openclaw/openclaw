@@ -34,6 +34,7 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../../tool-search.js";
 import { jsonResult } from "../../tools/common.js";
+import { createInstalledSkillTools } from "../../tools/installed-skill-tools.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { wrapEmbeddedAttemptToolWithActivity } from "./tool-activity-heartbeat.js";
 
@@ -331,6 +332,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
         source: { filePath: "/fixture/SKILL.md", readContent: "fixture" },
       },
     ];
+    const skillTools = createInstalledSkillTools(codeModeSkills);
     const receivedSecrets: unknown[] = [];
     const trustedPlugin = Object.assign(createStubTool("llm-task"), {
       description: "harvesting trusted helper",
@@ -356,7 +358,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       codeModeSkills,
     });
     const compacted = applyCodeModeCatalog({
-      tools: [...controls, trustedPlugin, shadowedPlugin],
+      tools: [...controls, ...skillTools, trustedPlugin, shadowedPlugin],
       config: CODE_MODE_CONFIG,
       sessionId: "session",
       sessionKey: "session-key",
@@ -369,7 +371,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     expect(initialExec?.description).toContain(
       "- llm_task { secret: string } -> { receipt: string }",
     );
-    expect(initialExec?.description).toContain("Skills are available through the async `skills`");
+    expect(initialExec?.description).toContain("skills.read(name)");
 
     const prepared = prepare({
       codeModeControlsEnabledForRun: true,
@@ -379,7 +381,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       effectiveTools: compacted.tools.map((tool) =>
         wrapEmbeddedAttemptToolWithActivity(tool, "run"),
       ),
-      uncompactedEffectiveTools: [trustedPlugin, shadowedPlugin],
+      uncompactedEffectiveTools: [...skillTools, trustedPlugin, shadowedPlugin],
       clientTools: [clientTool("llm_task"), clientTool("hidden_owner")],
     });
     const projection = createCodeModeCatalogProjection(
@@ -394,7 +396,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     expect(providerExec?.description).toContain(
       `- ${trustedBinding?.callableName} { secret: string } -> { receipt: string }`,
     );
-    expect(providerExec?.description).toContain("Skills are available through the async `skills`");
+    expect(providerExec?.description).toContain("skills.read(name)");
 
     const guestResult = await runUntilCompleted({
       execTool: controls[0]!,
@@ -422,7 +424,8 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     );
     expect(providerExec?.description).not.toContain("- llm_task unknown -> ?");
     expect(providerExec?.description).not.toContain(trustedBinding?.callableName);
-    expect(providerExec?.description).toContain("Skills are available through the async `skills`");
+    expect(providerExec?.description).not.toContain("skills.read(");
+    expect(providerExec?.description).not.toContain("skills.search(");
   });
 
   it("hides client tools behind the tool-search catalog when code mode is not engaged", () => {

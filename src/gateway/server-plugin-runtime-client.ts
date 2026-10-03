@@ -46,6 +46,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
   internalDeliveryMediaUrls?: string[];
   runtimeContextFragments?: RuntimeContextFragment[];
   internalDeliverySuppressText?: boolean;
+  internalDeliverySuppressErrors?: boolean;
   pluginRuntimeOwnerId?: string;
   nodeInvokeApprovalSessionKey?: string;
   pluginSubagentRequester?: PluginSubagentRequesterContext;
@@ -97,6 +98,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
         : {}),
       ...(params?.internalDeliverySuppressText === true
         ? { internalDeliverySuppressText: true }
+        : {}),
+      ...(params?.internalDeliverySuppressErrors === true
+        ? { internalDeliverySuppressErrors: true }
         : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),

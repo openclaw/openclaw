@@ -1,6 +1,6 @@
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type { RequesterSettleWakeBatchState } from "../announce/subagent-announce.requester-settle-state.js";
-import type { SubagentRunSqliteRow } from "../registry/subagent-registry.store.codec.js";
+import type { SubagentRunSqliteRow } from "../registry/subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 export type BlockSubagentCompletionRequest = {

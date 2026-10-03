@@ -36,33 +36,24 @@ type RemoteFileDeps = {
   onCleanupError?: (error: Error) => void;
 };
 
-function commandError(label: string, result: SpawnResult): Error | undefined {
-  if (result.code === 0 && result.termination === "exit") {
-    return undefined;
-  }
-  const detail = result.stderr.trim() || result.stdout.trim();
-  return new Error(
-    `${label} failed (${result.termination}${result.code === null ? "" : `, code ${result.code}`})${detail ? `: ${detail}` : ""}`,
-  );
-}
-
 async function runChecked(
   run: RunCommand,
   label: string,
   argv: string[],
   options: CommandOptions,
-): Promise<SpawnResult> {
+): Promise<void> {
   const result = await run(argv, {
     killProcessTree: true,
     maxOutputBytes: { stdout: 4 * 1024, stderr: 64 * 1024 },
     outputCapture: { stdout: "head", stderr: "tail" },
     ...options,
   });
-  const error = commandError(label, result);
-  if (error) {
-    throw error;
+  if (result.code !== 0 || result.termination !== "exit") {
+    const detail = result.stderr.trim() || result.stdout.trim();
+    throw new Error(
+      `${label} failed (${result.termination}${result.code === null ? "" : `, code ${result.code}`})${detail ? `: ${detail}` : ""}`,
+    );
   }
-  return result;
 }
 
 function requireToken(createToken: () => string): string {

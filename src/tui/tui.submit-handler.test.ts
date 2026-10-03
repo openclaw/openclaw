@@ -175,7 +175,7 @@ describe("createEditorSubmitHandler", () => {
     expect(sendMessage).not.toHaveBeenCalled();
     expect(handleCommand).not.toHaveBeenCalled();
     expect(handleBangLine).not.toHaveBeenCalled();
-    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead", {
+    expect(onBlockedMessageSubmit).toHaveBeenCalledWith({
       status: "blocked",
       reason: "pending",
     });

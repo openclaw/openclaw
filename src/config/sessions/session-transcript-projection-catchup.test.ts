@@ -1,11 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, describe, expect, it } from "vitest";
 import {
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import { rotateTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
@@ -19,15 +17,10 @@ import {
   type PreparedSessionTranscriptProjection,
 } from "./session-transcript-projection-rebuild.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-projection-catchup-");
 
 async function prepareDirtyProjection(label: string) {
-  const stateDir = tempDirs.make(`openclaw-projection-catchup-${label}-`);
+  const stateDir = sessionDirs.make();
   const scope = {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -87,7 +80,7 @@ function publishPreparedBase(params: {
 
 describe("session transcript projection append catch-up", () => {
   it("rejects catch-up when the prepared source contains an unresolved leaf control", async () => {
-    const stateDir = tempDirs.make("openclaw-projection-catchup-invalid-leaf-");
+    const stateDir = sessionDirs.make();
     const scope = {
       agentId: "main",
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },

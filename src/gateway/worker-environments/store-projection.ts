@@ -8,14 +8,12 @@ import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerEnvironmentAttachmentRecord } from "./session-attachment.js";
 import {
   digestWorkerEnvironmentAttachmentAuthority,
-  digestWorkerEnvironmentRecordAuthority,
+  digestWorkerEnvironmentAuthority,
+  digestWorkerCredentialAuthority,
   encodeWorkerEnvironmentTransferAuthority,
 } from "./store-commit-authority.js";
 import { assertShape } from "./store-validation.js";
-import type {
-  WorkerEnvironmentCommitAdmission,
-  WorkerEnvironmentFacts,
-} from "./store-worker-contract.js";
+import type { WorkerEnvironmentCommitAdmission, WorkerEnvironmentFacts } from "./store.types.js";
 
 export type WorkerEnvironmentNativePatch = Partial<
   Pick<
@@ -74,7 +72,8 @@ function createWorkerEnvironmentProjection() {
     string,
     {
       token: object;
-      recordAuthorityUnchanged: boolean;
+      environmentAuthorityUnchanged: boolean;
+      credentialAuthorityUnchanged: boolean;
       transferAuthorityUnchanged: boolean;
       attachmentAuthorityUnchanged: boolean;
     }
@@ -98,7 +97,7 @@ function createWorkerEnvironmentProjection() {
   };
   const assertReadable = (
     id: string,
-    authority: "record" | "transfer" | "attachment" = "record",
+    authority: "environment" | "credential" | "transfer" | "attachment",
   ) => {
     assertActive();
     const mutation = pending.get(id);
@@ -175,7 +174,8 @@ function createWorkerEnvironmentProjection() {
       assertActive();
       for (const {
         environmentId,
-        recordAuthority,
+        environmentAuthority,
+        credentialAuthority,
         transferAuthority,
         attachmentAuthority,
       } of facts) {
@@ -189,12 +189,11 @@ function createWorkerEnvironmentProjection() {
             attachmentAuthority ===
             (attachmentAuthorities.get(environmentId) ??
               digestWorkerEnvironmentAttachmentAuthority(undefined)),
-          recordAuthorityUnchanged:
-            recordAuthority ===
-            digestWorkerEnvironmentRecordAuthority(
-              environments.get(environmentId),
-              credentials.get(environmentId),
-            ),
+          environmentAuthorityUnchanged:
+            environmentAuthority ===
+            digestWorkerEnvironmentAuthority(environments.get(environmentId)),
+          credentialAuthorityUnchanged:
+            credentialAuthority === digestWorkerCredentialAuthority(credentials.get(environmentId)),
           transferAuthorityUnchanged:
             transferAuthority ===
             encodeWorkerEnvironmentTransferAuthority(
@@ -346,7 +345,7 @@ function createWorkerEnvironmentProjection() {
           row.nodeSetupId !== null &&
           !["destroyed", "failed", "orphaned"].includes(row.state)
         ) {
-          assertReadable(row.environmentId);
+          assertReadable(row.environmentId, "environment");
           return true;
         }
       }
@@ -368,7 +367,7 @@ function createWorkerEnvironmentProjection() {
             (["provisioning", "bootstrapping", "ready", "idle", "attached"].includes(row.state) &&
               row.nodeDeviceId === deviceId))
         ) {
-          assertReadable(row.environmentId);
+          assertReadable(row.environmentId, "environment");
           matches += 1;
           if (matches === 2) {
             return false;
@@ -378,7 +377,7 @@ function createWorkerEnvironmentProjection() {
       return matches === 1;
     },
     get(id: string) {
-      assertReadable(id);
+      assertReadable(id, "environment");
       const record = environments.get(id);
       if (record) {
         assertEnvironmentShape(record);
@@ -409,14 +408,14 @@ function createWorkerEnvironmentProjection() {
       };
     },
     credential(id: string) {
-      assertReadable(id);
+      assertReadable(id, "credential");
       return structuredClone(credentials.get(id));
     },
     credentialByHash(hash: string) {
       assertActive();
       const row = [...credentials.values()].find((entry) => entry.credentialHash === hash);
       if (row) {
-        assertReadable(row.environmentId);
+        assertReadable(row.environmentId, "credential");
       }
       return structuredClone(row);
     },

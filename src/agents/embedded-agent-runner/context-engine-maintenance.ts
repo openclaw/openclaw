@@ -341,9 +341,6 @@ function scheduleDeferredTurnMaintenance(
   return state.promise;
 }
 
-/**
- * Run optional context-engine transcript maintenance and normalize the result.
- */
 export async function runContextEngineMaintenance(
   params: ContextEngineMaintenanceParams,
 ): Promise<ContextEngineMaintenanceResult | undefined> {

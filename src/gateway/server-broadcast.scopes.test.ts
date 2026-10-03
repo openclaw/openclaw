@@ -36,40 +36,37 @@ describe("read-capable operator event scope guards", () => {
 });
 
 describe("Talk voice event scope guards", () => {
-  it.each(["requested", "cancelled"])(
-    "delivers a %s voice change only to targeted Talk-capable operators",
-    (phase) => {
-      const owner = makeClient("owner", "operator", ["operator.talk"]);
-      const writer = makeClient("writer", "operator", ["operator.write"]);
-      const admin = makeClient("admin", "operator", ["operator.admin"]);
-      const observer = makeClient("observer", "operator", ["operator.talk"]);
-      const reader = makeClient("reader", "operator", ["operator.read"]);
-      const node = makeClient("node", "node", ["operator.talk"]);
-      const targets = [owner, writer, admin, reader, node];
-      const { broadcastToConnIds } = createGatewayBroadcaster({
-        clients: new GatewayClientRegistry([...targets, observer].map((entry) => entry.client)),
-      });
+  it("delivers a voice change only to targeted Talk-capable operators", () => {
+    const owner = makeClient("owner", "operator", ["operator.talk"]);
+    const writer = makeClient("writer", "operator", ["operator.write"]);
+    const admin = makeClient("admin", "operator", ["operator.admin"]);
+    const observer = makeClient("observer", "operator", ["operator.talk"]);
+    const reader = makeClient("reader", "operator", ["operator.read"]);
+    const node = makeClient("node", "node", ["operator.talk"]);
+    const targets = [owner, writer, admin, reader, node];
+    const { broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([...targets, observer].map((entry) => entry.client)),
+    });
 
-      broadcastToConnIds(
-        "talk.voice.change",
-        {
-          phase,
-          changeId: "change-1",
-          voiceSessionId: "voice-1",
-          sessionKey: "main",
-          voice: "ember",
-        },
-        new Set(targets.map((entry) => entry.client.connId)),
-      );
+    broadcastToConnIds(
+      "talk.voice.change",
+      {
+        phase: "requested",
+        changeId: "change-1",
+        voiceSessionId: "voice-1",
+        sessionKey: "main",
+        voice: "ember",
+      },
+      new Set(targets.map((entry) => entry.client.connId)),
+    );
 
-      for (const allowed of [owner, writer, admin]) {
-        expect(allowed.socket.events).toEqual(["talk.voice.change"]);
-      }
-      for (const denied of [observer, reader, node]) {
-        expect(denied.socket.events).toEqual([]);
-      }
-    },
-  );
+    for (const allowed of [owner, writer, admin]) {
+      expect(allowed.socket.events).toEqual(["talk.voice.change"]);
+    }
+    for (const denied of [observer, reader, node]) {
+      expect(denied.socket.events).toEqual([]);
+    }
+  });
 });
 
 describe("update run event scope guards", () => {

@@ -243,24 +243,21 @@ function resolveBinEntry(
   binField: string | Record<string, string> | undefined,
 ): string | null {
   if (typeof binField === "string") {
-    const trimmed = normalizeOptionalString(binField);
-    return trimmed || null;
+    return normalizeOptionalString(binField) ?? null;
   }
   if (!binField || typeof binField !== "object") {
     return null;
   }
 
   if (packageName) {
-    const preferred = binField[packageName];
-    const normalizedPreferred =
-      typeof preferred === "string" ? normalizeOptionalString(preferred) : undefined;
+    const normalizedPreferred = normalizeOptionalString(binField[packageName]);
     if (normalizedPreferred) {
       return normalizedPreferred;
     }
   }
 
   for (const value of Object.values(binField)) {
-    const normalizedValue = typeof value === "string" ? normalizeOptionalString(value) : undefined;
+    const normalizedValue = normalizeOptionalString(value);
     if (normalizedValue) {
       return normalizedValue;
     }

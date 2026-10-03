@@ -12,7 +12,7 @@ import {
   type NativeApprovalTarget,
 } from "./approval-native-helpers.js";
 import type { ChannelApprovalCapability } from "./channel-contract.js";
-import type { OpenClawConfig } from "./config-runtime.js";
+import type { OpenClawConfig } from "./config-contracts.js";
 import { normalizeMessageChannel } from "./routing.js";
 import { normalizeOptionalString } from "./string-coerce-runtime.js";
 
@@ -285,30 +285,9 @@ export function createApproverRestrictedNativeApprovalCapability(
     accountId?: string | null;
   }) =>
     params.hasApprovers({ cfg, accountId }) && params.isNativeDeliveryEnabled({ cfg, accountId });
-  const resolveExecInitiatingSurfaceState = ({
-    cfg,
-    accountId,
-  }: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    action: "approve";
-  }) => availabilityState(isExecInitiatingSurfaceEnabled({ cfg, accountId }));
 
   return createChannelApprovalCapability({
-    authorizeActorAction: ({
-      cfg,
-      accountId,
-      senderId,
-      approvalKind,
-      request,
-    }: {
-      cfg: OpenClawConfig;
-      accountId?: string | null;
-      senderId?: string | null;
-      action: "approve";
-      approvalKind: ChannelApprovalKind;
-      request?: NativeApprovalRequest;
-    }) => {
+    authorizeActorAction: ({ cfg, accountId, senderId, approvalKind, request }) => {
       const pluginRequest =
         approvalKind === "plugin" && request && isPluginApprovalRequest(request)
           ? request
@@ -330,20 +309,14 @@ export function createApproverRestrictedNativeApprovalCapability(
             reason: `❌ You are not authorized to approve ${approvalKind} requests on ${params.channelLabel}.`,
           };
     },
-    getActionAvailabilityState: ({
-      cfg,
-      accountId,
-    }: {
-      cfg: OpenClawConfig;
-      accountId?: string | null;
-      action: "approve";
-      approvalKind?: ChannelApprovalKind;
-    }) => availabilityState(params.hasApprovers({ cfg, accountId })),
-    getExecInitiatingSurfaceState: resolveExecInitiatingSurfaceState,
+    getActionAvailabilityState: ({ cfg, accountId }) =>
+      availabilityState(params.hasApprovers({ cfg, accountId })),
+    getExecInitiatingSurfaceState: ({ cfg, accountId }) =>
+      availabilityState(isExecInitiatingSurfaceEnabled({ cfg, accountId })),
     describeExecApprovalSetup: params.describeExecApprovalSetup,
     describePluginApprovalSetup: params.describePluginApprovalSetup,
     delivery: {
-      hasConfiguredDmRoute: ({ cfg }: { cfg: OpenClawConfig }) =>
+      hasConfiguredDmRoute: ({ cfg }) =>
         params.listAccountIds(cfg).some((accountId) => {
           if (!params.hasApprovers({ cfg, accountId })) {
             return false;
@@ -380,15 +353,7 @@ export function createApproverRestrictedNativeApprovalCapability(
     native:
       params.resolveOriginTarget || params.resolveApproverDmTargets
         ? {
-            describeDeliveryCapabilities: ({
-              cfg,
-              accountId,
-            }: {
-              cfg: OpenClawConfig;
-              accountId?: string | null;
-              approvalKind: ChannelApprovalKind;
-              request: NativeApprovalRequest;
-            }) => ({
+            describeDeliveryCapabilities: ({ cfg, accountId }) => ({
               enabled: isExecInitiatingSurfaceEnabled({ cfg, accountId }),
               preferredSurface: normalizePreferredSurface(
                 params.resolveNativeDeliveryMode({ cfg, accountId }),

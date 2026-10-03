@@ -12,6 +12,7 @@ import {
 } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { ControlUiSessionPreview } from "../control-ui-contract.js";
 import type {
@@ -33,7 +34,7 @@ import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { buildGatewaySessionRow } from "../session-utils.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import { loadSessionEntriesForTarget } from "./sessions-shared.js";
+import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -222,9 +223,10 @@ function loadControlUiSessionPreview(
   if (!requestedAgent.ok) {
     return null;
   }
-  const { target, storePath, store, entry } = loadSessionEntriesForTarget({
+  const { target, storePath, store, entry } = loadAccessorSessionEntryForGatewayTarget({
     key: sessionKey,
     cfg,
+    clone: false,
     ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
   });
   if (!entry) {
@@ -285,34 +287,75 @@ function parseCheckDetailsParams(
     : null;
 }
 
-function resolveCheckDetailsSession(
+async function prepareCheckDetailsSession(
   sessionKey: string,
   context: GatewayRequestContext,
   client: GatewayClient | null,
-): ControlUiSessionPrTarget | null {
-  const cfg = context.getRuntimeConfig();
-  const requested = resolveRequestedGlobalAgentId(cfg, sessionKey);
-  if (!requested.ok) {
+): Promise<ControlUiSessionPrTarget | null> {
+  const readSelected = () => {
+    const cfg = context.getRuntimeConfig();
+    const requested = resolveRequestedGlobalAgentId(cfg, sessionKey);
+    if (!requested.ok) {
+      return undefined;
+    }
+    const { target, entry, storePath } = loadAccessorSessionEntryForGatewayTarget({
+      key: sessionKey,
+      cfg,
+      clone: false,
+      agentId: requested.agentId,
+    });
+    const entryFilter = createSessionListEntryFilter({ client, cfg });
+    if (!entry?.sessionId || (entryFilter && !entryFilter(target.canonicalKey, entry))) {
+      return undefined;
+    }
+    return {
+      cfg,
+      agentId: target.agentId,
+      canonicalKey: target.canonicalKey,
+      storePath,
+      readSource: target.readSource,
+      entry,
+    };
+  };
+  const initial = readSelected();
+  if (!initial) {
     return null;
   }
-  const { target, entry, storePath } = loadSessionEntriesForTarget({
-    key: sessionKey,
-    cfg,
-    agentId: requested.agentId,
-  });
-  const entryFilter = createSessionListEntryFilter({ client, cfg });
-  if (!entry?.sessionId || (entryFilter && !entryFilter(target.canonicalKey, entry))) {
-    return null;
-  }
-  const selected = resolveControlUiSessionPrTarget({
-    cfg,
-    agentId: target.agentId,
-    canonicalKey: target.canonicalKey,
-    storePath,
-    readSource: target.readSource,
-    entry,
-  });
-  return selected ?? null;
+  const workspaceId = initial.entry.repositoryWorkspaceId;
+  const prepared = workspaceId
+    ? await getSessionRepositoryWorkspaceStore().prepare(workspaceId)
+    : undefined;
+  const current = () => {
+    const selected = readSelected();
+    if (
+      !selected ||
+      selected.entry.sessionId !== initial.entry.sessionId ||
+      selected.entry.lifecycleRevision !== initial.entry.lifecycleRevision ||
+      selected.entry.repositoryWorkspaceId !== workspaceId
+    ) {
+      return undefined;
+    }
+    const repository = prepared?.current();
+    return resolveControlUiSessionPrTarget(
+      selected,
+      repository?.workspaceId === workspaceId &&
+        repository?.agentId === selected.agentId &&
+        repository.sessionKey === selected.canonicalKey
+        ? repository
+        : null,
+    );
+  };
+  const target = current();
+  return target
+    ? {
+        ...target,
+        assertCurrent() {
+          if (current()?.identity !== target.identity) {
+            throw new Error("Session pull-request target changed");
+          }
+        },
+      }
+    : null;
 }
 
 type LoadSessionCheckDetails = (
@@ -437,7 +480,7 @@ export function createControlUiHandlers(
           : undefined;
         const currentBinding = async () => {
           if (!client) {
-            return resolveCheckDetailsSession(parsed.sessionKey, context, client);
+            return await prepareCheckDetailsSession(parsed.sessionKey, context, client);
           }
           return (await reader?.()) ?? null;
         };
@@ -449,10 +492,7 @@ export function createControlUiHandlers(
           let identityCurrent = false;
           try {
             binding.assertCurrent?.();
-            identityCurrent = client
-              ? true
-              : resolveCheckDetailsSession(parsed.sessionKey, context, client)?.identity ===
-                binding.identity;
+            identityCurrent = true;
           } catch {
             // The read owner reports retired selections and grants as assertion failures.
           }

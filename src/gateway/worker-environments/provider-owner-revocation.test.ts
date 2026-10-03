@@ -131,7 +131,7 @@ describe("worker environment owner revocation", () => {
           ownerEpoch: attached.ownerEpoch,
         },
       });
-      createWorkerSessionPlacementGate(placements).updateAckCursors({ claim, liveSeq: 1 });
+      await createWorkerSessionPlacementGate(placements).updateAckCursors({ claim, liveSeq: 1 });
       const placementStore = createWorkerSessionPlacementGate(placements, {
         rejectExistingWorkerClaims: owner === "recovery-only",
       });

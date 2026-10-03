@@ -5,6 +5,8 @@ import {
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
+import { SessionTranscriptMessageCommittedError } from "../../agents/sessions/session-manager-message-error.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   makeAgentAssistantMessage,
@@ -23,15 +25,12 @@ import {
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
 import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
-import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
-  ENVIRONMENT_ID,
-  MANIFEST_REF,
-  OWNER_EPOCH,
+  acknowledgeCompletedWorkerTurn,
+  createWorkerTurnTunnel,
+  reconcileUnchangedLocalWorkspace,
   credential,
-  measureLaunchTurn,
-  readLaunchToolNames,
   SESSION_ID,
   SESSION_KEY,
   attachedEnvironment,
@@ -52,6 +51,91 @@ describe("worker turn execution", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
 
+  it.each(["authority", "acknowledgement"] as const)(
+    "retains the committed user receipt when %s fails before worker launch",
+    async (failure) => {
+      await seedActivePlacement();
+      const input = turn(`user-commit-${failure}`);
+      const expectedFailure = new Error(`synthetic ${failure} failure`);
+      let current = true;
+      let committedMessageId: string | undefined;
+      const open = SessionManager.openAsync.bind(SessionManager);
+      const opened = vi
+        .spyOn(SessionManager, "openAsync")
+        .mockImplementationOnce(async (...args) => {
+          const manager = await open(...args);
+          const append = manager.appendMessageAsync.bind(manager);
+          vi.spyOn(manager, "appendMessageAsync").mockImplementation(async (...appendArgs) => {
+            committedMessageId = await append(...appendArgs);
+            if (failure === "authority") {
+              current = false;
+            }
+            return committedMessageId;
+          });
+          return manager;
+        });
+      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>();
+      const onUserMessagePersisted = vi.fn(() => {
+        if (failure === "acknowledgement") {
+          throw expectedFailure;
+        }
+      });
+      const runLocal = vi.fn();
+      const tunnel = createWorkerTurnTunnel({
+        launchTurn,
+        runWorkspaceCommand: vi.fn(),
+        quiesceWorkspace: vi.fn(),
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(),
+        stop: vi.fn(),
+      });
+      const provider = createWorkerSessionTurnPlacementProvider({
+        placements,
+        environments: {
+          ...unusedEnvironments(),
+          get: attachedEnvironment,
+          acquireTurnCredential: async () => credential(),
+          startTunnel: async () => tunnel,
+        },
+      });
+      try {
+        const outcome = await provider
+          .executeTurn(
+            { ...sessionTarget, runId: input.runId },
+            { ...input, onUserMessagePersisted },
+            runLocal,
+            undefined,
+            () => {
+              if (!current) {
+                throw expectedFailure;
+              }
+            },
+          )
+          .then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+        expect(outcome).toBeInstanceOf(SessionTranscriptMessageCommittedError);
+        expect(outcome).toMatchObject({
+          committedMessageId,
+          committedTarget: sessionTarget,
+          cause: expectedFailure,
+        });
+        expect(isRecordedModelFallbackStop(outcome)).toBe(true);
+        expect(committedMessageId).toBeDefined();
+        const entries = (await openSessionManager()).getEntries();
+        expect(entries).toHaveLength(1);
+        expect(entries[0]).toMatchObject({ id: committedMessageId, message: { role: "user" } });
+        expect(onUserMessagePersisted).toHaveBeenCalledTimes(failure === "authority" ? 0 : 1);
+        expect(launchTurn).not.toHaveBeenCalled();
+        expect(runLocal).not.toHaveBeenCalled();
+      } finally {
+        opened.mockRestore();
+        input.preparedRunAdmission.close();
+      }
+    },
+  );
+
   it.each([false, true])(
     "launches only supervisor-admitted tools and authorizes the same set (declared: %s)",
     async (declared) => {
@@ -67,18 +151,15 @@ describe("worker turn execution", () => {
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async () => {
         throw new WorkerRunnerCapacityError();
       });
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
+      const tunnel = createWorkerTurnTunnel({
         launchTurn,
-        measureLaunchTurn,
         readLaunchToolNames: async () => launchToolNames,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
         stop: vi.fn(),
-      };
+      });
       const provider = createWorkerSessionTurnPlacementProvider({
         placements,
         environments: {
@@ -100,7 +181,11 @@ describe("worker turn execution", () => {
         expect(allowed.length).toBeGreaterThan(0);
         expect(allowed.filter((name) => !launchToolNames.includes(name))).toEqual([]);
         expect(allowed.includes("presence")).toBe(declared);
-        expect(authorize).toHaveBeenCalledExactlyOnceWith(request.turnClaim, allowed);
+        expect(authorize).toHaveBeenCalledExactlyOnceWith(
+          request.turnClaim,
+          allowed,
+          expect.any(Function),
+        );
       } finally {
         authorize.mockRestore();
         input.preparedRunAdmission.close();
@@ -189,8 +274,8 @@ describe("worker turn execution", () => {
     "checks %s ownership after writable transcript hydration before acquiring credentials",
     async (change) => {
       await seedActivePlacement();
-      const source = SessionManager.open(sessionTarget);
-      source.appendMessage(
+      const source = await SessionManager.openAsync(sessionTarget);
+      await source.appendMessageAsync(
         makeAgentUserMessage({ content: "Preserve 🦞\nexact history", timestamp: 1 }),
       );
       const before = source.getPersistedEntries();
@@ -286,7 +371,9 @@ describe("worker turn execution", () => {
         }
         expect(startTunnel).not.toHaveBeenCalled();
         if (change !== "session") {
-          expect(SessionManager.open(sessionTarget).getPersistedEntries()).toEqual(before);
+          expect((await SessionManager.openAsync(sessionTarget)).getPersistedEntries()).toEqual(
+            before,
+          );
           expect(readWorkerTurnTranscriptStorageRows()).toEqual(beforeRows);
         }
       } finally {
@@ -305,10 +392,12 @@ describe("worker turn execution", () => {
     const entered = createDeferred();
     const release = createDeferred();
     const open = SessionManager.openAsync.bind(SessionManager);
-    let reads = 0;
+    let terminalAcknowledged = false;
+    let terminalHydrationHeld = false;
     const hydration = vi.spyOn(SessionManager, "openAsync").mockImplementation(async (...args) => {
       const manager = await open(...args);
-      if (++reads === 2) {
+      if (terminalAcknowledged && !terminalHydrationHeld) {
+        terminalHydrationHeld = true;
         entered.resolve();
         await release.promise;
       }
@@ -316,53 +405,26 @@ describe("worker turn execution", () => {
     });
     const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async (request) => {
       request.onDispatchReady?.();
-      const leafId = openSessionManager().appendMessage(
+      const leafId = await (
+        await openSessionManager()
+      ).appendMessageAsync(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "Committed reply 🦞" }],
           timestamp: 2,
         }),
       );
-      createWorkerSessionPlacementGate(placements).updateAckCursors({
-        claim: request.turnClaim,
-        transcriptSeq: 2,
-        liveSeq: 1,
-      });
-      return {
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-        stderr: "",
-        stdout: JSON.stringify({
-          status: "completed",
-          transcriptLeafId: leafId,
-          transcriptNextSeq: 3,
-        }),
-      };
+      const result = await acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+      terminalAcknowledged = true;
+      return result;
     });
-    const tunnel: WorkerTunnelHandle = {
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
+    const tunnel = createWorkerTurnTunnel({
       launchTurn,
-      measureLaunchTurn,
-      readLaunchToolNames,
       runWorkspaceCommand: vi.fn(),
       syncWorkspace: vi.fn(),
       stop: vi.fn(),
       quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
-      reconcileWorkspace: async (request) => {
-        assert(request.source.kind === "local", "expected local workspace");
-        request.source.journal.commit(MANIFEST_REF);
-        return {
-          manifestRef: MANIFEST_REF,
-          changed: false,
-          verifyStable: async () => {},
-          verifyLocalStable: async () => {},
-          publishStagedResult: async () => {},
-          discardPreparedStagedResult: async () => {},
-        };
-      },
-    };
+      reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+    });
     const provider = createWorkerSessionTurnPlacementProvider({
       placements,
       environments: {
@@ -387,13 +449,13 @@ describe("worker turn execution", () => {
       expect(await Promise.race([entered.promise.then(() => "hydrated"), settled])).toBe(
         "hydrated",
       );
-      const committed = openSessionManager().getPersistedEntries();
+      const committed = (await openSessionManager()).getPersistedEntries();
       const committedRows = readWorkerTurnTranscriptStorageRows();
       expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
       abort.abort(new Error("cancel after terminal acknowledgement"));
       release.resolve();
       expect(await operation).toMatchObject({ payloads: [{ text: "Committed reply 🦞" }] });
-      expect(openSessionManager().getPersistedEntries()).toEqual(committed);
+      expect((await openSessionManager()).getPersistedEntries()).toEqual(committed);
       expect(readWorkerTurnTranscriptStorageRows()).toEqual(committedRows);
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
@@ -421,18 +483,15 @@ describe("worker turn execution", () => {
       });
       const launchTurn = vi.fn();
       const runLocal = vi.fn();
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
+      const tunnel = createWorkerTurnTunnel({
         launchTurn,
         measureLaunchTurn: measure,
-        readLaunchToolNames,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
         stop: vi.fn(),
-      };
+      });
       setActiveNodeContexts([
         {
           nodeId: "fixture-node",
@@ -497,12 +556,10 @@ describe("worker turn execution", () => {
     },
   );
 
-  it.each(
-    ([undefined, "merge", "replace"] as const).flatMap((mode) => [
-      { mode, reasoning: false, thinkingLevelMap: undefined, expected: "off" },
-      { mode, reasoning: true, thinkingLevelMap: { high: null }, expected: "medium" },
-    ]),
-  )(
+  it.each([
+    { mode: "merge", reasoning: false, thinkingLevelMap: undefined, expected: "off" },
+    { mode: "replace", reasoning: true, thinkingLevelMap: { high: null }, expected: "medium" },
+  ] as const)(
     "honors configured worker Ultra effort $expected in mode $mode with scheduled tools",
     async (testCase) => {
       await seedActivePlacement();
@@ -516,18 +573,14 @@ describe("worker turn execution", () => {
         );
         throw new WorkerRunnerCapacityError();
       });
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
+      const tunnel = createWorkerTurnTunnel({
         launchTurn,
-        measureLaunchTurn,
-        readLaunchToolNames,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
         stop: vi.fn(async () => {}),
-      };
+      });
       const environments = {
         ...unusedEnvironments(),
         get: vi.fn(() => attachedEnvironment()),

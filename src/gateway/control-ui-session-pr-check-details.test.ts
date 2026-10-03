@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type {
@@ -72,7 +71,7 @@ function harness() {
     runHead: headSha,
     snapshot: { pullRequests: [chip], rateLimited: false } as ControlUiSessionPullRequests,
   };
-  const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+  const fetchResponse: typeof fetch = async (input) => {
     const url = new URL(requestUrl(input));
     if (state.status !== 200) {
       const response = githubJson({ message: "do not expose upstream diagnostics" }, state.status);
@@ -105,14 +104,19 @@ function harness() {
       return status !== 200 ? githubJson({}, status) : paginated("jobs", state.jobs);
     }
     throw new Error("Unexpected route: " + url.href);
-  });
+  };
   const deps = {
     sessionScope: "ci-test-" + ++scope,
     assertCurrent: vi.fn(),
-    fetchImpl,
+    fetchImpl: vi.fn(fetchResponse),
     loadPullRequests: vi.fn(async () => state.snapshot),
   };
-  return { state, deps, load: () => loadControlUiSessionPullRequestChecks(target, deps) };
+  return {
+    state,
+    deps,
+    fetchResponse,
+    load: () => loadControlUiSessionPullRequestChecks(target, deps),
+  };
 }
 
 beforeEach(() => {
@@ -288,12 +292,8 @@ describe("session PR CI details", () => {
 
   it("discards old-head details if the PR advances while Actions jobs are loading", async () => {
     const h = harness();
-    const fetch = expectDefined(
-      h.deps.fetchImpl.getMockImplementation(),
-      "CI fetch implementation",
-    );
     h.deps.fetchImpl.mockImplementation(async (input, init) => {
-      const response = await fetch(input, init);
+      const response = await h.fetchResponse(input, init);
       if (requestUrl(input).includes("/jobs?")) {
         h.state.upstreamHead = "b".repeat(40);
       }
@@ -308,12 +308,8 @@ describe("session PR CI details", () => {
 
   it("rejects a rerun that replaces the current check inventory mid-request", async () => {
     const h = harness();
-    const fetch = expectDefined(
-      h.deps.fetchImpl.getMockImplementation(),
-      "CI fetch implementation",
-    );
     h.deps.fetchImpl.mockImplementation(async (input, init) => {
-      const response = await fetch(input, init);
+      const response = await h.fetchResponse(input, init);
       if (requestUrl(input).includes("/jobs?")) {
         h.state.checks = [check(2)];
       }
@@ -330,10 +326,6 @@ describe("session PR CI details", () => {
     const h = harness();
     const gate = createDeferred<Response>();
     const started = createDeferred();
-    const fetch = expectDefined(
-      h.deps.fetchImpl.getMockImplementation(),
-      "CI fetch implementation",
-    );
     let waiting = 0;
     h.deps.fetchImpl.mockImplementation(async (input, init) => {
       if (requestUrl(input).includes("/jobs?")) {
@@ -342,7 +334,7 @@ describe("session PR CI details", () => {
         }
         return gate.promise.then((response) => response.clone());
       }
-      return fetch(input, init);
+      return h.fetchResponse(input, init);
     });
     const pending = Array.from({ length: 4 }, (_, i) =>
       loadControlUiSessionPullRequestChecks(target, {
@@ -388,16 +380,12 @@ describe("session PR CI details", () => {
     const h = harness();
     const gate = createDeferred<Response>();
     const started = createDeferred();
-    const fetch = expectDefined(
-      h.deps.fetchImpl.getMockImplementation(),
-      "CI fetch implementation",
-    );
     h.deps.fetchImpl.mockImplementation(async (input, init) => {
       if (requestUrl(input).includes("/jobs?")) {
         started.resolve();
         return gate.promise;
       }
-      return fetch(input, init);
+      return h.fetchResponse(input, init);
     });
     const first = h.load();
     const second = loadControlUiSessionPullRequestChecks(target, {

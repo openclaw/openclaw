@@ -7,10 +7,18 @@ import type {
 import { isRouteId, pathForRoute, pluginTabLocation } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../app/operator-access.ts";
+import {
+  PLUGIN_PANEL_TOGGLE_EVENT,
+  type PluginPanelToggleDetail,
+} from "../components/panel-toggle-contract.ts";
+import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { i18n } from "../i18n/index.ts";
 import { redactToolPayloadText } from "../lib/browser-redact.ts";
 import { openPreferredApplicationSession } from "../lib/sessions/route-navigation.ts";
-import { normalizeSessionKeyForUiComparison } from "../lib/sessions/session-key.ts";
+import {
+  normalizeSessionKeyForUiComparison,
+  parseAgentSessionKey,
+} from "../lib/sessions/session-key.ts";
 import { createControlUiComponents } from "./control-ui-components.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 
@@ -76,6 +84,9 @@ export function createControlUiPluginHost(
       search: search.size ? `?${search}` : "",
     };
   };
+  const dock = getContext().assistantDock;
+  // Only an activation that actually docked a conversation owns a close-on-dispose.
+  let dockCloseRetained = false;
   return {
     apiVersion: 1,
     pluginId: owner.descriptor.pluginId,
@@ -128,6 +139,7 @@ export function createControlUiPluginHost(
         context.agentSelection.subscribe(notify),
         context.theme.subscribe(notify),
         i18n.subscribe(notify),
+        ...(dock ? [dock.subscribe(notify)] : []),
       ];
       return retain(() => stops.forEach((stop) => stop()));
     },
@@ -237,6 +249,23 @@ export function createControlUiPluginHost(
           }
         }),
     },
+    dock: dock
+      ? {
+          openSession(params) {
+            current().assistantDock.openSession(params, owner.abort);
+            if (!dockCloseRetained) {
+              dockCloseRetained = true;
+              retain(() => dock.close(owner.abort));
+            }
+          },
+          close() {
+            current().assistantDock.close();
+          },
+          get openSessionKey() {
+            return current().assistantDock.openSessionKey;
+          },
+        }
+      : undefined,
     navigation: {
       openPage(target, options) {
         const location = pageLocation(target, options);
@@ -257,6 +286,31 @@ export function createControlUiPluginHost(
       registerPage: (value) => runtime.register(owner, "pages", value),
       registerNavigation: (value) => runtime.register(owner, "navigation", value),
       registerPanel: (value) => runtime.register(owner, "panels", value),
+      openPanel(id, session) {
+        const context = current();
+        if (!owner.contributions.panels.has(id)) {
+          throw new Error("A plugin can open only its own registered panel.");
+        }
+        const sessionKey = session?.sessionKey ?? context.gateway.snapshot.sessionKey;
+        if (!sessionKey) {
+          throw new Error("Select a session before opening a plugin panel.");
+        }
+        const detail: PluginPanelToggleDetail = {
+          pluginId: owner.descriptor.pluginId,
+          panelId: id,
+          sessionKey,
+          agentId:
+            session?.agentId ??
+            parseAgentSessionKey(sessionKey)?.agentId ??
+            context.agentSelection.state.selectedId ??
+            undefined,
+          open: true,
+        };
+        const event = new CustomEvent(PLUGIN_PANEL_TOGGLE_EVENT, { detail });
+        rememberSessionPanelToggle(`plugin:${detail.pluginId}/${id}`, event);
+        openPreferredApplicationSession(context, sessionKey, session?.agentId);
+        window.dispatchEvent(event);
+      },
       registerAction: (value) => runtime.register(owner, "actions", value),
       registerAccessory: (value) => runtime.register(owner, "accessories", value),
       registerWidget: (value) => runtime.register(owner, "widgets", value),

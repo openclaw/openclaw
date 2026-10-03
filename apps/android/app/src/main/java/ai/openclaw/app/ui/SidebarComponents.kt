@@ -424,7 +424,7 @@ internal fun SidebarSessionRow(
         overflow = TextOverflow.Ellipsis,
       )
       Text(
-        text = attention?.status ?: sidebarSessionSubtitle(session, sessionStateDescription),
+        text = attention?.status ?: sessionListSubtitle(session, fallback = sessionSourceLabel(session.key), activeRunLabel = sessionStateDescription),
         style = ClawTheme.type.caption,
         color = palette.muted,
         maxLines = 1,
@@ -629,15 +629,3 @@ private suspend fun PointerInputScope.detectSidebarRowDrag(
     }
   }
 }
-
-internal fun sidebarSessionSubtitle(
-  session: ChatSessionEntry,
-  activeRunLabel: String?,
-  nowMs: Long = System.currentTimeMillis(),
-): String =
-  sessionListSubtitle(
-    session = session,
-    fallback = sessionSourceLabel(session.key),
-    nowMs = nowMs,
-    activeRunLabel = activeRunLabel,
-  )

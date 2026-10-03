@@ -18,6 +18,7 @@ import {
   isCanonicalTerminalUploadBase64,
 } from "../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-file-upload.js";
 
 vi.mock("node:fs/promises", async () => {
@@ -55,6 +56,26 @@ async function retainedDirectories(root: string): Promise<string[]> {
   return entries
     .filter((entry) => entry.isDirectory() && entry.name.startsWith("openclaw-terminal-upload-"))
     .map((entry) => entry.name);
+}
+
+async function advanceUploadCleanup(root: string, ms: number): Promise<void> {
+  const completed = createDeferredCore();
+  const rmMock = vi.mocked(rm);
+  const remove = rmMock.getMockImplementation()!;
+  rmMock.mockImplementation((target, options) => {
+    if (path.dirname(String(target)) === root) {
+      // Observe timer-driven removal before joining recovery. Deletion alone
+      // precedes scan completion and lock release, stranding retries on fake time.
+      completed.resolve(ensureTerminalUploadCleanup({ tempRoot: root }));
+    }
+    return remove(target, options);
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(ms);
+    await completed.promise;
+  } finally {
+    rmMock.mockImplementation(remove);
+  }
 }
 
 describe("terminal file upload", () => {
@@ -277,11 +298,9 @@ describe("terminal file upload", () => {
         expect(await retainedDirectories(root)).toHaveLength(count);
         expect(vi.getTimerCount()).toBe(1);
 
-        await vi.advanceTimersByTimeAsync(1);
+        await advanceUploadCleanup(root, 1);
 
-        await vi.waitFor(async () => {
-          expect(await retainedDirectories(root)).toHaveLength(0);
-        });
+        expect(await retainedDirectories(root)).toHaveLength(0);
         expect(vi.getTimerCount()).toBe(0);
       } finally {
         vi.useRealTimers();
@@ -331,10 +350,8 @@ describe("terminal file upload", () => {
         expect(await readFile(path.join(directory, "replacement.bin"), "utf8")).toBe(
           "new upload directory",
         );
-        await vi.advanceTimersByTimeAsync(retentionMs - remainingMs);
-        await vi.waitFor(async () => {
-          await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
-        });
+        await advanceUploadCleanup(root, retentionMs - remainingMs);
+        await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
         expect(await readFile(path.join(movedDirectory, "original.bin"), "utf8")).toBe(
           "keep outside staging",
         );
@@ -368,11 +385,8 @@ describe("terminal file upload", () => {
         "keep until expiry",
       );
 
-      await vi.advanceTimersByTimeAsync(retentionMs / 2);
-      await vi.waitFor(async () => {
-        await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
-      });
-      await ensureTerminalUploadCleanup({ tempRoot: root, retentionMs });
+      await advanceUploadCleanup(root, retentionMs / 2);
+      await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
       expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(retentionMs * 2);
       expect(vi.getTimerCount()).toBe(0);
@@ -459,11 +473,9 @@ describe("terminal file upload", () => {
       expect(await retainedDirectories(root)).toHaveLength(directoryLimit);
 
       rmMock.mockImplementation(actualFs.rm);
-      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      await advanceUploadCleanup(root, 60 * 60 * 1000);
 
-      await vi.waitFor(async () => {
-        await expect(stat(expiredDirectory)).rejects.toMatchObject({ code: "ENOENT" });
-      });
+      await expect(stat(expiredDirectory)).rejects.toMatchObject({ code: "ENOENT" });
       const accepted = await stageTerminalUpload(
         { name: "after-cleanup.bin", contentBase64: "AA==" },
         { tempRoot: root },
@@ -556,10 +568,8 @@ describe("terminal file upload", () => {
       await writeFile(path.join(directory, "report.pdf"), "stale");
       await utimes(directory, new Date(0), new Date(0));
 
-      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
-      await vi.waitFor(async () => {
-        await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
-      });
+      await advanceUploadCleanup(root, 60 * 60 * 1000);
+      await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       vi.useRealTimers();
     }
@@ -594,11 +604,9 @@ describe("terminal file upload", () => {
       ).rejects.toBe(writeError);
       expect(await readFile(partialFile)).toEqual(Buffer.from([0]));
 
-      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      await advanceUploadCleanup(root, 60 * 60 * 1000);
 
-      await vi.waitFor(async () => {
-        await expect(stat(path.dirname(partialFile))).rejects.toMatchObject({ code: "ENOENT" });
-      });
+      await expect(stat(path.dirname(partialFile))).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       writeMock.mockImplementation(actualFs.writeFile);
       rmMock.mockImplementation(actualFs.rm);

@@ -447,6 +447,21 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_suggestions_session_state_created
 CREATE INDEX IF NOT EXISTS idx_agent_session_suggestions_author_created
   ON session_suggestions(author_id, created_at, id);
 
+CREATE TABLE IF NOT EXISTS session_reactions (
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  emoji TEXT NOT NULL,
+  identity_id TEXT NOT NULL,
+  identity_label TEXT,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (session_key, session_id, message_id, emoji, identity_id),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_reactions_message
+  ON session_reactions(session_key, session_id, message_id);
+
 CREATE TABLE IF NOT EXISTS board_tabs (
   session_key TEXT NOT NULL,
   tab_id TEXT NOT NULL,

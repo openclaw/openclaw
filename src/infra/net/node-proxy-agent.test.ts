@@ -3,7 +3,6 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
-import { withEnv } from "../../test-utils/env.js";
 import { createNodeProxyAgent, resolveEnvNodeProxyUrlForTarget } from "./node-proxy-agent.js";
 
 const PROXY_ENV_KEYS = [
@@ -21,11 +20,23 @@ function withProxyEnv<T>(
   env: Partial<Record<(typeof PROXY_ENV_KEYS)[number], string | undefined>>,
   fn: () => T,
 ): T {
-  const clearedEnv = Object.fromEntries(PROXY_ENV_KEYS.map((key) => [key, undefined])) as Record<
-    (typeof PROXY_ENV_KEYS)[number],
-    undefined
-  >;
-  return withEnv({ ...clearedEnv, ...env }, fn);
+  const previousEnv = process.env;
+  const scopedEnv = { ...previousEnv };
+  for (const key of PROXY_ENV_KEYS) {
+    const value = env[key];
+    if (value === undefined) {
+      delete scopedEnv[key];
+    } else {
+      scopedEnv[key] = value;
+    }
+  }
+  // These agents consume JS env values; keep their fixtures out of Bun's native fetch proxy cache.
+  process.env = scopedEnv;
+  try {
+    return fn();
+  } finally {
+    process.env = previousEnv;
+  }
 }
 
 describe("resolveEnvNodeProxyUrlForTarget", () => {
@@ -59,6 +70,51 @@ describe("resolveEnvNodeProxyUrlForTarget", () => {
 });
 
 describe("createNodeProxyAgent", () => {
+  it.each(["explicit", "env"] as const)(
+    "uses native Node option defaults for %s proxies",
+    (mode) => {
+      withProxyEnv({ HTTPS_PROXY: "http://proxy.example:8080" }, () => {
+        const agentOptions = { keepAliveMsecs: 0, maxSockets: 0, maxFreeSockets: 0 };
+        const agent =
+          mode === "explicit"
+            ? createNodeProxyAgent({ mode, proxyUrl: "http://proxy.example:8080", agentOptions })
+            : createNodeProxyAgent({
+                mode,
+                targetUrl: "https://collector.example.test",
+                agentOptions,
+              });
+        try {
+          expect(agent).toMatchObject({
+            keepAliveMsecs: 1000,
+            maxSockets: Infinity,
+            maxFreeSockets: 256,
+          });
+        } finally {
+          agent?.destroy();
+        }
+      });
+    },
+  );
+
+  it("rejects an invalid total socket limit during construction", () => {
+    expect(() =>
+      createNodeProxyAgent({
+        mode: "explicit",
+        proxyUrl: "http://proxy.example:8080",
+        agentOptions: { maxTotalSockets: 0 },
+      }),
+    ).toThrow(RangeError);
+  });
+
+  it.each(["socks5://proxy.example:1080", new URL("socks5://proxy.example:1080")])(
+    "rejects unsupported explicit proxy %s before creating a request",
+    (proxyUrl) => {
+      expect(() => createNodeProxyAgent({ mode: "explicit", proxyUrl })).toThrow(
+        "Unsupported proxy protocol",
+      );
+    },
+  );
+
   it("rejects unusable env proxies at either Node request boundary", () => {
     withProxyEnv({ HTTP_PROXY: "socks5://proxy.example:1080" }, () => {
       const agent = createNodeProxyAgent({ mode: "env" });
@@ -105,6 +161,12 @@ describe("createNodeProxyAgent", () => {
         targetUrl: "https://collector.example.test/v1/traces",
         agentOptions: {
           keepAlive: true,
+          keepAliveMsecs: 750,
+          maxSockets: 3,
+          maxTotalSockets: 6,
+          maxFreeSockets: 2,
+          scheduling: "fifo",
+          timeout: 5000,
           ca: "collector-ca",
           cert: "collector-cert",
           key: "collector-key",
@@ -124,11 +186,20 @@ describe("createNodeProxyAgent", () => {
         | undefined;
       expect(agentState?.options).toMatchObject({
         keepAlive: true,
+        timeout: 5000,
         ca: "collector-ca",
         cert: "collector-cert",
         key: "collector-key",
       });
       expect(agentState?.keepAlive).toBe(true);
+      expect(agent).toMatchObject({
+        keepAliveMsecs: 750,
+        maxSockets: 3,
+        maxTotalSockets: 6,
+        maxFreeSockets: 2,
+        scheduling: "fifo",
+      });
+      agent?.destroy();
     });
   });
 });

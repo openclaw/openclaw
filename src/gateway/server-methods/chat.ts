@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-// Chat gateway methods expose the stable registry while focused modules own large workflows.
 import {
   ErrorCodes,
   errorShape,
@@ -25,20 +24,6 @@ import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-export {
-  augmentChatHistoryWithCanvasBlocks,
-  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  dropPreSessionStartAnnouncePairs,
-  resolveEffectiveChatHistoryMaxChars,
-  sanitizeChatHistoryMessages,
-} from "../chat-display-projection.js";
-export { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
-export {
-  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-  replaceOversizedChatHistoryMessages,
-  reportOmittedChatHistory,
-} from "./chat-history-budget.js";
-
 export const chatHandlers: GatewayRequestHandlers = {
   ...chatHistoryHandlers,
   ...chatMessageGetHandlers,
@@ -56,7 +41,6 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const p = params;
 
-    // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
     const agentIdOverride = normalizeOptionalString(p.agentId);
     const cfg = context.getRuntimeConfig();
@@ -131,7 +115,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    // Broadcast to webchat for immediate UI update
     const message = projectChatDisplayMessage(appended.message, {
       maxChars: resolveEffectiveChatHistoryMaxChars(),
     });

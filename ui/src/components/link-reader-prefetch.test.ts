@@ -2,6 +2,10 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  PRESENTATION_CHANGED_EVENT,
+  type PresentationBinding,
+} from "../lit/presentation-binding.ts";
 import { installTestLinkReader, TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { prefetchLinkReader } from "./link-reader-prefetch-request.ts";
 import { linkReaderPrefetch } from "./link-reader-prefetch.ts";
@@ -40,10 +44,11 @@ let container: HTMLDivElement;
 let provider: HTMLElement;
 let idleCallbacks: Map<number, IdleRequestCallback>;
 let nextIdleHandle: number;
+let presentation: PresentationBinding | undefined;
 
 function renderLinks(links = [href(1)], session = "first", active = true, connected = true) {
   render(
-    html`<div ${linkReaderPrefetch(session, active, connected)}>
+    html`<div ${linkReaderPrefetch(session, active ? (presentation ?? true) : false, connected)}>
       ${links.map((url) => html`<a class="markdown-github-link" href=${url}>Item</a>`)}
     </div>`,
     container,
@@ -84,6 +89,7 @@ describe("GitHub preview warming", () => {
     });
     vi.stubGlobal("cancelIdleCallback", (handle: number) => idleCallbacks.delete(handle));
     VisibilityObserver.instances = [];
+    presentation = undefined;
     prefetch.mockReset().mockResolvedValue(undefined);
     container = document.createElement("div");
     provider = installTestLinkReader(
@@ -116,13 +122,21 @@ describe("GitHub preview warming", () => {
     expect(scan).not.toHaveBeenCalled();
   });
 
-  it.each(["pane", "document", "disconnect"])(
+  it.each(["pane", "presentation", "document", "disconnect"])(
     "cancels unstarted discovery when hidden by %s",
     async (hiddenBy) => {
+      let presented = true;
+      const owner = new EventTarget();
+      if (hiddenBy === "presentation") {
+        presentation = { owner, isPresented: () => presented };
+      }
       renderLinks();
       expect(idleCallbacks.size).toBe(1);
       if (hiddenBy === "pane") {
         renderLinks([href(1)], "first", false);
+      } else if (hiddenBy === "presentation") {
+        presented = false;
+        owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
       } else if (hiddenBy === "document") {
         vi.spyOn(document, "hidden", "get").mockReturnValue(true);
         document.dispatchEvent(new Event("visibilitychange"));
@@ -401,9 +415,14 @@ describe("GitHub preview warming", () => {
     expect(prefetch).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["pane", "document", "disconnect"])(
+  it.each(["pane", "presentation", "document", "disconnect"])(
     "releases pending work when hidden by %s",
     async (hiddenBy) => {
+      let presented = true;
+      const owner = new EventTarget();
+      if (hiddenBy === "presentation") {
+        presentation = { owner, isPresented: () => presented };
+      }
       const pending = createDeferred();
       prefetch.mockImplementationOnce(() => pending.promise);
       const links = await show([href(1), href(2)]);
@@ -413,6 +432,9 @@ describe("GitHub preview warming", () => {
       const signal = prefetch.mock.calls[0]![1];
       if (hiddenBy === "pane") {
         await show([href(1), href(2)], "first", false);
+      } else if (hiddenBy === "presentation") {
+        presented = false;
+        owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
       } else if (hiddenBy === "document") {
         vi.spyOn(document, "hidden", "get").mockReturnValue(true);
         document.dispatchEvent(new Event("visibilitychange"));
@@ -427,6 +449,11 @@ describe("GitHub preview warming", () => {
       expect(prefetch).toHaveBeenCalledTimes(1);
 
       vi.restoreAllMocks();
+      if (hiddenBy === "presentation") {
+        presented = true;
+        owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+        expect(idleCallbacks.size).toBe(0);
+      }
       const resumed = await show([href(1)]);
       observer().intersect(resumed);
       await vi.advanceTimersByTimeAsync(200);

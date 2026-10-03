@@ -13,8 +13,8 @@ import {
   deleteCronJobScratch,
   hashCronScratchSource,
   readCronJobScratchState,
-  writeCronJobScratch,
 } from "../cron/scratch-store.js";
+import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
@@ -583,7 +583,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
         const state = readCronJobScratchState(storePath, monitor.id, { env });
         const shouldWriteScratch = state.scratch?.sourceSha256 !== source.sha256;
         if (shouldWriteScratch) {
-          const write = writeCronJobScratch({
+          const write = writeCronJobScratchForMaintenance({
             storePath,
             jobId: monitor.id,
             content: source.content,
@@ -630,7 +630,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
         // A third writer retaining an earlier revision-0 token may race after rollback;
         // this is preferable to a tombstone permanently blocking future migration.
         const reverted = commit.previous
-          ? writeCronJobScratch({
+          ? writeCronJobScratchForMaintenance({
               storePath,
               jobId: commit.monitor.id,
               content: commit.previous.content,

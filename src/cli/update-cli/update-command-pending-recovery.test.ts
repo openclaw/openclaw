@@ -43,11 +43,13 @@ import {
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import * as updateResume from "./update-command-resume.js";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 import { updateCommand } from "./update-command.js";
+import { updateRepairCommand } from "./update-repair-command.js";
 
 const dirs = new Set<string>();
 afterEach(() => cleanupTempDirs(dirs));
@@ -88,6 +90,9 @@ function pendingPackageInvocation(
     readOnlyConfig?: boolean;
   } = {},
 ) {
+  if (params.serviceDrift) {
+    stubNodeRuntime();
+  }
   const home = fs.realpathSync(makeTempDir(dirs, "pending-package-admission-"));
   const identity = createManagedServiceIdentityFixture(home);
   const state = resolveProfileStateDir(params.profile ?? "default", process.env, () => home);
@@ -404,20 +409,23 @@ async function fixture() {
 }
 
 describe("pending recovery finalizer", () => {
-  it("refuses standalone finalization before recreating a displaced canonical database", async () => {
+  it.each([
+    { command: "finalize", invoke: updateFinalizeCommand },
+    { command: "repair", invoke: updateRepairCommand },
+  ])("refuses $command before recreating a displaced canonical database", async ({ invoke }) => {
     const f = await fixture();
     const before = fs.readFileSync(f.displaced);
     const configPath = path.join(f.root, "openclaw.json");
     const originalConfig = fs.readFileSync(configPath);
     const resolveRoot = vi
       .spyOn(updateShared, "resolveUpdateRoot")
-      .mockRejectedValue(new Error("ordinary finalization reached root discovery"));
+      .mockRejectedValue(new Error("ordinary maintenance reached root discovery"));
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
     await expect(
       withOwnedManagedUpdateEnv(
         { ...process.env, ...f.env, OPENCLAW_CONFIG_PATH: configPath },
-        () => updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
+        () => invoke({ json: true, yes: true, deferCompletionCache: true }),
       ),
     ).rejects.toThrow("full-state recovery is deferred");
     expect(resolveRoot).not.toHaveBeenCalled();

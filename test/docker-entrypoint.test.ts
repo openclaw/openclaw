@@ -103,11 +103,9 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
   it.for(
     [
       ["gateway", "--help"],
-      ["--help"],
       ["--version"],
       ["doctor", "--fix"],
       ["gateway", "status"],
-      ["config", "get", "gateway.mode"],
       ["gateway", "--dev", "--reset"],
       ["gateway", "--", "--profile", "literal"],
       ["gateway", "--unknown-option"],

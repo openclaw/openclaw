@@ -22,7 +22,10 @@ import {
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
-import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
+import {
+  createCodexNativeMcpAppResultDetailsPreparer,
+  prepareCodexNativeMcpFormResourceContext,
+} from "./native-mcp-app.js";
 import {
   canonicalizeNativeProgressCardInput,
   type CodexNativePlan,
@@ -37,6 +40,7 @@ import type { CodexAttemptNotificationController } from "./run-attempt-notificat
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexStartedTurn } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { isCodexNativeDelegationDisabledForRun } from "./thread-requests.js";
 import {
   codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
@@ -542,6 +546,8 @@ export function activateCodexAttemptTurn(
     runId: params.runId,
     startedAtMs: params.startedAtMs,
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+    supportsCrossProfileSteering:
+      isCodexNativeDelegationDisabledForRun(params) || resourceState.nativeSpawnAdmissionInstalled,
     permissionChangeOwner: params.permissionChange?.owner,
     applyPermissionMode: async (
       mode: NonNullable<typeof params.permissionMode> | null,
@@ -601,6 +607,27 @@ export function activateCodexAttemptTurn(
       emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
       userInputBridgeRef.current = createCodexUserInputBridge({
         paramsForRun: params,
+        prepareResourceContext: async (request) => {
+          const serverName =
+            typeof request.snapshot.serverName === "string" ? request.snapshot.serverName : "";
+          const origin = activeProjector.getActiveMcpToolCall(serverName);
+          if (!origin || !params.sessionKey || !params.agentId) {
+            throw new Error("Native MCP form has no unambiguous live origin");
+          }
+          return await prepareCodexNativeMcpFormResourceContext({
+            client: resourceState.client,
+            threadId: resourceState.thread.threadId,
+            attempt: params,
+            request,
+            origin,
+            assertCurrent: () => {
+              params.hostCapabilities.assertActive();
+              if (activeProjector.getActiveMcpToolCall(serverName)?.id !== origin.id) {
+                throw new Error("Native MCP form origin expired");
+              }
+            },
+          });
+        },
         onOrdinaryResponse: (response) => activeProjector.recordUserInputResponse(response),
         threadId: resourceState.thread.threadId,
         turnId: activeTurnId,

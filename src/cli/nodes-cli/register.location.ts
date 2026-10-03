@@ -1,4 +1,3 @@
-// Node location commands: invokes location.get on a paired node and formats the location payload.
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
@@ -13,7 +12,6 @@ import {
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
-/** Register node location lookup commands. */
 export function registerNodesLocationCommands(nodes: Command) {
   const location = nodes.command("location").description("Fetch location from a paired node");
 

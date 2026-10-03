@@ -315,7 +315,7 @@ suite.define(() => {
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { width: 1280, height: 900 },
-      recordVideo: { dir: artifacts },
+      recordVideo: process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? { dir: artifacts } : undefined,
     });
     const page = await context.newPage();
     const sessionKey = "agent:main:main";
@@ -334,7 +334,7 @@ suite.define(() => {
             gatewayOwner: gatewayUrl,
             sessions: {
               "global\u0000agent:main": {
-                updatedAt: 1,
+                updatedAt: 1790955600000,
                 queue: [
                   {
                     id: "old-followup",
@@ -357,21 +357,24 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const notice = page.locator(".chat-outbox-recovery");
-      await notice.locator("summary").click();
-      await notice.getByText("Please check the deployment notes").waitFor();
+      expect(await notice.getAttribute("open")).not.toBeNull();
+      await notice
+        .locator(".chat-outbox-recovery__content")
+        .getByText("Please check the deployment notes")
+        .waitFor();
       await expectRequestCountStable(gateway, "chat.send", 0);
       await page.screenshot({
         animations: "disabled",
         path: `${artifacts}/before-confirmation.png`,
       });
-      await notice.getByRole("button", { name: "Restore here for review" }).click();
+      await notice.getByRole("button", { name: "Review in this chat" }).click();
       const dialog = page.locator("openclaw-modal-dialog");
-      await dialog.getByText("agent:main:main (main)", { exact: true }).waitFor();
+      await dialog.getByText(/Add this saved copy to “Main/).waitFor();
       await page.screenshot({
         animations: "disabled",
         path: `${artifacts}/destination-confirmation.png`,
       });
-      await dialog.getByRole("button", { name: "Restore here for review" }).click();
+      await dialog.getByRole("button", { name: "Review in this chat" }).click();
       await page
         .locator(".chat-group.user")
         .getByText("Please check the deployment notes")
@@ -545,12 +548,15 @@ suite.define(() => {
       expect(seededDatabaseVersion).toBe(1);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const notice = page.locator(".chat-outbox-recovery");
-      await notice.locator("summary").click();
-      await notice.getByText("legacy-note.txt", { exact: true }).waitFor();
-      await notice.getByRole("button", { name: "Restore here for review" }).click();
+      expect(await notice.getAttribute("open")).not.toBeNull();
+      await notice
+        .locator(".chat-outbox-recovery__content")
+        .getByText("Attachments: legacy-note.txt", { exact: true })
+        .waitFor();
+      await notice.getByRole("button", { name: "Review in this chat" }).click();
       await page
         .locator("openclaw-modal-dialog")
-        .getByRole("button", { name: "Restore here for review" })
+        .getByRole("button", { name: "Review in this chat" })
         .click();
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await expect.poll(() => composer.inputValue()).toBe("Review the attached deployment note");
@@ -576,5 +582,106 @@ suite.define(() => {
     } finally {
       await suite.closeBrowserContext(context);
     }
+  });
+
+  it("shows only meaningful saved drafts and deletes a reviewed copy without sending", async () => {
+    const artifacts = createControlUiE2eArtifactDir("saved-draft-notice", artifactRoot);
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page);
+        const gatewayAddress = controlUiBundledGatewayUrl(suite.server.baseUrl);
+        await page.addInitScript(
+          ({ gatewayUrl }) => {
+            if (sessionStorage.getItem("saved-draft-notice-seeded")) {
+              return;
+            }
+            sessionStorage.setItem("saved-draft-notice-seeded", "yes");
+            const sessions: Record<
+              string,
+              { updatedAt: number; draftRevision: number; draft?: string }
+            > = Object.fromEntries(
+              Array.from({ length: 20 }, (_, index) => [
+                "agent:main:old-" + index + "\u0000agent:main",
+                { updatedAt: 1790955600000, draftRevision: 42 },
+              ]),
+            );
+            sessions["global\u0000agent:main"] = {
+              updatedAt: 1790955600000,
+              draftRevision: 43,
+              draft: "Could you summarize the latest test results?",
+            };
+            sessionStorage.setItem(
+              "openclaw.control.chatComposer.v4:" + encodeURIComponent(gatewayUrl),
+              JSON.stringify({
+                version: 4,
+                gatewayOwner: gatewayUrl,
+                sessions,
+                recovery: {},
+              }),
+            );
+          },
+          { gatewayUrl: gatewayAddress },
+        );
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+        const notice = page.locator(".chat-outbox-recovery");
+        expect(await notice.getAttribute("open")).not.toBeNull();
+        await notice
+          .locator(".chat-outbox-recovery__content")
+          .getByText("Could you summarize the latest test results?", { exact: true })
+          .waitFor();
+        await page.screenshot({ animations: "disabled", path: artifacts + "/notification.png" });
+        await notice.screenshot({
+          animations: "disabled",
+          path: artifacts + "/notification-detail.png",
+        });
+        expect(await notice.locator(".chat-outbox-recovery-row").count()).toBe(1);
+        await page.emulateMedia({ colorScheme: "dark" });
+        await page.waitForFunction(() => document.documentElement.dataset.themeMode === "dark");
+        await page.screenshot({
+          animations: "disabled",
+          path: artifacts + "/notification-dark.png",
+        });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.screenshot({
+          animations: "disabled",
+          path: artifacts + "/notification-mobile.png",
+        });
+        await notice.screenshot({
+          animations: "disabled",
+          path: artifacts + "/notification-mobile-detail.png",
+        });
+        expect(await notice.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+          true,
+        );
+        await notice.locator("summary").click();
+        await page.screenshot({
+          animations: "disabled",
+          path: artifacts + "/notification-collapsed.png",
+        });
+        await notice.locator("summary").click();
+        await notice
+          .locator(".chat-outbox-recovery__content")
+          .getByText("Draft · Not sent", { exact: true })
+          .waitFor();
+        expect(
+          await notice
+            .locator(".chat-outbox-recovery__content")
+            .getByText("Queued messages: 0", { exact: true })
+            .count(),
+        ).toBe(0);
+        await notice.getByRole("button", { name: "Delete saved copy", exact: true }).click();
+        const dialog = page.locator("openclaw-modal-dialog");
+        await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+        expect(await notice.locator(".chat-outbox-recovery-row").count()).toBe(1);
+        await notice.getByRole("button", { name: "Delete saved copy", exact: true }).click();
+        await dialog.getByRole("button", { name: "Delete saved copy", exact: true }).click();
+        await notice.waitFor({ state: "detached" });
+        await page.reload();
+        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        expect(await notice.count()).toBe(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      },
+    );
   });
 });

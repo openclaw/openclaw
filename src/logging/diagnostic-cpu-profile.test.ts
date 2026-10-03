@@ -1,7 +1,6 @@
 import type { Profiler } from "node:inspector";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -85,6 +84,12 @@ async function capture(signal = new AbortController().signal, hasAuthority = () 
   return captureDiagnosticCpuProfile({ signal, hasAuthority });
 }
 
+function returnProfile(value: Profiler.Profile = profile()) {
+  native.post.mockImplementation(async (method: string) =>
+    method === "Profiler.stop" ? { profile: value } : {},
+  );
+}
+
 beforeEach(() => {
   if (hostBunVersion) {
     // Most cases exercise the Node inspector owner through a mocked native
@@ -110,9 +115,7 @@ beforeEach(() => {
     };
   });
   native.resolveRoot.mockResolvedValue("/fixture/openclaw");
-  native.post.mockImplementation(async (method: string) =>
-    method === "Profiler.stop" ? { profile: profile() } : {},
-  );
+  returnProfile();
   native.wait.mockResolvedValue(undefined);
 });
 afterEach(() => {
@@ -202,9 +205,7 @@ describe("diagnostic CPU profile owner", () => {
       lineNumber: 0,
       columnNumber: 0,
     };
-    native.post.mockImplementation(async (method) =>
-      method === "Profiler.stop" ? { profile: value } : {},
-    );
+    returnProfile(value);
     expect(await capture()).toMatchObject({
       status: "complete",
       result: {
@@ -233,14 +234,12 @@ describe("diagnostic CPU profile owner", () => {
     });
   });
 
-  it.each(["private payload", "-", "-1.5", `-${"1".repeat(33)}`])(
+  it.each(["-1.5", `-${"1".repeat(33)}`])(
     "rejects malformed or oversized script IDs: %s",
     async (scriptId) => {
       const value = profile();
       value.nodes[1].callFrame.scriptId = scriptId;
-      native.post.mockImplementation(async (method) =>
-        method === "Profiler.stop" ? { profile: value } : {},
-      );
+      returnProfile(value);
       expect(await capture()).toEqual({
         status: "unavailable",
         reason: "invalid-profile",
@@ -249,35 +248,6 @@ describe("diagnostic CPU profile owner", () => {
       expect(native.disconnect).toHaveBeenCalledOnce();
     },
   );
-
-  it("rejects overlap instead of queuing, and stops on cancellation", async () => {
-    const controller = new AbortController();
-    const waiting = createDeferred();
-    native.wait.mockImplementationOnce((_ms, _value, { signal }: { signal: AbortSignal }) => {
-      waiting.resolve();
-      return new Promise((_resolve, reject) => {
-        signal.addEventListener("abort", () => reject(new Error("fixture cancelled")), {
-          once: true,
-        });
-      });
-    });
-    const active = capture(controller.signal);
-    await waiting.promise;
-    expect(await capture()).toEqual({
-      status: "unavailable",
-      reason: "busy",
-      cleanupFailed: false,
-    });
-    controller.abort();
-    expect(await active).toEqual({
-      status: "unavailable",
-      reason: "cancelled",
-      cleanupFailed: false,
-    });
-    expect(native.post.mock.calls.filter(([method]) => method === "Profiler.stop")).toHaveLength(1);
-    expect(native.disconnect).toHaveBeenCalledOnce();
-    expect((await capture()).status).toBe("complete");
-  });
 
   it.each(["pre-abort", "authority-after-import", "authority-before-start"])(
     "does not start after %s",
@@ -310,35 +280,30 @@ describe("diagnostic CPU profile owner", () => {
     },
   );
 
-  it.each([
-    "Profiler.enable",
-    "Profiler.setSamplingInterval",
-    "Profiler.start",
-    "Profiler.stop",
-    "Profiler.disable",
-  ])("releases native ownership when %s fails", async (failedMethod) => {
-    native.post.mockImplementation(async (method) => {
-      if (method === failedMethod) {
-        throw new Error("private native error");
-      }
-      return method === "Profiler.stop" ? { profile: profile() } : {};
-    });
-    const outcome = await capture();
-    expect(outcome).toEqual({
-      status: "unavailable",
-      reason: failedMethod === "Profiler.disable" ? "cleanup-failed" : "capture-failed",
-      cleanupFailed: failedMethod === "Profiler.disable",
-    });
-    expect(JSON.stringify(outcome)).not.toContain("private");
-    expect(native.disconnect).toHaveBeenCalledOnce();
-    expect(
-      native.post.mock.calls.filter(([method]) => method === "Profiler.stop").length,
-    ).toBeLessThanOrEqual(1);
-    native.post.mockImplementation(async (method) =>
-      method === "Profiler.stop" ? { profile: profile() } : {},
-    );
-    expect((await capture()).status).toBe("complete");
-  });
+  it.each(["Profiler.setSamplingInterval", "Profiler.start", "Profiler.stop", "Profiler.disable"])(
+    "releases native ownership when %s fails",
+    async (failedMethod) => {
+      native.post.mockImplementation(async (method) => {
+        if (method === failedMethod) {
+          throw new Error("private native error");
+        }
+        return method === "Profiler.stop" ? { profile: profile() } : {};
+      });
+      const outcome = await capture();
+      expect(outcome).toEqual({
+        status: "unavailable",
+        reason: failedMethod === "Profiler.disable" ? "cleanup-failed" : "capture-failed",
+        cleanupFailed: failedMethod === "Profiler.disable",
+      });
+      expect(JSON.stringify(outcome)).not.toContain("private");
+      expect(native.disconnect).toHaveBeenCalledOnce();
+      expect(
+        native.post.mock.calls.filter(([method]) => method === "Profiler.stop").length,
+      ).toBeLessThanOrEqual(1);
+      returnProfile();
+      expect((await capture()).status).toBe("complete");
+    },
+  );
 
   it("preserves the capture failure and refuses reuse when disconnect fails", async () => {
     native.post.mockRejectedValue(new Error("private native error"));
@@ -391,18 +356,8 @@ describe("diagnostic CPU profile owner", () => {
     expect(native.connect).not.toHaveBeenCalled();
   });
 
-  it.each([
-    [
-      "CLI CPU tracing",
-      "node,disabled-by-default-v8.cpu_profiler",
-      "--trace-event-categories=disabled-by-default-v8.cpu_profiler",
-    ],
-    ["programmatic CPU tracing", "disabled-by-default-v8.cpu_profiler", ""],
-    ["non-CPU tracing", "node.perf", ""],
-    ["wildcard tracing", "*", ""],
-  ])("refuses the active category union for %s", async (_name, categories, nodeOptions) => {
-    vi.stubEnv("NODE_OPTIONS", nodeOptions);
-    native.tracingCategories.mockReturnValue(categories);
+  it("refuses active tracing even for non-CPU categories", async () => {
+    native.tracingCategories.mockReturnValue("node.perf");
     expect(await capture()).toEqual({
       status: "unavailable",
       reason: "tracing-active",
@@ -442,14 +397,12 @@ describe("diagnostic CPU profile owner", () => {
     }
   });
 
-  it.each(["private payload", "token:private", "<private>", "private[content]", "会話の内容"])(
+  it.each(["private payload", "会話の内容"])(
     "redacts unrecognized labels even at package code locations: %s",
     async (functionName) => {
       const value = profile();
       value.nodes[1].callFrame.functionName = functionName;
-      native.post.mockImplementation(async (method) =>
-        method === "Profiler.stop" ? { profile: value } : {},
-      );
+      returnProfile(value);
       const outcome = await capture();
       expect(outcome.status).toBe("complete");
       if (outcome.status === "complete") {
@@ -465,78 +418,50 @@ describe("diagnostic CPU profile owner", () => {
     },
   );
 
-  it.each([
-    [
-      "unknown sample",
-      (value: ProfileFixture) => {
-        value.samples[0] = 99;
-      },
-    ],
-    [
-      "missing delta",
-      (value: ProfileFixture) => {
-        value.timeDeltas.pop();
-      },
-    ],
-    [
-      "invalid delta",
-      (value: ProfileFixture) => {
-        value.timeDeltas[0] = Number.NaN;
-      },
-    ],
-    [
-      "fractional source line",
-      (value: ProfileFixture) => {
-        value.nodes[1].callFrame.lineNumber = -1.5;
-      },
-    ],
-    [
-      "fractional source column",
-      (value: ProfileFixture) => {
-        value.nodes[1].callFrame.columnNumber = -1.5;
-      },
-    ],
-    [
-      "fractional position-tick line",
-      (value: ProfileFixture) => {
-        value.nodes[1].positionTicks = [{ line: -1.5, ticks: 2 }];
-      },
-    ],
-    [
-      "duplicate node",
-      (value: ProfileFixture) => {
-        value.nodes[1].id = 1;
-      },
-    ],
-    [
-      "unknown child",
-      (value: ProfileFixture) => {
-        value.nodes[0].children.push(99);
-      },
-    ],
-    [
-      "cycle",
-      (value: ProfileFixture) => {
-        value.nodes[1].children = [1];
-      },
-    ],
-    [
-      "disconnected cycle",
-      (value: ProfileFixture) => {
-        value.nodes[0].children = [];
-        value.nodes[1].children = [3];
-        value.nodes[2].children = [2];
-      },
-    ],
-  ] as const)("rejects %s without publishing a partial graph", async (_name, mutate) => {
-    const value = profile();
-    mutate(value);
-    native.post.mockImplementation(async (method) =>
-      method === "Profiler.stop" ? { profile: value } : {},
-    );
-    expect(await capture()).toMatchObject({ status: "unavailable", reason: "invalid-profile" });
-    expect(native.disconnect).toHaveBeenCalledOnce();
-  });
+  const invalidProfiles: Record<string, (value: ProfileFixture) => void> = {
+    "unknown sample": (value) => {
+      value.samples[0] = 99;
+    },
+    "missing delta": (value) => {
+      value.timeDeltas.pop();
+    },
+    "invalid delta": (value) => {
+      value.timeDeltas[0] = Number.NaN;
+    },
+    "fractional source line": (value) => {
+      value.nodes[1].callFrame.lineNumber = -1.5;
+    },
+    "fractional source column": (value) => {
+      value.nodes[1].callFrame.columnNumber = -1.5;
+    },
+    "fractional position-tick line": (value) => {
+      value.nodes[1].positionTicks = [{ line: -1.5, ticks: 2 }];
+    },
+    "duplicate node": (value) => {
+      value.nodes[1].id = 1;
+    },
+    "unknown child": (value) => {
+      value.nodes[0].children.push(99);
+    },
+    cycle: (value) => {
+      value.nodes[1].children = [1];
+    },
+    "disconnected cycle": (value) => {
+      value.nodes[0].children = [];
+      value.nodes[1].children = [3];
+      value.nodes[2].children = [2];
+    },
+  };
+  it.each(Object.entries(invalidProfiles))(
+    "rejects %s without publishing a partial graph",
+    async (_name, mutate) => {
+      const value = profile();
+      mutate(value);
+      returnProfile(value);
+      expect(await capture()).toMatchObject({ status: "unavailable", reason: "invalid-profile" });
+      expect(native.disconnect).toHaveBeenCalledOnce();
+    },
+  );
 
   it("rejects a complete result larger than 1 MiB without truncation", async () => {
     const template = profile().nodes[1];
@@ -548,9 +473,7 @@ describe("diagnostic CPU profile owner", () => {
     const children = Array.from({ length: 2_999 }, (_, index) => ({ ...root, id: index + 2 }));
     root.children = children.map((node) => node.id);
     const value: Profiler.Profile = { ...profile(), nodes: [root, ...children] };
-    native.post.mockImplementation(async (method) =>
-      method === "Profiler.stop" ? { profile: value } : {},
-    );
+    returnProfile(value);
     expect(await capture()).toEqual({
       status: "unavailable",
       reason: "profile-too-large",

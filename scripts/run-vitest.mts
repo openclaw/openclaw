@@ -51,7 +51,10 @@ import {
   resolveVitestRuntimeCliSelections,
   shouldPrepareVitestCoreWorkers,
 } from "./lib/vitest-runtime-selection.mts";
-import { resolveVitestTestCommand } from "./lib/vitest-test-runtime.mts";
+import {
+  resolveNativeBunTestCommand,
+  resolveVitestTestCommand,
+} from "./lib/vitest-test-runtime.mts";
 import {
   createVitestUnhandledErrorDetector,
   stripVitestAnsi,
@@ -89,7 +92,7 @@ const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const GATEWAY_SERVER_VITEST_CONFIG = "test/vitest/vitest.gateway-server.config.ts";
 const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
 const E2E_TEST_PROCESS_COUNT = 4;
-export const TOOLING_EXCLUDED_TESTS = new Set([
+const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,
   "test/scripts/docker-build-helper.test.ts",
   ...toolingIsolatedTestFiles,
@@ -234,7 +237,7 @@ export function shouldSuppressVitestStderrLine(line: string): boolean {
 /**
  * Detects pnpm exec node invocations so the wrapper can spawn Node directly.
  */
-export function resolveDirectNodeVitestArgs(pnpmArgs: string[]): string[] | null {
+function resolveDirectNodeVitestArgs(pnpmArgs: string[]): string[] | null {
   return pnpmArgs[0] === "exec" && pnpmArgs[1] === "node" ? pnpmArgs.slice(2) : null;
 }
 
@@ -262,6 +265,28 @@ function isExplicitFileTargetArg(arg: string): boolean {
 
 function isExplicitTestFileArg(arg: string): boolean {
   return EXPLICIT_TEST_FILE_RE.test(arg) && isExplicitFileTargetArg(arg);
+}
+
+function validateNativeBunTestFiles(files: string[], cwd: string): string[] {
+  if (
+    files.length === 0 ||
+    files.some((file) => {
+      const relative = path.relative(cwd, path.resolve(cwd, file)).replaceAll(path.sep, "/");
+      return !isExplicitTestFileArg(file) || file !== `./${relative}` || relative.startsWith("../");
+    })
+  ) {
+    throw new Error("Native Bun tests require explicit ./relative.test.ts file operands");
+  }
+  const missing = resolveMissingExplicitTestFiles(files, cwd);
+  if (missing.length > 0) {
+    throw new Error(`Native Bun test files not found: ${missing.join(", ")}`);
+  }
+  for (const file of files) {
+    if (!fs.statSync(path.resolve(cwd, file)).isFile()) {
+      throw new Error(`Native Bun test operand is not a file: ${file}`);
+    }
+  }
+  return files;
 }
 
 function isDelegableBroadProjectRouterTarget(arg: string, cwd: string): boolean {
@@ -799,26 +824,45 @@ function forwardVitestOutput(
  * Joins watched Vitest processes and keeps expired deadlines failed after cooperative exits.
  */
 export function spawnWatchedVitestProcess({
-  pnpmArgs,
+  pnpmArgs = [],
+  nativeBunFiles,
   spawnParams,
   env,
   onNoOutputTimeout,
   workerRun,
-  homeMode = resolveVitestHomeSelection(pnpmArgs, { cwd: spawnParams.cwd, env }),
+  homeMode = nativeBunFiles
+    ? "hermetic"
+    : resolveVitestHomeSelection(pnpmArgs, { cwd: spawnParams.cwd, env }),
 }: {
-  pnpmArgs: string[];
   spawnParams: PnpmRunnerParams;
   env: NodeJS.ProcessEnv;
   onNoOutputTimeout?: () => void;
-  workerRun?: VitestWorkerRun;
-  homeMode?: Parameters<typeof spawnOwnedVitestProcess>[0]["homeMode"];
-}) {
+} & (
+  | {
+      pnpmArgs: string[];
+      nativeBunFiles?: never;
+      workerRun?: VitestWorkerRun;
+      homeMode?: Parameters<typeof spawnOwnedVitestProcess>[0]["homeMode"];
+    }
+  | {
+      nativeBunFiles: string[];
+      pnpmArgs?: never;
+      workerRun?: never;
+      homeMode?: "hermetic";
+    }
+)) {
   if (homeMode !== "tooling") {
     assertTestHomeSelection(env, homeMode);
   }
   let timeoutCompletion: Promise<boolean> | null = null;
   const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
-  const testCommand = directNodeArgs ? resolveVitestTestCommand(directNodeArgs, env) : undefined;
+  const testCommand = nativeBunFiles
+    ? resolveNativeBunTestCommand(
+        validateNativeBunTestFiles(nativeBunFiles, spawnParams.cwd ?? process.cwd()),
+      )
+    : directNodeArgs
+      ? resolveVitestTestCommand(directNodeArgs, env)
+      : undefined;
   if (workerRun && testCommand) {
     // Give either runtime the same owned compiled-subprocess generation.
     const cliIndex = testCommand.args.findIndex((arg) => path.basename(arg) === "vitest.mjs");
@@ -849,7 +893,18 @@ export function spawnWatchedVitestProcess({
     : spawnParams;
   const { child, completion: childCompletion } = spawnOwnedVitestProcess({
     ...(testCommand
-      ? { ...testCommand, options: childSpawnParams }
+      ? {
+          ...testCommand,
+          options: testCommand.envOverrides
+            ? {
+                ...childSpawnParams,
+                env: {
+                  ...(childSpawnParams.env ?? process.env),
+                  ...testCommand.envOverrides,
+                },
+              }
+            : childSpawnParams,
+        }
       : createPnpmRunnerSpawnSpec({ pnpmArgs, ...childSpawnParams })),
     homeMode,
   });
@@ -925,6 +980,46 @@ export async function runVitest(
   argv: string[] = process.argv.slice(2),
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
+  if (argv[0] === "--native-bun") {
+    if (env.OPENCLAW_NATIVE_BUN_PARENT_IPC === "1" && !process.connected) {
+      throw new Error("Native Bun test parent IPC disconnected before admission");
+    }
+    const spawnEnv = resolveRunVitestSpawnEnv(env, ["run"]);
+    let watched: ReturnType<typeof spawnWatchedVitestProcess> | undefined;
+    let interrupted: NodeJS.Signals | undefined;
+    const onSignal = (signal: NodeJS.Signals) => {
+      interrupted ??= signal;
+    };
+    const onParentDisconnect = () => {
+      interrupted ??= "SIGTERM";
+      process.kill(process.pid, "SIGTERM");
+    };
+    process.on("SIGINT", onSignal);
+    process.on("SIGTERM", onSignal);
+    if (process.connected) {
+      process.once("disconnect", onParentDisconnect);
+      process.channel?.unref();
+    }
+    try {
+      watched = spawnWatchedVitestProcess({
+        nativeBunFiles: argv.slice(1),
+        spawnParams: resolveVitestSpawnParams(spawnEnv),
+        env: spawnEnv,
+      });
+      const result = await watched.completion;
+      interrupted ??= result.signal ?? undefined;
+      process.exitCode = result.code ?? 1;
+    } finally {
+      const signal = interrupted ?? watched?.getForwardedSignal();
+      process.off("disconnect", onParentDisconnect);
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      if (signal) {
+        await exitBySignal(signal);
+      }
+    }
+    return;
+  }
   if (argv.some((arg) => arg === "--isolated-image" || arg.startsWith("--isolated-image="))) {
     const { parseIsolatedVitestArgs, runIsolatedVitest } =
       await import("./lib/vitest-isolated.mts");

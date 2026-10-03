@@ -5,8 +5,9 @@ import { useChatAbortRegistryFixture } from "../../gateway/server-methods/chat.a
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import * as registryPersistence from "../../agents/subagents/registry/subagent-registry-state.js";
+import { isSubagentRegistryWriteCommand } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
+import { rowToSubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.store.codec.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -17,16 +18,18 @@ import {
   type SessionAbortTargetResult,
 } from "../../config/sessions/session-accessor.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 import { stopSubagentsForRequester } from "./abort-operation.js";
 import { getAbortMemory, isAbortRequestText, setAbortMemory } from "./abort-primitives.js";
+import { enqueueAbortFollowupRun } from "./abort-queue.test-support.js";
 import {
   addSubagentFixture,
   type SubagentRunFixture,
 } from "./abort-subagent-registry.test-support.js";
 import { isAbortTrigger } from "./abort-trigger-text.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
-import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./queue.js";
+import { getFollowupQueueDepth } from "./queue.js";
 import { clearFollowupQueue } from "./queue/state.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
@@ -42,7 +45,9 @@ vi.mock("../../agents/embedded-agent.js", () => ({
 }));
 
 const commandQueueMocks = vi.hoisted(() => ({
-  clearCommandLane: vi.fn(() => 1),
+  clearCommandLane: vi.fn<typeof import("../../process/command-queue.js").clearCommandLane>(
+    () => 1,
+  ),
 }));
 
 vi.mock("../../process/command-queue.js", () => commandQueueMocks);
@@ -183,42 +188,15 @@ describe("abort detection", () => {
     });
   }
 
-  function enqueueQueuedFollowupRun(params: {
-    root: string;
-    cfg: OpenClawConfig;
-    sessionId: string;
-    sessionKey: string;
-  }) {
+  function enqueueQueuedFollowupRun(params: Parameters<typeof enqueueAbortFollowupRun>[0]) {
     trackedAbortMemoryKeys.add(params.sessionKey);
-    const followupRun: FollowupRun = {
-      prompt: "queued",
-      enqueuedAt: Date.now(),
-      run: {
-        agentId: "main",
-        agentDir: path.join(params.root, "agent"),
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        messageProvider: "telegram",
-        agentAccountId: "acct",
-        sessionFile: path.join(params.root, "session.jsonl"),
-        workspaceDir: path.join(params.root, "workspace"),
-        config: params.cfg,
-        provider: "anthropic",
-        model: "claude-opus-4-6",
-        timeoutMs: 1000,
-        blockReplyBreak: "text_end",
-      },
-    };
-    enqueueFollowupRun(
-      params.sessionKey,
-      followupRun,
-      { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
-      "none",
-    );
+    enqueueAbortFollowupRun(params);
   }
 
   function expectSessionLaneCleared(sessionKey: string) {
-    expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${sessionKey}`);
+    expect(commandQueueMocks.clearCommandLane.mock.calls.map(([lane]) => lane)).toContain(
+      `session:${sessionKey}`,
+    );
   }
 
   function bindAcpSessionForTest(targetSessionKey: string) {
@@ -468,8 +446,14 @@ describe("abort detection", () => {
       ...cfg.commands,
       ownerAllowFrom: ["telegram:123"],
     };
-    runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(activeSessionId);
-    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
+    const operation = createReplyOperation({
+      agentId: "main",
+      sessionKey,
+      sessionId: activeSessionId,
+      resetTriggered: false,
+    });
+    operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
+    enqueueQueuedFollowupRun({ root, cfg, sessionId: activeSessionId, sessionKey });
     expect(getFollowupQueueDepth(sessionKey)).toBe(1);
 
     const result = await runStopCommand({
@@ -482,6 +466,7 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
+    expect(operation.abortSignal.aborted).toBe(true);
     expect(runtimeAbortMocks.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith(sessionKey);
     expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(activeSessionId);
     expect(getFollowupQueueDepth(sessionKey)).toBe(0);
@@ -517,11 +502,17 @@ describe("abort detection", () => {
     const { root, cfg } = await createAbortConfig({
       sessionIdsByKey: { [sessionKey]: sessionId },
     });
-    runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(activeSessionId);
+    const operation = createReplyOperation({
+      agentId: "main",
+      sessionKey,
+      sessionId: activeSessionId,
+      resetTriggered: false,
+    });
+    operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
     vi.mocked(markSessionAbortTarget).mockRejectedValueOnce(
       new Error("simulated persistence failure"),
     );
-    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
+    enqueueQueuedFollowupRun({ root, cfg, sessionId: activeSessionId, sessionKey });
 
     const result = await runStopCommand({
       cfg,
@@ -531,6 +522,7 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
+    expect(operation.abortSignal.aborted).toBe(true);
     expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(activeSessionId);
     expect(getFollowupQueueDepth(sessionKey)).toBe(0);
     expectSessionLaneCleared(sessionKey);
@@ -1171,21 +1163,32 @@ describe("abort detection", () => {
       await addSubagentFixture(fixture);
     }
     let failedTombstone = false;
-    const persist = registryPersistence.persistSubagentRunsToDiskAsyncOrThrow;
-    vi.spyOn(registryPersistence, "persistSubagentRunsToDiskAsyncOrThrow").mockImplementation(
-      (runs, changedRunIds, options) => {
-        const first = runs.get("run-persistence-failure-first");
-        if (
-          !failedTombstone &&
-          changedRunIds?.includes("run-persistence-failure-first") &&
-          first?.execution.status === "terminal" &&
-          first.endedReason === "subagent-killed"
-        ) {
-          failedTombstone = true;
-          throw new Error("sqlite busy");
-        }
-        return persist(runs, changedRunIds, options);
-      },
+    const execute = stateWorker.runOpenClawStateWorkerOperation;
+    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
+      (context, operation, options) =>
+        execute(
+          context,
+          (scope) =>
+            operation({
+              execute: async (command, executeOptions) => {
+                if (isSubagentRegistryWriteCommand(command) && !failedTombstone) {
+                  const firstRow = command.input.values.find(
+                    (row) => row.run_id === "run-persistence-failure-first",
+                  );
+                  const first = firstRow && rowToSubagentRunRecord(firstRow);
+                  if (
+                    first?.execution.status === "terminal" &&
+                    first.endedReason === "subagent-killed"
+                  ) {
+                    failedTombstone = true;
+                    throw new Error("sqlite busy");
+                  }
+                }
+                return scope.execute(command, executeOptions);
+              },
+            }),
+          options,
+        ),
     );
 
     await expect(

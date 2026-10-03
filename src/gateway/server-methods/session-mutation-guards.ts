@@ -40,7 +40,7 @@ type RequestMutationAuthorityBase = {
 };
 
 /** Request lifetime only; method owners retain target and policy checks. */
-export type GatewayRequestMutationAuthority = RequestMutationAuthorityBase &
+type GatewayRequestMutationAuthority = RequestMutationAuthorityBase &
   ({ family: "worker"; assertWorkerCurrent: () => void } | { family: "native-compatibility" });
 
 const requestMutationAuthorityKey = Symbol("gatewayRequestMutationAuthority");

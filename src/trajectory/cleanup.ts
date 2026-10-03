@@ -1,4 +1,3 @@
-// Trajectory cleanup helpers remove old trajectory files by retention policy.
 import fs from "node:fs";
 import path from "node:path";
 import { readFileWindowFullySync, readRegularFileSync } from "@openclaw/fs-safe/advanced";

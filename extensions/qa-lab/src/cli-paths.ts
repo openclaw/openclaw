@@ -46,7 +46,6 @@ function assertRepoRelativePath(repoRoot: string, targetPath: string, label: str
   if (!isPathInside(repoRoot, targetPath)) {
     throw new Error(`${label} must stay within the repo root.`);
   }
-  return path.relative(repoRoot, targetPath);
 }
 
 async function assertNoSymlinkSegments(repoRoot: string, targetPath: string, label: string) {

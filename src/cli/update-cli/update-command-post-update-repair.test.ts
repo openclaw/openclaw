@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
+import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   getUpdateRun,
@@ -15,6 +16,7 @@ import {
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { createPostUpdateRepairFixture } from "./update-command-post-update-repair.test-support.js";
 import { registerCurrentCoreRuntimeRefreshTests } from "./update-command-post-update-runtime-refresh.test-support.js";
@@ -24,6 +26,7 @@ import {
   successfulPluginUpdate,
   taskRecovery,
 } from "./update-command-post-update.test-support.js";
+import { UpdateCommandFailure } from "./update-command-result.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
@@ -619,4 +622,183 @@ describe("post-activation failure settlement without inference", () => {
       repair: [],
     });
   });
+
+  it.each([
+    "settled",
+    "unsettled",
+    "missing",
+    "foreign",
+    "database-restored",
+    "source-rollback-failed",
+  ] as const)(
+    "recovers a migrated candidate only after proven Doctor settlement (%s)",
+    async (receipt) => {
+      const params = fixture();
+      mocks.version = "2026.9.7";
+      const root = path.join(params.opts.run!.env!.OPENCLAW_STATE_DIR!, "candidate");
+      await fs.mkdir(root, { recursive: true });
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", version: mocks.version }),
+      );
+      await fs.mkdir(path.join(root, "dist"));
+      await fs.writeFile(path.join(root, "dist/index.js"), "export {};\n");
+      const scratch = path.join(root, "tmp");
+      await fs.mkdir(scratch);
+      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(scratch);
+      params.root = root;
+      params.result = {
+        ...params.result,
+        root,
+        status: "error",
+        before: { version: "2026.9.7" },
+        after: { version: mocks.version },
+        reason: "state-migrated-no-rollback",
+        recovery:
+          receipt === "unsettled"
+            ? {
+                serviceRestartSafe: true,
+                version: mocks.version,
+              }
+            : {
+                serviceRestartSafe: false,
+                reason:
+                  receipt === "source-rollback-failed" ? receipt : "runtime-verification-failed",
+              },
+        steps: [
+          {
+            name: "post-install verification",
+            command: "openclaw doctor",
+            cwd: root,
+            durationMs: 5_000,
+            exitCode: 1,
+            termination: "timeout",
+            stderrTail: "Doctor timed out while repairing state.",
+            failureFacts: [{ check: "package-runtime", code: "runtime-verification-failed" }],
+          },
+        ],
+      };
+      const settledStep = {
+        name: "doctor process settlement",
+        command: "settle doctor process groups",
+        cwd: receipt === "foreign" ? path.join(root, "other-candidate") : root,
+        durationMs: 1,
+        exitCode: 0,
+        advisory: {
+          kind: "recoverable-maintenance" as const,
+          message:
+            "Doctor timed out; all tracked process groups stopped. Run `openclaw update repair`.",
+        },
+      };
+      if (receipt !== "missing") {
+        params.result.steps.push(settledStep);
+      }
+      const unsettledReason =
+        "Doctor writers remain unsettled (PIDs: 41001, 41002). Data is at risk; run `openclaw update repair` after they stop.";
+      if (receipt === "unsettled") {
+        params.result.steps.push({
+          ...settledStep,
+          exitCode: 1,
+          advisory: undefined,
+          stderrTail: unsettledReason,
+          failureFacts: [
+            {
+              check: "doctor-process-settlement",
+              code: "doctor-processes-unsettled",
+              message: unsettledReason,
+            },
+          ],
+        });
+      }
+      if (receipt === "unsettled" || receipt === "database-restored") {
+        params.result.steps.push({
+          name: "database rollback",
+          command: "restore database snapshot",
+          cwd: root,
+          durationMs: 1,
+          exitCode: receipt === "database-restored" ? 0 : 1,
+        });
+      }
+      const state: GatewayServiceState = {
+        installed: true,
+        loadState: { status: "loaded" },
+        running: false,
+        runtime: { status: "stopped", systemd: { managerUid: process.getuid?.() ?? 501 } },
+        env: params.opts.run!.env!,
+        command: {
+          programArguments: [process.execPath, path.join(root, "dist/index.js"), "gateway"],
+        },
+      };
+      params.preManagedServiceStop!.serviceManagerUid = process.getuid?.() ?? 501;
+      params.preManagedServiceStop!.serviceUpdateVerdict =
+        await revalidateManagedGatewayServiceAfterUpdate({ state, root });
+      mocks.revalidate.mockImplementation(revalidateManagedGatewayServiceAfterUpdate);
+      mocks.readService.mockImplementation(async () => ({
+        ...state,
+        running: mocks.healthy,
+        runtime: { ...state.runtime, status: mocks.healthy ? "running" : "stopped" },
+      }));
+      mocks.restartCommand.mockImplementation(async () => {
+        mocks.healthy = true;
+        return "accepted";
+      });
+      vi.mocked(verifyUpdatedGateway).mockImplementation(async ({ result }) => {
+        result.verification = {
+          serviceRunning: mocks.healthy,
+          readyz: mocks.healthy,
+          settled: mocks.healthy,
+          runningVersion: mocks.version,
+        };
+        return { ok: mocks.healthy, score: 7, summary: "Migrated candidate is healthy" };
+      });
+
+      const run = params.opts.run!;
+      await withUpdateCommandExecutor(run.runId, async (executor) => {
+        run.executorFence = await executor.enter(root);
+        const failure = await finishUpdate(params).catch((error: unknown) => error);
+        assert(failure instanceof UpdateCommandFailure);
+        expect(
+          failure.result.recovery,
+          JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls),
+        ).toMatchObject(
+          receipt === "settled"
+            ? {
+                serviceRestartSafe: true,
+                service: "healthy",
+                version: mocks.version,
+              }
+            : { serviceRestartSafe: false },
+        );
+      });
+      expect(mocks.restartCommand).toHaveBeenCalledTimes(receipt === "settled" ? 1 : 0);
+      const report = getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env });
+      expect(report?.verification).toMatchObject({
+        serviceRunning: receipt === "settled",
+        readyz: receipt === "settled",
+      });
+      const rendered = renderUpdateRunReport(report!).lines.join("\n");
+      if (receipt === "settled") {
+        expect(rendered).toContain("openclaw update repair");
+        expect(report?.origin.nextAction).toContain("candidate Gateway is healthy");
+      }
+      if (receipt === "unsettled") {
+        expect(mocks.rollback).not.toHaveBeenCalled();
+        expect(report?.origin.nextAction).toContain("41001, 41002");
+        expect(report?.origin.nextAction).toContain("Keep the Gateway stopped");
+        expect(
+          report?.steps.findLast((step) => step.step === "doctor process settlement"),
+        ).toMatchObject({
+          status: "failed",
+          exitCode: 1,
+          failureFacts: [
+            {
+              check: "doctor-process-settlement",
+              code: "doctor-processes-unsettled",
+              message: unsettledReason,
+            },
+          ],
+        });
+      }
+    },
+  );
 });

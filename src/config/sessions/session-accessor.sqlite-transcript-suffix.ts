@@ -13,6 +13,7 @@ import {
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
+  pruneTranscriptReactionsInTransaction,
   readTranscriptMutationStateInTransaction,
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
@@ -391,6 +392,10 @@ export function replaceSqliteTranscriptSuffixInTransaction(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
   plan: SqliteTranscriptSuffixMutationPlan,
+  projection: {
+    scheduleProjectionReconcile?: boolean;
+    onProjectionReconcileNeeded?: () => void;
+  } = {},
 ): void {
   const db = getSessionKysely(database.db);
   if (
@@ -508,6 +513,7 @@ export function replaceSqliteTranscriptSuffixInTransaction(
     }),
     retainedIdempotencyKeys,
   );
+  pruneTranscriptReactionsInTransaction(database, resolved, [...suffixIdentityKeys.keys()]);
   if (stagedData) {
     executeSqliteQuerySync(
       database.db,
@@ -591,7 +597,8 @@ export function replaceSqliteTranscriptSuffixInTransaction(
     });
   } else {
     markSessionTranscriptIndexDirtyInTransaction(database.db, resolved.sessionId);
-    scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, {});
+    projection.onProjectionReconcileNeeded?.();
+    scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, projection);
   }
   touchTranscriptMutationInTransaction(database, resolved.sessionId);
 }

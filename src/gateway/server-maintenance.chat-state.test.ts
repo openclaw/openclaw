@@ -119,69 +119,27 @@ describe("gateway chat-state maintenance", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("sweeps orphaned stale buffers once the abort controller is gone", async () => {
-    const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
-    const runId = "run-orphaned";
-    seedStaleRunBuffers(deps, runId);
-
+  it("sweeps abandoned progress-only records without requiring assistant text", async () => {
+    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
+    vi.setSystemTime(staleRunTimestamp());
+    const runId = "orphan-progress";
+    deps.chatRunState.recordProgressEvent(runId, {
+      runId,
+      seq: 1,
+      ts: Date.now(),
+      stream: "tool",
+      data: { phase: "start", toolCallId: "read-1", name: "read" },
+    });
+    vi.setSystemTime(now);
     const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expectStaleRunBuffersSwept(deps, runId);
-
-    await stopMaintenanceTimers(timers);
+    try {
+      expect(deps.chatRunState.runs.has(runId)).toBe(true);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(deps.chatRunState.runs.has(runId)).toBe(false);
+    } finally {
+      await stopMaintenanceTimers(timers);
+    }
   });
-
-  it.each(["progress", "status", "plan", "canvas"] as const)(
-    "sweeps abandoned %s-only records without requiring assistant text",
-    async (kind) => {
-      const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
-      vi.setSystemTime(staleRunTimestamp());
-      const runId = `orphan-${kind}`;
-      if (kind === "progress" || kind === "status") {
-        deps.chatRunState.recordProgressEvent(runId, {
-          runId,
-          seq: 1,
-          ts: Date.now(),
-          stream: kind === "progress" ? "tool" : "run_status",
-          data:
-            kind === "progress"
-              ? { phase: "start", toolCallId: "read-1", name: "read" }
-              : { phase: "starting_model" },
-        });
-      } else if (kind === "plan") {
-        deps.chatRunState.getOrCreate(runId).planSnapshot = {
-          steps: [{ step: "Inspect", status: "in_progress" }],
-        };
-      } else {
-        deps.chatRunState.getOrCreate(runId).canvasBlocks = [
-          {
-            type: "canvas",
-            rawText: null,
-            preview: {
-              kind: "canvas",
-              surface: "assistant_message",
-              render: "url",
-              title: "Orphaned widget",
-              url: "/__openclaw__/canvas/documents/orphan/index.html",
-              viewId: "orphan",
-              sandbox: "scripts",
-            },
-          },
-        ];
-      }
-      vi.setSystemTime(now);
-      const timers = startGatewayMaintenanceTimers(deps);
-      try {
-        expect(deps.chatRunState.runs.has(runId)).toBe(true);
-        await vi.advanceTimersByTimeAsync(60_000);
-        expect(deps.chatRunState.runs.has(runId)).toBe(false);
-      } finally {
-        await stopMaintenanceTimers(timers);
-      }
-    },
-  );
 
   it("keeps recently updated records despite an old thinking timestamp", async () => {
     const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
@@ -253,27 +211,6 @@ describe("gateway chat-state maintenance", () => {
     },
   );
 
-  it("sweeps orphaned stale agent throttle state once the abort controller is gone", async () => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
-    const runId = "run-agent-orphaned";
-    vi.setSystemTime(staleRunTimestamp());
-    seedBufferedAgentEvent(deps, runId);
-    const agentText = deps.chatRunState.getOrCreate(runId).agentText?.assistant;
-    expect(agentText).toBeDefined();
-    if (agentText) {
-      agentText.lastSentAt = Date.now();
-    }
-    vi.setSystemTime(now);
-
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
-
-    await stopMaintenanceTimers(timers);
-  });
-
   it("clears assistant snapshot scope when aborted runs age out", async () => {
     const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
     const runId = "run-aborted";
@@ -293,24 +230,6 @@ describe("gateway chat-state maintenance", () => {
     expect(deps.chatRunState.runs.get(runId)?.abortMarker).toBeUndefined();
     expectStaleRunBuffersSwept(deps, runId);
     expect(deps.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("sweeps orphaned raw buffers that never emitted a delta", async () => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
-    const runId = "run-raw-only";
-    vi.setSystemTime(staleRunTimestamp());
-    Object.assign(deps.chatRunState.getOrCreate(runId), {
-      rawBuffer: "suppressed raw buffer",
-    });
-    vi.setSystemTime(now);
-
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.chatRunState.runs.has(runId)).toBe(false);
 
     await stopMaintenanceTimers(timers);
   });

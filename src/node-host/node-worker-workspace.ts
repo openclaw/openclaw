@@ -218,8 +218,8 @@ export class NodeWorkerWorkspaceRuntime {
 
   private currentLocalProtection(
     gatewayNamespace: string,
-    retainedDuringPass: ReadonlySet<string>,
-    launches: readonly NodeWorkerWorkspaceLaunchReference[],
+    retainedDuringPass?: ReadonlySet<string>,
+    launches: readonly NodeWorkerWorkspaceLaunchReference[] = [],
   ): Set<string> {
     const protectedGenerations = new Set(retainedDuringPass);
     for (const generationKey of this.activeWorkspaceOperations.keys()) {
@@ -279,12 +279,7 @@ export class NodeWorkerWorkspaceRuntime {
         }
       }
       this.acceptedSnapshots.set(input.gatewayNamespace, next);
-      const retainedDuringPass = new Set<string>();
-      for (const generationKey of this.activeWorkspaceOperations.keys()) {
-        if (generationKey.startsWith(`${input.gatewayNamespace}/`)) {
-          retainedDuringPass.add(generationKey);
-        }
-      }
+      const retainedDuringPass = this.currentLocalProtection(input.gatewayNamespace);
       const protections = this.activeRetainProtections.get(input.gatewayNamespace) ?? new Set();
       protections.add(retainedDuringPass);
       this.activeRetainProtections.set(input.gatewayNamespace, protections);

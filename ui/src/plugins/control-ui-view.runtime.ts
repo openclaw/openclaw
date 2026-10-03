@@ -5,6 +5,7 @@ import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import type {
   ControlUiAction,
+  ControlUiSession,
   ControlUiSurface,
   ControlUiSurfaceProps,
   ControlUiView,
@@ -44,9 +45,8 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
   private handle?: ReturnType<ControlUiView<unknown>>;
   private viewContext?: ControlUiViewContext<unknown>;
   private readonly defaultContainers = new Set<HTMLElement>();
-  private readonly subscriptions = new SubscriptionsController(this).watch(
+  private readonly subscriptions = new SubscriptionsController(this).watchStore(
     () => this.context?.plugins,
-    (plugins, notify) => plugins.subscribe(notify),
     () => {
       const next = this.resolveRegistration();
       if (this.registration?.value !== next?.value || this.registration?.signal !== next?.signal) {
@@ -301,23 +301,19 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
     "navigation";
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) agentId?: string;
+  @property({ attribute: false }) session?: ControlUiSession;
   @property({ attribute: false }) navigationKey = "";
   @property({ type: Boolean }) presented = true;
   @state() private actionError = "";
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
+    .watchStore(
       () => this.context?.plugins,
-      (plugins, notify) => plugins.subscribe(notify),
       () => this.retireHiddenActions(),
     )
-    .watch(
-      () => (this.kind === "navigation" ? this.context?.router : undefined),
-      (router, notify) => router.subscribe(notify),
-    )
-    .watch(
+    .watchStore(() => (this.kind === "navigation" ? this.context?.router : undefined))
+    .watchStore(
       () =>
         this.kind === "header" || this.kind === "composer" ? this.context?.sessions : undefined,
-      (sessions, notify) => sessions.subscribe(notify),
       () => this.retireHiddenActions(),
     );
 
@@ -432,7 +428,7 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
           renderPluginContribution(
             "accessories",
             entry.key,
-            { sessionKey: this.sessionKey, agentId: this.agentId },
+            { sessionKey: this.sessionKey, agentId: this.agentId, session: this.session },
             nothing,
             this.presented,
           ),

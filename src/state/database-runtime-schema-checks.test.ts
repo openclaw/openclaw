@@ -1,19 +1,21 @@
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.entry.js";
 import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
+import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "./openclaw-agent-db.js";
+  openClawStateDatabaseCache,
+  recordOpenClawStateDatabaseOpenFailure,
+} from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -59,7 +61,8 @@ vi.mock("../infra/node-sqlite.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-schema-budget-");
+afterAll(() => vi.restoreAllMocks());
 const counts: Array<{
   owner: string;
   userVersion: number;
@@ -67,16 +70,10 @@ const counts: Array<{
   dataVersion: number;
 }> = [];
 
-afterAll(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-});
-
 beforeAll(async () => {
   const scope = {
     agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-schema-budget-") },
+    env: { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() },
     sessionKey: "agent:main:schema-budget",
     projection: "list" as const,
   };
@@ -115,6 +112,17 @@ beforeAll(async () => {
       dataVersion: sql.filter((text) => /^PRAGMA data_version\b/i.test(text)).length,
     });
   }
+  trace.execute.mockClear();
+  for (let i = 0; i < 100; i++) {
+    expect(withExistingOpenClawStateDatabaseReadOnly(({ db }) => db, scope)).toBe(state.db);
+  }
+  const sql = trace.execute.mock.calls.filter(([db]) => db === state.db).map(([, text]) => text);
+  counts.push({
+    owner: "state-readonly",
+    userVersion: sql.filter((text) => /^PRAGMA user_version\b/i.test(text)).length,
+    sqliteMaster: sql.filter((text) => /\bsqlite_(master|schema)\b/i.test(text)).length,
+    dataVersion: sql.filter((text) => /^PRAGMA data_version\b/i.test(text)).length,
+  });
   console.info("Admitted database checks for 100 reads per entry point:", counts);
 });
 
@@ -122,18 +130,49 @@ it("keeps admitted reads within the schema-query budget", () => {
   expect(
     counts.map(({ owner, userVersion, sqliteMaster }) => ({ owner, userVersion, sqliteMaster })),
   ).toEqual(
-    ["agent", "state"].map((owner) => ({
+    ["agent", "state", "state-readonly"].map((owner) => ({
       owner,
       userVersion: 0,
       sqliteMaster: 0,
     })),
+  );
+  expect(counts.find(({ owner }) => owner === "state")?.dataVersion).toBeLessThanOrEqual(100);
+  expect(counts.find(({ owner }) => owner === "state-readonly")?.dataVersion).toBeLessThanOrEqual(
+    100,
+  );
+});
+
+it("refuses a revoked cached admission without reading its schema again", () => {
+  const scope = { env: { OPENCLAW_STATE_DIR: sessionDirs.make() } };
+  const database = openOpenClawStateDatabase(scope);
+  expect(openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).toBe(database);
+  const failure = new Error("synthetic revoked state admission");
+  recordOpenClawStateDatabaseOpenFailure(database.path, failure);
+  trace.execute.mockClear();
+  expect(() => openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).toThrow(
+    failure,
+  );
+  expect(() => withExistingOpenClawStateDatabaseReadOnly(() => undefined, scope)).toThrow(failure);
+  expect(trace.execute).not.toHaveBeenCalled();
+});
+
+it("revalidates locally changed schema facts after a rollback", () => {
+  const scope = { env: { OPENCLAW_STATE_DIR: sessionDirs.make() } };
+  const database = openOpenClawStateDatabase(scope);
+  database.db.exec(`BEGIN; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
+  expect(openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).toBe(database);
+  database.db.exec("ROLLBACK");
+  expect(openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).toBe(database);
+  database.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+  expect(() => openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).toThrow(
+    /uses newer schema version/,
   );
 });
 
 it("refuses schemas migrated by another process on the next read", () => {
   const scope = {
     agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-schema-migration-") },
+    env: { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() },
   };
   const databases: Array<[string, number]> = [];
   try {

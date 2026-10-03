@@ -7,6 +7,7 @@ import type {
   AgentHarnessAttemptResult,
   AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -24,6 +25,7 @@ import {
   type AssistantUsageSnapshot,
   type AttemptTranscriptJournalProjection,
 } from "./event-bridge-transcript.js";
+import { createPromptError } from "./prompt-error.js";
 import { normalizeCopilotUsage } from "./usage-bridge.js";
 
 export type { AssistantMessage, AssistantUsageSnapshot } from "./event-bridge-transcript.js";
@@ -123,7 +125,6 @@ interface EventBridgeController {
 }
 
 type MessageAccumulator = { text: string };
-type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
 
 export function attachEventBridge(
   session: SessionLike,
@@ -155,13 +156,9 @@ export function attachEventBridge(
   let deltaChain = Promise.resolve();
   let agentEventChain = Promise.resolve();
   let compactionChain = Promise.resolve();
-  let compactionIdle = Promise.resolve();
-  let resolveCompactionIdle: (() => void) | undefined;
+  let compactionIdle: ReturnType<typeof createDeferred<void>> | undefined;
   let observedSessionIdle = false;
-  let resolveSessionIdle: (() => void) | undefined;
-  const sessionIdle = new Promise<void>((resolve) => {
-    resolveSessionIdle = resolve;
-  });
+  const sessionIdle = createDeferred();
   let firstDeltaError: unknown;
   let detached = false;
   let unconsumedDurableReasoning = false;
@@ -288,12 +285,7 @@ export function attachEventBridge(
     }
   });
 
-  registerListener(session, unsubscribeFns, "assistant.message", (event) => {
-    if (!isRootSessionEvent(event) || event.ephemeral === true) {
-      return;
-    }
-    handleAssistantMessage(event);
-  });
+  registerListener(session, unsubscribeFns, "assistant.message", handleAssistantMessage);
 
   registerListener(session, unsubscribeFns, "assistant.usage", (event) => {
     if (!isRootSessionEvent(event)) {
@@ -473,9 +465,7 @@ export function attachEventBridge(
     }
     observedCompaction = true;
     if (activeCompactionCount === 0) {
-      compactionIdle = new Promise<void>((resolve) => {
-        resolveCompactionIdle = resolve;
-      });
+      compactionIdle = createDeferred();
     }
     activeCompactionCount += 1;
     enqueueCompactionCallback(options.onCompactionStart);
@@ -504,8 +494,8 @@ export function attachEventBridge(
       }),
     );
     if (activeCompactionCount === 0) {
-      resolveCompactionIdle?.();
-      resolveCompactionIdle = undefined;
+      compactionIdle?.resolve();
+      compactionIdle = undefined;
     }
   });
 
@@ -516,8 +506,7 @@ export function attachEventBridge(
     markUnconsumedReasoningIncomplete();
     flushPendingAssistantProjection();
     observedSessionIdle = true;
-    resolveSessionIdle?.();
-    resolveSessionIdle = undefined;
+    sessionIdle.resolve();
   });
 
   registerListener(session, unsubscribeFns, "session.error", (event) => {
@@ -556,16 +545,14 @@ export function attachEventBridge(
     awaitCompactionChain() {
       return compactionChain;
     },
-    async awaitCompactionCompletion() {
-      await awaitStableCompaction();
-    },
+    awaitCompactionCompletion: awaitStableCompaction,
     awaitSessionIdle() {
-      return observedSessionIdle ? Promise.resolve() : sessionIdle;
+      return observedSessionIdle ? Promise.resolve() : sessionIdle.promise;
     },
     settleCompactionWait() {
       activeCompactionCount = 0;
-      resolveCompactionIdle?.();
-      resolveCompactionIdle = undefined;
+      compactionIdle?.resolve();
+      compactionIdle = undefined;
     },
     awaitDeltaChain() {
       return deltaChain;
@@ -797,7 +784,7 @@ export function attachEventBridge(
   }
 
   async function awaitStableCompaction(): Promise<void> {
-    const idle = activeCompactionCount > 0 ? compactionIdle : undefined;
+    const idle = activeCompactionCount > 0 ? compactionIdle?.promise : undefined;
     if (idle) {
       await idle;
     }
@@ -809,15 +796,6 @@ export function attachEventBridge(
       await awaitStableCompaction();
     }
   }
-}
-
-function createPromptError(code: string, message: string, cause?: unknown): PromptErrorWithCode {
-  const error = new Error(message) as PromptErrorWithCode;
-  error.code = code;
-  if (cause !== undefined) {
-    error.cause = cause;
-  }
-  return error;
 }
 
 function ensureMessageAccumulator(

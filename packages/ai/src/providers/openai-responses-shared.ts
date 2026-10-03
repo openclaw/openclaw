@@ -11,7 +11,10 @@ import {
   type OpenAIResponsesReplayMode,
 } from "../transports/openai-responses-compaction-replay.js";
 import { recordResponsesContextUsage } from "../transports/openai-responses-context-usage.js";
-import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
+import {
+  responsesServiceTierObserver,
+  type OpenAIResponsesRequestParams,
+} from "../transports/openai-responses-contracts.js";
 import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
 import { createResponsesStreamWithEncryptedContentRetry } from "../transports/openai-responses-replay-internal.js";
 import { hasOnlyResponsesFunctionTools } from "../transports/openai-responses-stream-errors.js";
@@ -38,6 +41,7 @@ import {
   resolveOpenAIRequestReasoning,
   type OpenAIRequestReasoningEffort,
 } from "./openai-request-reasoning.js";
+import { resolveOpenAIResponsesTextFormat } from "./openai-response-format.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 
 type OpenAIResponsesStreamOptions = Pick<
@@ -81,7 +85,10 @@ type OpenAIResponsesProcessStreamOptions = OpenAIResponsesStreamOptions &
 
 type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
 
-type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperature"> & {
+type ResponsesCommonParamsOptions = Pick<
+  StreamOptions,
+  "maxTokens" | "temperature" | "responseFormat"
+> & {
   reasoningEffort?: OpenAIRequestReasoningEffort;
   reasoningSummary?: ResponsesReasoningSummary;
 };
@@ -127,6 +134,13 @@ export function applyCommonResponsesParams<TApi extends Api>(
 
   if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;
+  }
+
+  if (options?.responseFormat !== undefined) {
+    params.text = {
+      ...params.text,
+      format: resolveOpenAIResponsesTextFormat(options.responseFormat),
+    };
   }
 
   if (context.tools) {
@@ -203,6 +217,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     firstEventAbort = firstEvent;
     let started = false;
     let admittedRequest: OpenAIResponsesRequestParams | undefined;
+    let requestedTier: unknown;
     const requestOptions: ResponsesRequestOptions = {
       signal: firstEvent.signal,
       ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
@@ -219,6 +234,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
         suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
       canRetryStream: () => output.content.length === 0,
       wrapStream: ({ stream: openaiStream, response, attempt }) => {
+        requestedTier = attempt.request.service_tier;
         admittedRequest = attempt.kind === "initial" ? attempt.request : undefined;
         return withProviderResponseHook({
           stream: openaiStream,
@@ -254,6 +270,8 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
         : undefined;
     const terminal = await processResponsesStream(hookedOpenAIStream, output, stream, model, {
       ...processStreamOptions,
+      onServiceTier: (responseTier) =>
+        responsesServiceTierObserver.observe(options, requestedTier, responseTier),
       canRetryIdentityConflict: () => hasOnlyResponsesFunctionTools(admittedRequest),
       reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
         sessionId: options?.sessionId,

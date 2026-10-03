@@ -1,9 +1,5 @@
-/**
- * Sandbox backend registry.
- *
- * Stores process-wide backend factories so core and plugins can register local container, SSH, or custom sandbox providers.
- */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import type {
@@ -68,14 +64,7 @@ type SandboxBackendRegistrationGeneration = {
 // Only explicit overrides need process-wide generations. Built-in defaults stay
 // module-local so repeated imports neither retain old graphs nor replace overrides.
 function getSandboxBackendFactories(): Map<SandboxBackendId, SandboxBackendRegistrationGeneration> {
-  const globalStore = globalThis as typeof globalThis & {
-    [SANDBOX_BACKEND_FACTORIES_STATE_KEY]?: Map<
-      SandboxBackendId,
-      SandboxBackendRegistrationGeneration
-    >;
-  };
-  globalStore[SANDBOX_BACKEND_FACTORIES_STATE_KEY] ??= new Map();
-  return globalStore[SANDBOX_BACKEND_FACTORIES_STATE_KEY];
+  return resolveGlobalMap(SANDBOX_BACKEND_FACTORIES_STATE_KEY);
 }
 
 function normalizeSandboxBackendId(id: string): SandboxBackendId {
@@ -122,7 +111,6 @@ export function registerSandboxBackend(
   };
 }
 
-/** Look up a sandbox backend factory by normalized backend id. */
 export function getSandboxBackendFactory(id: string): SandboxBackendFactory | null {
   const registration = resolveSandboxBackendRegistration(id);
   if (!registration) {
@@ -144,7 +132,6 @@ export function getSandboxBackendFactory(id: string): SandboxBackendFactory | nu
   };
 }
 
-/** Look up optional lifecycle management hooks for a registered backend. */
 export function getSandboxBackendManager(id: string): SandboxBackendManager | null {
   return resolveSandboxBackendRegistration(id)?.manager ?? null;
 }
@@ -154,7 +141,6 @@ export function usesSandboxRuntimeReservations(id: string): boolean {
   return resolveSandboxBackendRegistration(id)?.reserveRuntimeId !== undefined;
 }
 
-/** Look up optional backend workdir resolution that does not start the runtime. */
 export function getSandboxBackendWorkdirResolver(id: string): SandboxBackendWorkdirResolver | null {
   return resolveSandboxBackendRegistration(id)?.resolveWorkdir ?? null;
 }
@@ -166,7 +152,6 @@ export function getSandboxBackendCapabilities(
   return resolveSandboxBackendRegistration(id)?.capabilities;
 }
 
-/** Resolve a backend factory or throw the user-facing configuration error. */
 export function requireSandboxBackendFactory(id: string): SandboxBackendFactory {
   const factory = getSandboxBackendFactory(id);
   if (factory) {

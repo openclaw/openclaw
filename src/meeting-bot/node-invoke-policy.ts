@@ -42,10 +42,6 @@ type PolicyDecision =
   | { approved: true; params: Record<string, unknown> }
   | { approved: false; result: OpenClawPluginNodeInvokePolicyResult };
 
-function readOutputGeneration(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0 });
-}
-
 function copyCommand(command: string[] | undefined): string[] | undefined {
   return command && command.length > 0 ? [...command] : undefined;
 }
@@ -69,19 +65,13 @@ function copyConfiguredAudio(
   }
   const hasCommandOverrideFields =
     "audioInputCommandOverride" in start || "audioOutputCommandOverride" in start;
-  const audioInputCommand = copyCommand(
-    start.audioInputCommandOverride ??
-      (hasCommandOverrideFields ? undefined : start.audioInputCommand),
-  );
-  const audioOutputCommand = copyCommand(
-    start.audioOutputCommandOverride ??
-      (hasCommandOverrideFields ? undefined : start.audioOutputCommand),
-  );
-  if (audioInputCommand) {
-    target.audioInputCommand = audioInputCommand;
-  }
-  if (audioOutputCommand) {
-    target.audioOutputCommand = audioOutputCommand;
+  for (const key of ["audioInputCommand", "audioOutputCommand"] as const) {
+    const command = copyCommand(
+      start[`${key}Override`] ?? (hasCommandOverrideFields ? undefined : start[key]),
+    );
+    if (command) {
+      target[key] = command;
+    }
   }
   for (const key of [
     "bargeInInputCommand",
@@ -231,7 +221,7 @@ function buildForwardParams(
       if (base64) {
         forwarded.base64 = base64;
       }
-      const outputGeneration = readOutputGeneration(params.outputGeneration);
+      const outputGeneration = asSafeIntegerInRange(params.outputGeneration, { min: 0 });
       if (params.outputGeneration !== undefined && outputGeneration === undefined) {
         return {
           approved: false,

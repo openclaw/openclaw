@@ -309,18 +309,15 @@ export const SessionsDispatchResultSchema = closedObject({
 });
 
 /** Stops a worker or explicitly recovers one failed placement onto the Gateway. */
-export const SessionsReclaimParamsSchema = Type.Object(
-  {
-    key: NonEmptyString,
-    agentId: Type.Optional(NonEmptyString),
-    recoverToGateway: Type.Optional(
-      closedObject({
-        expectedGeneration: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-      }),
-    ),
-  },
-  { additionalProperties: false },
-);
+export const SessionsReclaimParamsSchema = closedObject({
+  key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  recoverToGateway: Type.Optional(
+    closedObject({
+      expectedGeneration: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    }),
+  ),
+});
 
 /** Terminal placement returned after a worker reclaim operation. */
 export const SessionsReclaimResultPlacementSchema = Type.Union([
@@ -329,15 +326,12 @@ export const SessionsReclaimResultPlacementSchema = Type.Union([
 ]);
 
 /** Result returned once worker ownership is reclaimed or a failed placement is cleared. */
-export const SessionsReclaimResultSchema = Type.Object(
-  {
-    ok: Type.Literal(true),
-    key: NonEmptyString,
-    sessionId: NonEmptyString,
-    placement: SessionsReclaimResultPlacementSchema,
-  },
-  { additionalProperties: false },
-);
+export const SessionsReclaimResultSchema = closedObject({
+  ok: Type.Literal(true),
+  key: NonEmptyString,
+  sessionId: NonEmptyString,
+  placement: SessionsReclaimResultPlacementSchema,
+});
 
 /** Exact active source observed before a session placement move. */
 export const SessionMoveExpectedSourceSchema = closedObject({

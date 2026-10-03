@@ -123,7 +123,6 @@ function resolveWorkshopSurface(
       sessionKey: sandboxRuntime.classificationSessionKey,
       runSessionKey: params.sessionKey,
       workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
       runtimeToolAllowlist: params.opts?.toolsAllow,
       messageProvider: params.command.channel,
       senderId: params.command.senderId,

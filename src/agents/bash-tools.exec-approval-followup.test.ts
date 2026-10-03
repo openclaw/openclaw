@@ -1,7 +1,6 @@
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   onInternalDiagnosticEvent,
@@ -11,6 +10,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
   finalizeExecApprovalFollowupRuntimeHandoff,
@@ -22,7 +22,7 @@ import { callGatewayTool } from "./tools/gateway.js";
 vi.mock("./tools/gateway.js", () => ({ callGatewayTool: vi.fn(async () => ({ status: "ok" })) }));
 vi.mock("../infra/outbound/message.js", () => ({ sendMessage: vi.fn(async () => ({ ok: true })) }));
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "exec-approval-followup-store-");
 const requireRecord = createRequireRecord("record", "expected-label");
 const approvalId = "req-1";
 const sessionKey = "agent:main:main";
@@ -140,7 +140,7 @@ describe("exec approval followup", () => {
   ])(
     "validates the approval-time session before direct delivery: $label",
     async ({ resultText, currentSession, stale }) => {
-      const sessionStore = path.join(dirs.make("exec-approval-followup-store-"), "sessions.json");
+      const sessionStore = path.join(sessionDirs.make(), "sessions.json");
       await replaceSessionEntry(
         { storePath: sessionStore, sessionKey },
         { sessionId: currentSession, updatedAt: Date.now() },

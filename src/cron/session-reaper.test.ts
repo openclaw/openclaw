@@ -20,6 +20,7 @@ import {
 } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { initializeSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import {
@@ -35,23 +36,16 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { drainSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions as sweepCronRunSessionsImpl } from "./session-reaper.js";
-import { resetReaperThrottle } from "./session-reaper.test-support.js";
+import { resetReaperThrottle, seedSessionEntries } from "./session-reaper.test-support.js";
 
 const { listSessionEntriesCore, patchSessionEntryCore, replaceSessionEntry } = sessionAccessor;
+const { explicitSqliteCloseReleasesNativeResources: keepsMaintenanceWorker } =
+  await initializeSqliteRuntimeCapabilities();
 
 function sweepCronRunSessions(
   params: Omit<Parameters<typeof sweepCronRunSessionsImpl>[0], "agentId">,
 ) {
   return sweepCronRunSessionsImpl({ ...params, agentId: "main" });
-}
-
-async function seedSessionEntries(
-  storePath: string,
-  entries: Record<string, SessionEntry>,
-): Promise<void> {
-  for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ agentId: "main", storePath, sessionKey }, entry);
-  }
 }
 
 function readSessionEntries(storePath: string): Record<string, SessionEntry> {
@@ -426,7 +420,7 @@ describe("sweepCronRunSessions", () => {
     let foregroundRead:
       | ReturnType<typeof sessionEntryReader.readSessionEntriesFromStoreInWorker>
       | undefined;
-    if (!process.versions.bun) {
+    if (keepsMaintenanceWorker) {
       const closeResources = maintenanceLane.pool.closeResources.bind(maintenanceLane.pool);
       vi.spyOn(maintenanceLane.pool, "closeResources").mockImplementationOnce((key) => {
         const closing = closeResources(key);
@@ -446,7 +440,7 @@ describe("sweepCronRunSessions", () => {
     });
 
     expect(result).toEqual({ swept: true, pruned: 1 });
-    if (!process.versions.bun) {
+    if (keepsMaintenanceWorker) {
       expect(foregroundRead).toBeDefined();
       expect(await foregroundRead).toMatchObject({
         entries: [

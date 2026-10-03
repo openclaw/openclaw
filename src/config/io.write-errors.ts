@@ -46,7 +46,7 @@ export async function recoverConfigWriteFailure(params: {
   cause: unknown;
   publication?: "complete" | "partial";
   restoreFile: () => Promise<boolean | undefined>;
-  restoreEffects?: () => void;
+  restoreEffects?: () => void | Promise<void>;
 }): Promise<never> {
   let rollbackStatus: ConfigWriteRollbackStatus = "unknown";
   let cause = params.cause;
@@ -54,7 +54,7 @@ export async function recoverConfigWriteFailure(params: {
     const restored = await params.restoreFile();
     rollbackStatus = restored ? "restored" : "not-restored";
     if (restored) {
-      params.restoreEffects?.();
+      await params.restoreEffects?.();
     }
   } catch (rollbackError) {
     cause = new AggregateError(

@@ -5,7 +5,7 @@
 // while rich-blocks-html-map.ts owns block-level island mapping.
 import type { MarkdownIR } from "openclaw/plugin-sdk/text-chunking";
 import { decodeTelegramHtmlEntities } from "./format-html.js";
-import type { RichText } from "./rich-block-model.js";
+import { MAX_RICH_BLOCK_NESTING, type RichText } from "./rich-block-model.js";
 
 export type HtmlNode = { start: number; end: number } & (
   | { kind: "text"; text: string }
@@ -110,17 +110,59 @@ export function parseHtmlFragment(ir: MarkdownIR): HtmlNode[] {
   pushText(cursor, text.length);
   // Retain unmatched parents: extracting their children as islands would hide
   // malformed authored markup. Both inline and block rendering keep them literal.
+  // Bound the tree before inline, island, and literal-subtree walkers see it.
+  // The parser itself uses an explicit stack, so even the fallback can retain
+  // all descendant text without first recursing through the hostile input.
+  const pending = [{ nodes: root, depth: 0 }];
+  while (pending.length > 0) {
+    const frame = pending.pop()!;
+    for (let index = 0; index < frame.nodes.length; index += 1) {
+      const node = frame.nodes[index]!;
+      if (node.kind !== "element") {
+        continue;
+      }
+      if (frame.depth >= MAX_RICH_BLOCK_NESTING * 4) {
+        frame.nodes[index] = {
+          kind: "text",
+          start: node.start,
+          end: node.end,
+          text: nodeText([node], true),
+        };
+      } else {
+        pending.push({ nodes: node.children, depth: frame.depth + 1 });
+      }
+    }
+  }
   return root;
 }
 
-export function nodeText(nodes: readonly HtmlNode[]): string {
-  return nodes
-    .map((node) =>
-      node.kind === "text"
-        ? decodeTelegramHtmlEntities(node.text)
-        : `${node.closed ? "" : decodeTelegramHtmlEntities(node.raw)}${nodeText(node.children)}`,
-    )
-    .join("");
+export function nodeText(nodes: readonly HtmlNode[], preserveMediaSources = false): string {
+  const parts: string[] = [];
+  const pending = nodes.toReversed();
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    if (node.kind === "text") {
+      parts.push(decodeTelegramHtmlEntities(node.text));
+    } else {
+      if (!node.closed) {
+        parts.push(decodeTelegramHtmlEntities(node.raw));
+      }
+      if (
+        preserveMediaSources &&
+        node.closed &&
+        (node.name === "img" || node.name === "video" || node.name === "audio")
+      ) {
+        const source = parseHtmlAttrs(node.raw).get("src");
+        if (source) {
+          parts.push(`\n${source}\n`);
+        }
+      }
+      for (let index = node.children.length - 1; index >= 0; index -= 1) {
+        pending.push(node.children[index]!);
+      }
+    }
+  }
+  return parts.join("");
 }
 
 function normalizeIslandText(text: string): string {

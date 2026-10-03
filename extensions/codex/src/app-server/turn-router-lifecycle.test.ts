@@ -25,6 +25,46 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     return harness;
   }
 
+  it("settles native completion after a strict Guardian denial interruption", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+    const router = getCodexAppServerTurnRouter(harness.client);
+    const route = router.reserveThread({ threadId: "thread-native", onNotification: vi.fn() });
+    route.armTurn();
+    await route.bindTurn("turn-native");
+    const watch = router.watchNativeTurnCompletion({
+      threadId: route.threadId,
+      turnId: "turn-native",
+      timeoutMs: 1_000,
+    });
+    try {
+      harness.send({
+        method: "turn/completed",
+        params: {
+          threadId: route.threadId,
+          turn: {
+            id: "turn-native",
+            status: "interrupted",
+            items: [],
+            error: {
+              message: "Guardian stopped the turn after repeated denials.",
+              codexErrorInfo: "tooManyDenials",
+              additionalDetails: null,
+              misalignment: null,
+            },
+          },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(route.completed).toBe(true);
+      expect(watch.state).toBe("confirmed");
+      await expect(watch.completion).resolves.toBe(true);
+    } finally {
+      watch.cancel();
+      route.release();
+    }
+  });
+
   it.each<{ label: string; turn: JsonObject }>([
     { label: "invalid items", turn: { id: "turn-native", status: "completed", items: null } },
     { label: "missing status", turn: { id: "turn-native", items: [] } },

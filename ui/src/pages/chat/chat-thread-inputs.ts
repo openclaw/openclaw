@@ -90,7 +90,7 @@ export function placeChatInputs(
     if (input.state === "queued") {
       blocks.push({ items: inputItems, runId: input.runId });
       // The active run owns this floor even when a fresh client has no local send.
-      if (currentRunId && input.runId === currentRunId && !hiddenKeys.has(first.key)) {
+      if (currentRunId && input.runId === currentRunId) {
         activeInputKey = first.key;
       }
       continue;
@@ -134,11 +134,7 @@ export function placeChatInputs(
       bypassesQueue: queued.queueMode === "steer" || queued.queueMode === "interrupt",
     };
     markSearchVisibility(message, block.items);
-    if (
-      !activeInputKey &&
-      !hiddenKeys.has(block.items[0]!.key) &&
-      !isQueuedSendInlineState(queued)
-    ) {
+    if (!activeInputKey && !isQueuedSendInlineState(queued)) {
       activeInputKey = block.items[0]!.key;
     }
     // Accepted rows keep the Gateway's order. A retained local neighbor provides

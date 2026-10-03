@@ -189,9 +189,6 @@ async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise
 }
 
 function truncateSummary(text: string, max = 50): string {
-  if (!text) {
-    return "";
-  }
   const clean = text.replace(/\n/g, " ").trim();
   // Slice on a code-point boundary so CardKit never receives a lone surrogate at the limit.
   return clean.length <= max ? clean : sliceUtf16Safe(clean, 0, max - 3) + "...";
@@ -233,7 +230,6 @@ export function mergeStreamingText(
   return `${previous}${next}`;
 }
 
-/** Streaming card session manager */
 export class FeishuStreamingSession {
   private client: Client;
   private creds: Credentials;
@@ -573,12 +569,10 @@ export class FeishuStreamingSession {
       }
     }
 
-    // Update note with final model/provider info
     if (options?.note) {
       await this.updateNoteContent(options.note);
     }
 
-    // Close streaming mode
     // A rejected final write must not advertise content that CardKit never accepted.
     const acceptedText = this.state.sentText;
     this.state.sequence += 1;

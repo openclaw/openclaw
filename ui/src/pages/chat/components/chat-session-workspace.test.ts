@@ -1,6 +1,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -134,16 +135,8 @@ describe("session workspace state", () => {
     }>((resolve) => {
       resolveReplacementList = resolve;
     });
-    let resolveOldFile!: (value: {
-      sessionKey: string;
-      root: string;
-      file: { path: string; name: string; kind: "read"; missing: false; content: string };
-    }) => void;
-    const oldFile = new Promise<{
-      sessionKey: string;
-      root: string;
-      file: { path: string; name: string; kind: "read"; missing: false; content: string };
-    }>((resolve) => {
+    let resolveOldFile!: (value: SessionWorkspaceGetResult) => void;
+    const oldFile = new Promise<SessionWorkspaceGetResult>((resolve) => {
       resolveOldFile = resolve;
     });
     let resolveOldArtifacts!: (value: { artifacts: [] }) => void;
@@ -222,6 +215,8 @@ describe("session workspace state", () => {
         name: "README.md",
         kind: "read",
         missing: false,
+        previewKind: "text",
+        contentEncoding: "utf8",
         content: "old checkout",
       },
     });
@@ -424,6 +419,8 @@ describe("openSessionWorkspaceFile", () => {
         name: "README.md",
         kind: "read",
         missing: false,
+        previewKind: "text",
+        contentEncoding: "utf8",
         content: "# Before\n",
         hash: "a".repeat(64),
       },
@@ -479,7 +476,14 @@ describe("openSessionWorkspaceFile", () => {
           getFile: vi.fn().mockResolvedValue({
             sessionKey: "agent:main:current",
             root: "/workspace",
-            file: { path: "notes.md", name: "notes.md", content: "before", hash: "old" },
+            file: {
+              path: "notes.md",
+              name: "notes.md",
+              previewKind: "text",
+              contentEncoding: "utf8",
+              content: "before",
+              hash: "old",
+            },
           }),
           setFile: vi.fn(() => saved.promise),
           listFiles: vi.fn(async () => {
@@ -568,6 +572,8 @@ describe("openSessionWorkspaceFile", () => {
             name: "README.md",
             kind: "read",
             missing: false,
+            previewKind: "text",
+            contentEncoding: "utf8",
             content: "# Before\n",
             hash: "a".repeat(64),
           },
@@ -598,6 +604,8 @@ describe("openSessionWorkspaceFile", () => {
           name: "readme.md",
           kind: "read",
           missing: false,
+          previewKind: "text",
+          contentEncoding: "utf8",
           content: "# Browser file\n",
         },
       }));
@@ -774,13 +782,17 @@ describe("openSessionWorkspaceFile", () => {
     });
   });
 
-  it("does not render base64 content as text when the preview discriminator disagrees", async () => {
+  it.each([
+    { previewKind: "text", contentEncoding: "base64" },
+    { previewKind: undefined, contentEncoding: "utf8" },
+    { previewKind: "text", contentEncoding: undefined },
+  ])("rejects incomplete or non-text preview metadata %j", async (metadata) => {
     const handleOpenSidebar = createSidebarContentRecorder();
     const state = {
       client: {},
       connected: true,
       handleOpenSidebar,
-      hello: gatewayHelloForMethods([]),
+      hello: gatewayHelloForMethods(["sessions.files.get", "sessions.diff"]),
       sessionKey: "agent:main:current",
       sidebarContent: null,
       sessions: {
@@ -791,8 +803,7 @@ describe("openSessionWorkspaceFile", () => {
             name: "notes.txt",
             kind: "read",
             missing: false,
-            contentEncoding: "base64",
-            previewKind: "text",
+            ...metadata,
             content: "bm90ZXM=",
           },
         }),
@@ -809,6 +820,11 @@ describe("openSessionWorkspaceFile", () => {
       kind: "unavailable",
       message: "Failed to load notes.txt",
     });
+    const diff = resolveSessionDiffSidebarContent(state);
+    expect(diff?.kind).toBe("session-diff");
+    if (diff?.kind === "session-diff") {
+      await expect(diff.loadFileText?.("notes.txt")).resolves.toBeNull();
+    }
   });
 
   it("keeps a rejected file open as an unavailable file tab", async () => {

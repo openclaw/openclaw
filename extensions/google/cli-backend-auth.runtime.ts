@@ -24,11 +24,10 @@ import {
   resolveGeminiCliTrustedTransportEnv,
 } from "./cli-backend-isolated-auth.runtime.js";
 import {
-  GOOGLE_GEMINI_CLI_PROVIDER_ID,
+  GOOGLE_GEMINI_CLI_PROVIDER_ID as GEMINI_CLI_PROVIDER_ID,
   resolveGeminiCliProfileHome as resolveGeminiCliProfileHomePath,
 } from "./gemini-cli-auth-home.js";
 
-const GEMINI_CLI_PROVIDER_ID = GOOGLE_GEMINI_CLI_PROVIDER_ID;
 const GOOGLE_PROVIDER_ID = "google";
 const VERCEL_AI_GATEWAY_PROVIDER_ID = "vercel-ai-gateway";
 const GEMINI_CLI_CREDENTIALS_FILENAME = "gemini-credentials.json";
@@ -90,8 +89,6 @@ type GeminiCliAuthHomeContext = GeminiCliRestrictedAuthContext & {
   isolatedCompletionCwd?: string;
   toolAvailability?: CliBackendToolAvailability;
   isolatedCompletionModelId?: string;
-  isolatedCompletionPrompt?: string;
-  isolatedCompletionSystemPrompt?: string;
 };
 
 type GeminiCliAuthSelectedType = "oauth-personal" | "gemini-api-key";

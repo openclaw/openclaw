@@ -11,6 +11,7 @@ import {
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -59,17 +60,10 @@ const FEISHU_THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.feishuThreadBindin
 let state: FeishuThreadBindingsState | undefined;
 
 function getState(): FeishuThreadBindingsState {
-  if (!state) {
-    const globalStore = globalThis as Record<PropertyKey, unknown>;
-    state = (globalStore[FEISHU_THREAD_BINDINGS_STATE_KEY] as
-      | FeishuThreadBindingsState
-      | undefined) ?? {
-      managersByAccountId: new Map(),
-      bindingsByAccountConversation: new Map(),
-    };
-    globalStore[FEISHU_THREAD_BINDINGS_STATE_KEY] = state;
-  }
-  return state;
+  return (state ??= resolveGlobalSingleton(FEISHU_THREAD_BINDINGS_STATE_KEY, () => ({
+    managersByAccountId: new Map(),
+    bindingsByAccountConversation: new Map(),
+  })));
 }
 
 function resolveBindingKey(params: { accountId: string; conversationId: string }): string {

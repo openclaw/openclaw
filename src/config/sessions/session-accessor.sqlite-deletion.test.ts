@@ -1,7 +1,12 @@
 import { statSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type {
@@ -37,6 +42,8 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -55,7 +62,7 @@ import {
 } from "./session-accessor.sqlite-deletion.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
-import { applySessionStoreProjection } from "./session-accessor.sqlite-projection.js";
+import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const tempDirs = createTempDirTracker();
@@ -168,6 +175,147 @@ describe("session deletion and native owner state", () => {
     });
   const read = (key = sessionKey) =>
     loadSessionEntry({ sessionKey: key, storePath, readConsistency: "latest" });
+
+  it("cleans repository state in the explicit environment and preserves the ambient same-key session", async () => {
+    const ambientEnv = { ...process.env };
+    const ambientRepositories = createSessionRepositoryWorkspaceStore({ env: ambientEnv });
+    const ambientRepository = await ambientRepositories.create({
+      agentId: "main",
+      sessionKey,
+      url: "https://github.com/openclaw/fixture.git",
+      assertCurrent: () => {},
+    });
+    const ambientScope = { agentId: "main", sessionKey, storePath, env: ambientEnv };
+    await replaceSessionEntry(ambientScope, {
+      sessionId: "ambient-sentinel",
+      updatedAt: 1,
+      repositoryWorkspaceId: ambientRepository.workspaceId,
+    });
+    const ambientEntry = loadSessionEntry(ambientScope);
+    expect(ambientEntry).toMatchObject({ sessionId: "ambient-sentinel" });
+    const ambientArtifactRoot = ambientRepositories.artifactPath(ambientRepository.workspaceId);
+    const ambientArtifact = path.join(ambientArtifactRoot, "checkpoint");
+    await fs.mkdir(ambientArtifactRoot, { recursive: true });
+    await fs.writeFile(ambientArtifact, "ambient checkpoint");
+
+    await withOpenClawTestState(
+      { label: "repository-cleanup-explicit-env", applyEnv: false },
+      async (state) => {
+        expect(state.env.OPENCLAW_STATE_DIR).not.toBe(process.env.OPENCLAW_STATE_DIR);
+        const explicitStorePath = path.join(state.sessionsDir(), "sessions.json");
+        const scope = { agentId: "main", sessionKey, storePath: explicitStorePath, env: state.env };
+        const repositories = createSessionRepositoryWorkspaceStore({ env: state.env });
+        expect(repositories.path).not.toBe(ambientRepositories.path);
+        const repository = await repositories.create({
+          agentId: "main",
+          sessionKey,
+          url: "https://github.com/openclaw/fixture.git",
+          assertCurrent: () => {},
+        });
+        await replaceSessionEntry(scope, {
+          sessionId: "explicit-environment-session",
+          updatedAt: 1,
+          repositoryWorkspaceId: repository.workspaceId,
+        });
+        const artifactRoot = repositories.artifactPath(repository.workspaceId);
+        await fs.mkdir(artifactRoot, { recursive: true });
+        await fs.writeFile(path.join(artifactRoot, "checkpoint"), "explicit checkpoint");
+
+        const result = await applySessionEntryLifecycleMutation({
+          agentId: "main",
+          env: state.env,
+          storePath: explicitStorePath,
+          removals: [{ sessionKey }],
+          skipMaintenance: true,
+        });
+
+        expect(result.removedSessionKeys).toEqual([sessionKey]);
+        expect(loadSessionEntry(scope)).toBeUndefined();
+        expect(await repositories.get(repository.workspaceId)).toBeUndefined();
+        await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(loadSessionEntry(ambientScope)).toEqual(ambientEntry);
+        expect(await ambientRepositories.get(ambientRepository.workspaceId)).toEqual(
+          ambientRepository,
+        );
+        expect(await fs.readFile(ambientArtifact, "utf8")).toBe("ambient checkpoint");
+      },
+    );
+  });
+
+  it("cleans a logical global owner's repository in a shared physical store and preserves its sibling", async () => {
+    await withOpenClawTestState({ label: "repository-cleanup-shared-owner" }, async (state) => {
+      const sharedStorePath = state.statePath("shared.sqlite");
+      await state.writeConfig({
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, ops: {}, worker: {} },
+          defaults: { sessionStore: { agentId: "ops" } },
+        },
+        session: { scope: "global", store: sharedStorePath },
+      });
+      openOpenClawAgentDatabase({ agentId: "main", path: sharedStorePath, env: state.env });
+      const repositories = createSessionRepositoryWorkspaceStore({ env: state.env });
+      const scope = {
+        agentId: "ops",
+        sessionKey: "global",
+        storePath: sharedStorePath,
+        env: state.env,
+      };
+      const siblingScope = { ...scope, agentId: "worker", sessionKey: "agent:worker:task" };
+      const repository = await repositories.create({
+        agentId: scope.agentId,
+        sessionKey: scope.sessionKey,
+        url: "https://github.com/openclaw/fixture.git",
+        assertCurrent: () => {},
+      });
+      const siblingRepository = await repositories.create({
+        agentId: siblingScope.agentId,
+        sessionKey: siblingScope.sessionKey,
+        url: "https://github.com/openclaw/fixture.git",
+        assertCurrent: () => {},
+      });
+      await replaceSessionEntry(scope, {
+        sessionId: "global-session",
+        updatedAt: 1,
+        repositoryWorkspaceId: repository.workspaceId,
+      });
+      await replaceSessionEntry(siblingScope, {
+        sessionId: "worker-sibling",
+        updatedAt: 1,
+        repositoryWorkspaceId: siblingRepository.workspaceId,
+      });
+      const siblingEntry = loadSessionEntry(siblingScope);
+      expect(siblingEntry).toMatchObject({ sessionId: "worker-sibling" });
+      const artifactRoot = repositories.artifactPath(repository.workspaceId);
+      const siblingArtifactRoot = repositories.artifactPath(siblingRepository.workspaceId);
+      const siblingArtifact = path.join(siblingArtifactRoot, "checkpoint");
+      await fs.mkdir(artifactRoot, { recursive: true });
+      await fs.writeFile(path.join(artifactRoot, "checkpoint"), "global checkpoint");
+      await fs.mkdir(siblingArtifactRoot, { recursive: true });
+      await fs.writeFile(siblingArtifact, "worker checkpoint");
+      expect(resolveSqliteScope(scope)).toMatchObject({
+        agentId: "ops",
+        databaseAgentId: "main",
+        path: sharedStorePath,
+      });
+
+      const result = await applySessionEntryLifecycleMutation({
+        agentId: "ops",
+        env: state.env,
+        storePath: sharedStorePath,
+        removals: [{ sessionKey: "global" }],
+        skipMaintenance: true,
+      });
+
+      expect(result.removedSessionKeys).toEqual(["global"]);
+      expect(loadSessionEntry(scope)).toBeUndefined();
+      expect(await repositories.get(repository.workspaceId)).toBeUndefined();
+      await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(loadSessionEntry(siblingScope)).toEqual(siblingEntry);
+      expect(await repositories.get(siblingRepository.workspaceId)).toEqual(siblingRepository);
+      expect(await fs.readFile(siblingArtifact, "utf8")).toBe("worker checkpoint");
+    });
+  });
 
   it.each([
     { deleteWindows: false, sparse: false, rejectSuggestions: false },
@@ -620,14 +768,10 @@ describe("session deletion and native owner state", () => {
       },
     });
     const deletion = owner.run(() =>
-      applySessionStoreProjection({
+      applySessionEntryLifecycleMutation({
         storePath,
         skipMaintenance: true,
-        update: (store) => {
-          delete store[baseKey];
-          delete store[sessionKey];
-          return { persist: true, result: undefined };
-        },
+        removals: [{ sessionKey: baseKey }, { sessionKey }],
       }),
     );
     await expect(deletion).rejects.toMatchObject({
@@ -640,9 +784,9 @@ describe("session deletion and native owner state", () => {
     expect(bindings.get(baseKey)).toBe(`thread:${baseKey}`);
   });
 
-  it.each(["prepare", "finalize"] as const)(
+  it.for(["prepare", "finalize"] as const)(
     "lets unrelated session writers progress during native %s",
-    async (phase) => {
+    async (phase, { signal }) => {
       await seed();
       await seed(baseKey);
       const entered = createDeferred();
@@ -654,15 +798,22 @@ describe("session deletion and native owner state", () => {
       const owner = nativeOwner(phase === "prepare" ? { prepare: wait } : { finalize: wait });
       const deletion = owner.run(() => remove());
       try {
-        await withTestTimeout(entered.promise, 5_000, "native deletion did not start");
-        await withTestTimeout(
+        // Native cleanup stays held; bind waits to the test so a stall still releases it below.
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            deletion,
+            "native deletion settled before preparation or finalization",
+          ),
+          signal,
+        );
+        await withinTest(
           owner.run(() =>
             patchSessionEntryCore({ sessionKey: baseKey, storePath }, () => ({
               label: "writer progressed",
             })),
           ),
-          5_000,
-          "native cleanup blocked another session writer",
+          signal,
         );
         expect(read(baseKey)?.label).toBe("writer progressed");
       } finally {
@@ -774,7 +925,7 @@ describe("session deletion and native owner state", () => {
     ]);
   });
 
-  it.each(["entry replacement", "whole-store projection", "maintenance"] as const)(
+  it.each(["entry replacement", "lifecycle removal", "maintenance"] as const)(
     "preserves successor bindings and removes deleted keys through %s",
     async (surface) => {
       await seed();
@@ -795,14 +946,11 @@ describe("session deletion and native owner state", () => {
           });
           return;
         }
-        if (surface === "whole-store projection") {
-          await applySessionStoreProjection({
+        if (surface === "lifecycle removal") {
+          await applySessionEntryLifecycleMutation({
             storePath,
             skipMaintenance: true,
-            update: (store) => {
-              delete store[sessionKey];
-              return { persist: true, result: undefined };
-            },
+            removals: [{ sessionKey }],
           });
           return;
         }

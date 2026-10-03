@@ -23,12 +23,12 @@ import {
   readLatestSessionTranscriptMessageEvent,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActivePathEntryRelation,
-  readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageEventPage,
   SessionTranscriptProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
 import {
+  readActiveTranscriptStats,
   readSessionTranscriptHistoryAnchorPage as readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptHistoryEventById as readSessionTranscriptMessageEventById,
 } from "./session-accessor.sqlite-history.test-support.js";
@@ -160,7 +160,7 @@ describe("SQLite active transcript event projection", () => {
          ORDER BY active.active_position`,
       )
       .all(scope.sessionId) as Array<{ event_json: string }>;
-    expect(readSessionTranscriptActiveStats(scope)).toEqual({
+    expect(readActiveTranscriptStats(scope)).toEqual({
       eventCount: activeRows.length,
       sizeBytes: activeRows.reduce(
         (total, row) => total + Buffer.byteLength(row.event_json, "utf8") + 1,
@@ -193,8 +193,8 @@ describe("SQLite active transcript event projection", () => {
       touchSessionEntry: false,
     });
 
-    expect(readSessionTranscriptActiveStats(scope)).toMatchObject({ eventCount: 1 });
-    expect(readSessionTranscriptActiveStats(scope).sizeBytes).toBeLessThan(1_000);
+    expect(readActiveTranscriptStats(scope)).toMatchObject({ eventCount: 1 });
+    expect(readActiveTranscriptStats(scope).sizeBytes).toBeLessThan(1_000);
     expect(readLatestSessionTranscriptMessageEvent(scope)?.event).toMatchObject({
       id: "post-reset",
     });
@@ -346,7 +346,7 @@ describe("SQLite active transcript event projection", () => {
       touchSessionEntry: false,
     });
 
-    expect(readSessionTranscriptActiveStats(scope).sizeBytes).toBeGreaterThan(20_000);
+    expect(readActiveTranscriptStats(scope).sizeBytes).toBeGreaterThan(20_000);
   });
 
   it("defers mixed legacy and canonical rebuilds off request stacks", async () => {
@@ -746,7 +746,7 @@ describe("SQLite active transcript event projection", () => {
         ]);
 
         if (writerVersion === "older") {
-          expect(() => readSessionTranscriptActiveStats(scope)).toThrow(
+          expect(() => readActiveTranscriptStats(scope)).toThrow(
             SessionTranscriptProjectionUnavailableError,
           );
           await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId, env: scope.env });

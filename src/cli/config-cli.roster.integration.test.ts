@@ -29,6 +29,27 @@ const withConfig = (raw: string, visit: Parameters<typeof withFile>[2]) =>
   withFile("config-cli-", raw, visit);
 
 describe("config cli roster integration", () => {
+  it("preserves a shorthand subagent primary through an indexed roster edit", async () => {
+    const raw = JSON.stringify({
+      agents: { entries: { main: { subagents: { model: "fixture-model/allowed" } } } },
+    });
+    await withConfig(raw, async ({ configPath }) => {
+      await set(
+        "agents.list[0].subagents.model.fallbacks[0]",
+        '"fixture-model/backup"',
+        "--strict-json",
+      );
+      const saved = load(configPath);
+      expect(saved.agents.entries.main.subagents.model).toEqual({
+        primary: "fixture-model/allowed",
+        fallbacks: ["fixture-model/backup"],
+      });
+      expect(saved.agents).not.toHaveProperty("list");
+      expect(read(`${configPath}.bak`)).toBe(raw);
+      expect(errors).toEqual([]);
+    });
+  });
+
   it("validates a surviving SecretRef after its agent is renamed within the batch", async () => {
     const raw = JSON.stringify({
       agents: { entries: { main: {} } },
@@ -84,22 +105,12 @@ describe("config cli roster integration", () => {
     },
   ];
 
-  it.each(
-    rosterMutations.map((mutation) =>
-      Object.assign({}, mutation, { legacy: mutation.name === "indexed set" }),
-    ),
-  )(
-    "persists roster intent for $name (legacy file: $legacy) after a read-only preview",
+  it.each(rosterMutations)(
+    "persists roster intent for $name after a read-only preview",
     async (mutation) => {
       const agents = {
         ownership: "explicit",
-        ...(mutation.legacy
-          ? {
-              list: Object.entries(originalEntries).map(([id, entry]) =>
-                Object.assign({ id }, entry),
-              ),
-            }
-          : { entries: originalEntries }),
+        entries: originalEntries,
       };
       const raw = `${JSON.stringify({ agents })}\n`;
       await withConfig(raw, async ({ configPath, tempDir }) => {
@@ -118,6 +129,24 @@ describe("config cli roster integration", () => {
       });
     },
   );
+
+  it("requires Doctor before editing a persisted legacy roster", async () => {
+    const raw = JSON.stringify({
+      agents: {
+        ownership: "explicit",
+        list: Object.entries(originalEntries).map(([id, entry]) => Object.assign({ id }, entry)),
+      },
+    });
+    await withConfig(raw, async ({ configPath }) => {
+      for (const preview of [true, false]) {
+        await reject(set("agents.list[0].name", "changed-main", ...(preview ? ["--dry-run"] : [])));
+        expect(read(configPath)).toBe(raw);
+        expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
+      }
+      expect(errors.join("\n")).toContain("doctor --fix");
+      expect(logs.join("\n")).not.toContain("Updated");
+    });
+  });
 
   it("keeps submitted numeric list order through later indexed batch edits", async () => {
     const entries = { "1": { name: "first" }, "2": { name: "second" } };
@@ -398,13 +427,13 @@ describe("config cli roster integration", () => {
     });
   });
 
-  it("requires explicit ownership before activating an escaped legacy agentDir", async () => {
+  it("requires explicit ownership before activating an escaped agentDir", async () => {
     await withConfig("{}", async ({ configPath, tempDir }) => {
       const root = fs.realpathSync(tempDir);
       const agentDir = path.join(root, "$${CONFIG_OWNER}");
       const activeDir = path.join(root, "${CONFIG_OWNER}");
       const raw = `${JSON.stringify({
-        agents: { list: [{ id: "main", agentDir }] },
+        agents: { entries: { main: { agentDir } } },
         browser: { enabled: true },
       })}\n`;
       fs.writeFileSync(configPath, raw);
@@ -510,42 +539,41 @@ describe("config cli roster integration", () => {
     });
   });
 
-  it.each([
-    { name: "retained legacy source", replacement: undefined, editedId: "2" },
-    { name: "replaced null parent", replacement: null, editedId: "1" },
-  ])("uses current numeric roster order after $name", async ({ replacement, editedId }) => {
+  it("resets submitted numeric roster order after replacing a null parent", async () => {
     const entries = { "1": { name: "first" }, "2": { name: "second" } };
     const raw = JSON.stringify({
       agents: {
         ownership: "explicit",
-        list: [
-          { id: "2", name: "second" },
-          { id: "1", name: "first" },
-        ],
+        entries,
       },
     });
     await withConfig(raw, async ({ configPath }) => {
-      const args =
-        replacement === undefined
-          ? ["config", "set", "agents.list[0].name", "indexed-change"]
-          : [
-              "config",
-              "set",
-              "--batch-json",
-              JSON.stringify([
-                { path: "agents", value: replacement },
-                { path: "agents.entries.1", value: entries["1"] },
-                { path: "agents.entries.2", value: entries["2"] },
-                { path: "agents.list[0].name", value: "indexed-change" },
-              ]),
-              "--replace",
-            ];
+      const args = [
+        "config",
+        "set",
+        "--batch-json",
+        JSON.stringify([
+          {
+            path: "agents.list",
+            value: [
+              { id: "2", name: "second" },
+              { id: "1", name: "first" },
+            ],
+          },
+          { path: "agents.entries.2.name", value: "discarded" },
+          { path: "agents", value: null },
+          { path: "agents.entries.1", value: entries["1"] },
+          { path: "agents.entries.2", value: entries["2"] },
+          { path: "agents.list[0].name", value: "indexed-change" },
+        ]),
+        "--replace",
+      ];
       await invoke([...args, "--dry-run"]);
       expect(read(configPath)).toBe(raw);
       await invoke(args);
       expect(load(configPath).agents.entries).toEqual({
         ...entries,
-        [editedId]: { name: "indexed-change" },
+        "1": { name: "indexed-change" },
       });
     });
   });
@@ -718,6 +746,7 @@ describe("config cli roster integration", () => {
       expect(prepareCronOwner).not.toHaveBeenCalled();
       await invoke(args);
       expect(prepareCronOwner).toHaveBeenCalledTimes(explicitFleet ? 0 : 1);
+      expect(read(`${configPath}.bak`)).toBe(raw);
       const after = load(configPath);
       expect(after.agents).toMatchObject({
         ownership: "explicit",

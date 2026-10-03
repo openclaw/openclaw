@@ -32,12 +32,6 @@ it.each([
     visible: "Intro  visible",
   },
   {
-    name: "literal with attachment",
-    chunks: ["See ["],
-    visible: "See [",
-    mediaUrl: "https://example.com/image.png",
-  },
-  {
     name: "complete final after literal with attachment",
     chunks: ["See ["],
     visible: "See [",

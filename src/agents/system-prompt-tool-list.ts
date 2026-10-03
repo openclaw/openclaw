@@ -23,7 +23,7 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
     exec: params.codeModeActive
       ? "Run JavaScript Code Mode; call exact catalog tools from code, never shell/Python/imports"
       : promptSurface === "cli_backend"
-        ? "Run shell on connected node; sync; host=node"
+        ? "Run shell on configured exec target"
         : "Run shell; pty for TTY CLIs",
     process: "Control background exec",
     web_search: "Web search",

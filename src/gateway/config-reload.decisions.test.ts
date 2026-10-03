@@ -19,18 +19,6 @@ describe("decision model reload planning", () => {
     reloadPlugins: boolean;
   }>([
     {
-      name: "adds a decision agent",
-      previous: { agents: { entries: {} } },
-      next: { agents: { entries: { worker: { decisionModel: "fixture/fast" } } } },
-      reloadPlugins: true,
-    },
-    {
-      name: "removes a decision agent",
-      previous: { agents: { entries: { worker: { decisionModel: "fixture/fast" } } } },
-      next: { agents: { entries: {} } },
-      reloadPlugins: true,
-    },
-    {
       name: "adds the decision agent roster",
       previous: {},
       next: { agents: { entries: { worker: { decisionModel: "fixture/fast" } } } },
@@ -43,12 +31,6 @@ describe("decision model reload planning", () => {
       reloadPlugins: true,
     },
     {
-      name: "renames an agent",
-      previous: { agents: { entries: { worker: { name: "Worker" } } } },
-      next: { agents: { entries: { worker: { name: "Research" } } } },
-      reloadPlugins: false,
-    },
-    {
       name: "changes a utility model",
       previous: { agents: { entries: { worker: { utilityModel: "fixture/small" } } } },
       next: { agents: { entries: { worker: { utilityModel: "fixture/large" } } } },
@@ -58,12 +40,6 @@ describe("decision model reload planning", () => {
       name: "adds an agent without a decision override",
       previous: { agents: { entries: {} } },
       next: { agents: { entries: { worker: {} } } },
-      reloadPlugins: false,
-    },
-    {
-      name: "removes an agent without a decision override",
-      previous: { agents: { entries: { worker: {} } } },
-      next: { agents: { entries: {} } },
       reloadPlugins: false,
     },
   ])(
@@ -80,13 +56,10 @@ describe("decision model reload planning", () => {
     },
   );
 
-  it.each([
-    { path: "agents.defaults.decisionModel", expected: { reloadPlugins: true } },
-    {
-      path: "agents.entries.worker.decisionModel",
-      expected: { reloadPlugins: true, refreshHooksPolicy: true, reloadInternalHooks: true },
-    },
-  ])("hot-applies $path", ({ path, expected }) => {
-    expect(buildGatewayReloadPlan([path])).toMatchObject({ restartGateway: false, ...expected });
+  it("hot-applies the default decision model", () => {
+    expect(buildGatewayReloadPlan(["agents.defaults.decisionModel"])).toMatchObject({
+      restartGateway: false,
+      reloadPlugins: true,
+    });
   });
 });

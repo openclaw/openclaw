@@ -20,22 +20,54 @@ import {
 } from "../../infra/update-run-step.js";
 import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import * as utils from "../../utils.js";
 import * as restartProbe from "../daemon-cli/restart-health-probe.js";
+import { registerExecutionPhaseReceiptTests } from "./update-command-execution-phase.test-support.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { admitSourceUpdateArtifacts } from "./update-command-git-admission.js";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import {
   gatewayServiceCommandUsesRoot,
   inspectManagedGatewayServiceBeforeUpdate,
 } from "./update-command-service-plan.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 
-const { executionParams, inspectOrStopService, mocks, schemaContext, successfulUpdate } =
-  await import("./update-command-execution.test-support.js");
+const {
+  bindExecutionGuards,
+  executionParams,
+  inspectOrStopService,
+  mocks,
+  schemaContext,
+  successfulUpdate,
+} = await import("./update-command-execution.test-support.js");
+
+const phaseAdmission = vi.hoisted(() => ({ active: false }));
+vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../infra/sqlite-worker-operation-admission.js")>();
+  return {
+    ...actual,
+    createSqliteWorkerOperationAdmission: (
+      ...args: Parameters<typeof actual.createSqliteWorkerOperationAdmission>
+    ) => {
+      const [admit, attachment] = args;
+      return actual.createSqliteWorkerOperationAdmission((request, grant) => {
+        phaseAdmission.active = true;
+        try {
+          admit(request, grant);
+        } finally {
+          phaseAdmission.active = false;
+        }
+      }, attachment);
+    },
+  };
+});
 
 describe("mutable update validation", () => {
+  registerExecutionPhaseReceiptTests({ executionParams, mocks, successfulUpdate, phaseAdmission });
   it.each([
     { owner: "dead", changed: false },
     { owner: "live", changed: false },
@@ -80,12 +112,14 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
         const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
         const execution = await withUpdateCommandTerminalResult(async (registerRun) => {
           registerRun(run);
-          const result = await executeMutableUpdate({
-            ...executionParams("git"),
-            root,
-            opts: { json: true, run },
-            onActivation,
-          });
+          const result = await executeMutableUpdate(
+            await bindExecutionGuards({
+              ...executionParams("git"),
+              root,
+              opts: { json: true, run },
+              onActivation,
+            }),
+          );
           if (owner === "absent") {
             await expect(admitSourceUpdateArtifacts(root, run)).rejects.toThrow(
               `retained by PID ${process.pid}`,
@@ -138,6 +172,7 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
       const { revalidateUpdateDatabaseContext } = await vi.importActual<
         typeof import("./update-command-managed-context.js")
       >("./update-command-managed-context.js");
+      const warning = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
       let current = schemaContext("default");
       mocks.captureSchemaContext.mockImplementation(async () => current);
       mocks.captureManagedPreflight.mockImplementation(async () => current);
@@ -175,16 +210,20 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
       mocks.runGitUpdate.mockImplementation(runStagedUpdate);
       mocks.runPackageUpdate.mockImplementation(runStagedUpdate);
 
-      const execution = await executeMutableUpdate(executionParams(kind));
+      const execution = await executeMutableUpdate(
+        await bindExecutionGuards(executionParams(kind)),
+      );
 
-      expect(execution?.result.status).toBe(changed ? "error" : "ok");
-      expect(mocks.validateCanary).toHaveBeenCalledTimes(changed ? 0 : 1);
+      expect(execution?.result.status).toBe("ok");
+      expect(mocks.validateCanary).toHaveBeenCalledTimes(1);
       expect(mocks.serviceStopped).toBe(false);
       expect(execution?.mutationStarted).toBe(false);
       if (changed) {
-        expect(execution?.result.reason).toBe("database-schema-preflight");
-        expect(execution?.failure?.detail).toContain(
-          "configuration changed during database admission",
+        expect(mocks.validateCanary.mock.calls[0]?.[0].config).toEqual({
+          gateway: { port: 19002 },
+        });
+        expect(warning).toHaveBeenCalledWith(
+          expect.stringContaining("Configuration changed during database admission"),
         );
       }
     },
@@ -203,7 +242,7 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
       failureFacts: [{ check: "readyz", code: "candidate-readiness-probe-failed", message }],
     };
     mocks.validateCanary.mockImplementation(async ({ onStep }) => {
-      onStep(step);
+      await onStep(step);
       return {
         status: "ok",
         phase: "readiness",
@@ -229,10 +268,12 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
     mocks.runGitUpdate.mockImplementation(runStagedUpdate);
     const onStepComplete = vi.fn<NonNullable<UpdateStepProgress["onStepComplete"]>>();
 
-    const execution = await executeMutableUpdate({
-      ...executionParams("git"),
-      progress: { onStepComplete },
-    });
+    const execution = await executeMutableUpdate(
+      await bindExecutionGuards({
+        ...executionParams("git"),
+        progress: { onStepComplete },
+      }),
+    );
 
     expect(execution?.result.status).toBe("ok");
     expect(accepted).toHaveBeenCalledOnce();
@@ -263,11 +304,13 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
       mocks.runPackageUpdate.mockImplementation(runStagedUpdate);
       mocks.runGitUpdate.mockImplementation(runStagedUpdate);
 
-      const execution = await executeMutableUpdate({
-        ...executionParams(kind),
-        timeoutMs,
-        updateStepTimeoutMs: timeoutMs ?? 30 * 60_000,
-      });
+      const execution = await executeMutableUpdate(
+        await bindExecutionGuards({
+          ...executionParams(kind),
+          timeoutMs,
+          updateStepTimeoutMs: timeoutMs ?? 30 * 60_000,
+        }),
+      );
 
       expect(execution?.result.status).toBe("ok");
       expect(mocks.validateCanary).toHaveBeenCalledOnce();
@@ -293,6 +336,7 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
         const cliRoot = installationDrift ? path.join(root, "cli-install") : root;
         const serviceRoot = installationDrift ? path.join(root, "service-install") : root;
         if (installationDrift) {
+          stubNodeRuntime();
           await fs.mkdir(cliRoot);
           await fs.mkdir(serviceRoot);
           await fs.writeFile(
@@ -495,7 +539,7 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
                 }),
               );
             });
-            return executeMutableUpdate(params);
+            return executeMutableUpdate(await bindExecutionGuards(params));
           });
           expect(mocks.nativeSupport).toHaveBeenCalledOnce();
           if (failure === "executor") {
@@ -577,7 +621,7 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
       },
     );
 
-    const execution = await executeMutableUpdate(executionParams("git"));
+    const execution = await executeMutableUpdate(await bindExecutionGuards(executionParams("git")));
 
     expect(execution?.result).toMatchObject({
       status: "error",

@@ -308,6 +308,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         DockIconManager.shared.updateDockVisibility()
         if launchPlan.allowsInteractiveServices, let state {
+            BundledRuntime.refreshOwnedMacCLILink(
+                allowsPersistentIntegration: ApplicationRelocator.currentBundleAllowsPersistentIntegration())
             let controller = StatusMenuController(state: state, updater: self.updaterController)
             controller.start()
             self.statusMenuController = controller
@@ -424,14 +426,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // AppKit will not tear down onboarding while its sheet remains attached.
         // Retire it before terminateLater starts the asynchronous cleanup loop.
         OnboardingController.shared.close()
+        let cleanupDeadline = AppTerminationTiming.cleanupDeadlineSeconds(
+            hasAppHostedGateway: GatewayProcessManager.shared.hasAppHostedGateway,
+            operationTimeout: GatewayProcessManager.shared.gatewayOperationShutdownTimeout)
         self.terminationCleanupTask = Task { @MainActor [weak self] in
+            async let hostedGatewayCleanup: Void = GatewayProcessManager.shared.shutdownAppHostedGateway()
             async let processCleanupResult: Void = Self.cleanUpProcesses()
             async let bridgeCleanupResult: Void = PeekabooBridgeHostCoordinator.shared.shutdown()
-            _ = await (processCleanupResult, bridgeCleanupResult)
+            _ = await (hostedGatewayCleanup, processCleanupResult, bridgeCleanupResult)
             self?.finishTerminationCleanup(for: sender)
         }
         self.terminationDeadlineTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(AppTerminationTiming.cleanupDeadlineSeconds))
+            try? await Task.sleep(for: .seconds(cleanupDeadline))
             guard !Task.isCancelled else { return }
             self?.finishTerminationCleanup(for: sender)
         }
@@ -450,10 +456,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sender.reply(toApplicationShouldTerminate: true)
     }
 
-    static func shouldPresentScheduledFirstRunOnboarding(onboardingSeen: Bool) -> Bool {
-        !onboardingSeen
-    }
-
     private func scheduleFirstRunOnboardingIfNeeded() async {
         let connectionMode = AppStateStore.shared.connectionMode
         let onboardingSeen = AppStateStore.shared.onboardingSeen
@@ -469,9 +471,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
         guard shouldShow else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            guard Self.shouldPresentScheduledFirstRunOnboarding(
-                onboardingSeen: AppStateStore.shared.onboardingSeen)
-            else { return }
+            guard !AppStateStore.shared.onboardingSeen else { return }
             OnboardingController.shared.show()
         }
     }

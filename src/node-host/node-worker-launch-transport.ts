@@ -3,6 +3,7 @@ import {
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
   WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   createChildAdapter,
   type AwaitedStdoutChildAdapter,
@@ -77,7 +78,12 @@ export async function prepareNodeWorkerLaunchTransport(
     gatewayNamespace: options.input.gatewayNamespace,
   });
   if (!options.containerEngine) {
-    const args = [entry, "--internal-worker-ipc", "--internal-worker-session"];
+    const args = [
+      ...resolveRuntimeArgs(),
+      entry,
+      "--internal-worker-ipc",
+      "--internal-worker-session",
+    ];
     const workerOptions = {
       env: options.workerEnv,
       ownedWorker: true,

@@ -167,7 +167,9 @@ export function enableOpenClawCompileCache(params: {
   }
   try {
     const directory = resolveOpenClawCompileCacheDirectory(params);
-    enableOwnedNodeCompileCache(directory);
+    if (directory) {
+      enableOwnedNodeCompileCache(directory);
+    }
   } catch {
     // Best-effort only; never block startup.
   }

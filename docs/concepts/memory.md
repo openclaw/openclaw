@@ -298,10 +298,18 @@ The dreaming system has two related review lanes:
 
 - **Live dreaming** works from short-term dreaming state in SQLite plugin
   storage and is what the normal deep phase uses to decide what graduates into
-  `MEMORY.md`. Doctor owns migration of legacy dreaming JSON state from
-  `memory/.dreams/`; run `openclaw doctor --fix` before using that old state.
+  `MEMORY.md`.
 - **Grounded backfill** reads historical `memory/YYYY-MM-DD.md` notes as
   standalone day files and writes structured review output into `DREAMS.md`.
+
+Dreaming JSON journals from before July 2026 are no longer imported. The
+migration check leaves `memory/.dreams/daily-ingestion.json`, `session-ingestion.json`,
+`short-term-recall.json`, and `phase-signals.json` untouched. Existing SQLite
+state remains authoritative. If Doctor cannot establish canonical state,
+restore a backup from a July 2026 or newer release. An empty ingestion store
+without a previous migration acknowledgement is indistinguishable from
+unmigrated state; after verifying its SQLite state, back up and move the retired
+JSON file aside, then rerun `openclaw doctor --fix`.
 
 Grounded backfill is useful for replaying older notes and inspecting what the
 system considers durable, without manually editing `MEMORY.md`.

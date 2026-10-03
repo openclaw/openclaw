@@ -7,8 +7,8 @@ import {
 import { createTestConfigFileStore } from "../commands/test-runtime-config-helpers.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import { resolvePersistCandidateForWrite } from "../config/io.write-prepare.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.model-auth.js";
 import {
@@ -117,7 +117,7 @@ describe("runSetupModelAuthStep", () => {
     let config = createDefaultAgentConfig();
     const prompter = createWizardPrompter();
     config.agents!.entries = { alpha: {}, ...config.agents!.entries };
-    config = migratePersistedImplicitMainRoster(config).config as OpenClawConfig;
+    config = createCanonicalAgentConfigFixture(config).config;
     config = await requireRiskAcknowledgement({ config, opts: { acceptRisk: true }, prompter });
     vi.mocked(prompter.select).mockResolvedValueOnce(false);
     config = await requestTelemetryConsent({ config, opts: {}, prompter });

@@ -33,10 +33,8 @@ import {
   type OutboundDeliveryQueuePolicy,
   type OutboundSendDeps,
 } from "./deliver.js";
-import type {
-  ConversationDeliveryTarget,
-  DurableDeliveryCompletion,
-} from "./delivery-completion.js";
+import type { ConversationDeliveryTarget } from "./delivery-completion.js";
+import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 import {
   resolveOutboundMessageGatewayOptions,
   type OutboundMessageGatewayOptionsInput,

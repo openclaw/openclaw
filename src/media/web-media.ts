@@ -95,10 +95,8 @@ type WebMediaOptions = {
   hostReadCapability?: boolean;
 };
 
-/** Compression preference used to tune image size/quality search grids. */
 export type ImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
 
-/** Per-model image compression constraints merged into outbound media policy. */
 export type ImageCompressionModelPolicy = {
   maxBytes?: number;
   maxPixels?: number;
@@ -106,7 +104,6 @@ export type ImageCompressionModelPolicy = {
   preferredSidePx?: number;
 };
 
-/** Image compression policy for model/tool callers that need bounded media payloads. */
 export type ImageCompressionPolicy = {
   quality?: ImageQualityPreference;
   models?: ImageCompressionModelPolicy[];
@@ -213,7 +210,7 @@ function stripLegacyMediaDirectivePrefix(mediaUrl: string): string {
   return mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
 }
 
-function getTextStats(text: string): { printableRatio: number } {
+function textPrintableRatio(text: string): number {
   let printable = 0;
   let total = 0;
   for (const char of text) {
@@ -223,7 +220,7 @@ function getTextStats(text: string): { printableRatio: number } {
       printable += 1;
     }
   }
-  return { printableRatio: total === 0 ? 0 : printable / total };
+  return total === 0 ? 0 : printable / total;
 }
 
 function hasSingleByteTextShape(buffer: Buffer): boolean {
@@ -249,7 +246,7 @@ function hasSingleByteTextShape(buffer: Buffer): boolean {
 function decodeHostReadText(buffer: Buffer): string | undefined {
   // UTF-16 decoding is intentionally omitted: TextDecoder("utf-16le/be") never throws on
   // arbitrary byte pairs, so every byte pair is a valid (if meaningless) Unicode scalar —
-  // an attacker can prepend a BOM and pass getTextStats with printableRatio≈1.0 on pure
+  // an attacker can prepend a BOM and get a printable ratio near 1.0 on pure
   // binary garbage. The Latin-1 path below already covers the most common non-UTF-8
   // real-world case (Excel CSV exports with accented chars like é, ñ) while remaining
   // safe because hasSingleByteTextShape gates on byte shape *before* any decode.
@@ -275,8 +272,7 @@ function getValidatedHostReadText(buffer?: Buffer): string | undefined {
   if (text === undefined) {
     return undefined;
   }
-  const { printableRatio } = getTextStats(text);
-  return printableRatio > 0.95 ? text : undefined;
+  return textPrintableRatio(text) > 0.95 ? text : undefined;
 }
 
 function resolveLocalMediaFileName(filePath: string): string | undefined {
@@ -725,7 +721,6 @@ function isPreservableImageMime(
   );
 }
 
-/** Returns the stricter byte cap between caller limits and image compression policy limits. */
 export function effectiveImageBytesCap(
   baseCap: number | undefined,
   policy?: ImageCompressionPolicy,
@@ -756,8 +751,7 @@ function buildDescendingLadder(maxSide: number, values: readonly number[]): numb
   return uniqueValues(fallbackLadder.filter((value) => value > 0)).toSorted((a, b) => b - a);
 }
 
-/** Resolves the ordered max-side and JPEG quality search grid for an image compression policy. */
-export function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
+function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
   sides: number[];
   qualities: number[];
 } {
@@ -909,7 +903,6 @@ async function loadWebMediaInternal(
   } = options;
   mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
   mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
-  // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (/^file:/iu.test(mediaUrl)) {
     try {
       mediaUrl = safeFileURLToPath(mediaUrl);
@@ -1001,7 +994,6 @@ async function loadWebMediaInternal(
     return await clampAndFinalize({ buffer, contentType, kind, fileName });
   }
 
-  // Expand tilde paths to absolute paths (e.g., ~/Downloads/photo.jpg)
   if (mediaUrl.startsWith("~")) {
     mediaUrl = resolveUserPath(mediaUrl);
   }
@@ -1039,7 +1031,6 @@ async function loadWebMediaInternal(
     throw new HostReadMediaTypeError(HOST_READ_DECLARED_TEXT_ERROR);
   }
 
-  // Local path
   let data: Buffer;
   if (readFileOverride) {
     data = await readOutboundMediaFile(readFileOverride, mediaUrl, { maxBytes: sourceReadCap });

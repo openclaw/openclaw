@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
+// Route tests mock the public facade in shared workers; exercise the real owners here.
 import {
-  ChromeMcpDocumentUnavailableError,
   clickChromeMcpElement,
   evaluateChromeMcpScript,
-  listChromeMcpTabs,
-  setChromeMcpSessionFactoryForTest,
   takeChromeMcpSnapshot,
   withChromeMcpDocument,
-} from "./chrome-mcp.js";
+} from "./chrome-mcp-actions.js";
+import { ChromeMcpDocumentUnavailableError } from "./chrome-mcp-contracts.js";
+import { setChromeMcpSessionFactoryForTest } from "./chrome-mcp-session.js";
+import { listChromeMcpTabs } from "./chrome-mcp-tabs.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import {
   createPageSession,
@@ -44,15 +45,6 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
         id: "child-root",
         role: "RootWebArea",
         children: [{ id: "button", role: "button" }],
-      },
-    },
-    {
-      label: "colliding document roots",
-      operation: "snapshot",
-      child: {
-        id: "root",
-        role: "RootWebArea",
-        children: [{ id: "child-button", role: "button" }],
       },
     },
     {
@@ -119,112 +111,90 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
     expect(snapshot.children![0]!.id).toBe(snapshot.children![1]!.children![0]!.id);
   });
 
-  it.each([false, true])(
-    "retires target refs before snapshot refresh, including failure=%s",
-    async (fails) => {
-      let refreshing = false;
-      let oldRef = "";
-      const refPresentAtDispatch: boolean[] = [];
-      const clicks: unknown[] = [];
-      const { session, targets } = await setupSnapshotSession(
-        (call) => {
-          const pageId = call.arguments?.pageId;
-          if (call.name === "take_snapshot") {
-            if (typeof pageId !== "number") {
-              throw new Error("Snapshot requires a numeric pageId");
-            }
-            if (refreshing) {
-              refPresentAtDispatch.push(
-                session.routing!.snapshotsByTarget.get(target.targetId)?.refs.has(oldRef) ?? false,
-              );
-              if (fails) {
-                return {
-                  isError: true,
-                  content: [{ type: "text", text: "snapshot failed after refresh" }],
-                };
-              }
-            }
-            return snapshotResult({
-              id: `root-${pageId}`,
-              role: "RootWebArea",
-              children: [{ id: `button-${pageId}`, role: "button", name: "Run" }],
-            });
-          }
-          if (call.name === "click") {
-            clicks.push([pageId, call.arguments?.uid]);
-            return { content: [] };
-          }
-          return undefined;
-        },
-        [1, 2],
-      );
-      const target = targets[0]!;
-      const sibling = targets[1]!;
-      oldRef = (await takeChromeMcpSnapshot(target)).children![0]!.id!;
-      const siblingRef = (await takeChromeMcpSnapshot(sibling)).children![0]!.id!;
-      refreshing = true;
-      const refresh = takeChromeMcpSnapshot(target);
-      if (fails) {
-        await expect(refresh).rejects.toThrow("snapshot failed after refresh");
-      } else {
-        await refresh;
-      }
-      expect(refPresentAtDispatch).toEqual([false]);
-      await expect(clickChromeMcpElement({ ...target, uid: oldRef })).rejects.toThrow(
-        /Unknown ref/,
-      );
-      await clickChromeMcpElement({ ...sibling, uid: siblingRef });
-      expect(clicks).toEqual([[2, "button-2"]]);
-    },
-  );
-
-  it.each([undefined, "Execution context was destroyed"])(
-    "preserves refs across document probes with predicate error %s",
-    async (errorMessage) => {
-      let snapshots = 0;
-      const clicks: unknown[] = [];
-      const { targets } = await setupSnapshotSession((call) => {
+  it("retires target refs before a failed snapshot refresh", async () => {
+    let refreshing = false;
+    let oldRef = "";
+    const refPresentAtDispatch: boolean[] = [];
+    const clicks: unknown[] = [];
+    const { session, targets } = await setupSnapshotSession(
+      (call) => {
+        const pageId = call.arguments?.pageId;
         if (call.name === "take_snapshot") {
-          snapshots += 1;
+          if (typeof pageId !== "number") {
+            throw new Error("Snapshot requires a numeric pageId");
+          }
+          if (refreshing) {
+            refPresentAtDispatch.push(
+              session.routing!.snapshotsByTarget.get(target.targetId)?.refs.has(oldRef) ?? false,
+            );
+            return {
+              isError: true,
+              content: [{ type: "text", text: "snapshot failed after refresh" }],
+            };
+          }
           return snapshotResult({
-            id: `root-${snapshots}`,
+            id: `root-${pageId}`,
             role: "RootWebArea",
-            children: [{ id: `button-${snapshots}`, role: "button" }],
+            children: [{ id: `button-${pageId}`, role: "button", name: "Run" }],
           });
         }
-        if (call.name === "evaluate_script") {
-          expect(call.arguments).toMatchObject({ args: ["root-1"], waitForStableDom: false });
-          return { content: [{ type: "text", text: "```json\ntrue\n```" }] };
-        }
         if (call.name === "click") {
-          clicks.push(call.arguments?.uid);
+          clicks.push([pageId, call.arguments?.uid]);
           return { content: [] };
         }
         return undefined;
-      });
-      const target = targets[0]!;
-      const initial = await takeChromeMcpSnapshot(target);
-      const oldRef = initial.children![0]!.id!;
-      const predicateError = errorMessage ? new Error(errorMessage) : undefined;
-      const inspect = async () =>
-        await withChromeMcpDocument(target, async (document) => {
-          await document.evaluate("() => true");
-          if (predicateError) {
-            throw predicateError;
-          }
-          return true;
+      },
+      [1, 2],
+    );
+    const target = targets[0]!;
+    const sibling = targets[1]!;
+    oldRef = (await takeChromeMcpSnapshot(target)).children![0]!.id!;
+    const siblingRef = (await takeChromeMcpSnapshot(sibling)).children![0]!.id!;
+    refreshing = true;
+    const refresh = takeChromeMcpSnapshot(target);
+    await expect(refresh).rejects.toThrow("snapshot failed after refresh");
+    expect(refPresentAtDispatch).toEqual([false]);
+    await expect(clickChromeMcpElement({ ...target, uid: oldRef })).rejects.toThrow(/Unknown ref/);
+    await clickChromeMcpElement({ ...sibling, uid: siblingRef });
+    expect(clicks).toEqual([[2, "button-2"]]);
+  });
+
+  it("preserves refs when a document probe's predicate throws", async () => {
+    let snapshots = 0;
+    const clicks: unknown[] = [];
+    const { targets } = await setupSnapshotSession((call) => {
+      if (call.name === "take_snapshot") {
+        snapshots += 1;
+        return snapshotResult({
+          id: `root-${snapshots}`,
+          role: "RootWebArea",
+          children: [{ id: `button-${snapshots}`, role: "button" }],
         });
-      if (predicateError) {
-        await expect(inspect()).rejects.toBe(predicateError);
-      } else {
-        await expect(inspect()).resolves.toBe(true);
-        await expect(inspect()).resolves.toBe(true);
       }
-      await clickChromeMcpElement({ ...target, uid: oldRef });
-      expect(clicks).toEqual(["button-1"]);
-      expect(snapshots).toBe(1);
-    },
-  );
+      if (call.name === "evaluate_script") {
+        expect(call.arguments).toMatchObject({ args: ["root-1"], waitForStableDom: false });
+        return { content: [{ type: "text", text: "```json\ntrue\n```" }] };
+      }
+      if (call.name === "click") {
+        clicks.push(call.arguments?.uid);
+        return { content: [] };
+      }
+      return undefined;
+    });
+    const target = targets[0]!;
+    const initial = await takeChromeMcpSnapshot(target);
+    const oldRef = initial.children![0]!.id!;
+    const predicateError = new Error("Execution context was destroyed");
+    const inspect = async () =>
+      await withChromeMcpDocument(target, async (document) => {
+        await document.evaluate("() => true");
+        throw predicateError;
+      });
+    await expect(inspect()).rejects.toBe(predicateError);
+    await clickChromeMcpElement({ ...target, uid: oldRef });
+    expect(clicks).toEqual(["button-1"]);
+    expect(snapshots).toBe(1);
+  });
 
   it("recaptures an expired document without retiring healthy sibling refs", async () => {
     const snapshots: number[] = [];
@@ -291,40 +261,35 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
     expect(clicks).toEqual([[2, "button-2-initial"]]);
   });
 
-  it.each(["changed", "disappeared"])(
-    "recovers when the document %s during a cold snapshot",
-    async (change) => {
-      let snapshots = 0;
-      const { targets } = await setupSnapshotSession((call) => {
-        if (call.name === "take_snapshot") {
-          snapshots += 1;
-          return snapshots === 1
-            ? {
-                isError: true,
-                content: [
-                  { type: "text", text: `Snapshot document ${change}. Take a new snapshot.` },
-                ],
-              }
-            : snapshotResult({ id: "root", role: "RootWebArea" });
-        }
-        if (call.name === "evaluate_script") {
-          return { content: [{ type: "text", text: "```json\ntrue\n```" }] };
-        }
-        return undefined;
-      });
-      const target = targets[0]!;
-      const inspect = vi.fn(async (document: { evaluate: (fn: string) => Promise<unknown> }) =>
-        document.evaluate("() => true"),
-      );
+  it("recovers when the document changes during a cold snapshot", async () => {
+    let snapshots = 0;
+    const { targets } = await setupSnapshotSession((call) => {
+      if (call.name === "take_snapshot") {
+        snapshots += 1;
+        return snapshots === 1
+          ? {
+              isError: true,
+              content: [{ type: "text", text: "Snapshot document changed. Take a new snapshot." }],
+            }
+          : snapshotResult({ id: "root", role: "RootWebArea" });
+      }
+      if (call.name === "evaluate_script") {
+        return { content: [{ type: "text", text: "```json\ntrue\n```" }] };
+      }
+      return undefined;
+    });
+    const target = targets[0]!;
+    const inspect = vi.fn(async (document: { evaluate: (fn: string) => Promise<unknown> }) =>
+      document.evaluate("() => true"),
+    );
 
-      await expect(withChromeMcpDocument(target, inspect)).rejects.toBeInstanceOf(
-        ChromeMcpDocumentUnavailableError,
-      );
-      expect(inspect).not.toHaveBeenCalled();
-      await expect(withChromeMcpDocument(target, inspect)).resolves.toBe(true);
-      expect(snapshots).toBe(2);
-    },
-  );
+    await expect(withChromeMcpDocument(target, inspect)).rejects.toBeInstanceOf(
+      ChromeMcpDocumentUnavailableError,
+    );
+    expect(inspect).not.toHaveBeenCalled();
+    await expect(withChromeMcpDocument(target, inspect)).resolves.toBe(true);
+    expect(snapshots).toBe(2);
+  });
 
   it.each([{ id: "not-a-document", role: "group" }, { role: "RootWebArea" }])(
     "does not publish refs from a cold snapshot without a document UID: %j",

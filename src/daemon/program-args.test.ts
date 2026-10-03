@@ -359,6 +359,7 @@ describe("resolveGatewayProgramArguments", () => {
     });
     expect(packaged.programArguments).toEqual([
       validatedBunPath,
+      "--no-install",
       packagedIndexPath,
       "gateway",
       "--port",
@@ -378,6 +379,7 @@ describe("resolveGatewayProgramArguments", () => {
     });
     expect(sourceCheckout.programArguments).toEqual([
       validatedBunPath,
+      "--no-install",
       repoEntryPath,
       "gateway",
       "--port",
@@ -555,6 +557,7 @@ describe("resolveNodeProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       validatedBunPath,
+      "--no-install",
       indexPath,
       "node",
       "run",
@@ -600,8 +603,8 @@ it.each([
         runtime,
         runtimePath,
       });
-      expect(gateway.programArguments[runtime === "node" ? 2 : 1]).toBe(expected);
-      expect(node.programArguments[1]).toBe(expected);
+      expect(gateway.programArguments[2]).toBe(expected);
+      expect(node.programArguments[runtime === "node" ? 1 : 2]).toBe(expected);
     }
   },
 );

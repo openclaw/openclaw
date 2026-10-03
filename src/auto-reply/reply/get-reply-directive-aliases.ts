@@ -1,4 +1,3 @@
-// Exposes reply directive aliases for parsing and command help.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

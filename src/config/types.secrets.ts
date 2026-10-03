@@ -1,4 +1,3 @@
-// Defines secret reference and resolution configuration types.
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -241,11 +240,7 @@ export function resolveSecretInputRef(params: {
 
 export type SecretProviderConfig = z.input<typeof SecretProviderSchema>;
 
-export type EnvSecretProviderConfig = Extract<SecretProviderConfig, { source: "env" }>;
-
 export type FileSecretProviderConfig = Extract<SecretProviderConfig, { source: "file" }>;
-
-export type FileSecretProviderMode = NonNullable<FileSecretProviderConfig["mode"]>;
 
 export type ExecSecretProviderConfig = Extract<SecretProviderConfig, { source: "exec" }>;
 
@@ -255,7 +250,5 @@ export type PluginIntegrationSecretProviderConfig = Exclude<
   ExecSecretProviderConfig,
   ManualExecSecretProviderConfig
 >;
-
-export type StoreSecretProviderConfig = Extract<SecretProviderConfig, { source: "store" }>;
 
 export type SecretsConfig = NonNullable<z.input<typeof SecretsConfigSchema>>;

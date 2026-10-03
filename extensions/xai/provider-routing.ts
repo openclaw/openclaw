@@ -2,20 +2,12 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { isXaiProviderId } from "./provider-id.js";
 
-const XAI_NATIVE_ENDPOINT_HOSTS = new Set(["api.x.ai"]);
-
 function resolveHostname(value: string): string | undefined {
-  try {
-    return new URL(value).hostname.toLowerCase();
-  } catch {
-    return undefined;
-  }
+  return URL.parse(value)?.hostname.toLowerCase();
 }
 
 function isXaiNativeEndpoint(baseUrl: unknown): boolean {
-  return (
-    typeof baseUrl === "string" && XAI_NATIVE_ENDPOINT_HOSTS.has(resolveHostname(baseUrl) ?? "")
-  );
+  return typeof baseUrl === "string" && resolveHostname(baseUrl) === "api.x.ai";
 }
 
 export function supportsXaiPromptCacheKey(params: { api?: unknown; baseUrl?: unknown }): boolean {

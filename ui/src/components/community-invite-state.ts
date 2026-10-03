@@ -1,7 +1,8 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
-export const COMMUNITY_INVITE_KEY = "openclaw:control-ui:community-invite";
+// Renew the invitation once for the Reddit/Discord/X design, independently of app updates.
+export const COMMUNITY_INVITE_KEY = "openclaw:control-ui:community-invite:v2";
 
 // A failed save must still dismiss across sidebar remounts in this page.
 let unpersistedDismissal = false;

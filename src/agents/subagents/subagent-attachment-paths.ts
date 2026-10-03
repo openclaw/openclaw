@@ -29,15 +29,3 @@ export function subagentAttachmentRootForRun(
     ? resolveSubagentSessionAttachmentRootDir({ agentId, childSessionKey })
     : undefined;
 }
-
-export function resolveSubagentAttachmentDir(
-  agentId: string,
-  childSessionKey: string,
-  attachmentId: string,
-  env?: NodeJS.ProcessEnv,
-): string {
-  return path.join(
-    resolveSubagentSessionAttachmentRootDir({ agentId, childSessionKey, env }),
-    attachmentId,
-  );
-}

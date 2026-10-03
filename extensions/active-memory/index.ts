@@ -258,6 +258,14 @@ export default definePluginEntry({
                 : undefined);
             const effectiveAgentId =
               resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
+            const skipRecall = async (reason: string) => {
+              logRecallSkipped(reason);
+              await persistPluginStatusLines({
+                api,
+                agentId: effectiveAgentId,
+                sessionKey: resolvedSessionKey,
+              });
+            };
             if (authorityAllowedRecallTools.length === 0) {
               await persistPluginStatusLines({
                 api,
@@ -286,12 +294,7 @@ export default definePluginEntry({
             deadlineController.signal.throwIfAborted();
             toolAuthority.assertActive();
             if (sessionDisabled) {
-              logRecallSkipped("session-disabled");
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              });
+              await skipRecall("session-disabled");
               return undefined;
             }
             const sessionContext = {
@@ -299,12 +302,7 @@ export default definePluginEntry({
               sessionKey: resolvedSessionKey ?? ctx.sessionKey,
             };
             if (!isEligibleInteractiveSession(sessionContext)) {
-              logRecallSkipped("session-ineligible");
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              });
+              await skipRecall("session-ineligible");
               return undefined;
             }
             const destinationContext = {
@@ -365,6 +363,20 @@ export default definePluginEntry({
                 laneOne = await resolveTriggerRecall({
                   cfg: liveConfig,
                   agentId: effectiveAgentId,
+                  source: memoryCapability?.providerRuntime
+                    ? {
+                        kind: "native",
+                        context: {
+                          authority: { kind: "host", operation: "active-memory-trigger-recall" },
+                          signal: deadlineController.signal,
+                          assertCurrent() {
+                            deadlineController.signal.throwIfAborted();
+                            toolAuthority.assertActive();
+                            ctx.hookInvocation?.assertActive();
+                          },
+                        },
+                      }
+                    : { kind: "legacy" },
                   query: searchQuery,
                   message: currentUserMessage,
                   activeProjectKeys: ctx.activeProjectKeys,
@@ -423,12 +435,7 @@ export default definePluginEntry({
               );
             }
             if (!activeMemoryAllowed && !productRecallAllowed) {
-              logRecallSkipped("destination-not-allowed");
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              });
+              await skipRecall("destination-not-allowed");
               return laneOneContext ? { prependContext: laneOneContext } : undefined;
             }
             const escalationDecision = resolveRecallEscalationDecision({

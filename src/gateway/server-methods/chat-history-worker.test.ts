@@ -17,10 +17,7 @@ import type {
   SessionHistoryWorkerRequest,
 } from "../../config/sessions/session-history-types.js";
 import * as historyWorker from "../../config/sessions/session-history-worker-runtime.js";
-import {
-  onDiagnosticEvent,
-  type DiagnosticPayloadLargeEvent,
-} from "../../infra/diagnostic-events.js";
+import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { SerializedJsonArray, serializeGatewayFrame } from "../serialized-json.js";
 import {
@@ -348,7 +345,7 @@ it("forwards large worker history as text JSON while preserving object callers a
       materialize.mockRestore();
     }
     expect(Array.isArray((await request(true, 200_000, "cron.history")).messages)).toBe(true);
-    const omissions: DiagnosticPayloadLargeEvent[] = [];
+    const omissions: Extract<DiagnosticEventPayload, { type: "payload.large" }>[] = [];
     const stop = onDiagnosticEvent((event) => {
       if (event.type === "payload.large" && event.surface === "gateway.chat.history") {
         omissions.push(event);

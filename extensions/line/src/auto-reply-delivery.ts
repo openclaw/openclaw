@@ -269,11 +269,7 @@ export async function deliverLineAutoReply(params: {
   };
   const mediaMessages: messagingApi.Message[] = [];
   let deliveryError: unknown;
-  for (const rawUrl of mediaUrls) {
-    const url = rawUrl?.trim();
-    if (!url) {
-      continue;
-    }
+  for (const url of mediaUrls) {
     try {
       mediaMessages.push(await buildLineMediaMessage(url, mediaOpts, to));
     } catch (err) {

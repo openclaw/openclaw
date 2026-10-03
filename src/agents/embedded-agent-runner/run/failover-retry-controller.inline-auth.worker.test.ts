@@ -27,9 +27,7 @@ import {
 } from "../../auth-profiles/runtime-snapshots.js";
 import {
   SHARED_AUTH_STORE_STATE_KEY,
-  SHARED_STATE_STATE_KEY,
-  SHARED_STORE_STATE_KEY,
-  readSharedAuthKvCell,
+  readAuthProfileJsonCellText,
 } from "../../auth-profiles/sqlite-json.js";
 import { inspectPersistedAuthProfileStoreRaw } from "../../auth-profiles/sqlite.js";
 import {
@@ -507,8 +505,8 @@ it.each(["local", "inherited"] as const)(
         setRuntimeAuthProfileStoreSnapshot(initial, scopedAgentDir);
         const sharedDatabase = openOpenClawStateDatabase({ env: state.env });
         const sharedRows = () => ({
-          credentials: readSharedAuthKvCell(sharedDatabase.db, SHARED_STORE_STATE_KEY),
-          state: readSharedAuthKvCell(sharedDatabase.db, SHARED_STATE_STATE_KEY),
+          credentials: readAuthProfileJsonCellText(sharedDatabase.db, "store", "shared-state"),
+          state: readAuthProfileJsonCellText(sharedDatabase.db, "state", "shared-state"),
         });
         const beforeShared = sharedRows();
         await withAuthProfileStoreAgentDir(scopedAgentDir, state.stateDir, async () => {

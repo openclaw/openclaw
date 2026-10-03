@@ -12,12 +12,14 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../../infra/diagnostic-events.js";
 import { tryBeginGatewaySuspendAdmission } from "../../../process/gateway-work-admission.js";
 import {
-  ensureProfileForEmail,
-  setDisplayName,
-  ensureProfileForTailscaleIdentity,
-  setAvatar,
-  syncGitHubIdentity,
   linkEmail,
+  setAvatar,
+  setDisplayName,
+  syncGitHubIdentity,
+} from "../../../state/user-profile-writes.worker.js";
+import {
+  ensureProfileForEmail,
+  ensureProfileForTailscaleIdentity,
 } from "../../../state/user-profiles.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -48,6 +50,7 @@ import {
   attachGatewayHarness,
   BACKEND_CONNECT_PARAMS,
   cleanupGatewayHarnesses,
+  connectTrustedProxyUser,
   createGatewayHarnessGate,
   captureSecurityEvents,
   createCloseMock,
@@ -183,71 +186,6 @@ beforeEach(() => {
   loadConfigMock.mockReset();
 });
 
-function connectTrustedProxyUser(
-  connId: string,
-  clientOverrides: Record<string, unknown> = {},
-  scopes: string[] = [],
-  handoffAuthenticatedReceive?: () => void,
-) {
-  loadConfigMock.mockImplementation(() => ({
-    gateway: {
-      auth: {
-        mode: "trusted-proxy",
-        identityScopes: { "alice@example.com": scopes },
-        trustedProxy: {
-          userHeader: "x-forwarded-user",
-          requiredHeaders: ["x-forwarded-proto"],
-        },
-      },
-      trustedProxies: ["10.0.0.1"],
-      controlUi: {
-        allowedOrigins: ["http://127.0.0.1:19001"],
-      },
-    },
-  }));
-  const harness = attachGatewayHarness({
-    connId,
-    handoffAuthenticatedReceive,
-    connectNonce: `nonce-${connId}`,
-    requestHost: "gateway.example.com:18789",
-    requestOrigin: "http://127.0.0.1:19001",
-    remoteAddr: "10.0.0.1",
-    resolvedAuth: {
-      mode: "trusted-proxy",
-      allowTailscale: false,
-      trustedProxy: {
-        userHeader: "x-forwarded-user",
-        requiredHeaders: ["x-forwarded-proto"],
-      },
-    },
-    headers: {
-      "x-forwarded-for": "203.0.113.10",
-      "x-forwarded-user": "alice@example.com",
-      "x-forwarded-proto": "https",
-    },
-    ingressAttribution: {
-      kind: "trusted-proxy",
-      clientIp: "203.0.113.10",
-      rateLimit: { subject: { key: "203.0.113.10" }, resetOnSuccess: true },
-    },
-  });
-  harness.sendConnect(`connect-${connId}`, {
-    minProtocol: PROTOCOL_VERSION,
-    maxProtocol: PROTOCOL_VERSION,
-    client: {
-      id: "openclaw-control-ui",
-      version: "dev",
-      platform: "test",
-      mode: "ui",
-      ...clientOverrides,
-    },
-    role: "operator",
-    scopes,
-    caps: [],
-  });
-  return harness;
-}
-
 describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
@@ -286,7 +224,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       prewarmStarted.resolve();
       return prewarm.promise;
     });
-    const harness = connectTrustedProxyUser("history-prewarm");
+    const harness = connectTrustedProxyUser(loadConfigMock, "history-prewarm");
     harness.socketSend.mockImplementation((_payload, callback) => {
       callback?.();
       helloSent.resolve();
@@ -1078,7 +1016,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       const connect = async (suffix: string) => {
         const connId = `conn-trusted-proxy-user-${suffix}`;
         let sql: ReturnType<typeof observeMainThreadSql> | undefined;
-        const harness = connectTrustedProxyUser(connId, {}, [], () => {
+        const harness = connectTrustedProxyUser(loadConfigMock, connId, {}, [], () => {
           try {
             sql?.expectIdle();
           } finally {
@@ -1731,7 +1669,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it("carries the client-reported time zone into the presence entry", async () => {
-    connectTrustedProxyUser("conn-time-zone", { timeZone: "Europe/Vienna" });
+    connectTrustedProxyUser(loadConfigMock, "conn-time-zone", { timeZone: "Europe/Vienna" });
 
     await waitForFast(() => {
       expect(upsertPresenceMock).toHaveBeenCalledWith(
@@ -1743,7 +1681,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it("does not mint Cloudflare sync for a generic or non-required-header proxy", async () => {
-    const harness = connectTrustedProxyUser("conn-generic-proxy-github");
+    const harness = connectTrustedProxyUser(loadConfigMock, "conn-generic-proxy-github");
     await waitForFast(() => expect(harness.client).not.toBeNull());
 
     expect(createAuthenticatedGitHubIdentitySyncMock).toHaveBeenCalledWith(
@@ -1761,7 +1699,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     ensureProfileForEmailMock.mockImplementationOnce(() => {
       throw new Error("profile store unavailable");
     });
-    const harness = connectTrustedProxyUser("conn-profile-store-failure");
+    const harness = connectTrustedProxyUser(loadConfigMock, "conn-profile-store-failure");
 
     await waitForFast(() => {
       expect(upsertPresenceMock).toHaveBeenCalledWith(
@@ -2276,7 +2214,9 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     "records authenticated remote management authority for %s with %s: %s",
     async (id, scope, allowed) => {
       await withOpenClawTestState({ label: "gateway-control-ui-admin" }, async () => {
-        const harness = connectTrustedProxyUser("control-ui-authority", { id }, [scope]);
+        const harness = connectTrustedProxyUser(loadConfigMock, "control-ui-authority", { id }, [
+          scope,
+        ]);
         await harness.whenAttached;
         expect(harness.client).toMatchObject({ connect: { scopes: [scope] } });
         const admission = resolveGatewayCronCreatorAuthorityAdmission({
@@ -2310,9 +2250,12 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         await releasePreparation.promise;
         return true;
       });
-      const harness = connectTrustedProxyUser("identity-policy", { id: "openclaw-control-ui" }, [
-        "operator.read",
-      ]);
+      const harness = connectTrustedProxyUser(
+        loadConfigMock,
+        "identity-policy",
+        { id: "openclaw-control-ui" },
+        ["operator.read"],
+      );
       await preparationStarted.promise;
       const config = structuredClone(loadConfigMock());
       const next: OpenClawConfig = {

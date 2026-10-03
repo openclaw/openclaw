@@ -11,7 +11,10 @@ import {
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
-import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
+import {
+  isSystemEventStoreCurrent,
+  resolveSystemEventQueueKey,
+} from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
@@ -31,14 +34,13 @@ function compactSystemEvent(event: SystemEvent): string | null {
     return trimmed;
   }
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lower.includes("reason periodic")) {
-    return null;
-  }
   // Keep retired heartbeat prompts out of replayed legacy system events.
-  if (lower.startsWith("read heartbeat.md")) {
-    return null;
-  }
-  if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) {
+  if (
+    lower.includes("reason periodic") ||
+    lower.startsWith("read heartbeat.md") ||
+    lower.includes("heartbeat poll") ||
+    lower.includes("heartbeat wake")
+  ) {
     return null;
   }
   if (trimmed.startsWith("Node:")) {
@@ -105,15 +107,22 @@ export async function drainFormattedSystemEvents(params: {
       (event) => !isExecCompletionEvent(event.text),
     ),
   );
-  const sessionStateTargets = queued
-    .map((event) =>
-      event.contextKey ? decodeSessionStateNoticeContextKey(event.contextKey) : undefined,
-    )
-    .filter((target): target is string => target !== undefined);
-  if (sessionStateTargets.length > 0) {
-    acknowledgeSessionStateNotices(params.sessionKey, sessionStateTargets);
+  const sessionStateNotices = queued.flatMap((event) => {
+    const targetSessionKey = event.contextKey
+      ? decodeSessionStateNoticeContextKey(event.contextKey)
+      : undefined;
+    return targetSessionKey === undefined
+      ? []
+      : [{ targetSessionKey, watcherStorePath: event.sessionStorePath ?? null }];
+  });
+  if (sessionStateNotices.length > 0) {
+    await acknowledgeSessionStateNotices(params.sessionKey, sessionStateNotices);
   }
   for (const event of queued) {
+    // A same-store resolver handoff does not retire already-consumed events.
+    if (!isSystemEventStoreCurrent(params.sessionKey, event.sessionStorePath, params.agentId)) {
+      continue;
+    }
     const compacted = compactSystemEvent(event);
     if (!compacted) {
       continue;

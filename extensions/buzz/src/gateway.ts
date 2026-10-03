@@ -3,6 +3,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -91,10 +92,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
     let bus: BuzzBus | undefined;
     let cycleError: Error | undefined;
     let connectedAt: number | undefined;
-    let reportBusFailure: (error: Error) => void = () => {};
-    const busFailure = new Promise<Error>((resolve) => {
-      reportBusFailure = resolve;
-    });
+    const { promise: busFailure, resolve: reportBusFailure } = createDeferred<Error>();
     try {
       const nowSeconds = Math.floor(Date.now() / 1000);
       const sinceByRoom = await resolveBuzzRecoverySince({

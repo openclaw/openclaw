@@ -19,18 +19,14 @@ import { repairJson } from "../utils/json-parse.js";
 import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
 import { isTransientNetworkError } from "../utils/retryable-network-errors.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { createZeroUsage } from "../utils/usage.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
-type ContextUsage = NonNullable<Usage["contextUsage"]>;
-
-type TransportUsage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  contextUsage?: ContextUsage;
-  totalTokens: number;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+type TransportUsage = Pick<
+  Usage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "contextUsage" | "totalTokens"
+> & {
+  cost: Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite" | "total">;
 };
 
 export type WritableTransportStream = Pick<
@@ -188,14 +184,7 @@ export function mergeTransportHeaders(
 }
 
 export function createEmptyTransportUsage(): TransportUsage {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
+  return createZeroUsage();
 }
 
 export function createWritableTransportEventStream() {

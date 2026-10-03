@@ -237,8 +237,14 @@ Gateway token.
 
 By default, trusted local connections silently approve first-time device
 pairing plus role and scope upgrades. This keeps normal same-host and SSH
-tunnel reconnects convenient. Operators using shell-less, port-forward-only
-SSH keys or a multi-user Mac can require explicit approval for every device:
+tunnel reconnects convenient. A native app that already paired as an operator
+can add its first node role with the same device identity without a device
+approval prompt, including retries of a pending request labeled as a repair.
+This preserves its operator token. Explicitly revoked node tokens still require
+approval; node capability approval remains a separate step.
+
+Operators using shell-less, port-forward-only SSH keys or a multi-user Mac can
+require explicit approval for every device:
 
 ```json5
 {

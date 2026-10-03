@@ -105,13 +105,13 @@ async function commitTask(host: EndFollowFixture, change: () => void) {
   });
 }
 
-it("tracks an outstanding end command after same-key row measurement grows the extent", async () => {
+it("preserves an end request through same-key row measurement growth", async () => {
   const { host, thread, row, extent, dock, distance } = await mountEndFollowFixture();
   host.transcript.scrollToEnd();
   await expect.poll(distance).toBe(0);
 
   const previousMax = thread.scrollHeight - thread.clientHeight;
-  // A task commits growth while an end command is outstanding. Its first
+  // Request the end before growth has committed its measured extent. The first
   // reconciliation frame precedes ResizeObserver's measured-extent commit.
   await new Promise<void>((resolve) => {
     setTimeout(() => {
@@ -139,6 +139,31 @@ it("tracks an outstanding end command after same-key row measurement grows the e
   expect(geometry.overhang).toBeLessThanOrEqual(0);
 });
 
+it("follows measured growth after a smooth no-op finishes without a scroll event", async () => {
+  const { host, thread, extent, distance } = await mountEndFollowFixture();
+  thread.scrollTop = 0;
+  await settleFrames();
+  await new Promise<void>((resolve) => {
+    const stop = subscribeTranscriptScroll(thread, (event) => {
+      if (event.type === "offset" && !event.scrolling && distance() === 0) {
+        stop();
+        resolve();
+      }
+    });
+    host.transcript.scrollToEnd();
+  });
+
+  host.transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
+  await settleFrames();
+  await commitTask(host, () => {
+    host.lastRowHeight += 35;
+  });
+  await expect.poll(() => extent.offsetHeight).toBe(1335);
+  await settleFrames();
+
+  expect(distance()).toBe(0);
+});
+
 it("does not yank a reader who left the end programmatically", async () => {
   const { host, thread, extent, distance } = await mountEndFollowFixture();
   host.transcript.scrollToEnd();
@@ -158,8 +183,6 @@ it("does not yank a reader who left the end programmatically", async () => {
   await expect.poll(() => extent.offsetHeight).toBe(1348);
   await settleFrames();
 
-  // A never-moved instant end command may linger until reader input or the
-  // next end settle; the reader's position is the contract here.
   const geometry = {
     previousEnd,
     movedPosition,
@@ -355,6 +378,75 @@ it.each([
     await expect.poll(() => extent.offsetHeight).toBe(1348);
     await settleFrames();
     expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original + 48);
+  },
+);
+
+it.each([
+  { behavior: "auto", fromEnd: true },
+  { behavior: "auto", fromEnd: false },
+  { behavior: "smooth", fromEnd: true },
+  { behavior: "smooth", fromEnd: false },
+] as const)(
+  "preserves a departed reader through clamped idle ($behavior, starts at end: $fromEnd)",
+  async ({ behavior, fromEnd }) => {
+    const { host, thread, extent, distance } = await mountEndFollowFixture();
+    if (fromEnd) {
+      host.transcript.scrollToEnd({ behavior });
+      await expect.poll(distance).toBe(0);
+    } else {
+      thread.scrollTop = 0;
+      await settleFrames();
+      let arrived = false;
+      const stop = subscribeTranscriptScroll(thread, (event) => {
+        if (event.type === "offset" && event.scrolling && distance() === 0) {
+          arrived = true;
+        }
+      });
+      try {
+        host.transcript.scrollToEnd({ behavior });
+        await expect
+          .poll(() => ({ arrived, distance: distance() }))
+          .toEqual({
+            arrived: true,
+            distance: 0,
+          });
+      } finally {
+        stop();
+      }
+    }
+    await settleFrames();
+    const original = thread.scrollTop;
+    let scrollingAtClamp = false;
+    let idleAtClamp = false;
+    const unsubscribe = subscribeTranscriptScroll(thread, (event) => {
+      if (event.type === "offset" && thread.clientHeight === 500) {
+        scrollingAtClamp ||= event.scrolling;
+        idleAtClamp ||= scrollingAtClamp && !event.scrolling;
+      }
+    });
+    try {
+      thread.scrollTop -= 8;
+      host.viewportHeight = 500;
+      host.requestUpdate();
+      await expect.poll(() => thread.clientHeight).toBe(500);
+      expect(thread.scrollTop).toBe(original - 100);
+      const readerPosition = thread.scrollTop;
+      // The existing native observer must settle while layout holds the reader
+      // at a temporary end, not after the original viewport has returned.
+      await expect.poll(() => idleAtClamp).toBe(true);
+      host.viewportHeight = 400;
+      host.requestUpdate();
+      await expect.poll(() => thread.clientHeight).toBe(400);
+      await settleFrames();
+      expect(thread.scrollTop).toBe(readerPosition);
+      host.lastRowHeight += 48;
+      host.requestUpdate();
+      await expect.poll(() => extent.offsetHeight).toBe(1348);
+      await settleFrames();
+      expect(thread.scrollTop).toBe(readerPosition);
+    } finally {
+      unsubscribe();
+    }
   },
 );
 

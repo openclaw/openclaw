@@ -10,11 +10,13 @@ import {
 import { bindCronManagementGrant } from "../../agents/cron-creator-authority-context.js";
 import * as hostFileWrite from "../../agents/host-file-write.js";
 import { makeSettledChild } from "../../agents/subagents/announce/subagent-announce.requester-settle-wake.test-support.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
+import { settleRequesterTurnAfterSessionSpawns } from "../../agents/subagents/registry/subagent-registry-requester-yield.js";
 import {
-  markRequesterTurnYieldedInRuns,
-  settleRequesterTurnAfterSessionSpawns,
-} from "../../agents/subagents/registry/subagent-registry-requester-yield.js";
-import { saveSubagentRegistryChangesToSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+  createRequesterInitialTransferFixture,
+  markRequesterTurnYieldedWithAuthority,
+} from "../../agents/subagents/registry/subagent-registry-requester-yield.test-support.js";
 import {
   revokeRequesterCronAuthority,
   withRequesterCronAuthority,
@@ -28,6 +30,7 @@ import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { resolveMcpLoopbackClientGrant, revokeMcpLoopbackClientGrant } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
@@ -66,9 +69,9 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
     requesterSettleWake: undefined,
     completion: { required: true, resultText: "Maintenance review complete" },
   });
-  const batch = [child];
-  const runs = new Map([[child.runId, child]]);
-  const persistOrThrow = (...ids: string[]) => saveSubagentRegistryChangesToSqlite(runs, ids);
+  subagentRuns.set(child.runId, child);
+  const runs = subagentRuns;
+  const transfer = createRequesterInitialTransferFixture(runs);
   const requester = createSyntheticPluginRuntimeClient({
     scopes: admin ? ["operator.admin"] : ["operator.write"],
   });
@@ -95,17 +98,17 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
   }
   await inRun(originalRunId, admitted, async () => {
     expect(
-      markRequesterTurnYieldedInRuns({
+      await markRequesterTurnYieldedWithAuthority({
         requesterSessionKey: SESSION,
         requesterAgentId: "main",
         requesterTurnRunId: originalRunId,
         runs,
-        persistOrThrow,
+        transfer,
       }),
     ).toBe(1);
   });
   expect(
-    settleRequesterTurnAfterSessionSpawns({
+    await settleRequesterTurnAfterSessionSpawns({
       requesterSessionKey: SESSION,
       requesterAgentId: "main",
       requesterTurnRunId: originalRunId,
@@ -118,7 +121,7 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
         },
       ],
       runs,
-      persistOrThrow,
+      transfer,
       schedule: () => {},
     }),
   ).toBe(true);
@@ -128,8 +131,8 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
       requesterSessionKey: SESSION,
       requesterSessionId: SESSION_ID,
       requesterAgentId: "main",
-      batch,
-      rearmGeneration: child.requesterSettleWake?.rearmGeneration,
+      batch: [expectDefined(runs.get(child.runId), "published requester child")],
+      rearmGeneration: runs.get(child.runId)?.requesterSettleWake?.rearmGeneration,
       runId,
       isCurrent: () => true,
     },
@@ -146,8 +149,18 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
             expect(management?.managementOnly).toBe(true);
             expect(() => management?.mint("cron.add")).toThrow("management-only");
           }
-          runs.clear();
-          persistOrThrow(child.runId);
+          await mutateSubagentRuns(
+            [child.runId],
+            () => ({
+              value: undefined,
+              postimages: new Map([[child.runId, null]]),
+            }),
+            {
+              runs,
+              context: captureOpenClawStateWorkerContext(),
+              assertCurrent: resolveAdmittedRunActiveAssertion(admittedRun),
+            },
+          );
           return await run(identity, admittedRun, creator);
         },
       ),

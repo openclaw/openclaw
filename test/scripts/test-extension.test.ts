@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { parseCLI } from "vitest/node";
 import {
   detectChangedExtensionIds,
@@ -50,7 +50,13 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
-import { waitForPidFile } from "../helpers/process-wait.js";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { listVitestConfigTestFiles } from "../vitest-projects-config.test-support.js";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
@@ -62,7 +68,10 @@ import { providerExtensionTestRoots } from "../vitest/vitest.extension-provider-
 import { qaExtensionTestRoots } from "../vitest/vitest.extension-qa-paths.mjs";
 import { zaloExtensionTestRoots } from "../vitest/vitest.extension-zalo-paths.mjs";
 import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.config.ts";
-import { isSharedVitestExcludedPath } from "../vitest/vitest.pattern-file.ts";
+import {
+  isSharedVitestExcludedPath,
+  matchesVitestCliSelection,
+} from "../vitest/vitest.pattern-file.ts";
 
 vi.mock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/vitest-build-prerequisites.mts")>()),
@@ -73,6 +82,8 @@ const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mts");
 const posixIt = process.platform === "win32" ? it.skip : it;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const fixture = createFixtureLifetime();
+afterEach(() => fixture.cleanup());
 
 type RunGroupParams = VitestBatchRunParams;
 
@@ -147,6 +158,13 @@ function expectPositiveIntegerMetric(value: number) {
 }
 
 describe("scripts/test-extension.mts", () => {
+  let receipts: FixtureReceiptChannel;
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts?.close();
+  });
   let balancedExtensionShards: ReturnType<typeof createExtensionTestShards>;
   let balancedExpectedExtensionIds: string[];
 
@@ -689,7 +707,7 @@ describe("scripts/test-extension.mts", () => {
       env: {
         OPENCLAW_EXTENSION_BATCH_PARALLEL: "2",
       },
-      targets: ["two"],
+      targets: ["two/"],
     });
     const cachePaths = runGroup.mock.calls.map(([params]) =>
       params.env?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/"),
@@ -777,10 +795,18 @@ describe("scripts/test-extension.mts", () => {
         mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-native-")),
       );
       const home = path.join(root, "home");
+      const bin = path.join(root, "bin");
+      const runtime = process.versions.bun ? "bun" : "node";
       const report = path.join(root, "report.json");
       const config = path.join(root, "vitest.config.mjs");
       const entry = path.join(root, "batch.mts");
       mkdirSync(home);
+      mkdirSync(bin);
+      symlinkSync(
+        process.execPath,
+        path.join(bin, process.platform === "win32" ? `${runtime}.exe` : runtime),
+        "file",
+      );
       symlinkSync(
         path.join(process.cwd(), "node_modules"),
         path.join(root, "node_modules"),
@@ -789,14 +815,14 @@ describe("scripts/test-extension.mts", () => {
       writeFileSync(
         config,
         `import assert from 'node:assert/strict';
-assert.equal(process.execArgv.includes('--no-maglev'), ${!enableMaglev}, 'batch Node defaults');
-assert.equal(process.execArgv.includes('--no-concurrent-sparkplug'), true, 'batch Sparkplug policy');
+assert.equal(process.execArgv.includes('--no-maglev'), ${runtime === "node" && !enableMaglev}, 'batch Node defaults');
+assert.equal(process.execArgv.includes('--no-concurrent-sparkplug'), ${runtime === "node"}, 'batch Sparkplug policy');
 export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "cache"))},test:{include:['*.test.mjs'],pool:${JSON.stringify(pool)},execArgv:['--no-warnings'],globalSetup:[${JSON.stringify(path.join(process.cwd(), "test/vitest/vitest.node-policy.global-setup.ts"))}],maxWorkers:1,fileParallelism:false,cache:false,fsModuleCache:false}};`,
       );
       const expectedHome = realHomeReplay ? JSON.stringify(home) : "path.join(tmpdir(), 'home')";
       writeFileSync(
         path.join(root, "selected.test.mjs"),
-        `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe('--trace-warnings');expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
+        `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(Boolean(process.versions.bun)).toBe(${runtime === "bun"});expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${runtime === "node" && pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe('--trace-warnings');expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
       );
       for (const name of ["excluded", "unrelated"]) {
         writeFileSync(
@@ -830,7 +856,8 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
             cwd: root,
             encoding: "utf8",
             env: {
-              PATH: "",
+              PATH: bin,
+              OPENCLAW_VITEST_RUNTIME: runtime,
               HOME: home,
               USERPROFILE: home,
               OPENCLAW_LIVE_TEST: realHomeReplay ? "1" : "0",
@@ -948,66 +975,139 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
 
   posixIt(
     "preserves wrapper termination when native Vitest exits cleanly after SIGTERM",
-    async () => {
-      const root = mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-signal-"));
-      const config = path.join(root, "vitest.config.mjs");
-      const entry = path.join(root, "batch.mts");
-      const childPidPath = path.join(root, "child.pid");
-      const descendantPidPath = path.join(root, "descendant.pid");
-      const signaledPath = path.join(root, "signaled");
+    ({ signal }) =>
+      fixture.run(async () => {
+        const root = mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-signal-"));
+        const config = path.join(root, "vitest.config.mjs");
+        const entry = path.join(root, "batch.mts");
+        const childPidPath = path.join(root, "child.pid");
+        const descendantPidPath = path.join(root, "descendant.pid");
+        const signaledPath = path.join(root, "signaled");
 
-      writeFileSync(
-        config,
-        `import {spawn} from 'node:child_process';import fs from 'node:fs';
+        writeFileSync(
+          config,
+          `import {spawn} from 'node:child_process';import fs from 'node:fs';
+${fixtureReceiptClientSource(receipts.endpoint)}
 process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(signaledPath)},'SIGTERM');process.exit(0)});
 const descendant=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000);process.stdout.write('ready');"],{stdio:['ignore','pipe','ignore']});
 await new Promise(resolve=>descendant.stdout.once('data',resolve));
 fs.writeFileSync(${JSON.stringify(descendantPidPath)},String(descendant.pid));
 fs.writeFileSync(${JSON.stringify(childPidPath)},String(process.pid));
+sendReceipt(${JSON.stringify(childPidPath)}, "ready");
 await new Promise(()=>{});export default {};`,
-      );
-      const batchRunnerUrl = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.vitestBatchRunner);
-      writeFileSync(
-        entry,
-        `import {runVitestBatch} from ${JSON.stringify(batchRunnerUrl.href)};process.exitCode=await runVitestBatch({config:${JSON.stringify(config)},args:['--configLoader=native'],targets:[]});`,
-      );
-      const runner = spawn(
-        process.execPath,
-        [...resolveRuntimeWorkerArgv(batchRunnerUrl).slice(0, -1), entry],
-        { cwd: process.cwd(), stdio: "ignore" },
-      );
-      let childPid = 0;
-      let descendantPid = 0;
+        );
+        const batchRunnerUrl = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.vitestBatchRunner);
+        writeFileSync(
+          entry,
+          `import {runVitestBatch} from ${JSON.stringify(batchRunnerUrl.href)};process.exitCode=await runVitestBatch({config:${JSON.stringify(config)},args:['--configLoader=native'],targets:[]});`,
+        );
+        const runner = spawn(
+          process.execPath,
+          [...resolveRuntimeWorkerArgv(batchRunnerUrl).slice(0, -1), entry],
+          { cwd: process.cwd(), stdio: "ignore" },
+        );
+        const runnerClosed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+          (resolve) => {
+            runner.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
+          },
+        );
+        let childPid = 0;
+        let descendantPid = 0;
 
-      try {
-        childPid = await waitForPidFile(childPidPath, 5_000);
-        descendantPid = await waitForPidFile(descendantPidPath, 5_000);
-        expect(Number.isInteger(childPid)).toBe(true);
-        expect(Number.isInteger(descendantPid)).toBe(true);
+        try {
+          // The native config publishes both PIDs before the receipt. Its exit can
+          // overtake that separate socket, so durable records decide an early close.
+          await withinTest(
+            Promise.race([
+              receipts.waitFor(childPidPath, "ready"),
+              runnerClosed.then(() => {
+                if (!fileExists(childPidPath) || !fileExists(descendantPidPath)) {
+                  throw new Error(`timeout waiting for pid in ${childPidPath}`);
+                }
+              }),
+            ]),
+            signal,
+          );
+          childPid = Number(readFileSync(childPidPath, "utf8"));
+          descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+          expect(Number.isInteger(childPid)).toBe(true);
+          expect(Number.isInteger(descendantPid)).toBe(true);
 
-        expect(runner.pid).toBeGreaterThan(0);
-        process.kill(runner.pid!, "SIGTERM");
-        const result = await waitForClose(runner);
+          expect(runner.pid).toBeGreaterThan(0);
+          process.kill(runner.pid!, "SIGTERM");
+          const result = await withinTest(runnerClosed, signal);
 
-        expect(result).toEqual({ code: null, signal: "SIGTERM" });
-        await waitFor(() => fileExists(signaledPath), 5_000);
-        expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
-        await waitFor(() => !isProcessAlive(childPid), 5_000);
-        await waitFor(() => !isProcessAlive(descendantPid), 5_000);
-      } finally {
-        if (runner.pid && isProcessAlive(runner.pid)) {
-          process.kill(runner.pid, "SIGKILL");
+          expect(result).toEqual({ code: null, signal: "SIGTERM" });
+          // The config writes this synchronously before exiting, and the batch
+          // runner joins the native process before re-raising its signal.
+          expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
+          await waitForProcessesExit([childPid, descendantPid], signal);
+        } finally {
+          if (runner.pid && isProcessAlive(runner.pid)) {
+            process.kill(runner.pid, "SIGTERM");
+          }
+          await runnerClosed;
+          childPid ||= fileExists(childPidPath) ? Number(readFileSync(childPidPath, "utf8")) : 0;
+          descendantPid ||= fileExists(descendantPidPath)
+            ? Number(readFileSync(descendantPidPath, "utf8"))
+            : 0;
+          if (childPid && isProcessAlive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+          }
+          if (descendantPid && isProcessAlive(descendantPid)) {
+            process.kill(descendantPid, "SIGKILL");
+          }
+          rmSync(root, { force: true, recursive: true });
         }
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
-        if (descendantPid && isProcessAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
-        rmSync(root, { force: true, recursive: true });
-      }
-    },
+      }),
   );
+
+  it.each([
+    { ids: ["policy"], args: [], selected: ["extensions/policy/src/example.test.ts"] },
+    {
+      ids: ["policy", "file-transfer"],
+      args: [],
+      selected: [
+        "extensions/policy/src/example.test.ts",
+        "extensions/file-transfer/src/shared/policy.test.ts",
+      ],
+    },
+    {
+      ids: ["policy"],
+      args: ["--watch"],
+      selected: ["extensions/policy/src/example.test.ts"],
+    },
+  ])("confines extension roots $ids with $args", async ({ ids, args, selected }) => {
+    const runGroup = vi.fn<(params: RunGroupParams) => Promise<number>>().mockResolvedValue(0);
+    await expect(
+      runExtensionBatchPlan(resolveExtensionBatchPlan({ extensionIds: ids }), {
+        env: {},
+        runGroup,
+        vitestArgs: args,
+      }),
+    ).resolves.toBe(0);
+
+    expect(runGroup).toHaveBeenCalledOnce();
+    const invocation = requireFirstMockArg<RunGroupParams>(runGroup);
+    const candidates = [
+      "extensions/policy/src/example.test.ts",
+      "extensions/file-transfer/src/shared/policy.test.ts",
+      "extensions/other/src/policy/example.test.ts",
+      "extensions/policy-extra/src/example.test.ts",
+      "extensions/policy/src/example.test.tsx",
+    ];
+    expect(
+      candidates.filter((file) =>
+        matchesVitestCliSelection(
+          file,
+          ["extensions/**/*.test.ts"],
+          ["run", "--config", invocation.config, ...invocation.args, ...invocation.targets],
+          "extensions",
+          invocation.env ?? {},
+        ),
+      ),
+    ).toEqual(selected);
+  });
 
   it("expands extension batch roots before applying exact Vitest excludes", async () => {
     const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
@@ -1222,7 +1322,7 @@ await new Promise(()=>{});export default {};`,
       expect(result).toBe(0);
       expect(runGroup).toHaveBeenCalledOnce();
       const invocation = requireFirstMockArg<RunGroupParams>(runGroup);
-      expect(invocation.targets).toEqual(["matrix"]);
+      expect(invocation.targets).toEqual(["matrix/"]);
       expect(invocation.config).toBe("test/vitest/vitest.database-worker-watch.config.ts");
       expect(invocation.homeMode).toBe("live-aware");
       expect(invocation.env?.OPENCLAW_VITEST_DATABASE_WORKER_WATCH_OWNER).toBe(
@@ -1387,28 +1487,18 @@ await new Promise(()=>{});export default {};`,
   });
 });
 
-async function waitFor(condition: () => boolean, timeoutMs = 3_000): Promise<void> {
-  const startedAt = Date.now();
-  while (!condition()) {
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error("timed out waiting for condition");
+// Native Vitest owns these handles and its group join accepts terminal zombies.
+// Preserve the stronger absent-PID assertion until reaping, bounded only by cancellation.
+async function waitForProcessesExit(pids: number[], signal: AbortSignal): Promise<void> {
+  while (pids.some(isProcessAlive)) {
+    try {
+      await delay(5, undefined, { signal });
+    } catch (cause) {
+      throw new Error(`timed out waiting for condition: processes ${pids.join(", ")} exited`, {
+        cause,
+      });
     }
-    await delay(5);
   }
-}
-
-async function waitForClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = 5_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await Promise.race([
-    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-      child.once("close", (code, signal) => resolve({ code, signal }));
-    }),
-    delay(timeoutMs, undefined, { ref: false }).then(() => {
-      throw new Error("timed out waiting for child close");
-    }),
-  ]);
 }
 
 function fileExists(filePath: string): boolean {

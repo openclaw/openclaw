@@ -275,6 +275,12 @@ type GatewayKernelContext = {
     agentIds: readonly string[],
   ) => Promise<PreparedGatewayModelCatalogReadResult[]>;
   readChatMetadata: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
+  readPreparedModelsList?: (
+    params: import("./models-list-context.js").PreparedModelsListRequest,
+  ) => Promise<
+    | import("../../../packages/gateway-protocol/src/schema/model-catalog.js").ModelsListResult
+    | undefined
+  >;
   readChatStartupProjection?: (
     params: ChatStartupProjectionReadParams,
   ) => Promise<ChatStartupProjectionResult | undefined>;
@@ -521,6 +527,9 @@ export type GatewayRequestHandlerOptions = Omit<
 > & {
   params: Record<string, unknown>;
   sessionMutationAuthorization?: SessionMutationAuthorization;
+  markSessionSubscribePhase?: (
+    phase: import("../slow-request-diagnostics.js").SessionSubscribePhase,
+  ) => void;
   /** Host-prepared session resource authority; services explicitly retain their own borrow. */
   sessionAccessAuthority?: import("../session-access-authority.js").GatewaySessionAccessAuthority;
 };

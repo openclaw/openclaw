@@ -1,16 +1,15 @@
-// Defines core Zod schema fragments for canonical config parsing.
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
-import type { OpenRouterRouting, VercelGatewayRouting } from "../llm/types.js";
 import { normalizeExactAllowedHost } from "../secrets/exact-hostname.js";
 import { ENV_SECRET_REF_ID_RE, SECRET_PROVIDER_ALIAS_PATTERN } from "../secrets/ref-contract.js";
-import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./model-config-vocabulary.js";
+import { MODEL_APIS } from "./model-config-vocabulary.js";
 import { isBuiltInModelProviderOverlayId } from "./model-provider-overlay-ids.js";
 import { AgentRuntimePolicySchema } from "./zod-schema.agent-entry-base.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { DmConfigSchema } from "./zod-schema.messages.js";
+import { ModelCompatSchema } from "./zod-schema.model-compat.js";
 import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -36,92 +35,72 @@ function isAbsolutePath(value: string): boolean {
 }
 
 /** Canonical operator-configurable SSRF policy shared by network-capable surfaces. */
-export const SsrFPolicyConfigSchema = z
-  .object({
-    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
-    allowRfc2544BenchmarkRange: z.boolean().optional(),
-    allowIpv6UniqueLocalRange: z.boolean().optional(),
-    allowedHostnames: z.array(z.string()).optional(),
-    blockedHostnames: z.array(z.string()).optional(),
-  })
-  .strict();
+export const SsrFPolicyConfigSchema = z.strictObject({
+  dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+  allowRfc2544BenchmarkRange: z.boolean().optional(),
+  allowIpv6UniqueLocalRange: z.boolean().optional(),
+  allowedHostnames: z.array(z.string()).optional(),
+  blockedHostnames: z.array(z.string()).optional(),
+});
 
-const SecretsEnvProviderSchema = z
-  .object({
-    source: z.literal("env"),
-    /** Optional env var allowlist (exact names). */
-    allowlist: z.array(z.string().regex(ENV_SECRET_REF_ID_RE)).max(256).optional(),
-  })
-  .strict();
+const SecretsEnvProviderSchema = z.strictObject({
+  source: z.literal("env"),
+  /** Optional env var allowlist (exact names). */
+  allowlist: z.array(z.string().regex(ENV_SECRET_REF_ID_RE)).max(256).optional(),
+});
 
-const SecretsFileProviderSchema = z
-  .object({
-    source: z.literal("file"),
-    path: z.string().min(1),
-    mode: z.union([z.literal("singleValue"), z.literal("json")]).optional(),
-    timeoutMs: z.number().int().positive().max(120000).optional(),
-    maxBytes: z
-      .number()
-      .int()
-      .positive()
-      .max(20 * 1024 * 1024)
-      .optional(),
-  })
-  .strict();
+const SecretsFileProviderSchema = z.strictObject({
+  source: z.literal("file"),
+  path: z.string().min(1),
+  mode: z.union([z.literal("singleValue"), z.literal("json")]).optional(),
+  timeoutMs: z.number().int().positive().max(120000).optional(),
+  maxBytes: z
+    .number()
+    .int()
+    .positive()
+    .max(20 * 1024 * 1024)
+    .optional(),
+});
 
-const SecretsManualExecProviderSchema = z
-  .object({
-    source: z.literal("exec"),
-    command: z
-      .string()
-      .min(1)
-      .refine((value) => isSafeExecutableValue(value), "secrets.providers.*.command is unsafe.")
-      .refine(
-        (value) => isAbsolutePath(value),
-        "secrets.providers.*.command must be an absolute path.",
-      ),
-    args: z.array(z.string().max(1024)).max(128).optional(),
-    timeoutMs: z.number().int().positive().max(120000).optional(),
-    noOutputTimeoutMs: z.number().int().positive().max(120000).optional(),
-    maxOutputBytes: z
-      .number()
-      .int()
-      .positive()
-      .max(20 * 1024 * 1024)
-      .optional(),
-    jsonOnly: z.boolean().optional(),
-    env: z.record(z.string(), z.string()).optional(),
-    passEnv: z.array(z.string().regex(ENV_SECRET_REF_ID_RE)).max(128).optional(),
-    trustedDirs: z
-      .array(
-        z
-          .string()
-          .min(1)
-          .refine((value) => isAbsolutePath(value), "trustedDirs entries must be absolute paths."),
-      )
-      .max(64)
-      .optional(),
-  })
-  .strict();
+const SecretsManualExecProviderSchema = z.strictObject({
+  source: z.literal("exec"),
+  command: z
+    .string()
+    .min(1)
+    .refine(isSafeExecutableValue, "secrets.providers.*.command is unsafe.")
+    .refine(isAbsolutePath, "secrets.providers.*.command must be an absolute path."),
+  args: z.array(z.string().max(1024)).max(128).optional(),
+  timeoutMs: z.number().int().positive().max(120000).optional(),
+  noOutputTimeoutMs: z.number().int().positive().max(120000).optional(),
+  maxOutputBytes: z
+    .number()
+    .int()
+    .positive()
+    .max(20 * 1024 * 1024)
+    .optional(),
+  jsonOnly: z.boolean().optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  passEnv: z.array(z.string().regex(ENV_SECRET_REF_ID_RE)).max(128).optional(),
+  trustedDirs: z
+    .array(z.string().min(1).refine(isAbsolutePath, "trustedDirs entries must be absolute paths."))
+    .max(64)
+    .optional(),
+});
 
-const SecretsPluginIntegrationExecProviderSchema = z
-  .object({
-    source: z.literal("exec"),
-    pluginIntegration: z
-      .object({
-        pluginId: z.string().min(1).max(128),
-        integrationId: z.string().min(1).max(128),
-      })
-      .strict(),
-  })
-  .strict();
+const SecretsPluginIntegrationExecProviderSchema = z.strictObject({
+  source: z.literal("exec"),
+  pluginIntegration: z.strictObject({
+    pluginId: z.string().min(1).max(128),
+    integrationId: z.string().min(1).max(128),
+  }),
+});
 
 const SecretsExecProviderSchema = z.union([
   SecretsManualExecProviderSchema,
   SecretsPluginIntegrationExecProviderSchema,
 ]);
 
-const SecretsStoreProviderSchema = z.object({ source: z.literal("store") }).strict();
+const SecretsStoreProviderSchema = z.strictObject({ source: z.literal("store") });
 
 // Same exact-host contract as per-secret destination bindings: rejecting schemes,
 // ports, wildcards, and malformed hostnames here keeps invalid entries out of the
@@ -151,32 +130,24 @@ export const SecretProviderSchema = z.union([
 
 /** Schema for the top-level `secrets` config block. */
 export const SecretsConfigSchema = z
-  .object({
+  .strictObject({
     egressProxy: z
-      .object({
+      .strictObject({
         enabled: z.boolean().optional(),
         allowedHosts: z.array(EgressProxyExactHostSchema).max(256).optional(),
         bypassHosts: z.array(EgressProxyExactHostSchema).max(256).optional(),
       })
-      .strict()
       .optional(),
-    providers: z
-      .object({
-        // Keep this as a record so users can define multiple named providers per source.
-      })
-      .catchall(SecretProviderSchema)
-      .optional(),
+    providers: z.object({}).catchall(SecretProviderSchema).optional(),
     defaults: z
-      .object({
+      .strictObject({
         env: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
         file: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
         exec: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
         store: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
       })
-      .strict()
       .optional(),
   })
-  .strict()
   .optional();
 
 const LEGACY_OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
@@ -190,178 +161,8 @@ const ModelApiSchema = z.enum(MODEL_APIS, {
       : undefined,
 });
 
-const RoutingPercentileCutoffsSchema = z
-  .object({
-    p50: z.number().optional(),
-    p75: z.number().optional(),
-    p90: z.number().optional(),
-    p99: z.number().optional(),
-  })
-  .strict();
-
-const OpenRouterRoutingSchema = z
-  .object({
-    allow_fallbacks: z.boolean().optional(),
-    require_parameters: z.boolean().optional(),
-    data_collection: z.enum(["deny", "allow"]).optional(),
-    zdr: z.boolean().optional(),
-    enforce_distillable_text: z.boolean().optional(),
-    order: z.array(z.string()).optional(),
-    only: z.array(z.string()).optional(),
-    ignore: z.array(z.string()).optional(),
-    quantizations: z.array(z.string()).optional(),
-    sort: z
-      .union([
-        z.string(),
-        z
-          .object({
-            by: z.string().optional(),
-            partition: z.string().nullable().optional(),
-          })
-          .strict(),
-      ])
-      .optional(),
-    max_price: z
-      .object({
-        prompt: z.union([z.number(), z.string()]).optional(),
-        completion: z.union([z.number(), z.string()]).optional(),
-        image: z.union([z.number(), z.string()]).optional(),
-        audio: z.union([z.number(), z.string()]).optional(),
-        request: z.union([z.number(), z.string()]).optional(),
-      })
-      .strict()
-      .optional(),
-    preferred_min_throughput: z.union([z.number(), RoutingPercentileCutoffsSchema]).optional(),
-    preferred_max_latency: z.union([z.number(), RoutingPercentileCutoffsSchema]).optional(),
-  } satisfies Record<keyof OpenRouterRouting, z.ZodType>)
-  .strict();
-
-const VercelGatewayRoutingSchema = z
-  .object({
-    only: z.array(z.string()).optional(),
-    order: z.array(z.string()).optional(),
-  } satisfies Record<keyof VercelGatewayRouting, z.ZodType>)
-  .strict();
-
-const ModelCompatSchema = z
-  .object({
-    /** Whether the provider supports the `store` field. Default: auto-detected from URL. */
-    supportsStore: z.boolean().optional(),
-    /** Whether provider accepts prompt-cache/session affinity keys. */
-    supportsPromptCacheKey: z.boolean().optional(),
-    /** Opts this model into stored HTTP continuation on a verified compatible endpoint. */
-    supportsResponsesContinuation: z.boolean().optional(),
-    /** Whether the provider supports the `developer` role (vs `system`). Default: auto-detected from URL. */
-    supportsDeveloperRole: z.boolean().optional(),
-    /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
-    supportsReasoningEffort: z.boolean().optional(),
-    /** Whether the model accepts the `temperature` parameter. Default: true. */
-    supportsTemperature: z.boolean().optional(),
-    /**
-     * Whether the provider honors top-level `instructions`. Defaults to true only for verified
-     * native routes (OpenAI, xAI); every other route defaults to false and embeds the system
-     * prompt in `input` unless set true here after verifying against that endpoint.
-     */
-    supportsInstructions: z.boolean().optional(),
-    /**
-     * Whether the provider supports `stream_options: { include_usage: true }` for token usage in
-     * streaming responses. Default: true.
-     */
-    supportsUsageInStreaming: z.boolean().optional(),
-    /** Whether this model supports tool/function calling. */
-    supportsTools: z.boolean().optional(),
-    /** Code-mode tier consumed by `tools.codeMode.enabled: "auto"`; absent means "capable". */
-    codeMode: z.enum(["preferred", "capable"]).optional(),
-    /** Whether the provider supports the `strict` field in tool definitions. Default: true. */
-    supportsStrictMode: z.boolean().optional(),
-    /**
-     * Whether the provider supports JSON Schema through `response_format`. Default: false for
-     * unknown compatible endpoints.
-     */
-    supportsJsonSchemaResponseFormat: z.boolean().optional(),
-    /** Whether all message parts must be coerced to plain strings. */
-    requiresStringContent: z.boolean().optional(),
-    /** Whether unknown message payload keys must be stripped before requests. */
-    strictMessageKeys: z.boolean().optional(),
-    /** Reasoning detail block types safe to expose in visible transcripts. */
-    visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
-    /** Provider-accepted reasoning effort labels. */
-    supportedReasoningEfforts: z.array(z.string().min(1)).optional(),
-    /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
-    reasoningEffortMap: z.record(z.string().min(1), z.string().min(1)).optional(),
-    /** Which field to use for max tokens. Default: auto-detected from URL. */
-    maxTokensField: z
-      .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
-      .optional(),
-    /** Reasoning/thinking payload dialect for provider-compatible APIs. */
-    thinkingFormat: z.enum(MODEL_THINKING_FORMATS).optional(),
-    /** Whether tool results require the `name` field. Default: auto-detected from URL. */
-    requiresToolResultName: z.boolean().optional(),
-    /**
-     * Whether a user message after tool results requires an assistant message in between. Default:
-     * auto-detected from URL.
-     */
-    requiresAssistantAfterToolResult: z.boolean().optional(),
-    /**
-     * Whether thinking blocks must be converted to text blocks with <thinking> delimiters.
-     * Default: auto-detected from URL.
-     */
-    requiresThinkingAsText: z.boolean().optional(),
-    /**
-     * Whether all replayed assistant messages must include an empty reasoning_content field when
-     * reasoning is enabled. Default: auto-detected from URL.
-     */
-    requiresReasoningContentOnAssistantMessages: z.boolean().optional(),
-    /** Named tool-schema profile used by provider adapters. */
-    toolSchemaProfile: z.string().optional(),
-    /** JSON Schema keywords rejected by this provider's tool schema validator. */
-    unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
-    /** Encoding expected for tool-call arguments in provider payloads. */
-    toolCallArgumentsEncoding: z.string().optional(),
-    /** Whether OpenAI-style calls must be reshaped to Anthropic-compatible tool payloads. */
-    requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
-    /** OpenRouter-specific routing preferences. Only used when baseUrl points to OpenRouter. */
-    openRouterRouting: OpenRouterRoutingSchema.optional(),
-    /** Vercel AI Gateway routing preferences. Only used when baseUrl points to Vercel AI Gateway. */
-    vercelGatewayRouting: VercelGatewayRoutingSchema.optional(),
-    /** Whether z.ai supports top-level `tool_stream: true` for streaming tool call deltas. Default: false. */
-    zaiToolStream: z.boolean().optional(),
-    /**
-     * Cache control convention for prompt caching. "anthropic" applies Anthropic-style
-     * `cache_control` markers to the system prompt, last tool definition, and last user/assistant
-     * text content.
-     */
-    cacheControlFormat: z.literal("anthropic").optional(),
-    /**
-     * Whether to send known session-affinity headers (`session_id`, `x-client-request-id`,
-     * `x-session-affinity`) from `options.sessionId` when caching is enabled. Default: false.
-     */
-    sendSessionAffinityHeaders: z.boolean().optional(),
-    /**
-     * Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when
-     * caching is enabled. Default: true.
-     */
-    sendSessionIdHeader: z.boolean().optional(),
-    /**
-     * Whether the provider accepts per-tool `eager_input_streaming`. When false, the Anthropic
-     * provider omits `tools[].eager_input_streaming` and sends the legacy
-     * `fine-grained-tool-streaming-2025-05-14` beta header for tool-enabled requests. Default:
-     * true.
-     */
-    supportsEagerToolInputStreaming: z.boolean().optional(),
-    /**
-     * Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"`
-     * or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true. Whether
-     * the provider supports `prompt_cache_retention: "24h"`. Default: true. Whether the provider
-     * supports Anthropic long cache retention (`cache_control.ttl: "1h"`). Default: true.
-     */
-    supportsLongCacheRetention: z.boolean().optional(),
-  })
-  .strict()
-  .optional();
-
 const ConfiguredProviderRequestTlsSchema = z
-  .object({
+  .strictObject({
     ca: SecretInputSchema.optional().register(sensitive),
     cert: SecretInputSchema.optional().register(sensitive),
     key: SecretInputSchema.optional().register(sensitive),
@@ -369,48 +170,37 @@ const ConfiguredProviderRequestTlsSchema = z
     serverName: z.string().optional(),
     insecureSkipVerify: z.boolean().optional(),
   })
-  .strict()
   .optional();
 
 const ConfiguredProviderRequestAuthSchema = z
   .union([
-    z
-      .object({
-        mode: z.literal("provider-default"),
-      })
-      .strict(),
-    z
-      .object({
-        mode: z.literal("authorization-bearer"),
-        token: SecretInputSchema.register(sensitive),
-      })
-      .strict(),
-    z
-      .object({
-        mode: z.literal("header"),
-        headerName: z.string().min(1),
-        value: SecretInputSchema.register(sensitive),
-        prefix: z.string().optional(),
-      })
-      .strict(),
+    z.strictObject({
+      mode: z.literal("provider-default"),
+    }),
+    z.strictObject({
+      mode: z.literal("authorization-bearer"),
+      token: SecretInputSchema.register(sensitive),
+    }),
+    z.strictObject({
+      mode: z.literal("header"),
+      headerName: z.string().min(1),
+      value: SecretInputSchema.register(sensitive),
+      prefix: z.string().optional(),
+    }),
   ])
   .optional();
 
 const ConfiguredProviderRequestProxySchema = z
   .union([
-    z
-      .object({
-        mode: z.literal("env-proxy"),
-        tls: ConfiguredProviderRequestTlsSchema,
-      })
-      .strict(),
-    z
-      .object({
-        mode: z.literal("explicit-proxy"),
-        url: z.string().min(1),
-        tls: ConfiguredProviderRequestTlsSchema,
-      })
-      .strict(),
+    z.strictObject({
+      mode: z.literal("env-proxy"),
+      tls: ConfiguredProviderRequestTlsSchema,
+    }),
+    z.strictObject({
+      mode: z.literal("explicit-proxy"),
+      url: z.string().min(1),
+      tls: ConfiguredProviderRequestTlsSchema,
+    }),
   ])
   .optional();
 
@@ -421,116 +211,99 @@ const ConfiguredProviderRequestFields = {
   tls: ConfiguredProviderRequestTlsSchema,
 };
 
-const ConfiguredProviderRequestSchema = z
-  .object(ConfiguredProviderRequestFields)
-  .strict()
-  .optional();
+const ConfiguredProviderRequestSchema = z.strictObject(ConfiguredProviderRequestFields).optional();
 
 const ConfiguredModelProviderRequestSchema = z
-  .object({
+  .strictObject({
     ...ConfiguredProviderRequestFields,
     allowPrivateNetwork: z.boolean().optional(),
   })
-  .strict()
   .optional();
 
-const ModelImageInputSchema = z
-  .object({
-    maxBytes: z.number().int().positive().optional(),
-    maxPixels: z.number().int().positive().optional(),
-    maxSidePx: z.number().int().positive().optional(),
-    preferredSidePx: z.number().int().positive().optional(),
-    tokenMode: z.union([z.literal("tile"), z.literal("detail"), z.literal("provider")]).optional(),
-  })
-  .strict();
+const ModelImageInputSchema = z.strictObject({
+  maxBytes: z.number().int().positive().optional(),
+  maxPixels: z.number().int().positive().optional(),
+  maxSidePx: z.number().int().positive().optional(),
+  preferredSidePx: z.number().int().positive().optional(),
+  tokenMode: z.union([z.literal("tile"), z.literal("detail"), z.literal("provider")]).optional(),
+});
 
-const ModelMediaInputSchema = z
-  .object({
-    image: ModelImageInputSchema.optional(),
-  })
-  .strict();
+const ModelMediaInputSchema = z.strictObject({
+  image: ModelImageInputSchema.optional(),
+});
 
 // Mirrors the runtime ThinkingLevelMap contract (model-registry TypeBox schema). Persisted model
 // entries carry thinkingLevelMap, so the strict config schema must accept it or updateConfig rolls back.
 const ThinkingLevelMapValueSchema = z.string().nullable();
-const ThinkingLevelMapSchema = z
-  .object({
-    off: ThinkingLevelMapValueSchema.optional(),
-    minimal: ThinkingLevelMapValueSchema.optional(),
-    low: ThinkingLevelMapValueSchema.optional(),
-    medium: ThinkingLevelMapValueSchema.optional(),
-    high: ThinkingLevelMapValueSchema.optional(),
-    xhigh: ThinkingLevelMapValueSchema.optional(),
-    max: ThinkingLevelMapValueSchema.optional(),
-  })
-  .strict();
+const ThinkingLevelMapSchema = z.strictObject({
+  off: ThinkingLevelMapValueSchema.optional(),
+  minimal: ThinkingLevelMapValueSchema.optional(),
+  low: ThinkingLevelMapValueSchema.optional(),
+  medium: ThinkingLevelMapValueSchema.optional(),
+  high: ThinkingLevelMapValueSchema.optional(),
+  xhigh: ThinkingLevelMapValueSchema.optional(),
+  max: ThinkingLevelMapValueSchema.optional(),
+});
 
-const ModelDefinitionSchema = z
-  .object({
-    /** Provider-facing model id. */
-    id: z.string().min(1),
-    /** Human-readable display name. */
-    name: z.string().min(1),
-    /** Optional API adapter override for this model. */
-    api: ModelApiSchema.optional(),
-    /** Optional base URL override for this model. */
-    baseUrl: z.string().min(1).optional(),
-    reasoning: z.boolean().optional(),
-    input: z
-      .array(
-        z.union([z.literal("text"), z.literal("image"), z.literal("video"), z.literal("audio")]),
-      )
-      .optional(),
-    cost: z
-      .object({
-        input: z.number().optional(),
-        output: z.number().optional(),
-        cacheRead: z.number().optional(),
-        cacheWrite: z.number().optional(),
-        tieredPricing: z
-          .array(
-            z
-              .object({
-                input: z.number(),
-                output: z.number(),
-                cacheRead: z.number(),
-                cacheWrite: z.number(),
-                range: z.union([z.tuple([z.number(), z.number()]), z.tuple([z.number()])]),
-              })
-              .strict(),
-          )
-          .optional(),
-      })
-      .strict()
-      .optional(),
-    /** Provider/native maximum context window in tokens. */
-    contextWindow: z.number().positive().optional(),
-    /**
-     * Optional effective runtime cap used for compaction/session budgeting.
-     * Keeps provider/native contextWindow metadata intact while letting configs
-     * prefer a smaller practical window.
-     */
-    contextTokens: z.number().int().positive().optional(),
-    maxTokens: z.number().positive().optional(),
-    /** Maps OpenClaw thinking levels to provider/model-specific values. */
-    thinkingLevelMap: ThinkingLevelMapSchema.optional(),
-    /** Provider-specific request/runtime parameters passed through to provider plugins. */
-    params: z.record(z.string(), z.unknown()).optional(),
-    /** Optional agent execution runtime override for this provider/model pair. */
-    agentRuntime: AgentRuntimePolicySchema,
-    /** Static headers merged into requests for this model. */
-    headers: z.record(z.string(), z.string()).optional(),
-    /** Provider compatibility flags for payload shaping and feature gating. */
-    compat: ModelCompatSchema,
-    /** Media input limits used by routing and preflight compression. */
-    mediaInput: ModelMediaInputSchema.optional(),
-    /** Metadata source marker for models added by CLI/catalog tooling. */
-    metadataSource: z.literal("models-add").optional(),
-  })
-  .strict();
+const ModelDefinitionSchema = z.strictObject({
+  /** Provider-facing model id. */
+  id: z.string().min(1),
+  /** Human-readable display name. */
+  name: z.string().min(1),
+  /** Optional API adapter override for this model. */
+  api: ModelApiSchema.optional(),
+  /** Optional base URL override for this model. */
+  baseUrl: z.string().min(1).optional(),
+  reasoning: z.boolean().optional(),
+  input: z
+    .array(z.union([z.literal("text"), z.literal("image"), z.literal("video"), z.literal("audio")]))
+    .optional(),
+  cost: z
+    .strictObject({
+      input: z.number().optional(),
+      output: z.number().optional(),
+      cacheRead: z.number().optional(),
+      cacheWrite: z.number().optional(),
+      tieredPricing: z
+        .array(
+          z.strictObject({
+            input: z.number(),
+            output: z.number(),
+            cacheRead: z.number(),
+            cacheWrite: z.number(),
+            range: z.union([z.tuple([z.number(), z.number()]), z.tuple([z.number()])]),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
+  /** Provider/native maximum context window in tokens. */
+  contextWindow: z.number().positive().optional(),
+  /**
+   * Optional effective runtime cap used for compaction/session budgeting.
+   * Keeps provider/native contextWindow metadata intact while letting configs
+   * prefer a smaller practical window.
+   */
+  contextTokens: z.number().int().positive().optional(),
+  maxTokens: z.number().positive().optional(),
+  /** Maps OpenClaw thinking levels to provider/model-specific values. */
+  thinkingLevelMap: ThinkingLevelMapSchema.optional(),
+  /** Provider-specific request/runtime parameters passed through to provider plugins. */
+  params: z.record(z.string(), z.unknown()).optional(),
+  /** Optional agent execution runtime override for this provider/model pair. */
+  agentRuntime: AgentRuntimePolicySchema,
+  /** Static headers merged into requests for this model. */
+  headers: z.record(z.string(), z.string()).optional(),
+  /** Provider compatibility flags for payload shaping and feature gating. */
+  compat: ModelCompatSchema,
+  /** Media input limits used by routing and preflight compression. */
+  mediaInput: ModelMediaInputSchema.optional(),
+  /** Metadata source marker for models added by CLI/catalog tooling. */
+  metadataSource: z.literal("models-add").optional(),
+});
 
 const ModelProviderLocalServiceSchema = z
-  .object({
+  .strictObject({
     /** Executable started before model requests are sent. */
     command: z.string().min(1),
     /** Arguments passed without shell expansion. */
@@ -546,44 +319,41 @@ const ModelProviderLocalServiceSchema = z
     /** Idle timeout in milliseconds before stopping the local service. */
     idleStopMs: z.number().int().nonnegative().optional(),
   })
-  .strict()
   .optional();
 
-const ModelProviderSchema = z
-  .object({
-    // Bundled provider overlays are materialized with an empty-string sentinel.
-    // ModelProvidersSchema below still rejects empty baseUrl values for custom providers.
-    baseUrl: z.string().optional(),
-    /** API key or secret reference for this provider. */
-    apiKey: SecretInputSchema.optional().register(sensitive),
-    /** Authentication mode used when resolving credentials for this provider. */
-    auth: z
-      .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
-      .optional(),
-    /** Default API adapter for models under this provider. */
-    api: ModelApiSchema.optional(),
-    /** Provider-level default max output tokens. */
-    maxTokens: z.number().positive().optional(),
-    /** Provider request timeout in seconds. */
-    timeoutSeconds: z.number().int().positive().optional(),
-    /** Optional provider deployment/API region used by provider plugins that expose regional endpoints. */
-    region: z.string().min(1).optional(),
-    injectNumCtxForOpenAICompat: z.boolean().optional(),
-    /** Provider-specific runtime parameters interpreted by provider plugins. */
-    params: z.record(z.string(), z.unknown()).optional(),
-    /** Optional default agent execution runtime for models under this provider. */
-    agentRuntime: AgentRuntimePolicySchema,
-    /** Optional local service to start before calling this provider. */
-    localService: ModelProviderLocalServiceSchema,
-    /** Secret-bearing headers merged into provider requests. */
-    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
-    /** Whether default Authorization header injection is enabled. */
-    authHeader: z.boolean().optional(),
-    /** Provider request transport/retry overrides. */
-    request: ConfiguredModelProviderRequestSchema,
-    models: z.array(ModelDefinitionSchema).optional(),
-  })
-  .strict();
+const ModelProviderSchema = z.strictObject({
+  // Bundled provider overlays are materialized with an empty-string sentinel.
+  // ModelProvidersSchema below still rejects empty baseUrl values for custom providers.
+  baseUrl: z.string().optional(),
+  /** API key or secret reference for this provider. */
+  apiKey: SecretInputSchema.optional().register(sensitive),
+  /** Authentication mode used when resolving credentials for this provider. */
+  auth: z
+    .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
+    .optional(),
+  /** Default API adapter for models under this provider. */
+  api: ModelApiSchema.optional(),
+  /** Provider-level default max output tokens. */
+  maxTokens: z.number().positive().optional(),
+  /** Provider request timeout in seconds. */
+  timeoutSeconds: z.number().int().positive().optional(),
+  /** Optional provider deployment/API region used by provider plugins that expose regional endpoints. */
+  region: z.string().min(1).optional(),
+  injectNumCtxForOpenAICompat: z.boolean().optional(),
+  /** Provider-specific runtime parameters interpreted by provider plugins. */
+  params: z.record(z.string(), z.unknown()).optional(),
+  /** Optional default agent execution runtime for models under this provider. */
+  agentRuntime: AgentRuntimePolicySchema,
+  /** Optional local service to start before calling this provider. */
+  localService: ModelProviderLocalServiceSchema,
+  /** Secret-bearing headers merged into provider requests. */
+  headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
+  /** Whether default Authorization header injection is enabled. */
+  authHeader: z.boolean().optional(),
+  /** Provider request transport/retry overrides. */
+  request: ConfiguredModelProviderRequestSchema,
+  models: z.array(ModelDefinitionSchema).optional(),
+});
 
 const ModelProvidersSchema = z
   .record(z.string(), ModelProviderSchema)
@@ -612,7 +382,7 @@ const ModelProvidersSchema = z
   });
 
 const ModelCatalogRefreshConfigSchema = z
-  .object({
+  .strictObject({
     /** Fetch model catalog updates from the hosted OpenClaw catalog. Default: true. */
     enabled: z.boolean().optional(),
     /** Override the hosted catalog URL (HTTPS mirrors, or localhost HTTP for testing). */
@@ -620,16 +390,13 @@ const ModelCatalogRefreshConfigSchema = z
       .string()
       .refine(
         (value) => {
-          try {
-            const parsed = new URL(value);
-            return (
-              parsed.protocol === "https:" ||
+          const parsed = URL.parse(value);
+          return (
+            parsed !== null &&
+            (parsed.protocol === "https:" ||
               (parsed.protocol === "http:" &&
-                ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname))
-            );
-          } catch {
-            return false;
-          }
+                ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)))
+          );
         },
         {
           message: "models.catalogRefresh.url must use https, or http on localhost",
@@ -637,28 +404,25 @@ const ModelCatalogRefreshConfigSchema = z
       )
       .optional(),
   })
-  .strict()
   .optional();
 
 export const ModelsConfigSchema = z
-  .object({
+  .strictObject({
     /** Merge provider config with bundled catalogs or replace bundled catalogs entirely. */
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: ModelProvidersSchema.optional(),
     /** Hosted model catalog refresh settings. */
     catalogRefresh: ModelCatalogRefreshConfigSchema,
   })
-  .strict()
   .optional();
 
 export const IdentitySchema = z
-  .object({
+  .strictObject({
     name: z.string().optional(),
     theme: z.string().optional(),
     emoji: z.string().optional(),
     avatar: z.string().optional(),
   })
-  .strict()
   .optional();
 
 export const ReplyToModeSchema = z.union([
@@ -679,30 +443,24 @@ export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
 export const ContextVisibilityModeSchema = z.enum(["all", "allowlist", "allowlist_quote"]);
 
-export const BlockStreamingCoalesceSchema = z
-  .object({
-    minChars: z.number().int().positive().optional(),
-    maxChars: z.number().int().positive().optional(),
-    idleMs: z.number().int().nonnegative().optional(),
-  })
-  .strict();
+export const BlockStreamingCoalesceSchema = z.strictObject({
+  minChars: z.number().int().positive().optional(),
+  maxChars: z.number().int().positive().optional(),
+  idleMs: z.number().int().nonnegative().optional(),
+});
 
 export const TextChunkModeSchema = z.enum(["length", "newline"]);
 
-export const ChannelStreamingBlockSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    coalesce: BlockStreamingCoalesceSchema.optional(),
-  })
-  .strict();
+export const ChannelStreamingBlockSchema = z.strictObject({
+  enabled: z.boolean().optional(),
+  coalesce: BlockStreamingCoalesceSchema.optional(),
+});
 
 /** Delivery-only nested streaming config for channels without preview modes. */
-export const ChannelDeliveryStreamingConfigSchema = z
-  .object({
-    chunkMode: TextChunkModeSchema.optional(),
-    block: ChannelStreamingBlockSchema.optional(),
-  })
-  .strict();
+export const ChannelDeliveryStreamingConfigSchema = z.strictObject({
+  chunkMode: TextChunkModeSchema.optional(),
+  block: ChannelStreamingBlockSchema.optional(),
+});
 
 export const ReplyRuntimeConfigSchemaShape = {
   historyLimit: z.number().int().min(0).optional(),
@@ -715,23 +473,20 @@ export const ReplyRuntimeConfigSchemaShape = {
   mediaMaxMb: z.number().positive().optional(),
 };
 
-export const BlockStreamingChunkSchema = z
-  .object({
-    minChars: z.number().int().positive().optional(),
-    maxChars: z.number().int().positive().optional(),
-    breakPreference: z
-      .union([z.literal("paragraph"), z.literal("newline"), z.literal("sentence")])
-      .optional(),
-  })
-  .strict();
+export const BlockStreamingChunkSchema = z.strictObject({
+  minChars: z.number().int().positive().optional(),
+  maxChars: z.number().int().positive().optional(),
+  breakPreference: z
+    .union([z.literal("paragraph"), z.literal("newline"), z.literal("sentence")])
+    .optional(),
+});
 
 const MarkdownTableModeSchema = z.enum(["off", "bullets", "code", "block"]);
 
 export const MarkdownConfigSchema = z
-  .object({
+  .strictObject({
     tables: MarkdownTableModeSchema.optional(),
   })
-  .strict()
   .optional();
 
 export const TtsProviderSchema = z.string().min(1);
@@ -751,19 +506,17 @@ const TtsProviderConfigSchema = z
       z.record(z.string(), z.unknown()),
     ]),
   );
-const TtsPersonaSchema = z
-  .object({
-    label: z.string().optional(),
-    description: z.string().optional(),
-    provider: TtsProviderSchema.optional(),
-    fallbackPolicy: z
-      .union([z.literal("preserve-persona"), z.literal("provider-defaults"), z.literal("fail")])
-      .optional(),
-    providers: z.record(z.string(), TtsProviderConfigSchema).optional(),
-  })
-  .strict();
+const TtsPersonaSchema = z.strictObject({
+  label: z.string().optional(),
+  description: z.string().optional(),
+  provider: TtsProviderSchema.optional(),
+  fallbackPolicy: z
+    .union([z.literal("preserve-persona"), z.literal("provider-defaults"), z.literal("fail")])
+    .optional(),
+  providers: z.record(z.string(), TtsProviderConfigSchema).optional(),
+});
 export const TtsConfigSchema = z
-  .object({
+  .strictObject({
     auto: TtsAutoSchema.optional(),
     enabled: z.boolean().optional(),
     mode: TtsModeSchema.optional(),
@@ -772,7 +525,7 @@ export const TtsConfigSchema = z
     personas: z.record(z.string(), TtsPersonaSchema).optional(),
     summaryModel: z.string().optional(),
     modelOverrides: z
-      .object({
+      .strictObject({
         enabled: z.boolean().optional(),
         allowText: z.boolean().optional(),
         allowProvider: z.boolean().optional(),
@@ -782,22 +535,18 @@ export const TtsConfigSchema = z
         allowNormalization: z.boolean().optional(),
         allowSeed: z.boolean().optional(),
       })
-      .strict()
       .optional(),
     providers: z.record(z.string(), TtsProviderConfigSchema).optional(),
     maxTextLength: z.number().int().min(1).optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
   })
-  .strict()
   .optional();
 
-export const HumanDelaySchema = z
-  .object({
-    mode: z.union([z.literal("off"), z.literal("natural"), z.literal("custom")]).optional(),
-    minMs: z.number().int().nonnegative().optional(),
-    maxMs: z.number().int().nonnegative().optional(),
-  })
-  .strict();
+export const HumanDelaySchema = z.strictObject({
+  mode: z.union([z.literal("off"), z.literal("natural"), z.literal("custom")]).optional(),
+  minMs: z.number().int().nonnegative().optional(),
+  maxMs: z.number().int().nonnegative().optional(),
+});
 
 /**
  * Closed set of sender-policy/allowFrom dependency violations. Both cases drop
@@ -864,7 +613,7 @@ export const ExecutableTokenSchema = z
 const MediaUnderstandingScopeSchema = createAllowDenyChannelRulesSchema();
 
 const MediaUnderstandingAttachmentsSchema = z
-  .object({
+  .strictObject({
     /** Select the first matching attachment or process multiple. */
     mode: z.union([z.literal("first"), z.literal("all")]).optional(),
     /** Max number of attachments to process (default: 1). */
@@ -874,7 +623,6 @@ const MediaUnderstandingAttachmentsSchema = z
       .union([z.literal("first"), z.literal("last"), z.literal("path"), z.literal("url")])
       .optional(),
   })
-  .strict()
   .optional();
 
 const MediaUnderstandingCapabilitiesSchema = z
@@ -904,7 +652,7 @@ const MediaUnderstandingRuntimeFields = {
 };
 
 const MediaUnderstandingModelSchema = z
-  .object({
+  .strictObject({
     /** provider API id (e.g. openai, google). */
     provider: z.string().optional(),
     /** Model id for provider-based understanding. */
@@ -927,11 +675,10 @@ const MediaUnderstandingModelSchema = z
     /** Preferred profile id if multiple are available. */
     preferredProfile: z.string().optional(),
   })
-  .strict()
   .optional();
 
 const ToolsMediaCapabilitySchema = z
-  .object({
+  .strictObject({
     /** Enable media understanding when models are configured. */
     enabled: z.boolean().optional(),
     /** Prefer a matching shared model entry. */
@@ -946,7 +693,6 @@ const ToolsMediaCapabilitySchema = z
     /** Attachment selection policy. */
     attachments: MediaUnderstandingAttachmentsSchema,
   })
-  .strict()
   .optional();
 
 const ToolsMediaAudioSchema = ToolsMediaCapabilitySchema.unwrap()
@@ -965,27 +711,24 @@ const ToolsMediaAudioSchema = ToolsMediaCapabilitySchema.unwrap()
   .optional();
 
 export const ToolsMediaSchema = z
-  .object({
+  .strictObject({
     models: z.array(MediaUnderstandingModelSchema).optional(),
     concurrency: z.number().int().positive().optional(),
     image: ToolsMediaCapabilitySchema.optional(),
     audio: ToolsMediaAudioSchema.optional(),
     video: ToolsMediaCapabilitySchema.optional(),
   })
-  .strict()
   .optional();
-const LinkModelSchema = z
-  .object({
-    /** Use a CLI command for link processing. */
-    type: z.literal("cli").optional(),
-    command: z.string().min(1),
-    args: z.array(z.string()).optional(),
-    timeoutSeconds: z.number().int().positive().optional(),
-  })
-  .strict();
+const LinkModelSchema = z.strictObject({
+  /** Use a CLI command for link processing. */
+  type: z.literal("cli").optional(),
+  command: z.string().min(1),
+  args: z.array(z.string()).optional(),
+  timeoutSeconds: z.number().int().positive().optional(),
+});
 
 export const ToolsLinksSchema = z
-  .object({
+  .strictObject({
     /** Enable link understanding when models are configured. */
     enabled: z.boolean().optional(),
     scope: MediaUnderstandingScopeSchema,
@@ -995,7 +738,4 @@ export const ToolsLinksSchema = z
     /** Ordered model list (fallbacks in order). */
     models: z.array(LinkModelSchema).optional(),
   })
-  .strict()
   .optional();
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

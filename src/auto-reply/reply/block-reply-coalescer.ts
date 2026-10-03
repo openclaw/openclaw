@@ -1,4 +1,3 @@
-// Coalesces buffered block-streaming payloads into sendable reply parts.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   copyReplyPayloadMetadata,
@@ -169,12 +168,9 @@ export function createBlockReplyCoalescer(params: {
     }
 
     const replyToConflict = Boolean(
-      bufferText &&
-      payload.replyToId &&
-      (!bufferedPayload?.replyToId || bufferedPayload.replyToId !== payload.replyToId),
+      payload.replyToId && bufferedPayload?.replyToId !== payload.replyToId,
     );
     const visibilityConflict =
-      bufferText &&
       bufferedPayload &&
       (bufferedPayload.isReasoning !== payload.isReasoning ||
         bufferedPayload.isCommentary !== payload.isCommentary ||

@@ -94,46 +94,44 @@ function loadFacadeModule(): FacadeModule {
 }
 
 /** Build a QA bus target string from conversation and optional thread parts. */
-export const buildQaTarget: FacadeModule["buildQaTarget"] = ((...args) =>
-  loadFacadeModule().buildQaTarget(...args)) as FacadeModule["buildQaTarget"];
+export const buildQaTarget: FacadeModule["buildQaTarget"] = (...args) =>
+  loadFacadeModule().buildQaTarget(...args);
 
 /** Format a QA bus target string for display and CLI output. */
-export const formatQaTarget: FacadeModule["buildQaTarget"] = ((...args) =>
-  loadFacadeModule().buildQaTarget(...args)) as FacadeModule["buildQaTarget"];
+export const formatQaTarget: FacadeModule["buildQaTarget"] = (...args) =>
+  loadFacadeModule().buildQaTarget(...args);
 
 /** Create a QA bus thread through the bundled QA channel facade. */
-export const createQaBusThread: FacadeModule["createQaBusThread"] = ((...args) =>
-  loadFacadeModule().createQaBusThread(...args)) as FacadeModule["createQaBusThread"];
+export const createQaBusThread: FacadeModule["createQaBusThread"] = (...args) =>
+  loadFacadeModule().createQaBusThread(...args);
 
 /** Delete a QA bus message through the bundled QA channel facade. */
-export const deleteQaBusMessage: FacadeModule["deleteQaBusMessage"] = ((...args) =>
-  loadFacadeModule().deleteQaBusMessage(...args)) as FacadeModule["deleteQaBusMessage"];
+export const deleteQaBusMessage: FacadeModule["deleteQaBusMessage"] = (...args) =>
+  loadFacadeModule().deleteQaBusMessage(...args);
 
 /** Edit a QA bus message through the bundled QA channel facade. */
-export const editQaBusMessage: FacadeModule["editQaBusMessage"] = ((...args) =>
-  loadFacadeModule().editQaBusMessage(...args)) as FacadeModule["editQaBusMessage"];
+export const editQaBusMessage: FacadeModule["editQaBusMessage"] = (...args) =>
+  loadFacadeModule().editQaBusMessage(...args);
 
 /** Read the current QA bus state snapshot. */
-export const getQaBusState: FacadeModule["getQaBusState"] = ((...args) =>
-  loadFacadeModule().getQaBusState(...args)) as FacadeModule["getQaBusState"];
+export const getQaBusState: FacadeModule["getQaBusState"] = (...args) =>
+  loadFacadeModule().getQaBusState(...args);
 
 /** Inject an inbound QA bus message for channel and gateway tests. */
-export const injectQaBusInboundMessage: FacadeModule["injectQaBusInboundMessage"] = ((...args) =>
-  loadFacadeModule().injectQaBusInboundMessage(
-    ...args,
-  )) as FacadeModule["injectQaBusInboundMessage"];
+export const injectQaBusInboundMessage: FacadeModule["injectQaBusInboundMessage"] = (...args) =>
+  loadFacadeModule().injectQaBusInboundMessage(...args);
 
 /** Normalize a user-provided QA target string when possible. */
-export const normalizeQaTarget: FacadeModule["normalizeQaTarget"] = ((...args) =>
-  loadFacadeModule().normalizeQaTarget(...args)) as FacadeModule["normalizeQaTarget"];
+export const normalizeQaTarget: FacadeModule["normalizeQaTarget"] = (...args) =>
+  loadFacadeModule().normalizeQaTarget(...args);
 
 /** Parse a QA target string into chat type, conversation id, and optional thread id. */
-export const parseQaTarget: FacadeModule["parseQaTarget"] = ((...args) =>
-  loadFacadeModule().parseQaTarget(...args)) as FacadeModule["parseQaTarget"];
+export const parseQaTarget: FacadeModule["parseQaTarget"] = (...args) =>
+  loadFacadeModule().parseQaTarget(...args);
 
 /** Poll the QA bus for new messages from a cursor. */
-export const pollQaBus: FacadeModule["pollQaBus"] = ((...args) =>
-  loadFacadeModule().pollQaBus(...args)) as FacadeModule["pollQaBus"];
+export const pollQaBus: FacadeModule["pollQaBus"] = (...args) =>
+  loadFacadeModule().pollQaBus(...args);
 
 /** Lazy QA channel plugin object used by plugin loader tests. */
 export const qaChannelPlugin: FacadeModule["qaChannelPlugin"] = createLazyFacadeObjectValue(
@@ -141,21 +139,21 @@ export const qaChannelPlugin: FacadeModule["qaChannelPlugin"] = createLazyFacade
 );
 
 /** Add a reaction to a QA bus message. */
-export const reactToQaBusMessage: FacadeModule["reactToQaBusMessage"] = ((...args) =>
-  loadFacadeModule().reactToQaBusMessage(...args)) as FacadeModule["reactToQaBusMessage"];
+export const reactToQaBusMessage: FacadeModule["reactToQaBusMessage"] = (...args) =>
+  loadFacadeModule().reactToQaBusMessage(...args);
 
 /** Read one QA bus message by id. */
-export const readQaBusMessage: FacadeModule["readQaBusMessage"] = ((...args) =>
-  loadFacadeModule().readQaBusMessage(...args)) as FacadeModule["readQaBusMessage"];
+export const readQaBusMessage: FacadeModule["readQaBusMessage"] = (...args) =>
+  loadFacadeModule().readQaBusMessage(...args);
 
 /** Search QA bus messages using the bundled channel facade. */
-export const searchQaBusMessages: FacadeModule["searchQaBusMessages"] = ((...args) =>
-  loadFacadeModule().searchQaBusMessages(...args)) as FacadeModule["searchQaBusMessages"];
+export const searchQaBusMessages: FacadeModule["searchQaBusMessages"] = (...args) =>
+  loadFacadeModule().searchQaBusMessages(...args);
 
 /** Send an outbound QA bus message with optional attachments and tool calls. */
-export const sendQaBusMessage: FacadeModule["sendQaBusMessage"] = ((...args) =>
-  loadFacadeModule().sendQaBusMessage(...args)) as FacadeModule["sendQaBusMessage"];
+export const sendQaBusMessage: FacadeModule["sendQaBusMessage"] = (...args) =>
+  loadFacadeModule().sendQaBusMessage(...args);
 
 /** Install a test runtime implementation into the bundled QA channel facade. */
-export const setQaChannelRuntime: FacadeModule["setQaChannelRuntime"] = ((...args) =>
-  loadFacadeModule().setQaChannelRuntime(...args)) as FacadeModule["setQaChannelRuntime"];
+export const setQaChannelRuntime: FacadeModule["setQaChannelRuntime"] = (...args) =>
+  loadFacadeModule().setQaChannelRuntime(...args);

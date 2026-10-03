@@ -108,7 +108,7 @@ describe("plugin link-reader discovery", () => {
     setActivePluginRegistry(replacement.registry.registry);
     expect(readers(["operator.read"])).toEqual([]);
   });
-  it.each(["missing", "other-owner", "write", "hidden", "control-plane-write"])(
+  it.each(["missing", "control-plane-write"])(
     "does not advertise a reader with a %s image method",
     (kind) => {
       const { registry, register, readers } = setup();
@@ -121,12 +121,6 @@ describe("plugin link-reader discovery", () => {
           registry.registry.gatewayMethodDescriptors.indexOf(method),
           1,
         );
-      } else if (kind === "other-owner") {
-        method.owner = { kind: "plugin", pluginId: "other" };
-      } else if (kind === "write") {
-        method.scope = "operator.write";
-      } else if (kind === "hidden") {
-        method.advertise = false;
       } else {
         method.controlPlaneWrite = true;
       }

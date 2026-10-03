@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Check Madge Import Cycles script supports OpenClaw repository automation.
+import { ChildProcess } from "node:child_process";
+import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as ts from "typescript/unstable/ast";
@@ -8,7 +9,12 @@ import {
   collectStronglyConnectedComponents,
 } from "./lib/import-cycle-graph.ts";
 import { formatNativeTypeScriptDiagnostics } from "./lib/native-typescript-diagnostics.mts";
-import { createNativeTypeScriptProject } from "./lib/native-typescript.mts";
+import {
+  createNativeTypeScriptProject,
+  resolveInstalledNativeTypeScriptCompiler,
+  type NativeTypeScriptProject,
+} from "./lib/native-typescript.mts";
+import { visitModuleSpecifiers } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = ["src", "extensions", "ui"] as const;
@@ -16,46 +22,80 @@ const sourceExtensions = [".ts"] as const;
 const ignoredPathPartPattern =
   /(^|\/)(node_modules|dist|build|coverage|\.artifacts|\.git|assets)(\/|$)/;
 
-function shouldSkipRepoPath(repoPath: string): boolean {
-  return ignoredPathPartPattern.test(repoPath);
-}
-
 function collectStaticModuleSpecifiers(sourceFile: ts.SourceFile): ts.StringLiteral[] {
   const specifiers: ts.StringLiteral[] = [];
-  const visit = (node: ts.Node) => {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-      specifiers.push(node.moduleSpecifier);
-    } else if (
-      ts.isExportDeclaration(node) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      specifiers.push(node.moduleSpecifier);
+  visitModuleSpecifiers(sourceFile, ({ kind, specifierNode }) => {
+    if ((kind === "import" || kind === "export") && ts.isStringLiteral(specifierNode)) {
+      specifiers.push(specifierNode);
     }
-    node.forEachChild(visit);
-  };
-  visit(sourceFile);
+  });
   return specifiers;
 }
 
-function createImportGraph(files: readonly string[]): Map<string, string[]> {
+async function createImportGraph(files: readonly string[]): Promise<Map<string, string[]>> {
   const configFileName = path.join(repoRoot, "tsconfig.madge-import-cycles.json");
   const absoluteToRepoPath = new Map(
     files.map((file): [string, string] => [path.resolve(repoRoot, file), file]),
   );
-  const session = createNativeTypeScriptProject({
-    cwd: repoRoot,
-    configFileName,
-    files: {
-      [configFileName]: JSON.stringify({
-        extends: "./tsconfig.json",
-        files: [...absoluteToRepoPath.keys()],
-        include: [],
-        exclude: [],
-      }),
-    },
-  });
+  const executable = resolveInstalledNativeTypeScriptCompiler().executable;
+  const observed: ChildProcess[] = [];
+  const compilers: { child: ChildProcess; closed: Promise<void> }[] = [];
+  const children = channel("child_process");
+  const observeCompiler = (message: unknown) => {
+    if (
+      message &&
+      typeof message === "object" &&
+      "process" in message &&
+      message.process instanceof ChildProcess
+    ) {
+      observed.push(message.process);
+    }
+  };
+  let session: NativeTypeScriptProject | undefined;
   try {
+    children.subscribe(observeCompiler);
+    try {
+      session = createNativeTypeScriptProject({
+        cwd: repoRoot,
+        configFileName,
+        files: {
+          [configFileName]: JSON.stringify({
+            extends: "./tsconfig.json",
+            files: [...absoluteToRepoPath.keys()],
+            include: [],
+            exclude: [],
+          }),
+        },
+      });
+    } finally {
+      children.unsubscribe(observeCompiler);
+      // Creation is synchronous: identify the spawned compiler before any event callback runs.
+      for (const child of observed.filter((candidate) => candidate.spawnfile === executable)) {
+        const closed = new Promise<void>((resolve, reject) => {
+          let failure: Error | undefined;
+          const onError = (error: Error) => {
+            failure ??= error;
+          };
+          child.on("error", onError);
+          child.once("close", () => {
+            child.off("error", onError);
+            if (failure && child.pid !== undefined) {
+              reject(failure);
+            } else {
+              resolve();
+            }
+          });
+        });
+        compilers.push({ child, closed });
+        // The synchronous transport unrefs its child; retain it until the real close event.
+        if (child.pid !== undefined) {
+          child.ref();
+        }
+      }
+    }
+    if (compilers.length !== 1 || compilers[0]?.child.pid === undefined) {
+      throw new Error("Native TypeScript did not expose exactly one compiler process");
+    }
     const { project } = session;
     const diagnostics = project.program.getConfigFileParsingDiagnostics();
     if (diagnostics.length) {
@@ -96,19 +136,26 @@ function createImportGraph(files: readonly string[]): Map<string, string[]> {
       ]),
     );
   } finally {
-    session.close();
+    try {
+      session?.close();
+    } finally {
+      // A synchronous spawn rejection has no OS child and may never emit close.
+      await Promise.all(
+        compilers.filter(({ child }) => child.pid !== undefined).map(({ closed }) => closed),
+      );
+    }
   }
 }
 
-function main(): number {
+async function main(): Promise<number> {
   const files = scanRoots.flatMap((root) =>
     collectSourceFiles(path.join(repoRoot, root), {
       repoRoot,
       sourceExtensions,
-      shouldSkipRepoPath,
+      shouldSkipRepoPath: (repoPath) => ignoredPathPartPattern.test(repoPath),
     }),
   );
-  const graph = createImportGraph(files);
+  const graph = await createImportGraph(files);
   const cycles = collectStronglyConnectedComponents(graph);
 
   console.log(`Madge import cycle check: ${cycles.length} cycle(s).`);
@@ -127,4 +174,4 @@ function main(): number {
   return 1;
 }
 
-process.exitCode = main();
+process.exitCode = await main();

@@ -81,7 +81,7 @@ const AGENT_ACTIVITY_SOFT_WARNING_MS = 30 * 60_000;
 function countGatewayListenerPids(portUsage: PortUsageLike): number {
   const pids = new Set<number>();
   for (const listener of portUsage.listeners) {
-    if (classifyPortListener(listener, portUsage.port) !== "gateway") {
+    if (classifyPortListener(listener) !== "gateway") {
       continue;
     }
     if (typeof listener.pid === "number" && Number.isFinite(listener.pid)) {
@@ -230,7 +230,7 @@ export async function appendStatusAllDiagnosis(params: {
 
   const lastErrClean = normalizeOptionalString(params.lastErr) ?? "";
   // Restart logs sometimes end with a single brace from truncated JSON; suppress that noise.
-  const isTrivialLastErr = lastErrClean.length < 8 || lastErrClean === "}" || lastErrClean === "{";
+  const isTrivialLastErr = lastErrClean.length < 8;
   if (lastErrClean && !isTrivialLastErr) {
     lines.push("");
     lines.push(muted("Gateway last log line:"));

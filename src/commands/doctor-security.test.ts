@@ -7,8 +7,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
-import { saveExecApprovals } from "../infra/exec-approvals-store.js";
-import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
+import {
+  saveExecApprovals,
+  testing as execApprovalsStoreTesting,
+} from "../infra/exec-approvals-store.test-support.js";
 import * as auditStore from "../secrets/audit-store.js";
 import { runSecretsAudit } from "../secrets/audit.js";
 import { readSecretStoreValue, writeSecretStoreEntry } from "../secrets/store/secret-store.js";

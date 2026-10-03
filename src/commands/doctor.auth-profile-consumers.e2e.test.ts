@@ -234,7 +234,7 @@ describe("doctor auth-profile consumers", () => {
                 modelPolicy: { allow: ["anthropic/*"] },
                 models: { "anthropic/test-model@claude-cli:work": { alias: "work-model" } },
               },
-              entries: { main: { default: true } },
+              entries: { main: {} },
             },
             auth: {
               profiles: {

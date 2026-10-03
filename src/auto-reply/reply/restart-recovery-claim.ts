@@ -329,15 +329,11 @@ export function createReplyRestartRecoveryClaimController(params: {
           restartRecoveryDeliveryRequestFingerprint: undefined,
           restartRecoveryDeliveryRunId: recoveryRunId,
           restartRecoveryDeliverySourceRunId: sourceTurnId,
-          restartRecoveryRequesterAccountId: sourceTurnId
-            ? normalizeOptionalString(params.requesterAccountId)
-            : undefined,
-          restartRecoveryRequesterSenderId: sourceTurnId
-            ? normalizeOptionalString(params.requesterSenderId)
-            : undefined,
+          restartRecoveryRequesterAccountId: normalizeOptionalString(params.requesterAccountId),
+          restartRecoveryRequesterSenderId: normalizeOptionalString(params.requesterSenderId),
           restartRecoverySameChannelThreadRequired:
-            sourceTurnId && params.sameChannelThreadRequired === true ? true : undefined,
-          restartRecoverySourceIngress: sourceTurnId ? "channel" : undefined,
+            params.sameChannelThreadRequired === true ? true : undefined,
+          restartRecoverySourceIngress: "channel",
           restartRecoverySourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           runtimeMs: undefined,
           startedAt: updatedAt,
@@ -497,11 +493,13 @@ export function createReplyRestartRecoveryClaimController(params: {
       {
         // Restart recovery can reuse this run id. Validate after async patch preparation,
         // inside the synchronous commit, so old cleanup cannot retire its successor's route.
-        assertCommitAllowed: () => {
-          assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-          if (params.isRestartAbort()) {
-            throw createAgentRunStaleLifecycleError();
-          }
+        workerGuard: {
+          assertCurrent: () => {
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            if (params.isRestartAbort()) {
+              throw createAgentRunStaleLifecycleError();
+            }
+          },
         },
       },
     );

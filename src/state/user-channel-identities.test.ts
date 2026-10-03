@@ -33,16 +33,18 @@ import {
   linkCanonicalUserProfileEmail,
   setCanonicalUserProfileRole,
 } from "./user-profile-writes.js";
+import {
+  linkEmail,
+  setDisplayName,
+  setUserProfileRole,
+  syncGitHubIdentity,
+} from "./user-profile-writes.worker.js";
 import { userProfilesDb } from "./user-profiles-internal.js";
 import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
-  linkEmail,
   resolveUserProfileId,
-  setDisplayName,
-  setUserProfileRole,
-  syncGitHubIdentity,
 } from "./user-profiles.js";
 import type { UserChannelIdentity } from "./user-profiles.types.js";
 

@@ -1158,24 +1158,51 @@ type OverrideViolation = {
   path: string;
 };
 
-// Maintainer-approved for the Bun-only npm plugin installer: pnpm overrides cannot
-// replace npm's bundled dependencies. Remove when npm 11.x ships refreshed bundles.
-// Exact paths, versions, and bundle markers keep this exception out of other trees.
-const NPM_11_20_0_BUNDLED_EXCEPTIONS = new Map([
-  ["node_modules/npm/node_modules/minimatch", "10.2.5"],
-  ["node_modules/npm/node_modules/brace-expansion", "5.0.9"],
-  ["node_modules/npm/node_modules/ip-address", "10.5.0"],
+type NpmBundledDependencyPolicy = {
+  allowMissingBundleMarker: boolean;
+  exceptions: Map<string, string>;
+};
+
+// Trusted release tooling validates frozen targets as well as current main. Keep each
+// reviewed npm tarball exact here until no supported frozen target can reference it.
+const NPM_BUNDLED_DEPENDENCY_POLICIES = new Map<string, NpmBundledDependencyPolicy>([
+  [
+    "11.20.0",
+    {
+      allowMissingBundleMarker: true,
+      exceptions: new Map([
+        ["node_modules/npm/node_modules/minimatch", "10.2.5"],
+        ["node_modules/npm/node_modules/brace-expansion", "5.0.9"],
+        ["node_modules/npm/node_modules/ip-address", "10.5.0"],
+      ]),
+    },
+  ],
+  [
+    "12.1.0",
+    {
+      allowMissingBundleMarker: false,
+      exceptions: new Map([
+        ["node_modules/npm/node_modules/minimatch", "10.2.5"],
+        ["node_modules/npm/node_modules/brace-expansion", "5.0.9"],
+        ["node_modules/npm/node_modules/ip-address", "10.5.0"],
+      ]),
+    },
+  ],
 ]);
 
 function isApprovedNpmBundledDependency(packages: UnknownRecord, lockPath: string) {
-  const expectedVersion = NPM_11_20_0_BUNDLED_EXCEPTIONS.get(lockPath);
   const npm = recordAt(packages, "node_modules/npm");
+  const npmVersion = typeof npm?.version === "string" ? npm.version : undefined;
+  const policy = npmVersion ? NPM_BUNDLED_DEPENDENCY_POLICIES.get(npmVersion) : undefined;
+  const expectedVersion = policy?.exceptions.get(lockPath);
   const dependency = recordAt(packages, lockPath);
   return (
     expectedVersion !== undefined &&
-    npm?.version === "11.20.0" &&
+    npm !== undefined &&
     (npm.name === undefined || npm.name === "npm") &&
-    dependency?.inBundle === true &&
+    dependency !== undefined &&
+    (dependency.inBundle === true ||
+      (policy?.allowMissingBundleMarker === true && dependency.inBundle === undefined)) &&
     dependency.version === expectedVersion &&
     (dependency.name === undefined || dependency.name === lockPath.split("/").at(-1))
   );
@@ -1621,9 +1648,12 @@ function normalizeNpmVersionDrift<T>(lockfile: T): T {
   if (!packages) {
     return lockfile;
   }
-  for (const metadata of Object.values(packages)) {
+  for (const [lockPath, metadata] of Object.entries(packages)) {
     if (!isRecord(metadata)) {
       continue;
+    }
+    if (metadata.inBundle === undefined && isApprovedNpmBundledDependency(packages, lockPath)) {
+      metadata.inBundle = true;
     }
     // npm versions and mutable registry metadata disagree on these package-lock
     // fields. None affect resolution, so keep generated npm locks stable.
@@ -1691,13 +1721,14 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
       ),
     );
     let npmBundleTarball: Buffer | undefined;
-    if (recordAt(recordAt(generated, "packages"), "node_modules/npm")?.version === "11.20.0") {
+    const npmVersion = recordAt(recordAt(generated, "packages"), "node_modules/npm")?.version;
+    if (typeof npmVersion === "string" && NPM_BUNDLED_DEPENDENCY_POLICIES.has(npmVersion)) {
       runNpm(
-        ["pack", "npm@11.20.0", "--ignore-scripts", "--pack-destination", tempDir],
+        ["pack", `npm@${npmVersion}`, "--ignore-scripts", "--pack-destination", tempDir],
         tempDir,
         env,
       );
-      npmBundleTarball = readFileSync(path.join(tempDir, "npm-11.20.0.tgz"));
+      npmBundleTarball = readFileSync(path.join(tempDir, `npm-${npmVersion}.tgz`));
     }
     assertNpmLockMatchesPnpmLock(generated, localPackageArtifacts, npmBundleTarball);
     return `${JSON.stringify(generated, null, 2)}\n`;
@@ -1718,15 +1749,18 @@ function verifiedNpmBundlePackages(
     return manifests;
   }
   const npm = recordAt(packages, "node_modules/npm");
+  const npmVersion = typeof npm?.version === "string" ? npm.version : undefined;
+  const policy = npmVersion ? NPM_BUNDLED_DEPENDENCY_POLICIES.get(npmVersion) : undefined;
   const integrity = `sha512-${createHash("sha512").update(tarball).digest("base64")}`;
   if (
-    npm?.version !== "11.20.0" ||
+    !policy ||
+    !npm ||
     (npm.name !== undefined && npm.name !== "npm") ||
     npm.integrity !== integrity ||
-    !pnpmIntegrities.get("npm@11.20.0")?.has(integrity)
+    !pnpmIntegrities.get(`npm@${npmVersion}`)?.has(integrity)
   ) {
     throw new Error(
-      "npm bundled dependency tarball does not match the pnpm-locked npm@11.20.0 integrity",
+      `npm bundled dependency tarball does not match the pnpm-locked npm@${npmVersion ?? "unknown"} integrity`,
     );
   }
   let parseError: Error | undefined;
@@ -1763,7 +1797,7 @@ function verifiedNpmBundlePackages(
     throw parseError;
   }
   const root = manifests.get("");
-  if (root?.name !== "npm" || root.version !== "11.20.0") {
+  if (root?.name !== "npm" || root.version !== npmVersion) {
     throw new Error("npm bundled dependency tarball has an unexpected package identity");
   }
   return new Map(

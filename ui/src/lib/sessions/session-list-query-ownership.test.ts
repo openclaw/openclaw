@@ -21,16 +21,14 @@ describe("session list replacement options", () => {
         updatedAt: 1,
       };
       const excluded: GatewaySessionRow = {
+        ...ordinary,
         key:
           flag === "excludeSubagents"
             ? "agent:main:subagent:worker"
             : flag === "excludeCron"
               ? "agent:main:cron:scheduled"
               : "agent:main:system:maintenance",
-        agentId: "main",
         sessionId: "excluded-session",
-        kind: "direct",
-        updatedAt: 1,
       };
       let primaryRows = [ordinary, excluded];
       let issued = 0;

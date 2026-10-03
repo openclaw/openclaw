@@ -37,6 +37,7 @@ import {
   classifyProviderModelAuthSource,
   type ProviderModelAuthDirectSource,
   type ProviderModelAuthProfileSource,
+  type ProviderModelAuthSource,
 } from "../provider-model-auth-source-plan.js";
 import {
   selectProviderModelAuthSources,
@@ -502,6 +503,40 @@ export function prepareAgentRuntimeAuth(
     env: params.env,
     requestTransportOverrides: params.requestTransportOverrides,
   });
+  const authPlanParams = {
+    provider: params.provider,
+    modelId: params.modelId,
+    config: params.config,
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+    metadataSnapshot: params.metadataSnapshot,
+    harnessId: params.harnessId,
+    harnessRuntime: params.harnessRuntime,
+    allowHarnessAuthProfileForwarding: harnessAllowsAuthProfileForwarding,
+  };
+  const buildAttemptPlan = (
+    source: ProviderModelAuthSource | undefined,
+    candidateIds: string[] | undefined,
+    modelRoute?: AgentRuntimeAuthPlan["modelRoute"],
+  ) => {
+    const profile = source?.kind === "profile" ? source : undefined;
+    return buildAgentRuntimeAuthPlan({
+      ...authPlanParams,
+      authProfileProvider: profile?.provider,
+      authProfileFlow: profile?.authFlow,
+      authProfileMode:
+        profile?.mode ?? (source?.kind === "direct" ? source.mode : selectedConfiguredAuthMode),
+      sessionAuthProfileId: profile?.profileId,
+      sessionAuthProfileSource: profile
+        ? profile.profileId === userPinnedProfileId
+          ? "user"
+          : "auto"
+        : undefined,
+      sessionAuthProfileCandidateIds: candidateIds,
+      credentialSource: source ? classifyProviderModelAuthSource(source) : { kind: "none" },
+      modelRoute,
+    });
+  };
   if (!resolution || resolution.kind === "indeterminate") {
     const sourceDecision = selectProviderModelAuthSources({
       provider: authProfileSelectionProvider,
@@ -519,36 +554,10 @@ export function prepareAgentRuntimeAuth(
       attempt: (typeof sourceDecision.attempts)[number] | undefined,
       candidateIndex: number,
     ) => {
-      const profile = attempt?.kind === "profile" ? attempt.source : undefined;
       const candidateIds = sourceDecision.attempts
         .slice(candidateIndex)
         .flatMap((candidate) => (candidate.kind === "profile" ? [candidate.source.profileId] : []));
-      return buildAgentRuntimeAuthPlan({
-        provider: params.provider,
-        modelId: params.modelId,
-        authProfileProvider: profile?.provider,
-        authProfileFlow: profile?.authFlow,
-        authProfileMode:
-          profile?.mode ??
-          (attempt?.kind === "direct" ? attempt.source.mode : selectedConfiguredAuthMode),
-        sessionAuthProfileId: profile?.profileId,
-        sessionAuthProfileSource: profile
-          ? profile.profileId === userPinnedProfileId
-            ? "user"
-            : "auto"
-          : undefined,
-        sessionAuthProfileCandidateIds: candidateIds.length > 0 ? candidateIds : undefined,
-        credentialSource: attempt
-          ? classifyProviderModelAuthSource(attempt.source)
-          : { kind: "none" },
-        config: params.config,
-        env: params.env,
-        workspaceDir: params.workspaceDir,
-        metadataSnapshot: params.metadataSnapshot,
-        harnessId: params.harnessId,
-        harnessRuntime: params.harnessRuntime,
-        allowHarnessAuthProfileForwarding: harnessAllowsAuthProfileForwarding,
-      });
+      return buildAttemptPlan(attempt?.source, candidateIds.length > 0 ? candidateIds : undefined);
     };
     const attempts: PreparedAgentRuntimeAuthAttempt[] = sourceDecision.attempts.map(
       (attempt, index) => {
@@ -603,15 +612,7 @@ export function prepareAgentRuntimeAuth(
   });
   if (routeAuthDecision.kind === "deferred") {
     const plan = buildAgentRuntimeAuthPlan({
-      provider: params.provider,
-      modelId: params.modelId,
-      config: params.config,
-      env: params.env,
-      workspaceDir: params.workspaceDir,
-      metadataSnapshot: params.metadataSnapshot,
-      harnessId: params.harnessId,
-      harnessRuntime: params.harnessRuntime,
-      allowHarnessAuthProfileForwarding: harnessAllowsAuthProfileForwarding,
+      ...authPlanParams,
       deferredRouteSupport: routeAuthDecision.routeSupport,
     });
     return { plan, attempts: [{ kind: "implicit", plan }] };
@@ -629,36 +630,12 @@ export function prepareAgentRuntimeAuth(
     throw new Error(routeAuthDecision.message);
   }
   const buildRoutedPlan = (attempt: (typeof routeAuthDecision.attempts)[number] | undefined) => {
-    const profile = attempt?.kind === "profile" ? attempt.source : undefined;
     const route = attempt?.route ?? routeAuthDecision.selection.route;
-    return buildAgentRuntimeAuthPlan({
-      provider: params.provider,
-      modelId: params.modelId,
-      authProfileProvider: profile?.provider,
-      authProfileFlow: profile?.authFlow,
-      authProfileMode:
-        profile?.mode ??
-        (attempt?.kind === "direct" ? attempt.source.mode : selectedConfiguredAuthMode),
-      sessionAuthProfileId: profile?.profileId,
-      sessionAuthProfileSource: profile
-        ? profile.profileId === userPinnedProfileId
-          ? "user"
-          : "auto"
-        : undefined,
-      sessionAuthProfileCandidateIds:
-        attempt?.kind === "profile" ? [...attempt.sameRouteProfileIds] : undefined,
-      credentialSource: attempt
-        ? classifyProviderModelAuthSource(attempt.source)
-        : { kind: "none" },
-      modelRoute: toPreparedRoute(route),
-      config: params.config,
-      env: params.env,
-      workspaceDir: params.workspaceDir,
-      metadataSnapshot: params.metadataSnapshot,
-      harnessId: params.harnessId,
-      harnessRuntime: params.harnessRuntime,
-      allowHarnessAuthProfileForwarding: harnessAllowsAuthProfileForwarding,
-    });
+    return buildAttemptPlan(
+      attempt?.source,
+      attempt?.kind === "profile" ? [...attempt.sameRouteProfileIds] : undefined,
+      toPreparedRoute(route),
+    );
   };
   const attempts: PreparedAgentRuntimeAuthAttempt[] = routeAuthDecision.attempts.map(
     (attempt, index) => {

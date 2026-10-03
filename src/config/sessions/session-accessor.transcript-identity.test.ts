@@ -39,19 +39,17 @@ describe("transcript turn physical identity", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(["global", "unknown"])(
-    "writes the qualified %s identity into its existing raw physical row",
-    async (raw) => {
-      replaceSessionEntrySync(scope(raw), { sessionId, updatedAt: 1 });
-      await expect(persist(`agent:main:${raw}`)).resolves.toMatchObject({ appendedCount: 1 });
-      expect(keys()).toEqual([{ session_key: raw }]);
-      expect(loadTranscriptEventsSync(scope(raw))).toContainEqual(
-        expect.objectContaining({ type: "message", message }),
-      );
-      expect(loadSessionEntryReadOnly(scope(raw))?.sessionId).toBe(sessionId);
-      expect(loadSessionEntryReadOnly(scope(`agent:main:${raw}`))).toBeUndefined();
-    },
-  );
+  it("writes the qualified unknown identity into its existing raw physical row", async () => {
+    const raw = "unknown";
+    replaceSessionEntrySync(scope(raw), { sessionId, updatedAt: 1 });
+    await expect(persist(`agent:main:${raw}`)).resolves.toMatchObject({ appendedCount: 1 });
+    expect(keys()).toEqual([{ session_key: raw }]);
+    expect(loadTranscriptEventsSync(scope(raw))).toContainEqual(
+      expect.objectContaining({ type: "message", message }),
+    );
+    expect(loadSessionEntryReadOnly(scope(raw))?.sessionId).toBe(sessionId);
+    expect(loadSessionEntryReadOnly(scope(`agent:main:${raw}`))).toBeUndefined();
+  });
 
   it.each(["entry", "retained window"])(
     "refuses a competing qualified %s before appending through the selected SID",

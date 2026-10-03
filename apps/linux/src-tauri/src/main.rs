@@ -755,7 +755,13 @@ impl DesktopState {
                 })
             })
             .and_then(|request| {
-                self.connect_remote_locked(app, request, RemoteConnectionSource::Saved, selection)
+                self.connect_remote_guarded(
+                    app,
+                    request,
+                    RemoteConnectionSource::Saved,
+                    selection,
+                    None,
+                )
             });
         match result {
             Ok(snapshot) => Ok(snapshot),
@@ -776,11 +782,12 @@ impl DesktopState {
             .map_err(|_| "Gateway operation lock is unavailable.".to_string())?;
         if !explicit_local {
             if let Some(remote) = remote_gateway::load_saved_remote()? {
-                return self.connect_remote_locked(
+                return self.connect_remote_guarded(
                     app,
                     remote,
                     RemoteConnectionSource::Saved,
                     selection,
+                    None,
                 );
             }
             self.on_main(app, move |state, app| {
@@ -972,22 +979,17 @@ impl DesktopState {
             .operation
             .lock()
             .map_err(|_| "Gateway operation lock is unavailable.".to_string())?;
-        let result =
-            self.connect_remote_locked(app, request, RemoteConnectionSource::Submitted, selection);
+        let result = self.connect_remote_guarded(
+            app,
+            request,
+            RemoteConnectionSource::Submitted,
+            selection,
+            None,
+        );
         if let Err(error) = &result {
             let _ = self.remote_failure(app, error.clone(), selection, None);
         }
         result
-    }
-
-    fn connect_remote_locked(
-        &self,
-        app: &AppHandle,
-        request: RemoteGatewayRequest,
-        source: RemoteConnectionSource,
-        selection: u64,
-    ) -> Result<GatewaySnapshot, String> {
-        self.connect_remote_guarded(app, request, source, selection, None)
     }
 
     fn promote_profile(

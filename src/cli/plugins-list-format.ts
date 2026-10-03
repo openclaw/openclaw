@@ -1,4 +1,3 @@
-// Text formatter for plugin list rows and verbose plugin details.
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { PluginBundleFormat } from "../plugins/manifest-types.js";
@@ -41,14 +40,14 @@ export function formatPluginLine(plugin: PluginRecord): string {
   if (plugin.version) {
     parts.push(`  version: ${plugin.version}`);
   }
-  if (plugin.activated !== undefined) {
-    parts.push(`  activated: ${plugin.activated ? "yes" : "no"}`);
-  }
-  if (plugin.imported !== undefined) {
-    parts.push(`  imported: ${plugin.imported ? "yes" : "no"}`);
-  }
-  if (plugin.explicitlyEnabled !== undefined) {
-    parts.push(`  explicitly enabled: ${plugin.explicitlyEnabled ? "yes" : "no"}`);
+  for (const [label, value] of [
+    ["activated", plugin.activated],
+    ["imported", plugin.imported],
+    ["explicitly enabled", plugin.explicitlyEnabled],
+  ] as const) {
+    if (value !== undefined) {
+      parts.push(`  ${label}: ${value ? "yes" : "no"}`);
+    }
   }
   if (plugin.activationSource) {
     parts.push(`  activation source: ${plugin.activationSource}`);

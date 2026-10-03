@@ -24,10 +24,11 @@ import {
   type DispatchProcessedNote,
 } from "./dispatch-processed-outcome.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
-import { clearSessionQueues, enqueueFollowupRun, type FollowupRun } from "./queue.js";
+import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
+import { clearFollowupDrainCallback } from "./queue/drain.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -137,7 +138,8 @@ describe("dispatch retry after queued ingress abandonment", () => {
           }
           runState.admission = { status: "accepted", mode: "followup" };
           if (abandonment === "abandon-before-commit") {
-            clearSessionQueues([key]);
+            clearFollowupQueue(key);
+            clearFollowupDrainCallback(key);
           }
           return undefined;
         });
@@ -209,7 +211,8 @@ describe("dispatch retry after queued ingress abandonment", () => {
           expect(duplicateDispatcher.sendFinalReply).not.toHaveBeenCalled();
         } finally {
           drain.dispose();
-          clearSessionQueues([key]);
+          clearFollowupQueue(key);
+          clearFollowupDrainCallback(key);
         }
       });
     },

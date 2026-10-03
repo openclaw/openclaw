@@ -3,12 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { loadExecApprovals } from "../infra/exec-approvals.js";
 import * as logger from "../logger.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { ProcessExtinctionResult } from "../process/supervisor/types.js";
@@ -699,7 +700,7 @@ process.stdin.on("end", () => {
 
   it.runIf(process.platform !== "win32")(
     "retains the prompt for an authoritative descendant without delaying the root result",
-    async () => {
+    async ({ signal }) => {
       const markerDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-prompt-"));
       tempDirs.push(markerDir);
       const marker = path.join(markerDir, "descendant-read");
@@ -721,19 +722,34 @@ process.stdout.write(JSON.stringify({ type: "result", result: prompt }) + "\\n")
           idleTimeoutMs: 2_000,
           timeoutMs: 5_000,
         };
-        const result = await runCommand(executable, request, { client: client(calls) });
-        const output = calls
-          .filter((call) => call.method === "node.invoke.progress")
-          .map((call) => (call.params as { chunk: string }).chunk)
-          .join("");
-        const promptPath = (JSON.parse(output) as { result: string }).result;
+        const removed = createDeferred();
+        const remove = fs.rm.bind(fs);
+        const removal = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+          try {
+            await remove(target, options);
+          } finally {
+            if (String(target).includes("openclaw-node-claude-prompt-")) {
+              removed.resolve();
+            }
+          }
+        });
+        try {
+          const result = await runCommand(executable, request, { client: client(calls) });
+          const output = calls
+            .filter((call) => call.method === "node.invoke.progress")
+            .map((call) => (call.params as { chunk: string }).chunk)
+            .join("");
+          const promptPath = (JSON.parse(output) as { result: string }).result;
 
-        expect(result).toMatchObject({ exitCode: 0, success: true });
-        await expect(fs.readFile(promptPath, "utf8")).resolves.toBe("descendant-owned prompt");
-        await vi.waitFor(async () => {
+          expect(result).toMatchObject({ exitCode: 0, success: true });
+          await expect(fs.readFile(promptPath, "utf8")).resolves.toBe("descendant-owned prompt");
+          // Removal follows certified descendant extinction, after its synchronous marker write.
+          await withinTest(removed.promise, signal);
           expect(await fs.readFile(marker, "utf8")).toBe("descendant-owned prompt");
           await expect(fs.stat(promptPath)).rejects.toThrow();
-        });
+        } finally {
+          removal.mockRestore();
+        }
       });
     },
   );

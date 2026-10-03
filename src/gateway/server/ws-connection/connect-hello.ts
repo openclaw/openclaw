@@ -35,6 +35,7 @@ import {
 import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
+import { operatorSessionCap } from "../../operator-role-policy.js";
 import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
 import {
   MAX_BUFFERED_BYTES,
@@ -151,6 +152,10 @@ export async function sendGatewayHello(
     ? ("configured" as const)
     : ("bundled" as const);
   const serverBuildId = resolveRuntimeServiceBuildId();
+  const sessionCap =
+    role === "operator"
+      ? operatorSessionCap(context.handler.getClient(), context.configSnapshot)
+      : undefined;
   const helloOk = {
     type: "hello-ok",
     // Admission already verified range overlap; this field reports the server's current protocol.
@@ -213,6 +218,7 @@ export async function sendGatewayHello(
       method: authMethod,
       role,
       scopes,
+      ...(sessionCap !== undefined ? { sessionCap } : {}),
       ...(recoveryScope ? { recoveryScope } : {}),
       ...(canMigrateRecovery ? { recoveryMigrationAllowed: true as const } : {}),
       ...(deviceToken
@@ -249,6 +255,7 @@ export async function sendGatewayHello(
           const consumed = await consumeSetupHandoff({
             token: bootstrapTokenCandidate,
             deviceId: device.id,
+            admitsCloudWorkerSetup: context.handler.admitsNodeSetupCompletion,
             pairedDeviceMatches: (paired) => paired?.publicKey === devicePublicKey,
           });
           if (!consumed) {

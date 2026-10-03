@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  withinTest,
+  type FixtureReceiptChannel,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
 import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
 
@@ -14,8 +20,16 @@ type NativeRpcRequest = {
 type NativeRecord = { kind: "cli"; args: string[] } | { kind: "rpc"; request: NativeRpcRequest };
 type NativeMode = "group" | "thread" | "accepted" | "immediate";
 
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
 function createNativeFixture(state: OpenClawTestState, mode: NativeMode) {
-  const cliPath = state.path("synthetic-imsg.cjs");
+  const cliPath = state.path("synthetic-imsg.mjs");
   const dbPath = state.path("unused-synthetic-chat.db");
   const logPath = state.path("native-requests.jsonl");
   const releasePath = state.path("release-native-response");
@@ -24,14 +38,18 @@ function createNativeFixture(state: OpenClawTestState, mode: NativeMode) {
     cliPath,
     [
       "#!" + process.execPath,
-      'const fs = require("node:fs");',
-      'const readline = require("node:readline");',
-      'const { setTimeout: delay } = require("node:timers/promises");',
+      'import fs from "node:fs";',
+      'import readline from "node:readline";',
+      'import { setTimeout as delay } from "node:timers/promises";',
+      fixtureReceiptClientSource(receipts.endpoint),
       "const mode = " + JSON.stringify(mode) + ";",
       "const logPath = " + JSON.stringify(logPath) + ";",
       "const releasePath = " + JSON.stringify(releasePath) + ";",
       "const args = process.argv.slice(2);",
-      'const record = (value) => fs.appendFileSync(logPath, JSON.stringify(value) + "\\n");',
+      "const record = (value) => {",
+      '  fs.appendFileSync(logPath, JSON.stringify(value) + "\\n");',
+      "  sendReceipt(logPath, value.kind);",
+      "};",
       'const write = (value) => process.stdout.write(JSON.stringify(value) + "\\n");',
       "const fail = (error) => {",
       '  process.stderr.write(String(error) + "\\n");',
@@ -98,6 +116,19 @@ function createNativeFixture(state: OpenClawTestState, mode: NativeMode) {
       accountId: "work",
     },
     release: () => fs.writeFileSync(releasePath, ""),
+    waitForRequest: (operation: PromiseLike<unknown>, signal: AbortSignal) =>
+      withinTest(
+        Promise.race([
+          receipts.waitFor(logPath, mode === "group" ? "cli" : "rpc"),
+          // The durable record precedes every reply; its receipt travels on a separate pipe.
+          Promise.resolve(operation).then(() => {
+            if (readRecords().length === 0) {
+              throw new Error("send settled before the native request boundary");
+            }
+          }),
+        ]),
+        signal,
+      ),
     readRecords,
     readRequests: () =>
       readRecords().flatMap((record) => (record.kind === "rpc" ? [record.request] : [])),
@@ -136,7 +167,9 @@ describe("iMessage caller authority at native request boundaries", () => {
     await state.cleanup();
   });
 
-  it("stops after a native group lookup when the caller retires without marking a send", async () => {
+  it("stops after a native group lookup when the caller retires without marking a send", async ({
+    signal,
+  }) => {
     const fixture = createNativeFixture(state, "group");
     const mediaPath = state.path("attachment.pdf");
     fs.writeFileSync(mediaPath, "%PDF-1.4\nsynthetic attachment");
@@ -153,13 +186,10 @@ describe("iMessage caller authority at native request boundaries", () => {
       }),
     );
     try {
-      await vi.waitFor(
-        () =>
-          expect(fixture.readRecords()).toEqual([
-            { kind: "cli", args: ["group", "--chat-id", "42", "--db", fixture.dbPath, "--json"] },
-          ]),
-        { timeout: 10_000, interval: 10 },
-      );
+      await fixture.waitForRequest(sending, signal);
+      expect(fixture.readRecords()).toEqual([
+        { kind: "cli", args: ["group", "--chat-id", "42", "--db", fixture.dbPath, "--json"] },
+      ]);
       expect(onPlatformSendDispatch).not.toHaveBeenCalled();
       caller.abort(retired);
       fixture.release();
@@ -174,9 +204,9 @@ describe("iMessage caller authority at native request boundaries", () => {
     }
   });
 
-  it.each(["active", "retired"] as const)(
+  it.for(["active", "retired"] as const)(
     "keeps the %s caller decision through a native unsupported-thread response",
-    async (lifetime) => {
+    async (lifetime, { signal }) => {
       const fixture = createNativeFixture(state, "thread");
       await rememberIMessageReplyCache({
         accountId: "work",
@@ -197,13 +227,10 @@ describe("iMessage caller authority at native request boundaries", () => {
         }),
       );
       try {
-        await vi.waitFor(
-          () =>
-            expect(fixture.readRequests()).toMatchObject([
-              { method: "send", params: { chat_id: 42, reply_to: "bound-reply-guid" } },
-            ]),
-          { timeout: 10_000, interval: 10 },
-        );
+        await fixture.waitForRequest(sending, signal);
+        expect(fixture.readRequests()).toMatchObject([
+          { method: "send", params: { chat_id: 42, reply_to: "bound-reply-guid" } },
+        ]);
         if (lifetime === "retired") {
           caller.abort(retired);
         }
@@ -236,7 +263,9 @@ describe("iMessage caller authority at native request boundaries", () => {
     },
   );
 
-  it("settles submitted success after caller A retires while caller B shares its real RPC client", async () => {
+  it("settles submitted success after caller A retires while caller B shares its real RPC client", async ({
+    signal,
+  }) => {
     const fixture = createNativeFixture(state, "accepted");
     const client = await createIMessageRpcClient({
       cliPath: fixture.cliPath,
@@ -256,13 +285,10 @@ describe("iMessage caller authority at native request boundaries", () => {
     );
     let sendingB: ReturnType<typeof observeSend> | undefined;
     try {
-      await vi.waitFor(
-        () =>
-          expect(fixture.readRequests()).toMatchObject([
-            { method: "send", params: { text: "caller A", chat_id: 42 } },
-          ]),
-        { timeout: 10_000, interval: 10 },
-      );
+      await fixture.waitForRequest(sendingA, signal);
+      expect(fixture.readRequests()).toMatchObject([
+        { method: "send", params: { text: "caller A", chat_id: 42 } },
+      ]);
       callerA.abort(new Error("caller A retired after submission"));
       sendingB = observeSend(
         sendMessageIMessage("chat_id:42", "caller B", {

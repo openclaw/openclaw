@@ -118,9 +118,6 @@ export function extractMessagingToolSourceReplyPayload(
   return Object.keys(payload).length > 0 ? payload : undefined;
 }
 
-// Core tool names that are allowed to emit trusted local media artifacts.
-// Plugin tools must be explicitly passed as trusted run-local names by the caller.
-
 function resolveMessageToolTarget(params: {
   action: string;
   args: Record<string, unknown>;

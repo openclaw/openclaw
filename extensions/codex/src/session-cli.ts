@@ -17,7 +17,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
   CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
-} from "./session-catalog.js";
+} from "./session-catalog-parsing.js";
 
 type CodexGatewayOptions = GatewayRpcOpts & {
   agent?: string;

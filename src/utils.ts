@@ -1,6 +1,6 @@
-// Shared filesystem, path, and process helpers for the CLI.
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { normalizeHomeDirValue } from "@openclaw/normalization-core/home-dir";
 import { resolveConfigDir } from "./infra/config-dir.js";
 import { resolveEffectiveHomeDir, resolveUserPath } from "./infra/home-dir.js";
@@ -61,6 +61,13 @@ export function resolveHomeDir(): string | undefined {
   return resolveEffectiveHomeDir(process.env, os.homedir);
 }
 
+// Stack traces print ESM paths as file:// URLs, so the URL scheme also starts a path.
+const HOME_TEXT_START = String.raw`(?<=^|[\s"'\x60(\[{<=:;]|file://)`;
+const HOME_TEXT_DELIMITER = String.raw`[\s"'\x60)\]}>]`;
+
+// A PATH-style list continues with another absolute path, home prefix, or drive letter.
+const HOME_TEXT_LIST_NEXT = String.raw`[:;](?=[/\\~$]|[A-Za-z]:)`;
+
 function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefined {
   const home = resolveHomeDir();
   if (!home) {
@@ -82,19 +89,27 @@ export function shortenHomePath(input: string): string {
   return shortenPathWithHome(input, display);
 }
 
-/** Replaces all effective-home occurrences inside a diagnostic string. */
+/** Replaces effective-home path occurrences inside a diagnostic string. */
 export function shortenHomeInString(input: string): string {
   if (!input) {
     return input;
   }
   const display = resolveHomeDisplayPrefix();
-  if (!display) {
+  // A filesystem-root home such as "/" would turn every path separator into the prefix.
+  if (!display || path.parse(display.home).root === display.home) {
     return input;
   }
-  if (process.platform === "win32") {
-    return input.replace(new RegExp(escapeRegExpValue(display.home), "giu"), display.prefix);
-  }
-  return input.split(display.home).join(display.prefix);
+  // Diagnostics delimit paths with whitespace, quotes, brackets, `=`, and PATH list separators.
+  // Replace the home only between those delimiters so /home/al+old, /mnt/home/al, and
+  // /home/al.bak stay exact. Trailing `.`, `,`, `;`, or `:` ends the home only when a
+  // delimiter, the end of the text, or the next PATH entry follows it.
+  // POSIX file names may contain backslashes, so only Windows treats them as separators.
+  const pathSeparator = process.platform === "win32" ? String.raw`[\\/]` : "/";
+  const homePattern = new RegExp(
+    `${HOME_TEXT_START}${escapeRegExpValue(display.home)}(?=$|${pathSeparator}|${HOME_TEXT_DELIMITER}|[.,;:](?:$|${HOME_TEXT_DELIMITER})|${HOME_TEXT_LIST_NEXT})`,
+    process.platform === "win32" ? "giu" : "gu",
+  );
+  return input.replace(homePattern, display.prefix);
 }
 
 /** Shortens a path for display without changing non-home paths. */

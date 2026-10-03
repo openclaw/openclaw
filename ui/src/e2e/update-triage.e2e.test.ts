@@ -8,6 +8,7 @@ import {
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import { QUICK_ACTIONS_QUESTION } from "../test-helpers/custodian-quick-actions.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -82,7 +83,10 @@ suite.define(() => {
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 1_000, width: 1_400 },
-          recordVideo: { dir: artifactDir, size: { height: 1_000, width: 1_400 } },
+          recordVideo:
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+              ? { dir: artifactDir, size: { height: 1_000, width: 1_400 } }
+              : undefined,
         },
         async ({ page }) => {
           const errors: string[] = [];
@@ -90,8 +94,9 @@ suite.define(() => {
           const traffic = await recordUpdateTraffic(page);
           if (source === "missing triage module") {
             // A replaced installation can retire the current document's lazy chunks.
-            await page.route(/\/update-triage\.runtime(?:-[\w-]+\.js|\.ts)(?:\?|$)/, (route) =>
-              route.abort("failed"),
+            await page.route(
+              controlUiE2eBuiltModuleRequest("ui/src/app/update-triage.runtime.ts"),
+              (route) => route.abort("failed"),
             );
           }
           const config = { update: { channel: "stable", auto: { enabled: true } } };
@@ -261,7 +266,10 @@ suite.define(() => {
       await suite.withPage(
         {
           viewport: { height: 1_000, width: 1_400 },
-          recordVideo: { dir: artifactDir, size: { height: 1_000, width: 1_400 } },
+          recordVideo:
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+              ? { dir: artifactDir, size: { height: 1_000, width: 1_400 } }
+              : undefined,
         },
         async ({ page }) => {
           const errors: string[] = [];

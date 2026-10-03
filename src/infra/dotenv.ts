@@ -10,6 +10,7 @@ import {
   readDotEnvFile,
   readDotEnvFileAsync,
 } from "./dotenv-global.js";
+import { clearFsSafeEnvFallback, normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -118,10 +119,18 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "DISCORD_API_URL",
   "HTTP_PROXY",
   "HTTPS_PROXY",
+  "HOMEBREW_API_DOMAIN",
+  "HOMEBREW_ARTIFACT_DOMAIN",
+  "HOMEBREW_BOTTLE_DOMAIN",
   "HOMEBREW_BREW_FILE",
+  "HOMEBREW_BREW_GIT_REMOTE",
+  "HOMEBREW_CORE_GIT_REMOTE",
   "HOMEBREW_CURL_PATH",
+  "HOMEBREW_CURLRC",
   "HOMEBREW_GIT_PATH",
   "HOMEBREW_PREFIX",
+  "HOMEBREW_SSH_CONFIG_PATH",
+  "HOMEBREW_XDG_CONFIG_HOME",
   "IRC_HOST",
   "APPDATA",
   "LOCALAPPDATA",
@@ -260,12 +269,14 @@ export function loadWorkspaceDotEnvFile(
   if (!parsed) {
     return;
   }
+  clearFsSafeEnvFallback(env);
   for (const { key, value } of parsed.entries) {
     if (env[key] !== undefined) {
       continue;
     }
     env[key] = value;
   }
+  normalizeFsSafeNativeEnv(env);
 }
 
 async function loadWorkspaceDotEnvFileAsync(
@@ -286,11 +297,13 @@ async function loadWorkspaceDotEnvFileAsync(
       includeUntrustedWorkspacePlugins: false,
     }),
   );
+  clearFsSafeEnvFallback(opts.env);
   for (const { key, value } of parsed.entries) {
     if (!blocked.has(key.toUpperCase()) && opts.env[key] === undefined) {
       opts.env[key] = value;
     }
   }
+  normalizeFsSafeNativeEnv(opts.env);
 }
 
 export async function loadDotEnvAsync(opts: {

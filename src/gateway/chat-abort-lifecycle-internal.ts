@@ -1,3 +1,4 @@
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { settlesWithin } from "../shared/settle-within.js";
 
 const terminalPersistenceErrorByEntry = new WeakMap<object, unknown>();
@@ -72,11 +73,12 @@ export async function waitForChatAbortControllerRemoval<
     projectSessionTerminalPending?: boolean;
     projectSessionTerminalPersistence?: Promise<void>;
   },
->(params: {
-  entries: ReadonlyMap<string, TEntry>;
-  targets: ReadonlyArray<{ runId: string; entry: TEntry }>;
-  timeoutMs: number;
-}): Promise<boolean> {
+>(
+  params: {
+    entries: ReadonlyMap<string, TEntry>;
+    targets: ReadonlyArray<{ runId: string; entry: TEntry }>;
+  } & ({ timeoutMs: number; signal?: never } | { timeoutMs: null; signal: AbortSignal }),
+): Promise<boolean> {
   const terminalOwnersSettled = () =>
     params.targets.every(
       ({ entry }) =>
@@ -102,7 +104,10 @@ export async function waitForChatAbortControllerRemoval<
     return terminalOwnersSettled();
   }
   try {
-    const removed = await settlesWithin(Promise.all(removals), Math.max(0, params.timeoutMs));
+    const removed =
+      params.timeoutMs === null
+        ? await racePromiseWithAbortSignal(Promise.all(removals), params.signal).then(() => true)
+        : await settlesWithin(Promise.all(removals), Math.max(0, params.timeoutMs));
     // Maintenance may retire a registration before its write settles. Registry
     // removal alone must not let a lifecycle mutation bypass that terminal owner.
     return removed && terminalOwnersSettled();

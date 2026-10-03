@@ -6,6 +6,7 @@ import {
   readNestedToolActivity,
   type NestedToolActivity,
 } from "../../../sessions/nested-tool-activity.js";
+import { notifyToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
@@ -22,7 +23,6 @@ import type { AnyAgentTool } from "../../tools/common.js";
 import { redactTranscriptMessage } from "../../transcript-redact.js";
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
-import { notifyToolActivity } from "./tool-activity-heartbeat.js";
 
 /** One owner for nested execution, acceptance, and durable display activity. */
 export function createSubscribedToolSearchExecutor(params: {
@@ -84,7 +84,7 @@ export function createSubscribedToolSearchExecutor(params: {
           await runWithOwnedSessionTranscriptWrite(
             { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
             () =>
-              withSessionManagerWrite(manager, () => {
+              withSessionManagerWrite(manager, async () => {
                 // Revalidate the exact attempt after awaited acceptance and writer admission.
                 if (!params.isCurrent()) {
                   return;
@@ -92,7 +92,10 @@ export function createSubscribedToolSearchExecutor(params: {
                 if (isRecord(terminal.result)) {
                   copyInternalToolResultState(terminal.result, message);
                 }
-                manager.appendMessage(message);
+                await manager.appendMessageAsync(message);
+                if (!params.isCurrent()) {
+                  return;
+                }
                 const recorded = readNestedToolActivity(
                   redactTranscriptMessage(message, attempt.config),
                 );

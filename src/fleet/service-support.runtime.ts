@@ -101,7 +101,6 @@ export async function prepareCellConfig(
   const cellRoot = await fsSafeRoot(record.dataDir, {
     hardlinks: "reject",
     maxBytes: CELL_CONFIG_MAX_BYTES,
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   try {

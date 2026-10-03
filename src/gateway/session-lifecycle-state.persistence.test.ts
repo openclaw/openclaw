@@ -1,9 +1,8 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi, type MockInstance } from "vitest";
+import { afterAll, afterEach, expect, it, vi, type MockInstance } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import {
   createAgentRunDirectAbortError,
@@ -34,6 +33,7 @@ import { startSessionWorkAdmissionInterruption } from "../sessions/session-lifec
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createAgentAdmissionController } from "./agent-turn/agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "./agent-turn/agent-dedupe-lifecycle.js";
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
@@ -53,6 +53,8 @@ import {
   getSessionRowProjection,
 } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-terminal-");
 
 const routing = vi.hoisted(() => ({ loadSessionEntry: vi.fn() }));
 vi.mock("./session-utils.js", async (importOriginal) => ({
@@ -81,9 +83,8 @@ it.each([
 ])(
   "retains $stopReason cancellation as $status after reopening a store without a shutdown marker",
   async ({ stopReason, status, recovery, timeoutPhase }) => {
-    const tempDirs = createTempDirTracker();
     const target = {
-      storePath: path.join(tempDirs.make("openclaw-restart-terminal-"), "sessions.json"),
+      storePath: path.join(tempDirs.make(), "sessions.json"),
       sessionKey: "agent:main:restart-terminal",
     };
     const runId = "interrupted-run";
@@ -131,15 +132,13 @@ it.each([
     } finally {
       routing.loadSessionEntry.mockReset();
       closeOpenClawAgentDatabasesForTest();
-      tempDirs.cleanup();
     }
   },
 );
 
 it("persists current-run timing after pre-start failure and clears it on the next run", async () => {
-  const tempDirs = createTempDirTracker();
   const target = {
-    storePath: path.join(tempDirs.make("openclaw-lifecycle-timing-"), "sessions.json"),
+    storePath: path.join(tempDirs.make(), "sessions.json"),
     sessionKey: "agent:main:timing",
   };
   let now = 1_000_000;
@@ -225,7 +224,6 @@ it("persists current-run timing after pre-start failure and clears it on the nex
     clock.mockRestore();
     routing.loadSessionEntry.mockReset();
     closeOpenClawAgentDatabasesForTest();
-    tempDirs.cleanup();
   }
 });
 
@@ -469,7 +467,7 @@ it.each(["success", "failed-write"])(
         "sessions.changed",
         expect.objectContaining({ runId, status: "killed", hasActiveRun: false, runtimeMs: 1_000 }),
         new Set(["session-observer"]),
-        { dropIfSlow: true },
+        { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
       );
       closeOpenClawAgentDatabasesForTest();
       const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
@@ -524,9 +522,8 @@ it.for([
   "keeps an owner claim active until its queued $label write commits",
   ({ phase, data, status }, { signal }) =>
     ownerClaimFixture.run(async () => {
-      const tempDirs = createTempDirTracker();
       const target = {
-        storePath: path.join(tempDirs.make("openclaw-owner-terminal-"), "sessions.json"),
+        storePath: path.join(tempDirs.make(), "sessions.json"),
         sessionKey: "agent:main:worker-terminal",
       };
       const runId = "worker-terminal-run";
@@ -648,7 +645,6 @@ it.for([
         releaseAgentRunContext(runId, claimId);
         routing.loadSessionEntry.mockReset();
         closeOpenClawAgentDatabasesForTest();
-        tempDirs.cleanup();
       }
     }),
 );

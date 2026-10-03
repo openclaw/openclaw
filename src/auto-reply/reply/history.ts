@@ -1,4 +1,4 @@
-/** Pending chat-history windows and prompt context builders for auto-reply turns. */
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
 
 export const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]";
@@ -6,7 +6,6 @@ export const RECENT_HISTORY_CONTEXT_MARKER = "[Recent chat messages - for contex
 export const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
 export { DEFAULT_GROUP_HISTORY_LIMIT } from "./history-limit.js";
 
-/** Maximum number of group history keys to retain (LRU eviction when exceeded). */
 const MAX_HISTORY_KEYS = 1000;
 
 /**
@@ -17,17 +16,7 @@ export function evictOldHistoryKeys<T>(
   historyMap: Map<string, T[]>,
   maxKeys: number = MAX_HISTORY_KEYS,
 ): void {
-  if (historyMap.size <= maxKeys) {
-    return;
-  }
-  const keysToDelete = historyMap.size - maxKeys;
-  const iterator = historyMap.keys();
-  for (let i = 0; i < keysToDelete; i++) {
-    const key = iterator.next().value;
-    if (key !== undefined) {
-      historyMap.delete(key);
-    }
-  }
+  pruneMapToMaxSize(historyMap, maxKeys);
 }
 
 export type { HistoryEntry } from "./history.types.js";
@@ -71,7 +60,6 @@ export function recordChannelHistoryEntryIfEnabled<T extends HistoryEntry>(param
     historyMap.delete(historyKey);
   }
   historyMap.set(historyKey, history);
-  // Evict oldest keys if map exceeds max size to prevent unbounded memory growth
   evictOldHistoryKeys(historyMap);
   return history;
 }
@@ -184,7 +172,7 @@ export async function recordChannelHistoryEntryWithMedia<T extends HistoryEntry>
     const currentHistory = params.historyMap.get(params.historyKey);
     const entryIndex = currentHistory?.indexOf(recordedEntry) ?? -1;
     if (currentHistory && entryIndex >= 0) {
-      currentHistory[entryIndex] = { ...recordedEntry, media } as T;
+      currentHistory[entryIndex] = { ...recordedEntry, media };
     }
     return history;
   }
@@ -197,7 +185,7 @@ export async function recordChannelHistoryEntryWithMedia<T extends HistoryEntry>
     limit: params.mediaLimit,
     messageId: params.messageId ?? params.entry.messageId,
   });
-  const entry = media.length > 0 ? ({ ...params.entry, media } as T) : params.entry;
+  const entry = media.length > 0 ? { ...params.entry, media } : params.entry;
   return recordChannelHistoryEntryIfEnabled({
     historyMap: params.historyMap,
     historyKey: params.historyKey,
@@ -264,9 +252,6 @@ export function buildInboundHistoryFromEntries(params: {
   if (params.limit <= 0) {
     return undefined;
   }
-  if (params.entries.length === 0) {
-    return [];
-  }
   return params.entries.slice(-params.limit).map((entry) => {
     const historyEntry: HistoryEntry = {
       sender: entry.sender,
@@ -276,7 +261,7 @@ export function buildInboundHistoryFromEntries(params: {
     if (entry.messageId) {
       historyEntry.messageId = entry.messageId;
     }
-    if (entry.media && entry.media.length > 0) {
+    if (entry.media?.length) {
       historyEntry.media = entry.media;
     }
     return historyEntry;

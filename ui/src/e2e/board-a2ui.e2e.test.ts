@@ -8,7 +8,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
+import type { TestPortClaim } from "../../../src/test-utils/port-claims.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import {
@@ -34,6 +35,7 @@ let browser: Browser;
 let controlUi: ControlUiE2eServer;
 let sandboxServer: HttpServer;
 let sandboxPort: number;
+let sandboxPortClaim: TestPortClaim | undefined;
 let rendererServer: HttpServer;
 let rendererOrigin: string;
 let rendererBundle: Buffer;
@@ -83,7 +85,8 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
     }
     rendererOrigin = `http://127.0.0.1:${rendererAddress.port}`;
     controlUi = await startControlUiE2eServer();
-    sandboxPort = await getGatewayE2ePortBlock();
+    sandboxPortClaim = await acquireGatewayE2ePortBlock();
+    sandboxPort = sandboxPortClaim.port;
     sandboxServer = createSandboxHostHttpServer();
     await new Promise<void>((resolve) => {
       sandboxServer.listen(sandboxPort, "127.0.0.1", resolve);
@@ -104,12 +107,61 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
         sandboxServer.close(() => resolve());
       });
     }
+    await sandboxPortClaim?.release();
     if (rendererServer) {
       await new Promise<void>((resolve) => {
         rendererServer.close(() => resolve());
       });
     }
     await controlUi?.close();
+  });
+
+  it("sends each v0.8 action once after the host reconnects", async () => {
+    const context = await browser.newContext();
+    contexts.add(context);
+    const page = await context.newPage();
+    await page.addScriptTag({
+      path: path.resolve("extensions/canvas/src/host/a2ui/a2ui.bundle.js"),
+      type: "module",
+    });
+    const result = await page.evaluate(async () => {
+      await customElements.whenDefined("openclaw-a2ui-host");
+      const emitted: unknown[] = [];
+      Reflect.set(globalThis, "openclaw", {
+        state: {
+          emit(payload: unknown) {
+            emitted.push(payload);
+            return Promise.resolve();
+          },
+        },
+      });
+      const host = document.createElement("openclaw-a2ui-host");
+      const sendAction = () =>
+        host.dispatchEvent(
+          new CustomEvent("a2uiaction", {
+            detail: {
+              eventType: "a2ui.action",
+              sourceComponentId: "refresh-button",
+              action: { name: "refresh" },
+            },
+          }),
+        );
+      document.body.append(host);
+      sendAction();
+      const connectedCount = emitted.length;
+      emitted.length = 0;
+      host.remove();
+      document.body.append(host);
+      sendAction();
+      host.remove();
+      return { connectedCount, reconnected: emitted };
+    });
+    expect(result.connectedCount).toBe(1);
+    expect(result.reconnected).toHaveLength(1);
+    expect(result.reconnected[0]).toMatchObject({
+      eventType: "a2ui.action",
+      action: { name: "refresh", surfaceId: "main", sourceComponentId: "refresh-button" },
+    });
   });
 
   for (const { colorScheme, rejectsAction, name } of [

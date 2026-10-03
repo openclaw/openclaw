@@ -1,4 +1,5 @@
 // Coordinates paired-node reapproval requests before they enter pairing storage.
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { GatewayAuthRateLimitConfig } from "../config/types.gateway.js";
 import {
   finalizeNodePairingCleanupClaim,
@@ -48,9 +49,7 @@ export type NodeReapprovalCoordinator = {
 
 function normalizeFingerprintList(value: string[] | undefined): string[] | undefined {
   return value
-    ? [
-        ...new Set(value.map((entry) => entry.trim()).filter((entry) => entry.length > 0)),
-      ].toSorted()
+    ? sortUniqueStrings(value.map((entry) => entry.trim()).filter((entry) => entry.length > 0))
     : undefined;
 }
 

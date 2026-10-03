@@ -9,12 +9,8 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, Concurr
         case unavailable
     }
 
-    private let manager = CLLocationManager()
+    let locationManager = CLLocationManager()
     var locationRequestContinuations: [UUID: CheckedContinuation<CLLocation, Swift.Error>] = [:]
-
-    var locationManager: CLLocationManager {
-        self.manager
-    }
 
     /// Compatibility witness for the shipped single-waiter protocol; app calls use the
     /// concurrent extension and its per-request continuation dictionary.
@@ -34,7 +30,7 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, Concurr
             throw Error.unavailable
         }
         return try await LocationCurrentRequest.resolve(
-            manager: self.manager,
+            manager: self.locationManager,
             desiredAccuracy: desiredAccuracy,
             maxAgeMs: maxAgeMs,
             timeoutMs: timeoutMs,

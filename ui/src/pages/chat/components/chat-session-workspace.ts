@@ -1,4 +1,5 @@
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { BROWSER_IMAGE_MIME_TYPES } from "../../../../../src/shared/browser-image-mime-types.js";
 import {
   formatFencedCodeBlock,
   formatInlineCodeSpan,
@@ -10,6 +11,7 @@ import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
+import { pathDisplayName } from "../../../lib/path-display.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
 import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
@@ -46,18 +48,6 @@ function languageForFile(name: string): string {
   }
   return extension;
 }
-
-function basenameForPath(filePath: string): string {
-  return filePath.split(/[\\/]/).findLast((part) => part) ?? filePath;
-}
-
-const SESSION_FILE_IMAGE_MIME_TYPES = new Set([
-  "image/avif",
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
 
 function formatMarkdownCodeSpan(value: string): string {
   // Markdown finds block boundaries before inline spans, so filenames must
@@ -216,13 +206,13 @@ function openFile(
       if (!file) {
         return null;
       }
-      const name = file.name || basenameForPath(path);
+      const name = file.name || pathDisplayName(path);
       if (file.previewKind === "image") {
         if (
           file.contentEncoding !== "base64" ||
           typeof file.content !== "string" ||
           !file.mimeType ||
-          !SESSION_FILE_IMAGE_MIME_TYPES.has(file.mimeType)
+          !BROWSER_IMAGE_MIME_TYPES.has(file.mimeType)
         ) {
           return null;
         }
@@ -237,12 +227,9 @@ function openFile(
       if (file.previewKind === "unsupported") {
         return unsupportedFileSidebarContent(file, path);
       }
-      // Missing previewKind is the pre-image-preview Gateway contract.
       if (
-        (file.previewKind !== undefined && file.previewKind !== "text") ||
-        (file.previewKind === "text" &&
-          file.contentEncoding !== undefined &&
-          file.contentEncoding !== "utf8") ||
+        file.previewKind !== "text" ||
+        file.contentEncoding !== "utf8" ||
         typeof file.content !== "string"
       ) {
         return null;
@@ -351,7 +338,7 @@ function openFile(
     `Failed to load ${path}`,
     {
       line: opts.line,
-      label: basenameForPath(path),
+      label: pathDisplayName(path),
       revalidate: true,
       resolveLabel: (result) => result.file?.name,
       resolveKey: (result) => {
@@ -369,21 +356,11 @@ export function openSessionWorkspaceFile(
   openFile(state, getSessionWorkspace(state), target.path, { line: target.line });
 }
 
-function toggleSessionWorkspace(state: SessionWorkspaceHost) {
-  const workspace = getSessionWorkspace(state);
-  workspace.collapsed = !workspace.collapsed;
-  if (!workspace.collapsed && workspace.list?.sessionKey !== state.sessionKey) {
-    loadSessionWorkspace(state, workspace);
-  }
-  state.requestUpdate?.();
-}
-
 export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: string) {
   const workspace = getSessionWorkspace(state);
   clearWorkspaceTimer(workspace);
   const normalizedPath = path.replaceAll("\\", "/");
   const separator = normalizedPath.lastIndexOf("/");
-  workspace.collapsed = false;
   workspace.browserPath = separator > 0 ? normalizedPath.slice(0, separator) : "";
   workspace.browserSearch = "";
   workspace.filter = "all";
@@ -491,7 +468,6 @@ export function createSessionWorkspaceProps(
   }
   const diffContent = resolveSessionDiffSidebarContent(state);
   return {
-    collapsed: options?.expanded === true ? false : workspace.collapsed,
     sessionKey: state.sessionKey,
     list: workspace.list?.sessionKey === state.sessionKey ? workspace.list : null,
     loading: workspace.loading,
@@ -504,7 +480,6 @@ export function createSessionWorkspaceProps(
       workspace.filter = filter;
       state.requestUpdate?.();
     },
-    onToggleCollapsed: () => toggleSessionWorkspace(state),
     onRefresh: () => loadSessionWorkspace(state, workspace, true),
     onBrowsePath: (path) => {
       clearWorkspaceTimer(workspace);
@@ -575,8 +550,8 @@ export function resolveSessionDiffSidebarContent(
             const file = result?.file;
             if (
               !file ||
-              (file.previewKind !== undefined && file.previewKind !== "text") ||
-              (file.contentEncoding !== undefined && file.contentEncoding !== "utf8") ||
+              file.previewKind !== "text" ||
+              file.contentEncoding !== "utf8" ||
               typeof file.content !== "string"
             ) {
               return null;

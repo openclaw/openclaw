@@ -29,6 +29,13 @@ export type OperatorScope = (typeof KNOWN_OPERATOR_SCOPE_VALUES)[number];
 
 const KNOWN_OPERATOR_SCOPES: ReadonlySet<string> = new Set(KNOWN_OPERATOR_SCOPE_VALUES);
 
+export function hasGatewayAdminScope(
+  client: { connect?: { scopes?: readonly string[] } } | null | undefined,
+): boolean {
+  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  return scopes.includes(ADMIN_SCOPE);
+}
+
 /** Narrows untrusted auth-token scope entries to the gateway's closed scope set. */
 export function isOperatorScope(value: unknown): value is OperatorScope {
   return typeof value === "string" && KNOWN_OPERATOR_SCOPES.has(value);
@@ -41,11 +48,5 @@ export function normalizeOperatorScopeList(
   if (!Array.isArray(scopes)) {
     return undefined;
   }
-  const normalized: OperatorScope[] = [];
-  for (const scope of scopes) {
-    if (isOperatorScope(scope) && !normalized.includes(scope)) {
-      normalized.push(scope);
-    }
-  }
-  return normalized;
+  return [...new Set(scopes.filter(isOperatorScope))];
 }
