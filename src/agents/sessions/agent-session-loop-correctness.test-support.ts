@@ -8,6 +8,7 @@ import { createResourceLoader } from "./agent-session-loop-resource-loader.test-
 import type { AgentSessionConfig } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
+import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ToolDefinition } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
@@ -153,7 +154,7 @@ export async function createTestSession(
   });
   const sessionOptions = {
     model,
-    thinkingLevel: "medium" as const,
+    thinkingLevel: settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
     authStorage,
     noTools: "builtin" as const,
     customTools: options.customTools,
