@@ -879,12 +879,21 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
   );
 }
 
-function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: string): void {
+export function createPackedBundledPluginActivationSmokeEnv(
+  env: NodeJS.ProcessEnv,
+  tmpRoot: string,
+): NodeJS.ProcessEnv {
   const homeDir = join(tmpRoot, "activation-home");
-  mkdirSync(homeDir, { recursive: true });
-  const env = createPackedCliSmokeEnv(process.env, {
+  return createPackedCliSmokeEnv(env, {
     HOME: homeDir,
+    OPENCLAW_STATE_DIR: join(homeDir, ".openclaw"),
   });
+}
+
+function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: string): void {
+  const env = createPackedBundledPluginActivationSmokeEnv(process.env, tmpRoot);
+  const homeDir = expectDefined(env.HOME, "packed activation smoke home");
+  mkdirSync(homeDir, { recursive: true });
 
   writePackedBundledPluginActivationConfig(homeDir);
   runReleaseCheckCommand(
