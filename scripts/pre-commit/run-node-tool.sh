@@ -12,6 +12,15 @@ tool="$1"
 shift
 
 local_tool="$ROOT_DIR/node_modules/.bin/$tool"
+# pnpm's sh shims resolve their target from POSIX-style $0 paths, which native
+# Windows node cannot load. The .cmd shim is the native invocation on MSYS.
+case "$(uname -s)" in
+  CYGWIN*|MINGW*|MSYS*)
+    if [[ -f "$local_tool.cmd" ]]; then
+      exec "$local_tool.cmd" "$@"
+    fi
+    ;;
+esac
 if [[ -x "$local_tool" ]]; then
   exec "$local_tool" "$@"
 fi
