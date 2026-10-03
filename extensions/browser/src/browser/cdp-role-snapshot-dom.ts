@@ -95,9 +95,10 @@ export async function findCursorInteractiveElements(
     const out = new Map<number, CursorInteractiveInfo>();
     await Promise.all(
       (queried?.nodeIds ?? []).map(async (nodeId) => {
+        // SAFETY: DOM.describeNode returns native node identity and alternating string attributes.
         const described = (await send("DOM.describeNode", { nodeId }).catch(() => null)) as {
           node?: { backendNodeId?: number; attributes?: string[] };
-        } | null; // SAFETY: DOM.describeNode returns native node identity and alternating string attributes.
+        } | null;
         const attrs = described?.node?.attributes ?? [];
         const attrIndex = attrs.indexOf(attr);
         const rawIndex = attrIndex >= 0 ? attrs[attrIndex + 1] : undefined;

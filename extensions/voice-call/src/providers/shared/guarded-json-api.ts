@@ -67,6 +67,7 @@ export async function guardedJsonApiRequest<T = unknown>(
     }
     try {
       const text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+      // SAFETY: Each carrier caller supplies the response type for its provider's JSON endpoint.
       return JSON.parse(text) as T;
     } catch (cause) {
       throw new Error(

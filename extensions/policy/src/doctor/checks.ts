@@ -300,15 +300,20 @@ export function createPolicyDoctorChecks(): readonly HealthCheck[] {
       "AGENTS.md tool policy entries use known sensitivity levels.",
     ],
   ];
-  return definitions.map(([id, description, repair]) => ({
-    id,
-    kind: "plugin",
-    description,
-    source: "policy",
-    async detect(ctx) {
-      const evaluation = await evaluatePolicy(ctx);
-      return evaluation.findings.filter((finding) => finding.checkId === id);
-    },
-    ...(repair ? { repair: (ctx, findings) => repair(ctx, findings, id) } : {}),
-  }));
+  return definitions.map(([id, description, repair]) => {
+    const check: HealthCheck = {
+      id,
+      kind: "plugin",
+      description,
+      source: "policy",
+      async detect(ctx) {
+        const evaluation = await evaluatePolicy(ctx);
+        return evaluation.findings.filter((finding) => finding.checkId === id);
+      },
+    };
+    if (repair) {
+      check.repair = (ctx, findings) => repair(ctx, findings, id);
+    }
+    return check;
+  });
 }

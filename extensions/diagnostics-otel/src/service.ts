@@ -122,6 +122,14 @@ function resolveResourceDetectors(): resources.ResourceDetector[] {
   });
 }
 
+function createStartupRollbackError(startupError: unknown, cleanupError: unknown) {
+  return new AggregateError(
+    [startupError, cleanupError],
+    "diagnostics-otel startup failed and rollback cleanup failed",
+    { cause: startupError },
+  );
+}
+
 function publicExporterEventForHealth(event: PublicExporterHealthUpdate): PublicExporterEvent {
   const base = {
     exporter: event.exporter,
@@ -500,11 +508,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             ctx.logger.error(
               `diagnostics-otel: SDK startup rollback cleanup failed: ${formatError(cleanupError)}`,
             );
-            throw new AggregateError(
-              [err, cleanupError],
-              "diagnostics-otel startup failed and rollback cleanup failed",
-              { cause: err },
-            );
+            throw createStartupRollbackError(err, cleanupError);
           }
           throw err;
         }
