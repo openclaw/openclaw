@@ -4,7 +4,6 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   ErrorCode,
   ListToolsResultSchema,
-  McpError,
   type CallToolResult,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
@@ -39,6 +38,7 @@ import { listAllMcpTools, MCP_CATALOG_LIST_LIMITS } from "./mcp-catalog-listing.
 import { bindMcpClientElicitation, MCP_ELICITATION_TIMEOUT_MS } from "./mcp-client-elicitation.js";
 import {
   connectMcpClient,
+  createMcpRequestLifecycle,
   disposeMcpClient,
   isMcpHttpSessionExpired,
   McpClientConnectTimeoutError,
@@ -539,68 +539,7 @@ function createServerMcpRuntime(
     await disposeSession(session);
     return true;
   };
-  const localRequestTimeouts = new WeakSet<object>();
-  const runMcpRequest = async <T>(
-    session: BundleMcpSession,
-    request: (signal: AbortSignal, holdForHumanInput: () => () => void) => Promise<T>,
-    parentSignal?: AbortSignal,
-  ): Promise<T> => {
-    const requestSignal = parentSignal ?? getSessionMcpRequestSignal();
-    const abortController = new AbortController();
-    const onParentAbort = () => abortController.abort(requestSignal?.reason);
-    if (requestSignal?.aborted) {
-      onParentAbort();
-    } else {
-      requestSignal?.addEventListener("abort", onParentAbort, { once: true });
-    }
-    const timeoutError = new McpError(ErrorCode.RequestTimeout, "Request timed out", {
-      timeout: session.requestTimeoutMs,
-    });
-    const onTimeout = () => {
-      localRequestTimeouts.add(timeoutError);
-      abortController.abort(timeoutError);
-    };
-    let deadline = Date.now() + session.requestTimeoutMs;
-    let humanInputRemainingMs = MCP_ELICITATION_TIMEOUT_MS;
-    let humanInputStartedAt = 0;
-    let humanInputWaits = 0;
-    let finished = false;
-    let timeout = setTimeout(onTimeout, session.requestTimeoutMs);
-    timeout.unref?.();
-    const armTimeout = (expiresAt: number) => {
-      clearTimeout(timeout);
-      timeout = setTimeout(onTimeout, Math.max(0, expiresAt - Date.now()));
-      timeout.unref?.();
-    };
-    const holdForHumanInput = () => {
-      if (humanInputWaits++ === 0) {
-        humanInputStartedAt = Date.now();
-        armTimeout(deadline + humanInputRemainingMs);
-      }
-      return () => {
-        if (--humanInputWaits === 0 && !finished && !abortController.signal.aborted) {
-          const elapsed = Math.min(Date.now() - humanInputStartedAt, humanInputRemainingMs);
-          humanInputRemainingMs -= elapsed;
-          deadline += elapsed;
-          armTimeout(deadline);
-        }
-      };
-    };
-    try {
-      const signal = abortController.signal;
-      signal.throwIfAborted();
-      const result = await request(signal, holdForHumanInput);
-      requestSignal?.throwIfAborted();
-      return result;
-    } catch (error) {
-      requestSignal?.throwIfAborted();
-      throw error;
-    } finally {
-      finished = true;
-      requestSignal?.removeEventListener("abort", onParentAbort);
-      clearTimeout(timeout);
-    }
-  };
+  const requests = createMcpRequestLifecycle(MCP_ELICITATION_TIMEOUT_MS);
   const runGuardedServerRequest = async <T>(
     session: BundleMcpSession,
     request: () => Promise<T>,
@@ -638,9 +577,7 @@ function createServerMcpRuntime(
         recycleReason = "expired HTTP session";
       } else if (tracksFailureBackoff && !requestSignal?.aborted) {
         const failures = recordServerToolFailure(session, nowMs);
-        const requestTimedOut =
-          error !== null && typeof error === "object" && localRequestTimeouts.has(error);
-        if (requestTimedOut && failures && failures >= BUNDLE_MCP_FAILURE_THRESHOLD) {
+        if (requests.didTimeout(error) && failures && failures >= BUNDLE_MCP_FAILURE_THRESHOLD) {
           recycleReason = "repeated request timeouts";
         }
       }
@@ -664,7 +601,7 @@ function createServerMcpRuntime(
     session: BundleMcpSession,
     request: (signal: AbortSignal, holdForHumanInput: () => () => void) => Promise<T>,
     options?: McpRequestOptions,
-  ) => runGuardedServerRequest(session, () => runMcpRequest(session, request), options);
+  ) => runGuardedServerRequest(session, () => requests.run(session, request), options);
   const collectServerItems = (session: BundleMcpSession, kind: "prompts" | "resources") => {
     const callerSignal = getSessionMcpRequestSignal();
     return collectMcpPaginatedItems({
@@ -676,7 +613,7 @@ function createServerMcpRuntime(
         ? AbortSignal.any([lifecycleAbortController.signal, callerSignal])
         : lifecycleAbortController.signal,
       loadPage: ({ cursor, requestTimeoutMs: timeout, signal }) =>
-        runMcpRequest(
+        requests.run(
           session,
           async (requestSignal) => {
             const requestParams = cursor === undefined ? undefined : { cursor };
