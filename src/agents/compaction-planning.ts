@@ -23,8 +23,8 @@ export const SAFETY_MARGIN = 1.2;
 const DEFAULT_PARTS = 2;
 
 /**
- * Overhead reserved for summary prompt, system prompt, prior summary, wrapper
- * tags, and high-reasoning summary generation.
+ * Overhead reserved while deriving chunk sizes. Single-pass eligibility uses the
+ * exact request pressure supplied by the summarization completion owner instead.
  */
 export const SUMMARIZATION_OVERHEAD_TOKENS = 4096;
 
@@ -32,6 +32,10 @@ export const SUMMARIZATION_OVERHEAD_TOKENS = 4096;
 export type StageSplitPlan =
   | {
       mode: "single";
+      // True only when the whole history was verified to fit one request. Legacy
+      // single-stage shortcuts (too few messages, parts<=1) leave this false and
+      // must keep their bounded chunk budget.
+      fitsWholeRequest?: boolean;
     }
   | {
       mode: "split";
@@ -88,6 +92,74 @@ function estimateCompactionPlanningTokens(message: AgentMessage): number {
 export function projectCompactionMessagesForPlanning(messages: AgentMessage[]): AgentMessage[] {
   const safe = sanitizeCompactionMessages(messages);
   return projectCompactionPlanningMessages(safe);
+}
+
+/**
+ * Inline media payloads above this size are replaced with an empty string before
+ * the planning worker transfer. Small payloads stay untouched so the common case
+ * pays no extra allocation.
+ */
+const COMPACTION_PLANNING_INLINE_MEDIA_MAX_CHARS = 1_024;
+
+/** Returns whether a content block carries an oversized inline media payload. */
+function hasOversizedInlineMedia(block: unknown): block is { data: string } {
+  if (typeof block !== "object" || block === null || !("data" in block)) {
+    return false;
+  }
+  const { data } = block;
+  return typeof data === "string" && data.length > COMPACTION_PLANNING_INLINE_MEDIA_MAX_CHARS;
+}
+
+/**
+ * Returns a copy of an oversized media block with an empty `data` payload.
+ *
+ * Copy-on-write: the caller's messages keep their payloads so the restored split
+ * still carries the original media. Only `data` is emptied; `type`, `mimeType`
+ * and every other property survive.
+ */
+function withEmptyInlineMediaData(block: { data: string }): { data: string } {
+  return Object.assign({}, block, { data: "" });
+}
+
+/**
+ * Drops oversized inline media payloads before the planning worker transfer.
+ *
+ * `serializeConversation` never emits media bytes: `getCompactionContent` maps a
+ * non-text block to a fixed omission marker and keeps only its text. Planning
+ * token estimates likewise read the omitted-character count, not the payload.
+ * The bytes are therefore dead weight across the structured-clone boundary, so
+ * this projection empties `data` while preserving every block, its `type`, its
+ * `mimeType` and message identity, keeping estimates and omission markers
+ * byte-identical.
+ */
+/** Union members that carry a structured content array. */
+type AgentMessageWithBlocks = Extract<AgentMessage, { content: unknown[] }>;
+
+/** Returns whether a message carries a structured content array. */
+function hasArrayContent(message: AgentMessage): message is AgentMessageWithBlocks {
+  // Property probe only: members without `content` read undefined, which
+  // Array.isArray rejects, so the predicate stays false for them.
+  // SAFETY: probing an optional property; Array.isArray rejects undefined.
+  return Array.isArray((message as AgentMessageWithBlocks).content);
+}
+
+export function projectCompactionInlineMediaForTransfer(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const projected = messages.map((message) => {
+    if (!hasArrayContent(message) || !message.content.some(hasOversizedInlineMedia)) {
+      return message;
+    }
+    changed = true;
+    const projectedContent = message.content.map((block) =>
+      hasOversizedInlineMedia(block) ? withEmptyInlineMediaData(block) : block,
+    );
+    // Object.assign keeps the message's own type in the result intersection, so
+    // the projected copy stays an AgentMessage without a type assertion.
+    return Object.assign({}, message, { content: projectedContent });
+  });
+  // Preserve array identity when nothing was oversized so callers can rely on
+  // reference equality for the common text-only path.
+  return changed ? projected : messages;
 }
 
 /** Clamps requested split parts to a usable count for the available messages. */
@@ -192,6 +264,17 @@ export function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindo
   return BASE_CHUNK_RATIO;
 }
 
+function fitsSingleSummarizationRequest(params: {
+  inputTokens: number;
+  contextWindow: number;
+  completionAllowanceTokens?: number;
+}): boolean {
+  return (
+    params.inputTokens * SAFETY_MARGIN + (params.completionAllowanceTokens ?? 0) <=
+    params.contextWindow
+  );
+}
+
 /** Builds sanitized chunks for summarization prompts. */
 export function buildSummaryChunks(params: {
   messages: AgentMessage[];
@@ -253,17 +336,32 @@ export function buildStageSplitPlan(params: {
   maxChunkTokens: number;
   parts?: number;
   minMessagesForSplit?: number;
+  contextWindow?: number;
+  singlePassInputTokens?: number;
+  completionAllowanceTokens?: number;
 }): StageSplitPlan {
   const minMessagesForSplit = Math.max(2, params.minMessagesForSplit ?? 4);
   const parts = normalizeCompactionParts(params.parts ?? DEFAULT_PARTS, params.messages.length);
-  if (parts <= 1 || params.messages.length < minMessagesForSplit) {
-    return { mode: "single" };
-  }
-
   const perMessageTokens = estimatePerMessageTokens(params.messages);
   const totalTokens = perMessageTokens.reduce((sum, tokens) => sum + tokens, 0);
-  if (totalTokens <= params.maxChunkTokens) {
-    return { mode: "single" };
+  if (
+    parts <= 1 ||
+    params.messages.length < minMessagesForSplit ||
+    totalTokens <= params.maxChunkTokens
+  ) {
+    return { mode: "single", fitsWholeRequest: false };
+  }
+
+  if (
+    params.contextWindow !== undefined &&
+    params.singlePassInputTokens !== undefined &&
+    fitsSingleSummarizationRequest({
+      inputTokens: params.singlePassInputTokens,
+      contextWindow: params.contextWindow,
+      completionAllowanceTokens: params.completionAllowanceTokens,
+    })
+  ) {
+    return { mode: "single", fitsWholeRequest: true };
   }
   const chunks = chunkCompactionMessageGroups(
     params.messages,
@@ -271,7 +369,9 @@ export function buildStageSplitPlan(params: {
     perMessageTokens,
     parts,
   );
-  return chunks.length > 1 ? { mode: "split", chunks } : { mode: "single" };
+  return chunks.length > 1
+    ? { mode: "split", chunks }
+    : { mode: "single", fitsWholeRequest: false };
 }
 
 /** Drops oldest token-share chunks until history fits the requested context share. */
