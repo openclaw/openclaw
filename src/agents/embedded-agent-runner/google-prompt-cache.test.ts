@@ -540,7 +540,7 @@ describe("google prompt cache", () => {
     const now = 2_500_000;
     const takeoverError = new SessionTranscriptWriterClaimReboundError();
     const sessionManager = {
-      appendCustomEntry: vi.fn(async () => {
+      appendCustomEntryAsync: vi.fn(async () => {
         throw takeoverError;
       }),
       getEntries: vi.fn(() => []),

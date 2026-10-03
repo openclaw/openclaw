@@ -529,7 +529,7 @@ void test("current-main still-starting keeps the restart unverified and records 
 
 // Synthetic tiny package bytes, real production transaction/filesystem owners.
 // This is not authenticated Gateway health or published-driver artifact proof.
-for (const failure of ["ERR_MODULE_NOT_FOUND", "ENOENT", "verified-result-control"]) {
+for (const failure of ["missing-module", "ENOENT", "verified-result-control"]) {
   void test(`filesystem swap: ${failure} cannot retire an unverified backup`, async (t) => {
     const base = await fs.mkdtemp(path.join(os.tmpdir(), "restart-142102-"));
     t.after(() => fs.rm(base, { recursive: true, force: true }));
@@ -539,11 +539,16 @@ for (const failure of ["ERR_MODULE_NOT_FOUND", "ENOENT", "verified-result-contro
       installRoot: disk.root,
       packageTransaction: disk.transaction,
       verifyOnDisk: async () => {
-        if (failure === "ERR_MODULE_NOT_FOUND") {
+        if (failure === "missing-module") {
           try {
             await disk.oldEntry.late();
           } catch (error) {
-            observed = error.code;
+            assert.ok(error instanceof Error);
+            // The missing import can fail during resolution or while loading its resolved file.
+            assert.match(error.message, /^(?:Cannot find module|ENOENT reading) /);
+            const missingChunk = path.join(await fs.realpath(disk.root), "dist/old-142102.mjs");
+            assert.ok(error.message.includes(missingChunk));
+            observed = failure;
             throw error;
           }
           assert.fail("old hashed chunk unexpectedly survived the swap");

@@ -26,11 +26,11 @@ import {
 } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
   prepareGatewaySessionStoreTargetsReadOnly,
   resolveGatewaySessionStoreTargetWithStore,
   type GatewaySessionStoreCache,
-  type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 
@@ -157,7 +157,6 @@ export type SessionSharingRoleParams = {
   cfg?: OpenClawConfig;
   client: GatewayClient | null;
   target: SessionSharingTarget;
-  includeMembership?: boolean;
   isMember?: boolean;
 };
 
@@ -209,15 +208,14 @@ export function resolveSessionSharingRole(
   }
   const member =
     params.isMember ??
-    (params.includeMembership !== false &&
-      isSessionMember(
-        {
-          agentId: params.target.agentId,
-          sessionKey: params.target.storeKey,
-          storePath: params.target.storePath,
-        },
-        identity.id,
-      ));
+    isSessionMember(
+      {
+        agentId: params.target.agentId,
+        sessionKey: params.target.storeKey,
+        storePath: params.target.storePath,
+      },
+      identity.id,
+    );
   return member ? "member" : "viewer";
 }
 

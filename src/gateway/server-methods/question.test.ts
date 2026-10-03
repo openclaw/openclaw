@@ -293,7 +293,7 @@ it.each([
   expect(broadcast).not.toHaveBeenCalled();
 });
 
-it("rejects duplicate ids and one-option questions at the request boundary", async () => {
+it("rejects duplicate ids and admits a bounded rich single-option question at the request boundary", async () => {
   const duplicate = await call("question.request", {
     questions: [requestParams.questions[0], requestParams.questions[0]],
   });
@@ -301,10 +301,37 @@ it("rejects duplicate ids and one-option questions at the request boundary", asy
   expect((duplicate[2] as { message: string }).message).toContain("duplicate question id");
 
   const oneOption = await call("question.request", {
-    questions: [{ ...requestParams.questions[0], options: [{ label: "Only" }] }],
+    id: "rich-question",
+    questions: [
+      {
+        ...requestParams.questions[0],
+        allowEmpty: true,
+        presentation: "form",
+        options: [{ label: "Only", thumbnail: "https://example.com/only.png" }],
+      },
+    ],
   });
-  expect(oneOption[0]).toBe(false);
-  expect((oneOption[2] as { message: string }).message).toContain("2 to 4 options");
+  expect(oneOption[0]).toBe(true);
+  expect(
+    (
+      await call("question.resolve", {
+        id: "rich-question",
+        answers: { answers: { destination: [] } },
+      })
+    )[1],
+  ).toEqual({ status: "answered", answers: { answers: { destination: [] } } });
+  expect(
+    (
+      await call("question.request", {
+        questions: [
+          {
+            ...requestParams.questions[0],
+            options: [{ label: "Unsafe", thumbnail: "javascript:alert(1)" }],
+          },
+        ],
+      })
+    )[0],
+  ).toBe(false);
 
   const clientId = "duplicate-client-id";
   expect((await call("question.request", { ...requestParams, id: clientId }))[0]).toBe(true);
@@ -434,7 +461,7 @@ it.each(["replacement", "abort"] as const)(
           answers: { answers: { secret_value: ["test-secret-stale-requester"] } },
         });
         expect(resolved).toMatchObject(invalidRequest);
-        expect(listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
+        expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
         expect(reloadSecrets).not.toHaveBeenCalled();
         expect(manager.get(id)?.status).toBe("cancelled");
         await expect(waiting).resolves.toEqual({ status: "cancelled" });
@@ -476,7 +503,7 @@ it.each(["replacement", "abort"] as const)(
             )[0],
           ).toBe(true);
           expect(
-            readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" }),
+            await readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" }),
           ).toEqual({
             ok: true,
             value: "test-secret-current-requester",
@@ -537,7 +564,7 @@ it("diverts operator-entered credentials into the store and exposes only a store
     const safeAnswers = { answers: { secret_value: ["stored"] } };
 
     expect(resolved).toEqual([true, { status: "answered", answers: safeAnswers }, undefined]);
-    expect(listSecretStoreEntries({ scope: { kind: "team" } })).toMatchObject([
+    expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toMatchObject([
       {
         name: "SERVICE_API_KEY",
         kind: "secret",
@@ -587,7 +614,7 @@ it("uses operator-edited hosts and keeps invalid store submissions pending for r
       secretStoreAllowedHosts: ["replacement.example.test"],
     });
     expect(retried[0]).toBe(true);
-    expect(listSecretStoreEntries({ scope: { kind: "team" } })[0]).toMatchObject({
+    expect((await listSecretStoreEntries({ scope: { kind: "team" } }))[0]).toMatchObject({
       allowedHosts: ["replacement.example.test"],
     });
   });
@@ -607,7 +634,7 @@ it.each([
       invalidRequest,
     );
     expect(manager.get(id)?.status).toBe("pending");
-    expect(listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
+    expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
   });
 });
 
@@ -626,7 +653,7 @@ it("rejects masked env requests while preserving ordinary question host validati
       ),
     ).toMatchObject(invalidRequest);
     expect(manager.list()).toEqual([]);
-    expect(listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
+    expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
     const ordinaryResponse = await call("question.request", requestParams);
     const ordinaryId = (ordinaryResponse[1] as { id: string }).id;
     expect(
@@ -675,7 +702,9 @@ it("settles the SQLite commit before a second answer races its deferred refresh"
           answers: { answers: { secret_value: ["test-secret-late-overwrite"] } },
         }),
       );
-      expect(readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" })).toEqual({
+      expect(
+        await readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" }),
+      ).toEqual({
         ok: true,
         value: firstValue,
       });
@@ -735,7 +764,9 @@ it("keeps a committed answer terminal and reports refresh failure without inviti
         })
       )[0],
     ).toBe(false);
-    expect(readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" })).toEqual({
+    expect(
+      await readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" }),
+    ).toEqual({
       ok: true,
       value,
     });
@@ -829,7 +860,7 @@ it.each([
         updatedBy: "Previous Operator",
       };
       if (existing) {
-        writeSecretStoreEntry({ ...entry, allowedHosts: ["a.example.test"] });
+        await writeSecretStoreEntry({ ...entry, allowedHosts: ["a.example.test"] });
       }
       const id = await requestSecretQuestion({
         name: entry.name,
@@ -853,8 +884,8 @@ it.each([
       if (!existing) {
         expect(manager.get(id)?.questions[0]).not.toHaveProperty("secretStoreExisting");
       }
-      writeSecretStoreEntry({ ...entry, allowedHosts: ["b.example.test"] });
-      expect(listSecretStoreEntries({ scope: entry.scope })[0]?.allowedHosts).toEqual([
+      await writeSecretStoreEntry({ ...entry, allowedHosts: ["b.example.test"] });
+      expect((await listSecretStoreEntries({ scope: entry.scope }))[0]?.allowedHosts).toEqual([
         "b.example.test",
       ]);
       const value = "test-secret-consented-replacement";
@@ -866,10 +897,10 @@ it.each([
       const safeAnswers = { answers: { secret_value: ["stored"] } };
       expect(resolved).toEqual([true, { status: "answered", answers: safeAnswers }, undefined]);
       expect(manager.get(id)).toMatchObject({ status: "answered", answers: safeAnswers });
-      expect(listSecretStoreEntries({ scope: entry.scope })).toMatchObject([
+      expect(await listSecretStoreEntries({ scope: entry.scope })).toMatchObject([
         { name: entry.name, kind: "secret", allowedHosts: override ?? shown },
       ]);
-      expect(readSecretStoreValue({ scope: entry.scope, name: entry.name })).toEqual({
+      expect(await readSecretStoreValue({ scope: entry.scope, name: entry.name })).toEqual({
         ok: true,
         value,
       });

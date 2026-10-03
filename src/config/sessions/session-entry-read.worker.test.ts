@@ -5,6 +5,7 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -13,6 +14,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
@@ -150,6 +152,11 @@ it("reads row metadata, board presence, and cold summary position from one snaps
     const sessionKey = "agent:main:cron:row-facts";
     const sessionId = "row-facts-session";
     const siblingKey = "agent:main:cron:without-summary";
+    const sessionKeys = [
+      sessionKey,
+      siblingKey,
+      ...Array.from({ length: 62 }, (_, index) => `agent:main:cron:cohort-${index}`),
+    ];
     writeSessionEntry(database, sessionKey, {
       sessionId,
       updatedAt: 1,
@@ -167,12 +174,18 @@ it("reads row metadata, board presence, and cold summary position from one snaps
         omittedContent: false,
       },
     });
-    writeSessionEntry(database, siblingKey, { sessionId: "without-summary", updatedAt: 1 });
-    database.db
-      .prepare(
-        "INSERT INTO board_tabs (session_key, tab_id, title, position, created_by, revision) VALUES (?, 'tab', 'Board', 0, 'user', 0)",
-      )
-      .run(sessionKey);
+    for (const key of sessionKeys.slice(1)) {
+      writeSessionEntry(database, key, { sessionId: key, updatedAt: 1 });
+    }
+    const boardKeys = sessionKeys.filter((_, index) => index % 2 === 0);
+    const insertTab = database.db.prepare(
+      "INSERT INTO board_tabs (session_key, tab_id, title, position, created_by, revision) VALUES (?, ?, 'Board', 0, 'user', 0)",
+    );
+    for (const key of boardKeys) {
+      for (let tab = 0; tab < 4; tab++) {
+        insertTab.run(key, `tab-${tab}`);
+      }
+    }
     database.db
       .prepare(
         "INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at) VALUES (?, 'hot-generation', 1)",
@@ -219,34 +232,125 @@ it("reads row metadata, board presence, and cold summary position from one snaps
       });
     try {
       retained.run(target, () => {
+        const opened = withOpenClawAgentDatabaseReadOnly((reader) => reader, { ...target, env });
+        if (!opened.found) {
+          throw new Error("Expected the seeded read-only database");
+        }
+        const queries = trackSqliteStatementExecutions(opened.value.db, ["boards"], (sql) =>
+          /\bfrom "board_tabs"/iu.test(sql) ? "boards" : null,
+        );
+        try {
+          const read = () =>
+            readSessionRowDatabaseFacts({
+              kind: "session-row-facts",
+              database: target,
+              env,
+              sessionKeys,
+            });
+          const first = read();
+          expect(first.rows).toHaveLength(64);
+          expect(queries.counts.boards).toBe(1);
+          expect(first.rows.filter((row) => row.hasBoard).map((row) => row.sessionKey)).toEqual(
+            boardKeys,
+          );
+          expect(first.rows[0]).toMatchObject({
+            sessionKey,
+            entry: { label: "before" },
+            hasBoard: true,
+            activitySummaryWatermark: { generation: "hot-generation", maxSeq: 41 },
+          });
+          expect(first.rows[1]).toMatchObject({
+            sessionKey: siblingKey,
+            hasBoard: false,
+          });
+          expect(first.rows[1]).not.toHaveProperty("activitySummaryWatermark");
+          expect(read().rows[0]).toMatchObject({
+            entry: { label: "after" },
+            hasBoard: false,
+            activitySummaryWatermark: { generation: "next-generation", maxSeq: 42 },
+          });
+          expect(queries.counts.boards).toBe(2);
+        } finally {
+          queries.restore();
+        }
+      });
+    } finally {
+      concurrentCommit.mockRestore();
+      retained.close();
+      peer.close();
+    }
+  });
+});
+
+it("consumes admitted board absence for a cohort and observes first use and foreign DDL", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKeys = Array.from(
+      { length: 64 },
+      (_, index) => `agent:main:cron:absent-boards-${index}`,
+    );
+    for (const sessionKey of sessionKeys) {
+      writeSessionEntry(database, sessionKey, { sessionId: sessionKey, updatedAt: 1 });
+    }
+    database.db.exec("DROP TABLE board_widgets; DROP TABLE board_tabs");
+    const target = { agentId: database.agentId, path: database.path };
+    await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+    const peer = new (requireNodeSqlite().DatabaseSync)(target.path);
+    const retained = new OpenClawAgentDatabaseReadOnlyScope();
+    try {
+      retained.run(target, () => {
+        const opened = withOpenClawAgentDatabaseReadOnly((reader) => reader, { ...target, env });
+        if (!opened.found) {
+          throw new Error("Expected the seeded read-only database");
+        }
         const read = () =>
           readSessionRowDatabaseFacts({
             kind: "session-row-facts",
             database: target,
             env,
-            sessionKeys: [sessionKey, siblingKey, "agent:main:cron:absent"],
+            sessionKeys,
           });
-        const first = read();
-        expect(first.rows).toHaveLength(2);
-        expect(first.rows[0]).toMatchObject({
-          sessionKey,
-          entry: { label: "before" },
-          hasBoard: true,
-          activitySummaryWatermark: { generation: "hot-generation", maxSeq: 41 },
-        });
-        expect(first.rows[1]).toMatchObject({
-          sessionKey: siblingKey,
-          hasBoard: false,
-        });
-        expect(first.rows[1]).not.toHaveProperty("activitySummaryWatermark");
-        expect(read().rows[0]).toMatchObject({
-          entry: { label: "after" },
-          hasBoard: false,
-          activitySummaryWatermark: { generation: "next-generation", maxSeq: 42 },
-        });
+        const queries = trackSqliteStatementExecutions(
+          opened.value.db,
+          ["boards", "catalog"],
+          (sql) =>
+            /sqlite_master/iu.test(sql)
+              ? "catalog"
+              : /\bfrom "board_tabs"/iu.test(sql)
+                ? "boards"
+                : null,
+        );
+        try {
+          for (let refresh = 0; refresh < 2; refresh++) {
+            const result = read();
+            expect(result.rows).toHaveLength(64);
+            expect(result.rows.every((row) => !row.hasBoard)).toBe(true);
+          }
+          expect(queries.counts).toEqual({ boards: 0, catalog: 0 });
+        } finally {
+          queries.restore();
+        }
+        boardStore.ensureBoardSchema({ db: peer, path: target.path });
+        peer
+          .prepare(
+            "INSERT INTO board_tabs (session_key, tab_id, title, position, created_by, revision) VALUES (?, 'tab', 'Board', 0, 'user', 0)",
+          )
+          .run(sessionKeys[0]!);
+        expect(
+          read()
+            .rows.filter((row) => row.hasBoard)
+            .map((row) => row.sessionKey),
+        ).toEqual([sessionKeys[0]]);
+        peer.exec("BEGIN IMMEDIATE; DROP TABLE board_widgets; DROP TABLE board_tabs");
+        expect(
+          boardStore.readBoardSessionKeys({ db: peer, path: target.path }, sessionKeys),
+        ).toEqual(new Set());
+        peer.exec("ROLLBACK");
+        expect(read().rows[0]?.hasBoard).toBe(true);
+        peer.exec("DROP TABLE board_widgets; DROP TABLE board_tabs");
+        expect(read().rows.every((row) => !row.hasBoard)).toBe(true);
       });
     } finally {
-      concurrentCommit.mockRestore();
       retained.close();
       peer.close();
     }
@@ -504,7 +608,7 @@ it.each(["durable", "incognito"] as const)(
       }
       const authority = await prepareSessionDeliveryGeneration(descriptor);
       try {
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("patch", {
           scope: database.path,
           identities: [sessionKey, entry.sessionId],
           prepare: async () => {
@@ -619,6 +723,74 @@ it.each(["durable", "incognito"] as const)(
       } finally {
         authority.release();
       }
+    });
+  },
+);
+
+it("orders native reads with writers and ignores unrelated metadata notifications", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:ordered-consumer";
+    writeSessionEntry(database, sessionKey, { sessionId: "ordered-session", updatedAt: 1 });
+    const input = { agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env };
+    let escaped: (() => void) | undefined;
+    await withSessionEntriesFromStoresInWorker(
+      [input],
+      ([read]) => {
+        escaped = read!.assertCurrent;
+        sessionChanges.emit({ sessionKey, scope: "runtime" });
+        sessionChanges.emit({ all: true, scope: "agent-runs" });
+        sessionChanges.emit({ all: true, scope: "worker-placements" });
+        sessionChanges.emit({ all: true, scope: "profiles" });
+        sessionChanges.emit({ sessionKey, agentId: "main" });
+        sessionChanges.emit({ sessionKey, storePath: database.path, facts: { kind: "unchanged" } });
+        sessionChanges.emit({
+          all: true,
+          scope: { storePath: path.join(path.dirname(database.path), "unrelated.sqlite") },
+          factsInvalidated: true,
+        });
+        read!.assertCurrent();
+        expect(read!.result.entries[0]?.entry.sessionId).toBe("ordered-session");
+        sessionChanges.emit({ sessionKey, storePath: database.path, factsInvalidated: true });
+        expect(read!.assertCurrent).toThrow("Session entry changed during read");
+      },
+      { ordered: true },
+    );
+    expect(escaped).toThrow("consumer is no longer active");
+    await expect(
+      runOpenClawAgentWriteAdmission({ agentId: "main", path: database.path, env }, () =>
+        withSessionEntriesFromStoresInWorker([input], () => {}, { ordered: true }),
+      ),
+    ).rejects.toThrow("cannot reenter an active SQLite writer admission");
+  });
+});
+
+it.each(["entry", "store", "topology"] as const)(
+  "revokes an ordered reader after authoritative %s changes",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+      const sessionKey = "agent:main:changed-consumer";
+      writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+      await withSessionEntriesFromStoresInWorker(
+        [{ agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env }],
+        ([read]) => {
+          read!.assertCurrent();
+          if (change === "entry") {
+            writeSessionEntry(database, sessionKey, { sessionId: "successor", updatedAt: 2 });
+          } else if (change === "store") {
+            sessionChanges.emit({
+              all: true,
+              scope: { storePath: database.path },
+              factsInvalidated: true,
+            });
+          } else {
+            sessionChanges.emit({ all: true, scope: "stores" });
+          }
+          expect(read!.assertCurrent).toThrow("Session entry changed during read");
+        },
+        { ordered: true },
+      );
     });
   },
 );

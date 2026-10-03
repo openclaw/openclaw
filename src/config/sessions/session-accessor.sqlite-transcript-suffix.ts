@@ -392,6 +392,10 @@ export function replaceSqliteTranscriptSuffixInTransaction(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
   plan: SqliteTranscriptSuffixMutationPlan,
+  projection: {
+    scheduleProjectionReconcile?: boolean;
+    onProjectionReconcileNeeded?: () => void;
+  } = {},
 ): void {
   const db = getSessionKysely(database.db);
   if (
@@ -593,7 +597,8 @@ export function replaceSqliteTranscriptSuffixInTransaction(
     });
   } else {
     markSessionTranscriptIndexDirtyInTransaction(database.db, resolved.sessionId);
-    scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, {});
+    projection.onProjectionReconcileNeeded?.();
+    scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, projection);
   }
   touchTranscriptMutationInTransaction(database, resolved.sessionId);
 }

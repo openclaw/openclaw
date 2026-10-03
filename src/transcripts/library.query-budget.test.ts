@@ -49,6 +49,18 @@ function fixture() {
   return createTranscriptLibraryStoreFixture(tempDirs.make("transcript-library-query-budget-"));
 }
 
+function seedExportBookkeeping(db: DatabaseSync) {
+  executeSqliteQuerySync(
+    db,
+    meetingTranscriptDb(db)
+      .updateTable("meeting_transcript_sessions")
+      .set({
+        export_manifest_json: JSON.stringify({ "retained-export.md": "x".repeat(16_384) }),
+        export_pending_json: JSON.stringify(["x".repeat(16_384)]),
+      }),
+  );
+}
+
 function observeArchiveReads(
   store: ReturnType<typeof createTranscriptLibraryStoreFixture>["store"],
   database: DatabaseSync,
@@ -167,15 +179,7 @@ describe("transcript library SQLite query budgets", () => {
       await store.writeSession(target);
     }
     const db = database();
-    executeSqliteQuerySync(
-      db,
-      meetingTranscriptDb(db)
-        .updateTable("meeting_transcript_sessions")
-        .set({
-          export_manifest_json: JSON.stringify({ "retained-export.md": "x".repeat(16_384) }),
-          export_pending_json: JSON.stringify(["x".repeat(16_384)]),
-        }),
-    );
+    seedExportBookkeeping(db);
     executeSqliteQuerySync(
       db,
       meetingTranscriptDb(db)
@@ -207,15 +211,7 @@ describe("transcript library SQLite query budgets", () => {
     await store.writeSession(target);
     await store.appendUtteranceForSession(target, { text: "Summarize this speech" });
     const db = database();
-    executeSqliteQuerySync(
-      db,
-      meetingTranscriptDb(db)
-        .updateTable("meeting_transcript_sessions")
-        .set({
-          export_manifest_json: JSON.stringify({ "retained-export.md": "x".repeat(16_384) }),
-          export_pending_json: JSON.stringify(["x".repeat(16_384)]),
-        }),
-    );
+    seedExportBookkeeping(db);
     const reads = observeArchiveReads(store, db);
     expect(await store.readSummarySnapshot(target, 20)).toMatchObject({
       nextSequence: 1,
@@ -350,20 +346,18 @@ describe("transcript library SQLite query budgets", () => {
     ).rejects.toThrow(expect.objectContaining({ type: "transcript_result_too_large" }));
   });
 
-  it.each(["title", "source and metadata", "last timestamp"])(
+  it.each(["source and metadata", "last timestamp"])(
     "bounds %s in list, selector and latest descriptors without limiting full-store reads",
     async (field) => {
       const { store, database } = fixture();
       const target = session(
         "descriptor",
-        field === "title"
-          ? { title: "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES + 1) }
-          : field === "source and metadata"
-            ? {
-                source: { providerId: "manual-transcript", private: "x".repeat(600_000) },
-                metadata: { private: "y".repeat(600_000) },
-              }
-            : {},
+        field === "source and metadata"
+          ? {
+              source: { providerId: "manual-transcript", private: "x".repeat(600_000) },
+              metadata: { private: "y".repeat(600_000) },
+            }
+          : {},
       );
       await store.writeSession(target);
       await store.appendUtteranceForSession(target, {

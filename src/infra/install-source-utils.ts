@@ -18,6 +18,7 @@ import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { resolveNpmCommand } from "./npm-command.js";
+import { parseNpmErrorCode } from "./npm-error.js";
 import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import {
   isExactSemverVersion,
@@ -219,7 +220,7 @@ export async function resolveNpmSpecMetadata(params: {
   );
   if (res.code !== 0) {
     const raw = formatNpmCommandFailureOutput(res);
-    if (/E404|is not in this registry/i.test(raw)) {
+    if (parseNpmErrorCode(raw) === "E404") {
       return {
         ok: false,
         error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
@@ -420,7 +421,7 @@ export async function packNpmSpecToArchive(params: {
   );
   if (res.code !== 0) {
     const raw = formatNpmCommandFailureOutput(res);
-    if (/E404|is not in this registry/i.test(raw)) {
+    if (parseNpmErrorCode(raw) === "E404") {
       return {
         ok: false,
         error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,

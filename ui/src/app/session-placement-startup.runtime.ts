@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
@@ -472,10 +473,7 @@ export default function createApplicationPlacementStartupRuntime(
         createdAt: entry.createdAt,
       });
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       connection.dispose();
       entries.clear();

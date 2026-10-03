@@ -21,6 +21,7 @@ import {
 } from "./sqlite-error-diagnostics.js";
 import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
 import { captureSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
+import type { SqliteWorkerDatabaseContext } from "./sqlite-worker-database-context.js";
 import { normalizeDatabasePath } from "./sqlite-worker-identity.js";
 
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
@@ -164,6 +165,8 @@ export type SqliteTransactionOptions = {
   beginDeadlineNs?: bigint;
   busyTimeoutMs?: number;
   databaseLabel?: string;
+  /** Prepared identifiers and counts only; never transcript or session payloads. */
+  diagnosticContext?: Readonly<Record<string, string | number | boolean | null | undefined>>;
   logger?: Pick<SubsystemLogger, "warn">;
   operationLabel?: string;
   slowTransactionHoldMs?: number;
@@ -191,7 +194,9 @@ function slowBusyWaitThresholdMs(options: SqliteTransactionOptions | undefined):
 
 function transactionDiagnosticLabels(
   db: DatabaseSync | undefined,
-  options: Pick<SqliteTransactionOptions, "databaseLabel" | "operationLabel"> | undefined,
+  options:
+    | Pick<SqliteTransactionOptions, "databaseLabel" | "operationLabel" | "diagnosticContext">
+    | undefined,
 ) {
   let database = options?.databaseLabel;
   if (!database) {
@@ -205,6 +210,7 @@ function transactionDiagnosticLabels(
   return {
     database,
     operation: options?.operationLabel || captureSqliteReaderOwner()?.operation || "unlabeled",
+    ...(options?.diagnosticContext ? { context: { ...options.diagnosticContext } } : {}),
   };
 }
 
@@ -309,19 +315,6 @@ function execTimedTransactionStep(params: {
   }
 }
 
-function beginTransaction(
-  db: DatabaseSync,
-  options: SqliteTransactionOptions | undefined,
-  mode: SqliteTransactionMode,
-): void {
-  execTimedTransactionStep({
-    db,
-    options,
-    sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
-    step: "begin",
-  });
-}
-
 function commitImmediateTransaction(
   db: DatabaseSync,
   options: SqliteTransactionOptions | undefined,
@@ -413,7 +406,12 @@ function runSqliteTransactionSync<T>(
     }
   }
 
-  beginTransaction(db, options, mode);
+  execTimedTransactionStep({
+    db,
+    options,
+    sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
+    step: "begin",
+  });
   const transactionStartedAt = Date.now();
   let commitStarted = false;
   try {
@@ -463,6 +461,28 @@ export function runSqliteImmediateTransactionSync<T>(
   options?: SqliteTransactionOptions,
 ): T {
   return runSqliteTransactionSync(db, operation, "immediate", options);
+}
+
+/** Admit the borrowed worker connection after BEGIN and before its physical commit. */
+export function runSqliteWorkerTransactionSync<T>(
+  context: SqliteWorkerDatabaseContext,
+  operation: () => T,
+  options?: SqliteTransactionOptions,
+): T {
+  return runSqliteImmediateTransactionSync(
+    context.database,
+    () => {
+      context.admit("transaction");
+      return operation();
+    },
+    {
+      ...options,
+      withCommit(commit) {
+        context.admit("commit");
+        return options?.withCommit ? options.withCommit(commit) : commit();
+      },
+    },
+  );
 }
 
 /** Prepare outside the transaction; yield for admission without replaying admitted writes. */

@@ -200,7 +200,7 @@ it.each(scenarios)(
         expect(
           await recorder.stageApproved?.({ runId: "acp-input", assertCurrent: () => {} }),
         ).toBe(true);
-        expect(listSessionPendingInputs(target).items).toHaveLength(1);
+        expect((await listSessionPendingInputs(target)).items).toHaveLength(1);
         const sourceOwner = fallbackAgentId ?? (sessionKey === "global" ? "work" : "main");
         const sourcePersistence = recorder.persistApproved.bind(recorder);
         const persistApproved = vi
@@ -272,7 +272,7 @@ it.each(scenarios)(
         expect(persistApproved).toHaveBeenCalledOnce();
         expect(recordProcessed).toHaveBeenCalledOnce();
         expect(markIdle).toHaveBeenCalledOnce();
-        expect(listSessionPendingInputs(target).items).toEqual([]);
+        expect((await listSessionPendingInputs(target)).items).toEqual([]);
         const transcript = await loadTranscriptEvents(target);
         expect(
           transcript.filter((event) => {

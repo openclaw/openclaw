@@ -158,6 +158,12 @@ function renderQueue(props: Parameters<typeof renderChatQueue>[0]) {
   return container;
 }
 
+function queueEdit(
+  overrides: Partial<NonNullable<Parameters<typeof renderChatQueue>[0]["queuedEdit"]>>,
+) {
+  return { editingId: null, onCancel: vi.fn(), ...overrides };
+}
+
 const waiting = (id: string, createdAt: number) => ({
   id,
   text: id,
@@ -325,7 +331,7 @@ describe("chat composer queue reordering", () => {
     const onQueueMove = vi.fn();
     const container = renderQueue({
       queue: [waiting("a", 1), waiting("b", 2), waiting("c", 3)],
-      editingId: "b",
+      queuedEdit: queueEdit({ editingId: "b" }),
       onQueueMove,
       onQueueRemove: vi.fn(),
     });
@@ -356,8 +362,7 @@ describe("chat composer queue reordering", () => {
         { id: "b", text: "b", createdAt: 2, sendState: "waiting-idle" },
         { id: "c", text: "c", createdAt: 3, sendState: "waiting-idle" },
       ],
-      editingId: "b",
-      onQueueEdit,
+      queuedEdit: queueEdit({ editingId: "b", onEdit: onQueueEdit }),
       onQueueSteer,
       onQueueMove: vi.fn(),
       onQueueRemove,
@@ -399,7 +404,7 @@ describe("chat composer queue reordering", () => {
           sendState: "waiting-idle",
         },
       ],
-      onQueueEdit: vi.fn(),
+      queuedEdit: queueEdit({ onEdit: vi.fn() }),
       onQueueRemove: vi.fn(),
     });
 
@@ -413,11 +418,13 @@ describe("chat composer queue reordering", () => {
     const onQueueEditCancel = vi.fn();
     const container = renderQueue({
       queue: [waiting("a", 1)],
-      editingId: "a",
-      editingText: "a draft",
-      onQueueEditChange,
-      onQueueEditSubmit,
-      onQueueEditCancel,
+      queuedEdit: queueEdit({
+        editingId: "a",
+        editingText: "a draft",
+        onEditChange: onQueueEditChange,
+        onEditSubmit: onQueueEditSubmit,
+        onCancel: onQueueEditCancel,
+      }),
       onQueueRemove: vi.fn(),
     });
     const editor = container.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")!;
@@ -442,9 +449,11 @@ describe("chat composer queue reordering", () => {
     const onQueueEditCancel = vi.fn();
     const container = renderQueue({
       queue: [waiting("a", 1)],
-      editingId: "a",
-      onQueueEditSubmit,
-      onQueueEditCancel,
+      queuedEdit: queueEdit({
+        editingId: "a",
+        onEditSubmit: onQueueEditSubmit,
+        onCancel: onQueueEditCancel,
+      }),
       onQueueRemove: vi.fn(),
     });
     const editor = container.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")!;
@@ -482,15 +491,17 @@ describe("chat composer queue reordering", () => {
       render(
         renderChatQueue({
           queue: [{ ...waiting("a", 1), text: "@Alex @Alex" }],
-          editingId: "a",
-          editingText,
-          editingMentions,
           onQueueRemove: vi.fn(),
-          onQueueEditChange: (text, mentions) => {
-            editingText = text;
-            editingMentions = mentions ?? [];
-            draw();
-          },
+          queuedEdit: queueEdit({
+            editingId: "a",
+            editingText,
+            editingMentions,
+            onEditChange: (text, mentions) => {
+              editingText = text;
+              editingMentions = mentions ?? [];
+              draw();
+            },
+          }),
         }),
         container,
       );

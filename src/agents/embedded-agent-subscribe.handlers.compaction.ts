@@ -124,12 +124,13 @@ export function handleCompactionEnd(
   ctx.state.compactionInFlight = false;
   const completed = outcome.status === "completed";
   const willRetry = completed && outcome.willRetry;
+  let recording: Promise<void> | undefined;
   if (completed) {
     ctx.incrementCompactionCount();
     ctx.noteCompactionTokensAfter(outcome.tokensAfter);
     const observedCompactionCount = ctx.getCompactionCount();
     if (ctx.params.sessionPersistence !== "detached") {
-      recordSessionCompacted({
+      recording = recordSessionCompacted({
         sessionKey: ctx.params.sessionKey,
         operationId: `${ctx.params.runId}:${observedCompactionCount}`,
         agentId: ctx.params.agentId,
@@ -232,4 +233,5 @@ export function handleCompactionEnd(
   if (completed && !willRetry) {
     runBestEffortCompactionHook(ctx, "after");
   }
+  return recording;
 }

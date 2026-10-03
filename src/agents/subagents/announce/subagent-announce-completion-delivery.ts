@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery-state.js";
 import {
@@ -294,12 +295,10 @@ function collectDirectCompletionContent(params: {
     const textParts: string[] = [];
     const mediaUrls = new Set<string>();
     let audioAsVoice = false;
-    for (const payload of payloads) {
-      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    for (const record of payloads) {
+      if (!isRecord(record)) {
         continue;
       }
-      // SAFETY: The object/array guard above narrows payload to a plain record boundary.
-      const record = payload as Record<string, unknown>;
       if (
         !hasVisibleAgentPayload(
           { payloads: [record] },
@@ -421,6 +420,12 @@ export async function deliverCompletionDirect(params: {
   const idempotencyKey = `${params.directIdempotencyKey}:text-direct`;
   let committedDelivery: SubagentAnnounceDeliveryResult | undefined;
   let deliveryResultReported: Promise<void> | undefined;
+  const assertDeliveryCurrent = () => {
+    params.signal?.throwIfAborted();
+    if (params.isSourceSessionEffectsAllowed?.() === false) {
+      throw new SourceOwnerChangedError();
+    }
+  };
   try {
     if (params.isSourceSessionEffectsAllowed?.() === false) {
       return sourceOwnerChangedResult();
@@ -443,12 +448,8 @@ export async function deliverCompletionDirect(params: {
       idempotencyKey,
       skipQueue: true,
       abortSignal: params.signal,
-      onPlatformSendDispatch: async () => {
-        params.signal?.throwIfAborted();
-        if (params.isSourceSessionEffectsAllowed?.() === false) {
-          throw new SourceOwnerChangedError();
-        }
-      },
+      onPlatformSendDispatch: async () => assertDeliveryCurrent(),
+      assertDirectAdapterHandoff: assertDeliveryCurrent,
       onDeliveredPayload: () => {
         if (committedDelivery) {
           return;

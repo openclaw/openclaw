@@ -430,21 +430,21 @@ async function createWorkerSessionToolTestFixture(
     sessionKey: string;
   }): Promise<void> {
     let placement = await placements.startDispatch(session);
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: session.sessionId,
       from: "requested",
       to: "provisioning",
       expectedGeneration: placement.generation,
       patch: { environmentId: session.environmentId },
     });
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: session.sessionId,
       from: "provisioning",
       to: "syncing",
       expectedGeneration: placement.generation,
       patch: { workerBundleHash: "a".repeat(64) },
     });
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: session.sessionId,
       from: "syncing",
       to: "starting",
@@ -459,7 +459,7 @@ async function createWorkerSessionToolTestFixture(
       sessionId: session.sessionId,
       ownerEpoch: session.ownerEpoch,
     });
-    placements.transition({
+    await placements.transition({
       sessionId: session.sessionId,
       from: "starting",
       to: "active",

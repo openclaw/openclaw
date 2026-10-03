@@ -43,7 +43,7 @@ export function createWorkboardOrchestrationTools(params: {
       name: "workboard_board_create",
       label: "Workboard Board Create",
       description:
-        "Create or update a Workboard board with persisted SQLite metadata. Choose kind sessions on creation for utility-model categorized sessions with free-form columns; card tools do not apply to Sessions boards. Board kind cannot change after creation.",
+        "Create or update a Workboard board with persisted SQLite metadata. Choose kind sessions on creation for columns with rules over Gateway-owned session facts; card tools do not apply to Sessions boards. Board kind cannot change after creation.",
       parameters: strictObject({
         id: Type.String({ description: "Board id." }),
         kind: Type.Optional(

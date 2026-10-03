@@ -10,12 +10,13 @@ import {
 import { bindCronManagementGrant } from "../../agents/cron-creator-authority-context.js";
 import * as hostFileWrite from "../../agents/host-file-write.js";
 import { makeSettledChild } from "../../agents/subagents/announce/subagent-announce.requester-settle-wake.test-support.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import { settleRequesterTurnAfterSessionSpawns } from "../../agents/subagents/registry/subagent-registry-requester-yield.js";
 import {
   createRequesterInitialTransferFixture,
   markRequesterTurnYieldedWithAuthority,
 } from "../../agents/subagents/registry/subagent-registry-requester-yield.test-support.js";
-import { persistSubagentRunsToDiskAsyncOrThrow } from "../../agents/subagents/registry/subagent-registry-state.js";
 import {
   admitRequesterCronAuthorityUserTurn,
   withRequesterCronAuthority,
@@ -68,8 +69,8 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
     requesterSettleWake: undefined,
     completion: { required: true, resultText: "Maintenance review complete" },
   });
-  const batch = [child];
-  const runs = new Map([[child.runId, child]]);
+  subagentRuns.set(child.runId, child);
+  const runs = subagentRuns;
   const transfer = createRequesterInitialTransferFixture(runs);
   const requester = createSyntheticPluginRuntimeClient({
     scopes: admin ? ["operator.admin"] : ["operator.write"],
@@ -130,8 +131,8 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
       requesterSessionKey: SESSION,
       requesterSessionId: SESSION_ID,
       requesterAgentId: "main",
-      batch,
-      rearmGeneration: child.requesterSettleWake?.rearmGeneration,
+      batch: [expectDefined(runs.get(child.runId), "published requester child")],
+      rearmGeneration: runs.get(child.runId)?.requesterSettleWake?.rearmGeneration,
       runId,
       isCurrent: () => true,
     },
@@ -148,11 +149,18 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
             expect(management?.managementOnly).toBe(true);
             expect(() => management?.mint("cron.add")).toThrow("management-only");
           }
-          runs.clear();
-          await persistSubagentRunsToDiskAsyncOrThrow(runs, [child.runId], {
-            context: captureOpenClawStateWorkerContext(),
-            assertCurrent: resolveAdmittedRunActiveAssertion(admittedRun),
-          });
+          await mutateSubagentRuns(
+            [child.runId],
+            () => ({
+              value: undefined,
+              postimages: new Map([[child.runId, null]]),
+            }),
+            {
+              runs,
+              context: captureOpenClawStateWorkerContext(),
+              assertCurrent: resolveAdmittedRunActiveAssertion(admittedRun),
+            },
+          );
           return await run(identity, admittedRun, creator);
         },
       ),
@@ -374,13 +382,21 @@ describe("requester continuation persisted automation management", () => {
     },
   );
 
-  it.each([true, false, "channel-owner"] as const)(
-    "permits the stored mutation only for an admitted manager: %s",
-    async (admin) => {
+  it.each([
+    [true, "cron.update"],
+    [false, "cron.update"],
+    ["channel-owner", "cron.update"],
+    ["channel-owner", "cron.remove"],
+  ] as const)(
+    "permits the stored mutation only for an admitted manager (%s) with a matching grant (%s)",
+    async (admin, grantMethod) => {
       const fixture = await createStoredJob();
-      const [ok, result, error] = await withSuccessor(admin, fixture.update);
-      expect(ok).toBe(Boolean(admin));
-      if (admin) {
+      const [ok, result, error] = await withSuccessor(admin, (identity) =>
+        fixture.updateWithGrantFor(grantMethod, identity),
+      );
+      const permitted = Boolean(admin) && grantMethod === "cron.update";
+      expect(ok).toBe(permitted);
+      if (permitted) {
         expect(result).toMatchObject({ name: "Reviewed maintenance", enabled: true });
         expect(await fixture.read()).toMatchObject([
           {
@@ -394,22 +410,12 @@ describe("requester continuation persisted automation management", () => {
         ]);
         expect(await fixture.readRuntimeAuthority()).toEqual(fixture.runtimeAuthority);
       } else {
-        // Without a management grant the write-scoped turn stops at the method-scope fence.
+        // An absent or wrong-method grant stops at the method-scope fence.
         expect(error).toMatchObject({ message: "missing scope: operator.admin" });
         expect(await fixture.read()).toEqual(fixture.before);
       }
     },
   );
-
-  it("does not admit an update with a grant bound to another management method", async () => {
-    const fixture = await createStoredJob();
-    const [ok, , error] = await withSuccessor("channel-owner", (identity) =>
-      fixture.updateWithGrantFor("cron.remove", identity),
-    );
-    expect(ok).toBe(false);
-    expect(error).toMatchObject({ message: "missing scope: operator.admin" });
-    expect(await fixture.read()).toEqual(fixture.before);
-  });
 
   it.each(["fresh user turn", "session reset", "global owner removal"])(
     "rejects %s revocation while the real update awaits validation",

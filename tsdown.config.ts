@@ -1,6 +1,6 @@
 // tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
-import { createRequire, isBuiltin } from "node:module";
+import { createRequire } from "node:module";
 import path from "node:path";
 import type { DtsOptions, TsdownPlugin, UserConfig } from "tsdown";
 import {
@@ -116,7 +116,7 @@ function matchesExternalOption(
 function buildInputOptions(
   options: InputOptionsArg,
   build?: { bundleAllDependencies?: boolean },
-): InputOptionsReturn {
+): Awaited<InputOptionsReturn> {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
   }
@@ -238,11 +238,12 @@ function nodeBuildConfig(
   };
 }
 
-function workerDeployBuildConfig(entry: Record<string, string>): UserConfig {
+function workerDeployBuildConfig(entry: Record<string, string>, split = false): UserConfig {
   return {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
     outDir: "dist",
+    platform: "node",
     dts: false,
     env,
     define: {
@@ -260,17 +261,26 @@ function workerDeployBuildConfig(entry: Record<string, string>): UserConfig {
       "utf-8-validate": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
     },
     deps: {
-      alwaysBundle: (id) => !isBuiltin(id),
+      // Rolldown's Node target owns builtin resolution, independently of the build host.
+      alwaysBundle: () => true,
       onlyBundle: false,
     },
     fixedExtension: false,
     minify: { codegen: true, compress: true, mangle: { keepNames: true } },
     outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
-    outputOptions: { codeSplitting: false, assetFileNames: "worker/[name][extname]" },
+    outputOptions: {
+      codeSplitting: split,
+      strictExecutionOrder: true,
+      chunkFileNames: "worker/worker-chunk-[hash].mjs",
+      assetFileNames: "worker/[name][extname]",
+    },
     plugins: [createStateSchemaInlinePlugin(), createWorkerDeployBuildPlugin()],
     shims: true,
     sourcemap: OUTPUT_SOURCE_MAPS,
-    inputOptions: (options) => buildInputOptions(options, { bundleAllDependencies: true }),
+    inputOptions: (options) => ({
+      ...(buildInputOptions(options, { bundleAllDependencies: true }) ?? options),
+      ...(split ? { preserveEntrySignatures: "allow-extension" as const } : {}),
+    }),
   };
 }
 
@@ -282,11 +292,12 @@ function workerHelperBuildConfig(
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
     outDir: "dist",
+    platform: "node",
     dts: false,
     env,
     define,
     deps: {
-      alwaysBundle: (id) => !isBuiltin(id),
+      alwaysBundle: () => true,
       onlyBundle: false,
     },
     fixedExtension: false,
@@ -968,7 +979,13 @@ const configs: UserConfig[] = [
     },
     false,
   ),
-  workerDeployBuildConfig({ "worker/worker": "src/worker/worker-deploy-entry.ts" }),
+  workerDeployBuildConfig(
+    {
+      "worker/worker": "src/worker/worker-deploy-entry.ts",
+      "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js",
+    },
+    true,
+  ),
   workerDeployBuildConfig({
     "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
   }),

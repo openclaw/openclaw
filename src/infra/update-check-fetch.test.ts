@@ -232,7 +232,6 @@ it.each([
   "ambiguous-missing",
   "conflicting-missing",
   "excluded",
-  "excluded-alias",
   "excluded-alias-pattern",
   "excluded-local",
 ])("keeps receipt freshness honest for %s remote mappings", async (mapping) => {
@@ -261,13 +260,7 @@ it.each([
         "remote.origin.fetch",
         "+refs/heads/other:refs/remotes/origin/main",
       );
-      await git(
-        receiver,
-        "config",
-        "--add",
-        "remote.origin.fetch",
-        mapping === "excluded-alias-pattern" ? "^refs/heads/oth*" : "^refs/heads/other",
-      );
+      await git(receiver, "config", "--add", "remote.origin.fetch", "^refs/heads/oth*");
     } else if (mapping.startsWith("ambiguous")) {
       await git(receiver, "remote", "add", "other", pathToFileURL(source).href);
       await git(

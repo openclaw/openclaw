@@ -160,6 +160,28 @@ describe("update schedule hydration", () => {
     expect(Value.Check(UpdateScheduleStateSchema, blankSchedule)).toBe(false);
   });
 
+  it.each([
+    { currentSha: "abcdef" },
+    { currentPath: "" },
+    { prepared: { sha: "b".repeat(40), path: "/candidate", buildDigest: "bad", preparedAtMs: 1 } },
+  ])("rejects malformed immutable facts in both schema and UI (%j)", (invalid) => {
+    const payload = {
+      channel: "dev",
+      autoEnabled: false,
+      install: {
+        kind: "immutable",
+        immutable: {
+          root: "/opt/openclaw",
+          currentSha: "a".repeat(40),
+          currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
+          ...invalid,
+        },
+      },
+    };
+    expect(Value.Check(UpdateScheduleStateSchema, payload)).toBe(false);
+    expect(readUpdateScheduleValue(payload)).toBeNull();
+  });
+
   it("drops blank optional strings instead of discarding the whole payload", () => {
     expect(
       readUpdateAvailableValue({
@@ -291,6 +313,29 @@ describe("update schedule hydration", () => {
         autoEnabled: true,
         install: { kind: "package" },
         target: { kind: "package", version: "2026.8.1-beta.1" },
+      },
+      UpdateScheduleStateSchema,
+      readUpdateScheduleValue,
+    ],
+    [
+      "schedule with a prepared immutable generation",
+      {
+        channel: "dev",
+        autoEnabled: false,
+        install: {
+          kind: "immutable",
+          immutable: {
+            root: "/opt/openclaw",
+            currentSha: "a".repeat(40),
+            currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
+            prepared: {
+              sha: "b".repeat(40),
+              path: `/opt/openclaw/releases/${"b".repeat(40)}`,
+              buildDigest: "c".repeat(64),
+              preparedAtMs: 123,
+            },
+          },
+        },
       },
       UpdateScheduleStateSchema,
       readUpdateScheduleValue,

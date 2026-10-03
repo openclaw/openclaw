@@ -26,6 +26,7 @@ import {
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { closeSkillsWatchers } from "../runtime/refresh.js";
 import { readSkillResourceFiles } from "../runtime/resources.js";
+import { recordSkillFileHost } from "../skill-file-host.js";
 import { runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
@@ -401,7 +402,7 @@ describe("installSkill before_install hooks", () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {
       await writeInstallableSkill(workspaceDir, "gateway-owned");
       const entries = loadTestWorkspaceSkillEntries(workspaceDir);
-      entries[0]!.skill.fileHost = "gateway";
+      recordSkillFileHost(entries[0]!.skill, "gateway");
       vi.mocked(prepareWorkspaceSkills).mockResolvedValue(entries);
       const hostInstall = vi.fn(async () => ({
         ok: true,

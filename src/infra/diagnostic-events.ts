@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import {
   isInternalDiagnosticEventInterested,
@@ -25,6 +26,7 @@ import type {
   DiagnosticMemoryUsage,
   DiagnosticChildProcessSpawnFields,
 } from "./diagnostic-process-types.js";
+import type { DiagnosticGatewayRpcFields } from "./diagnostic-rpc-types.js";
 import type {
   DiagnosticAgentCommentaryFields,
   DiagnosticRunScopeFields,
@@ -63,32 +65,7 @@ type DiagnosticBaseEvent = {
 type DiagnosticSessionEvent = DiagnosticBaseEvent &
   Pick<DiagnosticRunScopeFields, "sessionKey" | "sessionId">;
 
-/** Payload-free facts from authenticated Gateway WebSocket request owners. */
-type DiagnosticGatewayRpcEvent = DiagnosticBaseEvent & {
-  type: "gateway.rpc";
-  /** Canonical core method name, or a fixed other/unknown bucket. */
-  method: string;
-} & (
-    | { phase: "received" }
-    | {
-        phase: "response";
-        outcome: "ok" | "error" | "unavailable" | "suppressed";
-        durationMs: number;
-      }
-    | {
-        phase: "handler";
-        outcome: "returned" | "threw";
-        durationMs: number;
-        admissionMs: number;
-      }
-    | {
-        phase: "dispatch";
-        outcome: "returned" | "threw" | "rejected" | "cancelled";
-        durationMs: number;
-        queueWaitMs?: number;
-        response: "none" | "sent" | "unavailable" | "suppressed";
-      }
-  );
+type DiagnosticGatewayRpcEvent = DiagnosticBaseEvent & DiagnosticGatewayRpcFields;
 
 type DiagnosticUsageEvent = DiagnosticSessionEvent & {
   type: "model.usage";
@@ -1385,15 +1362,11 @@ function dispatchTrustedToolExecutionEvent(
     );
     return;
   }
-  for (const listener of state.toolExecutionListeners) {
-    try {
-      listener(enriched);
-    } catch (error) {
-      console.error(
-        `[diagnostic-events] tool execution listener error type=${enriched.type} seq=${enriched.seq}: ${String(error)}`,
-      );
-    }
-  }
+  notifyListeners(state.toolExecutionListeners, enriched, (error) => {
+    console.error(
+      `[diagnostic-events] tool execution listener error type=${enriched.type} seq=${enriched.seq}: ${String(error)}`,
+    );
+  });
 }
 
 /** Emits an untrusted diagnostic event from external/plugin-facing code. */
@@ -1581,11 +1554,7 @@ export function onTrustedInternalDiagnosticEvent(
 export function onTrustedToolExecutionEvent(
   listener: TrustedToolExecutionEventListener,
 ): () => void {
-  const state = getDiagnosticEventsState();
-  state.toolExecutionListeners.add(listener);
-  return () => {
-    state.toolExecutionListeners.delete(listener);
-  };
+  return registerListener(getDiagnosticEventsState().toolExecutionListeners, listener);
 }
 
 /** Checks currently queued async diagnostic events without draining the queue. */

@@ -6,7 +6,7 @@ fi
 set -euo pipefail
 
 # Direct callers use the same total envelope as CI; never restart an inherited budget.
-CELL_DEADLINE_EPOCH_SECONDS="${CELL_DEADLINE_EPOCH_SECONDS:-$(( $(date +%s) + 525 ))}"
+CELL_DEADLINE_EPOCH_SECONDS="${CELL_DEADLINE_EPOCH_SECONDS:-$(( $(date +%s) + 1125 ))}"
 if ! [[ "$CELL_DEADLINE_EPOCH_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid published-driver cell deadline" >&2
   exit 2
@@ -15,7 +15,6 @@ export CELL_DEADLINE_EPOCH_SECONDS
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz published-driver-update "${1:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}")"
 RUNTIME_VOLUME=""
@@ -38,6 +37,13 @@ IMAGE_NAME="$(docker_e2e_resolve_image openclaw-published-driver-update-e2e)"
 docker_e2e_build_or_reuse "$IMAGE_NAME" published-driver-update \
   "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
+DRIVER_ARGS=(-e GITHUB_EVENT_NAME -e OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE)
+if [[ "$DRIVER_TAG" != */* && "$DRIVER_TAG" != . && "$DRIVER_TAG" != .. ]]; then
+  driver_seed="$ROOT_DIR/.cache/published-driver-install/$DRIVER_TAG/driver.tar"
+  if [ -f "$driver_seed" ]; then
+    DRIVER_ARGS+=(-v "$driver_seed:/tmp/published-driver-cache/driver.tar:ro")
+  fi
+fi
 # OverlayFS makes the published updater copy its entire retained runtime. Keep
 # the disposable installation and retention tree on one native filesystem.
 RUNTIME_VOLUME="$(docker_e2e_docker_cmd volume create)"
@@ -45,6 +51,7 @@ docker_e2e_run_with_harness \
   --init \
   -e CELL_DEADLINE_EPOCH_SECONDS \
   --mount "type=volume,source=$RUNTIME_VOLUME,target=/tmp" \
+  "${DRIVER_ARGS[@]}" \
   -v "$ARTIFACT_DIR:/tmp/published-driver-artifacts" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \

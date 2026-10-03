@@ -20,11 +20,11 @@ import { controlRealtimeVoiceAgentRun } from "../../../talk/agent-run-control.js
 import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session.js";
 import { projectInternalRealtimeVoicePublicConfig } from "../../../talk/provider-internal.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../../talk/provider-resolver.js";
-import { resolveSandboxedSessionCreation } from "../../operator-role-policy.js";
-import { ADMIN_SCOPE } from "../../operator-scopes.js";
-import { resolveOperatorSessionCreation } from "../../server-methods/session-creation-provenance.js";
+import { ADMIN_SCOPE, hasGatewayAdminScope } from "../../operator-scopes.js";
+import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import type { GatewayRequestHandlers, RespondFn } from "../../server-methods/types.js";
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
+import { resolveOperatorSessionCreation } from "../../session-creation-provenance.js";
 import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { SessionMutationAuthorizationChangedError } from "../../session-sharing.js";
 import { withPreparedSessionResolve } from "../../sessions-resolve.js";
@@ -45,7 +45,6 @@ import {
   buildRealtimeVoiceLaunchOptions,
   buildTalkRealtimeConfig,
   buildTalkTranscriptionConfig,
-  canUseTalkDirectTools,
   normalizeTalkSessionBrain,
   normalizeTalkSessionMode,
   normalizeTalkSessionTransport,
@@ -71,31 +70,6 @@ import {
 } from "../transcription-relay.js";
 import { prepareTalkVoiceReplacement } from "../voice-selection.js";
 import { acknowledgeTalkSessionMark } from "./session-mark.js";
-
-function isActiveManagedRoomClient(
-  session: { handoffId: string },
-  connId: string | undefined,
-): boolean {
-  if (!connId) {
-    return false;
-  }
-  const handoff = getTalkHandoff(session.handoffId);
-  return handoff?.room.activeClientId === connId;
-}
-
-function canCloseManagedRoomSession(
-  session: { handoffId: string },
-  connId: string | undefined,
-): boolean {
-  const handoff = getTalkHandoff(session.handoffId);
-  return !handoff?.room.activeClientId || handoff.room.activeClientId === connId;
-}
-
-function canCreateUnscopedManagedRoomSession(
-  client: { connect?: { scopes?: string[] } } | null,
-): boolean {
-  return client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
-}
 
 function managedRoomOwnershipError(action: string) {
   return errorShape(
@@ -168,7 +142,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           return;
         }
         if (transport === "managed-room") {
-          if (brain === "direct-tools" && !canUseTalkDirectTools(client)) {
+          if (brain === "direct-tools" && !hasGatewayAdminScope(client)) {
             respondInvalidRequest(
               respond,
               `talk.session.create brain="direct-tools" requires gateway scope: ${ADMIN_SCOPE}`,
@@ -177,7 +151,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           }
           const spawnedBy = normalizeOptionalString(params.spawnedBy);
           const requestedSessionKey = normalizeOptionalString(params.sessionKey);
-          if (requestedSessionKey && !spawnedBy && !canCreateUnscopedManagedRoomSession(client)) {
+          if (requestedSessionKey && !spawnedBy && !hasGatewayAdminScope(client)) {
             respondInvalidRequest(
               respond,
               `talk.session.create managed-room sessionKey requires spawnedBy or gateway scope: ${ADMIN_SCOPE}`,
@@ -582,7 +556,10 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        if (!isActiveManagedRoomClient(session, client?.connId)) {
+        if (
+          !client?.connId ||
+          getTalkHandoff(session.handoffId)?.room.activeClientId !== client.connId
+        ) {
           respond(false, undefined, managedRoomOwnershipError("steer"));
           return;
         }
@@ -628,7 +605,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             connId,
           });
         } else {
-          if (!canCloseManagedRoomSession(session, client?.connId)) {
+          const activeClientId = getTalkHandoff(session.handoffId)?.room.activeClientId;
+          if (activeClientId && activeClientId !== client?.connId) {
             respond(false, undefined, managedRoomOwnershipError("close"));
             return;
           }

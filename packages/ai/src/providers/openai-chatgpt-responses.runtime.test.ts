@@ -183,72 +183,54 @@ describe("ChatGPT Responses runtime transport ownership", () => {
     }
   });
 
-  it("keeps managed fetch and credentials on one host during payload construction", async () => {
-    const firstToken = createJwt();
-    let firstRequestHeaders: HeadersInit | undefined;
-    const firstFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      firstRequestHeaders = init?.headers;
-      return new Response(`data: ${JSON.stringify(completion("resp_first"))}\n\n`, {
-        headers: { "content-type": "text/event-stream" },
-      });
-    });
-    const secondFetch = vi.fn(
-      async () =>
-        new Response(`data: ${JSON.stringify(completion("resp_second"))}\n\n`, {
-          headers: { "content-type": "text/event-stream" },
-        }),
-    );
-    configureAiTransportHost({
-      buildModelFetch: () => firstFetch,
-      requiresManagedTransport: () => true,
-      resolveSecretSentinel: (value) => (value === "opaque" ? firstToken : value),
-    });
-
-    await streamOpenAICodexResponses(model, context, {
-      apiKey: "opaque",
-      transport: "auto",
-      onPayload: (body) => {
-        configureAiTransportHost({
-          buildModelFetch: () => secondFetch,
-          requiresManagedTransport: () => true,
-        });
-        return body;
-      },
-    }).result();
-
-    expect(firstFetch).toHaveBeenCalledOnce();
-    expect(secondFetch).not.toHaveBeenCalled();
-    expect(new Headers(firstRequestHeaders).get("authorization")).toBe(`Bearer ${firstToken}`);
-  });
-
   it.each(["auto", "websocket-cached"] as const)(
-    "uses the managed fetch instead of opening a WebSocket for %s transport",
+    "retains the managed fetch and credentials across host replacement for %s transport",
     async (transport) => {
-      const managedFetch = vi.fn(
+      const firstToken = createJwt();
+      let firstRequestHeaders: HeadersInit | undefined;
+      const firstFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        firstRequestHeaders = init?.headers;
+        return new Response(`data: ${JSON.stringify(completion("resp_first"))}\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      });
+      const secondFetch = vi.fn(
         async () =>
-          new Response(`data: ${JSON.stringify(completion("resp_managed"))}\n\n`, {
+          new Response(`data: ${JSON.stringify(completion("resp_second"))}\n\n`, {
             headers: { "content-type": "text/event-stream" },
           }),
       );
       const host = createAiTransportHost({
-        buildModelFetch: () => managedFetch,
+        buildModelFetch: () => firstFetch,
+        requiresManagedTransport: () => true,
+        resolveSecretSentinel: (value) => (value === "opaque" ? firstToken : value),
+      });
+      const replacementHost = createAiTransportHost({
+        buildModelFetch: () => secondFetch,
         requiresManagedTransport: () => true,
       });
+      configureAiTransportHost(transport === "auto" ? host : replacementHost);
       const WebSocketFixture = vi.fn(() => {
         throw new Error("managed transport must not open a WebSocket");
       });
       vi.stubGlobal("WebSocket", WebSocketFixture);
 
-      const result = await runWithAiTransportHost(host, () =>
+      const run = () =>
         streamOpenAICodexResponses(model, context, {
-          apiKey: createJwt(),
+          apiKey: "opaque",
           sessionId: `managed-${transport}`,
           transport,
-        }).result(),
-      );
+          onPayload: (body) => {
+            configureAiTransportHost(replacementHost);
+            return body;
+          },
+        }).result();
+      const result = await (transport === "auto" ? run() : runWithAiTransportHost(host, run));
 
       expect(result.stopReason).toBe("stop");
-      expect(managedFetch).toHaveBeenCalledOnce();
+      expect(firstFetch).toHaveBeenCalledOnce();
+      expect(secondFetch).not.toHaveBeenCalled();
+      expect(new Headers(firstRequestHeaders).get("authorization")).toBe(`Bearer ${firstToken}`);
       expect(WebSocketFixture).not.toHaveBeenCalled();
     },
   );

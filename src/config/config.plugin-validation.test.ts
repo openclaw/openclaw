@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { validateConfigObjectWithPlugins as validateConfigObjectWithPluginsRaw } from "./validation.js";
@@ -394,9 +395,10 @@ describe("config plugin validation", () => {
         name: "scopes request-parameter diagnostics to the affected keyed agent",
         config: {
           agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "openclaw" } },
             entries: {
               openclaw: {
-                default: true,
                 model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
                 subagents: { model: "anthropic/claude-sonnet-4-6" },
               },
@@ -493,9 +495,10 @@ describe("config plugin validation", () => {
         name: "does not attribute keyed agent model refs to another agent",
         config: {
           agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "openclaw" } },
             entries: {
               openclaw: {
-                default: true,
                 model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
                 subagents: { model: "anthropic/claude-sonnet-4-6" },
               },
@@ -1144,7 +1147,7 @@ describe("config plugin validation", () => {
     },
   );
 
-  it("discovers legacy-root workspace plugins before ownership materialization", async () => {
+  it("discovers workspace plugins after Doctor preserves legacy ownership", async () => {
     const workspaceDir = path.join(fixtureRoot, "legacy-root-workspace");
     const pluginId = "legacy-root-channel";
     const channelId = "legacy-root";
@@ -1156,7 +1159,7 @@ describe("config plugin validation", () => {
     });
     const env = suiteEnv();
 
-    const res = validateConfigObjectWithPlugins(
+    const migrated = createCanonicalAgentConfigFixture(
       {
         agents: {
           defaults: { workspace: workspaceDir },
@@ -1165,17 +1168,18 @@ describe("config plugin validation", () => {
         channels: { [channelId]: {} },
         plugins: { entries: { [pluginId]: { enabled: true } } },
       },
-      {
-        env,
-        loadPluginMetadataSnapshot: (config) => ({
-          manifestRegistry: resolveConfigWidePluginManifestRegistry({
-            config,
-            env,
-            allowCurrent: false,
-          }),
+      { env, homedir: () => suiteHome },
+    ).config;
+    const res = validateConfigObjectWithPlugins(migrated, {
+      env,
+      loadPluginMetadataSnapshot: (config) => ({
+        manifestRegistry: resolveConfigWidePluginManifestRegistry({
+          config,
+          env,
+          allowCurrent: false,
         }),
-      },
-    );
+      }),
+    });
 
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -1285,7 +1289,7 @@ describe("config plugin validation", () => {
   it("accepts ask destructive policy without dropping adjacent Codex plugin config", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "openclaw" }] },
+        agents: { entries: { openclaw: {} } },
         plugins: {
           entries: {
             codex: {
@@ -1349,7 +1353,7 @@ describe("config plugin validation", () => {
   ])("rejects old always destructive policy in the $name", ({ codexPlugins, expectedPath }) => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "openclaw" }] },
+        agents: { entries: { openclaw: {} } },
         plugins: {
           entries: {
             codex: {

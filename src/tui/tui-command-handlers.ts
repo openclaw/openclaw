@@ -2,22 +2,22 @@ import { randomUUID } from "node:crypto";
 import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
+import { resolveTextCommand } from "../auto-reply/commands-registry.js";
 import { shouldForwardModelCommandToServer } from "../auto-reply/commands-registry.shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
+import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import {
   isSessionDefaultDirectiveValue,
   listThinkingLevelOptions,
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
-import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeTerminalChatSendAckStatus } from "../shared/chat-send-ack-status.js";
 import { formatFastModeValue } from "../shared/fast-mode.js";
 import {
   formatTuiLevelCommandUsage,
   helpText,
-  isSharedTextCommand,
   parseCommand,
   resolveTuiCommandDescriptor,
   type TuiCommandHandlerName,
@@ -32,7 +32,7 @@ import type { TuiBackend } from "./tui-backend.js";
 import { runTuiBrowserSetup } from "./tui-browser-setup.js";
 import type { CommandHandlerContext } from "./tui-command-context.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
-import { matchesTuiSessionSelection } from "./tui-session-events.js";
+import { captureTuiSessionIncarnation } from "./tui-session-events.js";
 import { buildSessionChoices, loadRecentSessions } from "./tui-session-picker.js";
 import {
   readTuiSessionProjectionScope,
@@ -58,7 +58,7 @@ function isBtwCommand(text: string): boolean {
 
 function isSlashStopCommand(text: string): boolean {
   const trimmed = text.trim();
-  return trimmed.startsWith("/") && isChatStopCommandText(trimmed);
+  return trimmed.startsWith("/") && isAbortRequestText(trimmed);
 }
 
 const TERMINAL_CHAT_SEND_FAILURE_MESSAGE = "Chat failed before the run started; try again.";
@@ -130,7 +130,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       allowDuringPending: isBtwCommand(message),
     });
 
-  const reportBlockedMessageSubmit = (_message: string, admission: TuiChatSubmitBlock) => {
+  const reportBlockedMessageSubmit = (admission: TuiChatSubmitBlock) => {
     if (admission.reason === "pending") {
       chatLog.addSystem("agent is busy — press Esc to abort before sending a new message", {
         coalesceConsecutive: true,
@@ -149,7 +149,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const admitSessionAction = () => {
     const admission = resolveTuiSessionActionAdmission(state);
     if (admission.status === "blocked") {
-      reportBlockedMessageSubmit("", admission);
+      reportBlockedMessageSubmit(admission);
       return false;
     }
     return true;
@@ -196,27 +196,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     return true;
   };
 
-  const captureSessionSelection = () => ({
-    sessionKey: state.currentSessionKey,
-    agentId: state.currentAgentId,
-  });
-
-  const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }) =>
-    matchesTuiSessionSelection(state, selection);
-
-  const captureSessionIncarnation = () => {
-    const selection = captureSessionSelection();
-    const sessionId = state.currentSessionId;
-    const generation = state.sessionGeneration ?? 0;
-    return {
-      selection,
-      sessionId,
-      isCurrent: () =>
-        isCurrentSessionSelection(selection) &&
-        (state.sessionGeneration ?? 0) === generation &&
-        (sessionId === null || state.currentSessionId === sessionId),
-    };
-  };
+  const captureSessionIncarnation = () => captureTuiSessionIncarnation(state);
 
   const applySessionSetting = async (
     patch: Omit<Parameters<TuiBackend["patchSession"]>[0], "key" | "agentId">,
@@ -861,7 +841,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     }
     if (descriptor?.handler) {
       await commandHandlers[descriptor.name as TuiCommandHandlerName](args, raw);
-    } else if (opts.local && isSharedTextCommand(raw)) {
+    } else if (opts.local && resolveTextCommand(raw) !== null) {
       addUnsupportedLocalCommand(name);
     } else {
       await sendMessage(raw);
@@ -872,12 +852,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const sendMessage = async (text: string, timeoutMs = opts.timeoutMs) => {
     const admission = resolveMessageAdmission(text);
     if (admission.status === "blocked") {
-      reportBlockedMessageSubmit(text, admission);
+      reportBlockedMessageSubmit(admission);
       return;
     }
     const isBtw = isBtwCommand(text);
     const forgetRunId = isBtw ? forgetLocalBtwRunId : forgetLocalRunId;
-    if (isSlashStopCommand(text) || (hasTrackedAbortTarget() && isChatStopCommandText(text))) {
+    if (isSlashStopCommand(text) || (hasTrackedAbortTarget() && isAbortRequestText(text))) {
       await abortActive({ preferActive: true });
       return;
     }

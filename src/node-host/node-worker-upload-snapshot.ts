@@ -68,7 +68,6 @@ export async function withNodeWorkerUploadSnapshot<T>(
     async (workspace) => {
       const sourceRoot = await root(params.workspaceDir, {
         hardlinks: "allow",
-        nonBlockingRead: true,
         symlinks: "follow-parents-within-root",
       });
       const stagedRoot = await workspace.store.root();

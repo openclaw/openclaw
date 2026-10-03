@@ -16,6 +16,7 @@ import {
   type LegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
+import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import {
   codeModeFailureCode,
   CodeModeHeadlessAbortError,
@@ -181,10 +182,11 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
 }
 
 async function releasePool(owner: NodePool): Promise<void> {
+  const { lifetime } = owner;
   if (
     idlePools.size >= MAX_IDLE_POOLS ||
-    !owner.lifetime ||
-    owner.lifetime.scheduler.signal.aborted ||
+    !lifetime ||
+    lifetime.scheduler.signal.aborted ||
     owner.tasks.isClosed ||
     owner.url !== resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.codeModeNode).href
   ) {
@@ -193,11 +195,14 @@ async function releasePool(owner: NodePool): Promise<void> {
   }
   idlePools.set(
     owner,
-    owner.lifetime.scheduler.schedule({
-      id: `code-mode-worker-idle:${++nextPoolId}`,
-      delayMs: 5 * 60_000,
-      run: () => closePool(owner),
-    }),
+    // Warm-worker retirement belongs to the host, never the completed turn's transcript context.
+    runInDetachedAsyncContext(() =>
+      lifetime.scheduler.schedule({
+        id: `code-mode-worker-idle:${++nextPoolId}`,
+        delayMs: 5 * 60_000,
+        run: () => closePool(owner),
+      }),
+    ),
   );
   if (idlePools.size === 1) {
     memoryPressure.subscribe(retireIdlePools);

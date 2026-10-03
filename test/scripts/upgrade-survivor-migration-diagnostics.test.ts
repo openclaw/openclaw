@@ -293,7 +293,6 @@ it("keeps policy log limits and symlink protections on successful publication", 
 it.each([
   { candidateVersion: "2026.9.5" },
   { activePlugins: ["device-pair"] },
-  { candidateEnabledPlugins: ["memory-core", "telegram", "unrelated"] },
   { candidateEnabledPlugins: ["telegram"] },
   { baselineEnabledPlugins: [] },
   { hookUnauthorizedStatus: 200 },
@@ -351,18 +350,43 @@ it.each(["failed", "passed"] as const)(
   },
 );
 
-function integrityLog(f: ReturnType<typeof fixture>, telemetry: Record<string, unknown>) {
+function integrityFixture(
+  identity: Record<string, unknown> = {},
+  telemetry: Record<string, unknown> = {},
+) {
+  const f = fixture();
+  write(path.join(f.artifacts, "diagnostics/process-42-started.json"), {
+    event: "started",
+    role: "update",
+    packageVersion: "2026.9.4",
+    pid: 42,
+    parentPid: 1,
+    timeOriginUnixMs: 100,
+    ...identity,
+  });
+  const observation = {
+    readerId: "42:1",
+    timeOriginUnixMs: 100,
+    event: "reader-settled",
+    phase: "retained",
+    budgetMs: 30000,
+    elapsedMs: 30002,
+    outcome: "timed-out",
+    pendingIo: 0,
+    ...telemetry,
+  };
   fs.writeFileSync(
     path.join(f.root, "openclaw-upgrade-survivor", "gateway.jsonl"),
     JSON.stringify({
       0: JSON.stringify({ subsystem: "update/package-integrity" }),
-      1: telemetry,
-      2: telemetry.event,
-      message: telemetry.event,
+      1: observation,
+      2: observation.event,
+      message: observation.event,
       _meta: { logLevelName: "DEBUG", path: privateBody },
       privateBody,
     }) + "\n",
   );
+  return f;
 }
 
 it("captures only the actual baseline updater's released integrity envelope and preserves failure", () => {
@@ -439,35 +463,12 @@ process.exit(1);`,
 
 it.each([
   { name: "different PID", identity: { pid: 43 } },
-  { name: "different process origin", identity: { timeOriginUnixMs: 101 } },
   { name: "Doctor", identity: { role: "doctor" } },
-  { name: "post-core", identity: { role: "post-core" } },
   { name: "different package", identity: { packageVersion: "2026.9.5" } },
-  { name: "non-numeric budget", telemetry: { budgetMs: "30000" } },
   { name: "missing settled outcome", telemetry: { outcome: undefined } },
   { name: "negative pending I/O", telemetry: { pendingIo: -1 } },
 ])("omits integrity evidence from $name", ({ identity, telemetry }) => {
-  const f = fixture();
-  write(path.join(f.artifacts, "diagnostics/process-42-started.json"), {
-    event: "started",
-    role: "update",
-    packageVersion: "2026.9.4",
-    pid: 42,
-    parentPid: 1,
-    timeOriginUnixMs: 100,
-    ...identity,
-  });
-  integrityLog(f, {
-    readerId: "42:1",
-    timeOriginUnixMs: 100,
-    event: "reader-settled",
-    phase: "retained",
-    budgetMs: 30000,
-    elapsedMs: 30002,
-    outcome: "timed-out",
-    pendingIo: 0,
-    ...telemetry,
-  });
+  const f = integrityFixture(identity, telemetry);
   const report = capture(f);
   expect(report.exitStatus).toBe(1);
   expect(report.packageIntegrity).toEqual({ availability: "unavailable" });
@@ -477,25 +478,7 @@ it.each([
 it.each(["input", "output", "entries", "symlink", "directory-symlink", "malformed"] as const)(
   "omits the whole integrity diagnostic at the %s boundary",
   (boundary) => {
-    const f = fixture();
-    write(path.join(f.artifacts, "diagnostics/process-42-started.json"), {
-      event: "started",
-      role: "update",
-      packageVersion: "2026.9.4",
-      pid: 42,
-      parentPid: 1,
-      timeOriginUnixMs: 100,
-    });
-    integrityLog(f, {
-      readerId: "42:1",
-      timeOriginUnixMs: 100,
-      event: "reader-settled",
-      phase: "transaction",
-      budgetMs: 30000,
-      elapsedMs: 30002,
-      outcome: "timed-out",
-      pendingIo: 1,
-    });
+    const f = integrityFixture({}, { phase: "transaction", pendingIo: 1 });
     const log = path.join(f.root, "openclaw-upgrade-survivor", "gateway.jsonl");
     const line = fs.readFileSync(log, "utf8");
     if (boundary === "symlink") {

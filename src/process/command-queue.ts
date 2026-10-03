@@ -21,7 +21,6 @@ import {
   enqueueLaneQueue,
   type CommandLaneTaskMarker,
   getQueueState,
-  type LaneGroupState,
   type LaneState,
   normalizeLane,
   removeLaneQueueEntry,
@@ -466,10 +465,9 @@ export function publishLaneConfiguration(config: {
   clearGroups?: readonly string[];
 }): void {
   // Validate before mutation so a rejected group cannot leave widened lanes behind.
-  const validated: LaneGroupState[] = [];
-  for (const [group, spec] of Object.entries(config.groups ?? {})) {
-    validated.push(validateCommandLaneGroupSpec(group, spec));
-  }
+  const validated = Object.entries(config.groups ?? {}).map(([group, spec]) =>
+    validateCommandLaneGroupSpec(group, spec),
+  );
 
   const touched = new Set<string>();
   for (const [rawLane, maxConcurrent] of Object.entries(config.lanes ?? {})) {

@@ -27,7 +27,6 @@ import {
   readLegacyMigrationReceiptFromDatabase,
   recordLegacyMigrationReceipt,
   resolveLegacyMigrationSourceKey,
-  type LegacyMigrationReceipt,
 } from "./state-migrations.receipts.js";
 import {
   LegacyMigrationSourceClaim,
@@ -278,34 +277,6 @@ function importAndRecordReceipt(params: {
   );
 }
 
-async function cleanupReceiptAuthoritativeSources(params: {
-  stateRoot: Root;
-  stateDir: string;
-  sourcePath: string;
-  receipt: LegacyMigrationReceipt;
-  env: NodeJS.ProcessEnv;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
-}): Promise<number> {
-  let removed = 0;
-  for (const candidate of [params.sourcePath, `${params.sourcePath}${APNS_DOCTOR_CLAIM_SUFFIX}`]) {
-    if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, candidate)))) {
-      continue;
-    }
-    // Validate ownership and drain the pinned inode before deleting receipt-retired bytes.
-    await readLegacySourceSnapshot(params.stateRoot, params.stateDir, candidate);
-    if (params.removeSource) {
-      await params.removeSource(candidate);
-    } else {
-      await params.stateRoot.remove(relativeLegacyPath(params.stateDir, candidate));
-    }
-    removed += 1;
-  }
-  if (!params.receipt.removedSource || removed > 0) {
-    markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
-  }
-  return removed;
-}
-
 async function migrateWithExclusiveStateOwnership(params: {
   stateRoot: Root;
   detected: LegacyStateDetection["apns"];
@@ -339,11 +310,10 @@ async function migrateWithExclusiveStateOwnership(params: {
   );
   if (receipt) {
     try {
-      const removed = await cleanupReceiptAuthoritativeSources({
-        ...params,
-        sourcePath: params.detected.sourcePath,
-        receipt,
-      });
+      const removed = await source.removeRetiredSources({ removeSource: params.removeSource });
+      if (!receipt.removedSource || removed > 0) {
+        markLegacyMigrationSourceRemoved(receipt.sourceKey, params.env);
+      }
       if (removed > 0) {
         notices.push("Discarded retired APNs JSON state already covered by its SQLite receipt.");
       }

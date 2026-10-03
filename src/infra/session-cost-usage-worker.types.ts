@@ -57,6 +57,8 @@ export type UsageCostWorkerInput = {
   location: UsageCostWorkerLocation;
   databases: UsageCostWorkerDatabase[];
   operation: UsageCostWorkerOperation;
+  /** Captured transcript selection; supplied actor work never discovers disk artifacts. */
+  transcriptFiles?: string[];
 };
 
 export type UsageCostWorkerResult =

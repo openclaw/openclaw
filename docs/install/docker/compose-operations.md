@@ -55,6 +55,17 @@ adjust the printed dashboard URL as described in [Containerized Gateway](/instal
 Use [Health checks](/install/docker#health-checks) to verify the gateway and
 [Update OpenClaw](/install/docker-vm-runtime#update-openclaw) for image updates.
 
+When the CLI shares Gateway state, add `pid: "service:openclaw-gateway"` to the
+`openclaw-cli` service in your Compose override so ownership checks can see the
+Gateway's processes; sharing the network alone does not share the PID namespace.
+Alternatively, run the TUI inside the Gateway container with
+`docker compose exec openclaw-gateway openclaw tui`. A different PID namespace
+now refuses unverifiable ownership instead of reclaiming the running Gateway's
+lock. `tui --local` starts an embedded agent and is not a PID-namespace workaround
+for shared state. Older locks retain their previous recovery behavior until the
+Gateway next starts and writes namespace identity.
+A crashed container reclaims its lock automatically after about 90 seconds without an owner heartbeat.
+
 Token setup belongs to the [Docker setup flow](/install/docker#containerized-gateway).
 If you need the Control UI token, read `OPENCLAW_GATEWAY_TOKEN` privately from the
 project `.env`. [`config get <path>`](/cli/config) redacts sensitive values; it

@@ -1,7 +1,7 @@
 // Skill prompt blobs externalize large session prompts into content-addressed files.
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { stripRuntimeOnlySessionSkillsFields } from "./store-entry-shape.js";
@@ -33,10 +33,6 @@ type SessionStorePersistenceProjection = PersistedSessionStore & {
 const promptRefCache = new Map<string, SessionSkillPromptRef>();
 const validPromptBlobCache = new Map<string, { mtimeMs: number; size: number; prompt: string }>();
 
-function hashPrompt(prompt: string): string {
-  return crypto.createHash(PROMPT_BLOB_ALGORITHM).update(prompt).digest("hex");
-}
-
 export function clearSessionSkillPromptRefCache(): void {
   promptRefCache.clear();
   validPromptBlobCache.clear();
@@ -45,10 +41,7 @@ function isSha256Hex(value: string): boolean {
   return /^[a-f0-9]{64}$/u.test(value);
 }
 
-function resolveSessionSkillPromptBlobPath(storePath: string, hash: string): string | null {
-  if (!isSha256Hex(hash)) {
-    return null;
-  }
+function resolveSessionSkillPromptBlobPath(storePath: string, hash: string): string {
   return path.join(
     path.dirname(path.resolve(storePath)),
     PROMPT_BLOB_DIR,
@@ -66,7 +59,7 @@ function buildPromptRef(prompt: string): SessionSkillPromptRef {
   const ref = {
     version: PROMPT_BLOB_VERSION,
     algorithm: PROMPT_BLOB_ALGORITHM,
-    hash: hashPrompt(prompt),
+    hash: sha256Hex(prompt),
     bytes: Buffer.byteLength(prompt, "utf8"),
   };
   promptRefCache.set(prompt, ref);
@@ -88,21 +81,11 @@ function rememberValidPromptBlob(blobPath: string, stat: fs.Stats, prompt: strin
 }
 
 function readValidPromptBlob(storePath: string, ref: SessionSkillPromptRef): string | null {
-  if (
-    ref.version !== PROMPT_BLOB_VERSION ||
-    ref.algorithm !== PROMPT_BLOB_ALGORITHM ||
-    !isSha256Hex(ref.hash) ||
-    typeof ref.bytes !== "number" ||
-    !Number.isFinite(ref.bytes) ||
-    ref.bytes < 0 ||
-    ref.bytes > MAX_PROMPT_BLOB_BYTES
-  ) {
+  // Generated references can bypass persisted-reference admission; keep file reads bounded.
+  if (ref.bytes > MAX_PROMPT_BLOB_BYTES) {
     return null;
   }
   const blobPath = resolveSessionSkillPromptBlobPath(storePath, ref.hash);
-  if (!blobPath) {
-    return null;
-  }
   try {
     const stat = fs.statSync(blobPath);
     if (!stat.isFile() || stat.size !== ref.bytes) {
@@ -114,7 +97,7 @@ function readValidPromptBlob(storePath: string, ref: SessionSkillPromptRef): str
       return cached.prompt;
     }
     const prompt = fs.readFileSync(blobPath, "utf8");
-    if (hashPrompt(prompt) !== ref.hash || Buffer.byteLength(prompt, "utf8") !== ref.bytes) {
+    if (sha256Hex(prompt) !== ref.hash || Buffer.byteLength(prompt, "utf8") !== ref.bytes) {
       validPromptBlobCache.delete(blobPath);
       return null;
     }
@@ -129,9 +112,6 @@ function readValidPromptBlob(storePath: string, ref: SessionSkillPromptRef): str
 async function ensurePromptBlob(storePath: string, prompt: string): Promise<SessionSkillPromptRef> {
   const ref = buildPromptRef(prompt);
   const blobPath = resolveSessionSkillPromptBlobPath(storePath, ref.hash);
-  if (!blobPath) {
-    return ref;
-  }
   if (readValidPromptBlob(storePath, ref) === prompt) {
     try {
       const now = new Date();
@@ -171,7 +151,6 @@ export function projectSessionStoreForPersistence(params: {
   store: Record<string, SessionEntry>;
 }): SessionStorePersistenceProjection {
   let persisted = params.store;
-  let changed = false;
   const promptBlobs = new Map<string, SessionSkillPromptBlobProjection>();
   for (const [key, entry] of Object.entries(params.store)) {
     let projectedEntry = stripRuntimeOnlySessionSkillsFields(entry);
@@ -193,9 +172,8 @@ export function projectSessionStoreForPersistence(params: {
       persisted = { ...params.store };
     }
     persisted[key] = projectedEntry;
-    changed = true;
   }
-  return { store: persisted, changed, promptBlobs };
+  return { store: persisted, changed: persisted !== params.store, promptBlobs };
 }
 
 export async function ensureSessionStorePromptBlobsForPersistence(params: {
@@ -215,7 +193,11 @@ function parsePromptRef(value: unknown): SessionSkillPromptRef | null {
   return ref.version === PROMPT_BLOB_VERSION &&
     ref.algorithm === PROMPT_BLOB_ALGORITHM &&
     typeof ref.hash === "string" &&
-    typeof ref.bytes === "number"
+    isSha256Hex(ref.hash) &&
+    typeof ref.bytes === "number" &&
+    Number.isFinite(ref.bytes) &&
+    ref.bytes >= 0 &&
+    ref.bytes <= MAX_PROMPT_BLOB_BYTES
     ? {
         version: ref.version,
         algorithm: ref.algorithm,

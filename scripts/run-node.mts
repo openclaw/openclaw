@@ -28,6 +28,7 @@ import {
   resolveGitHead,
   writeRuntimePostBuildStamp as writeDistRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mts";
+import { resolveQaCodexApiKeyEnvPatch, type ReadQaCodexApiKey } from "./lib/qa-codex-auth-env.mts";
 import {
   captureRunNodeInputState,
   type RunNodeInputState,
@@ -45,6 +46,7 @@ import {
   resolveStaticExtensionAssetSource,
   shouldCopyStaticExtensionAssets,
 } from "./lib/static-extension-assets.mts";
+import { resolveTestRuntime } from "./lib/test-runtime.mts";
 import {
   isBuildRelevantRunNodePath,
   normalizeRunNodePath as normalizePath,
@@ -91,6 +93,7 @@ type RunNodeMainParams = {
   env?: NodeJS.ProcessEnv;
   runRuntimePostBuild?: RunNodeRuntimePostBuild;
   platform?: NodeJS.Platform;
+  readCodexApiKey?: ReadQaCodexApiKey;
 };
 type RunNodeProgress = {
   clearLine(): void;
@@ -1173,7 +1176,7 @@ const getInterruptedSpawnOutcome = (
   return null;
 };
 
-const runNodeChild = async (deps: RunNodeDeps, args: string[]) => {
+const runNodeChild = async (deps: RunNodeDeps, args: string[], execPath = deps.execPath) => {
   deps.cancellation.signal.throwIfAborted();
   const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
   // The parent route grants lifecycle IPC; generic children must not extend
@@ -1184,7 +1187,7 @@ const runNodeChild = async (deps: RunNodeDeps, args: string[]) => {
       mode: "command-path",
     }) !== null;
   const nodeProcess = asRunNodeChild(
-    deps.spawn(deps.execPath, args, {
+    deps.spawn(execPath, args, {
       cwd: deps.cwd,
       detached: useProcessGroup,
       env: deps.env,
@@ -1207,7 +1210,11 @@ const runNodeChild = async (deps: RunNodeDeps, args: string[]) => {
 };
 
 const runOpenClaw = (deps: RunNodeDeps) =>
-  runNodeChild(deps, [...resolveRunNodeDiagnosticArgs(deps), "openclaw.mjs", ...deps.args]);
+  runNodeChild(
+    deps,
+    [...resolveRunNodeDiagnosticArgs(deps), "openclaw.mjs", ...deps.args],
+    resolveTestRuntime(deps.env) === "bun" ? "bun" : deps.execPath,
+  );
 
 const pipeSpawnedOutput = (
   childProcess: RunNodeChild,
@@ -1660,6 +1667,7 @@ function createRunNodeDeps(params: RunNodeMainParams) {
     args,
     env,
     platform: params.platform ?? process.platform,
+    readCodexApiKey: params.readCodexApiKey,
     signalProcess:
       params.signalProcess ??
       ((pid: number, signal?: NodeJS.Signals | number) => process.kill(pid, signal)),
@@ -1706,6 +1714,14 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
     deps.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
     deps.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
     deps.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS ??= "0";
+    Object.assign(
+      deps.env,
+      resolveQaCodexApiKeyEnvPatch({
+        args: deps.args,
+        env: deps.env,
+        readCodexApiKey: deps.readCodexApiKey,
+      }),
+    );
   }
   deps.outputTee = createRunNodeOutputTee(deps);
   // Children own signal forwarding; retain cancellation across in-process steps

@@ -66,6 +66,7 @@ describe("renderSkills", () => {
         {
           score: 1,
           slug: "remote-skill",
+          installRef: "@fixture/remote-skill",
           registry: "https://clawhub.ai",
           displayName: "Remote Skill",
         },
@@ -535,6 +536,7 @@ describe("renderSkills", () => {
         {
           score: 1,
           slug: "github",
+          installRef: "@openclaw/github",
           registry: "https://clawhub.ai",
           displayName: "GitHub",
           version: "1.0.0",

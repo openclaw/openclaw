@@ -12,10 +12,10 @@ runs:
           exit 1
         fi
 
-        # Built from openclaw/bun commit 57fadf566d797870759abbe103206ee3981a9323.
-        # WebKit commit f20ce7744553c910bcf16a33faf976af208de091.
+        # Built from openclaw/bun commit e167be5c8fdc8b959b707a13901af019b27bd4a3.
+        # WebKit commit fb1167ebf2cb9edc1f6771a2c11771b024693ae0.
         bun_dir="$(mktemp -d "$RUNNER_TEMP/openclaw-test-bun.XXXXXX")"
-        release_url="https://github.com/openclaw/bun/releases/download/openclaw-v1.4.3-20260930-57fadf566d-webkit-f20ce77445"
+        release_url="https://github.com/openclaw/bun/releases/download/openclaw-v1.4.3-20261003-e167be5c8f-webkit-fb1167ebf2"
         archive="$bun_dir/bun-linux-x64.zip"
         for asset in bun-linux-x64.zip SHA256SUMS manifest.json; do
           curl --fail --location --no-progress-meter --show-error \
@@ -32,14 +32,14 @@ runs:
           done
         )
         printf '%s  %s\n' \
-          '62452aa42cd54ce1bcd6862fc4305a59f515561b0d80d90bff7b39e7d8c5a05d' \
+          '0b66504b091092c45e2daef4ff02481f2d22030a9a767eaad2bc233baf64d32a' \
           "$archive" | sha256sum --check -
         unzip -p "$archive" bun-linux-x64/bun > "$bun_dir/bun"
         printf '%s  %s\n' \
           "$(jq -er '.assets[] | select(.name == "bun-linux-x64.zip") | .executable.sha256' "$bun_dir/manifest.json")" \
           "$bun_dir/bun" | sha256sum --check -
         printf '%s  %s\n' \
-          '1bca0225c01e3e0adabecec958f66c8e4cdfb16fbc3fbdef2f4aa145f13538d9' \
+          '94115055a32f926178a017bf892a2f39b4d8dbb49608932c1793b45bb95d6ce6' \
           "$bun_dir/bun" | sha256sum --check -
         chmod 755 "$bun_dir/bun"
         "$bun_dir/bun" --version

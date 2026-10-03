@@ -442,7 +442,7 @@ it("unwraps an npm script shim without reparsing prompt argv", async () => {
     command: "gemini",
     packagePath: ["@google", "gemini-cli", "bundle", "gemini.js"],
   });
-  const nodePath = path.join(binDir, "node.exe");
+  const nodePath = path.join(binDir, "node.EXE");
   await writeFile(nodePath, "", "utf8");
   const args = ["--prompt", "explain A&B | C > D and 100% coverage"];
   await setup({ argv: ["gemini", ...args], env: { PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT" } });

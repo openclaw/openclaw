@@ -13,6 +13,7 @@ import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts"
 import { t } from "../i18n/index.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import "./session-menu.ts";
+import "./mcp-app-catalog.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
@@ -80,7 +81,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
-  private readonly people = new SidebarPeopleController(this);
+  readonly people = new SidebarPeopleController(this);
 
   sessionGroupDefaults(name: string) {
     if (this.context?.sessions.groupsStatus() !== "ready") {
@@ -562,6 +563,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
                 >
                   ${renderAppSidebarHomeRow(this)}
+                  <openclaw-mcp-app-catalog surface="sidebar"></openclaw-mcp-app-catalog>
                   ${repeat(sidebarZone.entries, serializeSidebarEntry, (entry) =>
                     renderAppSidebarZoneEntry(
                       this,
@@ -587,7 +589,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
             }
           </div>
           <div class="sidebar-shell__invite">
-            ${this.communityInvitePresentation === "shown" ? renderCommunityInviteCard(this.dismissCommunityInvite) : nothing}
+            ${this.communityInvitePresentation === "shown" ? renderCommunityInviteCard(this.dismissCommunityInvite, this.context?.theme.resolvedMode ?? "dark") : nothing}
           </div>
           <div class="sidebar-shell__footer">
             ${

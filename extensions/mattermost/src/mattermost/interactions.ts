@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getMattermostRuntime } from "../runtime.js";
-import { isWildcardBindHost } from "./callback-host.js";
+import { resolveCallbackHost } from "./callback-host.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
 import {
   isRequestBodyLimitError,
@@ -124,15 +124,7 @@ export function computeInteractionCallbackUrl(
     return `${callbackBaseUrl.replace(/\/+$/, "")}${path}`;
   }
   const port = resolveGatewayPort(cfg);
-  let host =
-    cfg?.gateway?.customBindHost && !isWildcardBindHost(cfg.gateway.customBindHost)
-      ? cfg.gateway.customBindHost.trim()
-      : "localhost";
-
-  // Bracket IPv6 literals so the URL is valid: http://[::1]:18789/...
-  if (host.includes(":") && !(host.startsWith("[") && host.endsWith("]"))) {
-    host = `[${host}]`;
-  }
+  const host = resolveCallbackHost(cfg?.gateway?.customBindHost, true);
 
   return `http://${host}:${port}${path}`;
 }

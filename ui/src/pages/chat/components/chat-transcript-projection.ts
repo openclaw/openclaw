@@ -9,6 +9,7 @@ import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
+import { resolveChatSubagentWait } from "../chat-subagent-wait.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
@@ -22,15 +23,13 @@ import {
 } from "../chat-thread.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { buildChatArchiveNotice, renderChatDivider, renderChatNotice } from "./chat-divider.ts";
-import { assistantMediaPolicyKey } from "./chat-message-media.ts";
+import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts";
+import { assistantMediaPolicyKey, getChatMediaRenderVersion } from "./chat-message-media.ts";
 import {
-  getChatMediaRenderVersion,
-  renderActivityGroup,
-  renderMessageGroup,
   renderStreamGroup,
   renderWorkGroupSummary,
   type StreamGroupOptions,
-} from "./chat-message.ts";
+} from "./chat-message-stream.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import {
@@ -66,7 +65,7 @@ import type {
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
-import { renderTurnRecapRow } from "./chat-working-indicator.ts";
+import { renderChatWorkingIndicator, renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 const workPreviewCache =
@@ -237,8 +236,9 @@ export function projectChatTranscript(
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
-  const isEmpty =
-    chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation && !hasTypingActors;
+  const subagentWait = resolveChatSubagentWait(props);
+  const hasLiveContent = Boolean(subagentWait || hasTypingActors || hasRealtimeTalkConversation);
+  const isEmpty = chatItems.length === 0 && !props.loading && !hasLiveContent;
   transcript.setContentReady(!props.loading);
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(
     props,
@@ -246,13 +246,15 @@ export function projectChatTranscript(
     isGlobalAliasKey,
   );
   const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
+  const presented =
+    typeof props.presented === "object" ? props.presented.isPresented() : (props.presented ?? true);
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
   const turnRecapByGroupKey = new Map<string, TurnRecap>();
   const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
     entryRefFor: transcript.entryAnimations.refFor,
-    presented: props.presented,
+    presented,
     onReply: props.onSetReply
       ? (target) => state.transcriptRenderContext.onSetReply?.(target)
       : undefined,
@@ -540,6 +542,24 @@ export function projectChatTranscript(
       content: renderTurnRecapRow(turnRecap),
     });
   }
+  if (subagentWait && !searchFiltering) {
+    transcriptRows.push({
+      kind: "content",
+      key: "waiting-subagents",
+      content: renderChatWorkingIndicator(
+        {
+          kind: "reading-indicator",
+          key: `waiting-subagents:${props.sessionKey}`,
+          startedAt: subagentWait.startedAt,
+        },
+        {
+          mascot: props.branding?.mascot,
+          waitingSubagents: subagentWait,
+          onOpenSession: props.onOpenSession,
+        },
+      ),
+    });
+  }
   const typingIndicator = renderChatTypingIndicator(
     props.typingActors,
     avatarPlacement,
@@ -569,8 +589,10 @@ export function projectChatTranscript(
     Math.floor(Date.now() / 60_000),
     latestBrowserTabsKey,
     props.sessionKey,
-    props.presented,
-    props.transcriptVisible,
+    presented,
+    typeof props.transcriptVisible === "object"
+      ? props.transcriptVisible.isPresented()
+      : (props.transcriptVisible ?? true),
     // Invalidate settled rows when spawn metadata arrives, not on activity/title patches.
     avatarPlacement,
     props.boardProvider,

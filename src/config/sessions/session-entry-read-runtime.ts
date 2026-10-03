@@ -24,6 +24,7 @@ import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agen
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
+import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
 import { listSessionEntriesReadOnly } from "./session-accessor.sqlite-entry-list.read.js";
 import {
   loadSessionEntry,
@@ -40,6 +41,12 @@ import {
   captureCanonicalSessionReaderContinuation,
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
+import { withOrderedSessionEntriesInWorker } from "./session-entry-read-ordered.js";
+import type {
+  SessionEntryWorkerRead,
+  PreparedSessionEntryWorkerRead,
+  SessionStoreWorkerReadScope,
+} from "./session-entry-read-runtime.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   assertSessionStoreReadCandidate,
@@ -55,13 +62,13 @@ import {
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type {
-  SessionExactEntriesWorkerResult,
   SessionExactEntriesWorkerSelection,
   SessionHistoryWorkerDatabase,
+  SessionEntryListWorkerInput,
 } from "./session-transcript-worker.types.js";
 import type { SessionEntry } from "./types.js";
 
-function captureSessionEntryReadScope(input: SessionEntryReadScope) {
+export function captureSessionEntryReadScope(input: SessionEntryReadScope) {
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const scope = {
@@ -75,7 +82,10 @@ function captureSessionEntryReadScope(input: SessionEntryReadScope) {
   return { scope, env, agentId };
 }
 
-function isNativeSessionEntryRead(scope: SessionEntryReadScope, agentId: string | undefined) {
+export function isNativeSessionEntryRead(
+  scope: SessionEntryReadScope,
+  agentId: string | undefined,
+) {
   const storePath = scope.storePath;
   return Boolean(
     isIncognitoSessionKey(scope.sessionKey) ||
@@ -194,6 +204,7 @@ export async function withSessionDiagnosticTextInWorker(
 export async function readSessionEntryInWorker(
   input: SessionAccessScope,
   assertCallerCurrent: () => void,
+  onRegistryChange?: (change: AgentDatabaseRegistryChange) => void,
 ) {
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
@@ -249,7 +260,10 @@ export async function readSessionEntryInWorker(
       };
       const source = {
         assertCurrent,
-        onRegistryChange: owner.onRegistryChange,
+        onRegistryChange(change) {
+          owner.onRegistryChange(change);
+          onRegistryChange?.(change);
+        },
         createAdmission(binding) {
           return () => ({
             nativeLocations: binding.nativeLocations,
@@ -287,22 +301,24 @@ export async function readSessionEntryInWorker(
   return loadedRead.entry;
 }
 
-type SessionStoreWorkerReadScope = {
-  agentId: string;
-  storePath: string;
-  env?: NodeJS.ProcessEnv;
-};
-
 /** Read descriptive summaries through the original store selection and reader lifetime. */
-export async function readSessionEntrySummariesInWorker(input: SessionStoreWorkerReadScope) {
+export async function readSessionEntrySummariesInWorker(
+  input: Omit<SessionStoreWorkerReadScope, "agentId"> &
+    Pick<SessionEntryListWorkerInput["scope"], "agentId" | "cleanupSession">,
+) {
   const { scope, agentId } = captureSessionEntryReadScope({ ...input, sessionKey: "" });
   if (isNativeSessionEntryRead(scope, agentId)) {
     // Process-held transcripts keep their existing native reader until its worker cutover.
     return listSessionEntriesReadOnly({
       ...scope,
+      clone: false,
       projection: "list",
       hydrateSkillPromptRefs: false,
-    });
+    })
+      .filter(({ sessionKey, entry }) =>
+        matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession),
+      )
+      .map(({ sessionKey, entry }) => ({ sessionKey, entry: structuredClone(entry) }));
   }
   return withSessionStoreReaderInWorker(
     { ...input, env: scope.env, storePath: scope.storePath ?? input.storePath },
@@ -314,6 +330,7 @@ export async function readSessionEntrySummariesInWorker(input: SessionStoreWorke
           storePath: database.path,
           env: database.env,
           projection: "list",
+          cleanupSession: input.cleanupSession,
           hydrateSkillPromptRefs: false,
         },
         continuation,
@@ -325,26 +342,15 @@ export async function readSessionEntrySummariesInWorker(input: SessionStoreWorke
   );
 }
 
-type SessionEntryWorkerRead = SessionStoreWorkerReadScope &
-  SessionExactEntriesWorkerSelection & {
-    lifecycleSessionKey?: string;
-    projection?: "full" | "sharing" | "list";
-    includeMembers?: boolean;
-    includeParticipantRecords?: boolean;
-    includeAuthorization?: boolean;
-  };
-
-export type PreparedSessionEntryWorkerRead = {
-  result: SessionExactEntriesWorkerResult;
-  database: { agentId: string; path: string; env: NodeJS.ProcessEnv };
-  assertCurrent: () => void;
-};
-
 /** Keep every discovered database and original admission alive through one synchronous consumer. */
 export async function withSessionEntriesFromStoresInWorker<T>(
   inputs: readonly SessionEntryWorkerRead[],
   consume: (reads: readonly PreparedSessionEntryWorkerRead[]) => T,
+  options?: { ordered?: boolean },
 ): Promise<T> {
+  if (options?.ordered) {
+    return withOrderedSessionEntriesInWorker(inputs, consume, withSessionStoreReaderInWorker);
+  }
   const reads: PreparedSessionEntryWorkerRead[] = [];
   const enter = (index: number): Promise<T> => {
     const input = inputs[index];

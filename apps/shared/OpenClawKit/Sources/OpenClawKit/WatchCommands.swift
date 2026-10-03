@@ -331,6 +331,18 @@ public struct OpenClawWatchAppStatus: Codable, Sendable, Equatable {
         self.verbatim = verbatim
     }
 
+    public static func decode<Key: CodingKey>(
+        from container: KeyedDecodingContainer<Key>,
+        forKey key: Key,
+        fallbackText: String?) -> OpenClawWatchAppStatus?
+    {
+        if let status = try? container.decode(Self.self, forKey: key) {
+            return status
+        }
+        guard container.contains(key), let fallbackText, !fallbackText.isEmpty else { return nil }
+        return Self(code: .legacy, verbatim: fallbackText)
+    }
+
     public static func decodeLegacyGateway(
         text: String?,
         connected: Bool) -> OpenClawWatchAppStatus
@@ -390,6 +402,8 @@ public struct OpenClawWatchAppStatus: Codable, Sendable, Equatable {
 public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
     public var type: OpenClawWatchPayloadType
     public var gatewayStatus: OpenClawWatchAppStatus
+    // iPhone and Watch updates are staggered; keep encoding the shipped text fields
+    // until every supported Watch build decodes semantic statuses.
     public var gatewayStatusText: String
     public var gatewayConnected: Bool
     public var agentName: String
@@ -504,29 +518,8 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
             chatDeliveryContext: chatDeliveryContext)
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case type
-        case gatewayStatus
-        case gatewayStatusText
-        case gatewayConnected
-        case agentName
-        case agentAvatarURL
-        case agentAvatarText
-        case sessionKey
-        case gatewayStableID
-        case talkStatus
-        case talkStatusText
-        case talkEnabled
-        case talkListening
-        case talkSpeaking
-        case pendingApprovalCount
-        case chatItems
-        case chatStatus
+    private enum LegacyCodingKeys: String, CodingKey {
         case chatStatusCode
-        case chatStatusText
-        case sentAtMs
-        case snapshotId
-        case chatDeliveryContext
     }
 
     public init(from decoder: Decoder) throws {
@@ -549,18 +542,12 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
             OpenClawWatchChatDeliveryContext.self, forKey: .chatDeliveryContext)
 
         let gatewayStatusText = try container.decodeIfPresent(String.self, forKey: .gatewayStatusText)
-        if let gatewayStatus = try? container.decode(
-            OpenClawWatchAppStatus.self,
-            forKey: .gatewayStatus)
+        if let gatewayStatus = OpenClawWatchAppStatus.decode(
+            from: container,
+            forKey: .gatewayStatus,
+            fallbackText: gatewayStatusText)
         {
             self.gatewayStatus = gatewayStatus
-        } else if container.contains(.gatewayStatus),
-                  let gatewayStatusText,
-                  !gatewayStatusText.isEmpty
-        {
-            self.gatewayStatus = OpenClawWatchAppStatus(
-                code: .legacy,
-                verbatim: gatewayStatusText)
         } else {
             self.gatewayStatus = OpenClawWatchAppStatus.decodeLegacyGateway(
                 text: gatewayStatusText,
@@ -568,18 +555,12 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         }
         self.gatewayStatusText = gatewayStatusText ?? Self.legacyText(for: self.gatewayStatus)
         let talkStatusText = try container.decodeIfPresent(String.self, forKey: .talkStatusText)
-        if let talkStatus = try? container.decode(
-            OpenClawWatchAppStatus.self,
-            forKey: .talkStatus)
+        if let talkStatus = OpenClawWatchAppStatus.decode(
+            from: container,
+            forKey: .talkStatus,
+            fallbackText: talkStatusText)
         {
             self.talkStatus = talkStatus
-        } else if container.contains(.talkStatus),
-                  let talkStatusText,
-                  !talkStatusText.isEmpty
-        {
-            self.talkStatus = OpenClawWatchAppStatus(
-                code: .legacy,
-                verbatim: talkStatusText)
         } else {
             self.talkStatus = OpenClawWatchAppStatus.decodeLegacyTalk(
                 text: talkStatusText,
@@ -589,40 +570,14 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         }
         self.talkStatusText = talkStatusText ?? Self.legacyText(for: self.talkStatus)
         let chatStatusText = try container.decodeIfPresent(String.self, forKey: .chatStatusText)
-        let chatStatusCode = try container.decodeIfPresent(String.self, forKey: .chatStatusCode)
+        let chatStatusCode = try decoder.container(keyedBy: LegacyCodingKeys.self)
+            .decodeIfPresent(String.self, forKey: .chatStatusCode)
         self.chatStatus = (try? container.decode(
             OpenClawWatchAppStatus.self,
             forKey: .chatStatus)) ?? OpenClawWatchAppStatus.decodeLegacyChat(
             code: chatStatusCode,
             text: chatStatusText)
         self.chatStatusText = chatStatusText ?? self.chatStatus.map(Self.legacyText)
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(self.type, forKey: .type)
-        try container.encode(self.gatewayStatus, forKey: .gatewayStatus)
-        // iPhone and watchOS updates are staggered. Keep the shipped text fields
-        // until every supported Watch build decodes the semantic status payload.
-        try container.encode(self.gatewayStatusText, forKey: .gatewayStatusText)
-        try container.encode(self.gatewayConnected, forKey: .gatewayConnected)
-        try container.encode(self.agentName, forKey: .agentName)
-        try container.encodeIfPresent(self.agentAvatarURL, forKey: .agentAvatarURL)
-        try container.encodeIfPresent(self.agentAvatarText, forKey: .agentAvatarText)
-        try container.encode(self.sessionKey, forKey: .sessionKey)
-        try container.encodeIfPresent(self.gatewayStableID, forKey: .gatewayStableID)
-        try container.encode(self.talkStatus, forKey: .talkStatus)
-        try container.encode(self.talkStatusText, forKey: .talkStatusText)
-        try container.encode(self.talkEnabled, forKey: .talkEnabled)
-        try container.encode(self.talkListening, forKey: .talkListening)
-        try container.encode(self.talkSpeaking, forKey: .talkSpeaking)
-        try container.encode(self.pendingApprovalCount, forKey: .pendingApprovalCount)
-        try container.encodeIfPresent(self.chatItems, forKey: .chatItems)
-        try container.encodeIfPresent(self.chatStatus, forKey: .chatStatus)
-        try container.encodeIfPresent(self.chatStatusText, forKey: .chatStatusText)
-        try container.encodeIfPresent(self.sentAtMs, forKey: .sentAtMs)
-        try container.encodeIfPresent(self.snapshotId, forKey: .snapshotId)
-        try container.encodeIfPresent(self.chatDeliveryContext, forKey: .chatDeliveryContext)
     }
 
     private static func legacyText(for status: OpenClawWatchAppStatus) -> String {

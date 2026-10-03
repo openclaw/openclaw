@@ -23,26 +23,8 @@ function resolveHelperDylib(): string {
   );
 }
 
-function resolveHelperIpcKey(): string {
-  return resolve(
-    homedir(),
-    "Library",
-    "Application Support",
-    "OpenClaw",
-    "FaceTime",
-    "helper-ipc-key",
-  );
-}
-
-function resolveHelperBuildStamp(): string {
-  return resolve(
-    homedir(),
-    "Library",
-    "Application Support",
-    "OpenClaw",
-    "FaceTime",
-    "helper-build.sha256",
-  );
+function resolveHelperStateFile(name: "helper-ipc-key" | "helper-build.sha256"): string {
+  return resolve(homedir(), "Library", "Application Support", "OpenClaw", "FaceTime", name);
 }
 
 async function resolveNativeInstall(params: {
@@ -132,8 +114,8 @@ export async function inspectFaceTimeArtifacts(params: {
   ] = await Promise.all([
     inspectFaceTimeNativePackage(params),
     readable(resolveHelperDylib(), constants.R_OK),
-    readable(resolveHelperIpcKey(), constants.R_OK),
-    readable(resolveHelperBuildStamp(), constants.R_OK),
+    readable(resolveHelperStateFile("helper-ipc-key"), constants.R_OK),
+    readable(resolveHelperStateFile("helper-build.sha256"), constants.R_OK),
     Promise.all(helperTempDirs.map(countHelpers)).then((counts) =>
       counts.reduce((total, count) => total + count, 0),
     ),
@@ -189,8 +171,10 @@ export async function ensureHelperArtifacts(params: {
   const loadFile = params.readFile ?? readFile;
   const dylib = resolveHelperDylib();
   await checkAccess(dylib, constants.R_OK);
-  const ipcKey = (await loadFile(resolveHelperIpcKey(), "utf8")).trim();
-  const stagedBuildId = (await loadFile(resolveHelperBuildStamp(), "utf8")).trim();
+  const ipcKey = (await loadFile(resolveHelperStateFile("helper-ipc-key"), "utf8")).trim();
+  const stagedBuildId = (
+    await loadFile(resolveHelperStateFile("helper-build.sha256"), "utf8")
+  ).trim();
   if (!/^[\da-f]{64}$/u.test(ipcKey)) {
     throw new Error("FaceTime helper produced an invalid IPC authentication key");
   }

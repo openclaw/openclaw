@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Package lifecycle cleanup and completion touch only this installed package.
+// Package lifecycle cleanup touches this package and its verified Bun global bin.
 // Doctor owns operator-state migration and genuinely dangling runtime-link repair;
 // shared caches outside this package can still serve other installs or profiles.
 import {
@@ -109,12 +109,7 @@ function countInstalledDistScanEntry(budget) {
   }
 }
 
-function* iterateInstalledDistEntries(currentDir, params = {}) {
-  if (params.readdirSync) {
-    yield* params.readdirSync(currentDir, { withFileTypes: true });
-    return;
-  }
-
+function* iterateInstalledDistEntries(currentDir) {
   const dir = opendirSync(currentDir);
   try {
     while (true) {
@@ -129,9 +124,9 @@ function* iterateInstalledDistEntries(currentDir, params = {}) {
   }
 }
 
-function* iterateOptionalInstalledDistEntries(currentDir, params = {}) {
+function* iterateOptionalInstalledDistEntries(currentDir) {
   try {
-    yield* iterateInstalledDistEntries(currentDir, params);
+    yield* iterateInstalledDistEntries(currentDir);
   } catch (error) {
     if (error instanceof InstalledDistScanLimitError) {
       throw error;
@@ -153,7 +148,7 @@ function listInstalledDistFiles(params = {}) {
     if (!currentDir) {
       continue;
     }
-    for (const entry of iterateInstalledDistEntries(currentDir, params)) {
+    for (const entry of iterateInstalledDistEntries(currentDir)) {
       countInstalledDistScanEntry(budget);
       const entryPath = join(currentDir, entry.name);
       if (entry.isSymbolicLink()) {
@@ -189,7 +184,7 @@ function pruneEmptyDistDirectories(params = {}) {
   const budget = resolveInstalledDistScanBudget(params);
 
   function isDirectoryEmpty(currentDir) {
-    for (const entry of iterateInstalledDistEntries(currentDir, params)) {
+    for (const entry of iterateInstalledDistEntries(currentDir)) {
       void entry;
       countInstalledDistScanEntry(budget);
       return false;
@@ -199,7 +194,7 @@ function pruneEmptyDistDirectories(params = {}) {
 
   function prune(currentDir) {
     const childDirs = [];
-    for (const entry of iterateInstalledDistEntries(currentDir, params)) {
+    for (const entry of iterateInstalledDistEntries(currentDir)) {
       countInstalledDistScanEntry(budget);
       if (entry.isSymbolicLink()) {
         throw new Error(
@@ -248,14 +243,14 @@ function pruneLegacyInstalledPluginDependencyDirs(params) {
   const budget = resolveInstalledDistScanBudget(params);
   const removed = [];
 
-  for (const pluginEntry of iterateOptionalInstalledDistEntries(extensionsDir, params)) {
+  for (const pluginEntry of iterateOptionalInstalledDistEntries(extensionsDir)) {
     countInstalledDistScanEntry(budget);
     if (!pluginEntry.isDirectory() || pluginEntry.isSymbolicLink()) {
       continue;
     }
     const pluginDir = join(extensionsDir, pluginEntry.name);
     const dependencyDirNames = [];
-    for (const childEntry of iterateOptionalInstalledDistEntries(pluginDir, params)) {
+    for (const childEntry of iterateOptionalInstalledDistEntries(pluginDir)) {
       countInstalledDistScanEntry(budget);
       if (!isLegacyInstalledPluginDependencyDirName(childEntry.name)) {
         continue;
@@ -372,7 +367,6 @@ export function runBundledPluginPostinstall(params = {}) {
     packageRoot,
     existsSync: pathExists,
     readFileSync: params.readFileSync,
-    readdirSync: params.readdirSync,
     rmSync: params.rmSync,
     log,
   });
@@ -408,6 +402,22 @@ export function completePackageLifecycle(params = {}, reportError = console.erro
 
 if (isDirectPostinstallInvocation()) {
   runBundledPluginPostinstall();
+  if (
+    process.versions.bun &&
+    process.env.OPENCLAW_PACKAGE_BUN_LAUNCHER &&
+    !isSourceCheckoutRoot({ packageRoot: DEFAULT_PACKAGE_ROOT })
+  ) {
+    try {
+      const { installPackageBunCliLauncher } = await import(
+        pathToFileURL(join(DEFAULT_PACKAGE_ROOT, "scripts/postinstall-bun-cli-launcher.mjs")).href
+      );
+      installPackageBunCliLauncher({ packageRoot: DEFAULT_PACKAGE_ROOT });
+    } catch (error) {
+      console.warn(
+        `[postinstall] Bun CLI launcher repair deferred: ${String(error)}. Run Bun with this package's openclaw.mjs doctor --fix.`,
+      );
+    }
+  }
   let admitted = true;
   if (
     process.platform === "win32" &&

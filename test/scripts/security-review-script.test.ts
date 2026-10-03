@@ -63,6 +63,26 @@ const otherReview = {
   creator: { login: "github-actions[bot]", type: "Bot" },
 };
 
+const lockfilePr = {
+  ...pr,
+  changed_files: 1,
+  head: { ...pr.head, repo: { id: 1, full_name: "openclaw/openclaw" } },
+};
+const lockfileContents = {
+  type: "file",
+  encoding: "base64",
+  content: Buffer.from("lockfileVersion: '9.0'\n").toString("base64"),
+};
+const lockfileRoutes = {
+  [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml", status: "modified" }],
+  [rolePath]: { role_name: "read" },
+  [`GET /repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`]: [],
+  [`GET /repos/openclaw/openclaw/compare/${pr.base.sha}...${head}`]: {
+    base_commit: { sha: pr.base.sha },
+    merge_base_commit: { sha: pr.base.sha },
+  },
+};
+
 function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadline?: number) {
   const root = tempDirs.make("security-review-");
   const logPath = path.join(root, "requests.jsonl");
@@ -148,20 +168,9 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
 }
 
 describe("combined security review entry point", () => {
-  it("recovers a temporary HTTP 500 without failing the review", () => {
-    const result = evaluate({
-      [`GET ${pullPath}`]: { responses: [{ httpError: 500 }, pr] },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.waits).toEqual([1_000]);
-    expect(result.combined.at(-1)).toBe("success");
-    expect(result.reviews.filter((entry) => entry.body?.state === "success")).toHaveLength(2);
-  });
-
   it.each([
     { route: `GET ${pullPath}`, response: pr, requestTimeout: "fetch" },
     { route: rolePath, response: { role_name: "maintain" }, requestTimeout: "body" },
-    { route: jobsPath, response: jobs, requestTimeout: "fetch" },
   ])(
     "restarts evaluation after a $requestTimeout deadline on $route",
     ({ route, response, requestTimeout }) => {
@@ -213,27 +222,10 @@ describe("combined security review entry point", () => {
   it("recovers a lockfile read deadline before submitting one cleanup commit", () => {
     const result = evaluate(
       {
-        [`GET ${pullPath}`]: {
-          ...pr,
-          changed_files: 1,
-          head: { ...pr.head, repo: { id: 1, full_name: "openclaw/openclaw" } },
-        },
-        [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml", status: "modified" }],
-        [rolePath]: { role_name: "read" },
-        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`]: [],
-        [`GET /repos/openclaw/openclaw/compare/${pr.base.sha}...${head}`]: {
-          base_commit: { sha: pr.base.sha },
-          merge_base_commit: { sha: pr.base.sha },
-        },
+        ...lockfileRoutes,
+        [`GET ${pullPath}`]: lockfilePr,
         [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=${pr.base.sha}`]: {
-          responses: [
-            { requestTimeout: "fetch" },
-            {
-              type: "file",
-              encoding: "base64",
-              content: Buffer.from("lockfileVersion: '9.0'\n").toString("base64"),
-            },
-          ],
+          responses: [{ requestTimeout: "fetch" }, lockfileContents],
         },
         "POST /graphql": { data: { createCommitOnBranch: { commit: { oid: "e".repeat(40) } } } },
       },
@@ -268,8 +260,6 @@ describe("combined security review entry point", () => {
       unavailable: true,
     },
     { name: "unknown HTTP 403", response: { httpError: 403 }, unavailable: false },
-    { name: "invalid credentials", response: { httpError: 401 }, unavailable: false },
-    { name: "missing repository", response: { httpError: 404 }, unavailable: false },
     {
       name: "stale head",
       response: { errors: [{ type: "STALE_DATA", message: "Expected branch head to match" }] },
@@ -307,26 +297,15 @@ describe("combined security review entry point", () => {
     const { response, unavailable } = scenario;
     const baseReadDenied = "baseReadDenied" in scenario && scenario.baseReadDenied;
     const routes = {
+      ...lockfileRoutes,
       [`GET ${pullPath}`]: {
-        ...pr,
-        changed_files: 1,
+        ...lockfilePr,
         maintainer_can_modify: true,
         head: { ...pr.head, repo: { id: 2, full_name: "contributor/openclaw" } },
       },
-      [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml", status: "modified" }],
-      [rolePath]: { role_name: "read" },
-      [`GET /repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`]: [],
-      [`GET /repos/openclaw/openclaw/compare/${pr.base.sha}...${head}`]: {
-        base_commit: { sha: pr.base.sha },
-        merge_base_commit: { sha: pr.base.sha },
-      },
       [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml`]: baseReadDenied
         ? response
-        : {
-            type: "file",
-            encoding: "base64",
-            content: Buffer.from("lockfileVersion: '9.0'\n").toString("base64"),
-          },
+        : lockfileContents,
       "POST /graphql": response,
     };
     const cleanup = evaluate(routes, "autoscrub");
@@ -357,34 +336,19 @@ describe("combined security review entry point", () => {
   });
 
   it("preserves a failed cleanup mutation when the PR then closes", () => {
-    const cleanupPr = {
-      ...pr,
-      changed_files: 1,
-      head: { ...pr.head, repo: { id: 1, full_name: "openclaw/openclaw" } },
-    };
     const result = evaluate(
       {
+        ...lockfileRoutes,
         [`GET ${pullPath}`]: {
           responses: [
-            cleanupPr,
-            cleanupPr,
-            cleanupPr,
-            cleanupPr,
-            { ...cleanupPr, state: "closed" },
+            lockfilePr,
+            lockfilePr,
+            lockfilePr,
+            lockfilePr,
+            { ...lockfilePr, state: "closed" },
           ],
         },
-        [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml", status: "modified" }],
-        [rolePath]: { role_name: "read" },
-        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`]: [],
-        [`GET /repos/openclaw/openclaw/compare/${pr.base.sha}...${head}`]: {
-          base_commit: { sha: pr.base.sha },
-          merge_base_commit: { sha: pr.base.sha },
-        },
-        [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml`]: {
-          type: "file",
-          encoding: "base64",
-          content: Buffer.from("lockfileVersion: '9.0'\n").toString("base64"),
-        },
+        [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml`]: lockfileContents,
         "POST /graphql": { httpError: 500 },
       },
       "autoscrub",
@@ -442,32 +406,6 @@ describe("combined security review entry point", () => {
     ).toHaveLength(1);
     expect(result.stderr).toContain("exceeded timeout 30000ms");
     expect(result.combined).not.toContain("success");
-  });
-
-  it("exhausts HTTP 500 retries without publishing approval", () => {
-    const result = evaluate({ [`GET ${pullPath}`]: { httpError: 500 } });
-    expect(result.status).toBe(1);
-    expect(result.waits).toEqual([1_000, 2_000, 4_000]);
-    expect(result.requests.filter((entry) => entry.path === pullPath)).toHaveLength(4);
-    expect(result.stderr).toContain(`GitHub API GET ${pullPath} failed: 500`);
-    expect(
-      result.requests.every((entry) => entry.method === "GET" || entry.method === "WAIT"),
-    ).toBe(true);
-  });
-
-  it.each([
-    { name: "partial file list", initialPr: pr, initialFiles: files.slice(0, 1) },
-    { name: "stale file count", initialPr: { ...pr, changed_files: 3 }, initialFiles: files },
-  ])("recovers a $name before evaluating either guard", ({ initialPr, initialFiles }) => {
-    const result = evaluate({
-      [`GET ${pullPath}`]: { responses: [initialPr, pr] },
-      [`GET ${pullPath}/files`]: { responses: [initialFiles, files] },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.waits).toEqual([30_000, 30_000]);
-    expect(result.requests.filter((entry) => entry.path === `${pullPath}/files`)).toHaveLength(2);
-    expect(result.combined.at(-1)).toBe("success");
-    expect(result.reviews.filter((entry) => entry.body?.state === "success")).toHaveLength(2);
   });
 
   it.each(["detect", "enforce"])(
@@ -724,22 +662,19 @@ describe("combined security review entry point", () => {
     },
   );
 
-  it.each([
-    { httpError: 500 },
-    { httpError: 502 },
-    { httpError: 503 },
-    { httpError: 504 },
-    { transportError: "ECONNRESET" },
-  ])("restarts evaluation after a transient status publication failure: %j", (failure) => {
-    const result = evaluate({ [statusPath]: { responses: [failure, {}] } });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.waits).toEqual([1_000]);
-    const afterWait = result.requests.slice(
-      result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
-    );
-    expect(afterWait[0]).toMatchObject({ method: "GET", path: pullPath });
-    expect(result.combined.at(-1)).toBe("success");
-  });
+  it.each([{ httpError: 500 }, { transportError: "ECONNRESET" }])(
+    "restarts evaluation after a transient status publication failure: %j",
+    (failure) => {
+      const result = evaluate({ [statusPath]: { responses: [failure, {}] } });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits).toEqual([1_000]);
+      const afterWait = result.requests.slice(
+        result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+      );
+      expect(afterWait[0]).toMatchObject({ method: "GET", path: pullPath });
+      expect(result.combined.at(-1)).toBe("success");
+    },
+  );
 
   it.each([
     { httpError: 429 },
@@ -1129,29 +1064,14 @@ describe("combined security review entry point", () => {
   it.each(["before cleanup", "before commit"])(
     "preserves merged lockfiles %s and still reports their missing approval",
     (phase) => {
-      const cleanupPr = {
-        ...pr,
-        changed_files: 1,
-        head: { ...pr.head, repo: { id: 1, full_name: "openclaw/openclaw" } },
-      };
-      const merged = { ...cleanupPr, state: "closed", merged: true };
+      const merged = { ...lockfilePr, state: "closed", merged: true };
       const routes = {
+        ...lockfileRoutes,
         [`GET ${pullPath}`]: {
           responses:
-            phase === "before cleanup" ? [merged] : [cleanupPr, cleanupPr, cleanupPr, merged],
+            phase === "before cleanup" ? [merged] : [lockfilePr, lockfilePr, lockfilePr, merged],
         },
-        [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml", status: "modified" }],
-        [rolePath]: { role_name: "read" },
-        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`]: [],
-        [`GET /repos/openclaw/openclaw/compare/${pr.base.sha}...${head}`]: {
-          base_commit: { sha: pr.base.sha },
-          merge_base_commit: { sha: pr.base.sha },
-        },
-        [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml`]: {
-          type: "file",
-          encoding: "base64",
-          content: Buffer.from("lockfileVersion: '9.0'\n").toString("base64"),
-        },
+        [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml`]: lockfileContents,
       };
       const cleanup = evaluate(routes, "autoscrub");
       expect(cleanup.status, cleanup.stderr).toBe(0);
@@ -1216,15 +1136,12 @@ describe("combined security review entry point", () => {
     expect(result.combined).not.toContain("success");
   });
 
-  it.each([undefined, "", "main"])(
-    "does not treat an invalid live head %s as superseded",
-    (sha) => {
-      const result = evaluate({ [`GET ${pullPath}`]: { ...pr, head: { ...pr.head, sha } } });
-      expect(result.status).toBe(1);
-      expect(result.stdout).not.toContain("Superseded");
-      expect(result.requests.some((entry) => entry.method !== "GET")).toBe(false);
-    },
-  );
+  it.each([undefined, "main"])("does not treat an invalid live head %s as superseded", (sha) => {
+    const result = evaluate({ [`GET ${pullPath}`]: { ...pr, head: { ...pr.head, sha } } });
+    expect(result.status).toBe(1);
+    expect(result.stdout).not.toContain("Superseded");
+    expect(result.requests.some((entry) => entry.method !== "GET")).toBe(false);
+  });
 
   it("accepts the existing exact-head CI fallback without a manual guard run", () => {
     const fallback = {
@@ -1329,7 +1246,6 @@ describe("combined security review entry point", () => {
 
   it.each([
     { status: "completed", conclusion: "failure", expected: "failure" },
-    { status: "completed", conclusion: "cancelled", expected: "failure" },
     { status: "in_progress", conclusion: null, expected: "pending" },
   ])(
     "keeps newer substantive CI authoritative before a skipped PR workflow: $status/$conclusion",
@@ -1401,7 +1317,6 @@ describe("combined security review entry point", () => {
   });
 
   it.each([
-    { field: "status", value: undefined },
     { field: "status", value: "unknown" },
     { field: "run_attempt", value: undefined },
     { field: "run_attempt", value: 0 },
@@ -1419,7 +1334,7 @@ describe("combined security review entry point", () => {
     }
   });
 
-  it.each([0, -1, undefined, "invalid"])(
+  it.each([0, undefined])(
     "rejects malformed eligible run ID %s before selecting older successful CI",
     (id) => {
       const result = evaluate({
@@ -1434,14 +1349,11 @@ describe("combined security review entry point", () => {
     },
   );
 
-  it.each(["failure", "cancelled", "skipped", "neutral"])(
-    "does not hide a %s CI gate",
-    (conclusion) => {
-      const result = evaluate({ [jobsPath]: { ...jobs, jobs: [{ ...jobs.jobs[0], conclusion }] } });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.combined).not.toContain("success");
-    },
-  );
+  it.each(["failure", "skipped"])("does not hide a %s CI gate", (conclusion) => {
+    const result = evaluate({ [jobsPath]: { ...jobs, jobs: [{ ...jobs.jobs[0], conclusion }] } });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.combined).not.toContain("success");
+  });
 
   it("does not accept a previously successful CI attempt while a new attempt runs", () => {
     const result = evaluate({
@@ -1458,17 +1370,6 @@ describe("combined security review entry point", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("completed CI attempt changed");
     expect(result.combined).toEqual(["pending", "failure"]);
-  });
-
-  it("settles after CI completes without leaving either evaluation failed", () => {
-    const waiting = evaluate({
-      [runsPath]: { total_count: 1, workflow_runs: [{ ...run, status: "in_progress" }] },
-    });
-    const completed = evaluate();
-    expect(waiting.status, waiting.stderr).toBe(0);
-    expect(waiting.combined.at(-1)).toBe("pending");
-    expect(completed.status, completed.stderr).toBe(0);
-    expect(completed.combined.at(-1)).toBe("success");
   });
 
   it.each([

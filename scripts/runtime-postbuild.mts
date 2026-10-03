@@ -97,7 +97,6 @@ const PLUGIN_INSTALL_RUNTIME_ALIAS = {
   aliasFileName: "install.runtime.js",
   sourceIncludes: [
     "scanPackageInstallSource",
-    "scanFileInstallSource",
     "scanInstalledPackageDependencyTree",
     "scanBundleInstallSource",
   ],

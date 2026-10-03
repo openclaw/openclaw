@@ -59,7 +59,7 @@ export async function finalizeAlertOutcome(params: {
       jobId: params.job.id,
       job: structuredClone(params.job),
       activeJobMarker: markCronJobActive(params.job.id),
-      ...authorCronRunCompletion(params.state, params.job, {
+      ...authorCronRunCompletion(params.job, {
         status: params.status,
         error: params.error,
       }),

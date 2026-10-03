@@ -506,3 +506,30 @@ and remain with their original recovery owner. A successful retirement retains
 one bounded completion receipt after the directory and helper are gone. Only a
 new original-store-admitted operation can replace that slot. Status reads do
 not grant admission or perform cleanup.
+
+## Immutable installation preparation
+
+The immutable adapter uses that same installation-sibling control database path,
+with one `immutable_installation` row instead of a package operation. The accepted
+[immutable update design](/reference/team-immutable-update-design#detect-and-adopt-an-immutable-installation)
+binds explicit adoption to the physical installation and current generation,
+system service and account, state/config/profile, pinned external runtime, and
+official source. Its strict version-1 descriptor is canonical adoption state;
+the revision and optional prepared-generation receipt record verified preparation.
+No pointer publication, service change, migration, or recovery authority is implied.
+
+Adoption refuses any existing control rather than migrating or replacing package
+journals. Existing package descriptors and permissions stay unchanged. Immutable
+controls are root-owned directories with mode `0755` and a root-owned `0644`
+database: the service account may read these non-secret facts, but only the
+updater may write. Runtime observations use the existing read-only worker;
+CLI adoption and preparation use synchronous, revision-checked transactions with
+current executor checks at admission and commit. The existing rollback-journal
+durability and directory-sync owners publish the completed adoption record.
+
+Slice 1 retains all release generations. A prepared receipt can be replaced only
+at the observed revision; this does not delete its previously referenced tree.
+Future collection protects current, previous, and journal-referenced generations.
+Older runtimes do not understand this descriptor and cannot update the adopted
+installation; rollback of runtime bytes does not authorize pointer or state
+changes. Activation and independent recovery remain a later slice.

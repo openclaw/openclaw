@@ -117,66 +117,58 @@ describe("Telegram send recovery conformance over HTTP", () => {
     },
   );
 
-  it("does not replay an unrelated rich rejection as plain text", async () => {
-    rejections.push("Bad Request: CHAT_WRITE_FORBIDDEN");
-    await expect(sendThrough("direct", "answer", async () => {}, undefined, true)).rejects.toThrow(
-      /CHAT_WRITE_FORBIDDEN/,
-    );
-    expect(requests.map(({ method }) => method)).toEqual(["sendRichMessage"]);
-  });
+  it.each([
+    {
+      rejection: "can't parse entities",
+      text: `**${"x".repeat(1024)}**`,
+      captions: [`<b>${"x".repeat(1024)}</b>`, "x".repeat(1024)],
+    },
+    { rejection: "text must be non-empty", text: "\u200b", captions: ["\u200b", undefined] },
+  ])(
+    "recovers a rejected caption ($rejection) without duplicating accepted media",
+    async ({ rejection, text, captions }) => {
+      rejections.push(`Bad Request: ${rejection}`);
+      const result = await sendThrough(
+        "direct",
+        text,
+        async () => {},
+        photoPath,
+        false,
+        undefined,
+        { textMode: "markdown" },
+      );
+      expect(requests.map(({ method }) => method)).toEqual(["sendPhoto", "sendPhoto"]);
+      expect(requests.map(({ fields }) => fields.caption)).toEqual(captions);
+      expect(requests[1]!.fields.parse_mode).toBeUndefined();
+      expect(result).toMatchObject({ receipt: { platformMessageIds: ["2"] } });
+    },
+  );
 
-  it("keeps the parsed caption budget through HTML rejection", async () => {
-    rejections.push("Bad Request: can't parse entities");
-    const result = await sendThrough(
-      "direct",
-      `**${"x".repeat(1024)}**`,
-      async () => {},
-      photoPath,
-      false,
-      undefined,
-      { textMode: "markdown" },
-    );
-    expect(requests.map(({ method }) => method)).toEqual(["sendPhoto", "sendPhoto"]);
-    expect(requests.map(({ fields }) => fields.caption)).toEqual([
-      `<b>${"x".repeat(1024)}</b>`,
-      "x".repeat(1024),
-    ]);
-    expect(requests[1]!.fields.parse_mode).toBeUndefined();
-    expect(result).toMatchObject({ receipt: { platformMessageIds: ["2"] } });
-  });
-
-  it("retries a provider-empty caption without duplicating accepted media", async () => {
-    rejections.push("Bad Request: text must be non-empty");
-    const result = await sendThrough("direct", "\u200b", async () => {}, photoPath);
-    expect(requests.map(({ method }) => method)).toEqual(["sendPhoto", "sendPhoto"]);
-    expect(requests[0]!.fields.caption).toBe("\u200b");
-    expect(requests[1]!.fields.caption).toBeUndefined();
-    expect(requests[1]!.fields.parse_mode).toBeUndefined();
-    expect(result).toMatchObject({ receipt: { platformMessageIds: ["2"] } });
-  });
-
-  it("does not strip the topic or change media kind after a topic rejection", async () => {
-    rejections.push("Bad Request: message thread not found");
-    await expect(
-      sendThrough("direct", "caption", async () => {}, photoPath, false, undefined, {
-        threadId: 77,
-      }),
-    ).rejects.toThrow(/thread not found/);
-    expect(requests.map(({ method }) => method)).toEqual(["sendPhoto"]);
-    expect(requests[0]!.fields.message_thread_id).toBe("77");
-  });
-
-  it("does not retry a text send outside its missing topic", async () => {
-    rejections.push("Bad Request: message thread not found");
-    await expect(
-      sendThrough("direct", "answer", async () => {}, undefined, false, undefined, {
-        threadId: 77,
-      }),
-    ).rejects.toThrow(/thread not found/);
-    expect(requests.map(({ method, fields }) => [method, fields.message_thread_id])).toEqual([
-      ["sendMessage", 77],
-    ]);
-  });
+  it.each([
+    { kind: "rich", rejection: "CHAT_WRITE_FORBIDDEN", method: "sendRichMessage" },
+    { kind: "photo", rejection: "message thread not found", method: "sendPhoto" },
+    { kind: "text", rejection: "message thread not found", method: "sendMessage" },
+  ])(
+    "does not retry a $kind send after $rejection",
+    async ({ kind, rejection, method: expectedMethod }) => {
+      rejections.push(`Bad Request: ${rejection}`);
+      await expect(
+        sendThrough(
+          "direct",
+          "answer",
+          async () => {},
+          kind === "photo" ? photoPath : undefined,
+          kind === "rich",
+          undefined,
+          kind === "rich" ? {} : { threadId: 77 },
+        ),
+      ).rejects.toThrow(rejection);
+      expect(requests.map(({ method }) => method)).toEqual([expectedMethod]);
+      if (kind !== "rich") {
+        expect(requests[0]!.fields.message_thread_id).toBe(kind === "photo" ? "77" : 77);
+      }
+    },
+  );
 
   it.each([
     ["image/png", "sendPhoto", "photo", "image.png"],
@@ -252,7 +244,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
     },
   );
 
-  it.each(["observer", "abort", "revoked"] as const)(
+  it.each(["observer", "abort", "revoked", "missing-file"] as const)(
     "keeps an accepted album receipt when the next batch is stopped by %s",
     async (failure) => {
       const abort = new AbortController();
@@ -262,7 +254,10 @@ describe("Telegram send recovery conformance over HTTP", () => {
         sendMessageTelegram("123", "Album", {
           cfg,
           api: bot.api,
-          mediaUrls: photos,
+          mediaUrls:
+            failure === "missing-file"
+              ? [...photos.slice(0, 10), path.join(fixture.mediaDir, "missing.png")]
+              : photos,
           mediaLocalRoots: [fixture.mediaDir],
           messageThreadId: 77,
           signal: abort.signal,
@@ -278,7 +273,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
             if (messageId === ids.at(-1)) {
               if (failure === "abort") {
                 abort.abort();
-              } else {
+              } else if (failure === "revoked") {
                 authorized = false;
               }
             }
@@ -817,22 +812,6 @@ describe("Telegram send recovery conformance over HTTP", () => {
       }),
     ).rejects.toMatchObject({ name: "ImageOptimizationLimitError", maxBytes: 1 });
     expect(requests).toEqual([]);
-  });
-
-  it("retains accepted album parts when loading a later file fails", async () => {
-    await expect(
-      sendMessageTelegram("123", "Album", {
-        cfg,
-        api: bot.api,
-        mediaUrls: [...photos.slice(0, 10), path.join(fixture.mediaDir, "missing.png")],
-        mediaLocalRoots: [fixture.mediaDir],
-      }),
-    ).rejects.toMatchObject({
-      deliveryResult: {
-        messageIds: Array.from({ length: 10 }, (_, index) => String(1001 + index)),
-      },
-    });
-    expect(requests.map(({ method }) => method)).toEqual(["sendMediaGroup"]);
   });
 
   it.each([

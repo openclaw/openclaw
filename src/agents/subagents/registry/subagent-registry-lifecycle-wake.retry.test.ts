@@ -9,15 +9,13 @@ import { mockBlockedCompletionDeliveryOwner } from "./subagent-registry-lifecycl
 import { createLifecycleControllerFixture } from "./subagent-registry-lifecycle-controller.test-support.js";
 import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const completionDeliveryMocks = vi.hoisted(() => ({
   blockSubagentCompletionDelivery: vi.fn(),
   settleRequesterCompletionBatch: vi.fn(),
   mutateRequesterSettleWakeBatch: vi.fn(),
-  ownersByEntry: new WeakMap<
-    SubagentRunRecord,
-    Pick<SubagentLifecycleOptions, "runs" | "persistAsyncOrThrow">
-  >(),
+  ownersByEntry: new Map<object, Pick<SubagentLifecycleOptions, "runs">>(),
 }));
 
 // Keep completion, session cleanup, and transport outside this retry-owner proof.
@@ -35,11 +33,13 @@ vi.mock("./subagent-registry-requester-yield.js", () => ({
   settleRequesterTurnAfterSessionSpawns: vi.fn(),
 }));
 vi.mock("./subagent-registry-lifecycle-delivery.js", () => ({
+  refreshFrozenResultFromSession: vi.fn(),
+}));
+vi.mock("./subagent-registry-lifecycle-log.js", () => ({
   buildSafeLifecycleErrorMeta: (error: unknown) => ({
     message: error instanceof Error ? error.message : String(error),
   }),
   maskLifecycleIdentifier: () => "synthetic",
-  refreshFrozenResultFromSession: vi.fn(),
 }));
 vi.mock("../completion/subagent-completion-admission.store.js", () => ({
   blockSubagentCompletionDelivery: completionDeliveryMocks.blockSubagentCompletionDelivery,
@@ -103,15 +103,22 @@ describe("requester settle retry lifetime", () => {
       const wake = vi.fn(async (params: WakeParams) => {
         wakeSignals.push(getAsyncWorkSignal());
         if (wakeSignals.length === 1) {
-          await params.transitionBatch([entry], {
-            status: "pending",
-            attemptCount: 1,
-            nextAttemptAt: Date.now() + 1_000,
-            rearmGeneration: 1,
-          });
+          await params.transitionBatch(
+            [params.settledEntry],
+            {
+              status: "pending",
+              attemptCount: 1,
+              nextAttemptAt: Date.now() + 1_000,
+              rearmGeneration: 1,
+            },
+            () => {},
+          );
           return false;
         }
-        await params.completeBatch([entry], entry.requesterSettleWake?.rearmGeneration);
+        await params.completeBatch(
+          [params.settledEntry],
+          params.settledEntry.requesterSettleWake?.rearmGeneration,
+        );
         return true;
       });
       const unexpected = async (): Promise<never> => {
@@ -127,13 +134,13 @@ describe("requester settle retry lifetime", () => {
           resumedRuns: new Set(),
           subagentAnnounceTimeoutMs: 1_000,
           getRuntimeConfig: () => ({}),
-          persist: vi.fn(),
-          persistOrThrow: () => {
-            if (rejectNextCompletion && !entry.requesterSettleWake) {
+          beforeWrite: ({ postimages }) => {
+            const nextWake = postimages.get(entry.runId)?.requesterSettleWake;
+            if (rejectNextCompletion && !nextWake) {
               rejectNextCompletion = false;
               throw new Error("no-wake persistence unavailable");
             }
-            persistedWakes.push(structuredClone(entry.requesterSettleWake));
+            persistedWakes.push(structuredClone(nextWake));
           },
           clearPendingLifecycleError: vi.fn(),
           countPendingDescendantRuns: async () => 0,
@@ -177,14 +184,20 @@ describe("requester settle retry lifetime", () => {
         ]);
         await origin.drain();
         expect(origin.signal.aborted).toBe(true);
+        const deliveryBeforeCompletion = structuredClone(runs.get(entry.runId)?.delivery);
 
-        const replacement = structuredClone(entry);
+        const replacement = {
+          ...structuredClone(runs.get(entry.runId)!),
+          generation: (entry.generation ?? 0) + 1,
+        };
         if (mode === "replacement entry") {
           runs.set(entry.runId, replacement);
         }
         await vi.advanceTimersByTimeAsync(1_000);
         await vi.waitFor(() => {
-          expect(controller.scheduledRequesterSettleWakeRuns.has(entry)).toBe(false);
+          expect(
+            controller.scheduledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry)),
+          ).toBe(false);
           expect(getActiveGatewayRootWorkCount()).toBe(0);
         });
 
@@ -193,13 +206,13 @@ describe("requester settle retry lifetime", () => {
           expect(wakeSignals[1]).toBeDefined();
           expect(wakeSignals[1]).not.toBe(origin.signal);
           if (rejectCompletion) {
-            expect(entry.requesterSettleWake).toEqual(persistedWakes[0]);
-            expect(entry.delivery).toBeUndefined();
+            expect(runs.get(entry.runId)?.requesterSettleWake).toEqual(persistedWakes[0]);
+            expect(runs.get(entry.runId)?.delivery).toEqual(deliveryBeforeCompletion);
             expect(persistedWakes).toHaveLength(1);
             await vi.advanceTimersByTimeAsync(30_000);
             expect(wake).toHaveBeenCalledTimes(2);
           }
-          expect(entry.requesterSettleWake).toBeUndefined();
+          expect(runs.get(entry.runId)?.requesterSettleWake).toBeUndefined();
           expect(persistedWakes).toHaveLength(2);
         } else {
           expect(wake).toHaveBeenCalledTimes(1);

@@ -20,7 +20,6 @@ import * as commandRun from "./update-command-run.js";
 import * as servicePlan from "./update-command-service-plan.js";
 
 export const targetMetadata = {
-  target: "2026.9.2",
   version: "2026.9.2",
   nodeEngine: null,
   schemaVersions: { state: 16, agent: 19 },

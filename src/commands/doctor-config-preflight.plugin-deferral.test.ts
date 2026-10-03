@@ -223,7 +223,10 @@ describe("configured plugin migration deferral", () => {
       const source = path.join(home, "legacy-binding.json");
       const migrated = path.join(home, "migrated-binding.json");
       const pluginId = "deferred-fixture";
-      const config = createPluginConfig(pluginId, { legacyBinding: source });
+      const config = {
+        ...createPluginConfig(pluginId, { legacyBinding: source }),
+        meta: { migrations: { webhookListeners: true } },
+      };
       await writeOpenClawConfig(home, config);
       await fs.writeFile(source, '{"binding":"retained"}\n');
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
@@ -635,7 +638,7 @@ describe("configured plugin migration deferral", () => {
             { legacyBinding: source },
             entry === "stale-candidate" ? [pluginRoot] : undefined,
           ),
-          agents: { ownership: "explicit", list: [{ id: "alpha" }, { id: "beta" }] },
+          agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
           ...(entry === "stale-candidate" ? { legacyFixture: source } : {}),
         };
         if (entry === "stale-candidate") {

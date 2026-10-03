@@ -1,7 +1,3 @@
-/**
- * Browser profile availability operations: reachability probes, managed Chrome
- * launch/restart, Chrome MCP attach, and profile stop handling.
- */
 import fs from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -111,7 +107,6 @@ function recordManagedLaunchFailure(profileState: ProfileRuntimeState, err: unkn
   const now = Date.now();
   profileState.managedLaunchFailure = {
     consecutiveFailures,
-    lastFailureAt: now,
     ...(cooldownMs > 0 ? { cooldownUntil: now + cooldownMs } : {}),
     lastError:
       (err instanceof Error ? err.message : String(err)).trim() || "unknown browser launch failure",
@@ -136,7 +131,6 @@ function assertManagedLaunchNotCoolingDown(profileName: string, profileState: Pr
   );
 }
 
-/** Builds reachability, ensure, and stop operations for one resolved browser profile. */
 export function createProfileAvailability({
   opts,
   profile,
@@ -207,10 +201,7 @@ export function createProfileAvailability({
     signal?.throwIfAborted();
     return relay;
   };
-  const isReachable = async (
-    timeoutMs?: number,
-    options?: { ephemeral?: boolean; signal?: AbortSignal },
-  ) => {
+  const isReachable = async (timeoutMs?: number, options?: { signal?: AbortSignal }) => {
     const relay = await ensureExtensionRelay(options?.signal);
     if (relay?.ownership === "borrowed") {
       const ready = await relay.client.status();
@@ -219,13 +210,10 @@ export function createProfileAvailability({
     }
     if (capabilities.usesChromeMcp) {
       // countChromeMcpTabs creates the session if needed — no separate availability call required.
-      // Status probes opt into ephemeral so they reuse a cached attach session if one exists,
-      // but do not seed a new persistent session as a side effect of read-only status calls.
       assertChromeMcpCdpTransportAllowed(profile, getCdpReachabilityPolicy());
       const { countChromeMcpTabs } = await getChromeMcpModule();
       await countChromeMcpTabs(profile.name, profile, {
         ...(timeoutMs != null ? { timeoutMs } : {}),
-        ...(options?.ephemeral ? { ephemeral: true } : {}),
         ...(options?.signal ? { signal: options.signal } : {}),
       });
       return true;
@@ -562,7 +550,6 @@ export function createProfileAvailability({
       return;
     }
 
-    // Port is reachable - check if we own it.
     if (await isReachable(undefined, { signal })) {
       runtime.managedLaunchFailure = undefined;
       return;

@@ -1,9 +1,9 @@
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerDevicePlacementRequirementResolver } from "./placement-dispatch-startup.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
-import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import { matchesWorkerPlacementTarget } from "./placement-target.js";
 import { canRedispatchFailedWorkerPlacement } from "./session-placement-lifecycle.js";
 
 type RedispatchableWorkerPlacement = Extract<

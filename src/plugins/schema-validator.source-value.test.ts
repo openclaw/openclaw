@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 
 describe("source-aware schema validation", () => {
@@ -64,7 +64,7 @@ describe("source-aware schema validation", () => {
     },
   );
 
-  it("keeps the conditional-default exception tied to the source input", () => {
+  it("reuses compiled validation while keeping conditional defaults tied to the source input", () => {
     const conditional = {
       ...schema,
       properties: { ...schema.properties, enabled: { type: "boolean", default: true } },
@@ -84,16 +84,22 @@ describe("source-aware schema validation", () => {
       ok: true,
       value: { credential: "resolved-fixture-key", retries: 2, enabled: true },
     });
-    expect(
-      validateJsonSchemaValue({
-        ...params,
-        sourceValue: { ...params.sourceValue, enabled: true },
-      }).ok,
-    ).toBe(false);
-    expect(validateJsonSchemaValue(params)).toEqual({
-      ok: true,
-      value: { credential: "resolved-fixture-key", retries: 2, enabled: true },
-    });
+    const compile = vi.spyOn(globalThis, "Function");
+    try {
+      expect(
+        validateJsonSchemaValue({
+          ...params,
+          sourceValue: { ...params.sourceValue, enabled: true },
+        }).ok,
+      ).toBe(false);
+      expect(validateJsonSchemaValue(params)).toEqual({
+        ok: true,
+        value: { credential: "resolved-fixture-key", retries: 2, enabled: true },
+      });
+      expect(compile).not.toHaveBeenCalled();
+    } finally {
+      compile.mockRestore();
+    }
   });
 
   it.each([null, { credential: "invalid-plaintext-fixture" }])(

@@ -13,10 +13,6 @@ const sessionKey = "agent:main:wedged-main";
 const reason = "restart recovery exhausted after 3 attempts";
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-doctor-main-recovery-");
 
-function countLabel(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
-
 describe("doctor main-session recovery integrity", () => {
   let storePath = "";
 
@@ -57,7 +53,6 @@ describe("doctor main-session recovery integrity", () => {
       warnings,
       changes,
       confirmRepair,
-      countLabel,
     });
 
     expect(warnings.join("\n")).toContain("automatic restart recovery tombstoned");
@@ -80,7 +75,6 @@ describe("doctor main-session recovery integrity", () => {
       warnings,
       changes,
       confirmRepair,
-      countLabel,
     });
 
     expect(confirmRepair).toHaveBeenCalledWith({

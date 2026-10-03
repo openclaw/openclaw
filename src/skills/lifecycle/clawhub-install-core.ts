@@ -43,7 +43,7 @@ import {
   resolveWorkspaceClawHubSkills,
 } from "./clawhub-store.js";
 import type { ClawHubSkillFileState } from "./skill-tree-digest.js";
-import type { ClawHubSkillRef } from "./workspace-types.js";
+import type { ClawHubSkillRef, SkillArchiveInstallResult } from "./workspace-types.js";
 
 export type Logger = {
   info?: (message: string) => void;
@@ -85,34 +85,12 @@ export type InstallClawHubSkillResult =
       replacementBlocked?: string;
     };
 
-export function normalizeExpectedArtifactIntegrity(expectedIntegrity: string): string;
-export function normalizeExpectedArtifactIntegrity(expectedIntegrity: undefined): undefined;
-export function normalizeExpectedArtifactIntegrity(
-  expectedIntegrity: string | undefined,
-): string | undefined;
-export function normalizeExpectedArtifactIntegrity(
-  expectedIntegrity: string | undefined,
-): string | undefined {
-  if (expectedIntegrity === undefined) {
-    return undefined;
-  }
+export function normalizeExpectedArtifactIntegrity(expectedIntegrity: string): string {
   const normalized = normalizeClawHubSha256Integrity(expectedIntegrity);
   if (!normalized) {
     throw new Error(`Invalid expected ClawHub archive integrity: ${expectedIntegrity}`);
   }
   return normalized;
-}
-
-function assertDownloadedArtifactIntegrity(
-  archive: ClawHubDownloadResult,
-  expectedIntegrity: string | undefined,
-): void {
-  const normalizedExpected = normalizeExpectedArtifactIntegrity(expectedIntegrity);
-  if (normalizedExpected && archive.integrity !== normalizedExpected) {
-    throw new Error(
-      `ClawHub archive integrity mismatch: expected ${normalizedExpected}, got ${archive.integrity}.`,
-    );
-  }
 }
 
 type ClawHubOfficialFlagContainer = {
@@ -284,7 +262,10 @@ async function installDownloadedResolution(
     authority: "official" | "openclaw" | "third-party";
     github?: Extract<ClawHubSkillInstallResolutionResponse, { installKind: "github" }>["github"];
   },
-) {
+): Promise<
+  | Extract<SkillArchiveInstallResult, { ok: true }>
+  | Extract<InstallClawHubSkillResult, { ok: false }>
+> {
   const { github } = params;
   return await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -397,7 +378,10 @@ export async function performClawHubSkillInstall(
   params: ClawHubInstallParams,
 ): Promise<InstallClawHubSkillResult> {
   try {
-    normalizeExpectedArtifactIntegrity(params.expectedIntegrity);
+    const expectedIntegrity =
+      params.expectedIntegrity === undefined
+        ? undefined
+        : normalizeExpectedArtifactIntegrity(params.expectedIntegrity);
     const files = resolveWorkspaceClawHubSkills(params.workspaceDir);
     const registry = resolveClawHubBaseUrl(params.baseUrl);
     await (files?.assertClawHubSkillInstallState ?? assertClawHubSkillInstallState)({
@@ -417,22 +401,6 @@ export async function performClawHubSkillInstall(
       detail = resolved.detail;
       version = resolved.version;
       official = isDefaultOfficialClawHubSkillSource({ baseUrl: params.baseUrl, detail });
-      const trust = await checkClawHubSkillTrust({
-        ...params,
-        version,
-        skipClawHubTrustCheck: official,
-      });
-      if (!trust.ok) {
-        return { ...trust, version };
-      }
-      trustWarning = trust.warning;
-      params.logger?.info?.(`Downloading ${params.slug}@${version} from ClawHub…`);
-      archive = await downloadClawHubSkillArchive({
-        slug: params.slug,
-        ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-        version,
-        baseUrl: params.baseUrl,
-      });
     } else {
       resolution = assertInstallResolutionAllowed(
         await fetchClawHubSkillInstallResolution({
@@ -471,36 +439,47 @@ export async function performClawHubSkillInstall(
         detail,
         resolution,
       });
-      if (resolution.installKind === "github") {
-        version = resolution.github.commit;
-        // GitHub-backed ClawHub skills are commit resolutions, not ClawHub skill
-        // release versions; the install resolver owns their scan/force policy.
-        params.logger?.info?.(`Downloading ${params.slug}@${version} from GitHub…`);
-        archive = await downloadClawHubGitHubSkillArchive({
-          repo: resolution.github.repo,
-          commit: resolution.github.commit,
-        });
-      } else {
-        version = resolution.archive.version;
-        const trust = await checkClawHubSkillTrust({
-          ...params,
-          version,
-          skipClawHubTrustCheck: official,
-        });
-        if (!trust.ok) {
-          return { ...trust, version };
-        }
-        trustWarning = trust.warning;
-        params.logger?.info?.(`Downloading ${params.slug}@${version} from ClawHub…`);
-        archive = await downloadClawHubSkillArchiveUrl({
-          url: resolution.archive.downloadUrl,
-          baseUrl: params.baseUrl,
-        });
+      version =
+        resolution.installKind === "github" ? resolution.github.commit : resolution.archive.version;
+    }
+
+    if (resolution?.installKind === "github") {
+      // GitHub-backed skills are commit resolutions; their resolver owns scan/force policy.
+      params.logger?.info?.(`Downloading ${params.slug}@${version} from GitHub…`);
+      archive = await downloadClawHubGitHubSkillArchive({
+        repo: resolution.github.repo,
+        commit: resolution.github.commit,
+      });
+    } else {
+      const trust = await checkClawHubSkillTrust({
+        ...params,
+        version,
+        skipClawHubTrustCheck: official,
+      });
+      if (!trust.ok) {
+        return { ...trust, version };
       }
+      trustWarning = trust.warning;
+      params.logger?.info?.(`Downloading ${params.slug}@${version} from ClawHub…`);
+      archive = resolution
+        ? await downloadClawHubSkillArchiveUrl({
+            url: resolution.archive.downloadUrl,
+            baseUrl: params.baseUrl,
+          })
+        : await downloadClawHubSkillArchive({
+            slug: params.slug,
+            ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+            version,
+            baseUrl: params.baseUrl,
+          });
     }
 
     try {
-      assertDownloadedArtifactIntegrity(archive, params.expectedIntegrity);
+      if (expectedIntegrity && archive.integrity !== expectedIntegrity) {
+        throw new Error(
+          `ClawHub archive integrity mismatch: expected ${expectedIntegrity}, got ${archive.integrity}.`,
+        );
+      }
       const github = resolution?.installKind === "github" ? resolution.github : undefined;
       const install = await installDownloadedResolution({
         ...params,
@@ -518,7 +497,7 @@ export async function performClawHubSkillInstall(
         return {
           ok: false,
           error: install.error,
-          ...("replacementBlocked" in install && typeof install.replacementBlocked === "string"
+          ...(install.replacementBlocked !== undefined
             ? { replacementBlocked: install.replacementBlocked }
             : {}),
         };

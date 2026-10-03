@@ -168,12 +168,8 @@ function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number
   return current;
 }
 
-const STRIP_PROTECTED_KEYS: Record<string, Set<string>> = {
-  plugins: new Set(["installs"]),
-};
-
 /**
- * Removes unknown config keys reported by schema validation, except protected migration keys.
+ * Removes unknown config keys reported by schema validation.
  *
  * Doctor skips this while an update is in progress so partially written upgrade state is not
  * stripped before its migration can finish.
@@ -203,9 +199,6 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
     if (!isRecord(target)) {
       continue;
     }
-    const parentKey =
-      issuePath.length === 1 && typeof issuePath[0] === "string" ? issuePath[0] : undefined;
-    const protectedSet = parentKey ? STRIP_PROTECTED_KEYS[parentKey] : undefined;
     for (const key of issue.keys) {
       if (!(key in target)) {
         continue;
@@ -213,9 +206,6 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       // $include is authored parser syntax at every object depth, not a schema field.
       // Doctor validates raw source, so stripping it would destroy include-owned config.
       if (key === INCLUDE_KEY) {
-        continue;
-      }
-      if (protectedSet?.has(key)) {
         continue;
       }
       delete target[key];

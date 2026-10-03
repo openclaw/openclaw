@@ -373,9 +373,9 @@ export function installAgentAuthorityProofFixture() {
         void pending.catch(() => {});
         return pending;
       },
-      effects: (): ProofObservation => ({
+      effects: async (): Promise<ProofObservation> => ({
         ...owner.observation(),
-        pendingCount: listSessionPendingInputs(scope).total,
+        pendingCount: (await listSessionPendingInputs(scope)).total,
         transcriptChanged: !isDeepStrictEqual(
           sessionAccessor.loadTranscriptEventsSync(scope),
           before,

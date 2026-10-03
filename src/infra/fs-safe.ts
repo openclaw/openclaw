@@ -1,15 +1,15 @@
 // Re-exports fs-safe helpers with OpenClaw defaults and wrappers.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { ensureDirectoryWithinRoot, findExistingAncestor } from "@openclaw/fs-safe/advanced";
+import {
+  ensureDirectoryWithinRoot,
+  findExistingAncestor,
+  readLocalFileFromRoots as readFsSafeLocalFileFromRoots,
+} from "@openclaw/fs-safe/advanced";
 import "@openclaw/fs-safe/errors";
 import { writeExternalFileWithinRoot as writeExternalFileWithinRootBase } from "@openclaw/fs-safe/output";
-import {
-  root as fsSafeRoot,
-  type ReadResult,
-  type Root as FsSafeRoot,
-  type RootDefaults,
-} from "@openclaw/fs-safe/root";
+import { root as fsSafeRoot, type ReadResult, type RootDefaults } from "@openclaw/fs-safe/root";
+import type { CompatibleFsSafeRoot, LegacyNonBlockingReadOption } from "./fs-safe-compat.js";
 
 export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 export {
@@ -27,7 +27,7 @@ export {
 export { isPathInside } from "@openclaw/fs-safe/path";
 export { pathExists, pathExistsSync } from "@openclaw/fs-safe/advanced";
 export { movePathToTrash, type MovePathToTrashOptions } from "@openclaw/fs-safe/advanced";
-export { readLocalFileFromRoots, resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
+export { resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
 export {
   appendRegularFile,
   appendRegularFileSync,
@@ -59,11 +59,17 @@ export {
 } from "@openclaw/fs-safe/walk";
 export { withTimeout } from "@openclaw/fs-safe/advanced";
 
-// The broad Plugin SDK infra barrel re-exports this facade. Keep fs-safe 0.5's
-// new Root.walk capability core-only until a dedicated plugin contract is approved.
-export type Root = Omit<FsSafeRoot, "walk">;
+// Root.walk remains core-only on this facade; temp workspace stores keep their shipped full Root.
+export type Root = Omit<CompatibleFsSafeRoot, "walk">;
 
-export async function root(rootDir: string, defaults?: RootDefaults): Promise<Root> {
+export const readLocalFileFromRoots: (
+  options: Parameters<typeof readFsSafeLocalFileFromRoots>[0] & LegacyNonBlockingReadOption,
+) => ReturnType<typeof readFsSafeLocalFileFromRoots> = readFsSafeLocalFileFromRoots;
+
+export async function root(
+  rootDir: string,
+  defaults?: RootDefaults & LegacyNonBlockingReadOption,
+): Promise<Root> {
   return await fsSafeRoot(rootDir, defaults);
 }
 
@@ -134,6 +140,7 @@ export async function readFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
   rejectHardlinks?: boolean;
+  /** @deprecated Omit this hint; safe reads always use nonblocking admission where supported. */
   nonBlockingRead?: boolean;
   allowSymlinkTargetWithinRoot?: boolean;
   maxBytes?: number;
@@ -142,7 +149,6 @@ export async function readFileWithinRoot(params: {
   return await fsRoot.read(params.relativePath, {
     hardlinks: params.rejectHardlinks === false ? "allow" : "reject",
     maxBytes: params.maxBytes,
-    nonBlockingRead: params.nonBlockingRead,
     symlinks: params.allowSymlinkTargetWithinRoot === true ? "follow-within-root" : "reject",
   });
 }

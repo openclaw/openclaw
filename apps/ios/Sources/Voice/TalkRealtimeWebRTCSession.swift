@@ -211,7 +211,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
     }
 
     private struct AgentWaitResponse: Decodable {
-        let runId: String?
         let status: String?
         let startedAt: Double?
         let error: String?
@@ -758,10 +757,10 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private static func controlParams(sessionKey: String, argsJSON: String) throws -> [String: Any] {
         let args = try Self.decodeJSONObject(argsJSON)
         let record = args as? [String: Any] ?? [:]
-        let text = Self.nonEmptyString(record["text"])
-            ?? Self.nonEmptyString(record["message"])
-            ?? Self.nonEmptyString(record["request"])
-            ?? Self.nonEmptyString(record["query"])
+        let text = (record["text"] as? String)?.trimmedNonEmpty
+            ?? (record["message"] as? String)?.trimmedNonEmpty
+            ?? (record["request"] as? String)?.trimmedNonEmpty
+            ?? (record["query"] as? String)?.trimmedNonEmpty
         guard let text else {
             throw NSError(domain: "TalkRealtimeWebRTC", code: 20, userInfo: [
                 NSLocalizedDescriptionKey: "OpenClaw control tool call missing text",
@@ -771,16 +770,10 @@ final class TalkRealtimeWebRTCSession: NSObject {
             "sessionKey": sessionKey,
             "text": text,
         ]
-        if let mode = Self.nonEmptyString(record["mode"]) {
+        if let mode = (record["mode"] as? String)?.trimmedNonEmpty {
             params["mode"] = mode
         }
         return params
-    }
-
-    private static func nonEmptyString(_ value: Any?) -> String? {
-        guard let raw = value as? String else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     static func voiceConfirmationInstruction(from error: Error) -> String? {
@@ -809,7 +802,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let record = object as? [String: Any]
         else { return nil }
-        return Self.nonEmptyString(record["message"])
+        return (record["message"] as? String)?.trimmedNonEmpty
     }
 
     private static func abortChatRun(gateway: GatewayNodeSession, run: ConsultRun) -> Task<Void, Never> {
@@ -951,8 +944,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
                 throw NSError(domain: "TalkRealtimeWebRTC", code: 15, userInfo: [
                     NSLocalizedDescriptionKey: wait.stopReason ?? "OpenClaw realtime tool call aborted",
                 ])
-            case "timeout":
-                break
             default:
                 break
             }

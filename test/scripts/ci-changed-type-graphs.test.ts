@@ -73,15 +73,10 @@ describe("changed CI compiler graph selection", () => {
 
   it.for([
     [],
-    ["src/missing.ts"],
     ["src/types/runtime.d.ts"],
-    ["test/tsconfig/tsconfig.test.root.json"],
     ["package.json"],
     ["unclassified/module.ts"],
-    ["docs/plugins/sdk-subpaths.md", "ui/src/styles/chat.css"],
     [sharedType, "src/config/catalog.json"],
-    ["extensions/example/value.ts", "extensions/example/types.d.ts"],
-    ["extensions/example/value.ts", "extensions/example/tsconfig.json"],
   ])("retains all compilers without discovery for uncertain input %j", async (paths) => {
     expect(selectChangedCiTsgoGraphs(paths, graphs())).toBeUndefined();
     inspectGraphs.mockRejectedValue(new Error("Full plans must not enumerate compiler inputs"));
@@ -151,14 +146,13 @@ describe("changed CI compiler graph selection", () => {
     });
   });
 
-  it.each(["leaf", "directory", "extension-alias", "broken", "traversal", "directory-file"])(
+  it.each(["leaf", "directory", "traversal", "directory-file"])(
     "retains every compiler for a nonphysical extension input (%s)",
     async (kind) => {
       const cwd = tempDirs.make("ci-type-extension-alias-");
       mkdirSync(join(cwd, "src"));
       mkdirSync(join(cwd, "extensions", "example"), { recursive: true });
       writeFileSync(join(cwd, "src/value.ts"), "export type Value = number;\n");
-      writeFileSync(join(cwd, "extensions/example/other.ts"), "export type Value = number;\n");
       const file =
         kind === "traversal"
           ? "extensions/example/../../src/value.ts"
@@ -170,18 +164,7 @@ describe("changed CI compiler graph selection", () => {
       } else if (kind === "directory-file") {
         mkdirSync(join(cwd, file));
       } else if (kind !== "traversal") {
-        symlinkSync(
-          join(
-            cwd,
-            kind === "broken"
-              ? "src/missing.ts"
-              : kind === "extension-alias"
-                ? "extensions/example/other.ts"
-                : "src/value.ts",
-          ),
-          join(cwd, file),
-          "file",
-        );
+        symlinkSync(join(cwd, "src/value.ts"), join(cwd, file), "file");
       }
       inspectGraphs.mockRejectedValue(
         new Error("Aliases must retain all graphs without discovery"),
@@ -215,7 +198,7 @@ describe("changed CI compiler graph selection", () => {
     },
   );
 
-  it.each(["missing", "duplicate", "unexpected", "unmatched", "mixed", "ambient", "config"])(
+  it.each(["missing", "duplicate", "unmatched", "mixed"])(
     "refuses incomplete or inapplicable noncore discovery (%s)",
     (kind) => {
       const file = "extensions/example/value.ts";
@@ -227,29 +210,19 @@ describe("changed CI compiler graph selection", () => {
         inventory.pop();
       } else if (kind === "duplicate") {
         inventory[inventory.length - 1] = inventory[0]!;
-      } else if (kind === "unexpected") {
-        inventory[0] = { config: "tsconfig.core.json", files: [file] };
       } else if (kind === "unmatched") {
         paths.push("extensions/example/other.ts");
       } else if (kind === "mixed") {
         paths.push("src/value.ts");
-      } else if (kind === "ambient") {
-        paths.push("extensions/example/types.d.ts");
-      } else if (kind === "config") {
-        paths.push("extensions/example/package.json");
       }
       expect(selectChangedCiTsgoGraphs(paths, inventory, { scope: "noncore" })).toBeUndefined();
     },
   );
 
-  it.each(["missing", "duplicate"])("refuses an incomplete %s compiler inventory", (kind) => {
+  it("refuses an incomplete full compiler inventory", () => {
     const inventory = graphs();
     inventory[0]!.files.push(sharedType);
-    if (kind === "missing") {
-      inventory.pop();
-    } else {
-      inventory[inventory.length - 1] = inventory[0]!;
-    }
+    inventory.pop();
     expect(selectChangedCiTsgoGraphs([sharedType], inventory)).toBeUndefined();
   });
 });

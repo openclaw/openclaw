@@ -1,10 +1,8 @@
-import type { SessionFreshness } from "../../config/sessions/reset.js";
 import type { SessionResetBoundaryWrite } from "../../config/sessions/session-accessor.lifecycle-types.js";
 import {
   createSessionResetBoundaryId,
   type SessionResetBoundaryRequest,
 } from "../../config/sessions/session-reset-boundary-event.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import { createResetBoundaryTranscriptSource } from "../../gateway/session-end-transcript-reader.js";
 import type {
   PluginHookSessionEndEvent,
@@ -16,7 +14,7 @@ import {
   attachSessionEndTranscriptSource,
   type SessionEndTranscriptSource,
 } from "../../plugins/session-end-transcript.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 
 type ReplySessionEndReason = Extract<
   PluginHookSessionEndReason,
@@ -27,13 +25,6 @@ export function resolveExplicitSessionEndReason(
   matchedResetTriggerLower?: string,
 ): Extract<ReplySessionEndReason, "new" | "reset"> {
   return matchedResetTriggerLower === "/reset" ? "reset" : "new";
-}
-
-export function resolveStaleSessionEndReason(params: {
-  entry: SessionEntry | undefined;
-  freshness?: SessionFreshness;
-}): ReplySessionEndReason | undefined {
-  return params.entry ? params.freshness?.staleReason : undefined;
 }
 
 export function createReplySessionResetBoundary(params: {
@@ -91,6 +82,18 @@ export function buildSessionStartHookPayload(
     },
     context: buildSessionHookContext(params),
   };
+}
+
+export function emitReplySessionStartHook(
+  hookRunner: HookRunner,
+  params: Parameters<typeof buildSessionStartHookPayload>[0],
+): void {
+  const payload = buildSessionStartHookPayload(params);
+  // Lifecycle hooks outlive their requester; deferred plugin work must belong
+  // to the detached scope that keeps the Gateway drain alive until completion.
+  void runWithGatewayDetachedWorkContinuation(async () => {
+    await hookRunner.runSessionStart(payload.event, payload.context);
+  }, "hooks:session-start").catch(() => {});
 }
 
 export function buildSessionEndHookPayload(
@@ -153,7 +156,7 @@ export function emitReplySessionEndHook(params: {
       )
     : { available: false as const, reason: "unsupported-source" as const };
   const payload = buildSessionEndHookPayload({ ...params, endedTranscript });
-  void runWithGatewayIndependentRootWorkContinuation(async () => {
+  void runWithGatewayDetachedWorkContinuation(async () => {
     await params.hookRunner.runSessionEnd(payload.event, payload.context);
   }, "hooks:session-end").catch(() => {});
 }

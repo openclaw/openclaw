@@ -1,7 +1,8 @@
-// Installs fatal and transient unhandled rejection/exception handlers.
 import process from "node:process";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { restoreRuntimeTerminalState } from "../runtime.js";
+import { registerListener } from "../shared/listeners.js";
 import { isAbortError } from "./abort-signal.js";
 import { collectNestedErrorCandidates, extractErrorCodeOrErrno } from "./error-graph-internal.js";
 import { extractErrorCode, formatUncaughtError, readErrorCause, readErrorName } from "./errors.js";
@@ -27,10 +28,7 @@ function createErrorHandlerRegistry(globalKey: symbol, failureMessage: string) {
   }
   return {
     register(handler: UnhandledRejectionHandler): () => void {
-      handlers.add(handler);
-      return () => {
-        handlers.delete(handler);
-      };
+      return registerListener(handlers, handler);
     },
     isHandled(error: unknown): boolean {
       for (const handler of handlers) {
@@ -112,7 +110,7 @@ const TRANSIENT_SQLITE_MESSAGE_SNIPPETS = [
   "disk i/o error",
 ];
 
-function hasSqliteSignal(err: unknown): boolean {
+function hasSqliteSignal(err: unknown): err is Record<string, unknown> {
   if (!err || typeof err !== "object") {
     return false;
   }
@@ -147,21 +145,6 @@ function isBenignUncaughtNetworkMessage(message: string): boolean {
   return message === WS_PRE_HANDSHAKE_CLOSE_MESSAGE;
 }
 
-function extractNumericErrorCode(err: unknown, key: "errno" | "errcode"): number | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const value = (err as Record<"errno" | "errcode", unknown>)[key];
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value.trim());
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
-}
-
 function extractErrorCodeWithCause(err: unknown): string | undefined {
   return extractErrorCode(err) || extractErrorCode(readErrorCause(err));
 }
@@ -191,24 +174,17 @@ export function isTransientSqliteError(err: unknown): boolean {
       continue;
     }
 
-    const sqliteErrcode = extractNumericErrorCode(candidate, "errcode");
+    const value = candidate.errcode;
+    const sqliteErrcode = asFiniteNumber(
+      typeof value === "string" && value.trim() ? Number(value) : value,
+    );
     if (sqliteErrcode !== undefined && TRANSIENT_SQLITE_ERRCODES.has(sqliteErrcode)) {
       return true;
     }
 
-    if (!candidate || typeof candidate !== "object") {
-      continue;
-    }
-
-    const messageParts = [
-      (candidate as { message?: unknown }).message,
-      (candidate as { errstr?: unknown }).errstr,
-    ];
+    const messageParts = [candidate.message, candidate.errstr];
     for (const rawMessage of messageParts) {
       const message = normalizeLowercaseStringOrEmpty(rawMessage);
-      if (!message) {
-        continue;
-      }
       if (TRANSIENT_SQLITE_MESSAGE_CODE_RE.test(message)) {
         return true;
       }
@@ -230,7 +206,6 @@ function isTransientFileWatchError(err: unknown): boolean {
   const hasFileWatchSignal = (message: string) =>
     message.includes("inotify") ||
     message.includes("watcher") ||
-    message.includes("file watcher") ||
     message.includes("watch limit") ||
     message.includes("max watches");
   const hasFileWatchExhaustionSignal = (message: string) =>
@@ -261,9 +236,6 @@ function isTransientFileWatchError(err: unknown): boolean {
 
     // Without an ENOSPC code, only classify explicit watcher resource exhaustion.
     // Generic "file watcher failed" labels can wrap permission/config/runtime failures.
-    if (!message) {
-      continue;
-    }
     if (
       (message.includes("no space left on device") && hasFileWatchSignal(message)) ||
       hasFileWatchExhaustionSignal(message)

@@ -157,29 +157,20 @@ export function extractTextContent(content: unknown): string {
   return extractTextContentParts(content).join(" ").trim();
 }
 
-function findActiveMemoryCloseLine(lines: string[], startIndex: number): number {
-  for (let index = startIndex; index < lines.length; index += 1) {
-    if ((lines[index]?.trim() ?? "") === ACTIVE_MEMORY_CLOSE_TAG) {
-      return index;
-    }
-  }
-  return -1;
-}
-
 function stripRecalledContextNoise(text: string, injectedPrefixOnly = false): string {
-  const lines = text.split("\n");
+  const lines = text.split("\n").map((line) => line.trim());
   const cleanedLines: string[] = [];
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]?.trim() ?? "";
+    const line = lines[index] ?? "";
     if (!line) {
       continue;
     }
     const blockStart = line === ACTIVE_MEMORY_CONTEXT_HEADER ? index + 1 : index;
     if (
       (!injectedPrefixOnly || line === ACTIVE_MEMORY_CONTEXT_HEADER) &&
-      lines[blockStart]?.trim() === ACTIVE_MEMORY_OPEN_TAG
+      lines[blockStart] === ACTIVE_MEMORY_OPEN_TAG
     ) {
-      const closeIndex = findActiveMemoryCloseLine(lines, blockStart + 1);
+      const closeIndex = lines.indexOf(ACTIVE_MEMORY_CLOSE_TAG, blockStart + 1);
       if (closeIndex !== -1) {
         index = closeIndex;
         continue;

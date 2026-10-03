@@ -202,11 +202,7 @@ export function buildSystemdUnit({
 }
 
 export function parseSystemdExecStart(value: string): string[] {
-  return splitArgsPreservingQuotes(value, {
-    escapeMode: "backslash",
-    quoteChars: ['"', "'"],
-    quoteStart: "item-start",
-  });
+  return splitSystemdEnvironmentWords(value);
 }
 
 export function splitSystemdEnvironmentWords(value: string): string[] {

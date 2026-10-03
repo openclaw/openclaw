@@ -7,7 +7,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
-import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   getOwnedSessionTranscriptWriterFence,
@@ -311,12 +310,12 @@ it("fails closed for cross-agent and resolution-derived bare keys", async () => 
     agents: { ownership: "explicit" as const, entries: { main: {}, other: {} } },
     tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" as const } },
   };
-  const send = async (retained: boolean) =>
+  const send = async () =>
     requireDetails(
       await createSessionsSendTool({
         agentId: "main",
         agentSessionKey: MAIN_AGENT_SESSION_KEY,
-        config: retained ? retainLegacyDefaultAgentId(config, "main") : config,
+        config,
       }).execute("authorization", {
         sessionKey: bareKey,
         message: "status?",
@@ -328,7 +327,7 @@ it("fails closed for cross-agent and resolution-derived bare keys", async () => 
     .mockImplementation(async (request: { method?: string }) =>
       request.method === "sessions.resolve" ? { key: "incident-42", agentId: "other" } : {},
     );
-  expect(await send(false)).toMatchObject({
+  expect(await send()).toMatchObject({
     status: "forbidden",
     error: expect.stringContaining("Agent-to-agent messaging is disabled"),
   });
@@ -346,7 +345,7 @@ it("fails closed for cross-agent and resolution-derived bare keys", async () => 
       }
       return request.params?.sessionId ? { key: "incident-42" } : {};
     });
-  expect(await send(true)).toMatchObject({
+  expect(await send()).toMatchObject({
     status: "forbidden",
     error: expect.stringContaining("Upgrade the gateway"),
   });

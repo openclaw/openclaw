@@ -344,8 +344,8 @@ struct ManagedNodeGatewayMigrationTests {
                     currentVersion: "2026.9.6", owner: .gateway))
                 #expect(pending.hasPendingRuntimeMigration)
                 let manager = GatewayProcessManager()
-                manager.setTestingDesiredActive(true)
-                defer { manager.setTestingDesiredActive(false) }
+                manager.desiredActive = true
+                defer { manager.desiredActive = false }
                 // These are alternative results from the completed migration's previous lifecycle.
                 manager.nodeMigrationCompleted = !versionOnly
                 manager.nodeMigrationVersionUpdated = versionOnly
@@ -388,7 +388,7 @@ struct ManagedNodeGatewayMigrationTests {
             }
             let manager = GatewayProcessManager()
             manager.retainedServiceCLI = Fixture().candidate.cli
-            manager.setTestingDesiredActive(true)
+            manager.desiredActive = true
             manager.nodeMigrationFailure = "The Node update needs repair."
             if failureSource != "memory" {
                 try PostAppUpdateReceiptStore.recordSetupRecovery(fromVersion: "2026.8.1", toVersion: "2026.9.6")
@@ -397,12 +397,12 @@ struct ManagedNodeGatewayMigrationTests {
                     manager.stop()
                     await manager.waitForPendingLaunchAgentDisable()
                     #expect(!manager.nodeMigrationAttempted)
-                    manager.setTestingDesiredActive(true)
+                    manager.desiredActive = true
                 } else {
                     manager.nodeMigrationFailure = nil
                 }
             }
-            defer { manager.setTestingDesiredActive(false) }
+            defer { manager.desiredActive = false }
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             let result = await manager.enableLaunchAgentIfNeeded(port: port)
             #expect(result.error?.localizedCaseInsensitiveContains("repair") == true)
@@ -800,7 +800,7 @@ extension AppStateIsolationTests {
             let release = AsyncTestGate()
             defer { release.open() }
             let generation = manager.gatewayStartGeneration
-            manager.setTestingDesiredActive(true)
+            manager.desiredActive = true
             manager.beginGatewayStartTask(generation: generation) {
                 entered.open()
                 await release.wait()
@@ -865,7 +865,7 @@ extension AppStateIsolationTests {
             defaults.set("exact", forKey: cliInstallPolicyKey)
             defaults.set("service", forKey: GatewayHosting.defaultsKey)
             manager.retainedServiceCLI = fixture.cli
-            manager.setTestingDesiredActive(true)
+            manager.desiredActive = true
             manager.nodeMigrationFailure = "previous runtime switch failed"
             defer {
                 manager._testSetLaunchAgentDisableWaitHook(nil)

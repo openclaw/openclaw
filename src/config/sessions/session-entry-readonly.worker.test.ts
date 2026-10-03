@@ -97,95 +97,76 @@ it.each([false, true])(
   },
 );
 
-it.each([false, true])(
-  "keeps schema error classification with a disposable reader: %s",
-  async (disposable) => {
-    await withOpenClawTestState({ label: "readonly-entry-schema-error" }, async ({ env }) => {
+it.each(["schema-retained", "schema-disposable", "row", "rollback"] as const)(
+  "classifies selected-row failures only after reader cleanup: %s",
+  async (mode) => {
+    await withOpenClawTestState({ label: "readonly-entry-error" }, async ({ env }) => {
       const { database, scope } = createEntryFixture(env);
-      database.db.exec("DROP TABLE board_widgets");
-      if (disposable) {
-        await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+      const schema = mode.startsWith("schema");
+      const disposable = mode === "schema-disposable";
+      if (schema) {
+        database.db.exec("DROP TABLE board_widgets");
+        if (disposable) {
+          await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+        }
+      } else {
+        loadSessionEntryReadOnlyInScope(scope);
       }
-      const failure = Object.assign(new Error("native selected-row query failed"), {
-        code: "ERR_SQLITE_ERROR",
-        errcode: 1,
-      });
+      const continuation = schema ? undefined : captureCanonicalSessionReaderContinuation(database);
+      if (!schema && !continuation) {
+        throw new Error("Expected the committed reader admission");
+      }
+      const failure = schema
+        ? Object.assign(new Error("native selected-row query failed"), {
+            code: "ERR_SQLITE_ERROR",
+            errcode: 1,
+          })
+        : new Error("selected row could not be decoded");
       let reader: typeof database.db | undefined;
       const read = vi.spyOn(entryReads, "readSessionEntryRow").mockImplementation((source) => {
         reader = source.db;
         throw failure;
       });
+      const exec = database.db.exec.bind(database.db);
+      const rollback =
+        mode === "rollback"
+          ? vi.spyOn(database.db, "exec").mockImplementation((sql) => {
+              if (sql === "ROLLBACK") {
+                throw new Error("native rollback failed");
+              }
+              return exec(sql);
+            })
+          : undefined;
       try {
-        const result = loadSessionEntryReadOnlyResultInScope(scope);
-        expect(result.ok).toBe(false);
-        if (result.ok) {
-          throw new Error("Expected a selected-row failure");
+        const load = () => loadSessionEntryReadOnlyResultInScope(scope, continuation?.receipt);
+        if (mode === "rollback") {
+          expect(load).toThrow();
+          expect(database.db.isOpen).toBe(false);
+        } else if (schema) {
+          const result = load();
+          expect(result.ok).toBe(false);
+          if (result.ok) {
+            throw new Error("Expected a selected-row failure");
+          }
+          expect(result.error).toBeInstanceOf(SessionMetadataUnavailableError);
+          expect(result.error).toMatchObject({
+            reason: "table-missing",
+            missingTables: ["board_widgets"],
+          });
+          expect(reader?.isOpen).toBe(!disposable);
+        } else {
+          expect(load()).toEqual({ ok: false, error: failure });
+          expect(database.db.isTransaction).toBe(false);
+          expect(database.db.isOpen).toBe(true);
         }
-        expect(result.error).toBeInstanceOf(SessionMetadataUnavailableError);
-        expect(result.error).toMatchObject({
-          reason: "table-missing",
-          missingTables: ["board_widgets"],
-        });
-        expect(reader?.isOpen).toBe(!disposable);
       } finally {
+        rollback?.mockRestore();
         read.mockRestore();
+        continuation?.release();
       }
     });
   },
 );
-
-it("returns row data failures only after the native snapshot rolled back", async () => {
-  await withOpenClawTestState({ label: "readonly-entry-error" }, async ({ env }) => {
-    const { database, scope } = createEntryFixture(env);
-    loadSessionEntryReadOnlyInScope(scope);
-    const continuation = captureCanonicalSessionReaderContinuation(database);
-    if (!continuation) {
-      throw new Error("Expected the committed reader admission");
-    }
-    const failure = new Error("selected row could not be decoded");
-    const read = vi.spyOn(entryReads, "readSessionEntryRow").mockImplementation(() => {
-      throw failure;
-    });
-    try {
-      const result = loadSessionEntryReadOnlyResultInScope(scope, continuation.receipt);
-      expect(result).toEqual({ ok: false, error: failure });
-      expect(database.db.isTransaction).toBe(false);
-      expect(database.db.isOpen).toBe(true);
-    } finally {
-      read.mockRestore();
-      continuation.release();
-    }
-  });
-});
-
-it("does not downgrade a failed rollback to an ordinary row failure", async () => {
-  await withOpenClawTestState({ label: "readonly-entry-rollback" }, async ({ env }) => {
-    const { database, scope } = createEntryFixture(env);
-    loadSessionEntryReadOnlyInScope(scope);
-    const continuation = captureCanonicalSessionReaderContinuation(database);
-    if (!continuation) {
-      throw new Error("Expected the committed reader admission");
-    }
-    const exec = database.db.exec.bind(database.db);
-    const read = vi.spyOn(entryReads, "readSessionEntryRow").mockImplementation(() => {
-      throw new Error("selected row failed");
-    });
-    const rollback = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
-      if (sql === "ROLLBACK") {
-        throw new Error("native rollback failed");
-      }
-      return exec(sql);
-    });
-    try {
-      expect(() => loadSessionEntryReadOnlyResultInScope(scope, continuation.receipt)).toThrow();
-      expect(database.db.isOpen).toBe(false);
-    } finally {
-      rollback.mockRestore();
-      read.mockRestore();
-      continuation.release();
-    }
-  });
-});
 
 it("keeps source refusal outside the ordinary row-error result", async () => {
   await withOpenClawTestState({ label: "readonly-entry-source" }, async ({ env }) => {
@@ -227,43 +208,86 @@ it("propagates raw worker failure without calling the optional-data consumer", a
   });
 });
 
-it("rejects registry revocation during the retained asynchronous consumer", async () => {
-  await withOpenClawTestState({ label: "readonly-entry-retained" }, async ({ env, path }) => {
-    const storePath = path("shared.sqlite");
-    const sessionKey = "agent:main:retained";
-    replaceSessionEntrySync(
-      { agentId: "main", storePath, env, sessionKey },
-      {
-        sessionId: "retained-session",
-        updatedAt: 1,
-        skillsSnapshot: { prompt: "Full stored prompt", skills: [] },
-      },
-    );
-    let consumed = false;
-    await expect(
-      withSessionEntryReadOnlyInWorker(
-        {
-          sessionKey,
-          storePath,
-          env,
-          hydrateSkillPromptRefs: false,
-        },
-        () => {},
-        async (read) => {
-          if (!read.ok) {
-            throw read.error;
-          }
-          expect(read.value?.skillsSnapshot?.prompt).toBe("Full stored prompt");
-          consumed = true;
-          await Promise.resolve();
+it.each(["consumer", "cleanup"] as const)(
+  "rejects registry revocation during %s",
+  async (phase) => {
+    await withOpenClawTestState({ label: "readonly-entry-registry" }, async ({ env, path }) => {
+      const storePath = path("shared.sqlite");
+      const sessionKey =
+        phase === "consumer" ? "agent:main:retained" : "agent:main:cron:job:run:cleanup";
+      if (phase === "consumer") {
+        replaceSessionEntrySync(
+          { agentId: "main", storePath, env, sessionKey },
+          {
+            sessionId: "retained-session",
+            updatedAt: 1,
+            skillsSnapshot: { prompt: "Full stored prompt", skills: [] },
+          },
+        );
+      } else {
+        const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath, env });
+        writeSessionEntry(database, sessionKey, { sessionId: "cleanup-session", updatedAt: 1 });
+      }
+      const pool = historyLane.pool;
+      const rotate = pool.rotate.bind(pool);
+      const closeResources = pool.closeResources.bind(pool);
+      let cleanupCalled = false;
+      const invalidateAfterCleanup = () => {
+        if (!cleanupCalled) {
+          cleanupCalled = true;
           invalidateRegisteredAgentDatabasesMemo({ env });
-          return read.value;
-        },
-      ),
-    ).rejects.toThrow("registry changed");
-    expect(consumed).toBe(true);
-  });
-});
+        }
+      };
+      const rotateCleanup =
+        phase === "cleanup"
+          ? vi.spyOn(pool, "rotate").mockImplementation(async () => {
+              await rotate();
+              invalidateAfterCleanup();
+            })
+          : undefined;
+      const resourceCleanup =
+        phase === "cleanup"
+          ? vi.spyOn(pool, "closeResources").mockImplementation(async (key) => {
+              await closeResources(key);
+              invalidateAfterCleanup();
+            })
+          : undefined;
+      let consumed = false;
+      try {
+        await expect(
+          withSessionEntryReadOnlyInWorker(
+            {
+              sessionKey,
+              storePath,
+              env,
+              ...(phase === "consumer" ? { hydrateSkillPromptRefs: false } : {}),
+            },
+            () => {},
+            async (read) => {
+              if (!read.ok) {
+                throw read.error;
+              }
+              consumed = true;
+              if (phase === "consumer") {
+                expect(read.value?.skillsSnapshot?.prompt).toBe("Full stored prompt");
+                await Promise.resolve();
+                invalidateRegisteredAgentDatabasesMemo({ env });
+              }
+              return read.value;
+            },
+          ),
+        ).rejects.toThrow("registry changed");
+        if (phase === "cleanup") {
+          expect(cleanupCalled).toBe(true);
+        }
+        expect(consumed).toBe(true);
+      } finally {
+        rotateCleanup?.mockRestore();
+        resourceCleanup?.mockRestore();
+      }
+    });
+  },
+);
 
 it("retains the registry witness even when the first read rejects before returning a snapshot", async () => {
   await withOpenClawTestState({ label: "readonly-registry-witness" }, async ({ env }) => {
@@ -272,49 +296,6 @@ it("retains the registry witness even when the first read rejects before returni
     invalidateRegisteredAgentDatabasesMemo({ env });
     await expect(pending).rejects.toThrow("registry changed");
     expect(() => prepared.assertCurrent()).toThrow("registry changed");
-  });
-});
-
-it("checks the captured registry after logical data cleanup", async () => {
-  await withOpenClawTestState({ label: "readonly-entry-cleanup" }, async ({ env, path }) => {
-    const storePath = path("shared.sqlite");
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath, env });
-    const sessionKey = "agent:main:cron:job:run:cleanup";
-    writeSessionEntry(database, sessionKey, { sessionId: "cleanup-session", updatedAt: 1 });
-    const pool = historyLane.pool;
-    const rotate = pool.rotate.bind(pool);
-    const closeResources = pool.closeResources.bind(pool);
-    let cleanupCalled = false;
-    const cleanup = process.versions.bun
-      ? vi.spyOn(pool, "rotate").mockImplementation(async () => {
-          await rotate();
-          cleanupCalled = true;
-          invalidateRegisteredAgentDatabasesMemo({ env });
-        })
-      : vi.spyOn(pool, "closeResources").mockImplementation(async (key) => {
-          await closeResources(key);
-          cleanupCalled = true;
-          invalidateRegisteredAgentDatabasesMemo({ env });
-        });
-    let consumed = false;
-    try {
-      const pending = withSessionEntryReadOnlyInWorker(
-        { sessionKey, storePath, env },
-        () => {},
-        async (read) => {
-          if (!read.ok) {
-            throw read.error;
-          }
-          consumed = true;
-          return read.value;
-        },
-      );
-      await expect(pending).rejects.toThrow("registry changed");
-      expect(cleanupCalled).toBe(true);
-      expect(consumed).toBe(true);
-    } finally {
-      cleanup.mockRestore();
-    }
   });
 });
 

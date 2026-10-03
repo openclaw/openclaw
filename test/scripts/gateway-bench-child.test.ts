@@ -3,50 +3,48 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { stopChild } from "../../scripts/lib/gateway-bench-child.ts";
 
+function childFixture() {
+  const state: { exitCode: number | null; signalCode: NodeJS.Signals | null } = {
+    exitCode: null,
+    signalCode: null,
+  };
+  return Object.assign(new EventEmitter(), state, { kill: vi.fn(() => true) });
+}
+
+function pipedChildFixture() {
+  return Object.assign(childFixture(), {
+    stderr: { destroy: vi.fn() },
+    stdin: { destroy: vi.fn() },
+    stdout: { destroy: vi.fn() },
+    unref: vi.fn(),
+  });
+}
+
 describe("gateway benchmark child teardown", () => {
-  it.each([0, 7])(
-    "classifies queued child exit %i before sending teardown signals",
-    async (exitCode) => {
-      const child = new EventEmitter() as EventEmitter & {
-        exitCode: number | null;
-        kill: ReturnType<typeof vi.fn>;
-        signalCode: NodeJS.Signals | null;
-      };
-      child.exitCode = null;
-      child.signalCode = null;
-      child.kill = vi.fn(() => true);
-
-      const stopped = stopChild(child as unknown as ChildProcess);
-      queueMicrotask(() => {
-        child.exitCode = exitCode;
-        child.emit("exit", exitCode, null);
-      });
-
-      await expect(stopped).resolves.toEqual({
-        exitedBeforeTeardown: true,
-        exitCode,
-        signal: null,
-      });
-      expect(child.kill).not.toHaveBeenCalled();
-    },
-  );
+  it("classifies a queued child failure before sending teardown signals", async () => {
+    const child = childFixture();
+    const stopped = stopChild(child as unknown as ChildProcess);
+    queueMicrotask(() => {
+      child.exitCode = 7;
+      child.emit("exit", 7, null);
+    });
+    await expect(stopped).resolves.toEqual({
+      exitedBeforeTeardown: true,
+      exitCode: 7,
+      signal: null,
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
 
   it("classifies failed teardown signaling as a pre-teardown child exit", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      exitCode: number | null;
-      kill: ReturnType<typeof vi.fn>;
-      signalCode: NodeJS.Signals | null;
-    };
-    child.exitCode = null;
-    child.signalCode = null;
-    child.kill = vi.fn(() => {
+    const child = childFixture();
+    child.kill.mockImplementation(() => {
       setImmediate(() => {
         child.exitCode = 8;
         child.emit("exit", 8, null);
       });
       return false;
     });
-
     await expect(stopChild(child as unknown as ChildProcess)).resolves.toEqual({
       exitedBeforeTeardown: true,
       exitCode: 8,
@@ -56,30 +54,9 @@ describe("gateway benchmark child teardown", () => {
   });
 
   it("bounds teardown and releases IPC when the child ignores termination signals", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      channel: { unref: ReturnType<typeof vi.fn> };
-      exitCode: number | null;
-      kill: ReturnType<typeof vi.fn>;
-      signalCode: NodeJS.Signals | null;
-      stderr: { destroy: ReturnType<typeof vi.fn> };
-      stdin: { destroy: ReturnType<typeof vi.fn> };
-      stdout: { destroy: ReturnType<typeof vi.fn> };
-      unref: ReturnType<typeof vi.fn>;
-    };
-    child.exitCode = null;
-    child.signalCode = null;
-    child.channel = { unref: vi.fn() };
-    child.kill = vi.fn(() => true);
-    child.stderr = { destroy: vi.fn() };
-    child.stdin = { destroy: vi.fn() };
-    child.stdout = { destroy: vi.fn() };
-    child.unref = vi.fn();
-
+    const child = Object.assign(pipedChildFixture(), { channel: { unref: vi.fn() } });
     await expect(
-      stopChild(child as unknown as ChildProcess, {
-        killGraceMs: 1,
-        teardownGraceMs: 1,
-      }),
+      stopChild(child as unknown as ChildProcess, { killGraceMs: 1, teardownGraceMs: 1 }),
     ).resolves.toEqual({
       exitedBeforeTeardown: false,
       exitCode: null,
@@ -94,31 +71,24 @@ describe("gateway benchmark child teardown", () => {
     expect(child.unref).toHaveBeenCalledOnce();
   });
 
-  it.skipIf(process.platform === "win32")(
-    "preserves pre-teardown wrapper exits while cleaning the process group",
-    async () => {
-      const child = new EventEmitter() as EventEmitter & {
-        exitCode: number | null;
-        kill: ReturnType<typeof vi.fn>;
-        pid: number;
-        signalCode: NodeJS.Signals | null;
-        stderr: { destroy: ReturnType<typeof vi.fn> };
-        stdin: { destroy: ReturnType<typeof vi.fn> };
-        stdout: { destroy: ReturnType<typeof vi.fn> };
-        unref: ReturnType<typeof vi.fn>;
+  it.skipIf(process.platform === "win32").each([true, false])(
+    "joins the process group after wrapper exit with exitedBeforeTeardown=%s",
+    async (exitedBeforeTeardown) => {
+      const child = Object.assign(pipedChildFixture(), { pid: 4444 });
+      const queueExit = () => {
+        queueMicrotask(() => {
+          child.exitCode = 0;
+          child.emit("exit", 0, null);
+        });
       };
-      child.exitCode = null;
-      child.kill = vi.fn(() => true);
-      child.pid = 4444;
-      child.signalCode = null;
-      child.stderr = { destroy: vi.fn() };
-      child.stdin = { destroy: vi.fn() };
-      child.stdout = { destroy: vi.fn() };
-      child.unref = vi.fn();
-
+      let emittedExit = false;
       let processGroupAlive = true;
       const processKill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
         expect(pid).toBe(-child.pid);
+        if (!exitedBeforeTeardown && signal === "SIGTERM" && !emittedExit) {
+          emittedExit = true;
+          queueExit();
+        }
         if (signal === "SIGKILL") {
           processGroupAlive = false;
           return true;
@@ -133,81 +103,10 @@ describe("gateway benchmark child teardown", () => {
           killGraceMs: 50,
           teardownGraceMs: 1,
         });
-        queueMicrotask(() => {
-          child.exitCode = 0;
-          child.emit("exit", 0, null);
-        });
-        await expect(stopped).resolves.toEqual({
-          exitedBeforeTeardown: true,
-          exitCode: 0,
-          signal: null,
-        });
-        expect(processKill).toHaveBeenCalledWith(-child.pid, "SIGTERM");
-        expect(processKill).toHaveBeenCalledWith(-child.pid, "SIGKILL");
-        expect(child.kill).not.toHaveBeenCalled();
-        expect(child.stdin.destroy).not.toHaveBeenCalled();
-        expect(child.stdout.destroy).not.toHaveBeenCalled();
-        expect(child.stderr.destroy).not.toHaveBeenCalled();
-        expect(child.unref).not.toHaveBeenCalled();
-      } finally {
-        processKill.mockRestore();
-      }
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "waits for the process group after a teardown-triggered wrapper exit",
-    async () => {
-      const child = new EventEmitter() as EventEmitter & {
-        exitCode: number | null;
-        kill: ReturnType<typeof vi.fn>;
-        pid: number;
-        signalCode: NodeJS.Signals | null;
-        stderr: { destroy: ReturnType<typeof vi.fn> };
-        stdin: { destroy: ReturnType<typeof vi.fn> };
-        stdout: { destroy: ReturnType<typeof vi.fn> };
-        unref: ReturnType<typeof vi.fn>;
-      };
-      child.exitCode = null;
-      child.kill = vi.fn(() => true);
-      child.pid = 4445;
-      child.signalCode = null;
-      child.stderr = { destroy: vi.fn() };
-      child.stdin = { destroy: vi.fn() };
-      child.stdout = { destroy: vi.fn() };
-      child.unref = vi.fn();
-
-      let emittedExit = false;
-      let processGroupAlive = true;
-      const processKill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-        expect(pid).toBe(-child.pid);
-        if (signal === "SIGTERM" && !emittedExit) {
-          emittedExit = true;
-          queueMicrotask(() => {
-            child.exitCode = 0;
-            child.emit("exit", 0, null);
-          });
+        if (exitedBeforeTeardown) {
+          queueExit();
         }
-        if (signal === "SIGKILL") {
-          processGroupAlive = false;
-          return true;
-        }
-        if (signal === 0 && !processGroupAlive) {
-          throw Object.assign(new Error("gone"), { code: "ESRCH" });
-        }
-        return true;
-      });
-      try {
-        await expect(
-          stopChild(child as unknown as ChildProcess, {
-            killGraceMs: 50,
-            teardownGraceMs: 1,
-          }),
-        ).resolves.toEqual({
-          exitedBeforeTeardown: false,
-          exitCode: 0,
-          signal: null,
-        });
+        await expect(stopped).resolves.toEqual({ exitedBeforeTeardown, exitCode: 0, signal: null });
         expect(processKill).toHaveBeenCalledWith(-child.pid, "SIGTERM");
         expect(processKill).toHaveBeenCalledWith(-child.pid, "SIGKILL");
         expect(child.kill).not.toHaveBeenCalled();

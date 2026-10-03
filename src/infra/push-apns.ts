@@ -17,7 +17,6 @@ import {
   createApnsApprovalAlertPayload,
   createApnsApprovalResolvedPayload,
   createApnsBackgroundPayload,
-  resolveExecApprovalAlertBody,
   resolvePluginApprovalAlertBody,
 } from "./push-apns-payloads.js";
 import { apnsSendInvalidatedError, requireCurrentApnsSend } from "./push-apns-send-current.js";
@@ -53,7 +52,6 @@ export type { ApnsAuthConfig } from "./push-apns-auth.js";
 
 type ApnsTransport = "direct" | "relay";
 
-/** Normalized APNs push result returned to gateway push/nodes methods. */
 type ApnsPushResult = {
   ok: boolean;
   status: number;
@@ -104,7 +102,6 @@ function parseReason(body: string): string | undefined {
   }
 }
 
-/** Returns true for APNs responses that mean the direct device token is no longer usable. */
 function shouldInvalidateApnsRegistration(result: { status: number; reason?: string }): boolean {
   if (result.status === 410) {
     return true;
@@ -112,7 +109,6 @@ function shouldInvalidateApnsRegistration(result: { status: number; reason?: str
   return result.status === 400 && result.reason?.trim() === "BadDeviceToken";
 }
 
-/** Decides whether a failed direct push should clear the persisted registration. */
 export function shouldClearStoredApnsRegistration(params: {
   registration: ApnsRegistration;
   result: { status: number; reason?: string };
@@ -286,48 +282,30 @@ function resolveDirectSendContext(params: {
   };
 }
 
-function resolveRegistrationDebugSuffix(
-  registration: ApnsRegistration,
-  relayResult?: Pick<ApnsRelayPushResponse, "tokenSuffix">,
-): string {
-  if (registration.transport === "direct") {
-    return registration.token.slice(-8);
-  }
-  return (
-    relayResult?.tokenSuffix ?? registration.tokenDebugSuffix ?? registration.relayHandle.slice(-8)
-  );
-}
-
 function toPushResult(params: {
   registration: ApnsRegistration;
   response: ApnsRequestResponse | ApnsRelayPushResponse;
   tokenSuffix?: string;
 }): ApnsPushResult {
-  const response =
-    "body" in params.response
-      ? {
-          ok: params.response.status === 200,
-          status: params.response.status,
-          apnsId: params.response.apnsId,
-          reason: parseReason(params.response.body),
-          environment: params.registration.environment,
-          tokenSuffix: params.tokenSuffix,
-        }
-      : params.response;
+  const { registration, response } = params;
+  const direct = "body" in response;
   return {
-    ok: response.ok,
+    ok: direct ? response.status === 200 : response.ok,
     status: response.status,
     apnsId: response.apnsId,
-    reason: response.reason,
+    reason: direct ? parseReason(response.body) : response.reason,
     tokenSuffix:
       params.tokenSuffix ??
-      resolveRegistrationDebugSuffix(
-        params.registration,
-        "tokenSuffix" in response ? response : undefined,
-      ),
-    topic: params.registration.topic,
-    environment: response.environment ?? params.registration.environment,
-    transport: params.registration.transport,
+      (registration.transport === "direct"
+        ? registration.token.slice(-8)
+        : ((!direct ? response.tokenSuffix : undefined) ??
+          registration.tokenDebugSuffix ??
+          registration.relayHandle.slice(-8))),
+    topic: registration.topic,
+    environment: direct
+      ? registration.environment
+      : (response.environment ?? registration.environment),
+    transport: registration.transport,
   };
 }
 
@@ -377,7 +355,6 @@ type ApnsPluginApprovalAlertParams = ApnsApprovalParams & {
   description: string;
 };
 
-/** Sends a visible APNs alert via direct APNs token or relay registration. */
 export async function sendApnsAlert(params: ApnsAlertParams): Promise<ApnsPushResult> {
   const payload = createApnsAlertPayload({
     nodeId: params.nodeId,
@@ -391,7 +368,6 @@ export async function sendApnsAlert(params: ApnsAlertParams): Promise<ApnsPushRe
   );
 }
 
-/** Sends a silent background wake via direct APNs token or relay registration. */
 export async function sendApnsBackgroundWake(
   params: ApnsBackgroundWakeParams,
 ): Promise<ApnsPushResult> {
@@ -456,7 +432,6 @@ async function sendApnsPush(
   });
 }
 
-/** Sends an exec-approval alert notification via direct APNs or relay. */
 export async function sendApnsExecApprovalAlert(
   params: ApnsApprovalParams,
 ): Promise<ApnsPushResult> {
@@ -467,7 +442,7 @@ export async function sendApnsExecApprovalAlert(
       approvalId: params.approvalId,
       gatewayDeviceId: params.gatewayDeviceId,
       title: "Exec approval required",
-      body: resolveExecApprovalAlertBody(),
+      body: "Open OpenClaw to review this request.",
       category: EXEC_APPROVAL_NOTIFICATION_CATEGORY,
     }),
     pushType: "alert",
@@ -475,7 +450,6 @@ export async function sendApnsExecApprovalAlert(
   });
 }
 
-/** Sends a plugin-approval alert notification via direct APNs or relay. */
 export async function sendApnsPluginApprovalAlert(
   params: ApnsPluginApprovalAlertParams,
 ): Promise<ApnsPushResult> {
@@ -510,14 +484,12 @@ async function sendApnsApprovalResolvedWake(params: {
   });
 }
 
-/** Sends a silent wake telling the app an exec approval changed state. */
 export async function sendApnsExecApprovalResolvedWake(
   params: ApnsApprovalParams,
 ): Promise<ApnsPushResult> {
   return await sendApnsApprovalResolvedWake({ transport: params, kind: "exec" });
 }
 
-/** Sends a silent wake telling the app a plugin approval changed state. */
 export async function sendApnsPluginApprovalResolvedWake(
   params: ApnsApprovalParams,
 ): Promise<ApnsPushResult> {

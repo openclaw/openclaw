@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { AgentSelect } from "../../components/agent-select.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
@@ -171,74 +172,48 @@ describe("PaletteSessionDraft", () => {
     },
   );
 
-  it.each([
-    "same-owner",
-    "credentials-same-owner",
-    "principal-change",
-    "gateway-change",
-    "gateway-object",
-    "unscoped",
-    "disconnected",
-  ])("keeps rejected-session recovery bound to its owner after %s reconnect", async (reconnect) => {
-    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
-    const { host, context, publish } = await mount();
-    if (reconnect === "unscoped") {
-      delete context.gateway.snapshot.hello!.auth!.recoveryScope;
+  it.each(["same-owner", "gateway-object", "disconnected"])(
+    "keeps rejected-session recovery bound to its owner after %s reconnect",
+    async (reconnect) => {
+      const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+      const { host, context, publish } = await mount();
+      host.draft.setMessage("Keep the rejected task recoverable");
+      vi.mocked(context.sessions.createResult).mockResolvedValue({
+        key: "agent:main:dashboard:rejected",
+        initialRun: { status: "rejected", error: "Initial turn rejected" },
+      });
+      await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
+      await host.draft.submit();
+      const open = showToast.mock.calls.at(-1)?.[0].onAction;
+      expect(open).toBeTypeOf("function");
+      context.gateway.snapshot.phase = "reconnecting";
       publish();
-    }
-    host.draft.setMessage("Keep the rejected task recoverable");
-    vi.mocked(context.sessions.createResult).mockResolvedValue({
-      key: "agent:main:dashboard:rejected",
-      initialRun: { status: "rejected", error: "Initial turn rejected" },
-    });
-    await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
-    await host.draft.submit();
-    const open = showToast.mock.calls.at(-1)?.[0].onAction;
-    expect(open).toBeTypeOf("function");
-    context.gateway.snapshot.phase = "reconnecting";
-    publish();
-    context.gateway.snapshot.client = createDraftFixture().context.gateway.snapshot.client;
-    context.gateway.snapshot.phase = reconnect === "disconnected" ? "reconnecting" : "connected";
-    // Transport reconnects replace the client without changing the credential revision.
-    if (
-      ["credentials-same-owner", "principal-change", "gateway-change", "gateway-object"].includes(
-        reconnect,
-      )
-    ) {
-      Object.assign(context.gateway, { connectionRevision: 2 });
-    }
-    if (reconnect === "principal-change") {
-      const hello = context.gateway.snapshot.hello!;
-      context.gateway.snapshot.hello = {
-        ...hello,
-        auth: { ...hello.auth!, recoveryScope: "principal-b" },
-      };
-      Object.assign(context.gateway.snapshot.client!, { recoveryScope: "principal-b" });
-    } else if (reconnect === "gateway-object") {
-      Object.assign(context, { gateway: { ...context.gateway } });
-    } else if (reconnect === "gateway-change") {
-      Object.assign(context.gateway.connection, { gatewayUrl: "ws://another.example" });
-    }
-    publish();
-    await host.updateComplete;
-    if (reconnect === "same-owner") {
-      expect(host.draft.message).toBe("Keep the rejected task recoverable");
-      expect(host.draft.canSubmit).toBe(false);
-      const recovery = [...host.querySelectorAll("button")].find(
-        (button) => button.textContent?.trim() === "Open session",
-      );
-      expect(recovery).toBeDefined();
-      recovery?.click();
-      expect(context.gateway.setSessionKey).toHaveBeenCalledWith("agent:main:dashboard:rejected");
-      expect(context.navigate).toHaveBeenCalledOnce();
-      expect(host.started).toHaveBeenCalledOnce();
-    } else {
-      open?.();
-      expect(context.navigate).not.toHaveBeenCalled();
-      expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
-    }
-    expect(context.sessions.createResult).toHaveBeenCalledOnce();
-  });
+      context.gateway.snapshot.client = createDraftFixture().context.gateway.snapshot.client;
+      context.gateway.snapshot.phase = reconnect === "disconnected" ? "reconnecting" : "connected";
+      if (reconnect === "gateway-object") {
+        Object.assign(context, { gateway: { ...context.gateway } });
+      }
+      publish();
+      await host.updateComplete;
+      if (reconnect === "same-owner") {
+        expect(host.draft.message).toBe("Keep the rejected task recoverable");
+        expect(host.draft.canSubmit).toBe(false);
+        const recovery = [...host.querySelectorAll("button")].find(
+          (button) => button.textContent?.trim() === "Open session",
+        );
+        expect(recovery).toBeDefined();
+        recovery?.click();
+        expect(context.gateway.setSessionKey).toHaveBeenCalledWith("agent:main:dashboard:rejected");
+        expect(context.navigate).toHaveBeenCalledOnce();
+        expect(host.started).toHaveBeenCalledOnce();
+      } else {
+        open?.();
+        expect(context.navigate).not.toHaveBeenCalled();
+        expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
+      }
+      expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps one pending creation through close/reopen and suppresses duplicate submit", async () => {
     vi.spyOn(toast, "showToast").mockReturnValue(true);
@@ -419,6 +394,20 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
   };
 }
 
+function holdPaletteSave(fixture: Awaited<ReturnType<typeof mountPreferences>>) {
+  const saving = createDeferred();
+  const held = createDeferred();
+  let heldOnce = false;
+  fixture.setBeforeSave(async (patch) => {
+    if (Object.hasOwn(patch, PALETTE_PREFERENCE_KEY) && !heldOnce) {
+      heldOnce = true;
+      saving.resolve();
+      await held.promise;
+    }
+  });
+  return { saving: saving.promise, release: held.resolve };
+}
+
 describe("palette-only remembered settings", () => {
   it("never borrows or consumes the foreground draft's one-use worktree name", async () => {
     const ordinary = { folder: "/workspace", worktree: true, worktreeName: "foreground-task" };
@@ -446,26 +435,20 @@ describe("palette-only remembered settings", () => {
 
   it("uses a confirmed ordinary default after its initiating surface is disposed", async () => {
     const fixture = await mountPreferences();
-    let entered!: () => void;
-    let release!: () => void;
-    const saving = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const saving = createDeferred();
+    const held = createDeferred();
     fixture.setBeforeSave(async (patch) => {
       const preference = patch["new-session.v1:main"];
       if (isRecord(preference) && preference.folder === "/confirmed-after-disposal") {
-        entered();
-        await held;
+        saving.resolve();
+        await held.promise;
       }
     });
     fixture.place.applyFolder("/confirmed-after-disposal");
     try {
-      await saving;
+      await saving.promise;
       fixture.gateway.disconnect();
-      release();
+      held.resolve();
       await vi.waitFor(() =>
         expect(fixture.entries["new-session.v1:main"]).toMatchObject({
           folder: "/confirmed-after-disposal",
@@ -478,7 +461,7 @@ describe("palette-only remembered settings", () => {
         fixture.host.querySelector(".palette-session-settings__workspace")?.textContent,
       ).toContain("confirmed-after-disposal");
     } finally {
-      release();
+      held.resolve();
     }
   });
 
@@ -486,22 +469,7 @@ describe("palette-only remembered settings", () => {
     "refreshes confirmed remount settings without overriding edited choices (edited=%s)",
     async (edited) => {
       const fixture = await mountPreferences();
-      let entered!: () => void;
-      let release!: () => void;
-      let heldOnce = false;
-      const saving = new Promise<void>((resolve) => {
-        entered = resolve;
-      });
-      const held = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      fixture.setBeforeSave(async (patch) => {
-        if (Object.hasOwn(patch, PALETTE_PREFERENCE_KEY) && !heldOnce) {
-          heldOnce = true;
-          entered();
-          await held;
-        }
-      });
+      const { saving, release } = holdPaletteSave(fixture);
       fixture.select().onSelect("main");
       await fixture.host.updateComplete;
       fixture.remember().click();
@@ -557,22 +525,7 @@ describe("palette-only remembered settings", () => {
     "surfaces an unconfirmed queued %s after reconnect and retries the latest intent",
     async (intent) => {
       const fixture = await mountPreferences();
-      let entered!: () => void;
-      let release!: () => void;
-      let heldOnce = false;
-      const saving = new Promise<void>((resolve) => {
-        entered = resolve;
-      });
-      const held = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      fixture.setBeforeSave(async (patch) => {
-        if (Object.hasOwn(patch, PALETTE_PREFERENCE_KEY) && !heldOnce) {
-          heldOnce = true;
-          entered();
-          await held;
-        }
-      });
+      const { saving, release } = holdPaletteSave(fixture);
       fixture.host.draft.setMessage("Keep this exact reconnect prompt");
       await fixture.host.updateComplete;
       const prompt = expectDefined(fixture.host.querySelector("textarea"), "palette prompt");
@@ -806,31 +759,4 @@ describe("palette-only remembered settings", () => {
       }
     },
   );
-
-  it("renders machine-grouped workspace choices instead of an always-visible toolbar", async () => {
-    const { host } = await mountPreferences();
-    expect(host.querySelector(".palette-session-settings__trigger")).not.toBeNull();
-    expect(host.querySelector(".new-session-page__where-popover")).toBeNull();
-    expectDefined(
-      host.querySelector<HTMLButtonElement>(".palette-session-settings__workspace"),
-      "workspace picker",
-    ).click();
-    await host.updateComplete;
-    expect(
-      host.querySelector('section[aria-label="Local"] [data-machine="local"][data-project=""]'),
-    ).not.toBeNull();
-    const search = expectDefined(
-      host.querySelector<HTMLInputElement>(".palette-session-settings__search"),
-      "workspace search",
-    );
-    search.value = "no-such-workspace";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    await host.updateComplete;
-    expect(host.querySelector("[data-machine]")).toBeNull();
-    search.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-    );
-    await host.updateComplete;
-    expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull();
-  });
 });

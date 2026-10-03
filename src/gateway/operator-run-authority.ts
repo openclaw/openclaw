@@ -157,6 +157,7 @@ function intersectRunModelPolicy(
 export function captureChannelOperatorRunAuthority(input: {
   profileId: string;
   assignedRole: string | null;
+  githubLogin?: string | null;
   scopes: readonly string[];
   gatewayAccessGrant: AdmittedRunOperatorAuthority["gatewayAccessGrant"];
   getRuntimeConfig: () => OpenClawConfig;
@@ -170,8 +171,12 @@ export function captureChannelOperatorRunAuthority(input: {
   const prepareModelPolicy = (cfg: OpenClawConfig, metadata: typeof modelPolicyMetadata) =>
     prepareOperatorModelPolicy({
       cfg,
-      policy: resolveOperatorRolePolicyForAssignment(params.profileId, params.assignedRole, cfg)
-        ?.modelPolicy,
+      policy: resolveOperatorRolePolicyForAssignment(
+        params.profileId,
+        params.assignedRole,
+        cfg,
+        params.githubLogin ?? null,
+      )?.modelPolicy,
       manifestPlugins: metadata ?? [],
     });
   const originalModelPolicy = prepareModelPolicy(modelPolicyConfig, modelPolicyMetadata);
@@ -185,6 +190,7 @@ export function captureChannelOperatorRunAuthority(input: {
           params.profileId,
           params.assignedRole,
           modelPolicyConfig,
+          params.githubLogin ?? null,
         ),
       ),
     ),
@@ -193,6 +199,10 @@ export function captureChannelOperatorRunAuthority(input: {
     readCurrentRoleAssignment: () => {
       params.assertCurrent();
       return params.assignedRole;
+    },
+    readCurrentGithubLogin: () => {
+      params.assertCurrent();
+      return params.githubLogin ?? null;
     },
     get modelPolicy() {
       const cfg = params.getRuntimeConfig();
@@ -330,8 +340,15 @@ export async function captureGatewayOperatorRunAuthority(input: {
       throw new Error("operator source identity changed; start a new request", { cause: error });
     }
   };
-  const resolveCurrentRole = (cfg = getConfig()) =>
-    resolveOperatorRolePolicyForAssignment(profileId, assertProfileCurrent().assignedRole, cfg);
+  const resolveCurrentRole = (cfg = getConfig()) => {
+    const profile = assertProfileCurrent();
+    return resolveOperatorRolePolicyForAssignment(
+      profileId,
+      profile.assignedRole,
+      cfg,
+      profile.githubLogin ?? null,
+    );
+  };
   const assertRoleCurrent = () => {
     const policy = resolveCurrentRole();
     if (
@@ -474,7 +491,9 @@ export async function captureGatewayOperatorRunAuthority(input: {
     ) {
       throw new Error("Gateway caller authority is no longer active.");
     }
-    const capturedAssignedRole = assertProfileCurrent().assignedRole;
+    const capturedProfile = assertProfileCurrent();
+    const capturedAssignedRole = capturedProfile.assignedRole;
+    const capturedGithubLogin = capturedProfile.githubLogin ?? null;
     const capturedRole = structuredClone(resolveCurrentRole());
     const capturedSourcePolicy = sourceRolePolicy(capturedRole);
     if (
@@ -483,7 +502,12 @@ export async function captureGatewayOperatorRunAuthority(input: {
           !isDeepStrictEqual(
             capturedSourcePolicy,
             sourceRolePolicy(
-              resolveOperatorRolePolicyForAssignment(profileId, capturedAssignedRole, config),
+              resolveOperatorRolePolicyForAssignment(
+                profileId,
+                capturedAssignedRole,
+                config,
+                capturedGithubLogin,
+              ),
             ),
           ),
       )
@@ -496,6 +520,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
         profileId,
         current.assignedRole,
         getConfig(),
+        current.githubLogin ?? null,
       );
       if (
         current.assignedRole !== capturedAssignedRole ||
@@ -516,6 +541,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
         profileId,
         capturedAssignedRole,
         initialRoleConfig,
+        capturedGithubLogin,
       )?.modelPolicy,
       manifestPlugins: modelPolicyMetadata ?? [],
     });
@@ -535,6 +561,10 @@ export async function captureGatewayOperatorRunAuthority(input: {
         readCurrentRoleAssignment: () => {
           assertCurrent();
           return assertProfileCurrent().assignedRole;
+        },
+        readCurrentGithubLogin: () => {
+          assertCurrent();
+          return assertProfileCurrent().githubLogin ?? null;
         },
         gatewayAccessGrant:
           sourceAuthority === null || (sourceAuthority === undefined && authenticatedOwner)

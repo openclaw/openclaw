@@ -22,6 +22,10 @@ import { removeTemporaryArtifacts } from "../../infra/temp-artifact-cleanup.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  copyExplicitSkillSelectionFileHost,
+  resolveExplicitSkillSelectionFileHost,
+} from "../discovery/skill-command-provenance.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
   prepareSkillBundle,
@@ -30,7 +34,6 @@ import {
   skillLibraryRevisionDir,
   SkillTreeDirectoryError,
 } from "../library/bundle.js";
-import { SkillLibraryError } from "../library/errors.js";
 import { readSkillLibrarySelectionManifests } from "../library/selection-read.js";
 import {
   captureSkillLibrarySelection,
@@ -40,8 +43,17 @@ import { loadSingleSkillDirectory } from "../loading/local-loader.js";
 import { createSyntheticSourceInfo, type Skill } from "../loading/skill-contract.js";
 import { shouldSyncSkillPath } from "../loading/skill-paths.js";
 import { formatSkillsForPromptBounded } from "../loading/skill-prompt-limits.js";
+import {
+  copySkillFileHost,
+  recordSkillFileHost,
+  resolveSkillFileHost,
+} from "../skill-file-host.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import type { ExplicitSkillSelection, SkillSnapshot, SkillResourceSourceReader } from "../types.js";
+import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
 import { resolveSkillResourceCandidates } from "./resource-candidates.js";
+import { SkillResourceDeliveryLimitError } from "./resource-delivery-error.js";
+import { copySkillSnapshotExecutionFileHost } from "./skill-snapshot-provenance.js";
 
 const log = createSubsystemLogger("skills/resources");
 
@@ -112,6 +124,14 @@ const localSkillResourceReader: SkillResourceSourceReader = {
   readSkillFiles: readSkillResourceFiles,
 };
 
+function matchesExplicitSelection(skill: Skill, selection: ExplicitSkillSelection): boolean {
+  const selectionHost = resolveExplicitSkillSelectionFileHost(selection);
+  return (
+    skill.filePath === selection.path &&
+    (selectionHost === undefined || resolveSkillFileHost(skill) === selectionHost)
+  );
+}
+
 // The caller retains these bytes for its turn. Catalog versions do not version supporting files.
 export async function prepareSkillResourceDelivery(
   inputSnapshot: SkillSnapshot | undefined,
@@ -130,18 +150,22 @@ export async function prepareSkillResourceDelivery(
   ) {
     return undefined;
   }
-  const snapshot = {
+  const snapshot = copySkillSnapshotExecutionFileHost(inputSnapshot, {
     ...inputSnapshot,
     librarySelections: captureSkillLibrarySelection(inputSnapshot.librarySelections ?? []),
     skills: inputSnapshot.skills.map((skill) => ({ ...skill })),
-    resolvedSkills: inputSnapshot.resolvedSkills?.map((skill) => ({ ...skill })),
+    resolvedSkills: inputSnapshot.resolvedSkills?.map((skill) =>
+      copySkillFileHost(skill, { ...skill }),
+    ),
     skillRoots: inputSnapshot.skillRoots && { ...inputSnapshot.skillRoots },
-  };
-  const explicitSelections = inputExplicitSelections.map((selection) => ({ ...selection }));
+  });
+  const explicitSelections = inputExplicitSelections.map((selection) =>
+    copyExplicitSkillSelectionFileHost(selection, { ...selection }),
+  );
   // Library-only and node-native catalogs need no workspace filesystem access.
   let sourceReader: SkillResourceSourceReader | undefined;
   const getSourceReader = (skill?: Skill) => {
-    if (skill?.fileHost === "gateway") {
+    if (skill && resolveSkillFileHost(skill) === "gateway") {
       return localSkillResourceReader;
     }
     if (!sourceReader) {
@@ -182,21 +206,30 @@ export async function prepareSkillResourceDelivery(
   for (const selected of explicitSelections) {
     if (
       selected.path.startsWith("node://") ||
-      candidates.some((skill) => skill.filePath === selected.path)
+      candidates.some((skill) => matchesExplicitSelection(skill, selected))
     ) {
       continue;
     }
     // Explicit references are host-resolved command paths, including eligible hidden skills.
     // Read only that directory; a resource turn must not repeat global skill discovery.
     const skillDir = path.dirname(selected.path);
+    const selectedFileHost = resolveExplicitSkillSelectionFileHost(selected);
     const gatewayOwned = snapshot.skills.some((skill) => skill.gatewayFilePath === selected.path);
+    let fileHost = selectedFileHost ?? (gatewayOwned ? "gateway" : undefined);
+    if (!fileHost) {
+      const sourceWorkspace = snapshot.skillRoots?.agentWorkspaceDir ?? workspaceDir;
+      const hasRemoteWorkspace = sourceWorkspace
+        ? Boolean(getAgentWorkspaceAccess(sourceWorkspace, "loadSkills")?.loadSkills)
+        : false;
+      fileHost = hasRemoteWorkspace ? "workspace" : "gateway";
+    }
     let loaded: Skill | null;
     try {
       loaded = await (
-        gatewayOwned ? localSkillResourceReader : getSourceReader()
+        fileHost === "gateway" ? localSkillResourceReader : getSourceReader()
       ).resolveExplicitSkill(selected);
       if (loaded) {
-        loaded = { ...loaded, fileHost: gatewayOwned ? "gateway" : "workspace" };
+        loaded = recordSkillFileHost({ ...loaded }, fileHost);
       }
     } catch (error) {
       throw contextualizeSkillResourceError({ name: selected.name, baseDir: skillDir }, error);
@@ -205,7 +238,14 @@ export async function prepareSkillResourceDelivery(
     if (
       !loaded ||
       loaded.filePath !== selected.path ||
-      !snapshot.skills.some((skill) => skill.name === loaded.name) ||
+      !snapshot.skills.some(
+        (skill) =>
+          skill.name === loaded.name &&
+          (fileHost === "gateway"
+            ? skill.gatewayFilePath === selected.path ||
+              (selectedFileHost === undefined && skill.gatewayFilePath === undefined)
+            : skill.gatewayFilePath === undefined),
+      ) ||
       candidates.some((skill) => skill.name === loaded.name)
     ) {
       throw new Error(
@@ -232,8 +272,8 @@ export async function prepareSkillResourceDelivery(
       continue;
     }
     const pin = snapshot.librarySelections?.find((selection) => selection.name === skill.name);
-    const explicitlySelected = explicitSelections.some(
-      (selection) => selection.path === skill.filePath,
+    const explicitlySelected = explicitSelections.some((selection) =>
+      matchesExplicitSelection(skill, selection),
     );
     let files: SkillLibraryFile[] | null;
     try {
@@ -278,13 +318,21 @@ export async function prepareSkillResourceDelivery(
     }
     total += bundle.files.reduce((sum, file) => sum + file.sizeBytes, 0);
     if (total > SKILL_LIBRARY_MAX_BUNDLE_BYTES) {
-      throw new Error(
-        "Selected skill resources exceed the worker delivery limit (8 MiB). Select fewer skills before retrying.",
-      );
+      throw new SkillResourceDeliveryLimitError();
     }
+    const sourcePath =
+      resolveSkillFileHost(skill) === "workspace" &&
+      candidates.some(
+        (candidate) =>
+          candidate !== skill &&
+          candidate.filePath === skill.filePath &&
+          resolveSkillFileHost(candidate) === "gateway",
+      )
+        ? resolveSkillReadPath(skill)
+        : skill.filePath;
     skills.push({
       name: skill.name,
-      sourcePath: skill.filePath,
+      sourcePath,
       modelVisible:
         (snapshot.resolvedSkills?.some((selected) => selected.filePath === skill.filePath) ??
           false) ||
@@ -378,6 +426,12 @@ export async function materializeSkillResources(
         });
       }
       const filePath = path.join(baseDir, "SKILL.md");
+      const virtualPath = resolveSkillReadPath(
+        { name: skill.name, filePath: skill.sourcePath ?? filePath },
+        "workspace",
+      );
+      pathMappings.push([virtualPath, filePath]);
+      pathMappings.push([virtualPath.slice(0, -"SKILL.md".length), `${baseDir}${path.sep}`]);
       if (skill.sourcePath) {
         pathMappings.push([skill.sourcePath, filePath]);
         // Explicit supporting-file references share the same verified bundle root.

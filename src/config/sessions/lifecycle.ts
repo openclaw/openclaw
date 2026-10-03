@@ -20,10 +20,13 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "./types.js";
-import {
+export {
+  createSessionWorkStartChangedError,
+  isSessionWorkStartInvalidatedError,
   SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
-  SESSION_WORK_START_CHANGED_ERROR_CODE,
-  SESSION_WORK_START_INVALIDATED_ERROR_CODE,
+  SessionRestartRecoveryTombstoneError,
+  SessionWorkStartChangedError,
+  SessionWorkStartInvalidatedError,
 } from "./work-start-error.js";
 
 type SessionWorkStartEntry = Pick<
@@ -61,56 +64,6 @@ export function isRestartRecoveryTombstone(
 
 /** Stable Gateway error detail for stale session lifecycle requests. */
 export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
-export { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE };
-
-export class SessionWorkStartInvalidatedError extends Error {
-  readonly code = SESSION_WORK_START_INVALIDATED_ERROR_CODE;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionWorkStartInvalidatedError";
-  }
-}
-
-export class SessionWorkStartChangedError extends Error {
-  readonly code = SESSION_WORK_START_CHANGED_ERROR_CODE;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionWorkStartChangedError";
-  }
-}
-
-export function createSessionWorkStartChangedError(
-  sessionKey: string,
-): SessionWorkStartChangedError {
-  return new SessionWorkStartChangedError(
-    `Session "${sessionKey}" changed while starting work. Retry.`,
-  );
-}
-
-export function isSessionWorkStartInvalidatedError(
-  error: unknown,
-): error is SessionWorkStartInvalidatedError | SessionWorkStartChangedError {
-  return (
-    error instanceof SessionWorkStartInvalidatedError ||
-    error instanceof SessionWorkStartChangedError ||
-    (typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE ||
-        error.code === SESSION_WORK_START_CHANGED_ERROR_CODE))
-  );
-}
-
-export class SessionRestartRecoveryTombstoneError extends Error {
-  readonly code = SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionRestartRecoveryTombstoneError";
-  }
-}
 
 /** Lifecycle-owned expired, initializing, restart-tombstoned, and archived sessions reject work. */
 export function resolveSessionWorkStartError(

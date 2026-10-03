@@ -15,8 +15,7 @@ import {
   createMcpAttachGrantServerConfig,
   getActiveMcpLoopbackRuntime,
 } from "../mcp-http.loopback-runtime.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { resolveSessionStoreKey } from "../session-utils.js";
+import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const attachHandlers: GatewayRequestHandlers = {
@@ -24,7 +23,7 @@ export const attachHandlers: GatewayRequestHandlers = {
     const grantParams = asRecord(params);
     const cfg = context.getRuntimeConfig();
     const requestedSessionKey = normalizeOptionalString(grantParams.sessionKey) ?? "main";
-    const requestedAgent = resolveRequestedSessionAgentId(
+    const requestedAgent = resolveRequestedSessionStoreTarget(
       cfg,
       requestedSessionKey,
       normalizeOptionalString(grantParams.agentId),
@@ -33,14 +32,10 @@ export const attachHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const storageSessionKey = resolveSessionStoreKey({
-      cfg,
-      sessionKey: requestedSessionKey,
-      storeAgentId: requestedAgent.agentId,
-    });
+    const { sessionKey: storageSessionKey, agentId } = requestedAgent.value;
     const sessionKey = parseAgentSessionKey(storageSessionKey)
       ? storageSessionKey
-      : `agent:${requestedAgent.agentId}:${storageSessionKey}`;
+      : `agent:${agentId}:${storageSessionKey}`;
     const harnessEntry = isAgentHarnessSessionKey(storageSessionKey)
       ? resolveSessionEntryAccessTarget({ cfg, sessionKey: storageSessionKey }).entry
       : undefined;

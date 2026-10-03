@@ -28,6 +28,7 @@ import {
   prewarmSessionHistoryWorker,
   withSessionHistoryWorkerDatabase,
 } from "../config/sessions/session-transcript-worker-runtime.js";
+import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { DEFAULT_WORKER_PENDING_BYTES } from "../infra/worker-task-capacity.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -60,6 +61,7 @@ import { readChatHistoryMessageId } from "./session-history-tail.js";
 const observed = vi.hoisted(() => ({
   timers: vi.spyOn(globalThis, "setTimeout"),
   workers: [] as Worker[],
+  idleCloseKeepsWorker: new WeakMap<Worker, boolean>(),
   dispatch: undefined as ((message: unknown) => void) | undefined,
   restoration: undefined as
     | { sessionId: string; entered: () => void; wait: Promise<void> }
@@ -70,6 +72,13 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   return {
     ...actual,
     Worker: class extends actual.Worker {
+      constructor(...args: ConstructorParameters<typeof actual.Worker>) {
+        const { explicitSqliteCloseReleasesNativeResources } = getSqliteRuntimeCapabilities();
+        super(...args);
+        // Match the decision this generation inherits, before any later admission.
+        observed.idleCloseKeepsWorker.set(this, explicitSqliteCloseReleasesNativeResources);
+      }
+
       override postMessage(...args: Parameters<Worker["postMessage"]>): void {
         const kind = asOptionalRecord(asOptionalRecord(args[0])?.input)?.kind;
         if (
@@ -235,7 +244,7 @@ it("keeps fresh fixture roots isolated while reusing idle reader execution", asy
       const worker = observed.workers.at(-1)!;
       expect(worker).toBe(prewarmedWorker);
       if (previousWorker) {
-        if (process.versions.bun) {
+        if (observed.idleCloseKeepsWorker.get(previousWorker) !== true) {
           expect(previousWorker.threadId).toBe(-1);
           expect(worker).not.toBe(previousWorker);
         } else {
@@ -345,12 +354,13 @@ it("settles cancelled message reads before reuse and closes their database handl
       "cancel-message-read-message",
     ]);
     expect(observed.workers.at(-1)).toBe(worker);
+    const keepsWorker = observed.idleCloseKeepsWorker.get(worker) === true;
     await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
-    expect(worker.threadId).toBe(process.versions.bun ? -1 : threadId);
+    expect(worker.threadId).toBe(keepsWorker ? threadId : -1);
     expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
       "cancel-message-read-message",
     ]);
-    if (process.versions.bun) {
+    if (!keepsWorker) {
       expect(observed.workers.at(-1)).not.toBe(worker);
     } else {
       expect(observed.workers.at(-1)).toBe(worker);
@@ -536,6 +546,7 @@ it("closes idle A while active and queued B pages survive, then reads replaced A
     await b.read();
     const oldWorker = observed.workers.at(-1)!;
     const threadId = oldWorker.threadId;
+    const keepsWorker = observed.idleCloseKeepsWorker.get(oldWorker) === true;
     let closing: Promise<boolean> | undefined;
     observed.dispatch = (message) => {
       const input = asOptionalRecord(asOptionalRecord(message)?.input);
@@ -552,7 +563,7 @@ it("closes idle A while active and queued B pages survive, then reads replaced A
       ["active-b-message"],
       ["queued-b-message"],
     ]);
-    expect(oldWorker.threadId).toBe(process.versions.bun ? -1 : threadId);
+    expect(oldWorker.threadId).toBe(keepsWorker ? threadId : -1);
     // This also exercises Windows replacement while the unrelated agent remains usable.
     fs.copyFileSync(a.path, `${a.path}.replacement`);
     fs.renameSync(a.path, `${a.path}.previous`);
@@ -571,7 +582,7 @@ it("closes idle A while active and queued B pages survive, then reads replaced A
       "replacement-a-message",
     ]);
     expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual(["active-b-message"]);
-    if (!process.versions.bun) {
+    if (keepsWorker) {
       expect(observed.workers.at(-1)).toBe(oldWorker);
     }
   });
@@ -600,6 +611,7 @@ it("evicts the least recently used of 64 retained targets without charging missi
       expect(fs.existsSync(target.storePath)).toBe(false);
     }
     await targets[64]!.read();
+    const keepsWorker = observed.idleCloseKeepsWorker.get(worker) === true;
     const closeResources = vi.spyOn(historyLane.pool, "closeResources");
     try {
       // The evicted target has no retained native custody; the hot target still does.
@@ -607,8 +619,8 @@ it("evicts the least recently used of 64 retained targets without charging missi
       expect(worker.threadId).toBe(threadId);
       expect(closeResources).not.toHaveBeenCalled();
       await closeOpenClawAgentDatabaseByPathAsync(targets[0]!.path, "retained-0");
-      expect(worker.threadId).toBe(process.versions.bun ? -1 : threadId);
-      if (!process.versions.bun) {
+      expect(worker.threadId).toBe(keepsWorker ? threadId : -1);
+      if (keepsWorker) {
         expect(closeResources).toHaveBeenCalledWith(JSON.stringify([{ path: targets[0]!.path }]));
       }
     } finally {

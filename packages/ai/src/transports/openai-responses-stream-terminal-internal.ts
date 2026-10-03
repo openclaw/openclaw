@@ -58,6 +58,7 @@ type TerminalOutput = AssistantMessage & {
 type TerminalOptions = Pick<
   ResponsesStreamOptions,
   | "serviceTier"
+  | "onServiceTier"
   | "resolveServiceTier"
   | "applyServiceTierPricing"
   | "reasoningReplayMetadata"
@@ -323,6 +324,7 @@ export function createResponsesTerminalController(params: {
     >["response"],
     responseId = response.id,
   ) => {
+    options?.onServiceTier?.(response.service_tier);
     output.responseId = responseId || output.responseId;
     output.responseModel = options?.resolveResponseModel
       ? options.resolveResponseModel()?.trim() || undefined

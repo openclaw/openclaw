@@ -38,6 +38,7 @@ const execFileAsync = promisify(execFile);
 const tempDirs = createTempDirTracker();
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
@@ -107,6 +108,29 @@ describe("project registry", () => {
     "ssh://git@github.com:22/OpenClaw/OpenClaw",
   ])("canonicalizes accepted GitHub clone URL %s", (input) => {
     expect(parseProjectGitUrl(input)?.url).toBe("https://github.com/openclaw/openclaw.git");
+  });
+
+  it.each([
+    [
+      "https://ghe.example.test/Acme/Private-Repo",
+      "https://ghe.example.test/acme/private-repo.git",
+    ],
+    [
+      "git@ghe.example.test:Acme/Private-Repo.git",
+      "https://ghe.example.test/acme/private-repo.git",
+    ],
+    [
+      "ssh://git@ghe.example.test/Acme/Private-Repo.git",
+      "https://ghe.example.test/acme/private-repo.git",
+    ],
+  ])("canonicalizes accepted enterprise GitHub clone URL %s", (input, expected) => {
+    expect(parseProjectGitUrl(input, "ghe.example.test")?.url).toBe(expected);
+  });
+
+  it("rejects a repository URL from a host other than the configured GitHub host", () => {
+    expect(
+      parseProjectGitUrl("https://github.com/openclaw/openclaw.git", "ghe.example.test"),
+    ).toBeNull();
   });
 
   it.each([
@@ -310,6 +334,76 @@ describe("project registry", () => {
       source: "cloned",
       originUrl: "https://github.com/acme/fixture.git",
     });
+  });
+
+  it("scopes private clone and refresh credentials to the repository origin", async () => {
+    const root = tempDirs.make("openclaw-project-auth-origin-");
+    const checkout = await initializeRepository(root, "checkout");
+    const token = "synthetic-project-token";
+    const runCommand = processExec.runCommandWithTimeout;
+    const commandSpy = vi.spyOn(processExec, "runCommandWithTimeout");
+    commandSpy.mockImplementation(async (argv, options) => {
+      if (argv.includes("clone") || argv.includes("fetch")) {
+        return {
+          code: 0,
+          stdout: "",
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      return await runCommand(argv, options);
+    });
+    try {
+      await cloneProjectCheckout(
+        {
+          url: "https://ghe.example.test/acme/enterprise.git",
+          target: path.join(root, "enterprise"),
+        },
+        { token },
+      );
+      await cloneProjectCheckout(
+        {
+          url: "https://github.com/acme/public-cloud.git",
+          target: path.join(root, "public-cloud"),
+        },
+        { token },
+      );
+      await refreshProjectCheckout(
+        { target: checkout, url: "https://ghe.example.test/acme/enterprise.git" },
+        { token },
+      );
+
+      const networkCalls = commandSpy.mock.calls.filter(
+        ([argv]) => argv.includes("clone") || argv.includes("fetch"),
+      );
+      const networkEnvs = networkCalls.map(([, options]) =>
+        typeof options === "object" ? options?.env : undefined,
+      );
+      expect(networkCalls).toHaveLength(3);
+      expect(networkEnvs.map((env) => env?.GIT_CONFIG_KEY_0)).toEqual([
+        "http.https://ghe.example.test/.extraHeader",
+        "http.https://github.com/.extraHeader",
+        "http.https://ghe.example.test/.extraHeader",
+      ]);
+      expect(networkEnvs.map((env) => env?.GIT_CONFIG_COUNT)).toEqual(["1", "1", "1"]);
+      expect(networkCalls.flatMap(([argv]) => argv)).not.toContain(token);
+      expect(networkEnvs.map((env) => env?.GIT_CONFIG_KEY_0)).not.toContain("http.extraHeader");
+      const unrelatedOrigin = await runCommand(
+        [
+          "git",
+          "config",
+          "--get-urlmatch",
+          "http.extraHeader",
+          "https://unrelated.example/acme/repository.git",
+        ],
+        { env: networkEnvs[0] },
+      );
+      expect(unrelatedOrigin).toMatchObject({ code: 1, stdout: "" });
+    } finally {
+      commandSpy.mockRestore();
+    }
   });
 
   it.runIf(process.platform !== "win32")(

@@ -11,6 +11,7 @@ import type {
   OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
+import { captureSessionMessageAdmission } from "./session-manager-message-admission.js";
 import type {
   SessionMetadataOperations,
   SessionMetadataWorkerOperations,
@@ -25,19 +26,50 @@ export async function withSessionMetadataWorker<T>(
   database: OpenClawAgentDatabase,
   assertCurrent: () => void,
   operation: (scope: Pick<SqliteWorkerStore<SessionMetadataOperations>, "execute">) => Promise<T>,
+  controls?: { beforeFreshMessageCommit?: () => void },
 ): Promise<T> {
+  const admission = captureSessionMessageAdmission(assertCurrent, controls);
   const worker = await openOpenClawAgentSqliteWorkerStore<SessionMetadataWorkerOperations>(
     options,
     database.db,
-    { moduleUrl, input: undefined },
+    {
+      moduleUrl,
+      input: undefined,
+      assertAdmission: admission.assertAdmission,
+    },
   );
   let result: Result<T, unknown>;
   try {
     const value = await operation({
       execute: async (command, commandOptions) => {
+        if (
+          command.type === "session.transcript.rewrite" &&
+          "entries" in command.input &&
+          admission.control.pendingInput
+        ) {
+          command.input.pendingInput = admission.control.pendingInput;
+        }
+        if (
+          "event" in command.input &&
+          typeof command.input.event !== "string" &&
+          command.input.message
+        ) {
+          command.input.message = {
+            ...command.input.message,
+            ...admission.control,
+          };
+        }
         const reply = await worker.execute(command, assertCurrent, commandOptions);
         if (!reply.ok) {
           throw new SessionTranscriptWriterClaimReboundError(reply.refusal);
+        }
+        if (
+          reply.value &&
+          typeof reply.value === "object" &&
+          "pendingInputReceipt" in reply.value &&
+          reply.value.pendingInputReceipt
+        ) {
+          admission.publish(reply.value.pendingInputReceipt);
         }
         return reply.value;
       },

@@ -33,10 +33,28 @@ import { transcriptEventJsonSql } from "./transcript-payload.js";
 export function loadTranscriptSuffixEventsBoundedSync(
   scope: SessionTranscriptReadScope,
   startSeq: number,
+  limits: {
+    maxBytes: number;
+    maxEvents: number;
+    retainedCustomDataIds?: readonly string[];
+  },
+): TranscriptEvent[] {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  return loadTranscriptSuffixEventsBoundedFromDatabase(
+    openOpenClawAgentDatabase(toDatabaseOptions(resolved)),
+    scope,
+    startSeq,
+    limits,
+  );
+}
+
+export function loadTranscriptSuffixEventsBoundedFromDatabase(
+  database: Pick<ReturnType<typeof openOpenClawAgentDatabase>, "db" | "path">,
+  scope: SessionTranscriptReadScope,
+  startSeq: number,
   limits: { maxBytes: number; maxEvents: number; retainedCustomDataIds?: readonly string[] },
 ): TranscriptEvent[] {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   return runSqliteDeferredTransactionSync(
     database.db,
     () => {
@@ -131,38 +149,43 @@ export function loadTranscriptSuffixEventsBoundedSync(
 export function readPreviousIndexedTranscriptEventSync(
   scope: SessionTranscriptReadScope,
   beforeSeq: number,
+  options: { readOnly?: boolean } = {},
 ): SessionTranscriptEventRow | undefined {
-  return withCurrentProjectionSnapshot(scope, (projection) => {
-    const db = getActiveTranscriptKysely(projection.database);
-    const row = executeSqliteQueryTakeFirstSync(
-      projection.database.db,
-      db
-        .selectFrom("transcript_event_identities as identity")
-        .innerJoin("session_transcript_active_events as active", (join) =>
-          join
-            .onRef("active.session_id", "=", "identity.session_id")
-            .onRef("active.event_seq", "=", "identity.seq"),
-        )
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "identity.session_id")
-            .onRef("event.seq", "=", "identity.seq"),
-        )
-        .select([
-          transcriptEventJsonSql(projection.database.db, "event").as("event_json"),
-          "identity.seq",
-        ])
-        .where("identity.session_id", "=", projection.resolved.sessionId)
-        .where("identity.seq", "<", beforeSeq)
-        .orderBy("active.active_position", "desc")
-        .limit(1),
-    );
-    return row
-      ? {
-          // SAFETY: Indexed transcript rows contain the persisted transcript event union.
-          event: JSON.parse(row.event_json) as TranscriptEvent,
-          seq: sqliteNumber(row.seq),
-        }
-      : undefined;
-  });
+  return withCurrentProjectionSnapshot(
+    scope,
+    (projection) => {
+      const db = getActiveTranscriptKysely(projection.database);
+      const row = executeSqliteQueryTakeFirstSync(
+        projection.database.db,
+        db
+          .selectFrom("transcript_event_identities as identity")
+          .innerJoin("session_transcript_active_events as active", (join) =>
+            join
+              .onRef("active.session_id", "=", "identity.session_id")
+              .onRef("active.event_seq", "=", "identity.seq"),
+          )
+          .innerJoin("transcript_events as event", (join) =>
+            join
+              .onRef("event.session_id", "=", "identity.session_id")
+              .onRef("event.seq", "=", "identity.seq"),
+          )
+          .select([
+            transcriptEventJsonSql(projection.database.db, "event").as("event_json"),
+            "identity.seq",
+          ])
+          .where("identity.session_id", "=", projection.resolved.sessionId)
+          .where("identity.seq", "<", beforeSeq)
+          .orderBy("active.active_position", "desc")
+          .limit(1),
+      );
+      return row
+        ? {
+            // SAFETY: Indexed transcript rows contain the persisted transcript event union.
+            event: JSON.parse(row.event_json) as TranscriptEvent,
+            seq: sqliteNumber(row.seq),
+          }
+        : undefined;
+    },
+    options,
+  );
 }

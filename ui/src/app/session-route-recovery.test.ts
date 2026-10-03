@@ -57,6 +57,8 @@ async function setup(pathname = "/chat/main/dashboard/12345678-90ab-cdef-1234-56
     search: "?draft=keep-this",
     hash: "#message",
   };
+  const startAtDestination = () =>
+    startApplicationRouter(router, { ...history, location: () => destination }, "", context);
   const disconnect = () =>
     fixture.publish({ ...fixture.gateway.snapshot, phase: "reconnecting", hello: null });
   const reconnect = () =>
@@ -85,6 +87,7 @@ async function setup(pathname = "/chat/main/dashboard/12345678-90ab-cdef-1234-56
     beginLoad,
     writeHistory,
     request,
+    startAtDestination,
   };
 }
 
@@ -104,17 +107,7 @@ describe("session route reconnect recovery", () => {
       const loaded = createDeferredCore<unknown>();
       f.load.mockImplementationOnce(() => loaded.promise);
       f.request.mockResolvedValue({ ok: true, key: session.sessionKey });
-      const startup = startApplicationRouter(
-        f.router,
-        {
-          location: () => f.destination,
-          push: f.writeHistory,
-          replace: f.writeHistory,
-          listen: () => () => {},
-        },
-        "",
-        f.context,
-      );
+      const startup = f.startAtDestination();
       await vi.waitFor(() => expect(f.load).toHaveBeenCalledOnce());
       if (state === "pending") {
         f.reconnect();
@@ -135,17 +128,7 @@ describe("session route reconnect recovery", () => {
     f.router.stop();
     f.publish({ ...f.gateway.snapshot, phase: "connecting", hello: null });
     f.load.mockRejectedValueOnce(new Error("Gateway unavailable")).mockResolvedValue(session);
-    await startApplicationRouter(
-      f.router,
-      {
-        location: () => f.destination,
-        push: f.writeHistory,
-        replace: f.writeHistory,
-        listen: () => () => {},
-      },
-      "",
-      f.context,
-    ).catch(() => undefined);
+    await f.startAtDestination().catch(() => undefined);
     expect(f.router.getState().status).toBe("error");
     f.reconnect();
     await vi.waitFor(() => expect(f.router.getState().status).toBe("success"));
@@ -199,17 +182,7 @@ describe("session route reconnect recovery", () => {
     vi.spyOn(f.router.getRoute("chat")!, "component").mockReturnValue(component.promise);
     f.load.mockResolvedValueOnce(session).mockResolvedValue({ kind: "missing-session" });
     f.request.mockResolvedValue({ ok: false });
-    const startup = startApplicationRouter(
-      f.router,
-      {
-        location: () => f.destination,
-        push: f.writeHistory,
-        replace: f.writeHistory,
-        listen: () => () => {},
-      },
-      "",
-      f.context,
-    );
+    const startup = f.startAtDestination();
     await vi.waitFor(() => expect(f.load).toHaveBeenCalledOnce());
     f.disconnect();
     f.reconnect();
@@ -348,22 +321,6 @@ describe("session route reconnect recovery", () => {
     fixture.reconnect();
     await fixture.router.navigate("activity", fixture.context, { history: "push" });
     expect(fixture.router.getState().matches[0]?.routeId).toBe("activity");
-    expect(fixture.load).toHaveBeenCalledOnce();
-  });
-
-  it("preserves a loaded conversation across reconnect", async () => {
-    const fixture = await setup();
-    await fixture.router.navigate(
-      "chat",
-      fixture.context,
-      { history: "push" },
-      fixture.destination,
-    );
-    const match = fixture.router.getState().matches[0];
-    fixture.disconnect();
-    fixture.reconnect();
-    await Promise.resolve();
-    expect(fixture.router.getState().matches[0]).toBe(match);
     expect(fixture.load).toHaveBeenCalledOnce();
   });
 

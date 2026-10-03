@@ -51,4 +51,8 @@ export function markPrewarmedChatSnapshotReady(): void {
     pending.readyAt ??= Date.now();
   }
 }
-subscribeSnapshotInvalidation(({ sessionKey }) => discardPrewarmedChatSnapshot(sessionKey));
+subscribeSnapshotInvalidation(({ sessionKey, scopePrefix }) => {
+  if (!scopePrefix || pending?.cacheKey.startsWith(scopePrefix)) {
+    discardPrewarmedChatSnapshot(sessionKey);
+  }
+});

@@ -25,7 +25,6 @@ import {
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
 } from "../shared/legacy-tool-name-migration.js";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
-import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
 import {
   collectLegacyOpenAICodexCronModelRoutes,
   copyTopLevelAgentTurnFields,
@@ -124,37 +123,27 @@ function incrementIssue(issues: CronStoreIssues, key: CronStoreIssueKey) {
   issues[key] = (issues[key] ?? 0) + 1;
 }
 
-function normalizeStoredCronJobIdentity(raw: Record<string, unknown>): {
-  mutated: boolean;
-  legacyJobIdIssue: boolean;
-  missingIdIssue: boolean;
-  nonStringIdIssue: boolean;
-} {
-  const hadIdKey = "id" in raw;
-  const hadJobIdKey = "jobId" in raw;
+function normalizeStoredCronJobIdentity(
+  raw: Record<string, unknown>,
+  trackIssue: (key: CronStoreIssueKey) => void,
+): boolean {
   const id = normalizeOptionalStringifiedId(raw.id);
   const legacyJobId = normalizeOptionalStringifiedId(raw.jobId);
-  const canonicalId =
-    id ?? legacyJobId ?? resolveLegacyCronMigrationId(raw) ?? `cron-${randomUUID()}`;
-  const nonStringIdIssue = hadIdKey && raw.id != null && typeof raw.id !== "string";
-  const missingIdIssue = !id && !legacyJobId;
-  let mutated = false;
-
-  if (raw.id !== canonicalId) {
-    raw.id = canonicalId;
-    mutated = true;
-  }
+  const canonicalId = id ?? legacyJobId ?? `cron-${randomUUID()}`;
+  const hadJobIdKey = "jobId" in raw;
   if (hadJobIdKey) {
-    delete raw.jobId;
-    mutated = true;
+    trackIssue("jobId");
   }
-
-  return {
-    mutated,
-    legacyJobIdIssue: hadJobIdKey,
-    missingIdIssue,
-    nonStringIdIssue,
-  };
+  if (!id && !legacyJobId) {
+    trackIssue("missingId");
+  }
+  if ("id" in raw && raw.id != null && typeof raw.id !== "string") {
+    trackIssue("nonStringId");
+  }
+  const mutated = raw.id !== canonicalId || hadJobIdKey;
+  raw.id = canonicalId;
+  delete raw.jobId;
+  return mutated;
 }
 
 function resolveLegacyCronDeliveryMode(mode: unknown): "none" | "announce" | "webhook" | undefined {
@@ -222,19 +211,8 @@ export function normalizeStoredCronJobs(
       incrementIssue(issues, key);
     };
 
-    const idNorm = normalizeStoredCronJobIdentity(raw);
-    if (idNorm.mutated) {
-      mutated = true;
-    }
-    if (idNorm.legacyJobIdIssue) {
-      trackIssue("jobId");
-    }
-    if (idNorm.missingIdIssue) {
-      trackIssue("missingId");
-    }
-    if (idNorm.nonStringIdIssue) {
-      trackIssue("nonStringId");
-    }
+    const identityMutated = normalizeStoredCronJobIdentity(raw, trackIssue);
+    mutated ||= identityMutated;
 
     if (!isRecord(raw.state)) {
       raw.state = {};

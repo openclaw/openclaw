@@ -1,8 +1,6 @@
-// Channel resolution exposes read-only outbound runtime facades and performs
-// optional bootstrap for deliverable channels that are not loaded yet.
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -170,9 +168,7 @@ function* resolveOutboundChannelPluginSteps(
     );
   }
 
-  const resolveLoaded = () => getLoadedChannelPlugin(normalized);
-  const resolve = () => getChannelPlugin(normalized);
-  const current = resolveLoaded();
+  const current = getLoadedChannelPlugin(normalized);
   const requireActivatedRuntime = params.allowBootstrap === true;
   const runtimeCurrent = resolveOutboundPluginFromRuntimeRegistry(
     normalized,
@@ -183,7 +179,7 @@ function* resolveOutboundChannelPluginSteps(
     bootstrapRegistry ?? getOutboundRuntimeRegistry(),
     normalized,
   );
-  const bundledCurrent = resolve();
+  const bundledCurrent = getChannelPlugin(normalized);
   const candidate = resolveRuntimeOutboundPluginCandidate({
     loaded: current,
     runtime: runtimeCurrent,
@@ -206,9 +202,9 @@ function* resolveOutboundChannelPluginSteps(
     agentId: params.agentId,
   };
   return resolveRuntimeOutboundPluginCandidate({
-    loaded: resolveLoaded(),
+    loaded: getLoadedChannelPlugin(normalized),
     runtime: resolveOutboundPluginFromRuntimeRegistry(normalized, registry, true),
-    bundled: resolve(),
+    bundled: getChannelPlugin(normalized),
     requireActivatedRuntime: true,
   });
 }

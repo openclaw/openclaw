@@ -116,6 +116,16 @@ Changes to `agents.defaults.models`, agent model selection and fallbacks, and
 `models.providers` hot-apply without draining the Codex plugin. Changing Codex's
 own plugin settings still follows its plugin reload policy.
 
+Agent sandbox tool allow/deny lists under `agents.entries.<id>.tools.sandbox`
+hot-apply without restarting plugin services. Workboard reads live session facts;
+File Transfer reloads only for workspace inputs.
+
+If a service stop times out during config hot reload, that service remains owned
+and degraded while the Gateway keeps serving. Healthy services can finish their
+reloads. The warning names the plugin and service; plugin health includes its service
+failure. Once cleanup settles, retry `openclaw plugins reload <id>` to recover the
+affected plugin. A slow service cleanup does not schedule a Gateway restart.
+
 Channel transport edits, such as `channels.slack.streaming.mode`, retain prepared
 session rows and model catalogs. Agent rosters, session policy, store topology,
 configured model references, and channel activation still invalidate their affected

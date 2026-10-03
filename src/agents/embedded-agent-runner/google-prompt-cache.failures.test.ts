@@ -290,7 +290,7 @@ describe("google prompt cache failure handling", () => {
       fetchMock: vi.fn(async () => new Response("denied", { status: 403 })),
       now: NOW,
       sessionManager: {
-        appendCustomEntry: vi.fn(async () => {
+        appendCustomEntryAsync: vi.fn(async () => {
           throw rebound;
         }),
         getEntries: () => [],
@@ -308,7 +308,7 @@ describe("google prompt cache failure handling", () => {
       fetchMock: vi.fn(async () => new Response("denied", { status: 403 })),
       now: NOW,
       sessionManager: {
-        appendCustomEntry: vi.fn(async () => {
+        appendCustomEntryAsync: vi.fn(async () => {
           throw new Error("metadata unavailable");
         }),
         getEntries: () => [],

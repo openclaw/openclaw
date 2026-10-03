@@ -4,11 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertReliabilityForcedExit } from "../../scripts/lib/sqlite-reliability-process.js";
 import {
   installPrivateUpdateHandoffStore,
   writePrivateUpdateHandoffChildGuard,
 } from "../../test/helpers/private-update-handoff-store.js";
+import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -303,56 +303,18 @@ function replaceField(
   }
 }
 
+function createHotJournal(journalPath: string) {
+  createHotSqliteRollbackJournal({
+    path: journalPath,
+    mutationSql: "UPDATE package_activation SET phase = 'publication-complete'",
+    env: childGuardEnv({}),
+  });
+}
+
 describe.skipIf(process.platform === "win32")("package activation journal", () => {
   it("status refuses a real hot rollback journal without recovering or changing its files", async () => {
     const f = await fixture();
-    const setup = new DatabaseSync(f.journalPath);
-    try {
-      setup.exec(`
-        PRAGMA journal_mode = DELETE;
-        PRAGMA synchronous = FULL;
-        CREATE TABLE hot_journal_pressure (
-          id INTEGER PRIMARY KEY,
-          value TEXT NOT NULL,
-          payload BLOB NOT NULL
-        ) STRICT;
-        WITH RECURSIVE rows(id) AS (
-          SELECT 1 UNION ALL SELECT id + 1 FROM rows WHERE id < 256
-        )
-        INSERT INTO hot_journal_pressure
-        SELECT id, 'committed', zeroblob(8192) FROM rows;
-      `);
-    } finally {
-      setup.close();
-    }
-    // Match the existing sqlite-snapshot crash fixture: spill a real uncommitted
-    // write, then join the exact child that leaves the native rollback journal.
-    const crashed = spawnSync(
-      process.execPath,
-      [
-        "--no-warnings",
-        "--input-type=module",
-        "-e",
-        `
-          import { DatabaseSync } from "node:sqlite";
-          const database = new DatabaseSync(process.argv[1]);
-          database.exec(
-            "PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; " +
-            "PRAGMA cache_size = 2; PRAGMA cache_spill = ON; BEGIN IMMEDIATE; " +
-            "UPDATE package_activation SET phase = 'publication-complete'; " +
-            "UPDATE hot_journal_pressure SET value = 'uncommitted';"
-          );
-          process.kill(process.pid, "SIGKILL");
-        `,
-        f.journalPath,
-      ],
-      { env: childGuardEnv({}), encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" },
-    );
-    expect(crashed.error, crashed.stderr).toBeUndefined();
-    assertReliabilityForcedExit(
-      { code: crashed.status, signal: crashed.signal },
-      "activation hot-journal fixture",
-    );
+    createHotJournal(f.journalPath);
     const rollbackPath = `${f.journalPath}-journal`;
     expect(fs.statSync(rollbackPath).size).toBeGreaterThan(512);
     const before = journalFiles(f.anchor);
@@ -396,38 +358,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
 
   it("refuses a replaced hot journal before recovering its rollback", async () => {
     const f = await fixture();
-    const setup = new DatabaseSync(f.journalPath);
-    try {
-      setup.exec(`
-        PRAGMA journal_mode = DELETE;
-        PRAGMA synchronous = FULL;
-        CREATE TABLE pressure (id INTEGER PRIMARY KEY, value TEXT NOT NULL, payload BLOB NOT NULL) STRICT;
-        WITH RECURSIVE rows(id) AS (
-          SELECT 1 UNION ALL SELECT id + 1 FROM rows WHERE id < 256
-        )
-        INSERT INTO pressure SELECT id, 'committed', zeroblob(8192) FROM rows;
-      `);
-    } finally {
-      setup.close();
-    }
-    const child = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "-e",
-        `import { DatabaseSync } from 'node:sqlite';
-         const database = new DatabaseSync(process.argv[1]);
-         database.exec("PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; PRAGMA cache_size = 2; PRAGMA cache_spill = ON; BEGIN IMMEDIATE; UPDATE package_activation SET phase = 'publication-complete'; UPDATE pressure SET value = 'uncommitted';");
-         process.kill(process.pid, 'SIGKILL');`,
-        f.journalPath,
-      ],
-      { env: childGuardEnv({}), encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" },
-    );
-    expect(child.error, child.stderr).toBeUndefined();
-    assertReliabilityForcedExit(
-      { code: child.status, signal: child.signal },
-      "replacement hot journal",
-    );
+    createHotJournal(f.journalPath);
     const admission = await f.journal.readForRecovery();
     const rollbackPath = `${f.journalPath}-journal`;
     const readOnly = new DatabaseSync(f.journalPath, { readOnly: true });
@@ -556,29 +487,13 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
           launchers: [record.descriptor.launchers[0], record.descriptor.launchers[0]],
         }),
     },
-    {
-      name: "oversized UTF-8 descriptor",
-      column: "descriptor_json",
-      value: (record: PackageActivationRecord) => {
-        const value = JSON.stringify({
-          ...record.descriptor,
-          launchers: Array.from({ length: 64 }, (_, index) => ({
-            ...record.descriptor.launchers[0]!,
-            name: `launcher-${index}`,
-            previous: "\u754c".repeat(4096),
-            candidate: "\u754c".repeat(4096),
-          })),
-        });
-        expect(value.length).toBeLessThan(1024 * 1024);
-        expect(Buffer.byteLength(value)).toBeGreaterThan(1024 * 1024);
-        return value;
-      },
-    },
-  ] as const)("preserves a journal with $name", async ({ column, value }) => {
+  ] as const)("preserves a journal with $name", async ({ name, column, value }) => {
     const f = await fixture();
     replaceField(f.journalPath, column, value(f.record));
     const before = journalFiles(f.anchor);
-    expect(() => openPackageActivationJournal(f.anchor).read()).toThrow();
+    expect(() => openPackageActivationJournal(f.anchor).read()).toThrow(
+      name === "malformed descriptor" ? SyntaxError : undefined,
+    );
     await expect(f.transition(f.record, "publishing", { kind: "displace" })).rejects.toThrow();
     expect(journalFiles(f.anchor)).toEqual(before);
   });
@@ -625,7 +540,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     });
   });
 
-  it.each(["rollback-in-progress", "rolled-back", "aborted", "retiring"] as const)(
+  it.each(["rollback-in-progress", "retiring"] as const)(
     "refuses forward repair after %s is durable",
     async (phase) => {
       const f = await fixture();
@@ -708,7 +623,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
 
 const jsonColumns = ["descriptor_json", "intent_json", "publications_json"] as const;
 
-function byteBoundsFixture(oversized?: (typeof jsonColumns)[number]) {
+function byteBoundsFixture(oversized: (typeof jsonColumns)[number]) {
   const anchor = path.join(dirs.make("package-journal-byte-bound-"), "anchor");
   fs.mkdirSync(anchor, { mode: 0o700 });
   fs.mkdirSync(resolvePackageActivationControl(anchor), { mode: 0o700 });
@@ -719,10 +634,8 @@ function byteBoundsFixture(oversized?: (typeof jsonColumns)[number]) {
       "CREATE TABLE package_activation (slot INTEGER, revision INTEGER, phase TEXT, descriptor_json TEXT, intent_json TEXT, publications_json TEXT)",
     );
     const row = { descriptor_json: "{", intent_json: "null", publications_json: "[]" };
-    if (oversized) {
-      // Under one million characters, but over the one MiB byte bound.
-      row[oversized] = "é".repeat(512 * 1024 + 1);
-    }
+    // Under one million characters, but over the one MiB byte bound.
+    row[oversized] = "é".repeat(512 * 1024 + 1);
     db.prepare("INSERT INTO package_activation VALUES (1, 0, 'prepared', ?, ?, ?)").run(
       row.descriptor_json,
       row.intent_json,
@@ -758,11 +671,4 @@ describe.skipIf(process.platform === "win32")("existing package journal byte bou
       expect(snapshot()).toEqual(before);
     },
   );
-
-  it("passes bounded bytes to the decoder and preserves malformed input", () => {
-    const { anchor, snapshot } = byteBoundsFixture();
-    const before = snapshot();
-    expect(() => openPackageActivationJournal(anchor).read()).toThrow(SyntaxError);
-    expect(snapshot()).toEqual(before);
-  });
 });

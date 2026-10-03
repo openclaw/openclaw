@@ -55,8 +55,8 @@ public struct OpenClawChatSessionTarget: Sendable, Hashable {
         policy: OpenClawChatSessionTargetPolicy) -> Self
     {
         let sessionKey = rawSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let selected = self.normalizedAgentID(selectedAgentID)
-        let override = self.normalizedAgentID(overrideAgentID)
+        let selected = selectedAgentID?.trimmedNonEmpty?.lowercased()
+        let override = overrideAgentID?.trimmedNonEmpty?.lowercased()
 
         if OpenClawChatSessionKey.agentID(from: sessionKey) != nil {
             return Self(sessionKey: sessionKey, agentID: override)
@@ -78,11 +78,6 @@ public struct OpenClawChatSessionTarget: Sendable, Hashable {
             }
             return Self(sessionKey: "agent:\(agentID):\(sessionKey)", agentID: nil)
         }
-    }
-
-    private static func normalizedAgentID(_ agentID: String?) -> String? {
-        let normalized = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized?.isEmpty == false ? normalized : nil
     }
 }
 
@@ -308,21 +303,6 @@ public enum OpenClawChatGatewayRequests {
             method: "chat.abort",
             params: params,
             timeoutMs: Double(requestTimeoutMs))
-    }
-
-    public static func patchSessionPreferences(
-        sessionKey: String,
-        agentID: String?,
-        thinkingLevel: String?? = nil,
-        fastMode: OpenClawChatFastMode?? = nil,
-        verboseLevel: String?? = nil) -> OpenClawChatGatewayRequest
-    {
-        self.patchSessionSettings(
-            sessionKey: sessionKey,
-            agentID: agentID,
-            thinkingLevel: thinkingLevel,
-            fastMode: fastMode,
-            verboseLevel: verboseLevel)
     }
 
     public static func patchSessionSettings(

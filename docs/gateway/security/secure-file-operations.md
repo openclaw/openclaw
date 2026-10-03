@@ -40,7 +40,9 @@ The generic fs-safe environment name also works: `FS_SAFE_NATIVE_MODE`.
 
 [Managed worktree acceleration](/concepts/managed-worktrees#filesystem-acceleration) uses isolated native operations for APFS and Btrfs cloning and metadata reads. Those operations retain automatic native selection without changing the Gateway process's configuration. An explicit native mode applies to the isolated operations too; `off` selects normal Git checkout. Native writes remain owned by a supervised child until it exits, so cancellation cannot release the destination for cleanup while the child is still writing.
 
-fs-safe still maps the retired `FS_SAFE_PYTHON_MODE` and `OPENCLAW_FS_SAFE_PYTHON_MODE` values to native modes with a deprecation warning. Replace them with `FS_SAFE_NATIVE_MODE` or `OPENCLAW_FS_SAFE_NATIVE_MODE`. Python interpreter path settings are no longer used.
+fs-safe 0.23 removes the Python bridge. OpenClaw keeps `FS_SAFE_PYTHON_MODE` and `OPENCLAW_FS_SAFE_PYTHON_MODE` as deprecated mode aliases when loading its runtime environment, with a deprecation warning. Explicit native settings and programmatic `configureFsSafeNative()` still take precedence. Replace the old names with `FS_SAFE_NATIVE_MODE` or `OPENCLAW_FS_SAFE_NATIVE_MODE`.
+
+Python interpreter paths are not used. Remove `FS_SAFE_PYTHON`, `OPENCLAW_FS_SAFE_PYTHON`, `OPENCLAW_PINNED_PYTHON`, and `OPENCLAW_PINNED_WRITE_PYTHON` from deployments. Code that directly uses fs-safe must replace `configureFsSafePython` / `FsSafePythonConfig` with `configureFsSafeNative` / `FsSafeNativeConfig` and omit `pythonPath`.
 
 Use `require` when all native-capable operations must fail if the platform binding is unavailable. `auto` allows documented JavaScript fallbacks; no-clobber Root moves and Windows secure credential reads always require their native primitives.
 
@@ -114,6 +116,8 @@ In `require` mode, an unavailable or unloadable helper normally causes `helper-u
 
 - Plugin-facing file access should use `openclaw/plugin-sdk/*` helpers when a path comes from a message, model output, config, or plugin input. Plugins can use reviewed fs-safe primitives directly when they declare their own fs-safe dependency and retain the applicable path policy.
 - Core code should import fs-safe primitives from their focused package entry points. Keep OpenClaw adapters where they own behavior, including secret-directory mode repair, archive durability, producer isolation, and public SDK compatibility. Pure re-exports are unnecessary: fs-safe owns its process defaults.
+- OpenClaw's Plugin SDK retains the deprecated `nonBlockingRead` input hint for existing callers; omit it in new code. Safe reads always use nonblocking admission where supported, including when the old hint is `false`. Direct fs-safe calls no longer accept this option.
+- The SDK's atomic replacement helper also retains the ignored adapter `chmod` member for source compatibility. Direct fs-safe adapters must omit it; permissions use the retained file handle.
 - Archive extraction should use the fs-safe archive helpers with explicit size, entry-count, link, and destination limits.
 - Secrets should use OpenClaw secret helpers or fs-safe secret/private-state helpers. Do not hand-roll mode checks around `fs.writeFile`.
 - For hostile local-user isolation, do not rely on fs-safe alone. Run separate gateways under separate OS users/hosts, or use sandboxing.

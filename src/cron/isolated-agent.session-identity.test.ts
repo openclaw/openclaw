@@ -170,7 +170,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     async (source) => {
       await useRealCronSessionState();
       await withTempHome(async (home) => {
-        const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+        const storePath = await writeSessionStore(home, { delivery: { kind: "internal" } });
         const profile = ensureProfileForEmail("cron-creator@example.test");
         const createdActor = { type: "human" as const, source, id: profile.id };
         const job: CronStoredJob = {
@@ -310,7 +310,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
   it("starts a fresh session id for each cron run", async () => {
     await useRealCronSessionState();
     await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const storePath = await writeSessionStore(home, { delivery: { kind: "internal" } });
       const deps = makeDeps();
       const runPingTurn = () =>
         runCronTurn(home, {

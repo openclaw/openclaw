@@ -195,9 +195,8 @@ describe("update.run handoff refusal diagnostics", () => {
       });
       expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining(
-            "OpenClaw update failed: managed-service-handoff-failed",
-          ),
+          message:
+            "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
         }),
         expect.any(Object),
       );

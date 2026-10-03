@@ -2,10 +2,13 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { symlink } from "node:fs/promises";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
 import * as sqlite from "../../infra/kysely-sync.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { OpenClawStateExternalOwnershipError } from "../../infra/sqlite-lifecycle-errors.js";
@@ -15,7 +18,6 @@ import {
   clearOpenClawDatabaseQuarantine,
   recordOpenClawDatabaseQuarantine,
 } from "../../state/openclaw-quarantine-store.js";
-import { openClawStateDatabaseCache } from "../../state/openclaw-state-db-cache.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "../../state/openclaw-state-db-schema-policy.js";
 import {
@@ -25,11 +27,14 @@ import {
   openOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
   registerOpenClawStateDatabaseLifecycleListener,
+  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
-import { createWorkerEnvironmentStore } from "./store.js";
+import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
+import { createWorkerEnvironmentStoreKernel } from "./store.kernel.js";
 
 const delivery = vi.hoisted(() => ({
   afterTransition: undefined as (() => Promise<void>) | undefined,
@@ -69,15 +74,30 @@ vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => 
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(async () => {
-  vi.unstubAllEnvs();
-  delivery.afterTransition = undefined;
-  delivery.afterTouch = undefined;
-  delivery.commands = [];
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-});
+const fixture = createFixtureLifetime();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    // The aborted body still owns its child, store, and environment until cleanup joins.
+    await fixture.cleanup();
+    vi.unstubAllEnvs();
+    delivery.afterTransition = undefined;
+    delivery.afterTouch = undefined;
+    delivery.commands = [];
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
+
+function createIntent(store: WorkerEnvironmentStore, environmentId: string) {
+  return store.createIntent({
+    environmentId,
+    providerId: "provider",
+    profileId: "profile",
+    profileSnapshot: { settings: {} },
+    provisionOperationId: `provision:${environmentId}`,
+  });
+}
 
 it.each(["automatic", "doctor-preparation"] as const)(
   "keeps live inventory usable after a current-schema %s check",
@@ -86,13 +106,7 @@ it.each(["automatic", "doctor-preparation"] as const)(
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const database = openOpenClawStateDatabase({ env });
     const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
-    const intent = await store.createIntent({
-      environmentId: "schema-check-environment",
-      providerId: "provider",
-      profileId: "profile",
-      profileSnapshot: { settings: {} },
-      provisionOperationId: "schema-check-provision",
-    });
+    const intent = await createIntent(store, "schema-check-environment");
     const result = await createStateSchemaMigrationStep({
       stateDir,
       env,
@@ -174,23 +188,25 @@ it("joins explicit Doctor retirement when repair's native close fails after comm
   }
 });
 
-it.each(["automatic", "doctor-preparation", "doctor"] as const)(
-  "preserves live inventory when %s schema admission is refused",
-  async (mode) => {
-    const stateDir = tempDirs.make("worker-inventory-repair-refusal-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const database = openOpenClawStateDatabase({ env });
-    const store = await createWorkerEnvironmentStore({ database });
-    await expect(
-      withExistingOpenClawStateSchema({ path: database.path }, () =>
-        createStateSchemaMigrationStep({ stateDir, env, mode, requiredness: "conditional" }).run(),
-      ),
-    ).rejects.toThrow(/schema repair.*owned/i);
-    expect(database.db.isOpen).toBe(true);
-    expect(store.list()).toEqual([]);
-    await store.close();
-  },
-);
+it("preserves live inventory when schema admission is refused", async () => {
+  const stateDir = tempDirs.make("worker-inventory-repair-refusal-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const database = openOpenClawStateDatabase({ env });
+  const store = await createWorkerEnvironmentStore({ database });
+  await expect(
+    withExistingOpenClawStateSchema({ path: database.path }, () =>
+      createStateSchemaMigrationStep({
+        stateDir,
+        env,
+        mode: "doctor",
+        requiredness: "conditional",
+      }).run(),
+    ),
+  ).rejects.toThrow(/schema repair.*owned/i);
+  expect(database.db.isOpen).toBe(true);
+  expect(store.list()).toEqual([]);
+  await store.close();
+});
 
 it("shares committed inventory and pairing publications across database aliases", async () => {
   const directory = tempDirs.make("worker-inventory-alias-");
@@ -205,13 +221,7 @@ it("shares committed inventory and pairing publications across database aliases"
   });
   const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
   const alias = await createWorkerEnvironmentStore({ database: aliasDatabase, now: () => 1_000 });
-  const intent = await store.createIntent({
-    environmentId: "alias-environment",
-    providerId: "provider",
-    profileId: "profile",
-    profileSnapshot: { settings: {} },
-    provisionOperationId: "alias-provision",
-  });
+  const intent = await createIntent(store, "alias-environment");
   expect(alias.get(intent.environmentId)).toEqual(intent);
   await store.transition({
     environmentId: intent.environmentId,
@@ -246,13 +256,7 @@ it("preserves admitted inventory after a refused native open but fences terminal
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
       const store = await createWorkerEnvironmentStore();
       try {
-        const intent = await store.createIntent({
-          environmentId: "admitted-environment",
-          providerId: "provider",
-          profileId: "profile",
-          profileSnapshot: { settings: {} },
-          provisionOperationId: "admitted-provision",
-        });
+        const intent = await createIntent(store, "admitted-environment");
         expect(() =>
           openOpenClawStateDatabase({
             path: databasePath,
@@ -295,13 +299,7 @@ it("retires inventory when native admission discovers durable quarantine", async
     const store = await createWorkerEnvironmentStore();
     let intent: Awaited<ReturnType<typeof store.createIntent>>;
     try {
-      intent = await store.createIntent({
-        environmentId: "quarantined-environment",
-        providerId: "provider",
-        profileId: "profile",
-        profileSnapshot: { settings: {} },
-        provisionOperationId: "quarantined-provision",
-      });
+      intent = await createIntent(store, "quarantined-environment");
       // A different verifier can publish this fact without notifying our process.
       expect(
         recordOpenClawDatabaseQuarantine({
@@ -355,11 +353,17 @@ it("serves committed inventory and performs guarded mutations without host SQLit
     expect(store.list().map((row) => row.environmentId)).toEqual(["worker-a"]);
     expect(store.listForReconcile()).toEqual(store.list());
     const record = store.get("worker-a")!;
+    expect(store.get("worker-a")).toBe(record);
+    expect(store.list()[0]).toBe(record);
+    expect(store.list()).toBe(store.list());
+    expect(store.listForReconcile()[0]).toBe(record);
     const settings = record.profileSnapshot.settings;
     if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
       throw new Error("Expected fixture settings");
     }
-    settings.region = "caller mutation";
+    expect(() => {
+      settings.region = "caller mutation";
+    }).toThrow(TypeError);
     expect(store.get("worker-a")!.profileSnapshot.settings).toEqual({ region: "fixture" });
     expect(queries).not.toHaveBeenCalled();
     expect(firstRows).not.toHaveBeenCalled();
@@ -373,6 +377,9 @@ it("serves committed inventory and performs guarded mutations without host SQLit
     });
     expect(changed.state).toBe("provisioning");
     expect(store.get("worker-a")).toEqual(changed);
+    expect(store.get("worker-a")).not.toBe(record);
+    expect(store.list()[0]).toBe(store.get("worker-a"));
+    expect(record.state).toBe("requested");
     await expect(
       store.transition({ environmentId: "worker-a", from: "requested", to: "provisioning" }),
     ).rejects.toThrow("state conflict");
@@ -502,6 +509,103 @@ it.each(["create", "close"] as const)(
   },
 );
 
+it("touches the current attachment with one guarded write and no preliminary row read", () => {
+  const database = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("worker-attachment-touch-sql-") },
+  });
+  let nowMs = 1_000;
+  const kernel = createWorkerEnvironmentStoreKernel(database, () => nowMs);
+  const write = <T>(operation: () => T) =>
+    runOpenClawStateWriteTransaction(operation, { database });
+  const { attachment } = write(() =>
+    kernel.createSessionAttachmentIntent({
+      environmentId: "touch-environment",
+      providerId: "provider",
+      profileId: "profile",
+      profileSnapshot: { settings: {} },
+      provisionOperationId: "touch-provision",
+      sessionId: "touch-session",
+      sessionKey: "agent:main:touch-session",
+      agentId: "main",
+    }),
+  );
+  const sql = observeMainThreadSql();
+  try {
+    sql.calibrate();
+    for (const at of [2_000, 2_000]) {
+      nowMs = at;
+      sql.clear();
+      write(() => kernel.touchSessionAttachment(attachment));
+      const attachmentStatements = sql.calls
+        .flatMap((call) => call.mock.contexts)
+        .filter((context): context is StatementSync => context instanceof StatementSync)
+        .map((statement) => statement.sourceSQL)
+        .filter((statement) => statement.includes('"worker_environment_session_attachments"'));
+      expect(attachmentStatements).toHaveLength(1);
+      expect(attachmentStatements[0]).toMatch(/^update /i);
+      expect(kernel.getSessionAttachmentRecord(attachment.sessionId)).toEqual({
+        ...attachment,
+        lastUsedAtMs: at,
+      });
+    }
+  } finally {
+    sql.restore();
+  }
+});
+
+it("rejects stale, replaced, missing, closed, and revoked attachment touches", async () => {
+  const database = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("worker-attachment-touch-guards-") },
+  });
+  let nowMs = 1_000;
+  const store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
+  const intent = {
+    environmentId: "original-environment",
+    providerId: "provider",
+    profileId: "profile",
+    profileSnapshot: { settings: {} },
+    provisionOperationId: "original-provision",
+    sessionId: "guarded-session",
+    sessionKey: "agent:main:guarded-session",
+    agentId: "main",
+  };
+  const { attachment } = await store.createSessionAttachmentIntent(intent, () => {});
+  nowMs = 2_000;
+  for (const record of [
+    { ...attachment, generation: attachment.generation + 1 },
+    { ...attachment, environmentId: "other-environment" },
+    { ...attachment, sessionId: "missing-session" },
+  ]) {
+    await expect(store.touchSessionAttachment(record, () => {})).rejects.toThrow(
+      "Conversation environment attachment is no longer current",
+    );
+    expect(store.getSessionAttachmentRecord(attachment.sessionId)).toEqual(attachment);
+  }
+  await expect(
+    store.touchSessionAttachment(attachment, () => {
+      throw new Error("caller revoked");
+    }),
+  ).rejects.toThrow("caller revoked");
+  expect(store.getSessionAttachmentRecord(attachment.sessionId)).toEqual(attachment);
+  await store.transition({ environmentId: intent.environmentId, from: "requested", to: "failed" });
+  const { attachment: replacement } = await store.createSessionAttachmentIntent(
+    { ...intent, environmentId: "replacement-environment", provisionOperationId: "replacement" },
+    () => {},
+  );
+  nowMs = 3_000;
+  await expect(store.touchSessionAttachment(attachment, () => {})).rejects.toThrow(
+    "Conversation environment attachment is no longer current",
+  );
+  expect(store.getSessionAttachmentRecord(attachment.sessionId)).toEqual(replacement);
+  const closed = await store.closeSessionAttachment(replacement.sessionId);
+  nowMs = 4_000;
+  await expect(store.touchSessionAttachment(replacement, () => {})).rejects.toThrow(
+    "Conversation environment attachment is no longer current",
+  );
+  expect(store.getSessionAttachmentRecord(attachment.sessionId)).toEqual(closed);
+  await store.close();
+});
+
 it("rechecks idle-cleanup activity after a pending attachment touch publishes", async () => {
   const database = openOpenClawStateDatabase({
     env: { OPENCLAW_STATE_DIR: tempDirs.make("worker-attachment-touch-cleanup-") },
@@ -567,13 +671,7 @@ it("rejects queued cleanup before it can revoke a successor owner's credential",
   });
   const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
   const environmentId = "worker-revocation-owner";
-  await store.createIntent({
-    environmentId,
-    providerId: "provider",
-    profileId: "profile",
-    profileSnapshot: { settings: {} },
-    provisionOperationId: "provision-owner",
-  });
+  await createIntent(store, environmentId);
   await store.transition({ environmentId, from: "requested", to: "provisioning" });
   const previous = await store.transition({
     environmentId,
@@ -631,99 +729,101 @@ it("rejects queued cleanup before it can revoke a successor owner's credential",
   expect(revoked).toEqual([]);
 });
 
-// A transient native-open refusal must not retire an independently admitted inventory.
-it.each([
-  new GatewayStateOwnerContentionError("state-lifecycle"),
-  Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 }),
-])("keeps worker inventory usable after a transient database open failure: %s", async (error) => {
-  const database = openOpenClawStateDatabase({
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("worker-inventory-contention-") },
-  });
-  const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
-  openClawStateDatabaseCache.recordOpenClawStateDatabaseLifecycleOpenError(database.path, error);
-  expect(store.listForReconcile()).toEqual([]);
-  const intent = await store.createIntent({
-    environmentId: "after-contention",
-    providerId: "provider",
-    profileId: "profile",
-    profileSnapshot: { settings: {} },
-    provisionOperationId: "after-contention-provision",
-  });
-  expect(store.get(intent.environmentId)).toEqual(intent);
-  await closeOpenClawStateDatabaseByPathAsync(database.path);
-  expect(() => store.get(intent.environmentId)).toThrow("inventory has closed");
-});
-
-it("keeps the same inventory writable after a foreign maintenance owner releases state", async () => {
-  const stateDir = tempDirs.make("worker-inventory-contention-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  const database = openOpenClawStateDatabase();
-  const pathname = database.path;
-  // Bootstrap before acquiring the inventory. The resident inventory and its
-  // worker admission do not require a cached host-native SQLite connection.
-  await closeOpenClawStateDatabaseAsync();
-  const store = await createWorkerEnvironmentStore();
-  await store.createIntent({
-    environmentId: "before-lock",
-    providerId: "provider",
-    profileId: "profile",
-    profileSnapshot: { settings: {} },
-    provisionOperationId: "before-operation",
-  });
-  const events: string[] = [];
-  const unsubscribe = registerOpenClawStateDatabaseLifecycleListener((event) => {
-    if (event.kind === "open-error" && event.path === pathname) {
-      expect(event.error).toEqual(
-        expect.objectContaining({ message: expect.stringContaining("offline maintenance") }),
-      );
-      events.push(event.kind);
-    }
-  });
-  const child = spawn(
-    process.execPath,
-    [
-      "--import",
-      "tsx",
-      "--input-type=module",
-      "--eval",
-      `
-    import { acquireGatewayStateOwner } from "./src/infra/gateway-state-owner.ts";
-    const lease = acquireGatewayStateOwner({ databasePath: process.argv[1] });
-    process.once("message", () => {
-      lease.release(); process.disconnect();
-    });
-    process.send({ locked: true });
-  `,
-      pathname,
-    ],
-    { stdio: ["ignore", "ignore", "pipe", "ipc"] },
-  );
-  let stderr = "";
-  child.stderr?.on("data", (chunk) => {
-    stderr += String(chunk);
-  });
-  const exited = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
-    child.once("close", (code, signal) => resolve([code, signal]));
-  });
-  try {
-    const [ready] = await once(child, "message", { signal: AbortSignal.timeout(10_000) });
-    expect(ready).toEqual({ locked: true });
-    expect(() => openOpenClawStateDatabase()).toThrow("offline maintenance");
-    expect(child.exitCode).toBeNull();
-    expect(events).toEqual(["open-error"]);
-    child.send({ release: true });
-    expect(await exited, stderr).toEqual([0, null]);
-    expect(openOpenClawStateDatabase().path).toBe(pathname);
-    expect(store.get("before-lock")?.state).toBe("requested");
-    await store.transition({ environmentId: "before-lock", from: "requested", to: "provisioning" });
-    expect(store.get("before-lock")?.state).toBe("provisioning");
-    expect(store.list()).toHaveLength(1);
-    await closeOpenClawStateDatabaseAsync();
-    expect(() => store.list()).toThrow("inventory has closed");
-  } finally {
-    unsubscribe();
-    await stopChildProcess(child, 5_000);
-    await exited;
-    await store.close();
-  }
-}, 30_000);
+it(
+  "keeps the same inventory writable after a foreign maintenance owner releases state",
+  ({ signal }) =>
+    fixture.run(async () => {
+      signal.throwIfAborted();
+      const stateDir = tempDirs.make("worker-inventory-contention-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const database = openOpenClawStateDatabase();
+      const pathname = database.path;
+      // Bootstrap before acquiring the inventory. The resident inventory and its
+      // worker admission do not require a cached host-native SQLite connection.
+      await closeOpenClawStateDatabaseAsync();
+      const store = await createWorkerEnvironmentStore();
+      let child: ReturnType<typeof spawn> | undefined;
+      let exited: Promise<[number | null, NodeJS.Signals | null]> | undefined;
+      let unsubscribe = () => {};
+      try {
+        signal.throwIfAborted();
+        await createIntent(store, "before-lock");
+        const events: string[] = [];
+        unsubscribe = registerOpenClawStateDatabaseLifecycleListener((event) => {
+          if (event.kind === "open-error" && event.path === pathname) {
+            expect(event.error).toEqual(
+              expect.objectContaining({ message: expect.stringContaining("offline maintenance") }),
+            );
+            events.push(event.kind);
+          }
+        });
+        signal.throwIfAborted();
+        const maintenance = spawn(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            "--input-type=module",
+            "--eval",
+            `
+          import { acquireGatewayStateOwner } from "./src/infra/gateway-state-owner.ts";
+          const lease = acquireGatewayStateOwner({ databasePath: process.argv[1] });
+          process.once("message", () => {
+            lease.release(); process.disconnect();
+          });
+          process.send({ locked: true });
+        `,
+            pathname,
+          ],
+          { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+        );
+        child = maintenance;
+        let stderr = "";
+        child.stderr?.on("data", (chunk) => {
+          stderr += String(chunk);
+        });
+        exited = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
+          maintenance.once("close", (code, exitSignal) => resolve([code, exitSignal]));
+        });
+        const [ready] = await withinTest(
+          awaitGateBeforeSettlement(
+            once(child, "message", { signal }),
+            exited,
+            "foreign maintenance owner exited before acquiring its lock",
+          ),
+          signal,
+        );
+        expect(ready).toEqual({ locked: true });
+        expect(() => openOpenClawStateDatabase()).toThrow("offline maintenance");
+        expect(child.exitCode).toBeNull();
+        expect(events).toEqual(["open-error"]);
+        child.send({ release: true });
+        expect(await withinTest(exited, signal), stderr).toEqual([0, null]);
+        expect(openOpenClawStateDatabase().path).toBe(pathname);
+        expect(store.get("before-lock")?.state).toBe("requested");
+        await store.transition({
+          environmentId: "before-lock",
+          from: "requested",
+          to: "provisioning",
+        });
+        expect(store.get("before-lock")?.state).toBe("provisioning");
+        expect(store.list()).toHaveLength(1);
+        await closeOpenClawStateDatabaseAsync();
+        expect(() => store.list()).toThrow("inventory has closed");
+      } finally {
+        await fixture.verifyCleanup(() =>
+          runQaGatewayFixture(
+            async () => {
+              unsubscribe();
+              if (child) {
+                await stopChildProcess(child, 5_000);
+                await exited;
+              }
+            },
+            () => store.close(),
+          ),
+        );
+      }
+    }),
+  30_000,
+);

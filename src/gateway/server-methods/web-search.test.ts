@@ -41,6 +41,14 @@ async function invoke(options: GatewayRequestHandlerOptions) {
   await webSearchHandlers[options.req.method]!(options);
   return vi.mocked(options.respond);
 }
+async function expectFailure(
+  options: GatewayRequestHandlerOptions,
+  code: "INVALID_REQUEST" | "UNAVAILABLE",
+) {
+  const respond = await invoke(options);
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code }));
+  return respond;
+}
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.profile.mockReturnValue(undefined);
@@ -79,11 +87,7 @@ describe("Search settings Gateway boundary", () => {
       { modelProvider: "local", modelId: " " },
       { extra: true },
     ]) {
-      expect(await invoke(request("webSearch.status", params))).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
+      await expectFailure(request("webSearch.status", params), "INVALID_REQUEST");
     }
   });
 
@@ -132,30 +136,21 @@ describe("Search settings Gateway boundary", () => {
     );
   });
 
-  it.each(["native", "external", "disabled", "unavailable"] as const)(
-    "does not substitute a managed provider for a %s route",
-    async (kind) => {
-      searchStatus.route = {
-        kind,
-        label: "Other route",
-        testable: false,
-        reason: "Test this route in chat.",
-      };
-      expect(await invoke(request("webSearch.test", { query: "query" }))).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
-      expect(mocks.search).not.toHaveBeenCalled();
-    },
-  );
-
   it("tests only the explicitly named configured managed service beside an external harness", async () => {
-    searchStatus.route = { kind: "external", label: "Harness controls search", testable: false };
+    searchStatus.route = {
+      kind: "external",
+      provider: "custom-harness",
+      label: "Harness controls search",
+      testable: false,
+      reason: "Test this route in chat.",
+    };
     searchStatus.testProvider = { id: "example", label: "Example Search" };
-    expect(
-      await invoke(request("webSearch.test", { query: "query", providerId: "other" })),
-    ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "INVALID_REQUEST" }));
+    await expectFailure(request("webSearch.test", { query: "query" }), "INVALID_REQUEST");
+    expect(mocks.search).not.toHaveBeenCalled();
+    await expectFailure(
+      request("webSearch.test", { query: "query", providerId: "other" }),
+      "INVALID_REQUEST",
+    );
     expect(mocks.search).not.toHaveBeenCalled();
     expect(
       await invoke(request("webSearch.test", { query: "query", providerId: "example" })),
@@ -172,11 +167,7 @@ describe("Search settings Gateway boundary", () => {
       options.client!.invalidated = true;
       return { status: searchStatus, config };
     });
-    expect(await invoke(options)).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    await expectFailure(options, "UNAVAILABLE");
   });
 
   it("does not start a provider test after the authenticated account changes", async () => {
@@ -187,11 +178,7 @@ describe("Search settings Gateway boundary", () => {
       });
       return { status: searchStatus, config, agentDir: "/synthetic/agent" };
     });
-    expect(await invoke(request("webSearch.test", { query: "query" }))).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    await expectFailure(request("webSearch.test", { query: "query" }), "UNAVAILABLE");
     expect(mocks.search).not.toHaveBeenCalled();
   });
 
@@ -205,11 +192,7 @@ describe("Search settings Gateway boundary", () => {
       revoked.client!.invalidated = true;
       return { status: searchStatus, config, agentDir: "/synthetic/agent" };
     });
-    expect(await invoke(revoked)).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    await expectFailure(revoked, "UNAVAILABLE");
     expect(mocks.search).not.toHaveBeenCalled();
   });
 
@@ -219,23 +202,14 @@ describe("Search settings Gateway boundary", () => {
       config = { tools: { web: { search: { enabled: false } } } };
       return { status: searchStatus, config: original, agentDir: "/synthetic/agent" };
     });
-    expect(await invoke(request("webSearch.test", { query: "query" }))).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    await expectFailure(request("webSearch.test", { query: "query" }), "UNAVAILABLE");
     expect(mocks.search).not.toHaveBeenCalled();
     const revoked = request("webSearch.test", { query: "query" });
     mocks.search.mockImplementationOnce(async () => {
       revoked.client!.invalidated = true;
       return { provider: "example", result: { content: "Private result" } };
     });
-    const respond = await invoke(revoked);
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    const respond = await expectFailure(revoked, "UNAVAILABLE");
     expect(JSON.stringify(respond.mock.calls)).not.toContain("Private result");
   });
 

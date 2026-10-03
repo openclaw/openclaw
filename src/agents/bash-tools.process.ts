@@ -1,9 +1,10 @@
-import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 /**
  * Process-control tool factory.
  * Lists, polls, logs, writes to, sends keys to, pastes into, kills, clears,
  * and removes background exec sessions.
  */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
@@ -44,7 +45,7 @@ import { encodePaste } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { attachInternalToolResultAcknowledgement } from "./runtime/internal-hooks.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
-import type { AgentToolWithMeta } from "./tools/common.js";
+import { ToolInputError, type AgentToolWithMeta } from "./tools/common.js";
 import { textResult } from "./tools/tool-results.js";
 
 /** Defaults injected by tests, agent scopes, and scoped process registries. */
@@ -261,6 +262,13 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
   });
 }
 
+// Unknown keys otherwise pass through the schema and silently turn a waiting poll into a no-wait poll.
+function assertSupportedProcessParams(args: unknown): void {
+  if (isRecord(args) && Object.hasOwn(args, "timeoutMs")) {
+    throw new ToolInputError('process parameter "timeoutMs" is unsupported; use "timeout" instead');
+  }
+}
+
 /** Build the process-control tool with optional scope and input-idle defaults. */
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
@@ -310,6 +318,7 @@ export function createProcessTool(
         assertSourceCurrent();
       };
       assertCurrent();
+      assertSupportedProcessParams(args);
       const action = (args as { action?: unknown }).action;
       if (!PROCESS_TOOL_ACTIONS.includes(action as ProcessToolAction)) {
         return failText(

@@ -725,28 +725,6 @@ describe("discoverOpenClawPlugins", () => {
     );
   }
 
-  it("warns on legacy npm declaration stubs without loading workspace node_modules", () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "extensions", "guardrail-bridge");
-
-    writeJson(path.join(pluginDir, "openclaw.extension.json"), {
-      name: "guardrail-bridge",
-      type: "npm",
-      npmSpec: "@guardrail-bridge/guardrail-bridge@1.0.0",
-    });
-
-    const result = discoverWithStateDir(stateDir, {});
-
-    expectCandidateIds(result.candidates, { excludes: ["guardrail-bridge"] });
-    expectDiagnostic({
-      diagnostics: result.diagnostics,
-      level: "warn",
-      pluginId: "guardrail-bridge",
-      source: path.join(pluginDir, "openclaw.extension.json"),
-      messageIncludes: 'run "openclaw doctor --fix"',
-    });
-  });
-
   it("lets a valid bundled plugin win when a managed package is source-only TypeScript", () => {
     const stateDir = makeTempDir();
     const bundledDir = path.join(stateDir, "bundled");

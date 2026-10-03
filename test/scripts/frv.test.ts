@@ -8,7 +8,6 @@ import {
   preflightContinuation,
   watchRelease,
 } from "../../scripts/frv.mjs";
-import type { FlakeClassification } from "../../scripts/full-release-flake-classification.mjs";
 import {
   releaseChildSpec,
   releaseCompositeJobsSha256,
@@ -57,7 +56,6 @@ function preflightMethods(
     })),
   ];
   return {
-    loadFlakeClassifications: async () => ({}),
     getReleaseEvidenceClient: () => ({
       ...createReleaseEvidenceClient(REPOSITORY),
       getWorkflowSource: () => "name: Full Release Validation\n",
@@ -605,7 +603,6 @@ describe("FRV continuation preflight", () => {
 
     await expect(
       continueFailed(parentOwnedPlan, "77", {
-        loadFlakeClassifications: read,
         getReleaseEvidenceClient: () => {
           reads += 1;
           throw new Error("unexpected evidence client");
@@ -688,7 +685,6 @@ describe("FRV continuation preflight", () => {
 
     await expect(
       continueFailed(plan([first, second]), "77", {
-        loadFlakeClassifications: downstreamRead,
         getReleaseEvidenceClient: () => {
           downstreamReads += 1;
           throw new Error("unexpected evidence client");
@@ -752,7 +748,6 @@ describe("FRV same-parent recovery", () => {
     const runReads: string[] = [];
     const attemptReads: Array<[string, number]> = [];
     const result = await inspectContinuation(plan([selected, missing]), {
-      loadFlakeClassifications: async () => ({}),
       getAttemptJobs: async (runId: string, attempt: number) => {
         attemptReads.push([runId, attempt]);
         return [job("test")];
@@ -789,7 +784,6 @@ describe("FRV same-parent recovery", () => {
   it("reports the effective attempt and composite job evidence", async () => {
     const selected = child("normalCi", "101");
     const result = await inspectContinuation(plan([selected]), {
-      loadFlakeClassifications: async () => ({}),
       getAttemptJobs: async (_runId: string, attempt: number) => [
         job("test", attempt === 1 ? "failure" : "success"),
       ],
@@ -1035,63 +1029,6 @@ describe("FRV same-parent recovery", () => {
     expect(client.verify).toHaveBeenCalledOnce();
   });
 
-  it("reseals the failed parent without rerunning a classified child or its failed gate", async () => {
-    const scenario = rerunScenario({ parentSource: [1, "failure"] });
-    const receipt: FlakeClassification = {
-      schema: "openclaw.frv-flake-classification.v1",
-      parentRunId: "77",
-      parentRunAttempt: 1,
-      child: "normalCi",
-      childRunId: "101",
-      childRunAttempt: 1,
-      targetSha: TARGET_SHA,
-      jobId: "501",
-      jobName: "checks-node-test-2",
-      jobUrl: `https://github.com/${REPOSITORY}/actions/runs/101/job/501`,
-      conclusion: "failure",
-      trackingUrl: `https://github.com/${REPOSITORY}/issues/789`,
-      reason: "Shared test fixture races during cleanup; repair tracked on main.",
-      classifiedBy: "release-operator",
-      receiptRunId: "890",
-      receiptRunAttempt: 1,
-    };
-    const client = {
-      ...scenario.client,
-      getAttemptJobs: async () => [
-        {
-          ...job(receipt.jobName, "failure"),
-          id: 501,
-          run_id: 101,
-          run_attempt: 1,
-          html_url: receipt.jobUrl,
-        },
-        {
-          ...job("openclaw/ci-gate", "failure"),
-          id: 502,
-          run_id: 101,
-          run_attempt: 1,
-        },
-      ],
-      loadFlakeClassifications: vi.fn(async () => ({
-        flakeClassifications: [receipt],
-        gateEntries: [
-          { name: "preflight", result: "success", selected: true },
-          { name: "checks-node", result: "failure", selected: true },
-          { name: "pr-fail-fast", result: "skipped", selected: false },
-        ],
-      })),
-    };
-    await expect(continueFailed(plan([scenario.selected]), "77", client)).resolves.toMatchObject({
-      action: "reran-parent",
-      reruns: [],
-      finalRunId: "77",
-    });
-    expect(scenario.counters).toMatchObject({ posts: { child: 0, parent: 1 }, verifies: 1 });
-    expect(client.loadFlakeClassifications).toHaveBeenCalledWith(
-      expect.objectContaining({ parentRunId: "77", parentRunAttempt: 1, targetSha: TARGET_SHA }),
-    );
-  });
-
   it.each([false, true])(
     "reruns the exact carried failed job once, including ambiguous response=%s",
     async (ambiguous) => {
@@ -1300,7 +1237,6 @@ describe("FRV same-parent recovery", () => {
       const selected = child(key, "101");
       let latestReads = 0;
       const client = {
-        loadFlakeClassifications: async () => ({}),
         getRun: async () =>
           runFor(
             selected,

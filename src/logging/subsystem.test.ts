@@ -54,6 +54,34 @@ afterAll(async () => {
 });
 
 describe("createSubsystemLogger().isEnabled", () => {
+  it.each([
+    { input: "WhatsApp: hello", subsystem: "whatsapp", expected: "[whatsapp] hello" },
+    {
+      input: "discord gateway: closed",
+      subsystem: "discord",
+      expected: "[discord] gateway: closed",
+    },
+    {
+      input: "[discord] connection stalled",
+      subsystem: "discord",
+      expected: "[discord] connection stalled",
+    },
+    {
+      input: "discordant: hello",
+      subsystem: "discord",
+      expected: "[discord] discordant: hello",
+    },
+  ])("emits one subsystem label for $input", ({ input, subsystem, expected }) => {
+    vi.stubEnv("NO_COLOR", "1");
+    vi.stubEnv("FORCE_COLOR", "0");
+    setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "compact" });
+    const log = installConsoleMethodSpy("log");
+
+    createSubsystemLogger(subsystem).info(input);
+
+    expect(log).toHaveBeenCalledExactlyOnceWith(expected);
+  });
+
   it("omits routine call sites while retaining error and fatal locations", async () => {
     const file = logPathTracker.nextPath();
     setLoggerOverride({ level: "trace", consoleLevel: "silent", file });

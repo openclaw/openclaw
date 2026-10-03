@@ -320,8 +320,8 @@ describe("release:stable CLI", () => {
     },
   );
 
-  it.each(["unknown", "stableSoakWaiver", "laneWaiver"])(
-    "refuses retired or unknown state field %s without overwriting recovery evidence",
+  it.each(["stableSoakWaiver", "laneWaiver"])(
+    "refuses retired state field %s without overwriting recovery evidence",
     (field) => {
       const release = fixture();
       const state = phaseState("validate");

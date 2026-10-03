@@ -1,8 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry.store.test-support.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntrySync,
@@ -58,7 +58,7 @@ describe("chat history registry projection", () => {
     async (sessionScope) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = {
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: { ownership: "explicit", entries: { main: {}, work: {} } },
           session: { scope: sessionScope, mainKey: "home" },
         } satisfies OpenClawConfig;
         await state.writeConfig(cfg);

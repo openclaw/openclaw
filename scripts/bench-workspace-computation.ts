@@ -213,7 +213,7 @@ async function createFixture(params: {
     await fs.mkdir(workspace);
     if (scenario === "inventory" || scenario === "delta" || scenario === "unchanged") {
       await exec("git", ["-c", `core.hooksPath=${os.devNull}`, "init", "--quiet", workspace], {
-        env: { ...isolatedEnv(root), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull },
+        env: isolatedEnv(root),
       });
     }
     if (scenario === "inventory" || scenario === "manifest") {

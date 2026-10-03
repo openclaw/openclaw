@@ -5,7 +5,11 @@ import {
   iterateSessionContextMessages,
   projectSessionEntryMessage,
 } from "../../../packages/agent-core/src/harness/session/session.js";
-import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import {
+  classifyToolUseResultPairing,
+  isSyntheticMissingToolResult,
+  SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
+} from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { isCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import {
   executeSqliteQueryTakeFirstSync,
@@ -30,6 +34,10 @@ import {
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
+import type {
+  SessionModelContextLimits,
+  SessionTranscriptModelContext,
+} from "./session-history-read.types.js";
 import { projectModelContextEventSql } from "./session-model-context-projection.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
@@ -49,12 +57,7 @@ import {
 } from "./transcript-tree.js";
 
 type ContextEntry = SessionTreeEntry & { seq: number };
-export type SessionModelContextLimits = {
-  maxBytes: number;
-  maxEvents: number;
-  /** Detached model views may omit result bodies; evidence and fork readers remain strict. */
-  toolResultOverflow?: "omit";
-};
+export type { SessionModelContextLimits } from "./session-history-read.types.js";
 type ModelContextRequest = {
   entry: ContextEntry;
   omitCheckpoint: boolean;
@@ -318,10 +321,7 @@ export function readSessionTranscriptModelContext(
   scope: SessionTranscriptReadScope,
   through?: TranscriptEntryAnchor,
   limits?: SessionModelContextLimits,
-): {
-  events: TranscriptEvent[];
-  version?: SessionTranscriptContextVersion;
-} {
+): SessionTranscriptModelContext {
   if (
     limits &&
     (!Number.isSafeInteger(limits.maxBytes) ||
@@ -580,7 +580,18 @@ function withTranscriptContextSnapshot<T>(
                   .where("seq", "in", [...bySeq.keys()]);
                 for (const row of iterateSqliteQuerySync(database.db, query)) {
                   const entry = bySeq.get(row.seq)!;
-                  payloads.set(entry, hydrateContextEntry(row.event_json, entry));
+                  const hydrated = hydrateContextEntry(row.event_json, entry);
+                  if (
+                    entry.type === "message" &&
+                    entry.message.role === "toolResult" &&
+                    isSyntheticMissingToolResult(entry.message) &&
+                    hydrated.type === "message" &&
+                    hydrated.message.role === "toolResult"
+                  ) {
+                    // Retain pairing provenance after SQL removes opaque tool details.
+                    hydrated.message.details = { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true };
+                  }
+                  payloads.set(entry, hydrated);
                 }
               }
               return payloads;

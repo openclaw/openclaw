@@ -18,10 +18,8 @@ import {
   createBoardDeclaredSummary,
   resolveBoardWidgetPutParams,
   type BoardWidgetHtmlViewMetadata,
-  type BoardWidgetHtmlDocument,
   type BoardWidgetDocument,
   type BoardWidgetNameIdentityMarker,
-  type BoardWidgetRegisteredDocument,
 } from "./board-store.js";
 
 export type SelectedBoardTabRow = Selectable<BoardTabRow>;
@@ -384,27 +382,6 @@ export function parsePluginContent(value: string): ParsedPluginContent {
       };
 }
 
-function rowToHtmlDocument(
-  row: Pick<
-    SelectedBoardWidgetRow,
-    "content_kind" | "html" | "revision" | "sha256" | "view_generation" | "grant_state" | "manifest"
-  >,
-): BoardWidgetHtmlDocument | undefined {
-  if (row.content_kind !== "html" || row.html === null || row.view_generation === null) {
-    return undefined;
-  }
-  const manifest = parseManifest(row.manifest);
-  const declared = manifest.declared;
-  return {
-    html: Buffer.from(row.html).toString("utf8"),
-    revision: row.revision,
-    sha256: row.sha256,
-    viewGeneration: row.view_generation,
-    grantState: effectiveGrantState(row.grant_state, manifest),
-    ...(declared ? { declared } : {}),
-  };
-}
-
 export function rowToBoardWidgetDocument(
   row: Pick<
     SelectedBoardWidgetRow,
@@ -420,13 +397,39 @@ export function rowToBoardWidgetDocument(
   >,
 ): BoardWidgetDocument | undefined {
   if (row.content_kind === "html") {
-    return rowToHtmlDocument(row);
-  }
-  if (row.content_kind === "plugin") {
-    return rowToRegisteredDocument(row);
+    if (row.html === null || row.view_generation === null) {
+      return undefined;
+    }
+    const manifest = parseManifest(row.manifest);
+    const declared = manifest.declared;
+    return {
+      html: Buffer.from(row.html).toString("utf8"),
+      revision: row.revision,
+      sha256: row.sha256,
+      viewGeneration: row.view_generation,
+      grantState: effectiveGrantState(row.grant_state, manifest),
+      ...(declared ? { declared } : {}),
+    };
   }
   if (row.descriptor_json === null) {
     return undefined;
+  }
+  if (row.content_kind === "plugin") {
+    const content = parsePluginContent(row.descriptor_json);
+    const manifest = parseManifest(row.manifest);
+    if (!("source" in content) || !manifest.registeredInstanceId) {
+      return undefined;
+    }
+    return {
+      pluginKind: content.pluginKind,
+      source: content.source,
+      ...(row.title !== null ? { title: row.title } : {}),
+      revision: row.revision,
+      sha256: row.sha256,
+      viewGeneration: manifest.registeredInstanceId,
+      grantState: effectiveGrantState(row.grant_state, manifest),
+      ...(manifest.declared ? { declared: manifest.declared } : {}),
+    };
   }
   const manifest = parseManifest(row.manifest);
   if (manifest.mcpAppInteractive === undefined || manifest.mcpAppInstanceId === undefined) {
@@ -439,38 +442,6 @@ export function rowToBoardWidgetDocument(
     grantState: effectiveGrantState(row.grant_state, manifest),
     declaredTools: manifest.declared?.tools ?? [],
     interactive: manifest.mcpAppInteractive,
-  };
-}
-
-function rowToRegisteredDocument(
-  row: Pick<
-    SelectedBoardWidgetRow,
-    | "content_kind"
-    | "descriptor_json"
-    | "title"
-    | "revision"
-    | "sha256"
-    | "grant_state"
-    | "manifest"
-  >,
-): BoardWidgetRegisteredDocument | undefined {
-  if (row.content_kind !== "plugin" || row.descriptor_json === null) {
-    return undefined;
-  }
-  const content = parsePluginContent(row.descriptor_json);
-  const manifest = parseManifest(row.manifest);
-  if (!("source" in content) || !manifest.registeredInstanceId) {
-    return undefined;
-  }
-  return {
-    pluginKind: content.pluginKind,
-    source: content.source,
-    ...(row.title !== null ? { title: row.title } : {}),
-    revision: row.revision,
-    sha256: row.sha256,
-    viewGeneration: manifest.registeredInstanceId,
-    grantState: effectiveGrantState(row.grant_state, manifest),
-    ...(manifest.declared ? { declared: manifest.declared } : {}),
   };
 }
 

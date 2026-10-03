@@ -34,7 +34,7 @@ import {
   unregisterOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db-registry.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
@@ -285,7 +285,7 @@ describe("resident sessions.list", () => {
           visibility: "shared",
         },
       );
-      closeOpenClawAgentDatabaseByPath(extraDatabasePath);
+      await closeOpenClawAgentDatabaseByPathAsync(extraDatabasePath);
       unregisterOpenClawAgentDatabase({ agentId: "main", env: state.env, path: extraDatabasePath });
 
       const context = requestContext(config);
@@ -353,7 +353,7 @@ describe("resident sessions.list", () => {
       const opened = await listSessions({ client, context, request });
       expect(opened.sessions.map((session) => session.key)).not.toContain(childKey);
 
-      expect(closeOpenClawAgentDatabaseByPath(incognitoPath)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(incognitoPath)).toBe(true);
       const closed = await listSessions({ client, context, request });
       expect(closed.sessions.map((session) => session.key)).not.toContain(childKey);
     });
@@ -623,7 +623,7 @@ describe("resident sessions.list", () => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       const config = await seedSessions();
       const runId = "sessions-list-cache-live-subagent";
-      addSubagentRunForTests({
+      await addSubagentRunForTests({
         runId,
         childSessionKey: "agent:main:active",
         controllerSessionKey: "agent:main:draft",
@@ -681,7 +681,7 @@ describe("resident sessions.list", () => {
         });
       } finally {
         clearAgentRunContext(runId);
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
       }
     });
   });

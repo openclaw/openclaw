@@ -21,6 +21,16 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function fixture(prefix: string) {
+  const cwd = tempDirs.make(prefix);
+  const write = (file: string, source: string) => {
+    const target = path.join(cwd, file);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, source);
+  };
+  return { cwd, write };
+}
+
 vi.mock("../../scripts/test-projects.test-support.mts", async (importOriginal) => {
   const original =
     await importOriginal<typeof import("../../scripts/test-projects.test-support.mts")>();
@@ -39,12 +49,7 @@ vi.mock("../../scripts/test-projects.test-support.mts", async (importOriginal) =
 
 describe("CI changed lint", () => {
   it("includes transitive and aliased type consumers without widening to their packages", async () => {
-    const cwd = tempDirs.make("ci-file-lint-");
-    const write = (file: string, content: string) => {
-      const target = path.join(cwd, file);
-      mkdirSync(path.dirname(target), { recursive: true });
-      writeFileSync(target, content);
-    };
+    const { cwd, write } = fixture("ci-file-lint-");
     write("pnpm-workspace.yaml", "packages:\n  - .\n  - ui\n  - packages/*\n  - extensions/*\n");
     for (const root of [
       ".",
@@ -145,23 +150,17 @@ describe("CI changed lint", () => {
   ])(
     "retains full lint when an affected consumer augments globals through %s",
     async (file, source) => {
-      const cwd = tempDirs.make("ci-ambient-consumer-");
-      mkdirSync(path.join(cwd, "src"));
-      writeFileSync(path.join(cwd, "package.json"), '{"type":"module"}');
-      writeFileSync(path.join(cwd, "src/value.ts"), "export type Work = () => Promise<void>;\n");
-      writeFileSync(path.join(cwd, "src", file), source);
-      writeFileSync(path.join(cwd, "src/reader.ts"), "window.work();\n");
+      const { cwd, write } = fixture("ci-ambient-consumer-");
+      write("package.json", '{"type":"module"}');
+      write("src/value.ts", "export type Work = () => Promise<void>;\n");
+      write(`src/${file}`, source);
+      write("src/reader.ts", "window.work();\n");
       expect(await resolveChangedOxlintFileScope(["src/value.ts"], cwd)).toBeUndefined();
     },
   );
 
   it("runs native rules on a changed file and unchanged consumers of its changed type", () => {
-    const cwd = tempDirs.make("ci-file-lint-native-");
-    const write = (file: string, source: string) => {
-      const target = path.join(cwd, file);
-      mkdirSync(path.dirname(target), { recursive: true });
-      writeFileSync(target, source);
-    };
+    const { cwd, write } = fixture("ci-file-lint-native-");
     write("package.json", '{"private":true,"type":"module"}');
     write("pnpm-workspace.yaml", "packages: [.]\n");
     write(

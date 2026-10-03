@@ -4,10 +4,10 @@ import {
   readSqliteEntryCount,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
+import { summarizeDoctorSessionSqliteReport } from "./doctor-session-sqlite-diagnostics.js";
 import { restoreSessionSqliteMigrationRuns } from "./doctor-session-sqlite-restore.js";
 import {
   createDoctorSessionSqliteTargetReport,
-  createDoctorSessionSqliteTotals,
   type DoctorSessionSqliteReport,
 } from "./doctor-session-sqlite-types.js";
 
@@ -46,9 +46,5 @@ export async function restoreDoctorSessionSqliteTargets(params: {
     })),
   );
   const targets = targetReports.length > 0 ? targetReports : [reportTarget];
-  return {
-    mode: "restore",
-    targets,
-    totals: createDoctorSessionSqliteTotals(targets),
-  };
+  return summarizeDoctorSessionSqliteReport("restore", targets);
 }

@@ -14,6 +14,7 @@ export function createMigrationDatabaseHandle(
     path: pathname,
     walMaintenance: {
       checkpoint: () => false,
+      stop: async () => {},
       close: () => false,
       reclaimFreePages: createSqliteWalReclamationResult,
     },

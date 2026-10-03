@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { LEGACY_MISSING_TOOL_RESULT_TEXT } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptEvent,
@@ -840,7 +840,7 @@ it.each(["details", "text", "duplicate-object", "late-array-call"])(
         content: [
           {
             type: "text",
-            text: marker === "details" ? "missing" : DEFAULT_MISSING_TOOL_RESULT_TEXT,
+            text: marker === "details" ? "missing" : LEGACY_MISSING_TOOL_RESULT_TEXT,
           },
         ],
         ...(marker === "details" ? { details: { openclawSyntheticMissingToolResult: true } } : {}),
@@ -867,7 +867,7 @@ it.each(["details", "text", "duplicate-object", "late-array-call"])(
         await waitForSessionTranscriptProjection(scope);
         const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
         // Preserve duplicate members from imported JSON; JavaScript objects would collapse them.
-        const content = `{"part":{"type":"text","text":"ordinary"},"part":{"type":"text","text":${JSON.stringify(DEFAULT_MISSING_TOOL_RESULT_TEXT)}}}`;
+        const content = `{"part":{"type":"text","text":"ordinary"},"part":{"type":"text","text":${JSON.stringify(LEGACY_MISSING_TOOL_RESULT_TEXT)}}}`;
         database.db
           .prepare(
             "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.content', json(?)) WHERE session_id = ? AND json_extract(event_json, '$.id') = ?",

@@ -1,4 +1,5 @@
 /** Canonical ordering and visibility for numbered subagent lists and targets. */
+import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
 
@@ -14,17 +15,22 @@ export function buildSubagentRunView(params: {
   const latest: SubagentRunRecord[] = [];
   const active: SubagentRunRecord[] = [];
   const recent: SubagentRunRecord[] = [];
-  const seen = new Set<string>();
+  const seen = new Map<string, SubagentRunRecord[]>();
   for (const entry of params.runs.toSorted((a, b) => {
     const aTime = a.execution.startedAt ?? a.createdAt;
     const bTime = b.execution.startedAt ?? b.createdAt;
     return bTime - aTime;
   })) {
-    if (seen.has(entry.childSessionKey)) {
+    const childRuns = seen.get(entry.childSessionKey) ?? [];
+    const superseded = childRuns.some((candidate) =>
+      matchesSubagentChildSessionOwner(candidate, entry.childSessionKey, entry.childAgentId),
+    );
+    // Hidden legacy rows still fence every older owner under the raw key.
+    childRuns.push(entry);
+    seen.set(entry.childSessionKey, childRuns);
+    if (superseded) {
       continue;
     }
-    // Steering/retries can leave several records for one child; the newest display row wins.
-    seen.add(entry.childSessionKey);
     latest.push(entry);
     if (
       isRetainedUnendedSubagentRun(entry, now) ||

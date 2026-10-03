@@ -1,4 +1,3 @@
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
 import {
@@ -13,11 +12,11 @@ import type {
   CronRunErrorClassification,
   CronRunStatus,
 } from "../types.js";
-import { autoDisableCronJob } from "./auto-disable.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   errorBackoffMs,
-  isJobEnabled,
+  HEARTBEAT_SKIP_DISABLED,
+  resolveNextRunAtMsOrDisable,
 } from "./jobs-scheduling.js";
 import type {
   CronJobPolicyContext,
@@ -26,7 +25,6 @@ import type {
   DeferredCronNotifications,
 } from "./state.js";
 import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
-import { HEARTBEAT_SKIP_DISABLED } from "./timer-execution-timeout.js";
 
 /** Default max retries for cron jobs on transient errors (#24355). */
 const DEFAULT_MAX_TRANSIENT_RETRIES = 3;
@@ -50,27 +48,6 @@ type QueuedSystemEventHandle = {
   accepted: boolean;
   remove?: () => boolean | void;
 };
-
-/** Rejects outcome-generated schedule timestamps before they can persist or arm a timer. */
-export function resolveNextRunAtMsOrDisable(params: {
-  state: CronJobPolicyContext;
-  job: CronJob;
-  candidate: unknown;
-  deferredNotifications: DeferredCronNotifications;
-}): number | undefined {
-  const nextRunAtMs = asDateTimestampMs(params.candidate);
-  if (nextRunAtMs !== undefined && nextRunAtMs > 0) {
-    return nextRunAtMs;
-  }
-  autoDisableCronJob({
-    job: params.job,
-    reason: "schedule-errors",
-    atMs: params.state.deps.nowMs(),
-    consecutiveErrors: 1,
-    deferredNotifications: params.deferredNotifications,
-  });
-  return undefined;
-}
 
 /** Persists non-busy trigger evaluation state without touching payload-run history. */
 export function applyTriggerEvaluationState(
@@ -262,31 +239,6 @@ export function shouldRetryDisabledHeartbeatOneShot(
     job.wakeMode === "now" &&
     result.status === "skipped" &&
     result.error === HEARTBEAT_SKIP_DISABLED
-  );
-}
-
-export function isScheduledTerminalOneShotRetry(
-  job: CronJob,
-  lastRunStatus: CronRunStatus,
-  lastRun: unknown,
-  nextRun: unknown,
-): boolean {
-  if (
-    !isJobEnabled(job) ||
-    typeof nextRun !== "number" ||
-    typeof lastRun !== "number" ||
-    nextRun <= lastRun
-  ) {
-    return false;
-  }
-  if (lastRunStatus === "error") {
-    return true;
-  }
-  return (
-    lastRunStatus === "skipped" &&
-    job.sessionTarget === "main" &&
-    job.wakeMode === "now" &&
-    job.state.lastError === HEARTBEAT_SKIP_DISABLED
   );
 }
 

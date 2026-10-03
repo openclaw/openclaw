@@ -109,14 +109,10 @@ export function createChatMetadataModelList(params: {
         const projection = await prepare(shared);
         return {
           isCurrent: () => authority() && projection.isCurrent(),
-          read: (): ModelsListResult => {
-            const { decisionModels, ...result } = projection.read();
-            return {
-              ...result,
-              accountSelection: { kind: "automatic", label: "Automatic account selection" },
-              ...(decisionModels ? { decisionModels } : {}),
-            };
-          },
+          read: (): ModelsListResult => ({
+            ...projection.read(),
+            accountSelection: { kind: "automatic", label: "Automatic account selection" },
+          }),
         };
       }
       return prepare(shared);

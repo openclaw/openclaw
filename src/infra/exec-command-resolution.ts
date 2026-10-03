@@ -40,11 +40,7 @@ function buildExecutableResolution(
     useCache?: boolean;
   },
 ): ExecutableResolution {
-  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, {
-    cwd: params.cwd,
-    env: params.env,
-    useCache: params.useCache,
-  });
+  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, params);
   const resolvedRealPath = tryResolveRealpath(resolvedPath);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
   return {
@@ -53,32 +49,6 @@ function buildExecutableResolution(
     resolvedPath,
     resolvedRealPath,
     executableName,
-  };
-}
-
-function buildCommandResolution(params: {
-  rawExecutable: string;
-  policyRawExecutable?: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  useCache?: boolean;
-  effectiveArgv: string[];
-  wrapperChain: string[];
-  policyBlocked: boolean;
-  blockedWrapper?: string;
-}): CommandResolution {
-  const execution = buildExecutableResolution(params.rawExecutable, params);
-  const policy = params.policyRawExecutable
-    ? buildExecutableResolution(params.policyRawExecutable, params)
-    : execution;
-  return {
-    kind: "command",
-    execution,
-    policy,
-    effectiveArgv: params.effectiveArgv,
-    wrapperChain: params.wrapperChain,
-    policyBlocked: params.policyBlocked,
-    blockedWrapper: params.blockedWrapper,
   };
 }
 
@@ -95,17 +65,20 @@ export function resolveCommandResolutionFromArgv(
   if (!rawExecutable) {
     return null;
   }
-  return buildCommandResolution({
-    rawExecutable,
-    policyRawExecutable: plan.policyArgv[0]?.trim(),
+  const resolutionOptions = { cwd, env, useCache: options?.useCache };
+  const execution = buildExecutableResolution(rawExecutable, resolutionOptions);
+  const policyRawExecutable = plan.policyArgv[0]?.trim();
+  return {
+    kind: "command",
+    execution,
+    policy: policyRawExecutable
+      ? buildExecutableResolution(policyRawExecutable, resolutionOptions)
+      : execution,
     effectiveArgv,
     wrapperChain: plan.wrapperChain,
     policyBlocked: plan.policyBlocked,
     blockedWrapper: plan.blockedWrapper,
-    useCache: options?.useCache,
-    cwd,
-    env,
-  });
+  };
 }
 
 function resolveExecutableCandidatePathFromResolution(

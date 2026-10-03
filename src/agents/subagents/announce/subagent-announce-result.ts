@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16WithEllipsis } from "../../../shared/text-truncate.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
@@ -5,6 +6,7 @@ import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 
 const MAX_CHILD_COMPLETION_FIELD_CHARS = 256;
 
@@ -16,42 +18,56 @@ type SubagentAnnounceResultDeps = Pick<
   | "resolveAgentIdFromSessionKey"
   | "resolveSessionStorePathCore"
 > & {
+  readSubagentRun: (runId: string) => SubagentRunRecord | undefined;
   findTranscriptEvent: typeof import("../../../config/sessions/session-accessor.js").findTranscriptEvent;
   findSessionTranscriptArchiveEventReadOnly: typeof import("../../../config/sessions/session-history.js").findSessionTranscriptArchiveEventReadOnly;
 };
 
-type AnnounceChild = Pick<ChildCompletionRow, "childSessionKey" | "execution" | "completion"> & {
-  runId: string;
-};
 export type PreparedAnnounceResult = { text: string | undefined; isCurrent: () => boolean };
 
-function captureAnnounceResultAuthority(child: AnnounceChild): () => boolean {
-  const { runId, childSessionKey } = child;
-  const terminalReply = child.completion?.terminalReply;
-  const outcome = child.execution.outcome;
-  const target = child.execution.transcriptTarget;
-  const targetIdentity = target ? { ...target } : undefined;
+function announceResultFacts(child: SubagentRunRecord) {
+  return {
+    task: child.task,
+    taskName: child.taskName,
+    label: child.label,
+    endedReason: child.endedReason,
+    status: child.execution.status,
+    endedAt: child.execution.endedAt,
+    outcome: child.execution.outcome,
+    interruptionReason: child.execution.interruptionReason,
+    transcriptTarget: child.execution.transcriptTarget,
+    terminalReply: child.completion?.terminalReply,
+    resultText: child.completion?.resultText,
+    fallbackResultText: child.completion?.fallbackResultText,
+  };
+}
+
+function captureAnnounceResultAuthority(
+  child: SubagentRunRecord,
+  readSubagentRun: SubagentAnnounceResultDeps["readSubagentRun"],
+): () => boolean {
+  const facts = structuredClone(announceResultFacts(child));
+  const runId = child.runId;
   return () => {
-    const currentTarget = child.execution.transcriptTarget;
-    return (
-      child.runId === runId &&
-      child.childSessionKey === childSessionKey &&
-      child.completion?.terminalReply === terminalReply &&
-      child.execution.outcome === outcome &&
-      currentTarget === target &&
-      currentTarget?.sessionId === targetIdentity?.sessionId &&
-      currentTarget?.agentId === targetIdentity?.agentId &&
-      currentTarget?.storePath === targetIdentity?.storePath
+    const current = readSubagentRun(runId);
+    return Boolean(
+      current &&
+      isSameSubagentRunOwner(current, child) &&
+      isDeepStrictEqual(announceResultFacts(current), facts),
     );
   };
 }
 
 /** Read the final assistant message from the transcript identity owned by this run. */
 export async function readSubagentRunAnnounceResultUsing(
-  child: AnnounceChild,
+  observed: SubagentRunRecord,
   deps: SubagentAnnounceResultDeps,
 ): Promise<PreparedAnnounceResult> {
-  const isCurrent = captureAnnounceResultAuthority(child);
+  const child = deps.readSubagentRun(observed.runId);
+  if (!child || !isSameSubagentRunOwner(child, observed)) {
+    throw new Error("The completed child run's owner changed before announcement.");
+  }
+  const isCurrent = captureAnnounceResultAuthority(child, deps.readSubagentRun);
   const terminalReply = child.completion?.terminalReply;
   const capturedResult = resolveSubagentCompletionResultText(child);
   if (

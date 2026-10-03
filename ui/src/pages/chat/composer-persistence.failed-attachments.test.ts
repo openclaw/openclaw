@@ -2,6 +2,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.ts";
+import {
+  captureChatOutboxRecoveryDestination,
+  readChatOutboxRecovery,
+  restoreChatOutboxRecovery,
+} from "../../lib/chat/outbox-recovery.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -14,6 +20,8 @@ type ComposerState = Parameters<typeof persistChatComposerState>[0];
 function createState(overrides: Partial<ComposerState> = {}): ComposerState {
   return {
     settings: { gatewayUrl: "ws://gateway.test/control" },
+    connected: true,
+    client: { recoveryScope: "credential", recoveryScopeReady: true },
     sessionKey: "agent:lily:main",
     chatMessage: "",
     chatQueue: [],
@@ -60,7 +68,7 @@ describe("failed attachment send persistence", () => {
     ]);
   });
 
-  it("preserves legacy failed sends, including attachment stack-overflow records", () => {
+  it("retains legacy failed sends for review, including attachment stack-overflow records", () => {
     const gatewayUrl = "ws://gateway.test/control";
     sessionStorage.setItem(
       `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl)}`,
@@ -98,7 +106,33 @@ describe("failed attachment send persistence", () => {
       }),
     );
 
-    const state = createState({ settings: { gatewayUrl } });
+    const state = createState({
+      settings: { gatewayUrl },
+      agentsList: { defaultId: "lily", mainKey: "main" },
+    });
+    expect(loadChatComposerSnapshot(state, state.sessionKey)).toBeNull();
+    const [entry] = readChatOutboxRecovery(state).entries;
+    expect(entry?.session.queue).toMatchObject([
+      {
+        id: "legacy-attachment-overflow",
+        sendState: "failed",
+        sendError: "RangeError: Maximum call stack size exceeded",
+        attachments: [{ id: "att-legacy", dataUrl: "data:image/png;base64,AAA" }],
+      },
+      { id: "legacy-text-failure", sendState: "failed", sendError: "gateway unreachable" },
+    ]);
+    const destination = captureChatOutboxRecoveryDestination(state, {
+      sessionKey: state.sessionKey,
+      agentId: "lily",
+    });
+    expect(destination).not.toBeNull();
+    expect(restoreChatOutboxRecovery(state, entry!, destination!)).toBe("restored");
+    expect(readChatOutboxRecovery(state).entries).toEqual([]);
+    expect(
+      loadChatComposerSnapshot(state, state.sessionKey)?.queue.every(
+        (item) => item.storageScope === outboxStorageScope(state),
+      ),
+    ).toBe(true);
     expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue).toMatchObject([
       { id: "legacy-attachment-overflow", sendState: "failed" },
       { id: "legacy-text-failure", sendState: "failed", sendError: "gateway unreachable" },

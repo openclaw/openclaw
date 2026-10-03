@@ -18,7 +18,6 @@ import type { SessionsListResult } from "./session-utils.types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
-  seedSessionTranscript,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -98,16 +97,23 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
       },
       storePath,
     });
-    await seedSessionTranscript({
-      agentId,
-      messages: [
-        { role: "user", content: `Title ${agentId}` },
-        { role: "assistant", content: `Reply ${agentId}` },
-      ],
-      sessionId,
-      sessionKey,
-      storePath,
-    });
+    await sessionAccessor.replaceTranscriptEvents({ agentId, sessionId, sessionKey, storePath }, [
+      { type: "session", version: 3, id: sessionId, cwd: "/tmp" },
+      {
+        type: "message",
+        id: "question",
+        parentId: null,
+        timestamp: "2026-06-19T12:00:01.000Z",
+        message: { role: "user", content: `Title ${agentId}`, timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "reply",
+        parentId: "question",
+        timestamp: "2026-06-19T12:00:02.000Z",
+        message: { role: "assistant", content: `Reply ${agentId}`, timestamp: 2 },
+      },
+    ]);
   }
 
   const cfg = { session: { store: storeTemplate }, agents: testState.agentsConfig };

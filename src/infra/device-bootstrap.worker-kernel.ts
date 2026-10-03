@@ -120,8 +120,9 @@ function normalizeBootstrapPublicKey(publicKey: string): string {
 
 function loadState(nowMs: number): DeviceBootstrapStateFile {
   const state = loadDeviceBootstrapTokenRecords();
+  const now = asDateTimestampMs(nowMs) ?? 0;
   for (const [token, record] of Object.entries(state)) {
-    if ((asDateTimestampMs(nowMs) ?? 0) > resolveDeviceBootstrapTokenExpiresAtMs(record)) {
+    if (now > resolveDeviceBootstrapTokenExpiresAtMs(record)) {
       delete state[token];
     }
   }

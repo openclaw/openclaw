@@ -1,5 +1,5 @@
 import { getAuthoredConfigSecretRef } from "../config/resolution-facts.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { hasCurrentPluginInstanceAuthority } from "../plugins/plugin-instance-scope.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { formatConcreteConfigPath, parseConcreteConfigPathTokens } from "../shared/dot-path.js";
@@ -46,7 +46,7 @@ export function getPreparedPluginSecretInput(
   };
   const source = read(snapshot.sourceConfig);
   if (
-    !coerceSecretRef(source, snapshot.sourceConfig.secrets?.defaults) &&
+    !parseSecretRef(source, snapshot.sourceConfig.secrets?.defaults) &&
     !getAuthoredConfigSecretRef(snapshot.sourceConfig, fullPath)
   ) {
     return { revision };

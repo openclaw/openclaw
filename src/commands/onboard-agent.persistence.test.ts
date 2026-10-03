@@ -126,12 +126,18 @@ describe("onboarding authored config persistence", () => {
   it.each([
     { entries: { existing: { name: "Existing" } } },
     { entries: { main: {} } },
-    { list: [{ id: "main", default: true }] },
     {
-      list: [
-        { id: "alpha", default: true, model: "fixture/alpha" },
-        { id: "beta", model: "fixture/beta" },
-      ],
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "main" } },
+      entries: { main: {} },
+    },
+    {
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "alpha" } },
+      entries: {
+        alpha: { model: "fixture/alpha" },
+        beta: { model: "fixture/beta" },
+      },
     },
   ])("leaves an existing roster config byte-identical: %j", async (agents) => {
     await withTempHome(async (home) => {
@@ -142,6 +148,7 @@ describe("onboarding authored config persistence", () => {
       await fs.writeFile(configPath, raw);
       resetConfigRuntimeState();
       const snapshot = await readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
 
       const result = await ensureOnboardingAgent({
         config: snapshot.config,

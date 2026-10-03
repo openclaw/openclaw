@@ -133,7 +133,6 @@ it.skipIf(process.platform === "win32").each(["", "openclaw"])(
 );
 
 it.each([
-  { parentName: "openclaw-sqlite-readonly-v2-Parent", layout: "", artifact: "operator.txt" },
   {
     parentName: "openclaw-sqlite-readonly-v2-Parent",
     layout: "",

@@ -67,27 +67,27 @@ export function materializeDeclarationPackages(root: string, unified: boolean) {
     fs.readFileSync(path.join(normalizationSource, "package.json"), "utf8"),
   );
   fs.mkdirSync(normalizationCore, { recursive: true });
-  const errorCoercion = fs.readFileSync(
-    path.join(normalizationSource, "src/error-coercion.ts"),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(normalizationCore, "error-coercion.ts"), errorCoercion);
-  fs.writeFileSync(
-    path.join(normalizationCore, "error-coercion.mjs"),
-    stripNodeTypeScriptTypes(errorCoercion),
-  );
+  const normalizationEntries = ["error-coercion", "record-coerce"];
+  for (const entry of normalizationEntries) {
+    const source = fs.readFileSync(path.join(normalizationSource, `src/${entry}.ts`), "utf8");
+    fs.writeFileSync(path.join(normalizationCore, `${entry}.ts`), source);
+    fs.writeFileSync(
+      path.join(normalizationCore, `${entry}.mjs`),
+      stripNodeTypeScriptTypes(source),
+    );
+  }
   fs.writeFileSync(
     path.join(normalizationCore, "package.json"),
     JSON.stringify({
       name: normalizationManifest.name,
       version: normalizationManifest.version,
       type: "module",
-      exports: {
-        "./error-coercion": {
-          types: "./error-coercion.ts",
-          default: "./error-coercion.mjs",
-        },
-      },
+      exports: Object.fromEntries(
+        normalizationEntries.map((entry) => [
+          `./${entry}`,
+          { types: `./${entry}.ts`, default: `./${entry}.mjs` },
+        ]),
+      ),
     }),
   );
   for (const name of [

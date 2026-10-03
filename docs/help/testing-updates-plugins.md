@@ -215,6 +215,9 @@ commit before the update and compare the installed application payload with the
 frozen tarball afterward, before candidate probes. This distinguishes different
 builds with the same version string. npm still owns dependency reification;
 manual tarball runs without a selected source SHA retain their existing contract.
+These generic scenarios do not require a worker-cell baseline identity artifact.
+After the update, missing or unreadable tarballs and installed payloads fail with
+the corresponding candidate identity diagnostic before any candidate probes run.
 
 Useful published-upgrade survivor variants:
 

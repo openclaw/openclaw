@@ -1,8 +1,16 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
+import { clearPendingFinalDeliveryAfterSuccess } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
+import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TelegramAccountConfig } from "../../config/types.telegram.js";
-import { installDeliveryQueueTmpDirHooks } from "../../infra/outbound/delivery-queue.test-helpers.js";
+import {
+  installDeliveryQueueTmpDirHooks,
+  loadPendingDeliveries,
+} from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { bindPluginRegistryGatewayOwner } from "../../plugins/registry-lifecycle.js";
@@ -28,7 +36,7 @@ import {
 
 const cfg: OpenClawConfig = { channels: { telegram: { enabled: true } } };
 
-async function replacementFixture(options?: { newChannel?: boolean }) {
+async function replacementFixture(options?: { newChannel?: boolean; sameGeneration?: boolean }) {
   const retired = new PluginInstance("discord");
   const old = createTestRegistry([
     {
@@ -80,13 +88,12 @@ async function replacementFixture(options?: { newChannel?: boolean }) {
   bindPluginRegistryGatewayOwner(current, owner);
   // Agent-only registries inherit ingress identity even when they expose no channels.
   const turn = createTestRegistry([]);
-  bindPluginRegistryGatewayOwner(turn, owner, old);
+  bindPluginRegistryGatewayOwner(turn, owner, options?.sameGeneration ? current : old);
   // A different process-root Gateway must never become the delivery owner.
   setActivePluginRegistry(createTestRegistry([]));
   await retired.dispose();
   const request: DurableInboundReplyDeliveryParams = {
     cfg,
-    prepareRuntimeHandoff: (currentConfig) => currentConfig,
     channel: "telegram",
     accountId: "default",
     agentId: "main",
@@ -129,22 +136,67 @@ describe("final delivery after plugin replacement", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([false, true])(
-    "sends once through its own Gateway (structured=%s)",
-    async (structured) => {
+  it.each([
+    { sameGeneration: true, structured: false },
+    { sameGeneration: false, structured: true },
+  ])(
+    "settles final custody through its Gateway without sender preparation (sameGeneration=$sameGeneration, structured=$structured)",
+    async ({ sameGeneration, structured }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
-      const fixture = await replacementFixture();
+      const fixture = await replacementFixture({ sameGeneration });
+      const successorConfig: OpenClawConfig = { ...cfg, logging: { level: "debug" } };
+      fixture.setConfig(successorConfig);
+      const locator = {
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:12345",
+        storePath: path.join(state.tmpDir(), "sessions.json"),
+      };
+      const entry = { sessionId: "ordinary-final-session", updatedAt: 1 };
+      await replaceSessionEntry(locator, entry);
+      await persistPendingFinalDeliveryMarker({
+        ...locator,
+        deliver: true,
+        sessionEntry: entry,
+        sessionStore: { [locator.sessionKey]: entry },
+        suppressVisibleSessionEffects: false,
+        sessionReboundDuringRun: false,
+        payloads: [fixture.request.payload],
+        deliveryContext: { channel: "telegram", to: "12345" },
+        runOwnedSessionId: entry.sessionId,
+      });
+      const completion = resolvePendingFinalDeliveryCompletion([fixture.request.payload]);
+      if (!completion) {
+        throw new Error("Expected production-owned pending-final custody");
+      }
+      expect(loadSessionEntry(locator)?.pendingFinalDelivery?.deliveries).toEqual([
+        { id: completion.deliveryId, state: "prepared" },
+      ]);
       const result = await fixture.deliver(structured);
       if (result.status === "failed") {
         throw result.error;
       }
       expect(result).toMatchObject({
         status: "handled_visible",
-        delivery: { visibleReplySent: true, messageIds: ["accepted-final"] },
+        delivery: {
+          visibleReplySent: true,
+          messageIds: ["accepted-final"],
+          receipt: { platformMessageIds: ["accepted-final"] },
+        },
       });
       expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ to: "12345", text: "Saved final answer", accountId: "default" }),
+        expect.objectContaining({
+          cfg: sameGeneration ? cfg : successorConfig,
+          to: "12345",
+          text: "Saved final answer",
+          accountId: "default",
+        }),
       );
+      expect(loadSessionEntry(locator)?.pendingFinalDelivery?.deliveries).toEqual([
+        { id: completion.deliveryId, state: "delivered" },
+      ]);
+      expect(await loadPendingDeliveries(state.tmpDir())).toEqual([]);
+      await clearPendingFinalDeliveryAfterSuccess(completion);
+      expect(loadSessionEntry(locator)?.pendingFinalDelivery).toBeUndefined();
     },
   );
 
@@ -152,15 +204,20 @@ describe("final delivery after plugin replacement", () => {
     "closed",
     "removed",
     "account-changed",
+    "defaults-changed",
     "plugin-changed",
+    "plugin-id-changed",
     "new-channel",
     "replaced-channel",
-    "no-sender-preparation",
     "superseded-before-send",
     "superseded-live-send",
+    "superseded-prepared-send",
   ] as const)("does not send or borrow the process root when %s", async (stateChange) => {
     vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
-    const fixture = await replacementFixture({ newChannel: stateChange === "new-channel" });
+    const fixture = await replacementFixture({
+      newChannel: stateChange === "new-channel",
+      sameGeneration: stateChange === "superseded-prepared-send",
+    });
     setActivePluginRegistry(createTestRegistry([...fixture.current.channels]));
     if (stateChange === "replaced-channel") {
       fixture.current.channels = fixture.current.channels.map((entry) => ({
@@ -168,8 +225,11 @@ describe("final delivery after plugin replacement", () => {
         plugin: { ...entry.plugin },
       }));
     }
-    if (stateChange === "no-sender-preparation") {
-      delete fixture.request.prepareRuntimeHandoff;
+    if (stateChange === "plugin-id-changed") {
+      fixture.current.channels = fixture.current.channels.map((entry) => ({
+        ...entry,
+        pluginId: "another-owner",
+      }));
     }
     if (stateChange === "closed") {
       fixture.publication.current = undefined;
@@ -179,6 +239,9 @@ describe("final delivery after plugin replacement", () => {
     }
     if (stateChange === "account-changed") {
       fixture.setConfig({ channels: { telegram: { enabled: false } } });
+    }
+    if (stateChange === "defaults-changed") {
+      fixture.setConfig({ channels: { ...cfg.channels, defaults: { groupPolicy: "disabled" } } });
     }
     if (stateChange === "plugin-changed") {
       fixture.setConfig({ ...cfg, plugins: { entries: { telegram: { enabled: false } } } });

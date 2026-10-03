@@ -1,13 +1,18 @@
 import "./test/dom.setup.ts";
 import type { ControlUiAccessory } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import workboardPlugin from "./index.ts";
 import { createGatewaySession, createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";
 import { workboardTestHost } from "./test/host.setup.ts";
 import { createViewContext } from "./test/host.ts";
 
-it("keeps an existing reassigned session card available without registering a session action", async () => {
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+it("keeps reassigned session cards current through events without polling", async () => {
+  vi.useFakeTimers();
   const fixture = workboardTestHost();
   const { host, connection, registrations } = fixture;
   connection.connected = true;
@@ -40,14 +45,16 @@ it("keeps an existing reassigned session card available without registering a se
   const container = document.createElement("div");
   let disposeAccessory = () => {};
   try {
-    await vi.waitFor(() => expect(registrations.has("navigation/board-ops")).toBe(true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(registrations.has("navigation/board-ops")).toBe(true);
     const context = { sessionKey: session.key, session };
     expect([...registrations.keys()].filter((key) => key.startsWith("action/"))).toEqual([]);
 
     const accessory = registrations.get("accessory/linked-card") as ControlUiAccessory;
     const mounted = accessory.mount(container, createViewContext(host, context));
     disposeAccessory = () => mounted?.dispose?.();
-    await vi.waitFor(() => expect(container.textContent).toContain(card.title));
+    expect(container.textContent).toContain(card.title);
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
     expect(request.mock.calls).toEqual([["workboard.cards.list", {}]]);
 
     // The session accessory follows the catalog's refreshed card state.
@@ -57,9 +64,10 @@ it("keeps an existing reassigned session card available without registering a se
       updatedAt: card.updatedAt + 1,
     };
     request.mockClear();
-    fixture.emit("plugin.workboard.changed", {});
-    await vi.waitFor(() => expect(container.textContent).toContain(currentCard.title));
+    fixture.emit("plugin.workboard.changed", { epoch: "catalog-epoch", revision: 1 });
+    await vi.advanceTimersByTimeAsync(0);
     expect(container.textContent).toContain(currentCard.title);
+    expect(request.mock.calls).toEqual([["workboard.cards.list", {}]]);
   } finally {
     disposeAccessory();
     dispose?.();

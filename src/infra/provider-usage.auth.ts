@@ -99,16 +99,12 @@ function hasProviderAuthEnvCredentialSource(params: {
       ...params.state.env,
     },
   });
-  for (const providerId of normalizeProviderIds(params.providerIds)) {
+  return normalizeProviderIds(params.providerIds).some((providerId) => {
     const envVars = Object.hasOwn(candidates, providerId) ? candidates[providerId] : undefined;
-    if (!envVars) {
-      continue;
-    }
-    if (envVars.some((envVar) => Boolean(normalizeSecretInput(params.state.env[envVar])))) {
-      return true;
-    }
-  }
-  return false;
+    return (
+      envVars?.some((envVar) => Boolean(normalizeSecretInput(params.state.env[envVar]))) ?? false
+    );
+  });
 }
 
 function hasProviderUsageAuthEnvCredentialSource(params: {
@@ -154,14 +150,7 @@ function resolveProviderApiKeyCandidatesFromConfigAndStoreSync(params: {
   const credentials = normalizeProviderIds(params.providerIds)
     .flatMap((provider) => resolveAuthProfileOrder({ cfg: params.state.cfg, store, provider }))
     .map((id) => store.profiles[id])
-    .filter(
-      (
-        profile,
-      ): profile is
-        | { type: "api_key"; provider: string; key: string }
-        | { type: "token"; provider: string; token: string } =>
-        profile?.type === "api_key" || profile?.type === "token",
-    );
+    .filter((profile) => profile?.type === "api_key" || profile?.type === "token");
   for (const credential of credentials) {
     const value = normalizeSecretInput(
       credential.type === "api_key" ? credential.key : credential.token,
@@ -223,13 +212,9 @@ async function resolveProviderApiKeyCandidatesFromConfigAndStore(params: {
 }
 
 function normalizeProviderIds(providerIds: Iterable<string | undefined>): string[] {
-  return [
-    ...new Set(
-      [...providerIds]
-        .map((providerId) => (providerId ? normalizeProviderId(providerId) : undefined))
-        .filter((providerId): providerId is string => Boolean(providerId)),
-    ),
-  ];
+  return normalizeUniqueStringEntries(
+    Array.from(providerIds, (providerId) => (providerId ? normalizeProviderId(providerId) : "")),
+  );
 }
 
 function isUsageProviderManifestEligible(params: {
@@ -331,10 +316,7 @@ async function resolveOAuthToken(params: {
         ...(credential.type === "oauth" && credential.authFlow
           ? { authFlow: credential.authFlow }
           : {}),
-        accountId:
-          cred.type === "oauth" && "accountId" in cred
-            ? (cred as { accountId?: string }).accountId
-            : undefined,
+        accountId: cred.type === "oauth" ? cred.accountId : undefined,
         // Plan metadata is captured at external CLI sync time; runtime usage
         // fetches must not re-read CLI keychains, so the stored profile is the
         // only prompt-free source for plan labels.
@@ -558,9 +540,7 @@ export async function resolveProviderAuths(params: {
         ...authProfileSourceState,
         allowAuthProfileStore,
       };
-      const hasPluginCredentialSource = hasDirectCredentialSource || allowAuthProfileStore;
-
-      if (hasPluginCredentialSource) {
+      if (allowAuthProfileStore) {
         const pluginAuth = await resolveProviderUsageAuthViaPlugin({
           state,
           provider,

@@ -1,6 +1,7 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { readCodeModeSkill, type CodeModeSkill } from "./code-mode-skills.js";
+import { getTextLexicalIndex } from "./tool-search-index.js";
 import { buildLexicalIndex, scoreLexical, tokenizeDocument } from "./tool-search-ranking.js";
 import { ToolInputError } from "./tools/common.js";
 
@@ -21,15 +22,6 @@ const MAX_BODY_SKILLS = 1_024;
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_INDEX_BODY_BYTES = 4 * 1024 * 1024;
 const READ_CONCURRENCY = 4;
-
-function buildMetadataIndex(skills: readonly InstalledSkill[]) {
-  return buildLexicalIndex(
-    skills.map((skill) => ({
-      value: skill,
-      terms: tokenizeDocument(`${skill.name} ${skill.description}`),
-    })),
-  );
-}
 
 function assertCatalogCurrent(skills: readonly InstalledSkill[], signal?: AbortSignal) {
   signal?.throwIfAborted();
@@ -99,7 +91,6 @@ async function buildIndex(
   assertCatalogCurrent(skills, signal);
   assertBodyReadable(canReadInstructions);
   return {
-    metadata: buildMetadataIndex(skills),
     bodies: buildLexicalIndex(documents),
     coverage: {
       bodyIndexed: documents.length,
@@ -131,8 +122,26 @@ async function readSearchBody(skill: InstalledSkill, maxBytes: number, signal?: 
   if (skill.reader) {
     return undefined;
   }
-  const { buffer } = await readLocalFileSafely({ filePath: skill.source.filePath, maxBytes });
-  return { content: buffer.toString("utf8"), truncated: false };
+  const opened = await openLocalFileSafely({ filePath: skill.source.filePath });
+  try {
+    // One extra byte detects truncation without reading the rest of the file.
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      signal?.throwIfAborted();
+      const { bytesRead } = await opened.handle.read(buffer, total, buffer.length - total, total);
+      if (bytesRead === 0) {
+        break;
+      }
+      total += bytesRead;
+    }
+    return {
+      content: buffer.subarray(0, Math.min(total, maxBytes)).toString("utf8"),
+      truncated: total > maxBytes,
+    };
+  } finally {
+    await opened.handle.close();
+  }
 }
 
 const indexes = new WeakMap<readonly InstalledSkill[], Awaited<ReturnType<typeof buildIndex>>>();
@@ -193,10 +202,10 @@ export async function searchInstalledSkills(
   const terms = [...new Set(tokenizeDocument(needle))].map((term) => ({ term, weight: 1 }));
   const scores = new Map<InstalledSkill, number>();
   for (const { value, score } of scoreLexical(
-    index?.metadata ?? buildMetadataIndex(skills),
+    getTextLexicalIndex(skills.map((skill) => `${skill.name} ${skill.description}`)),
     terms,
   )) {
-    scores.set(value, score * 2);
+    scores.set(skills[value]!, score * 2);
   }
   if (includeBodies && index) {
     assertBodyReadable(canReadInstructions);
@@ -205,7 +214,9 @@ export async function searchInstalledSkills(
     }
   }
   const ranked = [...scores].map(([value, score]) => ({ value, score }));
-  const exact = skills.find((skill) => skill.name.toLowerCase() === needle.toLowerCase());
+  const exact =
+    skills.find((skill) => skill.name === needle) ??
+    skills.find((skill) => skill.name.toLowerCase() === needle.toLowerCase());
   if (exact && !ranked.some(({ value }) => value === exact)) {
     ranked.push({ value: exact, score: 0 });
   }

@@ -50,11 +50,8 @@ function claimReceipt(storePath: string, job: CronJob, startedAtMs: number) {
   );
 }
 
-function authorOutcome(
-  state: ReturnType<typeof createCronServiceState>,
-  outcome: Omit<TimedCronRunOutcome, "completionStatus" | "deliveryState">,
-) {
-  return authorCronRunCompletion(state, outcome.job, outcome);
+function authorOutcome(outcome: Omit<TimedCronRunOutcome, "completionStatus" | "deliveryState">) {
+  return authorCronRunCompletion(outcome.job, outcome);
 }
 
 describe("cron outcome receipt finalization", () => {
@@ -133,7 +130,7 @@ describe("cron outcome receipt finalization", () => {
       expect(definitionsBefore).toHaveLength(2);
       try {
         await finalizeCompletedCronRunOutcomes(state, [
-          authorOutcome(state, {
+          authorOutcome({
             jobId: retired.id,
             job: retired,
             taskRunId,
@@ -145,7 +142,7 @@ describe("cron outcome receipt finalization", () => {
             startedAt,
             endedAt: startedAt,
           }),
-          authorOutcome(state, {
+          authorOutcome({
             jobId: current.id,
             job: current,
             activeJobMarker: currentMarker,
@@ -241,7 +238,7 @@ describe("cron outcome receipt finalization", () => {
     });
 
     await finalizeCompletedCronRunOutcomes(state, [
-      authorOutcome(state, {
+      authorOutcome({
         jobId: stale.id,
         job: stale,
         activeJobMarker: markCronJobActive(stale.id),
@@ -251,7 +248,7 @@ describe("cron outcome receipt finalization", () => {
         startedAt,
         endedAt: startedAt + 2,
       }),
-      authorOutcome(state, {
+      authorOutcome({
         jobId: current.id,
         job: current,
         activeJobMarker: markCronJobActive(current.id),
@@ -327,7 +324,7 @@ describe("cron outcome receipt finalization", () => {
     });
 
     await finalizeCompletedCronRunOutcomes(state, [
-      authorOutcome(state, {
+      authorOutcome({
         jobId: completed.id,
         job: completed,
         activeJobMarker: markCronJobActive(completed.id),
@@ -389,7 +386,7 @@ describe("cron outcome receipt finalization", () => {
     try {
       await expect(
         finalizeCompletedCronRunOutcomes(state, [
-          authorOutcome(state, {
+          authorOutcome({
             jobId: completed.id,
             job: completed,
             activeJobMarker: markCronJobActive(completed.id),

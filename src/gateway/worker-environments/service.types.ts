@@ -43,8 +43,18 @@ export type WorkerEnvironmentServiceErrorCode =
   | "provider_failure"
   | "bootstrap_failure";
 
-export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions &
-  WorkerEnvironmentSessionAttachmentOptions & {
+export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
+  resolveHumanPresenceDemand?: () =>
+    | {
+        profileId: string;
+        executionMode: "worker-turn" | "remote-exec";
+        repository: { agentId: string; url: string; ref?: string };
+      }
+    | undefined;
+  presenceDemandStore?: Parameters<
+    typeof import("./prepared-pool.js").createPreparedWorkerPool
+  >[0]["presenceDemandStore"];
+} & WorkerEnvironmentSessionAttachmentOptions & {
     prepareComputer?: (
       claim: import("./placement-store.js").WorkerSessionTurnClaim,
     ) => Promise<import("./computer-transport.js").PreparedWorkerComputer | undefined>;

@@ -13,6 +13,7 @@ import type {
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import { getPendingWakeCommit } from "./subagent-registry-requester-wake-commit.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export const isCurrentRequesterSettleWakeBatch = (
   context: SubagentLifecycleWakeContext,
@@ -23,20 +24,27 @@ export const isCurrentRequesterSettleWakeBatch = (
   // Closure can precede replacement activation. Only a recorded visible final
   // may settle then; cancellation or an in-flight handoff must retain the wake.
   try {
+    const ownsRows = () =>
+      batch.every((entry) => {
+        const current = context.options.runs.get(entry.runId);
+        return (
+          !context.cancelledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry)) &&
+          isSameSubagentRunOwner(current, entry) &&
+          current?.requesterSettleWake !== undefined &&
+          current.requesterSettleWake.rearmGeneration === rearmGeneration &&
+          (current.requesterSettleWake.yieldedFinalDeliverable === true) ===
+            (entry.requesterSettleWake?.yieldedFinalDeliverable === true)
+        );
+      });
     return (
       batch.length > 0 &&
+      ownsRows() &&
       (visibleFinalDelivered ||
         batch.every((entry) => {
           const resolve = getGatewayContextResolver(entry);
           return !resolve || Boolean(resolve());
         })) &&
-      // Validate every row and generation after calling the captured owner fences.
-      batch.every(
-        (entry) =>
-          context.options.runs.get(entry.runId) === entry &&
-          entry.requesterSettleWake &&
-          entry.requesterSettleWake.rearmGeneration === rearmGeneration,
-      )
+      ownsRows()
     );
   } catch {
     return false;
@@ -55,6 +63,9 @@ function assertRequesterWakeCommitCurrent(
     throw new Error("Requester wake lost its current commit episode");
   }
   for (const entry of entries) {
+    if (context.cancelledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
+      throw new Error("Requester wake was cancelled before commit");
+    }
     const resolve = getGatewayContextResolver(entry);
     if (!visibleFinalDelivered && resolve && !resolve()) {
       throw new Error("Requester wake Gateway owner is closed");
@@ -68,6 +79,7 @@ export async function commitRequesterSettleWakeMutation(
   operation: RequesterWakeMutation | { kind: "settle"; outcome: SubagentAnnounceDeliveryResult },
   stateContext: OpenClawStateWorkerContext,
   pending: PendingRequesterSettleWakeCommit,
+  onPublished?: (entries: readonly SubagentRunRecord[]) => void,
 ): Promise<boolean> {
   const visibleFinalDelivered =
     operation.kind === "settle" &&
@@ -95,8 +107,10 @@ export async function commitRequesterSettleWakeMutation(
     onCommitted: (write: NonNullable<PendingRequesterSettleWakeCommit["committedWake"]>) => {
       pending.committedWake = write;
     },
-    onPublished: () => pending.adoptPublished(entries),
-    retiredPreimages: new Set(entries.filter((entry) => pending.isPublishedRetirement(entry))),
+    onPublished: () => {
+      const published = pending.adoptPublished(entries);
+      onPublished?.(published);
+    },
   };
   const result = await (operation.kind === "settle"
     ? settleRequesterCompletionBatch({

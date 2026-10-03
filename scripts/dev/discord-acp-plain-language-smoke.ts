@@ -18,6 +18,7 @@ import {
   redactForDevToolLog,
   redactHomePath,
 } from "../lib/dev-tooling-safety.ts";
+import { CliArgumentError } from "../lib/error-format.mts";
 import { sleep } from "../lib/sleep.mjs";
 
 function writeStdoutLine(message: string): void {
@@ -154,10 +155,6 @@ const VALUE_OPTIONS = new Set([
   "--state-dir",
   "--openclaw-bin",
 ]);
-
-class CliArgumentError extends Error {
-  override name = "CliArgumentError";
-}
 
 function remainingTimeoutMs(
   deadlineMs: number,

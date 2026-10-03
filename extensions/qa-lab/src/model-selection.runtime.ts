@@ -2,7 +2,6 @@ import { normalizeOptionalString as normalizeModel } from "openclaw/plugin-sdk/s
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
-  type QaProviderMode,
   type QaProviderModeInput,
 } from "./model-selection.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
@@ -14,19 +13,14 @@ export function resolveQaRuntimeModelPair(params: {
   providerMode: QaProviderModeInput;
   primaryModel?: string;
   alternateModel?: string;
-  resolveDefaultModel?: (mode: QaProviderMode, alternate?: boolean) => string;
 }) {
   const providerMode = normalizeQaProviderMode(params.providerMode);
-  const resolveDefaultModel =
-    params.resolveDefaultModel ??
-    ((mode: QaProviderModeInput, alternate = false) =>
-      defaultQaModelForMode(mode, alternate ? { alternate: true } : undefined));
-  const primaryModel = normalizeModel(params.primaryModel) ?? resolveDefaultModel(providerMode);
+  const primaryModel = normalizeModel(params.primaryModel) ?? defaultQaModelForMode(providerMode);
   const alternateModel =
     normalizeModel(params.alternateModel) ??
     (providerMode === DEFAULT_QA_LIVE_PROVIDER_MODE
       ? (resolveQaLiveFrontierAlternateModel(primaryModel) ??
-        resolveDefaultModel(providerMode, true))
-      : resolveDefaultModel(providerMode, true));
+        defaultQaModelForMode(providerMode, { alternate: true }))
+      : defaultQaModelForMode(providerMode, { alternate: true }));
   return { primaryModel, alternateModel };
 }

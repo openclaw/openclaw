@@ -6,7 +6,7 @@ import { prepareAgentCommandExecutionIdentity } from "../agents/agent-command-ex
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import { consumeSubagentPauseNotice } from "../agents/subagents/registry/subagent-delivery-state.js";
 import { subagentRuns as runs } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { persistSubagentRunsToDiskAsyncOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
+import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
   admitRequesterCronAuthorityUserTurn,
@@ -143,15 +143,26 @@ describe("requester pause authority at the Gateway effect", () => {
       };
       const originalBatch = overlapping ? [child, sibling] : [child];
       const owned = overlapping ? [...originalBatch, later] : originalBatch;
-      for (const entry of owned) {
-        runs.set(entry.runId, entry);
-      }
-      await persistSubagentRunsToDiskAsyncOrThrow(
-        runs,
+      const currentChild = () => expectDefined(runs.get(child.runId), "published requester child");
+      const mutateChild = (update: (draft: SubagentRunRecord) => void) =>
+        mutateSubagentRuns(
+          [child.runId],
+          (rows) => {
+            const next = structuredClone(
+              expectDefined(rows.get(child.runId), "admitted requester child"),
+            );
+            update(next);
+            return { value: undefined, postimages: new Map([[next.runId, next]]) };
+          },
+          { runs, context: captureOpenClawStateWorkerContext() },
+        );
+      await mutateSubagentRuns(
         owned.map((entry) => entry.runId),
-        {
-          context: captureOpenClawStateWorkerContext(),
-        },
+        () => ({
+          value: undefined,
+          postimages: new Map(owned.map((entry) => [entry.runId, entry])),
+        }),
+        { runs, context: captureOpenClawStateWorkerContext() },
       );
       const received: string[] = [];
       agentCommandMock.mockImplementation(async (input) => {
@@ -204,7 +215,9 @@ describe("requester pause authority at the Gateway effect", () => {
             );
             expect(await recorder.persistApproved()).toMatchObject({ appended: true });
             if (runId === originalRunId || runId === secondRunId) {
-              const batch = runId === originalRunId ? originalBatch : [later];
+              const batch = (runId === originalRunId ? originalBatch : [later]).map((entry) =>
+                expectDefined(runs.get(entry.runId), "published yielded cohort child"),
+              );
               expect(
                 await markRequesterTurnYielded({
                   requesterSessionKey: parent,
@@ -229,17 +242,12 @@ describe("requester pause authority at the Gateway effect", () => {
               expect(opts.sessionKey).toBe(parent);
               received.push(opts.message);
               if (runId === pauseRunId) {
-                expect(consumeSubagentPauseNotice(child)).toBe(true);
-                await persistSubagentRunsToDiskAsyncOrThrow(
-                  runs,
-                  owned.map((entry) => entry.runId),
-                  {
-                    context: captureOpenClawStateWorkerContext(),
-                  },
-                );
+                await mutateChild((draft) => {
+                  expect(consumeSubagentPauseNotice(draft)).toBe(true);
+                });
                 revokeRequesterCronAuthorityBatch(
-                  [child],
-                  child.requesterSettleWake?.rearmGeneration,
+                  [currentChild()],
+                  currentChild().requesterSettleWake?.rearmGeneration,
                 );
                 expect(opts.cronCreatorAuthorityCapability?.isCurrent?.()).toBe(
                   outcome === "operator only" ? undefined : true,
@@ -259,9 +267,12 @@ describe("requester pause authority at the Gateway effect", () => {
         runId: string,
         target: string,
         message: string,
-        batch = runId === pauseRunId ? [child] : originalBatch,
-      ) =>
-        withRequesterCronAuthority(
+        observedBatch = runId === pauseRunId ? [child] : originalBatch,
+      ) => {
+        const batch = observedBatch.map((entry) =>
+          expectDefined(runs.get(entry.runId), "published dispatch cohort child"),
+        );
+        return withRequesterCronAuthority(
           {
             requesterSessionKey: parent,
             requesterSessionId: parentId,
@@ -288,6 +299,7 @@ describe("requester pause authority at the Gateway effect", () => {
               { expectFinal: true, resolveGatewayContext: () => context },
             ),
         );
+      };
       try {
         expect(
           await dispatchGatewayRequestInProcessRaw(
@@ -363,10 +375,15 @@ describe("requester pause authority at the Gateway effect", () => {
               { client, context, expectFinal: true },
             ),
           ).toMatchObject({ ok: true });
-          later.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
-          await persistSubagentRunsToDiskAsyncOrThrow(runs, [later.runId], {
-            context: captureOpenClawStateWorkerContext(),
-          });
+          await mutateSubagentRuns(
+            [later.runId],
+            (rows) => {
+              const draft = structuredClone(expectDefined(rows.get(later.runId), "later cohort child"));
+              draft.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
+              return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
+            },
+            { runs, context: captureOpenClawStateWorkerContext() },
+          );
           const laterRunId = `later-completion-${id}`;
           await dispatch(laterRunId, parent, "Newer cohort completed first", [later]);
           // Replay the identical accepted completion; the Gateway must not execute it twice.
@@ -374,21 +391,16 @@ describe("requester pause authority at the Gateway effect", () => {
           expect(received).toHaveLength(1);
           received.length = 0;
         }
-        child.pauseReason = "sessions_yield";
-        child.execution = { status: "terminal", endedAt: Date.now() };
-        child.requesterSettleWake!.pauseNotice = { acknowledgment: marker };
-        await persistSubagentRunsToDiskAsyncOrThrow(
-          runs,
-          owned.map((entry) => entry.runId),
-          {
-            context: captureOpenClawStateWorkerContext(),
-          },
-        );
+        await mutateChild((draft) => {
+          draft.pauseReason = "sessions_yield";
+          draft.execution = { status: "terminal", endedAt: Date.now() };
+          draft.requesterSettleWake!.pauseNotice = { acknowledgment: marker };
+        });
         await dispatch(pauseRunId, parent, `Child paused awaiting continuation: ${marker}`);
         expect(received).toEqual([
           `${interSessionPrefix}Child paused awaiting continuation: ${marker}`,
         ]);
-        expect(child.requesterSettleWake?.pauseNotice).toBeUndefined();
+        expect(currentChild().requesterSettleWake?.pauseNotice).toBeUndefined();
         const target = outcome === "foreign requester" ? foreign : parent;
         const sessionId = outcome === "foreign requester" ? foreignId : parentId;
         const scope = { agentId: "main", sessionKey: target, sessionId };
@@ -396,16 +408,18 @@ describe("requester pause authority at the Gateway effect", () => {
         const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
         const execution = vi.spyOn(executionModule, "startAgentRunExecution");
         agentCommandMock.mockClear();
-        child.pauseReason = undefined;
-        for (const entry of originalBatch) {
-          entry.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
-        }
-        await persistSubagentRunsToDiskAsyncOrThrow(
-          runs,
-          owned.map((entry) => entry.runId),
-          {
-            context: captureOpenClawStateWorkerContext(),
-          },
+        await mutateSubagentRuns(
+          originalBatch.map((entry) => entry.runId),
+          (rows) => ({
+            value: undefined,
+            postimages: new Map(originalBatch.map((entry) => {
+              const draft = structuredClone(expectDefined(rows.get(entry.runId), "settled cohort child"));
+              draft.pauseReason = undefined;
+              draft.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
+              return [entry.runId, draft];
+            })),
+          }),
+          { runs, context: captureOpenClawStateWorkerContext() },
         );
         const entered = createDeferred();
         const resume = createDeferred();
@@ -488,7 +502,7 @@ describe("requester pause authority at the Gateway effect", () => {
             expect(failure).toBeInstanceOf(Error);
             expect(failure).toHaveProperty("message", expect.stringContaining(expectedDenial));
           }
-          expect(listSessionPendingInputs(scope).total).toBe(0);
+          expect((await listSessionPendingInputs(scope)).total).toBe(0);
         } finally {
           resume.resolve();
           await Promise.allSettled([continuation, ...trackedRequests()]);
@@ -497,13 +511,14 @@ describe("requester pause authority at the Gateway effect", () => {
         }
       } finally {
         admitRequesterCronAuthorityUserTurn({ sessionKey: parent });
-        for (const entry of owned) {
-          runs.delete(entry.runId);
-        }
-        await persistSubagentRunsToDiskAsyncOrThrow(
-          runs,
+        await mutateSubagentRuns(
           owned.map((entry) => entry.runId),
+          () => ({
+            value: undefined,
+            postimages: new Map(owned.map((entry) => [entry.runId, null])),
+          }),
           {
+            runs,
             context: captureOpenClawStateWorkerContext(),
           },
         );

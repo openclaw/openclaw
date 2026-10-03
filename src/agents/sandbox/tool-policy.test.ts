@@ -3,8 +3,8 @@
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSandboxConfigForAgent as resolveSandboxConfigForAgentBase } from "./config.js";
 import {
@@ -19,7 +19,7 @@ import {
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-required-sandbox-");
 
 function loadedConfig(config: OpenClawConfig | undefined): OpenClawConfig {
-  return migratePersistedImplicitMainRoster(config ?? {}).config as OpenClawConfig;
+  return createCanonicalAgentConfigFixture(config).config;
 }
 
 function resolveSandboxConfigForAgent(config: OpenClawConfig, agentId: string) {

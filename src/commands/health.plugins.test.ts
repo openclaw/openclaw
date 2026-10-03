@@ -21,7 +21,7 @@ let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePlu
 let setActiveDegradedPlugins: typeof import("../plugins/runtime-degraded-state.js").setActiveDegradedPlugins;
 let createTestRegistry: typeof import("../test-utils/channel-plugins.js").createTestRegistry;
 let collectGatewayHealthSnapshot: typeof import("../gateway/health/collector.js").collectGatewayHealthSnapshot;
-let startPluginServices: typeof import("../plugins/services.js").startPluginServices;
+let startPluginServices: typeof import("../plugins/services.test-support.js").startPluginServices;
 let pluginServicesHandle: PluginServicesHandle | undefined;
 let inventoryPlugins: ChannelPlugin[] = [];
 
@@ -47,7 +47,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         import("../plugins/runtime-degraded-state.js"),
         import("../test-utils/channel-plugins.js"),
         import("../gateway/health/collector.js"),
-        import("../plugins/services.js"),
+        import("../plugins/services.test-support.js"),
       ]);
     setActivePluginRegistry = pluginsRuntime.setActivePluginRegistry;
     setActiveDegradedPlugins = degradedState.setActiveDegradedPlugins;

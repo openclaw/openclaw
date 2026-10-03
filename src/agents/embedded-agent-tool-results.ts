@@ -18,7 +18,7 @@ import {
 } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
-import { memoizeSanitizedToolResult } from "./embedded-agent-tool-result-cache.js";
+import { createToolResultPreparation } from "./embedded-agent-tool-result-preparation.js";
 import {
   isToolResultError,
   readToolResultDetails,
@@ -256,7 +256,13 @@ export function sanitizeToolResult(result: unknown): unknown {
   if (!result || typeof result !== "object") {
     return result;
   }
-  return memoizeSanitizedToolResult(result, () => sanitizeStructuredToolResult(result));
+  return sanitizeStructuredToolResult(result);
+}
+
+export function prepareToolResult(result: unknown): () => unknown {
+  return result && typeof result === "object"
+    ? createToolResultPreparation(result, () => sanitizeStructuredToolResult(result))
+    : () => sanitizeToolResult(result);
 }
 
 function sanitizeStructuredToolResult(result: object): object {

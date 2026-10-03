@@ -1,6 +1,7 @@
 import type { ImageContent, Message, TextContent } from "@openclaw/llm-core";
 import { parseDateStringTimestampMs as parseSessionTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { getOpenClawSystemUpdateKind } from "../operator-messages.js";
 import type {
   AgentMessage,
   BashExecutionMessage,
@@ -116,7 +117,9 @@ export function createCustomMessage(
 /** Recognize the structured carrier marker shared with provider replay. */
 export function isRuntimeContextCarrier(message: AgentMessage): boolean {
   return (
-    message.role === "custom" && asOptionalRecord(message.details)?.runtimeContextCarrier === true
+    message.role === "custom" &&
+    (asOptionalRecord(message.details)?.runtimeContextCarrier === true ||
+      getOpenClawSystemUpdateKind(message) === "runtime-context")
   );
 }
 

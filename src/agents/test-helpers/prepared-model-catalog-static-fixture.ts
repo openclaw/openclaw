@@ -26,7 +26,7 @@ export function createStaticCatalogSnapshotFixture(params: {
       provideMetadataToWorker?: boolean;
     },
   ) {
-    const fixture = createCatalogFixture(makeTempDir, spinMs, envOverride, {
+    const fixture = await createCatalogFixture(makeTempDir, spinMs, envOverride, {
       ...options,
       receiptBroadcastName: params.receiptBroadcastName?.(),
     });

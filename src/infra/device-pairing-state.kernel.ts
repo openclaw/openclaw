@@ -4,7 +4,6 @@ import {
   loadDevicePairingStoreState,
   type DevicePairingStoreState,
 } from "./device-pairing-store.js";
-import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
 import { pruneExpiredPending } from "./pairing-files.js";
 
 const DEVICE_PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
@@ -23,11 +22,6 @@ export function loadDevicePairingStateForMutation(
 /** Resolve the expiry timestamp for one pending device-pairing request. */
 export function resolvePairingRequestExpiry(timestampMs: number): number {
   return timestampMs + DEVICE_PAIRING_PENDING_TTL_MS;
-}
-
-/** Normalize a device id at pairing state boundaries. */
-export function normalizeDevicePairingId(deviceId: string) {
-  return deviceId.trim();
 }
 
 /** Normalize one requested or approved pairing role. */
@@ -100,9 +94,4 @@ export function sameDevicePairingStringSet(
 /** Resolve the normalized role set requested by a pairing record. */
 export function resolveRequestedDeviceRoles(input: { role?: string; roles?: string[] }): string[] {
   return mergeDevicePairingRoles(input.roles, input.role) ?? [];
-}
-
-/** Clone a paired device's role-token map before mutation. */
-export function cloneDevicePairingTokens(device: PairedDevice): Record<string, DeviceAuthToken> {
-  return device.tokens ? { ...device.tokens } : {};
 }

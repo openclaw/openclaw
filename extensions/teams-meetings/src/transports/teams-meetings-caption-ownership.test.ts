@@ -1,6 +1,6 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
-import { teamsMeetingTranscriptScript } from "./teams-meetings-page-scripts.js";
+import { teamsMeetingPageScripts } from "./teams-meetings-page-scripts.js";
 import {
   CONSUMER_URL,
   URL,
@@ -41,7 +41,7 @@ describe("Microsoft Teams meeting caption ownership", () => {
     delete window["__openclawTeamsCaptions"];
 
     const readOldTranscript = runInNewContext(
-      `(${teamsMeetingTranscriptScript(URL, "old-session", false)})`,
+      `(${teamsMeetingPageScripts.transcript(URL, "old-session", false)})`,
       {
         URL: globalThis.URL,
         clearTimeout,
@@ -85,7 +85,7 @@ describe("Microsoft Teams meeting caption ownership", () => {
     });
     delete window["__openclawTeamsCaptions"];
     const readOldTranscript = runInNewContext(
-      `(${teamsMeetingTranscriptScript(URL, "session-a", false)})`,
+      `(${teamsMeetingPageScripts.transcript(URL, "session-a", false)})`,
       {
         URL: globalThis.URL,
         clearTimeout,

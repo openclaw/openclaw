@@ -5,10 +5,7 @@ import { sleepWithAbort } from "@openclaw/retry";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveDeliveryNotSentRetryability } from "../../../infra/delivery-recovery.shared.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
-import {
-  isOutboundDeliveryError,
-  isPlatformMessageRejectedError,
-} from "../../../infra/outbound/deliver-types.js";
+import { isPlatformMessageRejectedError } from "../../../infra/outbound/deliver-types.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isFailoverError } from "../../failover-error.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
@@ -166,16 +163,11 @@ export function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
   return /(?:incomplete terminal response|code=incomplete_result)\b/i.test(message);
 }
 
-function hasDirectAnnounceSendEvidence(error: unknown): boolean {
-  if (isOutboundDeliveryError(error) && error.sentBeforeError) {
-    return true;
-  }
-  const record = asOptionalObjectRecord(error);
-  return record?.sentBeforeError === true || record?.visibleReplySent === true;
-}
-
 export function hasAnnounceSendEvidence(error: unknown): boolean {
-  return hasAnnounceErrorMatch(error, hasDirectAnnounceSendEvidence);
+  return hasAnnounceErrorMatch(error, (candidate) => {
+    const record = asOptionalObjectRecord(candidate);
+    return record?.sentBeforeError === true || record?.visibleReplySent === true;
+  });
 }
 
 export async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {

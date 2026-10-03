@@ -31,6 +31,8 @@ async function openFilePreview(page: Page) {
           response: {
             root: "/workspace",
             file: {
+              previewKind: "text",
+              contentEncoding: "utf8",
               content: `Synthetic ${name} content`,
               kind: "read",
               missing: false,

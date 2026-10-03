@@ -16,7 +16,8 @@ import {
   getReplyPayloadMetadata,
 } from "../../auto-reply/reply-payload.js";
 import { isFencedProviderReadAction } from "../../channels/plugins/message-action-dispatch.js";
-import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
@@ -168,25 +169,19 @@ async function handleBroadcastAction(
   for (const { channel: targetChannel, plugin: targetChannelPlugin } of targetChannels) {
     for (const target of rawTargets) {
       const receiptDiscriminator = `broadcast:${attemptIndex++}`;
-      if (interrupted) {
-        results.push({
-          channel: targetChannel,
-          to: target,
-          ok: false,
-          attempted: false,
-          error: "Broadcast canceled before this target was attempted.",
-        });
-        continue;
-      }
-      const hadAcceptedResult = hasAcceptedResult();
-      try {
-        throwIfAborted(input.abortSignal);
-        input.assertDirectAdapterHandoff?.();
-      } catch (err) {
-        if (!hadAcceptedResult) {
-          throw err;
+      const hadAcceptedResult = !interrupted && hasAcceptedResult();
+      if (!interrupted) {
+        try {
+          throwIfAborted(input.abortSignal);
+          input.assertDirectAdapterHandoff?.();
+        } catch (err) {
+          if (!hadAcceptedResult) {
+            throw err;
+          }
+          interrupted = true;
         }
-        interrupted = true;
+      }
+      if (interrupted) {
         results.push({
           channel: targetChannel,
           to: target,

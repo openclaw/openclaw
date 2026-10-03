@@ -2,9 +2,10 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { outboxStorageScope } from "../lib/chat/outbox-payload-store.runtime.ts";
 import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
 import {
-  storageTargetForGateway,
+  storageTargetForComposer,
   storedChatOutboxScopeKey,
   writeStoredOutboxStore,
 } from "../lib/chat/outbox-store.ts";
@@ -36,7 +37,12 @@ it("projects only the ready recovery owner's attachment failures through the she
   };
   const ownSessionKey = "agent:main:own-attachment";
   const otherSessionKey = "agent:main:other-attachment";
-  const target = storageTargetForGateway(gateway.connection.gatewayUrl);
+  const admittedHost = {
+    settings: { gatewayUrl: gateway.connection.gatewayUrl },
+    connected: true,
+    client: { ...owner, recoveryScopeReady: true },
+  };
+  const target = storageTargetForComposer(admittedHost);
   writeStoredOutboxStore(storage, target, {
     version: 4,
     gatewayOwner: target.gatewayOwner,
@@ -57,6 +63,10 @@ it("projects only the ready recovery owner's attachment failures through the she
               text: "attachment failed",
               createdAt: 1,
               sendState: "failed",
+              storageScope: outboxStorageScope({
+                ...admittedHost,
+                client: { recoveryScope, recoveryScopeReady: true },
+              }),
               attachmentPayload: { key: sessionKey, recoveryScope, tabId: "tab" },
             },
           ],

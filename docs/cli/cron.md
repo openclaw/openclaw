@@ -213,7 +213,7 @@ Skipped runs are tracked separately from execution errors. They do not affect re
 
 A local configured model provider has a base URL on loopback, on a private network, or on `.local`. For isolated jobs that target such a provider, the scheduler runs a lightweight provider preflight before it starts the agent turn. The scheduler probes `api: "ollama"` providers at `/api/tags`. It probes other local OpenAI-compatible providers (`api: "openai-completions"`, for example vLLM, SGLang, and LM Studio) at `/models`. If the endpoint is unreachable, the scheduler records the run as `skipped` and retries it on a later schedule. It caches the reachability result per endpoint for 5 minutes, so many jobs against the same local server do not send repeated probes.
 
-Automation jobs, pending runtime state, and run history live in the shared SQLite state database. The file store it replaced in 2026.6.1 is still imported once: legacy `jobs.json`, `<name>-state.json`, and `runs/*.jsonl` files are read and then renamed with a `.migrated` suffix. After import, edit schedules with `openclaw automations add|edit|remove` instead of editing JSON files.
+Automation jobs, pending runtime state, and run history live in the shared SQLite state database. The file store it replaced in 2026.6.1 is retired. If `jobs.json`, `<name>-state.json`, or `runs/*.jsonl` files remain, install OpenClaw `2026.9.7` and run `openclaw doctor --fix` before upgrading to the latest version. Current Doctor preserves these files and reports the intermediate upgrade requirement. Supported `jobs-quarantine.json` sidecars are still imported and archived with a `.migrated` suffix. Edit schedules with `openclaw automations add|edit|remove` instead of editing JSON files.
 
 ### Manual runs
 

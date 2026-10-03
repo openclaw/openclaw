@@ -39,14 +39,6 @@ export const scanInstalledPackageDependencyTree = bindInstallSecurityScanRuntime
   (runtime) => runtime.scanInstalledPackageDependencyTreeRuntime,
 );
 
-/**
- * Retained for install.runtime compatibility with pre-v2026.6.5 lazy install chunks.
- * Remove only with the matching runtime-postbuild legacy alias cleanup.
- */
-export const scanFileInstallSource = bindInstallSecurityScanRuntime(
-  (runtime) => runtime.scanFileInstallSourceRuntime,
-);
-
 /** Runs npm install policy checks before package install side effects. */
 export const preflightPluginNpmInstallPolicy = bindInstallSecurityScanRuntime(
   (runtime) => runtime.preflightPluginNpmInstallPolicyRuntime,

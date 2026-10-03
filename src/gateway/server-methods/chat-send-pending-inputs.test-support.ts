@@ -20,6 +20,7 @@ import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { disposeSessionReadContexts } from "../session-read-contexts.test-support.js";
 import { dispatchInboundMessageMock, testState, writeSessionStore } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resources.test-helpers.js";
@@ -30,6 +31,7 @@ import type { GatewayClient, RespondFn } from "./types.js";
 export function useBrowserFollowupFixture() {
   const temporaryDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(async () => {
+      await disposeSessionReadContexts();
       // Agent leases retain the per-case Gateway home; release them before its cleanup.
       for (const dir of temporaryDirs.dirs) {
         await releaseGatewaySessionStoreFixture(dir);

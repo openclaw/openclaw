@@ -12,6 +12,13 @@ import {
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
 import {
+  getMemoryProviderMock,
+  getMemorySearchManagerMock,
+  resetCompactMemoryMocks,
+  getMemoryProviderRuntimeMock,
+  resolveMemorySearchConfigMock,
+} from "./compact.hooks.memory.test-support.js";
+import {
   acquireCompactHooksPreparedModelRuntime,
   createCompactHooksResolvedModel,
   emptyPluginMetadataSnapshot,
@@ -30,11 +37,6 @@ import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import type { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
-type MockMemorySearchManager = {
-  manager: {
-    sync: (params?: unknown) => Promise<void>;
-  };
-};
 type MockEmbeddedAgentStreamFn = Mock<
   (model?: unknown, context?: unknown, options?: unknown) => unknown
 >;
@@ -99,21 +101,6 @@ const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
 );
 const validateReplayTurnsMock = vi.fn(async ({ messages }: { messages: unknown[] }) => messages);
-export const getMemorySearchManagerMock: Mock<
-  (params?: unknown) => Promise<MockMemorySearchManager>
-> = vi.fn(async () => ({
-  manager: {
-    sync: vi.fn(async (_params?: unknown) => {}),
-  },
-}));
-export const resolveMemorySearchConfigMock = vi.fn(() => ({
-  sources: ["sessions"],
-  sync: {
-    sessions: {
-      postCompactionForce: true,
-    },
-  },
-}));
 export const resolveSessionAgentIdMock = vi.fn<
   typeof import("../agent-scope.js").resolveSessionAgentId
 >(() => "main");
@@ -233,7 +220,7 @@ const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
 export const resolveEffectiveCompactionModeMock = vi.fn(() => "default");
 const guardSessionManagerMock = vi.fn((sessionManager: Record<string, unknown>) => ({
   ...sessionManager,
-  flushPendingToolResults: vi.fn(),
+  flushPendingToolResultsAsync: vi.fn(async () => undefined),
 }));
 const applyAgentCompactionSettingsFromConfigMock = vi.fn();
 const createPreparedEmbeddedAgentSettingsManagerMock = vi.fn(() => ({
@@ -406,21 +393,7 @@ export function resetCompactSessionStateMocks(): void {
   buildEmbeddedExtensionFactoriesMock.mockReset();
   buildEmbeddedExtensionFactoriesMock.mockReturnValue([]);
 
-  getMemorySearchManagerMock.mockReset();
-  getMemorySearchManagerMock.mockResolvedValue({
-    manager: {
-      sync: vi.fn(async () => {}),
-    },
-  });
-  resolveMemorySearchConfigMock.mockReset();
-  resolveMemorySearchConfigMock.mockReturnValue({
-    sources: ["sessions"],
-    sync: {
-      sessions: {
-        postCompactionForce: true,
-      },
-    },
-  });
+  resetCompactMemoryMocks();
   resolveSessionAgentIdMock.mockReset();
   resolveSessionAgentIdMock.mockReturnValue("main");
   resolveSessionAgentIdsMock.mockReset();
@@ -577,7 +550,7 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = 
   guardSessionManagerMock.mockReset();
   guardSessionManagerMock.mockImplementation((sessionManager) => ({
     ...sessionManager,
-    flushPendingToolResults: vi.fn(),
+    flushPendingToolResultsAsync: vi.fn(async () => undefined),
   }));
   applyAgentCompactionSettingsFromConfigMock.mockReset();
   createPreparedEmbeddedAgentSettingsManagerMock.mockReset();
@@ -918,7 +891,15 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   }));
 
   vi.doMock("../../plugins/memory-runtime.js", () => ({
+    getActiveMemoryProviderCore: getMemoryProviderMock,
     getActiveMemorySearchManagerCore: getMemorySearchManagerMock,
+  }));
+
+  vi.doMock("../../plugins/memory-state.js", async () => ({
+    ...(await vi.importActual<typeof import("../../plugins/memory-state.js")>(
+      "../../plugins/memory-state.js",
+    )),
+    resolveLoadedMemoryProviderKind: () => (getMemoryProviderRuntimeMock() ? "native" : undefined),
   }));
 
   vi.doMock("../date-time.js", async () => {

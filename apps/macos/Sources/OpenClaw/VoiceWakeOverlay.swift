@@ -82,7 +82,6 @@ final class VoiceWakeOverlayController {
     var hostingView: NSHostingView<VoiceWakeOverlayView>?
     var autoSendTask: Task<Void, Never>?
     var activeToken: UUID?
-    var activeSource: VoiceSessionCoordinator.Source?
     var lastLevelUpdate: TimeInterval = 0
 
     let width: CGFloat = 360

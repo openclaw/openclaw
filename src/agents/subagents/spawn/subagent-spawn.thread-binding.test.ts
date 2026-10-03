@@ -229,9 +229,7 @@ describe("spawnSubagentDirect thread binding", () => {
   );
 
   it("preserves lifecycle cleanup after thread registration fails", async () => {
-    registerSubagentRunMock.mockImplementation(() => {
-      throw new Error("registry unavailable");
-    });
+    registerSubagentRunMock.mockRejectedValue(new Error("registry unavailable"));
     const result = await spawnSubagentDirect(
       { task: "fail after binding", thread: true, mode: "session", context: "isolated" },
       caller,

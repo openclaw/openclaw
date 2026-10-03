@@ -2,7 +2,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { HookRunner } from "../../plugins/hooks.js";
-import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
+import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
+import {
+  getActiveMemoryProviderCore,
+  getActiveMemorySearchManagerCore,
+} from "../../plugins/memory-runtime.js";
+import { resolveLoadedMemoryProviderKind } from "../../plugins/memory-state.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchIndexConfig } from "../memory-search.js";
@@ -19,8 +24,10 @@ type PostCompactionSession = {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  memoryAudience?: MemoryAudience;
+  sandboxed?: boolean;
   sessionFile: string;
-  assertActive?: () => void;
+  assertActive?: () => void | Promise<void>;
 };
 
 async function runPostCompactionSessionMemorySync(params: PostCompactionSession): Promise<void> {
@@ -37,6 +44,55 @@ async function runPostCompactionSessionMemorySync(params: PostCompactionSession)
       config: params.config,
       agentId: params.agentId,
     });
+    // A native slot owner owns its refresh. Classification reads owners this process
+    // already loaded; every other owner keeps the session-sync checks below, which
+    // never load the slot plugin or call it just to decide.
+    if (resolveLoadedMemoryProviderKind(params.config) === "native") {
+      const sessionKey = params.sessionKey?.trim();
+      const authority =
+        params.memoryAudience && sessionKey
+          ? {
+              kind: "session" as const,
+              sessionKey,
+              sessionId: params.sessionId?.trim() || undefined,
+              sandboxed: params.sandboxed === true,
+              audience: params.memoryAudience,
+            }
+          : { kind: "host" as const, operation: "post-compaction-refresh" };
+      let provider: Awaited<ReturnType<typeof getActiveMemoryProviderCore>>["provider"] = null;
+      try {
+        await params.assertActive?.();
+        // Providers check currency synchronously before I/O; the memory runtime adds audience
+        // currency to this guard. The caller's writer check can await a session read, so it
+        // runs at the awaited gates around open and refresh instead.
+        const acquired = await getActiveMemoryProviderCore({
+          cfg: params.config,
+          agentId,
+          context: { authority, assertCurrent: () => {} },
+        });
+        provider = acquired.provider;
+        await params.assertActive?.();
+        if (!provider) {
+          log.debug(
+            `memory refresh denied (post-compaction) for ${acquired.providerId ?? "selected memory provider"}: ${acquired.error ?? "provider unavailable"}`,
+          );
+          return;
+        }
+        if (!provider.refresh) {
+          log.debug(
+            `memory refresh unsupported (post-compaction) for ${acquired.providerId ?? "selected memory provider"}`,
+          );
+          return;
+        }
+        await provider.refresh();
+        await params.assertActive?.();
+      } catch (error) {
+        log.debug(`memory refresh failed (post-compaction): ${formatErrorMessage(error)}`);
+      } finally {
+        await provider?.close().catch(() => {});
+      }
+      return;
+    }
     // The memory backend owns provider resolution; an unavailable backend must
     // not cold-load embedding plugins just to decide whether to sync.
     const resolvedMemory = resolveMemorySearchIndexConfig(params.config, agentId);
@@ -46,12 +102,12 @@ async function runPostCompactionSessionMemorySync(params: PostCompactionSession)
     if (!resolvedMemory.sync.sessions.postCompactionForce) {
       return;
     }
-    params.assertActive?.();
+    await params.assertActive?.();
     const { manager } = await getActiveMemorySearchManagerCore({
       cfg: params.config,
       agentId,
     });
-    params.assertActive?.();
+    await params.assertActive?.();
     if (!manager?.sync) {
       return;
     }
@@ -71,34 +127,13 @@ async function runPostCompactionSessionMemorySync(params: PostCompactionSession)
         : { archiveFiles: [sessionFile] }),
     });
   } catch (err) {
-    params.assertActive?.();
+    await params.assertActive?.();
     log.warn(`memory sync skipped (post-compaction): ${formatErrorMessage(err)}`);
   }
 }
 
-function syncPostCompactionSessionMemory(
-  params: PostCompactionSession & {
-    mode: "off" | "async" | "await";
-  },
-): Promise<void> {
-  if (params.mode === "off" || !params.config) {
-    return Promise.resolve();
-  }
-
-  const syncTask = runPostCompactionSessionMemorySync(params);
-  if (params.mode === "await") {
-    return syncTask;
-  }
-  // Async indexing must not retain a closed foreground owner or leak an abort
-  // rejection after the caller has already settled its turn.
-  void syncTask.catch((error: unknown) => {
-    log.debug(`memory sync cancelled (post-compaction): ${formatErrorMessage(error)}`);
-  });
-  return Promise.resolve();
-}
-
 export async function runPostCompactionSideEffects(params: PostCompactionSession): Promise<void> {
-  params.assertActive?.();
+  await params.assertActive?.();
   const sessionFile = params.sessionFile.trim();
   if (!sessionFile) {
     return;
@@ -109,13 +144,20 @@ export async function runPostCompactionSideEffects(params: PostCompactionSession
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  params.assertActive?.();
-  await syncPostCompactionSessionMemory({
-    ...params,
-    sessionFile,
-    mode: params.config?.agents?.defaults?.compaction?.postIndexSync ?? "async",
-  });
-  params.assertActive?.();
+  await params.assertActive?.();
+  const mode = params.config?.agents?.defaults?.compaction?.postIndexSync ?? "async";
+  const syncTask =
+    mode !== "off" && params.config
+      ? runPostCompactionSessionMemorySync({ ...params, sessionFile })
+      : undefined;
+  if (mode !== "await") {
+    // Async indexing cannot leak an abort rejection after foreground settlement.
+    void syncTask?.catch((error: unknown) => {
+      log.debug(`memory sync cancelled (post-compaction): ${formatErrorMessage(error)}`);
+    });
+  }
+  await (mode === "await" ? syncTask : undefined);
+  await params.assertActive?.();
 }
 
 type CompactionHookRunner = Partial<

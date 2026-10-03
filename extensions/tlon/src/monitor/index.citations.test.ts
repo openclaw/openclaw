@@ -1,3 +1,4 @@
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { expect, it, vi } from "vitest";
 import { useTlonMonitorFixture } from "./monitor.test-harness.js";
@@ -38,7 +39,11 @@ it("fetches and prepends citations only after DM and channel sender admission", 
   ingressMock.start.mockImplementationOnce(() => started.resolve());
   const controller = new AbortController();
   const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
-  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  const monitor = monitorTlonProvider({
+    scheduler: createTestPluginServiceScheduler(),
+    abortSignal: controller.signal,
+    runtime,
+  });
   try {
     await Promise.race([started.promise, monitor]);
     for (const source of ["chat", "channels"]) {

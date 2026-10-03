@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
 import { PackageIntegrityTimeoutError } from "./package-update-integrity.js";
-import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
 import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
@@ -937,6 +939,7 @@ describe("retained npm package integrity", () => {
     async ({ shape, cause }) => {
       await withTestDir({ prefix: "openclaw-rollback-admission-" }, async (base) => {
         const { params, packageRoot, globalRoot, launcher } = await createPackageSwapFixture(base);
+        let timedOut = false;
         if (shape === "external link") {
           await fs.symlink(base, path.join(packageRoot, "external"));
         }
@@ -960,7 +963,6 @@ describe("retained npm package integrity", () => {
           });
         }
         if (shape === "timed-out scan") {
-          let timedOut = false;
           const lstat = fs.lstat.bind(fs);
           vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
             if (timedOut && String(args[0]) === packageRoot) {
@@ -968,7 +970,7 @@ describe("retained npm package integrity", () => {
             }
             return lstat(...args);
           });
-          vi.spyOn(fs, "open").mockImplementation(async () => {
+          interceptPackageFileHashes(async () => {
             timedOut = true;
             throw new PackageIntegrityTimeoutError(40);
           });
@@ -980,6 +982,7 @@ describe("retained npm package integrity", () => {
           beforeActivate,
           onLiveMutation,
         });
+        expect(timedOut).toBe(shape === "timed-out scan");
         expect(result.status).toBe("failed");
         expect(result.step.stderrTail).not.toContain("package tree changed");
         expect(result.step.stderrTail).not.toContain("Installation recovery is unverified");

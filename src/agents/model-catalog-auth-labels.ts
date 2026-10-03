@@ -1,7 +1,7 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { maskApiKey } from "../security/secret-mask.js";
 import { shortenHomePath } from "../utils.js";
@@ -22,7 +22,7 @@ function resolveStoredCredentialLabel(params: { value: unknown; refValue: unknow
   if (masked !== "missing") {
     return masked;
   }
-  if (coerceSecretRef(params.refValue)) {
+  if (parseSecretRef(params.refValue)) {
     return "ref";
   }
   return "missing";

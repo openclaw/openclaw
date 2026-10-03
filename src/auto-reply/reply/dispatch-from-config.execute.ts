@@ -87,11 +87,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     flush: flushBlockTtsText,
   } = createDispatchBlockReplyHandler(state);
   const flushDeferredFinalText = async () => {
-    const delivered = await flushDispatchDeferredFinalText({
-      deferFinalTtsText,
-      isHeartbeat: params.replyOptions?.isHeartbeat === true,
-      state,
-    });
+    const delivered = await flushDispatchDeferredFinalText(state);
     didDeliverVisiblePartialReply ||= delivered;
     return delivered;
   };

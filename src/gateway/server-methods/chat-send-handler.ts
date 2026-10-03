@@ -4,10 +4,10 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
 import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
-import {
-  lookupSessionGoalOperation,
-  type SessionGoalOperation,
-  type SessionGoalOperationResult,
+import { lookupSessionGoalOperation } from "../../config/sessions/goals-operations-read.js";
+import type {
+  SessionGoalOperation,
+  SessionGoalOperationResult,
 } from "../../config/sessions/goals-operations.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { logVerbose } from "../../globals.js";
@@ -231,6 +231,16 @@ async function handleChatSendWithOptions(
       sessionMutationCommitGuard?.();
     };
     assertInputAdmissionCurrent();
+    const goalCommitGuard = normalizedRequest.value.goalOperation
+      ? createChatSendGoalCommitGuard({
+          admission: admitted.value,
+          session: preparedSession.value,
+          client,
+          context,
+          sessionMutationAuthorization,
+          sessionMutationCommitGuard,
+        })
+      : undefined;
     const userTurn = createGatewayChatUserTurnController({
       admission: admitted.value,
       client,
@@ -241,14 +251,7 @@ async function handleChatSendWithOptions(
       warn: (message) => context.logGateway.warn(message),
       mentionInbox: context.mentionInbox,
       assertOriginalInputCommit: assertInputAdmissionCurrent,
-      assertGoalCurrent: createChatSendGoalCommitGuard({
-        admission: admitted.value,
-        session: preparedSession.value,
-        client,
-        context,
-        sessionMutationAuthorization,
-        sessionMutationCommitGuard,
-      }),
+      goalCommitGuard,
     });
     const {
       persist: persistGatewayUserTurnTranscript,
@@ -256,7 +259,7 @@ async function handleChatSendWithOptions(
       replyContextFieldsPromise,
     } = userTurn;
     bindPreparedMediaRecorder(userTurnRecorder);
-    const preparedUserTurn = prepareChatSendUserTurn({
+    const preparedUserTurn = await prepareChatSendUserTurn({
       request: normalizedRequest.value,
       session: preparedSession.value,
       admission: admitted.value,
@@ -267,7 +270,7 @@ async function handleChatSendWithOptions(
       userTurn,
     });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
-    admitted.value.setPendingInputCleanup(() => {
+    admitted.value.setPendingInputCleanup(async () => {
       try {
         const pending =
           userTurnRecorder.getPendingInputMessage?.() &&
@@ -293,6 +296,7 @@ async function handleChatSendWithOptions(
             reason,
           });
         }
+        await userTurnRecorder.waitForPendingInputSettlement?.();
       } finally {
         void preparedUserTurn
           .discardUnreferencedMedia(userTurnRecorder.getPendingInputMessage?.())
@@ -370,15 +374,18 @@ async function handleChatSendWithOptions(
       const goalOperation = normalizedRequest.value.goalOperation;
       if (goalOperation) {
         const mutation = persistedUserTurn?.sessionTurnMutationResult;
-        goalResult =
-          mutation?.result ??
-          lookupSessionGoalOperation({
+        goalResult = mutation?.result;
+        if (!goalResult) {
+          goalResult = await lookupSessionGoalOperation({
             sessionKey,
             storePath,
             agentId: preparedSession.value.agentId,
             expectedSessionId: admittedSessionId,
             operation: goalOperation,
           });
+          assertInputAdmissionCurrent();
+          goalCommitGuard?.assertCurrent();
+        }
         if (goalResult && (!persistedUserTurn || mutation?.replayed)) {
           admitted.value.cleanupAdmittedRun();
           clearAgentRunContext(clientRunId, lifecycleGeneration);
@@ -392,7 +399,7 @@ async function handleChatSendWithOptions(
           throw new Error("Goal and its input were not durably admitted.");
         }
         if (admitted.value.initialSessionEntry) {
-          recordSessionCreated(preparedSession.value.cfg, {
+          await recordSessionCreated(preparedSession.value.cfg, {
             sessionKey,
             agentId: preparedSession.value.agentId,
             entry: persistedUserTurn.sessionEntry,
@@ -523,7 +530,7 @@ async function handleChatSendWithOptions(
     messageInjectionAttempt = preAckInjection.attempt;
     // The admitted turn owns authoring after creating a session; the request's
     // absent-target authorization expires when that session is materialized.
-    const skillLibraryAuthoring = prepareGatewaySkillAuthoring(
+    const skillLibraryAuthoring = await prepareGatewaySkillAuthoring(
       {
         client,
         context,

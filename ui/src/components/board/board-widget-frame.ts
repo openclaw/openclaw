@@ -6,8 +6,10 @@ import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
 import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { WidgetRenderTimeoutError } from "../../lib/widget-sandbox-host.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../lib/widget-theme.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../command-palette-contract.ts";
 import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
@@ -141,6 +143,8 @@ class BoardWidgetTicketRefresh {
 
 export class BoardWidgetFrameLifecycle {
   error = "";
+  private waiting = false;
+  private renderStalled = false;
 
   private frameFailureKey = "";
   private frameRefreshAttempts = 0;
@@ -156,10 +160,15 @@ export class BoardWidgetFrameLifecycle {
   private revealFrame = 0;
   private readonly ticketRefresh = new BoardWidgetTicketRefresh(
     () => this.host.widget()?.viewTicket,
-    () => this.host.active() && !documentHidden(),
+    () => this.host.active() && !documentHidden() && this.gatewayAvailable(),
   );
 
   constructor(private readonly host: BoardWidgetFrameLifecycleHost) {}
+
+  private gatewayAvailable(): boolean {
+    const snapshot = this.host.context()?.gateway.snapshot;
+    return !snapshot || isGatewayAvailable(snapshot);
+  }
 
   connect(): void {
     if (!this.messageListening) {
@@ -200,7 +209,7 @@ export class BoardWidgetFrameLifecycle {
   activityChanged(): void {
     if (this.host.active()) {
       this.connect();
-      this.sandboxHost?.setActive(true);
+      this.sandboxHost?.setActive(this.gatewayAvailable());
       // The inner document may have finished loading while this tab was hidden.
       const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
       if (frame) {
@@ -237,7 +246,6 @@ export class BoardWidgetFrameLifecycle {
     this.connect();
     this.ticketRefresh.schedule(this.host.widget(), this.host.refreshFrame());
     this.updateSandboxHost();
-    this.sandboxHost?.setActive(true);
   }
 
   render(widget: BoardWidget): TemplateResult {
@@ -255,7 +263,18 @@ export class BoardWidgetFrameLifecycle {
         ${
           this.contentVisible
             ? nothing
-            : renderPanelLoadingSkeleton("discussion", t("common.loading"), false, true)
+            : this.renderStalled
+              ? html`<div class="board-widget__notice" role="status">
+                  ${t("board.widget.resourceUnavailable")}
+                  <button class="btn btn--small" @click=${() => this.retryContent()}>
+                    ${t("common.retry")}
+                  </button>
+                </div>`
+              : this.waiting
+                ? html`<div class="board-widget__notice" role="status">
+                    ${t("board.widget.waitingForConnection")}
+                  </div>`
+                : renderPanelLoadingSkeleton("discussion", t("common.loading"), false, true)
         }
         <iframe
           class="board-widget__frame"
@@ -324,6 +343,8 @@ export class BoardWidgetFrameLifecycle {
   }
 
   private resetFailures(notify = true): void {
+    this.waiting = false;
+    this.renderStalled = false;
     this.resetPresentation();
     this.frameProbeGeneration += 1;
     this.frameFailureKey = "";
@@ -469,27 +490,32 @@ export class BoardWidgetFrameLifecycle {
     if (!resolveFrameUrl) {
       return undefined;
     }
+    const context = this.host.context();
     return {
       frame,
       widget,
       bridgeEnabled: this.host.bridgeEnabled?.() ?? true,
+      // A lifecycle pause does not retire this authenticated connection or its ticket.
+      connected: !context || context.gateway.snapshot.phase === "connected",
       sandboxOrigin: this.sandboxOrigin,
       sandboxUrl: frame.src,
       sourceOrigin: resolveGatewayHttpOrigin(
-        this.host.context()?.gateway.connection.gatewayUrl ?? "",
+        context?.gateway.connection.gatewayUrl ?? "",
         window.location.origin,
       ),
-      controlUiBaseUrl: `${window.location.origin}${this.host.context()?.basePath ?? ""}`,
-      client: this.host.context()?.gateway.snapshot.client ?? undefined,
+      controlUiBaseUrl: `${window.location.origin}${context?.basePath ?? ""}`,
+      client: context?.gateway.snapshot.client ?? undefined,
       resolveFrameUrl,
       confirmPrompt: (prompt) => window.confirm(`${t("common.confirm")}:\n\n${prompt}`),
       onFrameUrl: (url) => {
         this.lastFrameUrl = url;
       },
-      onLoadFailed: (currentWidget) => this.refreshFailedFrame(currentWidget),
+      onLoadFailed: () => this.waitForConnection(),
       onUnauthorized: (currentWidget) => this.refreshFailedFrame(currentWidget),
-      onReadyTimeout: () => this.refreshFailedFrame(widget),
+      onReadyTimeout: () => this.waitForConnection(),
+      onPending: () => this.waitForConnection(),
       onLoaded: () => {
+        this.waiting = false;
         this.resetPresentation();
         this.frameFailureKey = "";
         this.frameRefreshAttempts = 0;
@@ -501,13 +527,32 @@ export class BoardWidgetFrameLifecycle {
         // Bind host state to that rendered document, including saved widgets
         // whose wrapper predates the private bridge-ready notification.
         this.postBoardHostState(frame);
+        this.waiting = false;
+        this.renderStalled = false;
         this.setError("");
         this.revealContent();
       },
       onError: (error) => {
+        if (error instanceof WidgetRenderTimeoutError) {
+          this.renderStalled = true;
+          this.host.requestUpdate();
+          return;
+        }
         this.setError(formatUiError(error));
       },
     };
+  }
+
+  private retryContent(): void {
+    this.renderStalled = false;
+    this.waiting = false;
+    this.sandboxHost?.reset();
+    this.host.requestUpdate();
+  }
+
+  private waitForConnection(): void {
+    this.waiting = true;
+    this.host.requestUpdate();
   }
 
   private updateSandboxHost(): void {
@@ -605,12 +650,20 @@ export class BoardWidgetFrameLifecycle {
     if (!options) {
       return undefined;
     }
+    const active = this.host.active() && this.gatewayAvailable();
+    // Pause before updating options, then resume only under current availability.
+    // Reuse the existing inactive lifecycle so pending work is fenced without
+    // requiring a new authorization ticket after suspension is canceled.
+    if (!active) {
+      this.sandboxHost?.setActive(false);
+    }
     if (!this.sandboxHost || this.sandboxHost.frame !== frame) {
       this.sandboxHost?.dispose();
       this.sandboxHost = new BoardWidgetSandboxHost(options);
     } else {
       this.sandboxHost.update(options);
     }
+    this.sandboxHost.setActive(active);
     return this.sandboxHost;
   }
 }

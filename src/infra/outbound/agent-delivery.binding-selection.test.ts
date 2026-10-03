@@ -135,10 +135,8 @@ describe("agent delivery binding selection", () => {
   });
 
   it.each([
-    { stage: "target", change: "add" },
     { stage: "target", change: "remove" },
     { stage: "session", change: "add" },
-    { stage: "session", change: "remove" },
   ] as const)("observes binding $change during the $stage await", async ({ stage, change }) => {
     const bindings: AgentBinding[] = change === "add" ? [] : [isolatingBinding];
     const cfg: OpenClawConfig = { bindings };

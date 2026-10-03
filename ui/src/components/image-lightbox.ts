@@ -1,6 +1,7 @@
 import Panzoom, { type PanzoomObject } from "@panzoom/panzoom";
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, query, queryAll, state } from "lit/decorators.js";
+import { BROWSER_IMAGE_MIME_TYPES } from "../../../src/shared/browser-image-mime-types.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
@@ -14,14 +15,6 @@ import { panImageWithKeyboard } from "./image-lightbox-keyboard.ts";
 import { imageLightboxStyles } from "./image-lightbox.styles.ts";
 import type { ImageLightboxGallery, ImageLightboxItem } from "./image-lightbox.types.ts";
 import "./modal-dialog.ts";
-
-const SAFE_TOP_LEVEL_IMAGE_BLOB_TYPES = new Set([
-  "image/avif",
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
 
 const MAX_SCALE = 4;
 const DOUBLE_TAP_SCALE = 2.5;
@@ -626,7 +619,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     const sourceType = isDataUrl ? dataUrlMimeType(source) : undefined;
     // Reject active data formats before fetching. Incoming blob URLs still need
     // their fetched MIME checked because top-level blobs inherit the app origin.
-    if (isDataUrl && (!sourceType || !SAFE_TOP_LEVEL_IMAGE_BLOB_TYPES.has(sourceType))) {
+    if (isDataUrl && (!sourceType || !BROWSER_IMAGE_MIME_TYPES.has(sourceType))) {
       return;
     }
     this.resolvingOriginal = true;
@@ -636,7 +629,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       if (
         !this.isConnected ||
         request !== this.originalUrlRequest ||
-        !SAFE_TOP_LEVEL_IMAGE_BLOB_TYPES.has(mimeTypeEssence(blob.type))
+        !BROWSER_IMAGE_MIME_TYPES.has(mimeTypeEssence(blob.type))
       ) {
         return;
       }

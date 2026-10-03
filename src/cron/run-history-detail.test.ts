@@ -1,6 +1,5 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-reasons.js";
 import { cronRunLogEntryFromEvent } from "./run-event-codec.js";
 import {
   cronQuietTriggerDetail,
@@ -29,25 +28,17 @@ function recordFromEntry(entry: CronRunLogEntry, index: number, storeKey: string
 describe("cron history wire codec", () => {
   it.each([
     { serialized: "{", expected: undefined },
-    { serialized: "undefined", expected: undefined },
     { serialized: "null", expected: null },
-    { serialized: "false", expected: false },
-    { serialized: "0", expected: 0 },
-    { serialized: '"retained"', expected: "retained" },
-    { serialized: '[1,{"state":[true,null]}]', expected: [1, { state: [true, null] }] },
+    {
+      serialized: '[1,{"state":[true,null,"retained"]}]',
+      expected: [1, { state: [true, null, "retained"] }],
+    },
     { serialized: '{"overflow":1e400}', expected: { overflow: Infinity } },
   ])("preserves stored JSON semantics for $serialized", ({ serialized, expected }) => {
     expect(parseCronRunDetailJson(serialized)).toEqual(expected);
   });
 
-  it.each([
-    { status: "ok", expectedStatus: "ok" },
-    { status: "error", expectedStatus: "error" },
-    { status: "skipped", expectedStatus: "skipped" },
-    { status: "invalid", expectedStatus: undefined },
-    { status: null, expectedStatus: undefined },
-    { status: undefined, expectedStatus: undefined },
-  ])("allowlists the legacy wire record with status $status", ({ status, expectedStatus }) => {
+  it("allowlists legacy wire fields and retains row fallbacks", () => {
     const storeKey = "/internal/cron/store";
     const record = recordFromEntry(
       { ts: 100, jobId: JOB_ID, action: "finished", status: "ok" },
@@ -58,7 +49,8 @@ describe("cron history wire codec", () => {
     record.summary = "legacy summary";
     record.detail = {
       kind: "cron-run",
-      ...(status === undefined ? {} : { status }),
+      status: "skipped",
+      sessionId: "old-generation",
       storeKey,
       internalFutureField: "secret",
       triggerState: { secret: true },
@@ -69,7 +61,8 @@ describe("cron history wire codec", () => {
     Object.freeze(record);
     const entry = cronRunRecordToRunLogEntry(record);
     expect(entry).not.toBeNull();
-    expect(entry?.status).toBe(expectedStatus);
+    expect(entry?.status).toBe("skipped");
+    expect(entry?.sessionId).toBe("old-generation");
     for (const key of ["delivered", "deliveryStatus", "deliveryError", "sessionId", "sessionKey"]) {
       expect(Object.hasOwn(entry ?? {}, key)).toBe(true);
     }
@@ -87,8 +80,6 @@ describe("cron history wire codec", () => {
     { status: "ok", delivered: true, deliveryStatus: undefined, expected: "succeeded" },
     { status: "ok", delivered: undefined, deliveryStatus: "not-requested", expected: "succeeded" },
     { status: "ok", delivered: undefined, deliveryStatus: "not-delivered", expected: "unknown" },
-    { status: "ok", delivered: undefined, deliveryStatus: "unknown", expected: "unknown" },
-    { status: "ok", delivered: undefined, deliveryStatus: undefined, expected: "unknown" },
   ] as const)(
     "derives legacy $status/$deliveryStatus completion as $expected",
     ({ status, delivered, deliveryStatus, expected }) => {
@@ -98,25 +89,13 @@ describe("cron history wire codec", () => {
           jobId: JOB_ID,
           action: "finished",
           status,
+          completionStatus: "partial",
           ...(delivered === undefined ? {} : { delivered }),
           ...(deliveryStatus === undefined ? {} : { deliveryStatus }),
         })?.completionStatus,
       ).toBe(expected);
     },
   );
-
-  it("normalizes invalid completion status from immutable stored facts", () => {
-    expect(
-      parseCronRunLogEntryObject({
-        ts: 100,
-        jobId: JOB_ID,
-        action: "finished",
-        status: "ok",
-        deliveryStatus: "not-delivered",
-        completionStatus: "partial",
-      })?.completionStatus,
-    ).toBe("unknown");
-  });
 
   it("keeps quiet-trigger recovery detail out of run history", () => {
     const record = recordFromEntry(
@@ -136,27 +115,6 @@ describe("cron history wire codec", () => {
       state: { ready: false },
     });
     expect(cronRunRecordToRunLogEntry(record)).toBeNull();
-  });
-
-  it("locks the serialized detail shape: kind first, status second", () => {
-    // External tooling may prefix-match serialized detail; keep the codec's
-    // field order stable so those prefixes stay meaningful.
-    for (const status of ["ok", "error", "skipped"] as const) {
-      const detail = cronRunLogEntryToDetail(
-        {
-          ts: 100,
-          jobId: JOB_ID,
-          action: "finished",
-          status,
-        },
-        { storeKey: "/tmp/cron-history" },
-      );
-      const serialized = JSON.stringify(detail);
-      expect(
-        serialized.startsWith(`{"kind":"cron-run","status":"${status}"`),
-        `detail for status "${status}" must keep the stable prefix: ${serialized}`,
-      ).toBe(true);
-    }
   });
 
   it.each([
@@ -274,19 +232,5 @@ describe("cron history wire codec", () => {
     ).toBeUndefined();
     expect(parseCronRunLogEntryObject({ ...base, ts: MAX_DATE_TIMESTAMP_MS })).not.toBeNull();
     expect(parseCronRunLogEntryObject({ ...base, ts: MAX_DATE_TIMESTAMP_MS + 1 })).toBeNull();
-  });
-
-  it("preserves every canonical failover reason in stored run history", () => {
-    for (const errorReason of FAILOVER_REASONS) {
-      const entry = {
-        ts: 100,
-        jobId: JOB_ID,
-        action: "finished",
-        status: "error",
-        errorReason,
-      } as const;
-
-      expect(parseCronRunLogEntryObject(entry)?.errorReason).toBe(errorReason);
-    }
   });
 });

@@ -1,4 +1,8 @@
+import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
+import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -19,7 +23,15 @@ export type SessionEntryCacheSnapshot = {
 export type SessionSharingEntry = Pick<
   InternalSessionEntry,
   | "sessionId"
+  | "previousSessionId"
   | "updatedAt"
+  | "createdAt"
+  | "initializationPending"
+  | "providerReview"
+  | "mainRestartRecovery"
+  | "modelSelectionLocked"
+  | "pendingProjectGitUrl"
+  | "pendingWorktree"
   | "lifecycleRevision"
   | "lifecycleRunId"
   | "activeWriterRunId"
@@ -40,7 +52,17 @@ export type SessionSharingEntry = Pick<
 export function projectSessionSharingEntry(entry: InternalSessionEntry): SessionSharingEntry {
   return {
     sessionId: entry.sessionId,
+    previousSessionId: entry.previousSessionId,
     updatedAt: entry.updatedAt,
+    createdAt: entry.createdAt,
+    initializationPending: entry.initializationPending,
+    providerReview: entry.providerReview ? structuredClone(entry.providerReview) : undefined,
+    mainRestartRecovery: entry.mainRestartRecovery
+      ? structuredClone(entry.mainRestartRecovery)
+      : undefined,
+    modelSelectionLocked: entry.modelSelectionLocked,
+    pendingProjectGitUrl: entry.pendingProjectGitUrl,
+    pendingWorktree: entry.pendingWorktree ? structuredClone(entry.pendingWorktree) : undefined,
     lifecycleRevision: entry.lifecycleRevision,
     lifecycleRunId: entry.lifecycleRunId,
     activeWriterRunId: entry.activeWriterRunId,
@@ -88,4 +110,95 @@ export type SessionEntryCreationOperation = Readonly<{ [creationBrand]: true }>;
 /** Allocate an opaque token; the publication owner's WeakMap alone grants live custody. */
 export function createSessionEntryCreationOperation(): SessionEntryCreationOperation {
   return Object.freeze({ [creationBrand]: true });
+}
+
+/** Timestamp-only progress does not change retained sharing authority. */
+export function sessionSharingEntriesEqual(
+  previous: InternalSessionEntry | undefined,
+  current: InternalSessionEntry | undefined,
+): boolean {
+  if (!previous || !current) {
+    return false;
+  }
+  const { updatedAt: _previousUpdatedAt, ...before } = projectSessionSharingEntry(previous);
+  const { updatedAt: _currentUpdatedAt, ...after } = projectSessionSharingEntry(current);
+  return isDeepStrictEqual(before, after);
+}
+
+export type SessionEntryPublicationSource = {
+  identity: string | symbol;
+  birthtime: string | undefined;
+  incarnation: string;
+  filename: string;
+  revision?: number;
+};
+
+export type PreparedSessionEntryChanges = {
+  source: SessionEntryPublicationSource;
+  entries: ReadonlyMap<string, SessionEntry>;
+  sharing?: ReadonlyMap<string, SessionSharingEntry>;
+};
+
+export type SessionEntryReplacementPublication = {
+  kind: "session-entry-replacements";
+  pendingArchiveRecovery: boolean;
+  previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
+  current: Map<string, SessionEntry>;
+  ageChanges: SessionEntryMaintenanceAgeChange[];
+  source?: SessionEntryPublicationSource;
+  changedKeys: string[];
+  membershipInvalidatedKeys: string[];
+  sharingUnchangedKeys: string[];
+};
+
+export type CreationDatabase =
+  | {
+      kind: "native";
+      database: SessionEntryCacheDatabase & { path: string };
+      agentId: string | undefined;
+    }
+  | {
+      kind: "file";
+      path: string;
+      agentId: string;
+      databaseIdentity: string;
+      assertCurrent: () => void;
+    };
+export type CreationRecord = {
+  agentId: string;
+  source: CreationDatabase;
+  sessionKey: string;
+  active: boolean;
+};
+export type PlaceholderReceipt = {
+  creation: CreationRecord | undefined;
+  databaseIdentity: DatabaseSync | string;
+  sessionKey: string;
+  placeholder: SessionEntryPlaceholder;
+  committed: boolean;
+};
+
+export type SessionEntryPublicationRecord =
+  | { kind: "marker"; sharingChange: "changed" | "unchanged" }
+  | {
+      kind: "metadata";
+      sharingChange: "changed" | "unchanged";
+      prepared: PreparedSessionEntryChanges;
+    }
+  | { kind: "placeholder"; sharingChange: "changed"; receipt: PlaceholderReceipt };
+
+export type PendingSessionEntryPublication = {
+  superseded: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined>;
+  metadataSuperseded: Set<string>;
+  ownerChanges: Map<string, Extract<SessionRowFacts, { kind: "owner" }>>;
+  membershipInvalidated: Set<string>;
+  sharingUnchanged: Set<string>;
+  settled: boolean;
+  completion: Promise<void>;
+};
+
+export function readSessionEntryCreationIdentity(creation: CreationRecord): DatabaseSync | string {
+  return creation.source.kind === "native"
+    ? creation.source.database.db
+    : creation.source.databaseIdentity;
 }

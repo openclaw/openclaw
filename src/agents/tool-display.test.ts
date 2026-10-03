@@ -40,6 +40,21 @@ describe("isShellToolDisplayName", () => {
 });
 
 describe("tool display details", () => {
+  it("displays the called tool and inner query for a Tool Search invocation", () => {
+    expect(
+      resolveToolDisplay({
+        name: "tool_call",
+        args: { id: "openclaw:search:web_search", args: { query: "OpenClaw release notes" } },
+      }),
+    ).toMatchObject({
+      name: "web_search",
+      emoji: "🔎",
+      label: "Web Search",
+      verb: "search",
+      detail: 'for "OpenClaw release notes"',
+    });
+  });
+
   it("preserves the curated presentation for historical image activity", () => {
     const display = resolveToolDisplay({
       name: "image",

@@ -1,4 +1,5 @@
 /** Runs capability-aware video generation and persistence. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -9,7 +10,6 @@ import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { createInstalledPluginEnabledPredicate } from "../../plugins/installed-plugin-index.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { listRuntimeVideoGenerationProviders } from "../../video-generation/runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
@@ -40,11 +40,7 @@ import {
   resolveGenerateAction,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import {
-  hasAuthForProvider,
-  coerceToolModelConfig,
-  type ToolModelConfig,
-} from "./model-config.helpers.js";
+import { hasAuthForProvider, coerceToolModelConfig } from "./model-config.helpers.js";
 import {
   createVideoGenerateDuplicateGuardResult,
   createVideoGenerateListActionResult,
@@ -208,53 +204,6 @@ function createVideoGenerateToolSchema(params: { includeAudioReferences: boolean
   return Type.Object(properties);
 }
 
-function collectVideoGenerationModelProviderIds(params: {
-  cfg: OpenClawConfig;
-  modelConfig: ToolModelConfig;
-  workspaceDir?: string;
-}): Set<string> {
-  const providerIds = new Set<string>();
-  for (const modelRef of [params.modelConfig.primary, ...(params.modelConfig.fallbacks ?? [])]) {
-    const parsed = parseVideoGenerationModelRef(modelRef);
-    if (parsed?.provider) {
-      providerIds.add(
-        resolveProviderIdForAuth(parsed.provider, {
-          config: params.cfg,
-          ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-        }),
-      );
-    }
-  }
-  return providerIds;
-}
-
-function isVideoGenerationProviderConfigured(params: {
-  snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  providerId: string;
-}): boolean {
-  return (
-    getCustomProviderApiKey(params.cfg, params.providerId) !== undefined ||
-    hasSnapshotCapabilityProviderAvailability({
-      snapshot: params.snapshot,
-      key: "videoGenerationProviders",
-      providerId: params.providerId,
-      config: params.cfg,
-      authStore: params.authStore,
-    }) ||
-    hasAuthForProvider({
-      provider: params.providerId,
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      authStore: params.authStore,
-    })
-  );
-}
-
 function shouldExposeVideoReferenceAudioParams(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
@@ -267,11 +216,19 @@ function shouldExposeVideoReferenceAudioParams(params: {
   });
   const knownProviderIds = new Set<string>();
   const audioCandidateProviderIds = new Set<string>();
-  const explicitProviderIds = collectVideoGenerationModelProviderIds({
-    cfg: params.cfg,
-    modelConfig: coerceToolModelConfig(params.cfg.agents?.defaults?.mediaModels?.video),
-    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-  });
+  const modelConfig = coerceToolModelConfig(params.cfg.agents?.defaults?.mediaModels?.video);
+  const explicitProviderIds = new Set<string>();
+  for (const modelRef of [modelConfig.primary, ...(modelConfig.fallbacks ?? [])]) {
+    const parsed = parseVideoGenerationModelRef(modelRef);
+    if (parsed?.provider) {
+      explicitProviderIds.add(
+        resolveProviderIdForAuth(parsed.provider, {
+          config: params.cfg,
+          ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+        }),
+      );
+    }
+  }
   let normalizedConfig: ReturnType<typeof normalizePluginsConfig> | undefined;
   let isInstalledPluginEnabled:
     | ReturnType<typeof createInstalledPluginEnabledPredicate>
@@ -317,13 +274,20 @@ function shouldExposeVideoReferenceAudioParams(params: {
 
   for (const providerId of audioCandidateProviderIds) {
     if (
-      isVideoGenerationProviderConfigured({
+      getCustomProviderApiKey(params.cfg, providerId) !== undefined ||
+      hasSnapshotCapabilityProviderAvailability({
         snapshot,
+        key: "videoGenerationProviders",
+        providerId,
+        config: params.cfg,
+        authStore: params.authStore,
+      }) ||
+      hasAuthForProvider({
+        provider: providerId,
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
-        providerId,
       })
     ) {
       return true;
@@ -416,23 +380,12 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
           const audio = readBooleanParam(args, "audio");
           const watermark = readBooleanParam(args, "watermark");
           const timeoutMs = readGenerationTimeoutMs(args) ?? videoGenerationModelConfig.timeoutMs;
-          // providerOptions must be a plain object. Arrays are objects in JS, so
-          // exclude them explicitly — a bogus call like `providerOptions: ["seed", 42]`
-          // would otherwise be cast to `Record<string, unknown>` with numeric-string
-          // keys and silently forwarded to the provider.
-          const providerOptionsRaw = readSnakeCaseParamRaw(args, "providerOptions");
-          if (
-            providerOptionsRaw != null &&
-            (typeof providerOptionsRaw !== "object" || Array.isArray(providerOptionsRaw))
-          ) {
+          const providerOptions = readSnakeCaseParamRaw(args, "providerOptions") ?? undefined;
+          if (providerOptions !== undefined && !isRecord(providerOptions)) {
             throw new ToolInputError(
               "providerOptions must be a JSON object keyed by provider-specific option name.",
             );
           }
-          const providerOptions =
-            providerOptionsRaw != null
-              ? (providerOptionsRaw as Record<string, unknown>)
-              : undefined;
           const { inputs: imageInputs, roles: imageRoles } = readVideoReferenceInputs(
             args,
             "image",
@@ -453,7 +406,6 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
             providers: providers ?? listRuntimeVideoGenerationProviders({ config: effectiveCfg }),
             modelConfig: videoGenerationModelConfig,
             modelOverride: model,
-            parseModelRef: parseVideoGenerationModelRef,
           });
           const explicitModelRef = parseVideoGenerationModelRef(model);
           const primaryModelRef = parseVideoGenerationModelRef(videoGenerationModelConfig.primary);

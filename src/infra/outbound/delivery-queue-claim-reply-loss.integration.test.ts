@@ -1,7 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
 import {
   collectNestedErrorCandidates,
   extractErrorCode,
@@ -12,7 +10,6 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
-import type { SqliteWorkerRequest } from "../sqlite-worker-contract.js";
 import {
   boundedCronCompletionRetention,
   drainMatrixReconnect,
@@ -21,6 +18,7 @@ import {
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import type { DeliverFn } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
+import { holdDeliveryQueueReply } from "./delivery-queue-worker-reply.test-support.js";
 import {
   installDeliveryQueueTmpDirHooks,
   readQueuedEntry,
@@ -84,82 +82,31 @@ describe("recovery claim reply loss", () => {
       deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } }),
     );
     const recover = () => drainMatrixReconnect({ deliver, stateDir });
-    let claimThreadId: number | undefined;
-    let requestId: number | undefined;
-    let committedClaim: string | undefined;
-    let terminated: Promise<number> | undefined;
-    let attempts = 0;
-    // oxlint-disable-next-line typescript/unbound-method -- The saved method retains the intercepted worker receiver.
-    const originalPost = Worker.prototype.postMessage;
-    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply retains the intercepted worker receiver.
-    const originalEmit = Worker.prototype.emit;
-    const post = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-      this: Worker,
-      request: SqliteWorkerRequest,
-      transferList,
-    ) {
-      if (request.type === "execute") {
-        const command: unknown = deserialize(request.input);
-        if (
-          command &&
-          typeof command === "object" &&
-          "type" in command &&
-          command.type === "deliveryQueue.claimPlatformSend" &&
-          "input" in command &&
-          command.input &&
-          typeof command.input === "object" &&
-          "id" in command.input &&
-          command.input.id === id
-        ) {
-          claimThreadId = this.threadId;
-          requestId = request.id;
-          attempts += 1;
-        }
-      }
-      return originalPost.call(this, request, transferList);
-    });
-    const emit = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
-      this: Worker,
-      event: string | symbol,
-      ...args: unknown[]
-    ) {
-      const reply = args[0];
-      if (
-        committedClaim === undefined &&
-        this.threadId === claimThreadId &&
-        event === "message" &&
-        reply &&
-        typeof reply === "object" &&
-        "id" in reply &&
-        reply.id === requestId &&
-        "ok" in reply &&
-        reply.ok === true &&
-        "value" in reply &&
-        reply.value instanceof Uint8Array
-      ) {
-        const result: unknown = deserialize(reply.value);
-        if (typeof result === "string") {
-          // Drop only a committed claim's successful reply, then join native exit.
-          committedClaim = result;
-          terminated = this.terminate();
-          return false;
-        }
-      }
-      return Reflect.apply(originalEmit, this, [event, ...args]);
-    });
+    const reply = holdDeliveryQueueReply("deliveryQueue.claimPlatformSend", id, (value) =>
+      typeof value === "string" ? value : undefined,
+    );
+    const outcome = recover().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    let committedClaim: string;
     let failure: unknown;
     try {
-      failure = await recover().then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+      committedClaim = await Promise.race([
+        reply.held,
+        outcome.then((error) => {
+          throw new Error("Recovery settled before its committed claim reply", { cause: error });
+        }),
+      ]);
+      await reply.lose();
+      failure = await outcome;
+      expect(reply.attempts()).toBe(1);
     } finally {
-      post.mockRestore();
-      emit.mockRestore();
-      await terminated;
+      reply.restore();
+      reply.release();
+      await outcome;
     }
     expect(committedClaim).toEqual(expect.any(String));
-    expect(attempts).toBe(1);
     expect(failure).toBeInstanceOf(Error);
     expect(collectNestedErrorCandidates(failure).map(extractErrorCode)).toContain(
       "outcome-unknown",

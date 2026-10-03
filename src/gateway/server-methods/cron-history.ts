@@ -7,7 +7,6 @@ import {
   validateCronHistoryParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CronHistoryResultSchema } from "../../../packages/gateway-protocol/src/schema/cron.js";
-import { tryGetLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readSessionHistoryPageInWorker } from "../../config/sessions/session-history-worker-runtime.js";
 import { cronRunRecordToRunLogEntry } from "../../cron/run-history-detail.js";
@@ -60,7 +59,6 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
     const visibility = sessionVisibility.resolve();
     const job = context.cron.getJob(params.id);
     const defaultAgentId = context.cron.getDefaultAgentId();
-    const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(context.getRuntimeConfig());
     if (
       (callerScope || visibility) &&
       (!job ||
@@ -68,10 +66,9 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
           job,
           callerScope,
           defaultAgentId,
-          legacyDefaultAgentId,
           allowCurrentJob: true,
         }) ||
-        !cronJobIsVisible(job, visibility, defaultAgentId, legacyDefaultAgentId))
+        !cronJobIsVisible(job, visibility, defaultAgentId))
     ) {
       throw new Error("Cron job not found");
     }
@@ -83,11 +80,7 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
     await context.cron.readJob(params.id);
     assertCronReadCurrent(opts);
     await sessionVisibility.prepare([
-      cronJobVisibilityTarget(
-        context.cron.getJob(params.id),
-        context.cron.getDefaultAgentId(),
-        tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
-      ),
+      cronJobVisibilityTarget(context.cron.getJob(params.id), context.cron.getDefaultAgentId()),
     ]);
     assertAllowed();
     const select = async () =>

@@ -164,7 +164,7 @@ identity, keys, or message-state format.
 - Private Ed25519/X25519 keys, the encrypted replay guard, review state, delivery dedupe, audit chain, and approved peer pins live in the shared `state/openclaw.sqlite` plugin state. They never leave the machine. `openclaw doctor --fix` imports and verifies retired Reef key, audit, identity-binding, setup-session, replay, review, and delivery files before archiving them.
 - Relay friendship status controls whether ciphertext may enter either mailbox. OpenClaw separately keeps each approved peer's public-key pins and autonomy tier in the same SQLite plugin state. `channels.reef` has no friendship allowlist to edit.
 - A normal OpenClaw pairing approval becomes an identity-, key-, and revocation-bound one-time handoff. Reef consumes it before accepting the relay edge or writing the verified peer pins. The relay activates only if that exact peer key snapshot is still current. A stale approval cannot authorize changed keys or undo a local removal. Removing a friend clears local trust first, then blocks the relay edge.
-- `pinnedModel` must be an immutable model id: a dated snapshot, or one of the documented undated ids (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`). Floating aliases are rejected. Dated pins require an exact provider-attested response model. A documented undated pin accepts the same provider-attested id or that id plus a provider date suffix. Missing or mismatched provider model evidence fails closed.
+- `pinnedModel` must be an immutable model id: a dated snapshot, or one of the documented undated ids (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6.1-sol`). Floating aliases are rejected. Dated pins require an exact provider-attested response model. A documented undated pin accepts the same provider-attested id or that id plus a provider date suffix. Missing or mismatched provider model evidence fails closed.
 - `authMode: "oauth"` is OpenAI-only. `authProfileId` names the exact OpenAI profile owned by the host; no fallback to another credential or provider is allowed.
 - `apiKeyEnv` names an environment variable visible to the Gateway process. The guard fails closed. A missing key or provider error fails the send immediately. Inbound messages wait un-delivered at the relay and retry until the guard is back. A provider outage never rejects a peer's message.
 
@@ -210,6 +210,10 @@ openclaw message send --channel reef --target @friend --message "hello from my c
 ```
 
 A send never fails silently. Local guard or relay errors fail the send immediately. Replies and peer guard rejections come back through the flows below. If the peer's claw confirms nothing for about 10 minutes, the sending agent receives a delivery-delay notice. A follow-up arrives once the message is finally delivered or rejected. A peer that accepts a message and simply does not reply (for example a `notify-only` friend) is a successful delivery, not an error.
+
+When upgrading from early Reef versions, sends that were already in flight may keep an unknown delivery status. Reef leaves their protocol journal intact and handles new sends through current delivery records. Check with the friend before manually resending a pre-upgrade message whose status remains unknown.
+
+A late rejection for one of those historical sends no longer starts the peer's 15-minute rejection cooldown. A later rejection may therefore allow one automatic rephrased resend that the old cooldown would have suppressed. Peer trust, keys, and the guard checks on new sends are unchanged.
 
 Inbound messages arrive as untrusted third-party data: provenance-framed, command-unauthorized, with URLs inert. Depending on the friend's autonomy tier, OpenClaw notifies you or sends a bounded guarded reply:
 

@@ -48,8 +48,7 @@ import {
 } from "./lib/code-mode-matrix-provider.ts";
 import type { MatrixUsageAccounting } from "./lib/code-mode-matrix-usage.ts";
 import { previewForDevToolLog, redactJsonValueForDevToolLog } from "./lib/dev-tooling-safety.ts";
-
-export { validateQaEvidenceSummaryJson };
+import { groupBy } from "./lib/group-by.mts";
 
 const execFileAsync = promisify(execFile);
 const SOURCE_PATH = "scripts/code-mode-model-matrix.ts";
@@ -194,7 +193,6 @@ type MatrixRunDependencies = {
   buildCliArtifacts?: (repoRoot: string) => Promise<void>;
   now?: () => Date;
   readBuildSha256?: (repoRoot: string) => Promise<string>;
-  readGitSha?: (repoRoot: string) => Promise<string>;
   readSourceIdentity?: (repoRoot: string) => Promise<SourceIdentity>;
   runCell?: (params: RunCellParams) => Promise<CodeModeMatrixCellResult>;
 };
@@ -333,7 +331,7 @@ export function parseCodeModeMatrixOptions(
       "--max-known-cost-usd": "maxKnownCostUsd",
       "--max-wall-seconds": "maxWallSeconds",
     };
-    const admissionKey = admissionKeys[arg];
+    const admissionKey = Object.hasOwn(admissionKeys, arg) ? admissionKeys[arg] : undefined;
     if (admissionKey) {
       recordOnce(arg);
       const raw = requireOptionArgument(argv, index, arg);
@@ -947,7 +945,6 @@ export function classifyCodeModeMatrixCell(params: {
   mode: CodeModeMatrixMode;
   model: string;
   stdoutContractValid?: boolean;
-  task: CodeModeMatrixTask;
 }): {
   failureCategory: CellFailureCategory | null;
   oracle: CodeModeMatrixCellResult["oracle"];
@@ -1283,7 +1280,6 @@ async function runMatrixCell(params: RunCellParams): Promise<CodeModeMatrixCellR
       mode: params.cell.mode,
       model: params.cell.model,
       stdoutContractValid: command.stdoutContractValid,
-      task: params.cell.task,
     });
     return {
       ...(command.envelope.assistantTurns !== undefined
@@ -1377,13 +1373,7 @@ function summarizeMetric(values: (number | undefined)[]) {
 }
 
 function summarizeResults(results: CodeModeMatrixCellResult[]) {
-  const groups = new Map<string, CodeModeMatrixCellResult[]>();
-  for (const result of results) {
-    const key = `${result.model}\0${result.mode}\0${result.task}`;
-    const group = groups.get(key) ?? [];
-    group.push(result);
-    groups.set(key, group);
-  }
+  const groups = groupBy(results, (result) => `${result.model}\0${result.mode}\0${result.task}`);
   return [...groups.entries()].map(([key, group]) => {
     const [model, mode, task] = key.split("\0");
     const passed = group.filter((result) => result.passed);
@@ -1524,13 +1514,7 @@ export async function runCodeModeModelMatrix(
   const runtimeRepoRoot = options.runtimeDir ?? options.repoRoot;
   const sourceIdentity = deps.readSourceIdentity
     ? await deps.readSourceIdentity(runtimeRepoRoot)
-    : deps.readGitSha
-      ? {
-          gitSha: await deps.readGitSha(runtimeRepoRoot),
-          sourceDirty: false,
-          sourcePatchSha256: null,
-        }
-      : await readSourceIdentity(runtimeRepoRoot, STRICT_SOURCE_IDENTITY_OPTIONS);
+    : await readSourceIdentity(runtimeRepoRoot, STRICT_SOURCE_IDENTITY_OPTIONS);
   if (options.runtimeDir && sourceIdentity.sourceDirty) {
     throw new Error("--runtime-dir must identify a clean committed checkout.");
   }
@@ -1953,11 +1937,7 @@ async function main(): Promise<void> {
   }
 }
 
-function isCliEntrypoint(): boolean {
-  const entrypoint = process.argv[1];
-  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
-}
-
-if (isCliEntrypoint()) {
+const entrypoint = process.argv[1];
+if (entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href) {
   await main();
 }

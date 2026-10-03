@@ -76,7 +76,7 @@ describe("root help", () => {
   });
 
   it("includes plugin CLI descriptors alongside core and sub-CLI commands", async () => {
-    const text = await renderRootHelpText({ includePluginDescriptors: true });
+    const text = await renderRootHelpText({ config: {} });
 
     expect(text).toContain("status");
     expect(text).toContain("config");

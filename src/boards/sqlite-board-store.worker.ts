@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   assertTransactionUsable,
-  runSqliteImmediateTransactionSync,
+  runSqliteWorkerTransactionSync,
 } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerDatabaseContext } from "../infra/sqlite-worker-database-context.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { normalizeBoardWidgetPutParams } from "./board-store.js";
 import type { BoardWriteOperations } from "./sqlite-board-operations.js";
@@ -16,11 +16,7 @@ import {
 
 export function bindSqliteWorkerBackend(
   _input: unknown,
-  context: {
-    database: DatabaseSync;
-    databasePath: string;
-    admit(stage: "transaction" | "commit"): void;
-  },
+  context: SqliteWorkerDatabaseContext,
 ): SqliteWorkerBackend<BoardWriteOperations> {
   const database = { db: context.database, path: context.databasePath };
   ensureBoardSchema(database);
@@ -41,10 +37,9 @@ export function bindSqliteWorkerBackend(
         }
       });
       try {
-        const value = runSqliteImmediateTransactionSync(
-          database.db,
+        const value = runSqliteWorkerTransactionSync(
+          context,
           () => {
-            context.admit("transaction");
             if (command.type === "boards.applyOps") {
               return applyBoardOpsToDatabase(database, command.input.sessionKey, command.input.ops);
             }
@@ -68,10 +63,6 @@ export function bindSqliteWorkerBackend(
           {
             databaseLabel: database.path,
             operationLabel: command.type,
-            withCommit(commit) {
-              context.admit("commit");
-              commit();
-            },
           },
         );
         return { value, changes };

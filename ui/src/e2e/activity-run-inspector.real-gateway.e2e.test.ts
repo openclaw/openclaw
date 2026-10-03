@@ -143,7 +143,7 @@ suite.define(() => {
         const freshContext = await suite.newBrowserContext(createControlUiE2eContextOptions());
         for (const browserContext of [context, freshContext]) {
           await browserContext.addInitScript(() => {
-            localStorage.setItem("openclaw:control-ui:community-invite", "dismissed");
+            localStorage.setItem("openclaw:control-ui:community-invite:v2", "dismissed");
           });
         }
         const chat = await context.newPage();

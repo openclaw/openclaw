@@ -898,7 +898,7 @@ describe("xai provider plugin", () => {
       model: createProviderModel({ id: "grok-4-1-fast" }),
     } as never);
     expect(olderReasoningModel?.thinkingLevelMap).toEqual({
-      off: null,
+      off: undefined,
       minimal: null,
       low: null,
       medium: null,

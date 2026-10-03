@@ -16,9 +16,9 @@ import { createGatewayConfigOverrides } from "./test-helpers.config-runtime.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "./test-helpers.listener.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   installGatewayTestHooks,
@@ -80,7 +80,7 @@ describe("Gateway test environment lifecycle", () => {
       });
     const token = "retained-listener-token";
     const acquisition = startGatewayWithClient({
-      port: await getGatewayE2ePortBlock(),
+      portClaim: await acquireGatewayE2ePortBlock(),
       cfg: { gateway: { auth: { mode: "token", token } } },
       configPath,
       token,

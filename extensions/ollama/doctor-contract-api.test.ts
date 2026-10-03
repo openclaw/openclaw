@@ -1,14 +1,9 @@
-// Ollama tests cover doctor contract config compatibility.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
 import { createModel } from "./model.test-support.js";
 
 const cloudModel = createModel("kimi-k2.5:cloud", "Kimi K2.5 Cloud", { contextWindow: 131072 });
-
-function readOllamaCloudProvider(config: OpenClawConfig): Record<string, unknown> | undefined {
-  return config.models?.providers?.["ollama-cloud"] as Record<string, unknown> | undefined;
-}
 
 function legacyLocalConfig(): OpenClawConfig {
   return {
@@ -33,14 +28,9 @@ function legacyLocalConfig(): OpenClawConfig {
 }
 
 describe("ollama doctor contract", () => {
-  it("detects retired Ollama Cloud provider endpoints", () => {
-    expect(legacyConfigRules[0]?.match({ baseUrl: "https://ai.ollama.com" })).toBe(true);
-    expect(legacyConfigRules[0]?.match({ baseUrl: "https://ollama.com" })).toBe(false);
-  });
-
   it("migrates the pre-#123190 local marker without replacing its catalog or default", () => {
     const config = legacyLocalConfig();
-    const localRule = legacyConfigRules[1];
+    const localRule = legacyConfigRules[0];
 
     expect(
       localRule?.match(
@@ -92,102 +82,5 @@ describe("ollama doctor contract", () => {
       config: customizedProfile,
       changes: [],
     });
-  });
-
-  it("migrates retired Ollama Cloud provider baseUrl to the canonical endpoint", () => {
-    const config = {
-      models: {
-        providers: {
-          "ollama-cloud": {
-            baseUrl: "https://ai.ollama.com",
-            api: "ollama",
-            models: [cloudModel],
-          },
-          ollama: {
-            baseUrl: "http://127.0.0.1:11434",
-            api: "ollama",
-            models: [],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = normalizeCompatibilityConfig({ cfg: config });
-
-    expect(result.changes).toEqual([
-      "Updated models.providers.ollama-cloud.baseUrl from the retired Ollama Cloud endpoint to https://ollama.com.",
-    ]);
-    expect(readOllamaCloudProvider(result.config)).toEqual({
-      baseUrl: "https://ollama.com",
-      api: "ollama",
-      models: [cloudModel],
-    });
-    expect(readOllamaCloudProvider(config)?.baseUrl).toBe("https://ai.ollama.com");
-  });
-
-  it.each([
-    {
-      name: "migrates retired Ollama Cloud provider baseURL aliases when canonical baseUrl is blank",
-      inputBaseUrl: " ",
-      expectedBaseUrl: "https://ollama.com",
-      expectedChange:
-        "Updated models.providers.ollama-cloud.baseURL from the retired Ollama Cloud endpoint to https://ollama.com.",
-    },
-    {
-      name: "preserves custom canonical baseUrl when removing retired baseURL aliases",
-      inputBaseUrl: "https://custom-ollama-cloud.example.test",
-      expectedBaseUrl: "https://custom-ollama-cloud.example.test",
-      expectedChange:
-        "Removed retired models.providers.ollama-cloud.baseURL while preserving models.providers.ollama-cloud.baseUrl.",
-    },
-  ])("$name", ({ inputBaseUrl, expectedBaseUrl, expectedChange }) => {
-    const config = {
-      models: {
-        providers: {
-          "ollama-cloud": {
-            baseUrl: inputBaseUrl,
-            baseURL: "https://ai.ollama.com/",
-            api: "ollama",
-            models: [],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = normalizeCompatibilityConfig({ cfg: config });
-
-    expect(result.changes).toEqual([expectedChange]);
-    expect(readOllamaCloudProvider(result.config)).toEqual({
-      baseUrl: expectedBaseUrl,
-      api: "ollama",
-      models: [],
-    });
-    expect(readOllamaCloudProvider(config)).toEqual({
-      baseUrl: inputBaseUrl,
-      baseURL: "https://ai.ollama.com/",
-      api: "ollama",
-      models: [],
-    });
-  });
-
-  it("does not expose credentials or query parameters from the retired URL", () => {
-    const config = {
-      models: {
-        providers: {
-          "ollama-cloud": {
-            baseUrl: "https://user:password@ai.ollama.com/?token=secret",
-            api: "ollama",
-            models: [],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = normalizeCompatibilityConfig({ cfg: config });
-
-    expect(result.changes.join("\n")).not.toContain("user");
-    expect(result.changes.join("\n")).not.toContain("password");
-    expect(result.changes.join("\n")).not.toContain("secret");
-    expect(readOllamaCloudProvider(result.config)?.baseUrl).toBe("https://ollama.com");
   });
 });

@@ -4,7 +4,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { hasActiveGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import {
@@ -16,7 +16,10 @@ import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import { prepareOpenClawStateDatabaseRemoval } from "../../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  prepareOpenClawStateDatabaseRemoval,
+} from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import {
@@ -62,26 +65,30 @@ export async function captureUpdateDatabases(params: {
   try {
     const capture = async () => {
       params.assertCurrent();
-      if (maintenance && process.platform === "win32") {
-        try {
-          // Rollback closes this Windows probe before replacing files. Settle its
-          // checkpoint now so a retained progress reader's WAL is not later drift.
-          const exclusion = await prepareOpenClawStateDatabaseRemoval(
-            resolveOpenClawStateSqlitePath(env),
-            params.assertCurrent,
-          );
-          exclusion.release();
-        } catch (error) {
-          // A busy native probe still permits a snapshot for manual recovery;
-          // drainage and cleanup uncertainty must retain their failure.
-          if (
-            !(error instanceof Error) ||
-            error instanceof AggregateError ||
-            !isSqliteLockError(error.cause)
-          ) {
-            throw error;
+      if (maintenance) {
+        // Settle the writer checkpoint before capture, while leaving POSIX
+        // snapshot workers free to read the source database.
+        if (process.platform === "win32") {
+          try {
+            const exclusion = await prepareOpenClawStateDatabaseRemoval(
+              resolveOpenClawStateSqlitePath(env),
+              params.assertCurrent,
+            );
+            exclusion.release();
+          } catch (error) {
+            // A busy native probe still permits a snapshot for manual recovery;
+            // drainage and cleanup uncertainty must retain their failure.
+            if (
+              !(error instanceof Error) ||
+              error instanceof AggregateError ||
+              !isSqliteLockError(error.cause)
+            ) {
+              throw error;
+            }
+            unavailable = "another SQLite connection is active";
           }
-          unavailable = "another SQLite connection is active";
+        } else {
+          await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
         }
         params.assertCurrent();
         maintenance.assertCurrent();

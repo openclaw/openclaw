@@ -531,10 +531,7 @@ function createCronPromptExecutor(
                     sourceReplyDeliveryMode,
                     requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
                   },
-                  toolsAllow: resolveCliRuntimeToolsAllow(
-                    params.agentPayload?.toolsAllow,
-                    params.agentPayload?.toolsAllowIsDefault,
-                  ),
+                  toolsAllow: resolveCliRuntimeToolsAllow(params.agentPayload?.toolsAllow),
                   abortSignal: cliAbortSignal,
                 });
                 const classification = runOptions.classifyResult(candidateResult);
@@ -694,8 +691,8 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     normalizeVerboseLevel(params.agentVerboseDefault) ??
     "off";
   registerAgentRunContext(params.runId, {
-    sessionKey: params.runSessionKey,
     sessionId: params.cronSession.sessionEntry.sessionId,
+    agentId: params.agentId,
     verboseLevel: resolvedVerboseLevel,
   });
   const runStartedAt = params.runStartedAt ?? Date.now();

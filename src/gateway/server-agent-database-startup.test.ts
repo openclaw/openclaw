@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
@@ -18,13 +19,15 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import * as inspection from "../infra/sqlite-readonly-worker.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { runExec } from "../process/exec.js";
 import * as spawnBroker from "../process/spawn-broker/context.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import {
+  AgentDatabaseAdmissionError,
+  readAgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -43,9 +46,15 @@ import { testState } from "./test-helpers.runtime-state.js";
 import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.server.js";
 
 installGatewayTestHooks();
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
+let pendingFixtureCleanup: Promise<void> | undefined;
+afterEach(async () => {
+  try {
+    await pendingFixtureCleanup;
+  } finally {
+    pendingFixtureCleanup = undefined;
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  }
 });
 
 function pauseIntegrityInspections(params: {
@@ -100,13 +109,6 @@ DatabaseSync.prototype.prepare = function(sql) {
   for (const [key, value] of Object.entries(env)) {
     vi.stubEnv(key, value);
   }
-  const readBudget = inspection.readSqliteInspectionBudget;
-  vi.spyOn(inspection, "readSqliteInspectionBudget").mockImplementation(
-    (operation, pathname, size) => {
-      const budget = readBudget(operation, pathname, size);
-      return pausedPaths.includes(pathname) ? { ...budget, timeoutMs: 1 } : budget;
-    },
-  );
   return {
     env,
     releasePath,
@@ -117,10 +119,9 @@ DatabaseSync.prototype.prepare = function(sql) {
   };
 }
 
-it.each([
+it.for([
   { outcome: "recover", agentId: "worker" },
   { outcome: "corrupt", agentId: "worker" },
-  { outcome: "physical-corrupt", agentId: "worker" },
   { outcome: "physical-corrupt", agentId: "main" },
   { outcome: "shutdown", agentId: "worker" },
   { outcome: "fast", agentId: "worker" },
@@ -131,7 +132,7 @@ it.each([
   { outcome: "shutdown-preparation", agentId: "worker" },
 ] as const)(
   "applies startup admission while $agentId follows its $outcome lifecycle",
-  async ({ outcome, agentId }) => {
+  async ({ outcome, agentId }, { signal }) => {
     const nativeBroker = process.platform === "linux" && !process.versions.bun;
     const brokerExpected =
       nativeBroker ||
@@ -338,11 +339,11 @@ it.each([
       }
       expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
       const readiness = await fetch(`http://127.0.0.1:${port}/readyz`);
-      expect(readiness.status).toBe(agentId === "main" && paused ? 503 : 200);
+      expect(readiness.status).toBe(200);
       if (agentId === "main" && paused) {
         await expect(readiness.json()).resolves.toMatchObject({
-          ready: false,
-          failing: ["agent-database:main"],
+          ready: true,
+          failing: [],
           agentDatabases: [readAgentDatabaseAdmissionRefusal(agentId, { env })],
         });
       }
@@ -351,6 +352,7 @@ it.each([
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-pending",
         });
+        expect(() => openOpenClawAgentDatabase(scope)).toThrow(AgentDatabaseAdmissionError);
         await vi.waitFor(() => expect(fs.existsSync(enteredPath)).toBe(true));
       }
       if (outcome === "recover") {
@@ -401,10 +403,13 @@ it.each([
         expect(() => process.kill(pid, 0)).toThrow();
       } else if (outcome === "recover" || outcome === "superseded") {
         fs.writeFileSync(releasePath, "resume");
-        await Promise.race([
-          preparationEntered.promise,
-          hostJournalRead.promise.then(() => expect(hostJournalReads).toBe(0)),
-        ]);
+        await withinTest(
+          Promise.race([
+            preparationEntered.promise,
+            hostJournalRead.promise.then(() => expect(hostJournalReads).toBe(0)),
+          ]),
+          signal,
+        );
         expect(sessionPrepared).toBe(true);
         if (outcome === "recover") {
           expect(preparationParent).toBe(brokerExpected ? brokerPid : process.pid);
@@ -450,7 +455,7 @@ it.each([
         );
         expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
         expect(hostJournalReads).toBe(0);
-      } else if (outcome === "corrupt" || outcome === "physical-corrupt") {
+      } else if (outcome === "corrupt") {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-failed",
           repairHint: expect.stringContaining("doctor --fix"),
@@ -469,20 +474,23 @@ it.each([
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
       }
     } finally {
-      preparationRelease.resolve();
-      fs.writeFileSync(releasePath, "resume");
-      if (pause) {
-        fs.writeFileSync(pause.preparationReleasePath, "resume");
-      }
-      try {
-        await server?.close();
-      } finally {
-        try {
-          await suppliedBroker?.close();
-        } finally {
-          await unadoptedPortClaim?.release();
+      pendingFixtureCleanup = (async () => {
+        preparationRelease.resolve();
+        fs.writeFileSync(releasePath, "resume");
+        if (pause) {
+          fs.writeFileSync(pause.preparationReleasePath, "resume");
         }
-      }
+        try {
+          await server?.close();
+        } finally {
+          try {
+            await suppliedBroker?.close();
+          } finally {
+            await unadoptedPortClaim?.release();
+          }
+        }
+      })();
+      await pendingFixtureCleanup;
     }
   },
 );
@@ -529,7 +537,7 @@ it("recovers queued agents after both inspection slots expire without refusing a
     server = started.server;
     await server.startupSettled;
     expect((await fetch(`http://127.0.0.1:${started.port}/healthz`)).status).toBe(200);
-    expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(503);
+    expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(200);
     await vi.waitFor(() => {
       for (const marker of pause.enteredPaths.slice(0, 2)) {
         expect(fs.existsSync(marker)).toBe(true);

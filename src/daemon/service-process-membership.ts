@@ -185,6 +185,31 @@ function readSystemdMembership(
     : { hierarchy: null, atRoot: [...memberships.values()].every((entry) => entry.path === "/") };
 }
 
+/** One process against an observed systemd cgroup, including a stopped service. */
+export function inspectSystemdProcessMembershipSync(
+  pid: number,
+  controlGroup: string,
+): "inside" | "outside" | "unknown" {
+  if (
+    !Number.isSafeInteger(pid) ||
+    pid <= 0 ||
+    !isCgroupPath(controlGroup) ||
+    controlGroup === "/"
+  ) {
+    return "unknown";
+  }
+  try {
+    const membership = readSystemdMembership(pid);
+    return !membership || membership.hierarchy === null
+      ? "unknown"
+      : isWithinControlGroup(membership.path, controlGroup)
+        ? "inside"
+        : "outside";
+  } catch {
+    return "unknown";
+  }
+}
+
 /** Native containment survives parent exit; environment markers never establish it. */
 export function inspectServiceProcessMembershipSync(
   gatewayPid: number,

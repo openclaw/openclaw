@@ -17,16 +17,11 @@ extension OpenClawChatComposer {
                 Button {
                     self.viewModel.clearComposerToolOverrides()
                 } label: {
-                    Label {
-                        Text("Clear tool overrides")
-                            .font(OpenClawChatTypography.body)
-                    } icon: {
-                        Image(systemName: "xmark.circle")
-                    }
+                    chatActionLabel(Text("Clear tool overrides"), systemImage: "xmark.circle")
                 }
                 .disabled(self.viewModel.composerClearToolOverridesDisabled)
                 .accessibilityHint(
-                    self.viewModel.composerToolOverrideMutationHint ?? "")
+                    self.viewModel.composerToolOverrideMutationDisabledReason ?? "")
             }
             if !self.viewModel.composerCapabilitiesLoading,
                let reason = self.viewModel.composerPermissionMutationDisabledReason,
@@ -55,12 +50,7 @@ extension OpenClawChatComposer {
                 Button {
                     Task { await self.viewModel.loadComposerCapabilities(force: true) }
                 } label: {
-                    Label {
-                        Text("Retry capability loading")
-                            .font(OpenClawChatTypography.body)
-                    } icon: {
-                        Image(systemName: "arrow.clockwise")
-                    }
+                    chatActionLabel(Text("Retry capability loading"), systemImage: "arrow.clockwise")
                 }
             }
         }
@@ -128,14 +118,7 @@ extension OpenClawChatComposer {
         return Button {
             self.viewModel.selectComposerPermissionMode(mode)
         } label: {
-            Label {
-                Text(title)
-                    .font(OpenClawChatTypography.body)
-            } icon: {
-                Image(systemName: isSelected
-                    ? "checkmark.circle.fill"
-                    : "circle")
-            }
+            chatActionLabel(Text(title), systemImage: isSelected ? "checkmark.circle.fill" : "circle")
         }
         .accessibilityValue(isSelected ? String(localized: "Selected") : String(localized: "Not selected"))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -147,14 +130,7 @@ extension OpenClawChatComposer {
         return Button {
             self.viewModel.toggleComposerWebSearch()
         } label: {
-            Label {
-                Text("Web Search")
-                    .font(OpenClawChatTypography.body)
-            } icon: {
-                Image(systemName: isEnabled
-                    ? "checkmark.circle.fill"
-                    : "circle")
-            }
+            chatActionLabel(Text("Web Search"), systemImage: isEnabled ? "checkmark.circle.fill" : "circle")
         }
         .disabled(
             !self.viewModel.composerCapabilityCatalog.webSearchAvailable ||
@@ -163,7 +139,7 @@ extension OpenClawChatComposer {
                 self.viewModel.composerCapabilityMutationDisabled)
         .accessibilityValue(isEnabled ? String(localized: "On") : String(localized: "Off"))
         .accessibilityAddTraits(isEnabled ? .isSelected : [])
-        .accessibilityHint(self.viewModel.composerWebSearchMutationHint ?? "")
+        .accessibilityHint(self.viewModel.composerWebSearchMutationDisabledReason ?? "")
         .accessibilityIdentifier("chat-composer-web-search")
     }
 
@@ -185,14 +161,9 @@ extension OpenClawChatComposer {
                     Button {
                         self.viewModel.toggleComposerSkill(skill)
                     } label: {
-                        Label {
-                            Text(statusMessage.map { "\(skill.name) — \($0)" } ?? skill.name)
-                                .font(OpenClawChatTypography.body)
-                        } icon: {
-                            Image(systemName: isEnabled
-                                ? "checkmark.circle.fill"
-                                : "circle")
-                        }
+                        chatActionLabel(
+                            Text(statusMessage.map { "\(skill.name) — \($0)" } ?? skill.name),
+                            systemImage: isEnabled ? "checkmark.circle.fill" : "circle")
                     }
                     .disabled(
                         !skill.baseEnabled || skill.missingDependencies || skill.blocked ||
@@ -201,16 +172,11 @@ extension OpenClawChatComposer {
                     .accessibilityValue(isEnabled ? String(localized: "On") : String(localized: "Off"))
                     .accessibilityAddTraits(isEnabled ? .isSelected : [])
                     .accessibilityHint(
-                        statusMessage ?? self.viewModel.composerToolOverrideMutationHint ?? "")
+                        statusMessage ?? self.viewModel.composerToolOverrideMutationDisabledReason ?? "")
                 }
             }
         } label: {
-            Label {
-                Text("Skills")
-                    .font(OpenClawChatTypography.body)
-            } icon: {
-                Image(systemName: "book.closed")
-            }
+            chatActionLabel(Text("Skills"), systemImage: "book.closed")
         }
         .accessibilityIdentifier("chat-composer-skills")
     }
@@ -232,12 +198,7 @@ extension OpenClawChatComposer {
                 }
             }
         } label: {
-            Label {
-                Text("Connectors")
-                    .font(OpenClawChatTypography.body)
-            } icon: {
-                Image(systemName: "puzzlepiece.extension")
-            }
+            chatActionLabel(Text("Connectors"), systemImage: "puzzlepiece.extension")
         }
         .accessibilityIdentifier("chat-composer-connectors")
     }
@@ -248,21 +209,16 @@ extension OpenClawChatComposer {
             Button {
                 self.viewModel.toggleComposerConnector(connector)
             } label: {
-                Label {
-                    Text("Enabled for this session")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: isEnabled
-                        ? "checkmark.circle.fill"
-                        : "circle")
-                }
+                chatActionLabel(
+                    Text("Enabled for this session"),
+                    systemImage: isEnabled ? "checkmark.circle.fill" : "circle")
             }
             .disabled(
                 !self.viewModel.composerCapabilityCatalog.toolOverrideMutationAvailable ||
                     self.viewModel.composerCapabilityMutationDisabled)
             .accessibilityValue(isEnabled ? String(localized: "On") : String(localized: "Off"))
             .accessibilityAddTraits(isEnabled ? .isSelected : [])
-            .accessibilityHint(self.viewModel.composerToolOverrideMutationHint ?? "")
+            .accessibilityHint(self.viewModel.composerToolOverrideMutationDisabledReason ?? "")
 
             if let notice = connector.notice {
                 Text(notice)
@@ -278,12 +234,9 @@ extension OpenClawChatComposer {
                         Button {
                             self.viewModel.toggleComposerTool(server: connector.name, tool: tool.name)
                         } label: {
-                            Label {
-                                Text(tool.label)
-                                    .font(OpenClawChatTypography.body)
-                            } icon: {
-                                Image(systemName: toolIsEnabled ? "checkmark.circle.fill" : "circle")
-                            }
+                            chatActionLabel(
+                                Text(tool.label),
+                                systemImage: toolIsEnabled ? "checkmark.circle.fill" : "circle")
                         }
                         .disabled(
                             !self.viewModel.composerCapabilityCatalog.toolAccessAvailable ||
@@ -291,26 +244,14 @@ extension OpenClawChatComposer {
                                 self.viewModel.composerCapabilityMutationDisabled)
                         .accessibilityValue(toolIsEnabled ? String(localized: "On") : String(localized: "Off"))
                         .accessibilityAddTraits(toolIsEnabled ? .isSelected : [])
-                        .accessibilityHint(self.viewModel.composerToolOverrideMutationHint ?? "")
+                        .accessibilityHint(self.viewModel.composerToolOverrideMutationDisabledReason ?? "")
                     }
                 } label: {
-                    Label {
-                        Text("Tool Access")
-                            .font(OpenClawChatTypography.body)
-                    } icon: {
-                        Image(systemName: "wrench.and.screwdriver")
-                    }
+                    chatActionLabel(Text("Tool Access"), systemImage: "wrench.and.screwdriver")
                 }
             }
         } label: {
-            Label {
-                Text(connector.name)
-                    .font(OpenClawChatTypography.body)
-            } icon: {
-                Image(systemName: isEnabled
-                    ? "checkmark.circle.fill"
-                    : "circle")
-            }
+            chatActionLabel(Text(connector.name), systemImage: isEnabled ? "checkmark.circle.fill" : "circle")
         }
         .accessibilityValue(isEnabled ? String(localized: "On") : String(localized: "Off"))
         .accessibilityAddTraits(isEnabled ? .isSelected : [])

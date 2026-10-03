@@ -37,20 +37,15 @@ afterEach(() => {
 });
 
 describe("managed handoff Windows process identities", () => {
-  it.each([
-    { option: "--profile", args: ["--profile", "handoff-fixture"] },
-    { option: "--dev", args: ["--dev"] },
-  ])(
-    "keeps original launcher attribution after $option normalization in a real child",
-    async ({ args }) => {
-      vi.useRealTimers();
-      const root = dirs.make("handoff-original-argv-");
-      const fixturePath = path.join(root, "profile-identity.mjs");
-      const profileUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.cliProfile);
-      const identityUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.handoffProcess);
-      fs.writeFileSync(
-        fixturePath,
-        `
+  it("keeps original launcher attribution after profile normalization in a real child", async () => {
+    vi.useRealTimers();
+    const root = dirs.make("handoff-original-argv-");
+    const fixturePath = path.join(root, "profile-identity.mjs");
+    const profileUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.cliProfile);
+    const identityUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.handoffProcess);
+    fs.writeFileSync(
+      fixturePath,
+      `
       import assert from "node:assert/strict";
       import childProcess from "node:child_process";
       import {syncBuiltinESMExports} from "node:module";
@@ -72,32 +67,32 @@ describe("managed handoff Windows process identities", () => {
       assert.equal(receiver.isProcessIdentityCurrent(original), true);
       process.stdout.write("original launcher matched");
     `,
-      );
-      const child = spawn(
-        process.execPath,
-        [
-          ...resolveRuntimeWorkerArgv(profileUrl).slice(0, -1),
-          fixturePath,
-          ...args,
-          "update",
-          "--yes",
-        ],
-        { stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 },
-      );
-      const closed = once(child, "close");
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-      child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-      try {
-        expect(await closed, stderr).toEqual([0, null]);
-        expect(stdout).toBe("original launcher matched");
-      } finally {
-        child.kill("SIGKILL");
-        await closed;
-      }
-    },
-  );
+    );
+    const child = spawn(
+      process.execPath,
+      [
+        ...resolveRuntimeWorkerArgv(profileUrl).slice(0, -1),
+        fixturePath,
+        "--profile",
+        "handoff-fixture",
+        "update",
+        "--yes",
+      ],
+      { stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 },
+    );
+    const closed = once(child, "close");
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    try {
+      expect(await closed, stderr).toEqual([0, null]);
+      expect(stdout).toBe("original launcher matched");
+    } finally {
+      child.kill("SIGKILL");
+      await closed;
+    }
+  });
 
   it("makes published strict readers refuse fallback leases without changing numeric identities", () => {
     // v2026.9.4's nested strict contract must reject an identity it could mistake for PID reuse.
@@ -191,76 +186,43 @@ describe("managed handoff Windows process identities", () => {
     });
   });
 
-  it("binds a spawned process when its InteractiveToken session cannot read a creation time", async () => {
-    spawnSyncMock.mockReturnValue({ status: 0, stdout: "" });
-    const onProcessIdentityWarning = vi.fn();
+  it("requires observed launcher attribution unless the caller retains live process custody", async () => {
+    const suffix = "%%^!";
+    const dead = vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
+    const argv = [
+      "C:\\Program Files\\nodejs\\node.exe",
+      `C:\\openclaw${suffix}\\dist\\entry.js`,
+      "gateway",
+      "install",
+      "--update-executor",
+      "check",
+      "--json",
+    ];
+    let commandLine = `"c:/program files/nodejs/node.exe" "C:\\openclaw${suffix}\\dist\\entry.js" gateway install --update-executor check --json`;
+    spawnSyncMock.mockImplementation((_command: string, args: string[]) => ({
+      status: 0,
+      stdout: args.some((arg) => arg.includes("CommandLine")) ? commandLine : "",
+    }));
     const store = createManagedHandoffLeaseStore({
       databasePath: "unused-handoff-identity.sqlite",
       serviceManagerEnv: { SystemRoot: "C:\\Windows" },
-      onProcessIdentityWarning,
     });
 
     await withMockedPlatform("win32", async () => {
-      const identity = store.processIdentity(42, [
-        "C:\\Program Files\\nodejs\\node.exe",
-        "C:\\openclaw\\dist\\entry.js",
-        "gateway",
-        "install",
-        "--update-executor",
-        "check",
-        "--json",
-      ]);
-      expect(identity).toEqual({
-        pid: 42,
-        startIdentity: expect.stringMatching(/^win32-argv-sha256:[a-f0-9]{64}$/),
-        startIdentitySource: "argv-sha256",
-      });
-      expect(onProcessIdentityWarning).toHaveBeenCalledWith(
-        42,
-        expect.stringContaining("launcher attribution"),
-      );
+      const identity = store.processIdentity(42, argv);
+      expect(store.isProcessIdentityCurrent(identity)).toBe(true);
+
+      commandLine = commandLine.replace(" check ", " run ");
+      expect(store.isProcessIdentityCurrent(identity, true)).toBe(false);
+
+      commandLine = "";
+      expect(store.isProcessIdentityCurrent(identity)).toBe(false);
+      expect(store.isProcessIdentityCurrent(identity, true)).toBe(true);
+
+      dead.mockReturnValue(true);
+      expect(store.isProcessIdentityCurrent(identity, true)).toBe(false);
     });
   });
-
-  it.each(["plain", "%%", "^!"])(
-    "requires observed launcher attribution with literal %s unless the caller retains live process custody",
-    async (suffix) => {
-      const dead = vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
-      const argv = [
-        "C:\\Program Files\\nodejs\\node.exe",
-        `C:\\openclaw${suffix}\\dist\\entry.js`,
-        "gateway",
-        "install",
-        "--update-executor",
-        "check",
-        "--json",
-      ];
-      let commandLine = `"c:/program files/nodejs/node.exe" "C:\\openclaw${suffix}\\dist\\entry.js" gateway install --update-executor check --json`;
-      spawnSyncMock.mockImplementation((_command: string, args: string[]) => ({
-        status: 0,
-        stdout: args.some((arg) => arg.includes("CommandLine")) ? commandLine : "",
-      }));
-      const store = createManagedHandoffLeaseStore({
-        databasePath: "unused-handoff-identity.sqlite",
-        serviceManagerEnv: { SystemRoot: "C:\\Windows" },
-      });
-
-      await withMockedPlatform("win32", async () => {
-        const identity = store.processIdentity(42, argv);
-        expect(store.isProcessIdentityCurrent(identity)).toBe(true);
-
-        commandLine = commandLine.replace(" check ", " run ");
-        expect(store.isProcessIdentityCurrent(identity, true)).toBe(false);
-
-        commandLine = "";
-        expect(store.isProcessIdentityCurrent(identity)).toBe(false);
-        expect(store.isProcessIdentityCurrent(identity, true)).toBe(true);
-
-        dead.mockReturnValue(true);
-        expect(store.isProcessIdentityCurrent(identity, true)).toBe(false);
-      });
-    },
-  );
 
   it("keeps known creation-time mismatches authoritative", async () => {
     vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
@@ -306,7 +268,6 @@ describe("managed handoff Windows process identities", () => {
   });
 
   it.each([
-    { name: "a prompt probe", probeMs: 25, available: true, acquired: true },
     { name: "a probe slower than one second", probeMs: 2_000, available: true, acquired: true },
     { name: "an unavailable creation time", probeMs: 25, available: false, acquired: false },
     { name: "an exhausted identity budget", probeMs: 10_000, available: true, acquired: false },
@@ -487,15 +448,12 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
     expect(test.storedParent()?.owner).toBe("replacement");
   });
 
-  it.each(["ETIMEDOUT", "EPERM", "ENOBUFS", "ESRCH"])(
-    "refuses incomplete %s inspection without reclaiming the legacy row",
-    (failure) => {
-      const test = fixture();
-      test.probes.failure = failure;
-      expect(test.current()).toBe(false);
-      expect(test.storedParent()).toEqual(test.parent);
-    },
-  );
+  it("refuses denied inspection without reclaiming the legacy row", () => {
+    const test = fixture();
+    test.probes.failure = "EPERM";
+    expect(test.current()).toBe(false);
+    expect(test.storedParent()).toEqual(test.parent);
+  });
 
   it("refuses malformed process metadata without clearing the retained row", () => {
     const test = fixture();

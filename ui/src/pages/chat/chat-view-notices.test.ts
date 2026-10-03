@@ -168,7 +168,9 @@ it.each([true, false])(
     expect(notice?.getAttribute("role")).toBe("status");
     const details = notice?.querySelector("details");
     expect(details?.open).toBe(false);
-    expect(details?.querySelector("strong")?.textContent).toBe(diagnostic.split("\n")[0]);
+    expect(details?.querySelector("strong")?.textContent).toBe(
+      "OpenClaw is busy. Check status before trying again.",
+    );
     expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
     expect(notice?.querySelector("img")).toBeNull();
     const check = notice?.querySelector<HTMLButtonElement>(".chat-error__refresh");

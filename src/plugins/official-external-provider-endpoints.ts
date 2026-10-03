@@ -26,15 +26,8 @@ export function listOfficialExternalProviderEndpointManifests(): Record<string, 
   if (!Array.isArray(entries)) {
     return [];
   }
-  const manifests: Record<string, unknown>[] = [];
-  for (const entry of entries) {
-    if (!isRecord(entry)) {
-      continue;
-    }
-    const manifest = entry[MANIFEST_KEY];
-    if (isRecord(manifest) && Array.isArray(manifest.providerEndpoints)) {
-      manifests.push(manifest);
-    }
-  }
-  return manifests;
+  return entries.flatMap((entry) => {
+    const manifest = isRecord(entry) ? entry[MANIFEST_KEY] : undefined;
+    return isRecord(manifest) && Array.isArray(manifest.providerEndpoints) ? [manifest] : [];
+  });
 }

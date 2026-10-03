@@ -273,15 +273,24 @@ describe("openai completions DSML", () => {
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
 
-  it.each(["__proto__", "constructor", "text"])(
-    "preserves literal DSML parameter name %s as an own scalar argument",
-    async (name) => {
+  it.each([
+    { name: "__proto__", value: "scalar value", duplicate: true },
+    { name: "constructor", value: "scalar value", duplicate: true },
+    { name: "text", value: "scalar value", duplicate: true },
+    { name: "text", value: "", duplicate: false },
+    { name: "text", value: "", duplicate: true },
+    { name: "text", value: " \t ", duplicate: false },
+  ])(
+    "preserves DSML parameter $name as an own scalar argument ($value, duplicate: $duplicate)",
+    async ({ name, value, duplicate }) => {
       const model = createDeepSeekCompletionsModel();
       const output = createAssistantOutput(model);
       const content =
         '<|DSML|tool_calls><|DSML|invoke name="echo">' +
-        `<|DSML|parameter name="${name}" string="true">first value</|DSML|parameter>` +
-        `<|DSML|parameter name="${name}" string="true">scalar value</|DSML|parameter>` +
+        (duplicate
+          ? `<|DSML|parameter name="${name}" string="true">first value</|DSML|parameter>`
+          : "") +
+        `<|DSML|parameter name="${name}" string="true">${value}</|DSML|parameter>` +
         "</|DSML|invoke></|DSML|tool_calls>";
 
       await processCompletionsStream(
@@ -295,9 +304,9 @@ describe("openai completions DSML", () => {
       expect(output.content).toHaveLength(1);
       const call = output.content.find((block) => block.type === "toolCall");
       expect(call).toMatchObject({ type: "toolCall", name: "echo" });
-      expect(call?.arguments).toStrictEqual({ [name]: "scalar value" });
+      expect(call?.arguments).toStrictEqual({ [name]: value });
       expect(Object.getOwnPropertyDescriptor(call?.arguments, name)).toMatchObject({
-        value: "scalar value",
+        value,
         enumerable: true,
       });
       expect(Object.getPrototypeOf(call?.arguments)).toBe(Object.prototype);

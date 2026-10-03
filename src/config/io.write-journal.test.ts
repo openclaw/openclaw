@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { startGatewayConfigReloader } from "../gateway/config-reload.js";
 import { createWatcherMock } from "../gateway/config-reload.watcher.test-support.js";
@@ -7,11 +8,12 @@ import * as tmpDirOwner from "../infra/tmp-openclaw-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { readLatestConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
+import { readLatestConfigSnapshotAuditRecordAsync } from "./config-journal-snapshot.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import {
   createConfigIO,
@@ -112,9 +114,17 @@ describe("config write and startup journal", () => {
 
   it("shares raw snapshot hashes between config writes and gateway startup reconciliation", async () => {
     await withJournal(async ({ home, configPath, io }) => {
-      const write = await io.writeConfigFile({ gateway: { port: 18789 } });
+      openOpenClawStateDatabase({ env: process.env });
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const write = await io.writeConfigFile({ gateway: { port: 18789 } }).finally(() => {
+        const auditQueries = prepare.mock.calls.filter(([sql]) =>
+          sql.includes("diagnostic_events"),
+        );
+        prepare.mockRestore();
+        expect(auditQueries).toEqual([]);
+      });
       const writtenSnapshot = await readConfigFileSnapshotForRuntimeTransaction({});
-      const slot = readLatestConfigSnapshotAuditRecord({
+      const slot = await readLatestConfigSnapshotAuditRecordAsync({
         env: process.env,
         homedir: () => home,
       });
@@ -166,7 +176,7 @@ describe("config write and startup journal", () => {
           ),
         ).toEqual([]);
         expect(
-          readLatestConfigSnapshotAuditRecord({
+          await readLatestConfigSnapshotAuditRecordAsync({
             env: process.env,
             homedir: () => home,
           }),

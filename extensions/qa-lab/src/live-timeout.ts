@@ -13,8 +13,6 @@ export function resolveQaLiveTurnTimeoutMs(
   modelRef = profile.primaryModel,
 ) {
   return getQaProvider(profile.providerMode).resolveTurnTimeoutMs({
-    primaryModel: profile.primaryModel,
-    alternateModel: profile.alternateModel,
     modelRef,
     fallbackMs,
   });

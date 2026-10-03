@@ -1,6 +1,7 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isStringOption } from "../../utils/string-readers.js";
 import type {
   AuthProfileBlockedReason,
   AuthProfileBlockedSource,
@@ -20,12 +21,7 @@ function normalizeEnumValue<T extends string>(
   value: unknown,
   allowed: ReadonlySet<T>,
 ): T | undefined {
-  for (const candidate of allowed) {
-    if (candidate === value) {
-      return candidate;
-    }
-  }
-  return undefined;
+  return isStringOption(value, allowed) ? value : undefined;
 }
 
 function normalizeFailureCounts(raw: unknown): ProfileUsageStats["failureCounts"] {

@@ -95,8 +95,7 @@ public enum OpenClawChatHistoryPresentation {
     }
 
     private nonisolated static func decodeMessage(_ raw: OpenClawKit.AnyCodable) -> MessageEntry? {
-        guard let data = try? JSONEncoder().encode(raw),
-              let message = try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
+        guard let message = try? GatewayPayloadDecoding.decode(raw, as: OpenClawChatMessage.self)
         else { return nil }
         let text = ChatMessageVisibleText.visibleText(in: message)
             .trimmingCharacters(in: .whitespacesAndNewlines)

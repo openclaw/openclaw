@@ -24,6 +24,12 @@ enum CapabilityAuthorizationStatus: Equatable, Sendable {
 
 enum PermissionManager {
     @MainActor static let screenRecordingPermissions = PermissionsService()
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "permissions")
+
+    static func reportDeferredRequest() {
+        self.logger.warning(
+            "Permission dialog deferred by --no-activate; relaunch without the flag to grant access, then retry.")
+    }
 
     /// UNUserNotificationCenter.current() aborts with NSInternalInconsistencyException
     /// ("bundleProxyForCurrentProcess is nil") in unbundled processes such as
@@ -57,6 +63,10 @@ enum PermissionManager {
     }
 
     static func ensure(_ caps: [Capability], interactive: Bool) async -> [Capability: Bool] {
+        if interactive, !AppLaunchRuntimePlan.current.allowsActivation {
+            self.reportDeferredRequest()
+        }
+        let interactive = interactive && AppLaunchRuntimePlan.current.allowsActivation
         var results: [Capability: Bool] = [:]
         for cap in caps {
             results[cap] = await self.ensureCapability(cap, interactive: interactive)
@@ -102,7 +112,7 @@ enum PermissionManager {
             return granted && self.isNotificationAuthorized(status: updated.authorizationStatus)
         }
         if settings.authorizationStatus == .denied, interactive {
-            SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: .notifications))
+            await SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: .notifications))
         }
         return false
     }
@@ -140,7 +150,7 @@ enum PermissionManager {
             return await AVCaptureDevice.requestAccess(for: mediaType)
         case .denied, .restricted:
             if interactive {
-                SystemSettingsURLSupport.openPrivacySettings(for: capability)
+                await SystemSettingsURLSupport.openPrivacySettings(for: capability)
             }
             return false
         @unknown default:
@@ -151,7 +161,7 @@ enum PermissionManager {
     private static func ensureSpeechRecognition(interactive: Bool) async -> Bool {
         let status = SFSpeechRecognizer.authorizationStatus()
         if self.shouldOpenSpeechRecognitionSettings(status: status, interactive: interactive) {
-            SystemSettingsURLSupport.openPrivacySettings(for: .speechRecognition)
+            await SystemSettingsURLSupport.openPrivacySettings(for: .speechRecognition)
         }
         if status == .notDetermined, interactive {
             await withUnsafeContinuation { (cont: UnsafeContinuation<Void, Never>) in
@@ -305,6 +315,10 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
     func request(always: Bool) async -> CLAuthorizationStatus {
         let current = self.manager.authorizationStatus
         if PermissionManager.isLocationAuthorized(status: current, requireAlways: always) {
+            return current
+        }
+        guard AppLaunchRuntimePlan.current.allowsActivation else {
+            PermissionManager.reportDeferredRequest()
             return current
         }
 

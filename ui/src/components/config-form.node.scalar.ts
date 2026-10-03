@@ -37,12 +37,7 @@ import {
   setControlValidity,
   type ScalarEditHint,
 } from "./config-form.scalar-edit.ts";
-import {
-  configFieldId,
-  hintForPath,
-  redactedPlaceholder,
-  schemaType,
-} from "./config-form.shared.ts";
+import { configFieldId, hintForPath, schemaType } from "./config-form.shared.ts";
 
 function coerceTextInputValue(
   value: string,
@@ -183,7 +178,7 @@ export function renderTextInput(
         : t("configForm.structuredSecretFile")
       : masked
         ? "••••••••"
-        : redactedPlaceholder()
+        : t("configForm.redactedPlaceholder")
     : (hint?.placeholder ??
       (!masked && schema.default !== undefined
         ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })

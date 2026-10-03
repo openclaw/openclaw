@@ -459,7 +459,6 @@ type TranslationBatchContext = LocaleRunContext & {
   batchCount: number;
   batchIndex: number;
   locale: string;
-  splitDepth?: number;
   segmentLabel?: string;
   validateTranslation?: TranslationValidator;
 };
@@ -711,7 +710,6 @@ async function translateBatch(
   context: TranslationBatchContext,
 ): Promise<Map<string, string>> {
   const batchLabel = formatBatchLabel(context);
-  const splitDepth = context.splitDepth ?? 0;
   let lastError: Error | null = null;
   let validationError: string | undefined;
   for (let attempt = 0; attempt < TRANSLATE_MAX_ATTEMPTS; attempt += 1) {
@@ -749,12 +747,10 @@ async function translateBatch(
         );
         const left = await translateBatch(clientAccess, items.slice(0, midpoint), {
           ...context,
-          splitDepth: splitDepth + 1,
           segmentLabel: `${context.segmentLabel ?? ""}a`,
         });
         const right = await translateBatch(clientAccess, items.slice(midpoint), {
           ...context,
-          splitDepth: splitDepth + 1,
           segmentLabel: `${context.segmentLabel ?? ""}b`,
         });
         return new Map([...left, ...right]);

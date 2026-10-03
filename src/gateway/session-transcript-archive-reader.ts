@@ -25,16 +25,19 @@ import {
   type MaterializedTranscriptEntry,
   type SessionTranscriptIndex,
 } from "./session-transcript-index.fs.js";
+import type {
+  ReadRecentSessionMessagesOptions,
+  ReadSessionMessagesAsyncOptions,
+} from "./session-transcript-read.types.js";
 import {
   MAX_TRANSCRIPT_PARSE_LINE_BYTES,
   parseTranscriptRecord,
 } from "./session-transcript-record-parser.js";
 
-export type ReadRecentSessionMessagesOptions = {
-  maxMessages: number;
-  maxBytes?: number;
-  maxLines?: number;
-};
+export type {
+  ReadRecentSessionMessagesOptions,
+  ReadSessionMessagesAsyncOptions,
+} from "./session-transcript-read.types.js";
 
 type ReadSessionMessagesPageOptions = {
   offset: number;
@@ -42,15 +45,6 @@ type ReadSessionMessagesPageOptions = {
   beforeSeq?: number;
   recentAtHead?: TranscriptRecentReadLimits;
 };
-
-export type ReadSessionMessagesAsyncOptions =
-  | {
-      mode: "full";
-      reason: string;
-    }
-  | ({
-      mode: "recent";
-    } & ReadRecentSessionMessagesOptions);
 
 type ReadRecentSessionMessagesResult = {
   displaySource?: string;

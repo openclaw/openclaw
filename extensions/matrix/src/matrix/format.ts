@@ -1,4 +1,3 @@
-// Matrix helper module supports format behavior.
 import MarkdownIt from "markdown-it";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -189,10 +188,7 @@ function collectMentionCandidates(text: string): MatrixMentionCandidate[] {
   const mentions: MatrixMentionCandidate[] = [];
   for (const match of text.matchAll(MENTION_PATTERN)) {
     const raw = match[0];
-    const start = match.index ?? -1;
-    if (start < 0 || !raw) {
-      continue;
-    }
+    const start = match.index;
     if (!isMentionStartBoundary(text[start - 1])) {
       continue;
     }

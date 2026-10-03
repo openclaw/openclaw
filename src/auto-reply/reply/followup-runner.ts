@@ -100,13 +100,12 @@ export function createFollowupRunner(
     turn: AdmittedFollowupTurn,
     payloads: ReplyPayload[],
     kind: "tool" | "block",
-    runId = turn.runId,
   ) => {
     await deliverFollowupDecision({
       decision: { kind: "deliver", payloads },
       turn,
       defaults,
-      runId,
+      runId: turn.runId,
       runFollowup,
       kind,
     });
@@ -167,10 +166,8 @@ export function createFollowupRunner(
       const execution = await executeFollowupTurn({
         turn,
         defaults,
-        onToolResult: (payload, identity) =>
-          deliverProgress(turn, [payload], "tool", identity.runId),
-        onCompactionNoticePayload: (payload, identity) =>
-          deliverProgress(turn, [payload], "block", identity.runId),
+        onToolResult: (payload) => deliverProgress(turn, [payload], "tool"),
+        onCompactionNoticePayload: (payload) => deliverProgress(turn, [payload], "block"),
       });
       // A closed execution result is terminal queue work. Commit consumption
       // before accounting/delivery so their failures cannot replay model or tool effects.

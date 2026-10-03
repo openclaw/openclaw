@@ -536,7 +536,7 @@ struct RootSidebar: View {
         ChatSessionSidebarModel.selectedSessionKey(
             sessions: self.model.sessions,
             currentSessionKey: "main",
-            mainSessionKey: self.appModel.defaultChatSessionKey,
+            mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
             sessionRoutingContract: self.appModel.chatSessionRoutingContract)
     }
@@ -545,7 +545,7 @@ struct RootSidebar: View {
         ChatSessionSidebarModel.selectedSessionKey(
             sessions: self.model.sessions,
             currentSessionKey: self.appModel.chatSessionKey,
-            mainSessionKey: self.appModel.defaultChatSessionKey,
+            mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
             sessionRoutingContract: self.appModel.chatSessionRoutingContract)
     }
@@ -554,7 +554,7 @@ struct RootSidebar: View {
         self.model.sections(
             query: self.searchText,
             currentSessionKey: self.appModel.chatSessionKey,
-            mainSessionKey: self.appModel.defaultChatSessionKey,
+            mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
             groups: self.sessionGroups,
             sessionRoutingContract: self.appModel.chatSessionRoutingContract)
@@ -688,10 +688,8 @@ struct RootSidebar: View {
                 canDelete: ChatSessionSidebarModel.canDeleteSession(
                     key: session.key,
                     mainSessionKey: self.resolvedMainSessionKey),
-                actions: .gateway(
-                    session: session,
-                    performMutation: self.performSessionMutation,
-                    fork: { self.forkSession(session) }))
+                performMutation: self.performSessionMutation,
+                fork: { self.forkSession(session) })
             .accessibilityValue(Self.sessionAccessibilityValue(
                 isPinned: session.pinned == true,
                 isUnread: session.unread == true))
@@ -810,7 +808,7 @@ struct RootSidebar: View {
 
     private func performSessionMutation(
         resetActiveSessionKey: String?,
-        _ operation: @escaping CommandSessionActions.Mutation)
+        _ operation: @escaping CommandSessionActionsModifier.Mutation)
     {
         Task {
             do {

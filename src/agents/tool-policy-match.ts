@@ -88,16 +88,16 @@ export function createToolPolicyMatcher(
 
 /** Return whether one tool name is allowed by a single sandbox policy. */
 export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
-  if (!policy) {
-    return true;
-  }
   return createToolPolicyMatcher(policy)(name);
 }
 
 /** Runtime caps deny empty lists and preserve every independently merged restriction. */
-export function createRuntimeToolMatcher(toolsAllow?: string[], writeAllowsApplyPatch = true) {
+export function createRuntimeToolMatcher(
+  toolsAllow?: readonly string[],
+  writeAllowsApplyPatch = true,
+) {
   const matchers = (
-    toolsAllow === undefined ? [] : (readToolAllowlistIntersection(toolsAllow) ?? [toolsAllow])
+    toolsAllow === undefined ? [] : (readToolAllowlistIntersection(toolsAllow) ?? [[...toolsAllow]])
   ).map((allow) =>
     allow.length > 0 ? createToolPolicyMatcher({ allow }, writeAllowsApplyPatch) : () => false,
   );
@@ -105,12 +105,7 @@ export function createRuntimeToolMatcher(toolsAllow?: string[], writeAllowsApply
 }
 
 export function isRuntimeToolAllowed(name: string, toolsAllow?: readonly string[]): boolean {
-  return (
-    toolsAllow === undefined ||
-    (readToolAllowlistIntersection(toolsAllow) ?? [[...toolsAllow]]).every(
-      (allow) => allow.length > 0 && isToolAllowedByPolicyName(name, { allow }),
-    )
-  );
+  return createRuntimeToolMatcher(toolsAllow)(name);
 }
 
 /** Filter runtime tools by policy without rebuilding its patterns for each tool. */

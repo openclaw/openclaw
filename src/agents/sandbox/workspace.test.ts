@@ -4,16 +4,72 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { nodeFilePath } from "../../test-utils/node-file-path.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
 import { DEFAULT_AGENTS_FILENAME, DEFAULT_SOUL_FILENAME } from "../workspace.js";
+import { captureSandboxStateOwner } from "./state-owner.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("ensureSandboxWorkspace", () => {
+  it("rejects released hosted custody before bootstrap publication after a destination read", async () => {
+    const root = tempDirs.make("sandbox-bootstrap-owner-");
+    const seed = path.join(root, "seed");
+    const sandbox = path.join(root, "sandbox");
+    const target = path.join(sandbox, DEFAULT_AGENTS_FILENAME);
+    await fs.mkdir(seed, { recursive: true });
+    await fs.mkdir(sandbox);
+    await fs.writeFile(path.join(seed, DEFAULT_AGENTS_FILENAME), "seeded-agents");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+      const owner = acquireGatewayStateOwner({
+        databasePath: resolveOpenClawStateSqlitePath(),
+        payload: {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: path.join(root, "openclaw.json"),
+          role: "gateway",
+        },
+      });
+      const assertCurrent = await captureSandboxStateOwner();
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const access = fs.access.bind(fs);
+      const read = vi.spyOn(fs, "access").mockImplementation(async (...args) => {
+        if (nodeFilePath(args[0]) === target) {
+          entered.resolve();
+          await resume.promise;
+        }
+        return access(...args);
+      });
+      const preparation = ensureSandboxWorkspace(sandbox, seed, true, undefined, {
+        assertHost: assertCurrent,
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          preparation,
+          "Bootstrap skipped destination read",
+        );
+        owner.release();
+        resume.resolve();
+        const result = await preparation.catch((error: unknown) => error);
+        expect(await fs.readdir(sandbox)).toEqual([]);
+        expect(result).toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
+      } finally {
+        resume.resolve();
+        await preparation.catch(() => {});
+        read.mockRestore();
+        owner.release();
+      }
+    });
+  });
+
   it("seeds regular bootstrap files from the source workspace", async () => {
     const root = tempDirs.make("openclaw-sandbox-workspace-");
     const seed = path.join(root, "seed");

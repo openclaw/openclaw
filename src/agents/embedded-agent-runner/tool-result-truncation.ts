@@ -702,7 +702,6 @@ export function truncateOversizedToolResultsInMessages(
     branch: projection?.branch ?? sourceBranch,
     maxChars,
     aggregateBudgetChars,
-    minKeepChars: RECOVERY_MIN_KEEP_CHARS,
     protectTrailingToolResults: Boolean(projectionState),
   });
   const replacedBranch = plan.branch;
@@ -1117,12 +1116,10 @@ function hashToolResultText(texts: string[]): string {
 
 function buildAggregateToolResultReplacements(params: {
   branch: MeasuredToolResultBranchEntry[];
-  spillSourceBranch?: ToolResultBranchEntry[];
+  spillSourceBranch: ToolResultBranchEntry[];
   aggregateBudgetChars: number;
-  minKeepChars?: number;
   protectedEntryIds?: Set<string>;
 }): { replacements: MeasuredToolResultReplacement[]; pressureExceeded: boolean } {
-  const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
   const candidates = params.branch
     .flatMap(({ entry, textLength }, index) => {
       const message = entry.message;
@@ -1131,7 +1128,7 @@ function buildAggregateToolResultReplacements(params: {
             {
               entryId: entry.id,
               message,
-              spillSourceMessage: params.spillSourceBranch?.[index]?.message ?? message,
+              spillSourceMessage: params.spillSourceBranch[index]?.message ?? message,
               textLength,
               aggregateEligible: entry.aggregateEligible !== false,
               protectedByTrailingBatch: params.protectedEntryIds?.has(entry.id) ?? false,
@@ -1146,11 +1143,10 @@ function buildAggregateToolResultReplacements(params: {
   }
 
   const suffixFactory =
-    minKeepChars === RECOVERY_MIN_KEEP_CHARS &&
     params.aggregateBudgetChars < candidates.length * estimateToolResultTextChars(DEFAULT_SUFFIX(1))
       ? COMPACT_RECOVERY_SUFFIX
       : DEFAULT_SUFFIX;
-  const minTruncatedTextChars = minKeepChars + estimateToolResultTextChars(suffixFactory(1));
+  const minTruncatedTextChars = estimateToolResultTextChars(suffixFactory(1));
 
   const totalChars = candidates.reduce((sum, item) => sum + item.textLength, 0);
   if (totalChars <= params.aggregateBudgetChars) {
@@ -1197,7 +1193,7 @@ function buildAggregateToolResultReplacements(params: {
           estimateToolResultTextChars(suffix(1)),
         );
         message = truncateToolResultMessage(candidate.message, targetChars, {
-          minKeepChars,
+          minKeepChars: RECOVERY_MIN_KEEP_CHARS,
           suffix,
         });
       }
@@ -1237,7 +1233,7 @@ function getTrailingToolResultEntryIds(branch: ToolResultBranchEntry[]): Set<str
 
 function clearToolResultText(
   message: AgentMessage,
-  maxTextChars = Number.POSITIVE_INFINITY,
+  maxTextChars: number,
   resolvedSpillMarkers?: AggregateElisionMarkers,
 ): AgentMessage {
   const content = (message as { content?: unknown }).content;
@@ -1305,10 +1301,8 @@ function buildToolResultReplacementPlan(params: {
   branch: ToolResultBranchEntry[];
   maxChars: number;
   aggregateBudgetChars: number;
-  minKeepChars?: number;
   protectTrailingToolResults?: boolean;
 }) {
-  const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
   const protectedEntryIds = params.protectTrailingToolResults
     ? getTrailingToolResultEntryIds(params.branch)
     : undefined;
@@ -1341,9 +1335,7 @@ function buildToolResultReplacementPlan(params: {
         suffix ? estimateToolResultTextChars(suffix(1)) : 0,
       );
       const replacementMessage = truncateToolResultMessage(message, maxChars, {
-        minKeepChars: protectedEntryIds?.has(entry.id)
-          ? Math.max(minKeepChars, MIN_KEEP_CHARS)
-          : minKeepChars,
+        minKeepChars: protectedEntryIds?.has(entry.id) ? MIN_KEEP_CHARS : RECOVERY_MIN_KEEP_CHARS,
         ...(suffix ? { suffix } : {}),
       });
       return [
@@ -1363,7 +1355,6 @@ function buildToolResultReplacementPlan(params: {
     branch: oversizedPhase.branch,
     spillSourceBranch: params.branch,
     aggregateBudgetChars: params.aggregateBudgetChars,
-    minKeepChars,
     protectedEntryIds,
   });
   const aggregatePhase = applyToolResultReplacementsToBranch(
@@ -1409,7 +1400,6 @@ function buildRecoveryToolResultReplacementPlan(params: {
     branch: projectedBranch,
     maxChars,
     aggregateBudgetChars,
-    minKeepChars: RECOVERY_MIN_KEEP_CHARS,
     protectTrailingToolResults: params.protectTrailingToolResults,
   });
   const replacements = params.branch.flatMap((entry, index) => {
@@ -1448,7 +1438,6 @@ export function estimateToolResultReductionPotential(params: {
     branch,
     maxChars,
     aggregateBudgetChars,
-    minKeepChars: RECOVERY_MIN_KEEP_CHARS,
   });
   const maxReducibleChars = plan.oversizedReducibleChars + plan.aggregateReducibleChars;
 

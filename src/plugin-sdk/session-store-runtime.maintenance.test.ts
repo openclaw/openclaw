@@ -2,7 +2,7 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { observeSessionMaintenanceCompletion } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { prepareSessionEntryReplacementDatabase } from "../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -23,28 +23,28 @@ describe("plugin session store maintenance", () => {
       const scope = { agentId: "main", env };
       const expiredKey = "agent:main:sdk-cleanup-env-expired";
       const retainedKey = "agent:main:retained";
-      const seed = (sessionKey: string, sessionId: string) =>
-        replaceSessionEntrySync({ ...scope, sessionKey }, { sessionId, updatedAt: 1 });
-      seed(expiredKey, "expired");
+      const seed = (sessionKey: string, sessionId: string) => {
+        const entry = { sessionId, updatedAt: 1 };
+        return patchSessionEntry({
+          ...scope,
+          sessionKey,
+          fallbackEntry: entry,
+          replaceEntry: true,
+          skipMaintenance: true,
+          requireWriteSuccess: true,
+          update: () => entry,
+        });
+      };
+      await seed(expiredKey, "expired");
       // A live target exposes an incorrect fallback to the process environment.
       const execution = captureOpenClawAgentDatabaseExecution(scope);
       try {
-        seed(retainedKey, "retained");
-        await execution.prepare({
-          assertCurrent: () => execution.assertCurrent(),
-          createAdmission(binding) {
-            return () => ({
-              nativeLocations: binding.nativeLocations,
-              admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                binding.authorize(request);
-                execution.assertCurrent();
-                if (!grant()) {
-                  throw new Error("Session cleanup fixture lost database admission");
-                }
-              }, binding.attachment),
-            });
-          },
-        });
+        await seed(retainedKey, "retained");
+        await prepareSessionEntryReplacementDatabase(
+          { ...scope, path: execution.path },
+          () => execution.assertCurrent(),
+          execution,
+        );
         expect(execution.fileIdentity).toBeDefined();
         await expect(
           cleanupSessionLifecycleArtifacts({

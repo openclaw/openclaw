@@ -8,10 +8,10 @@ import {
   persistSessionTranscriptTurn,
   replaceTranscriptEvents,
 } from "./session-accessor.js";
-import { readSessionTranscriptActiveStats } from "./session-accessor.sqlite-active-events.js";
 import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.js";
 import {
   historyEventId,
+  readActiveTranscriptStats,
   readSessionTranscriptHistoryEventCount,
   readSessionTranscriptHistoryAnchorPage,
   readSessionTranscriptHistoryEvents,
@@ -175,7 +175,7 @@ describe("SQLite imported transcript history", () => {
         "fresh",
       ]);
       const retained = new Set(["kept-user", "kept-assistant", "kept-result", "fresh"]);
-      expect(readSessionTranscriptActiveStats(scope)).toEqual({
+      expect(readActiveTranscriptStats(scope)).toEqual({
         eventCount: retained.size,
         sizeBytes: rows.reduce(
           (bytes, row, seq) =>

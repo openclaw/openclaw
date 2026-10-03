@@ -13,6 +13,7 @@ import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
+import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
@@ -147,7 +148,10 @@ export async function prepareEmbeddedSessionState(params: {
   });
   const skillSnapshotState = await resolveReusableWorkspaceSkillSnapshot({
     workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId),
-    executionWorkspaceDir: params.executionWorkspaceDir,
+    ...resolveSessionSkillExecutionWorkspace(
+      sessionEntry?.worktree?.canonicalWorkspaceDir,
+      params.executionWorkspaceDir,
+    ),
     config: params.cfg,
     agentId: params.sessionAgentId,
     existingSnapshot: params.isNewSession ? undefined : currentSkillsSnapshot,

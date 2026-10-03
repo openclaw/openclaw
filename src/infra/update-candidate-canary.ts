@@ -17,6 +17,10 @@ import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
+import {
+  buildUpdateCanaryCommands,
+  type UpdateCanaryCommand,
+} from "./update-candidate-canary-commands.js";
 import { launchCanary, stopCanary, waitBounded } from "./update-candidate-canary-process.js";
 import { UPDATE_CANARY_PROGRESS_ARGS } from "./update-candidate-canary-progress.js";
 import {
@@ -45,6 +49,7 @@ import {
   type UpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
 import {
+  createUpdateCanaryFailureFacts,
   createUpdateFailureFact,
   parseConfigFailureFacts,
   type UpdateFailureFact,
@@ -54,15 +59,7 @@ import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import { UpdateSnapshotCapacityError } from "./update-snapshot-capacity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
-type CanaryPhase =
-  | "snapshot"
-  | "doctor"
-  | "lint"
-  | "config"
-  | "plugins"
-  | "runtime"
-  | "startup"
-  | "readiness";
+type CanaryPhase = UpdateCanaryCommand["phase"] | "snapshot" | "startup" | "readiness";
 
 type CanaryResult = {
   phase: CanaryPhase;
@@ -96,6 +93,8 @@ export async function validateUpdateCandidateCanary(
     env?: NodeJS.ProcessEnv;
     nodeRunner?: string;
     assertCurrent?: () => void;
+    /** Startup-only callers must prove the preserved input boots without Doctor repair. */
+    migrationPolicy?: "rehearse" | "startup-only";
   } & CanaryReceiptCallbacks,
 ): Promise<CanaryResult> {
   const started = Date.now();
@@ -136,7 +135,7 @@ export async function validateUpdateCandidateCanary(
   let doctorConfigWrites = false;
   let doctorConfigChanges: UpdateDoctorConfigChange[] = [];
   let listenerIsolation: CanaryResult["listenerIsolation"];
-  let phase: CanaryPhase = "runtime";
+  const progress: { phase: CanaryPhase } = { phase: "runtime" };
   let env: NodeJS.ProcessEnv = { ...sourceEnv };
   const capture = (chunk: Buffer | string) => {
     const safe = redactSupportString(
@@ -188,8 +187,14 @@ export async function validateUpdateCandidateCanary(
       if (!hasErrnoCode(error, "ENOENT")) {
         throw error;
       }
+      if (params.migrationPolicy === "startup-only") {
+        throw new Error(
+          "The candidate lacks the runtime required to prove preserved-input startup",
+          { cause: error },
+        );
+      }
       const message = "This version uses the current updater to finish installation";
-      const step: UpdateStepResult = {
+      await recordStep({
         name: "candidate-recovery",
         command: "--check",
         cwd: params.root,
@@ -197,19 +202,20 @@ export async function validateUpdateCandidateCanary(
         exitCode: null,
         stdoutTail: message,
         advisory: { kind: "candidate-runtime-unavailable", message },
-      };
-      await recordStep(step);
+      });
       // Older targets also lack the isolated canary CLI; retain their shipped finalization path.
-      return { status: "ok", phase, durationMs: Date.now() - started, logTail, steps };
+      return { status: "ok", phase: "runtime", durationMs: Date.now() - started, logTail, steps };
     }
-    const policy = resolveUpdateDoctorExecutionPolicy({
-      targetVersion: await readPackageVersion(params.root),
-      allowGatewayServiceRepair: false,
-    });
-    if (!policy.fix) {
-      throw new Error("Cannot check migrations without changing the running service");
+    if (params.migrationPolicy !== "startup-only") {
+      const policy = resolveUpdateDoctorExecutionPolicy({
+        targetVersion: await readPackageVersion(params.root),
+        allowGatewayServiceRepair: false,
+      });
+      if (!policy.fix) {
+        throw new Error("Cannot check migrations without changing the running service");
+      }
     }
-    phase = "snapshot";
+    progress.phase = "snapshot";
     activeStep = { name: "candidate-state-snapshot", command: "Preparing update checks" };
     stepStartedAt = Date.now();
     // Admit the progress writer before the child chooses its snapshot source.
@@ -230,6 +236,7 @@ export async function validateUpdateCandidateCanary(
       signal: params.signal,
       assertCurrent: params.assertCurrent,
       onProgress: params.onProgress,
+      migrationPolicy: params.migrationPolicy,
     });
     // Copying private state has its own size/progress budget; preserve the
     // runtime validation budget after large snapshots finish.
@@ -251,36 +258,10 @@ export async function validateUpdateCandidateCanary(
       gateway: { host: "127.0.0.1", port },
       mcpAppSandbox: "disabled",
     };
-    const commands: Array<{ phase: CanaryPhase; name: string; args: string[]; entry?: string }> = [
-      {
-        phase: "doctor",
-        name: "candidate-doctor",
-        args: ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
-      },
-      {
-        phase: "lint",
-        name: "candidate-doctor-lint",
-        args: ["doctor", "--lint", "--json", "--severity-min", "error"],
-      },
-      {
-        phase: "config",
-        name: "candidate-config",
-        args: ["config", "validate", "--json"],
-      },
-      {
-        phase: "plugins",
-        name: "candidate-plugins",
-        args: ["plugins", "list", "--json"],
-      },
-      {
-        phase: "runtime",
-        name: "candidate-recovery",
-        // After a schema bump only a fresh candidate may finalize the run;
-        // prove its full recovery import graph before live state changes.
-        entry: continuationEntry,
-        args: ["--check"],
-      },
-    ];
+    const commands = buildUpdateCanaryCommands({
+      continuationEntry,
+      migrationPolicy: params.migrationPolicy,
+    });
     // Each fresh process may inspect the private state again, including the Gateway.
     const processBudget = resolveSqliteInspectionBudget(
       "update validation",
@@ -304,7 +285,8 @@ export async function validateUpdateCandidateCanary(
       return milliseconds;
     };
     for (const command of commands) {
-      phase = command.phase;
+      const { phase } = command;
+      progress.phase = phase;
       activeLintStep = undefined;
       env.OPENCLAW_UPDATE_IN_PROGRESS = phase === "doctor" ? "1" : "0";
       activeStep = { name: command.name, command: command.args.join(" ") };
@@ -344,6 +326,7 @@ export async function validateUpdateCandidateCanary(
         },
       });
       let code: number | null = null;
+      let signal: NodeJS.Signals | null = null;
       let doctorAdvisory: UpdateStepResult["advisory"];
       let doctorReceipt: UpdatePostInstallDoctorResult | null = null;
       const pluginFailures: UpdateFailureFact[] = [];
@@ -356,6 +339,7 @@ export async function validateUpdateCandidateCanary(
         // Freeze the winning outcome before teardown can make a killed child
         // emit a successful close event.
         code = outcome.status === "completed" ? outcome.value : 1;
+        signal = outcome.status === "completed" ? running.child.signalCode : null;
         timedOut = outcome.status === "deadline";
         if (timedOut) {
           const elapsed = Date.now() - stepStartedAt;
@@ -365,7 +349,7 @@ export async function validateUpdateCandidateCanary(
               ? parseUpdateDoctorLintReport(running.stdout(), env)
               : undefined;
           const completed = checksCompletedAt !== undefined && (phase === "doctor" || lintReport);
-          timeoutMessage = `Update ${phase} checks phase timed out (${elapsed}ms)`;
+          timeoutMessage = `candidate-migration-rehearsal: ${phase} exceeded budget after ${Math.ceil(elapsed / 1000)} s (${stepLogTail.at(-1) ?? "no progress output"})`;
           if (completed && checksCompletedAt !== undefined) {
             exitWarning = `Update ${phase} exit phase timed out after ${Date.now() - checksCompletedAt}ms (${elapsed}ms total); checks completed; ${running.processExited() ? "output pipes stayed open" : "process did not exit"}. Continuing with recorded check results.`;
             code =
@@ -384,7 +368,7 @@ export async function validateUpdateCandidateCanary(
             doctorResultPath,
             doctorResultOptions,
           );
-          if (doctorReceipt?.status === "error") {
+          if (doctorReceipt?.status === "error" && !signal) {
             code = 1;
           }
           doctorConfigChanges = doctorReceipt?.configChanges ?? [];
@@ -419,6 +403,7 @@ export async function validateUpdateCandidateCanary(
               durationMs: Date.now() - stepStartedAt,
               exitCode: running.child.exitCode,
               signal: running.child.signalCode,
+              stderrTail: signal ? running.stderrTail() : undefined,
               killed: running.child.killed,
               termination: timedOut ? "timeout" : running.child.signalCode ? "signal" : "exit",
               outputLimitExceeded: running.outputExceeded(),
@@ -501,7 +486,11 @@ export async function validateUpdateCandidateCanary(
         cwd: params.root,
         durationMs: Date.now() - stepStartedAt,
         exitCode: timedOut ? null : code,
-        ...(timedOut ? { termination: "timeout" as const } : {}),
+        ...(timedOut
+          ? { termination: "timeout" as const }
+          : signal
+            ? { termination: "signal" as const, signal, stderrTail: running.stderrTail() }
+            : {}),
       };
       if (doctorAdvisory) {
         step.advisory = doctorAdvisory;
@@ -528,25 +517,17 @@ export async function validateUpdateCandidateCanary(
         if (!findings?.length && phase === "config" && !running.outputExceeded()) {
           findings = parseConfigFailureFacts(running.stdout(), env);
         }
-        step.failureFacts = findings?.length
-          ? findings
-          : [
-              createUpdateFailureFact(
-                {
-                  check: phase,
-                  code:
-                    timedOut && !exitWarning
-                      ? "candidate-checks-timeout"
-                      : phase === "doctor" || phase === "lint"
-                        ? "doctor-failed"
-                        : `candidate-${phase}-failed`,
-                  message: timedOut
-                    ? failureMessage
-                    : (running.stderrDiagnostic() ?? failureMessage),
-                },
-                env,
-              ),
-            ];
+        step.failureFacts = createUpdateCanaryFailureFacts({
+          phase,
+          name: command.name,
+          signal,
+          timedOut,
+          exitWarning,
+          failureMessage,
+          diagnostic: running.stderrDiagnostic(),
+          findings,
+          env,
+        });
       }
       steps.push(step);
       if (code !== 0 && !doctorAdvisory) {
@@ -557,7 +538,7 @@ export async function validateUpdateCandidateCanary(
     if (!candidateSchemaVersions) {
       throw new Error("The update did not report its supported database versions");
     }
-    phase = "startup";
+    progress.phase = "startup";
     activeStep = { name: "candidate-gateway-startup", command: "gateway run" };
     stepStartedAt = Date.now();
     stepLogTail.length = 0;
@@ -596,7 +577,7 @@ export async function validateUpdateCandidateCanary(
         env,
         stateDir: params.stateDir,
         onEndpoint: (endpoint) => {
-          phase = endpoint === "startupz" ? "startup" : "readiness";
+          progress.phase = endpoint === "startupz" ? "startup" : "readiness";
         },
         capture,
       });
@@ -632,7 +613,7 @@ export async function validateUpdateCandidateCanary(
     }
     return {
       status: "ok",
-      phase,
+      phase: progress.phase,
       durationMs: Date.now() - started,
       logTail,
       candidateSchemaVersions,
@@ -651,6 +632,7 @@ export async function validateUpdateCandidateCanary(
       // A receipt refusal must not become a failed candidate check or be reported again.
       throw error;
     }
+    const { phase } = progress;
     const durationMs = Date.now() - stepStartedAt;
     const displayPhase = phase === "lint" ? "health" : phase;
     const failureLine = capture(`${displayPhase}: ${coerceErrorMessage(error)} (${durationMs}ms)`);
@@ -687,7 +669,7 @@ export async function validateUpdateCandidateCanary(
       failed.failureFacts.some(
         (fact) => failureLine === `${displayPhase}: ${fact.message} (${durationMs}ms)`,
       );
-    failed.stderrTail = stepLogTail.slice(0, repeatsFact ? -1 : undefined).join("\n");
+    failed.stderrTail ??= stepLogTail.slice(0, repeatsFact ? -1 : undefined).join("\n");
     try {
       await receipts.onStep?.(failed);
     } catch (recordingError) {

@@ -511,7 +511,7 @@ async function prepareReadOnlySourceInProcess(
 ): Promise<PreparedSqliteReadOnlyLocation> {
   signal?.throwIfAborted();
   const canonicalPath = fs.realpathSync.native(pathname);
-  const report = createSnapshotAttemptReporter(canonicalPath, 0, performance.now());
+  const report = createSnapshotAttemptReporter(canonicalPath);
   let operation: "raw-copy" | "online-backup" = "online-backup";
   try {
     const journalMode = readSourceJournalMode(canonicalPath);

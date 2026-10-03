@@ -48,12 +48,14 @@ export function createParams(sessionFile: string, workspaceDir: string): Embedde
   return params;
 }
 
-export function createCurrentInputContinuityHarness(
+export async function createCurrentInputContinuityHarness(
   sessionFile: string,
   workspaceDir: string,
   scenario: string,
 ) {
-  openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
+  await openFileBackedSessionManagerForTest(sessionFile, {
+    sessionId: "session-1",
+  }).appendMessageAsync(
     userMessage(
       `PROJECTED_HISTORY_PREFIX ${"x".repeat(600_000)} PROJECTED_HISTORY_TAIL`,
       10,

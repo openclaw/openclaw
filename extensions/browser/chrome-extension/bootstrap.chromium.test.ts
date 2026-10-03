@@ -6,6 +6,7 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type BrowserContext } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getChromeMcpPid } from "../src/browser/chrome-mcp-session.js";
@@ -153,7 +154,9 @@ function decodeSingleNativeResponse(frame: Buffer): Record<string, unknown> {
 }
 
 describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
-  it("pre-registers before the first native call, auto-pairs, and revokes a paused tab", async () => {
+  it("pre-registers before the first native call, auto-pairs, and revokes a paused tab", async ({
+    signal,
+  }) => {
     const diagnostic = createBootstrapDiagnostic();
     cleanups.push(async () => {
       diagnostic.dispose();
@@ -305,21 +308,29 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           .map((productRoot) =>
             path.join(productRoot.nativeManifestDir, "ai.openclaw.browser_bootstrap.json"),
           );
+        const registered = Promise.withResolvers<void>();
         const installPromise = installChromeExtensionBootstrap({
           bundledDir: extensionSource,
           pluginRoot: path.resolve("extensions/browser"),
           waitMs: 15_000,
           deps,
+          signal,
+          onProgress: (message) => {
+            if (message.startsWith("Native bootstrap is ready.")) {
+              registered.resolve();
+            }
+          },
         });
         try {
-          await expect
-            .poll(
-              async () => await exactOwnedManifestsExist(relevantManifestPaths, expectedOrigins),
-              {
-                timeout: 15_000,
-              },
-            )
-            .toBe(true);
+          await withinTest(
+            awaitGateBeforeSettlement(
+              registered.promise,
+              installPromise,
+              "Native host pre-registration failed",
+            ),
+            signal,
+          );
+          expect(await exactOwnedManifestsExist(relevantManifestPaths, expectedOrigins)).toBe(true);
         } catch (error) {
           const status = await installPromise;
           const modes = await Promise.all(

@@ -20,6 +20,7 @@ import {
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import {
   resolveReplySourceTurnId,
@@ -30,15 +31,18 @@ import { isAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
-import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
+import { runWithChatAbortExecution } from "../chat-abort-lifecycle-internal.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { resolveChatSendCallerContext } from "../server-methods/gateway-client-identity.js";
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
+import { prepareSessionWorkspaceForRun } from "../server-methods/session-create-project.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { prepareGatewaySkillAuthoring } from "../skill-library-authoring.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
@@ -60,11 +64,20 @@ import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineag
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 import { settleUnstartedGatewayFollowup } from "./agent-run-subagent.js";
 import {
+  annotateAgentRunUserTurnPrompt,
   finalizePreparedAgentRunUserTurn,
-  releasePreparedAgentRunUserTurn,
+  releaseStoppedAgentRunUserTurn,
 } from "./agent-run-user-turn.js";
 
 export async function startAgentRunExecution(params: StartAgentRunExecutionParams): Promise<void> {
+  return await runWithChatAbortExecution(
+    params.prepared.activeRunAbort.entry,
+    () => executeAgentRun(params),
+    params.prepared.activeRunAbort.cleanup,
+  );
+}
+
+async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<void> {
   const { prepared } = params;
   const diagnostics = createAgentRunDiagnostics(
     params.resolvedSessionKey,
@@ -81,7 +94,12 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
   const releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
   let finishUndispatchedFollowup = false;
   try {
-    await using preparedModelRuntimeLease = prepared.preparedModelRuntimeLease;
+    await using runtimeResources = new AsyncDisposableStack();
+    let preparedModelRuntimeLease = prepared.preparedModelRuntimeLease
+      ? runtimeResources.use(prepared.preparedModelRuntimeLease)
+      : undefined;
+    let replyDispatchRuntime = prepared.replyDispatchRuntime;
+    let workspaceOverride = prepared.workspaceOverride;
     let leaseActive = true;
     const abortRegistration = prepared.activeRunAbort;
     const abortEntry = abortRegistration.entry;
@@ -128,17 +146,11 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
       }
     };
     let mediaCleanup: Promise<void> | undefined;
-    const cleanupAdmittedRun: typeof prepared.activeRunAbort.cleanup = () => {
+    const cleanupAdmittedRun = async () => {
       const refsToDiscard = unpersistedOffloadedRefs;
       unpersistedOffloadedRefs = [];
       try {
-        const stopReason = prepared.activeRunAbort.entry?.abortStopReason;
-        const outcome = buildAgentRunTerminalOutcome({ status: "error", stopReason });
-        const cancelled =
-          prepared.activeRunAbort.controller.signal.aborted &&
-          stopReason !== "restart" &&
-          (!prepared.userTurn.privateCompletion || outcome.reason === "cancelled");
-        releasePreparedAgentRunUserTurn(prepared.userTurn, cancelled ? "cancelled" : "interrupted");
+        await releaseStoppedAgentRunUserTurn(prepared.userTurn, prepared.activeRunAbort);
       } catch (error) {
         diagnostics.warning("failed to settle pending agent input")(error);
       }
@@ -163,9 +175,9 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
     ) => {
       const run = () =>
         withPreparedModelRuntimePluginGenerationScope(
-          prepared.replyDispatchRuntime.pluginGeneration,
+          replyDispatchRuntime.pluginGeneration,
           () => dispatchAgentRunFromGateway(dispatch),
-          () => (leaseActive ? preparedModelRuntimeLease.snapshot : undefined),
+          () => (leaseActive ? preparedModelRuntimeLease?.snapshot : undefined),
         );
       const recorder = prepared.userTurn.recorder;
       return recorder?.withPendingInput ? recorder.withPendingInput(run) : run();
@@ -173,6 +185,7 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
     return await prepared.activeGatewayWorkAdmission.run(async () => {
       await yieldAfterAgentAcceptedAck();
       let dispatched = false;
+      let publishFinalAfterCleanup: (() => void) | undefined;
       let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
       const settleUnstartedFollowup = (outcome: AgentRunTerminalOutcome) =>
         !dispatched
@@ -192,23 +205,25 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
         const outcome = buildAgentRunTerminalOutcome({ status: "error", error: renderedErr });
         if (recordCompletion) {
           try {
-            prepared.userTurn.recorder?.completeProcessing?.(outcome);
+            await completeUserTurnProcessing(prepared.userTurn.recorder, outcome);
           } catch (completionError) {
             diagnostics.warning("input completion persistence failed")(completionError);
           }
         }
         await settleUnstartedFollowup(outcome);
         const payload = { runId: params.runId, status: "error" as const, summary: renderedErr };
-        setGatewayDedupeEntries({
-          dedupe: params.context.dedupe,
-          keys: params.agentDedupeKeys,
-          session: captureAgentJobSession(jobSessionBinding),
-          entry: diagnostics.forReplay({ ts: Date.now(), ok: false, payload, error }),
-        });
-        params.io.emitFinal([false, payload, error], {
-          runId: params.runId,
-          ...diagnostics.errorMeta(renderedErr),
-        });
+        publishFinalAfterCleanup = () => {
+          setGatewayDedupeEntries({
+            dedupe: params.context.dedupe,
+            keys: params.agentDedupeKeys,
+            session: captureAgentJobSession(jobSessionBinding),
+            entry: diagnostics.forReplay({ ts: Date.now(), ok: false, payload, error }),
+          });
+          params.io.emitFinal([false, payload, error], {
+            runId: params.runId,
+            ...diagnostics.errorMeta(renderedErr),
+          });
+        };
       };
       const finishUndispatchedAbort = async () => {
         const stopReason = prepared.activeRunAbort.entry?.abortStopReason?.trim() || "rpc";
@@ -220,7 +235,7 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
         });
         try {
           pendingRecovery = await prepared.restoreAdmittedRestartRecoveryInterrupted?.();
-          prepared.userTurn.recorder?.completeProcessing?.(outcome);
+          await completeUserTurnProcessing(prepared.userTurn.recorder, outcome);
         } catch (error) {
           // This helper also runs from the outer abort catch. A failed required
           // write must still publish a final error and release the admitted turn.
@@ -228,17 +243,22 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
           return;
         }
         await settleUnstartedFollowup(outcome);
-        setAbortedAgentDedupeEntries({
-          dedupe: params.context.dedupe,
-          keys: params.agentDedupeKeys,
-          session: captureAgentJobSession(jobSessionBinding),
-          agentId: params.activeSessionAgentId,
-          runId: params.runId,
-          stopReason,
-        });
-        params.io.emitFinal([true, buildAbortedAgentPayload(params.runId, stopReason), undefined], {
-          runId: params.runId,
-        });
+        publishFinalAfterCleanup = () => {
+          setAbortedAgentDedupeEntries({
+            dedupe: params.context.dedupe,
+            keys: params.agentDedupeKeys,
+            session: captureAgentJobSession(jobSessionBinding),
+            agentId: params.activeSessionAgentId,
+            runId: params.runId,
+            stopReason,
+          });
+          params.io.emitFinal(
+            [true, buildAbortedAgentPayload(params.runId, stopReason), undefined],
+            {
+              runId: params.runId,
+            },
+          );
+        };
       };
       try {
         if (prepared.activeRunAbort.controller.signal.aborted) {
@@ -246,11 +266,43 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
           return;
         }
 
+        if (prepared.acquireWorkspaceModelRuntime) {
+          const entry = params.sessionEntry;
+          if (!entry || !params.resolvedSessionKey || entry.sessionId !== abortEntry?.sessionId) {
+            throw new Error("Session changed before preparing its worktree.");
+          }
+          await prepareSessionWorkspaceForRun({
+            entry,
+            cfg: params.cfgForAgent ?? params.cfg,
+            agentId: params.activeSessionAgentId,
+            runId: params.runId,
+            sessionKey: params.resolvedSessionKey,
+            storePath: prepared.lifecycleStorePath,
+            context: params.context,
+            signal: abortController.signal,
+            assertCurrent: assertDispatchCurrent,
+            runSetupScript: params.client?.connect.scopes?.includes(ADMIN_SCOPE) === true,
+          });
+          assertDispatchCurrent();
+          workspaceOverride = resolveIngressWorkspaceOverrideForSessionRun({
+            spawnedBy: entry.spawnedBy,
+            workspaceDir: entry.spawnedWorkspaceDir,
+            cwd: entry.spawnedCwd,
+          });
+          preparedModelRuntimeLease = runtimeResources.use(
+            await prepared.acquireWorkspaceModelRuntime(workspaceOverride),
+          );
+          assertDispatchCurrent();
+          replyDispatchRuntime = Object.freeze({
+            ...replyDispatchRuntime,
+            pluginGeneration: preparedModelRuntimeLease.pluginGeneration,
+          });
+        }
+
         let message = prepared.userTurn.message;
         let execApprovalContinuationPromptRange =
           prepared.userTurn.execApprovalContinuationPromptRange;
-        const execApprovalContinuationTranscriptPromptRange =
-          prepared.userTurn.execApprovalContinuationTranscriptPromptRange;
+        const execApprovalContinuationTranscriptPromptRange = execApprovalContinuationPromptRange;
 
         // Admission owns plugin/settlement adoption; other inter-session work
         // must leave the paused task's completion lifecycle with its owner.
@@ -288,18 +340,11 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
         }
 
         if (!params.isRawModelRun) {
-          const unannotatedMessage = message;
-          message = annotateInterSessionPromptText(unannotatedMessage, params.inputProvenance);
-          if (execApprovalContinuationPromptRange) {
-            if (!message.endsWith(unannotatedMessage)) {
-              throw new Error("exec approval continuation prompt range could not be annotated");
-            }
-            const offset = message.length - unannotatedMessage.length;
-            execApprovalContinuationPromptRange = {
-              start: offset + execApprovalContinuationPromptRange.start,
-              end: offset + execApprovalContinuationPromptRange.end,
-            };
-          }
+          ({ message, execApprovalContinuationPromptRange } = annotateAgentRunUserTurnPrompt({
+            message,
+            inputProvenance: params.inputProvenance,
+            execApprovalContinuationPromptRange,
+          }));
         }
         const senderIsOwner = prepared.userTurn.senderIsOwner;
         const userTurnTranscriptRecorder = prepared.userTurn.recorder;
@@ -388,7 +433,7 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
         const gatewayContext = params.context.resolveGatewayContext?.();
         const skillLibraryAuthoring =
           gatewayContext && params.resolvedSessionKey
-            ? prepareGatewaySkillAuthoring(
+            ? await prepareGatewaySkillAuthoring(
                 {
                   client: params.client,
                   context: gatewayContext,
@@ -417,8 +462,8 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
               assertSettlementCurrent,
               admittedRunEntry: abortEntry,
               commandRuntimeContext: {
-                config: prepared.replyDispatchRuntime.config,
-                pluginGeneration: prepared.replyDispatchRuntime.pluginGeneration,
+                config: replyDispatchRuntime.config,
+                pluginGeneration: replyDispatchRuntime.pluginGeneration,
               },
               cronCreatorAuthority: prepared.cronCreatorAuthority,
               ingressOpts: {
@@ -568,7 +613,7 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
                     prepared.activeRunAbort.entry.sessionId = sessionId;
                   }
                 },
-                workspaceDir: prepared.workspaceOverride,
+                workspaceDir: workspaceOverride ?? replyDispatchRuntime.workspaceDir,
                 cwd: resolveSessionRuntimeCwd({
                   requestedCwd: params.request.cwd,
                   sessionEntry: params.sessionEntry,
@@ -641,7 +686,7 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
                   );
                 } finally {
                   try {
-                    cleanupAdmittedRun();
+                    await cleanupAdmittedRun();
                   } finally {
                     scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
                   }
@@ -654,6 +699,7 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
             await mediaCleanup;
           } finally {
             finishUndispatchedFollowup = !dispatched;
+            publishFinalAfterCleanup?.();
           }
         }
       }

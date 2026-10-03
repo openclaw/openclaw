@@ -39,7 +39,7 @@ it.each(["owner", "tile"] as const)(
         renderNewSessionDraftComposer({
           agentId: "main",
           attachmentDraft,
-          canSubmit: attachmentDraft.pendingReads === 0,
+          canSubmit: attachmentDraft.reads.pendingReads === 0,
           context: undefined,
           draftOwnerKey: "attachments",
           isCatalogTarget: true,
@@ -69,7 +69,7 @@ it.each(["owner", "tile"] as const)(
       createDragEvent("drop", [new File(["first"], "first.txt"), new File(["bad"], "bad.txt")]),
     );
     composer.dispatchEvent(createDragEvent("drop", [new File(["second"], "second.txt")]));
-    expect(attachmentDraft.pendingReads).toBe(3);
+    expect(attachmentDraft.reads.pendingReads).toBe(3);
     expect(
       container.querySelector(".new-session-page__start-submit")?.getAttribute("aria-busy"),
     ).toBe("true");
@@ -107,7 +107,7 @@ it.each(["owner", "tile"] as const)(
     );
     expect(status()?.textContent).toContain("Preparing 1 attachment");
     readers[1]?.dispatchEvent(new ProgressEvent("error"));
-    await waitForFast(() => expect(attachmentDraft.pendingReads).toBe(0));
+    await waitForFast(() => expect(attachmentDraft.reads.pendingReads).toBe(0));
     tiles.forEach((tile, index) =>
       expect(container.querySelectorAll(".chat-attachment-thumb")[index]).toBe(tile),
     );
@@ -117,9 +117,9 @@ it.each(["owner", "tile"] as const)(
     expect(status()?.textContent?.trim()).toBe("");
 
     composer.dispatchEvent(createDragEvent("drop", [new File(["held"], "held.txt")]));
-    expect(attachmentDraft.pendingReads).toBe(1);
+    expect(attachmentDraft.reads.pendingReads).toBe(1);
     if (cancellation === "owner") {
-      attachmentDraft.abortReads();
+      attachmentDraft.reads.abortReads();
     } else {
       container.querySelector<HTMLButtonElement>('button[aria-label="Remove held.txt"]')?.click();
     }
@@ -130,7 +130,7 @@ it.each(["owner", "tile"] as const)(
     Object.defineProperty(readers[3], "result", { value: "data:text/plain;base64,aGVsZA==" });
     readers[3]?.dispatchEvent(new ProgressEvent("load"));
     await Promise.resolve();
-    expect(attachmentDraft.pendingReads).toBe(0);
+    expect(attachmentDraft.reads.pendingReads).toBe(0);
     expect(attachmentDraft.attachments.map(({ fileName }) => fileName)).toEqual([
       "first.txt",
       "second.txt",

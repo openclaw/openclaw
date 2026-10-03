@@ -133,12 +133,25 @@ const RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map(
 
 // Runtime launches added after 9.5: FaceTime starts its own staged capture
 // helper with no arguments and a sanitized env, and ONNX forks its bundled
-// worker entry from process.execPath.
-const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+// worker entry from process.execPath. Freeze these requirements for 9.6 and 9.7.
+const RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ...RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
   ["@openclaw/facetime:dangerous-exec:src/audio-pump.ts", 1],
   ["@openclaw/onnx:dangerous-exec:src/worker-client.ts", 1],
 ]);
+
+const RELEASE_2026_9_8_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+  ...RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+  ["@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-vc-runtime.ts", 1],
+]);
+
+// The ACPX proxy asset was removed from the packed plugin after 2026.9.8.
+// Preserve the shipped inventory while matching current package contents.
+const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map(
+  [...RELEASE_2026_9_8_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS].filter(
+    ([key]) => key !== "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
+  ),
+);
 
 type ReviewedReleaseLayout = {
   id: string;
@@ -298,11 +311,35 @@ for (const [key, count] of [
   CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
 }
 
+const RELEASE_2026_9_8_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+);
+
 const CURRENT_SECURITY_INVENTORY_POLICY: PluginSecurityInventoryPolicy = {
   layout: CURRENT_REVIEWED_RELEASE_LAYOUT,
   optionalPackedFindingCounts: CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
   requiredSourceFindingCounts: CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
 };
+
+const REVIEWED_EXACT_PACKED_FIXTURES = [
+  // This loopback-only native fixture owns its temporary home and joins its child.
+  {
+    packageName: "@openclaw/codex",
+    path: "src/app-server/run-attempt.skills.native.test.ts",
+    ruleId: "dangerous-exec",
+    count: 1,
+    sha256: "111364dcbc09d239ddac974953b2fe4d587b32ebcba3da8ac579a0dc1768569a",
+  },
+  // The Windows-only fixture invokes the pinned MXC executable with a generated
+  // config in dry-run mode and a fixed timeout.
+  {
+    packageName: "@openclaw/mxc-sandbox",
+    path: "test/mxc-sdk-wire-contract.integration.test.ts",
+    ruleId: "dangerous-exec",
+    count: 1,
+    sha256: "9b5b0dc1f3f43bf2983135a35e12e53c76d9769bc3abdd5da1f08f2f1085d4ee",
+  },
+] as const;
 
 const FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
@@ -362,6 +399,11 @@ const FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT = {
   ]),
 };
 
+const FROZEN_EXTENDED_STABLE_2026_8_33_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map([
+  ...RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+  ["@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-vc-runtime.ts", 1],
+]);
+
 const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurityInventoryPolicy>([
   [
     "release/2026.9.1",
@@ -408,9 +450,25 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
     {
       ...CURRENT_SECURITY_INVENTORY_POLICY,
       optionalPackedFindingCounts: RELEASE_2026_9_6_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
-  ["release/2026.9.7", CURRENT_SECURITY_INVENTORY_POLICY],
+  [
+    "release/2026.9.7",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      requiredSourceFindingCounts: RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  [
+    "release/2026.9.8",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: RELEASE_2026_9_8_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_8_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  ["release/2026.10.1", CURRENT_SECURITY_INVENTORY_POLICY],
   [
     "extended-stable/2026.6.33",
     {
@@ -433,7 +491,8 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
     {
       layout: FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT,
       optionalPackedFindingCounts: FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
-      requiredSourceFindingCounts: RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+      requiredSourceFindingCounts:
+        FROZEN_EXTENDED_STABLE_2026_8_33_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
 ]);
@@ -950,15 +1009,19 @@ export function loadPluginNpmSecurityArtifacts(params: {
   };
 }
 
+type PluginTarballInspection = {
+  inventory: Array<
+    { path: string; sizeBytes: number } & ({ type: "file"; sha256: string } | { type: "directory" })
+  >;
+  packageManifest: Record<string, unknown>;
+  tarballSha256: string;
+};
+
 export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
   directlyScannedFileCount: number;
   directlyScannedFindings: SkillScanFinding[];
   fileCount: number;
-  inspection: {
-    inventory: Array<{ path: string; sizeBytes: number; type: string }>;
-    packageManifest: Record<string, unknown>;
-    tarballSha256: string;
-  };
+  inspection: PluginTarballInspection;
   packedFiles: string[];
   stageDir: string;
   totalBytes: number;
@@ -977,11 +1040,7 @@ export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
     const inspection = inspectPackageTarballBytes(
       tarballBytes,
       PLUGIN_TARBALL_INSPECTION_LIMITS,
-    ) as {
-      inventory: Array<{ path: string; sizeBytes: number; type: string }>;
-      packageManifest: Record<string, unknown>;
-      tarballSha256: string;
-    };
+    ) as PluginTarballInspection;
     for (const entry of inspection.inventory) {
       if (entry.type !== "file") {
         continue;
@@ -1133,6 +1192,7 @@ export function assertCompleteScannerSummary(
 async function scanSupplementalInertPluginInput(
   plugin: PluginNpmSecurityArtifact,
   policy: PluginSecurityInventoryPolicy | undefined,
+  targetContextRef: string,
 ): Promise<ScanPackageResult> {
   const reviewedCriticalFindings: string[] = [];
   const expectedReviewedCriticalFindings: string[] = [];
@@ -1146,6 +1206,22 @@ async function scanSupplementalInertPluginInput(
       staged.inspection.tarballSha256 !== plugin.tarballSha256
     ) {
       throw new Error(`${plugin.packageName}: supplemental inert package input identity mismatch.`);
+    }
+    let qualifiedFixtureKey: string | undefined;
+    const fixture = REVIEWED_EXACT_PACKED_FIXTURES.find(
+      (candidate) => candidate.packageName === plugin.packageName,
+    );
+    if (fixture && (targetContextRef === "" || targetContextRef === "release/2026.10.1")) {
+      const entry = staged.inspection.inventory.find(
+        (candidate) => candidate.type === "file" && candidate.path === `package/${fixture.path}`,
+      );
+      if (entry?.type === "file") {
+        const key = `${fixture.packageName}:${fixture.ruleId}:${fixture.path}`;
+        expectedReviewedCriticalFindings.push(...Array.from({ length: fixture.count }, () => key));
+        if (entry.sha256 === fixture.sha256) {
+          qualifiedFixtureKey = key;
+        }
+      }
     }
     const normalizedPackedPaths = new Set<string>();
     for (const packedFile of staged.packedFiles) {
@@ -1181,7 +1257,7 @@ async function scanSupplementalInertPluginInput(
       }
       const record = findingRecord(staged.stageDir, finding);
       const key = findingKey(plugin.packageName, record);
-      if (isReviewedCriticalFinding(key, policy)) {
+      if (isReviewedCriticalFinding(key, policy) || key === qualifiedFixtureKey) {
         reviewedCriticalFindings.push(key);
       } else {
         unexpectedCriticalFindings.push(record);
@@ -1361,7 +1437,9 @@ export async function scanPublishablePluginPackages(
         plugin ? sanitizePackageScanError(plugin, error) : "Unknown package: package scan failed.",
       );
     },
-    tasks: packages.map((plugin) => () => scanSupplementalInertPluginInput(plugin, policy)),
+    tasks: packages.map(
+      (plugin) => () => scanSupplementalInertPluginInput(plugin, policy, targetContextRef),
+    ),
   });
   return {
     packageResults: results.filter((result): result is ScanPackageResult => result !== undefined),

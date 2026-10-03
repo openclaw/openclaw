@@ -1,9 +1,11 @@
+import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
+import type { SessionTranscriptBoundedMessageTailOptions } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import {
   prepareSqliteTranscriptReadScope,
   toDatabaseOptions,
@@ -11,6 +13,8 @@ import {
 import { readSessionTranscriptWatermark } from "../config/sessions/session-accessor.sqlite-transcript-watermark.js";
 import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
 import { readRestoredSessionTranscript } from "../config/sessions/session-cold-storage-read.js";
+import { readSessionTranscriptAccountingFromProjection } from "../config/sessions/session-transcript-accounting.js";
+import type { SessionTranscriptAccountingOptions } from "../config/sessions/session-transcript-accounting.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
@@ -24,6 +28,10 @@ import {
   resolveTranscriptReadTarget,
   toTranscriptReadScope,
 } from "./session-transcript-read-target.js";
+import type {
+  SessionTranscriptSummaryQuery,
+  SessionTranscriptSummaryResult,
+} from "./session-transcript-summary.js";
 
 export type { SessionTranscriptReadScope } from "./session-transcript-read-kernel.js";
 export { capArrayByJsonBytes } from "./session-utils.fs.js";
@@ -41,8 +49,6 @@ const sessionTranscriptReader = createSessionTranscriptReader({
     );
   },
 });
-// Callback consumers retain their native snapshot; artifact selection uses the typed worker below.
-export const { visitSessionMessagesAsync } = sessionTranscriptReader;
 
 function usesProcessHeldTranscript(scope: SessionTranscriptReadScope): boolean {
   // Incognito SQLite belongs to this process and cannot be reopened in a worker.
@@ -81,23 +87,54 @@ function createHistoryPageReader<Options, Result>(
     read: typeof import("../config/sessions/session-history-worker-runtime.js").readSessionHistoryPageInWorker,
     target: SessionTranscriptReadScope,
     options: Options,
+    signal?: AbortSignal,
   ) => Promise<Result>,
 ) {
-  return async (scope: SessionTranscriptReadScope, inputOptions: Options): Promise<Result> => {
+  return async (
+    scope: SessionTranscriptReadScope,
+    inputOptions: Options,
+    signal?: AbortSignal,
+  ): Promise<Result> => {
+    signal?.throwIfAborted();
     const target = captureHistoryReadScope(scope);
     const options = structuredClone(inputOptions);
     if (usesProcessHeldTranscript(target)) {
-      return readLocal(target, options);
+      const result = await readLocal(target, options);
+      signal?.throwIfAborted();
+      return result;
     }
     const { readSessionHistoryPageInWorker } =
       await import("../config/sessions/session-history-worker-runtime.js");
-    return readWorker(readSessionHistoryPageInWorker, target, options);
+    signal?.throwIfAborted();
+    const result = await readWorker(readSessionHistoryPageInWorker, target, options, signal);
+    signal?.throwIfAborted();
+    return result;
   };
 }
 
 export const readSessionMessagesWithSourceAsync = createHistoryPageReader(
   sessionTranscriptReader.readSessionMessagesWithSourceAsync,
   (read, target, options) => read({ kind: "source-messages", params: { target, options } }),
+);
+
+export const readSessionTranscriptAccountingAsync = createHistoryPageReader(
+  async (target, options: SessionTranscriptAccountingOptions) =>
+    withCurrentProjectionSnapshot(target, (projection) =>
+      readSessionTranscriptAccountingFromProjection(projection, options),
+    ),
+  (read, target, options, signal) =>
+    read({ kind: "active-accounting", params: { target, options } }, signal),
+);
+
+export const readSessionTranscriptBoundedMessageTailPageAsync = createHistoryPageReader(
+  async (target, options: SessionTranscriptBoundedMessageTailOptions) =>
+    withCurrentProjectionSnapshot(
+      target,
+      (projection) =>
+        readSessionTranscriptBoundedMessageTailPageFromProjection(projection, options),
+      options,
+    ),
+  (read, target, options) => read({ kind: "bounded-tail", params: { target, options } }),
 );
 
 export const readRecentSessionMessagesWithStatsAsync = createHistoryPageReader(
@@ -114,6 +151,24 @@ export const readSessionMessagesAroundIdWithStatsAsync = createHistoryPageReader
   sessionTranscriptReader.readSessionMessagesAroundIdWithStatsAsync,
   (read, target, options) => read({ kind: "around-id", params: { target, options } }),
 );
+
+export function readSessionTranscriptSummaryAsync<Query extends SessionTranscriptSummaryQuery>(
+  scope: SessionTranscriptReadScope,
+  query: Query,
+): Promise<Extract<SessionTranscriptSummaryResult, { kind: Query["kind"] }>>;
+export async function readSessionTranscriptSummaryAsync(
+  scope: SessionTranscriptReadScope,
+  inputQuery: SessionTranscriptSummaryQuery,
+): Promise<SessionTranscriptSummaryResult> {
+  const target = captureHistoryReadScope(scope);
+  const query = structuredClone(inputQuery);
+  if (usesProcessHeldTranscript(target)) {
+    return sessionTranscriptReader.readSessionTranscriptSummaryAsync(target, query);
+  }
+  const { readSessionHistoryPageInWorker } =
+    await import("../config/sessions/session-history-worker-runtime.js");
+  return readSessionHistoryPageInWorker({ kind: "summary", params: { target, query } });
+}
 
 export function readSessionArtifacts<Query extends SessionArtifactReadQuery>(
   scope: SessionTranscriptReadScope,

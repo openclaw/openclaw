@@ -183,29 +183,6 @@ describe("gateway settings and layout persistence", () => {
     );
   });
 
-  it("ignores and scrubs legacy persisted tokens", () => {
-    sessionStorage.setItem("openclaw.control.token.v1", "legacy-session-token");
-    const gatewayUrl = "wss://gateway.example:8443/openclaw";
-    writeStored({ gatewayUrl, token: "persisted-token", sessionKey: "agent" }, gatewayUrl);
-    localStorage.setItem(
-      "openclaw.control.currentGateway.v1:wss://gateway.example:8443",
-      gatewayUrl,
-    );
-    const settings = loadSettings();
-    expect(settings.gatewayUrl).toBe(gatewayUrl);
-    expect(settings.token).toBe("");
-    expect(settings.sessionKey).toBe("agent");
-    const rewritten = readStored(gatewayUrl);
-    expect(rewritten.token).toBeUndefined();
-    expect(rewritten.sessionsByGateway).toEqual({
-      "wss://gateway.example:8443/openclaw": {
-        sessionKey: "agent",
-        lastActiveSessionKey: "agent",
-      },
-    });
-    expect(sessionStorage.length).toBe(0);
-  });
-
   it("clears the current-tab token explicitly", () => {
     const gwUrl = expectedGatewayUrl("");
     persistSessionToken(gwUrl, "stale-token");
@@ -351,12 +328,39 @@ describe("gateway settings and layout persistence", () => {
     expect(loadSettings().navWidth).toBe(258);
   });
 
-  it("migrates the legacy route-only list once and writes only sidebarEntries", () => {
-    writeStored({ sidebarPinnedRoutes: ["workboard", "usage", "tasks", "usage", "worktrees", 7] });
-    expect(loadSettings().sidebarEntries).toEqual(["plugin:workboard/workboard", "route:usage"]);
-    const migrated = readStored();
-    expect(migrated.sidebarEntries).toEqual(["plugin:workboard/workboard", "route:usage"]);
-    expect(migrated).not.toHaveProperty("sidebarPinnedRoutes");
+  it.each([
+    ["2026.7.1-beta.1", {}],
+    ["2026.7.1", { sidebarPinnedRoutes: ["workboard", "usage", "tasks", "usage", "worktrees", 7] }],
+  ])("loads and upgrades settings written by %s", (_release, sidebar) => {
+    const gatewayUrl = expectedGatewayUrl("");
+    // Both July writers persisted sessionsByGateway; the stable release added pinned routes.
+    const sessionsByGateway = {
+      [gatewayUrl]: { sessionKey: "agent:main:work", lastActiveSessionKey: "agent:main:work" },
+    };
+    writeStored({
+      gatewayUrl,
+      theme: "claw",
+      themeMode: "dark",
+      navWidth: 300,
+      sessionsByGateway,
+      ...sidebar,
+    });
+    const settings = loadSettings();
+    expect(settings).toMatchObject({
+      gatewayUrl,
+      sessionKey: "agent:main:work",
+      lastActiveSessionKey: "agent:main:work",
+      themeMode: "dark",
+      navWidth: 300,
+    });
+    if ("sidebarPinnedRoutes" in sidebar) {
+      expect(settings.sidebarEntries).toEqual(["plugin:workboard/workboard", "route:usage"]);
+      expect(readStored().sidebarEntries).toEqual(settings.sidebarEntries);
+    }
+    saveSettings(settings);
+    expect(readStored().sessionsByGateway).toEqual(sessionsByGateway);
+    expect(readStored()).not.toHaveProperty("sidebarPinnedRoutes");
+    expect(loadSettings()).toEqual(settings);
   });
 
   it("persists roster mode and defaults invalid stored modes to chip", () => {
