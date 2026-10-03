@@ -3147,166 +3147,25 @@ describe("state migrations", () => {
     expect(result.changes).toContain("Migrated 2 ACP session metadata rows → shared SQLite state");
   });
 
-  it("migrates legacy delivery queue files into shared SQLite state", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(1_000);
+  it.each([
+    "delivery-queue/pending.json",
+    "delivery-queue/failed/failed.json",
+    "session-delivery-queue/pending.json",
+    "delivery-queue/sent.delivered",
+  ])("refuses retired queue files unchanged before migration: %s", async (relativePath) => {
     const { root, stateDir, env } = createMigrationContext(await createTempDir());
-    const cfg = createConfig();
-    await fs.mkdir(path.join(stateDir, "delivery-queue"), { recursive: true });
-    await fs.mkdir(path.join(stateDir, "delivery-queue", "failed"), { recursive: true });
-    await fs.mkdir(path.join(stateDir, "session-delivery-queue"), { recursive: true });
-    await fs.mkdir(path.join(stateDir, "session-delivery-queue", "failed"), { recursive: true });
-    await fs.writeFile(
-      path.join(stateDir, "delivery-queue", "outbound-1.json"),
-      JSON.stringify({
-        id: "outbound-1",
-        enqueuedAt: 10,
-        retryCount: 2,
-        channel: "telegram",
-        to: "123",
-        accountId: "main",
-        lastAttemptAt: 1.5,
-        platformSendStartedAt: Number.MAX_SAFE_INTEGER + 1,
-        payloads: [{ text: "hi" }],
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(stateDir, "session-delivery-queue", "session-1.json"),
-      JSON.stringify({
-        id: "session-1",
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "resume",
-        messageId: "m1",
-        retryCount: 0,
-        enqueuedAt: 20,
-        lastAttemptAt: 21,
-        platformSendStartedAt: 22,
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(stateDir, "delivery-queue", "failed", "outbound-failed.json"),
-      JSON.stringify({
-        id: "outbound-failed",
-        enqueuedAt: 30,
-        retryCount: 3,
-        channel: "telegram",
-        to: "456",
-        lastError: "permanent",
-        retainOnFailure: true,
-        payloads: [{ text: "nope" }],
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(stateDir, "session-delivery-queue", "failed", "session-failed.json"),
-      JSON.stringify({
-        id: "session-failed",
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "failed resume",
-        lastError: "expired",
-        retryCount: 3,
-        enqueuedAt: 40,
-      }),
-      "utf8",
-    );
+    const sourcePath = path.join(stateDir, relativePath);
+    const original = '{"id":"retired","payloads":[{"text":"preserve this message"}]}\n';
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, original);
 
-    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
-    expect(detected.deliveryQueues.hasLegacy).toBe(true);
-
-    const result = await runLegacyStateMigrations({ detected });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain(
-      "Migrated 2 outbound delivery queue entries → shared SQLite state",
-    );
-    expect(result.changes).toContain(
-      "Migrated 1 session delivery queue entry → shared SQLite state",
-    );
-    const { db } = openOpenClawStateDatabase({ env });
-    const rows = db
-      .prepare(
-        "SELECT queue_name, id, status, channel, target, retry_count FROM delivery_queue_entries ORDER BY queue_name, id",
-      )
-      .all();
-    expect(rows).toEqual([
-      {
-        queue_name: "outbound",
-        id: "outbound-failed",
-        status: "failed",
-        channel: null,
-        target: null,
-        retry_count: 3,
-      },
-      {
-        queue_name: "outbound-prepared-v1",
-        id: "outbound-1",
-        status: "pending",
-        channel: "telegram",
-        target: "123",
-        retry_count: 2,
-      },
-      {
-        queue_name: "session",
-        id: "session-1",
-        status: "pending",
-        channel: null,
-        target: null,
-        retry_count: 0,
-      },
-    ]);
-    expect(
-      db
-        .prepare(
-          `SELECT id, last_attempt_at, platform_send_started_at
-             FROM delivery_queue_entries
-            WHERE status = 'pending'
-            ORDER BY id`,
-        )
-        .all(),
-    ).toEqual([
-      { id: "outbound-1", last_attempt_at: null, platform_send_started_at: null },
-      { id: "session-1", last_attempt_at: 21, platform_send_started_at: 22 },
-    ]);
-    expect(
-      db
-        .prepare(
-          `SELECT entry_kind, session_key, account_id, last_attempt_at, last_error,
-                  recovery_state, platform_send_started_at, entry_json, failed_at
-             FROM delivery_queue_entries
-            WHERE status = 'failed'
-            ORDER BY queue_name, id`,
-        )
-        .all(),
-    ).toEqual([
-      {
-        entry_kind: null,
-        session_key: null,
-        account_id: null,
-        last_attempt_at: null,
-        last_error: null,
-        recovery_state: "completed_permanent",
-        platform_send_started_at: null,
-        entry_json: JSON.stringify({
-          id: "outbound-failed",
-          enqueuedAt: 30,
-          retryCount: 3,
-          failedAt: 30,
-          completionRetention: "permanent",
-          recoveryState: "completed_permanent",
-        }),
-        failed_at: 30,
-      },
-    ]);
     await expect(
-      fs.readFile(path.join(stateDir, "delivery-queue", "outbound-1.json.migrated"), "utf8"),
-    ).resolves.toContain("hi");
-    await expect(
-      fs.readFile(path.join(stateDir, "session-delivery-queue", "session-1.json.migrated"), "utf8"),
-    ).resolves.toContain("resume");
+      detectLegacyStateMigrations({ cfg: createConfig(), env, homedir: () => root }),
+    ).rejects.toThrow("Upgrade through OpenClaw 2026.9.7");
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(original);
+    await expect(fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("migrates legacy voice wake JSON settings into shared SQLite state", async () => {
@@ -5101,107 +4960,6 @@ describe("state migrations", () => {
     expect(result.notices).toBeUndefined();
     await fs.access(sourcePath);
     await expectMissingPath(`${sourcePath}.migrated`);
-  });
-
-  it("keeps legacy delivery queue files when shared SQLite already has a conflicting row", async () => {
-    const { root, stateDir, env } = createMigrationContext(await createTempDir());
-    const cfg = createConfig();
-    const queueDir = path.join(stateDir, "delivery-queue");
-    await fs.mkdir(path.join(queueDir, "failed"), { recursive: true });
-    await fs.writeFile(
-      path.join(queueDir, "outbound-1.json"),
-      JSON.stringify({
-        id: "outbound-1",
-        enqueuedAt: 10,
-        retryCount: 2,
-        channel: "telegram",
-        to: "123",
-        payloads: [{ text: "hi" }],
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(queueDir, "outbound-completed.delivered"),
-      '{"id":"done"}\n',
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(queueDir, "outbound-2.json"),
-      JSON.stringify({
-        id: "outbound-2",
-        enqueuedAt: 11,
-        retryCount: 1,
-        channel: "telegram",
-        to: "456",
-        payloads: [{ text: "still pending" }],
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(queueDir, "failed", "outbound-failed.json"),
-      JSON.stringify({
-        id: "outbound-failed",
-        enqueuedAt: 12,
-        retryCount: 3,
-        channel: "telegram",
-        to: "789",
-        lastError: "nope",
-        retainOnFailure: true,
-        payloads: [{ text: "failed once" }],
-      }),
-      "utf8",
-    );
-
-    const { db } = openOpenClawStateDatabase({ env });
-    db.prepare(
-      `
-        INSERT INTO delivery_queue_entries (
-          queue_name, id, status, channel, target, retry_count, entry_json,
-          enqueued_at, updated_at
-        ) VALUES (
-          'outbound', 'outbound-1', 'pending', 'telegram', '123', 0,
-          '{"id":"outbound-1","retryCount":0}', 10, 10
-        )
-      `,
-    ).run();
-
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
-    const result = await runLegacyStateMigrations({ detected });
-
-    expect(result.changes).toContain(
-      "Migrated 2 outbound delivery queue entries → shared SQLite state",
-    );
-    expect(result.changes).toContain(
-      `Archived outbound delivery queue legacy source → ${path.join(queueDir, "outbound-completed.delivered.migrated")}`,
-    );
-    expect(result.warnings).toStrictEqual([
-      "Left outbound delivery queue in place because 1 entry already existed in shared state: outbound-1",
-    ]);
-    await expect(fs.readFile(path.join(queueDir, "outbound-1.json"), "utf8")).resolves.toContain(
-      '"retryCount":2',
-    );
-    await expectMissingPath(path.join(queueDir, "outbound-completed.delivered"));
-    const migratedDb = openOpenClawStateDatabase({ env }).db;
-    expect(
-      migratedDb
-        .prepare(
-          "SELECT id, retry_count, failed_at FROM delivery_queue_entries WHERE queue_name = 'outbound' ORDER BY id",
-        )
-        .all(),
-    ).toEqual([
-      { id: "outbound-1", retry_count: 0, failed_at: null },
-      { id: "outbound-2", retry_count: 1, failed_at: null },
-      { id: "outbound-failed", retry_count: 3, failed_at: 12 },
-    ]);
-
-    vi.setSystemTime(2_000);
-    const rerunDetected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
-    const rerunResult = await runLegacyStateMigrations({ detected: rerunDetected });
-    expect(rerunResult.warnings).toStrictEqual([
-      "Left outbound delivery queue in place because 1 entry already existed in shared state: outbound-1",
-    ]);
   });
 
   it("preserves a readable target store when normalization rejects an existing key", async () => {

@@ -299,10 +299,10 @@ it.each(["cjs", "mjs"])(
       `let registrations = 0;
        ${extension === "mjs" ? "export const register =" : "exports.register ="} () => {
          const registration = ++registrations;
-         return { read: () => registration };
+         return () => registration;
        };`,
     );
-    type BundledModule = { register(): { read(): number } };
+    type BundledModule = { register(): () => number };
     const previous = new PluginInstance("bundled-recovery");
     instances.push(previous);
     bindPluginInstanceModuleLoader({
@@ -312,7 +312,7 @@ it.each(["cjs", "mjs"])(
       rootDir: root,
     });
     const oldCallback = (previous.loadModule(entry) as BundledModule).register();
-    expect(oldCallback.read()).toBe(1);
+    expect(oldCallback()).toBe(1);
     expect(getSharedPluginCodeReloadWarning(previous)).toBeUndefined();
     const recovery = previous.captureModuleLoaderRecovery();
     await previous.dispose();
@@ -323,10 +323,10 @@ it.each(["cjs", "mjs"])(
     recovery.bind(restored);
     recovery.dispose();
     const restoredCallback = (restored.loadModule(entry) as BundledModule).register();
-    expect(restoredCallback.read()).toBe(2);
+    expect(restoredCallback()).toBe(2);
     expect(getSharedPluginCodeReloadWarning(restored)).toBeUndefined();
-    expect(() => oldCallback.read()).toThrow(/reloaded or disabled/);
-    expect(restoredCallback.read()).toBe(2);
+    expect(oldCallback).toThrow(/reloaded or disabled/);
+    expect(restoredCallback()).toBe(2);
 
     const secondRecovery = restored.captureModuleLoaderRecovery();
     await restored.dispose();
@@ -334,7 +334,7 @@ it.each(["cjs", "mjs"])(
     instances.push(final);
     secondRecovery.bind(final);
     secondRecovery.dispose();
-    expect((final.loadModule(entry) as BundledModule).register().read()).toBe(3);
-    expect(() => restoredCallback.read()).toThrow(/reloaded or disabled/);
+    expect((final.loadModule(entry) as BundledModule).register()()).toBe(3);
+    expect(restoredCallback).toThrow(/reloaded or disabled/);
   },
 );

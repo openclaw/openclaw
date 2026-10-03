@@ -10,7 +10,7 @@ import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findPluginHttpRouteRegistrationConflicts } from "./http-route-overlap.js";
 import { getPluginHttpRouteViews, replacePluginHttpRoutes } from "./http-route-owner.js";
-import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
+import { getPluginInstance, wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import { capturePluginLifecycleAuthority, getPluginRecordRegistry } from "./registry-lifecycle.js";
 import {
   resolvePluginRegistrationCapabilities,
@@ -142,6 +142,9 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         `session catalog already registered: ${id} (${existing.pluginId})`,
       );
       return;
+    }
+    if (provider.continueSession) {
+      getPluginInstance(record)?.admitFactory(provider.continueSession);
     }
     const normalizedProvider = { ...provider, id, label };
     registry.sessionCatalogs.push(
@@ -313,6 +316,11 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       );
       pluginsWithChannelRegistrationConflict.add(record.id);
       return;
+    }
+    const agentTools = plugin.agentTools;
+    if (agentTools) {
+      plugin.agentTools = typeof agentTools === "function" ? agentTools : () => agentTools;
+      getPluginInstance(record)?.admitFactory(plugin.agentTools);
     }
     const metadata = {
       // Normalization copied the input; teardown must retain its registration owner.

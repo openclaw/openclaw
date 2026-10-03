@@ -379,7 +379,6 @@ extensions/firecrawl/index.ts	2
 extensions/firecrawl/src/config.ts	3
 extensions/firecrawl/src/firecrawl-client.ts	1
 extensions/firecrawl/src/firecrawl-fetch-provider-shared.ts	5
-extensions/fish-audio-speech/speech-provider.ts	1
 extensions/github-copilot/embeddings.ts	3
 extensions/github-copilot/index.ts	3
 extensions/github-copilot/login.ts	2
@@ -1144,7 +1143,7 @@ packages/ai/src/transports/openai-responses-client.ts	11
 packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
-packages/ai/src/transports/openai-responses-debug.ts	11
+packages/ai/src/transports/openai-responses-debug.ts	10
 packages/ai/src/transports/openai-responses-params-internal.ts	5
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
@@ -2164,8 +2163,7 @@ src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	4
 src/gateway/server-methods/cron.ts	3
-src/gateway/server-methods/devices.ts	4
-src/gateway/server-methods/doctor.ts	3
+src/gateway/server-methods/doctor.ts	2
 src/gateway/server-methods/exec-approvals.ts	2
 src/gateway/server-methods/memory-search.ts	3
 src/gateway/server-methods/migrations.ts	1
@@ -2178,7 +2176,7 @@ src/gateway/server-methods/nodes.invoke-talk-events.ts	1
 src/gateway/server-methods/nodes.pending-work.ts	1
 src/gateway/server-methods/nodes.read.ts	2
 src/gateway/server-methods/open-path.ts	1
-src/gateway/server-methods/plugin-approval.ts	2
+src/gateway/server-methods/plugin-approval.ts	1
 src/gateway/server-methods/plugin-host-hooks.ts	1
 src/gateway/server-methods/restart-request.ts	8
 src/gateway/server-methods/send.ts	1
@@ -2189,7 +2187,6 @@ src/gateway/server-methods/sessions-compact.ts	1
 src/gateway/server-methods/sessions-create.ts	1
 src/gateway/server-methods/sessions-messaging.ts	3
 src/gateway/server-methods/sessions-patch-engine.ts	1
-src/gateway/server-methods/skills-workspace-handler.ts	1
 src/gateway/server-methods/system-agent-chat-params.ts	2
 src/gateway/server-methods/system-changes.ts	9
 src/gateway/server-methods/task-suggestions.ts	5
@@ -2240,7 +2237,6 @@ src/gateway/tools-invoke-http.ts	1
 src/gateway/tools-invoke-shared.ts	3
 src/gateway/watch-node-http.ts	3
 src/gateway/worker-environments/bundle.ts	5
-src/gateway/worker-environments/inference-control.ts	1
 src/gateway/worker-environments/inference-runtime.ts	2
 src/gateway/worker-environments/live-event-projection.ts	1
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
@@ -2403,7 +2399,6 @@ src/infra/state-migrations.runtime-state.ts	1
 src/infra/state-migrations.session-store.ts	6
 src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.state-dir.ts	1
-src/infra/state-migrations.storage.ts	2
 src/infra/state-migrations.tui-last-session.ts	2
 src/infra/state-migrations.update-check.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	2
@@ -2425,7 +2420,7 @@ src/infra/windows-shell-command.ts	1
 src/interactive/payload.ts	1
 src/llm/providers/stream-wrappers/google-thinking-payload.ts	3
 src/llm/providers/stream-wrappers/moonshot-thinking.ts	2
-src/llm/providers/stream-wrappers/openai.ts	11
+src/llm/providers/stream-wrappers/openai.ts	8
 src/llm/providers/stream-wrappers/stream-payload-utils.ts	1
 src/llm/utils/node-http-proxy.ts	1
 src/llm/utils/oauth/anthropic.ts	2
@@ -2682,7 +2677,7 @@ src/process/supervisor/adapters/child.ts	2
 src/process/supervisor/adapters/pty.ts	1
 src/process/terminal-pty.ts	1
 src/process/windows-command.ts	1
-src/provider-runtime/operation-retry.ts	3
+src/provider-runtime/operation-retry.ts	2
 src/proxy-capture/env.ts	1
 src/proxy-capture/store.sqlite.ts	2
 src/realtime-transcription/websocket-session.ts	2
@@ -2790,9 +2785,8 @@ src/talk/client-voice-session.ts	1
 src/talk/consult-question.ts	2
 src/talk/exact-speech-protocol.ts	1
 src/talk/provider-internal.ts	2
-src/talk/provider-resolver.ts	1
 src/talk/turn-context-tracker.ts	2
-src/trajectory/export.ts	14
+src/trajectory/export.ts	9
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	4
 src/transcripts/config.ts	2
@@ -2963,7 +2957,6 @@ ui/src/lit/subscriptions-controller.ts	1
 ui/src/local-storage.ts	2
 ui/src/main.ts	1
 ui/src/pages/activity/view.ts	2
-ui/src/pages/agents/memory/memory-panel.ts	1
 ui/src/pages/agents/memory/view.ts	1
 ui/src/pages/agents/model-config.ts	2
 ui/src/pages/agents/panels-overview.ts	2
@@ -3022,7 +3015,6 @@ ui/src/pages/chat/talk/google-live.ts	1
 ui/src/pages/chat/talk/shared.ts	3
 ui/src/pages/chat/talk/webrtc.ts	1
 ui/src/pages/chat/workspace-conflict.ts	2
-ui/src/pages/config/config-page.ts	1
 ui/src/pages/config/config-sections.ts	1
 ui/src/pages/config/language-select.ts	2
 ui/src/pages/config/memory-dreaming.ts	1

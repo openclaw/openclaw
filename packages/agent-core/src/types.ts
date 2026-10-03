@@ -100,11 +100,11 @@ export type InternalBeforeToolBatchResult =
   | { intervention?: never; warnings?: ToolLoopWarning[] };
 
 export interface DeferredToolCallContext {
-  /** The assistant message that requested the deferred tool call. */
+  /** The assistant message that requested the tool call. */
   assistantMessage: AssistantMessage;
-  /** The raw tool call block whose authorized tool definition is deferred. */
+  /** The raw tool call block from `assistantMessage.content`. */
   toolCall: AgentToolCall;
-  /** Current agent context before the deferred tool is hydrated. */
+  /** Current agent context when the hook runs. */
   context: AgentContext;
 }
 
@@ -132,31 +132,17 @@ export interface AfterToolCallResult {
 }
 
 /** Context passed to `beforeToolCall`. */
-export interface BeforeToolCallContext {
-  /** The assistant message that requested the tool call. */
-  assistantMessage: AssistantMessage;
-  /** The raw tool call block from `assistantMessage.content`. */
-  toolCall: AgentToolCall;
+export interface BeforeToolCallContext extends DeferredToolCallContext {
   /** Validated tool arguments for the target tool schema. */
   args: unknown;
-  /** Current agent context at the time the tool call is prepared. */
-  context: AgentContext;
 }
 
 /** Context passed to `afterToolCall`. */
-export interface AfterToolCallContext {
-  /** The assistant message that requested the tool call. */
-  assistantMessage: AssistantMessage;
-  /** The raw tool call block from `assistantMessage.content`. */
-  toolCall: AgentToolCall;
-  /** Validated tool arguments for the target tool schema. */
-  args: unknown;
+export interface AfterToolCallContext extends BeforeToolCallContext {
   /** The executed tool result before unknown `afterToolCall` overrides are applied. */
   result: AgentToolResult<unknown>;
   /** Whether the executed tool result is currently treated as an error. */
   isError: boolean;
-  /** Current agent context at the time the tool call is finalized. */
-  context: AgentContext;
 }
 
 /**
@@ -166,23 +152,11 @@ export interface AfterToolCallContext {
  * execution. `args` contains validated arguments when execution reached the
  * prepared state, otherwise the raw model arguments.
  */
-export interface AfterToolOutcomeContext {
-  /** The assistant message that requested the tool call. */
-  assistantMessage: AssistantMessage;
-  /** The tool call whose final result is being emitted. */
-  toolCall: AgentToolCall;
-  /** Validated arguments when available, otherwise the raw model arguments. */
-  args: unknown;
-  /** Final result after any executed-only `afterToolCall` override. */
-  result: AgentToolResult<unknown>;
-  /** Whether the finalized result is currently treated as an error. */
-  isError: boolean;
+export interface AfterToolOutcomeContext extends AfterToolCallContext {
   /** Whether the tool implementation started executing. */
   executionStarted: boolean;
   /** Typed pre-execution failure provenance when available. */
   errorKind?: "argument-validation";
-  /** Current agent context at the time the tool outcome is finalized. */
-  context: AgentContext;
 }
 
 /** Context passed to `shouldStopAfterTurn`. */

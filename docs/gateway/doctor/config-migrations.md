@@ -105,6 +105,13 @@ live files and reports the upgrade requirement before activation, including when
 a published updater omits those files from its later rehearsal snapshot. Existing SQLite cron stores,
 including their owner and delivery repairs, keep their normal update path.
 
+Doctor refuses pre-July JSON delivery queue files and leaves them unchanged.
+Upgrade through `2026.9.7` and run its `openclaw doctor --fix` before retrying.
+Current SQLite queues remain supported. Updates driven by `2026.9.7` check these
+original files before stopping the running Gateway. The same early check reports
+the existing recovery guidance for a retired `plugins/installs.json` index. See
+[state migration recovery](/gateway/doctor/state-and-sessions).
+
 Doctor also refuses these retired config inputs:
 
 - `agents.defaults.llm`, agent `embeddedPi`, `embeddedHarness`, whole-agent

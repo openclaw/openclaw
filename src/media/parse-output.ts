@@ -487,25 +487,34 @@ export function splitMediaOutput(
   let foundMediaToken = false;
   const segments: ParsedMediaOutputSegment[] = [];
   let lastTextSegment: Extract<ParsedMediaOutputSegment, { type: "text" }> | undefined;
+  let lineSeparator = "";
+  let lastTextSeparator = "";
 
   const pushTextSegment = (text: string) => {
     const last = segments[segments.length - 1];
     if (last?.type === "text") {
-      last.text = `${last.text}\n${text.trim() ? text : ""}`;
+      last.text = `${last.text}${lastTextSeparator}${text.trim() ? text : ""}`;
+      lastTextSeparator = lineSeparator;
     } else if (!text.trim()) {
-      if (last?.type === "media" && lastTextSegment && !lastTextSegment.text.endsWith("\n")) {
-        lastTextSegment.text += "\n";
+      if (last?.type === "media" && lastTextSegment && !/[\r\n]$/.test(lastTextSegment.text)) {
+        lastTextSegment.text += lastTextSeparator;
       }
     } else {
       lastTextSegment = { type: "text", text };
+      lastTextSeparator = lineSeparator;
       segments.push(lastTextSegment);
     }
   };
 
   const codeBlocks = findCodeRegions(trimmedRaw).filter((region) => region.block);
 
-  const lines = trimmedRaw.split("\n");
+  const lines = trimmedRaw.split(/(\r\n|\r|\n)/);
   const keptLines: string[] = [];
+  let keptSeparator = "";
+  const keepLine = (text: string) => {
+    keptLines.push(keptSeparator, text);
+    keptSeparator = lineSeparator;
+  };
   const markdownImages =
     mayContainMarkdownImage &&
     lines.some((line) => line.length <= MAX_MARKDOWN_IMAGE_LINE_LENGTH && line.includes("!["))
@@ -516,7 +525,9 @@ export function splitMediaOutput(
   let lineOffset = 0; // Track character offset for code-block checking
   // Line offsets and scanner spans advance in source order.
   let codeBlockIndex = 0;
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 2) {
+    const line = expectDefined(lines[lineIndex], "media output line");
+    lineSeparator = lines[lineIndex + 1] ?? "";
     const lineEnd = lineOffset + line.length;
     const lineImages: MarkdownImageMatch[] = [];
     for (; markdownImageIndex < markdownImages.length; markdownImageIndex += 1) {
@@ -544,9 +555,9 @@ export function splitMediaOutput(
       codeBlock = codeBlocks[codeBlockIndex];
     }
     if (codeBlock && lineEnd > codeBlock.start) {
-      keptLines.push(line);
+      keepLine(line);
       pushTextSegment(line);
-      lineOffset += line.length + 1; // +1 for newline
+      lineOffset += line.length + lineSeparator.length;
       continue;
     }
 
@@ -562,12 +573,12 @@ export function splitMediaOutput(
           })
         : { lineSegments: [], foundMedia: false };
       if (!markdownImageResult.foundMedia) {
-        keptLines.push(line);
+        keepLine(line);
         pushTextSegment(line);
       } else {
         foundMediaToken = true;
         if (markdownImageResult.cleanedLine !== undefined) {
-          keptLines.push(markdownImageResult.cleanedLine);
+          keepLine(markdownImageResult.cleanedLine);
         }
         for (const segment of markdownImageResult.lineSegments) {
           if (segment.type === "text") {
@@ -577,15 +588,15 @@ export function splitMediaOutput(
           segments.push(segment);
         }
       }
-      lineOffset += line.length + 1; // +1 for newline
+      lineOffset += line.length + lineSeparator.length;
       continue;
     }
 
     const match = MEDIA_TOKEN_RE.exec(line);
     if (!match) {
-      keptLines.push(line);
+      keepLine(line);
       pushTextSegment(line);
-      lineOffset += line.length + 1;
+      lineOffset += line.length + lineSeparator.length;
       continue;
     }
 
@@ -652,13 +663,13 @@ export function splitMediaOutput(
       cleanedLine = cleanLineText(line);
     }
     if (cleanedLine) {
-      keptLines.push(cleanedLine);
+      keepLine(cleanedLine);
       pushTextSegment(cleanedLine);
     }
-    lineOffset += line.length + 1;
+    lineOffset += line.length + lineSeparator.length;
   }
 
-  const visibleText = keptLines.join("\n").replace(/^(?:[ \t]*\n)+/, "");
+  const visibleText = keptLines.join("").replace(/^(?:[ \t]*(?:\r\n|\r|\n))+/, "");
   const audioTagResult =
     options.extractAudioDirectives === false
       ? { text: visibleText, audioAsVoice: false }

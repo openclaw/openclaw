@@ -51,7 +51,10 @@ export async function runQuickstartForegroundGateway(
       (deps.waitForGateway ?? waitForGatewayReachable)({
         url: links.wsUrl,
         token: authMode === "token" ? credentials.token : undefined,
-        password: authMode === "password" ? credentials.password : undefined,
+        password:
+          authMode === "password" || authMode === "trusted-proxy"
+            ? credentials.password
+            : undefined,
         ...resolveGatewayStartupTiming(),
       }),
     ]);

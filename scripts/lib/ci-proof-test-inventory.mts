@@ -328,7 +328,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/buzz/src/setup-surface.test.ts",
   "extensions/clickclack/src/gateway.test.ts",
   "extensions/clickclack/src/inbound.model-loop.test.ts",
-  "extensions/code-mode-quickjs/src/live-vm.test.ts",
   "extensions/code-mode-quickjs/src/worker-lifecycle.test.ts",
   "extensions/codex/doctor-contract-api.test.ts",
   "extensions/codex/index.test.ts",

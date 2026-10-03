@@ -1210,7 +1210,7 @@ src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-instance-owned-values.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
-src/plugins/plugin-instance-value-views.ts
+src/plugins/plugin-instance-bindings.ts
 src/plugins/plugin-instance.ts
 src/plugins/plugin-lifecycle-trace.ts
 src/plugins/plugin-metadata-contributions.ts
@@ -1600,6 +1600,7 @@ src/utils.ts
 src/utils/boolean.ts
 src/utils/delivery-context.read.ts
 src/utils/fetch-timeout.ts
+src/utils/github-login.ts
 src/utils/parse-json-compat.ts
 src/utils/run-with-concurrency.ts
 src/utils/shell-argv.ts

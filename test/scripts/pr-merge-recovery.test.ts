@@ -6,6 +6,54 @@ import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-suppor
 const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness();
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it("recovers a REST projection refusal through one pinned GraphQL squash", () => {
+    const f = fixture();
+    f.save({
+      ...f.state(),
+      restPolicy: "supported",
+      restDispatchChange: "projection",
+    });
+
+    const refused = f.run();
+    expect(refused.status, refused.output).toBe(1);
+    const previous = f.git(["rev-parse", outcomeRef]);
+    const previousRecord = f.record();
+    expect(previousRecord).toMatchObject({
+      phase: "intent",
+      accepted: false,
+      transport: "rest",
+      head: f.head,
+    });
+    expect(f.state().mutations).toBe(0);
+    expect(f.captures()).toHaveLength(1);
+    expect(f.captures()[0]![1]).toContain(
+      "immediate squash requires the prepared open, non-draft, clean PR head",
+    );
+    f.recover();
+
+    const recovered = f.run(false, f.repo, "squash", previous);
+
+    expect(recovered.status, recovered.output).toBe(0);
+    expect(f.record()).toMatchObject({
+      phase: "complete",
+      route: "immediate",
+      head: f.head,
+      recovery: { outcome: previous, attempt: previousRecord.attempt },
+    });
+    expect(f.state().mutations).toBe(1);
+    expect(f.state().restMergePayload).toBeNull();
+    expect(f.state().graphqlMergePayloads).toEqual([
+      {
+        pullRequestId: "fixture-pr",
+        expectedHeadOid: f.head,
+        mergeMethod: "SQUASH",
+        commitBody: f.state().mergeBody,
+      },
+    ]);
+    expect(JSON.parse(f.git(["show", `${previous}:outcome.json`]))).toEqual(previousRecord);
+    f.git(["merge-base", "--is-ancestor", previous, outcomeRef]);
+  });
+
   it("reconciles uncertain dispatch without the body and accepts a body only for explicit recovery", () => {
     const f = fixture();
     const body = join(f.repo, "body.md");

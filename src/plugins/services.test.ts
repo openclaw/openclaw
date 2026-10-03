@@ -505,9 +505,7 @@ describe("startPluginServices", () => {
       const handle = await start(registry);
       try {
         if (phase === "reload") {
-          await expect(handle.reload({}, serviceIds)).rejects.toThrow(
-            "plugin service reload startup failed",
-          );
+          await expect(handle.reload({}, serviceIds)).resolves.toBeUndefined();
         }
         expect(listPluginServiceHealthFailures(registry)).toContainEqual(
           expect.objectContaining({ serviceId: "retry-service", error: failure.message }),
@@ -515,7 +513,7 @@ describe("startPluginServices", () => {
         await handle.reload({}, serviceIds);
         expect(order.slice(-2)).toEqual(["dependency", "dependent"]);
         expect(startService).toHaveBeenCalledTimes(failAt + 1);
-        expect(siblingStart).toHaveBeenCalledTimes(2);
+        expect(siblingStart).toHaveBeenCalledTimes(phase === "reload" ? 3 : 2);
         expect(listPluginServiceHealthFailures(registry)).toEqual([]);
       } finally {
         await handle.stop();

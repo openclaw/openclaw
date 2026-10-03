@@ -6,7 +6,11 @@ import { setImmediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createCapturedPluginRegistration,
   createPluginRuntimeMock,
@@ -97,7 +101,14 @@ describe("Logbook service disposal", () => {
           visionModel: "codex/gpt-5.6-sol",
           analysisIntervalMinutes: 10,
         }),
-        { dataDir, workerModuleUrl, runtime, fullConfig: {}, logger },
+        {
+          dataDir,
+          workerModuleUrl,
+          runtime,
+          fullConfig: {},
+          logger,
+          scheduler: createTestPluginServiceScheduler(),
+        },
       );
       const peer = await LogbookStore.open(dataDir, workerModuleUrl);
       try {
@@ -239,6 +250,7 @@ describe("Logbook service disposal", () => {
     const service = new LogbookService(resolveLogbookConfig({ captureEnabled: false }), {
       dataDir,
       workerModuleUrl,
+      scheduler: createTestPluginServiceScheduler(),
       runtime: createPluginRuntimeMock(),
       fullConfig: {},
       logger: quietLogger,
@@ -259,6 +271,7 @@ describe("Logbook service disposal", () => {
       {
         dataDir,
         workerModuleUrl,
+        scheduler: createTestPluginServiceScheduler(),
         runtime: createPluginRuntimeMock(),
         fullConfig: {},
         logger: quietLogger,
@@ -422,23 +435,26 @@ describe("Logbook service disposal", () => {
         return await observationsInRange(...args);
       });
     }
+    const clock = createGatewaySchedulerClock();
     const service = new LogbookService(
       resolveLogbookConfig({
         captureEnabled: true,
-        captureIntervalSeconds: 600,
+        captureIntervalSeconds: kind.startsWith("capture") ? 5 : 600,
         visionModel: "synthetic/vision",
       }),
-      { runtime, fullConfig: {}, logger, dataDir, workerModuleUrl },
+      {
+        runtime,
+        fullConfig: {},
+        logger,
+        dataDir,
+        workerModuleUrl,
+        scheduler: createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock)),
+      },
     );
     await service.start();
-    const ticks = service as unknown as {
-      captureTick(): Promise<void>;
-      analysisTick(): Promise<void>;
-    };
-    const active = kind.startsWith("capture")
-      ? ticks.captureTick()
-      : kind.startsWith("vision")
-        ? ticks.analysisTick()
+    const active =
+      kind.startsWith("capture") || kind.startsWith("vision")
+        ? Promise.resolve(clock.wake())
         : kind === "status-read"
           ? service.status()
           : kind === "ask-read"
@@ -466,6 +482,7 @@ describe("Logbook service disposal", () => {
         });
       }
       await settled;
+      expect(clock.armedAtMs).toBeNull();
       expect(logger.error).not.toHaveBeenCalled();
       const reopened = await LogbookStore.open(dataDir, workerModuleUrl);
       try {

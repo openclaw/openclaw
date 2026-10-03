@@ -410,8 +410,8 @@ export const createTelegramMessageProcessor = (
               deferred = true;
               drainLifecycle?.onDeferred();
             },
-            onDeferredHeartbeat: () => drainLifecycle?.onDeferredHeartbeat?.(),
-            deferredHeartbeatIntervalMs: drainLifecycle?.deferredHeartbeatIntervalMs,
+            onDeferredHeartbeat: () => participant.heartbeat(),
+            deferredHeartbeatIntervalMs: participant.heartbeatIntervalMs,
             onAbandoned: () => {
               if (!adopted) {
                 void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");

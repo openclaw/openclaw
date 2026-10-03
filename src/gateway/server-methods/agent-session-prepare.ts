@@ -8,7 +8,6 @@ import {
   resolveSessionResetPolicy,
   resolveSessionResetType,
   type SessionEntry,
-  type SessionFreshness,
 } from "../../config/sessions.js";
 import { hasSessionTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
@@ -27,34 +26,6 @@ import type { AgentRunRequest } from "./agent-request-types.js";
 import { evaluateAgentSessionReuse } from "./agent-session-patch.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-type PreparedAgentSession = {
-  cfg: OpenClawConfig;
-  storePath: string;
-  entry?: SessionEntry;
-  canonicalKey: string;
-  storeKeys?: string[];
-  maintenanceConfig: ReturnType<typeof resolveMaintenanceConfigFromInput>;
-  canonicalSessionAgentId: string;
-  resetPolicy: ReturnType<typeof resolveSessionResetPolicy>;
-  now: number;
-  freshness: SessionFreshness | undefined;
-  visibleRequest: boolean;
-  mainSessionKey: string;
-  isSystemGatewayRun: boolean;
-  usableRequestedSessionId?: string;
-  sessionId: string;
-  isNewSession: boolean;
-  rotatedSessionId: boolean;
-  touchInteraction: boolean;
-  sessionPersistedBeforeGatewayAdmission: boolean;
-  effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
-  restoredCronContinuationIdentity?: Pick<
-    RestoredCronContinuation,
-    "lifecycleRevision" | "sessionId"
-  >;
-  failedSessionTranscriptMissing: (entry: SessionEntry | undefined) => boolean;
-};
-
 export function prepareAgentSession(params: {
   cfg: OpenClawConfig;
   requestedSessionKey: string;
@@ -68,7 +39,7 @@ export function prepareAgentSession(params: {
   effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   preAttachmentSession?: { canonicalKey: string; sessionId?: string };
   respond: GatewayRequestHandlerOptions["respond"];
-}): PreparedAgentSession | undefined {
+}) {
   const requestedSessionAgent = resolveRequestedSessionAgentId(
     params.cfg,
     params.requestedSessionKey,
@@ -96,7 +67,9 @@ export function prepareAgentSession(params: {
   }
 
   let effectiveBootstrapContextRunKind = params.effectiveBootstrapContextRunKind;
-  let restoredCronContinuationIdentity: PreparedAgentSession["restoredCronContinuationIdentity"];
+  let restoredCronContinuationIdentity:
+    | Pick<RestoredCronContinuation, "lifecycleRevision" | "sessionId">
+    | undefined;
   const isGeneratedMediaCronContinuation =
     hasGeneratedMediaCompletionEvent(params.request.internalEvents) &&
     parseCronRunScopeSuffix(canonicalKey).runId !== undefined;

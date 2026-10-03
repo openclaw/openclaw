@@ -475,10 +475,14 @@ test(
     writeFileSync(
       selectedGit,
       `#!/bin/sh
-if [ "$1" = diff ] && [ "$2" = --name-only ]; then
-  printf 'docs/partial.md\\0'
-  echo 'fixture changed-path failure' >&2
-  exit 73
+if [ "$1" = diff ]; then
+  for arg in "$@"; do
+    if [ "$arg" = --name-only ]; then
+      printf 'docs/partial.md\\0'
+      echo 'fixture changed-path failure' >&2
+      exit 73
+    fi
+  done
 fi
 exec git "$@"
 `,

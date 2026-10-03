@@ -173,7 +173,6 @@ async function stageWorkerWorkspaceResult(
   },
 ): Promise<string> {
   const root = await ensureWorkerWorkspaceResultRepository(params.root, params.assertCurrent);
-  const stagedResultRef = requireWorkerResultStorageRef(params.stagedResultRef);
   params.assertCurrent?.();
   const temporary = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-import-"),
@@ -186,7 +185,7 @@ async function stageWorkerWorkspaceResult(
     params.assertCurrent?.();
     const input = await fs.open(inputPath, "r");
     try {
-      await withWorkspaceResultRefMutation(root, (baseEnv) => {
+      const { stdout } = await withWorkspaceResultRefMutation(root, (baseEnv) => {
         params.assertCurrent?.();
         return runExec("git", gitCommand(root, ["fast-import", "--quiet"]).slice(1), {
           baseEnv,
@@ -195,10 +194,10 @@ async function stageWorkerWorkspaceResult(
           maxBuffer: 1024 * 1024,
         });
       });
+      return stdout.trim();
     } finally {
       await input.close();
     }
-    return await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`]);
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
   }

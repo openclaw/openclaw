@@ -12,12 +12,14 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import {
   consumeControlPlaneWriteBudget,
   CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS,
   CONTROL_PLANE_RATE_LIMIT_WINDOW_MS,
 } from "./control-plane-rate-limit.js";
+import { errorShapeFromError } from "./error-shape.js";
 import { createExpectedProfileBinding } from "./expected-profile.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import {
@@ -485,6 +487,10 @@ export async function handleGatewayRequest(
         reject: (error) => respond(false, undefined, error),
       });
     } catch (error) {
+      if (error instanceof AgentDatabaseAdmissionError) {
+        respond(false, undefined, errorShapeFromError(ErrorCodes.UNAVAILABLE, error));
+        return;
+      }
       if (!(error instanceof SessionMutationAuthorizationChangedError)) {
         throw error;
       }

@@ -1,3 +1,4 @@
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import { hasKind } from "./slots.js";
@@ -51,6 +52,10 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
       supportsPrivateTranscriptRecall: _droppedPrivateRecall,
       ...consolidationCapability
     } = capability;
+    if (memorySlotSelected && capability.runtime) {
+      // oxlint-disable-next-line typescript/unbound-method -- Record factory identity; executable views bind the original receiver.
+      getPluginInstance(record)?.admitFactory(capability.runtime.getMemorySearchManager);
+    }
     registry.memoryCapabilities.push({
       pluginId: record.id,
       capability: memorySlotSelected ? capability : consolidationCapability,
