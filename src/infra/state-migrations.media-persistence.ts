@@ -113,7 +113,13 @@ async function migrateAgentDatabase(params: {
   preparedArchives?: ReadonlySet<string>;
 }) {
   const database = openNodeSqliteDatabase(params.pathname);
-  const schemaOptions = { agentId: params.agentId, path: params.pathname, env: params.env };
+  const schemaWarnings: string[] = [];
+  const schemaOptions = {
+    agentId: params.agentId,
+    path: params.pathname,
+    env: params.env,
+    onMigrationWarning: (warning: string) => schemaWarnings.push(warning),
+  };
   const runSchema = (operation: Parameters<typeof runSqliteIntegrityOperationInWorker>[0]) =>
     runSqliteIntegrityOperationInWorker(operation, {
       busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -270,6 +276,7 @@ async function migrateAgentDatabase(params: {
           rewrittenSessions: 0,
           rewrittenTrajectoryRows: 0,
           ...archives,
+          warnings: [...schemaWarnings, ...archives.warnings],
           initialVersion,
           finalVersion: userVersion,
         };
@@ -354,6 +361,7 @@ async function migrateAgentDatabase(params: {
     return {
       ...rewritten,
       ...archives,
+      warnings: [...schemaWarnings, ...archives.warnings],
       initialVersion,
       finalVersion: readSqliteUserVersion(database),
     };
