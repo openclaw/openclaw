@@ -93,33 +93,37 @@ describe("Scheduled Task stop/restart cleanup", () => {
         );
         openOpenClawStateDatabase({ env });
         closeOpenClawStateDatabaseForTest();
-        const admission = resolveDoctorUpdateAdmission(env);
-        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-        let clock = 0;
-        vi.spyOn(Date, "now").mockImplementation(() => clock);
-        setTaskStateProbeResult(() => {
-          if (schtasksCalls.some(([action]) => action === "/Run")) {
-            return 4;
-          }
-          if (schtasksCalls.some(([action]) => action === "/End")) {
-            return 3;
-          }
-          clock += GATEWAY_SERVICE_STOP_TIMEOUT_MS / 4;
-          return taskState;
-        });
-        pushSuccessfulSchtasksResponses(4);
+        vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+        try {
+          const admission = resolveDoctorUpdateAdmission(env);
+          vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+          setTaskStateProbeResult(() => {
+            if (schtasksCalls.some(([action]) => action === "/Run")) {
+              return 4;
+            }
+            if (schtasksCalls.some(([action]) => action === "/End")) {
+              return 3;
+            }
+            // Elapsed polling time also runs the retained admission's heartbeat.
+            vi.advanceTimersByTime(GATEWAY_SERVICE_STOP_TIMEOUT_MS / 4);
+            return taskState;
+          });
+          pushSuccessfulSchtasksResponses(4);
 
-        await expect(
-          withGatewayServiceUpdateAuthority(admission.assertCurrent, (assertCurrent) =>
-            restartScheduledTask({ env, stdout, assertCurrent, preserveDefinition: true }),
-          ),
-        ).resolves.toMatchObject({ outcome: "completed" });
+          await expect(
+            withGatewayServiceUpdateAuthority(admission.assertCurrent, (assertCurrent) =>
+              restartScheduledTask({ env, stdout, assertCurrent, preserveDefinition: true }),
+            ),
+          ).resolves.toMatchObject({ outcome: "completed" });
 
-        expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
-        expect(schtasksCalls.filter(([action]) => action === "/End")).toHaveLength(
-          taskState === 4 ? 1 : 0,
-        );
-        expect(() => admission.assertCurrent()).not.toThrow();
+          expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+          expect(schtasksCalls.filter(([action]) => action === "/End")).toHaveLength(
+            taskState === 4 ? 1 : 0,
+          );
+          expect(() => admission.assertCurrent()).not.toThrow();
+        } finally {
+          vi.useRealTimers();
+        }
       });
     },
   );
