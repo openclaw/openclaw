@@ -173,6 +173,32 @@ In onboarding/configure model pickers, the BytePlus auth choice prefers both `by
   </Tab>
 </Tabs>
 
+### Bourse
+
+Bourse resells unused provider capacity at 11-58% under list price. It speaks OpenAI Chat Completions, so no provider plugin is needed - add it as a custom provider:
+
+- Provider: `bourse`
+- 
+- Auth: `BOURSE_API_KEY`
+- 
+- Example model: `bourse/claude-opus-5`
+- 
+- Catalogue and prices: https://bourse.run
+- 
+
+
+```
+
+{models: {mode: "merge",providers: {bourse: {baseUrl: "https://api.bourse.run/v1",apiKey: "${BOURSE_API_KEY}",api: "openai-completions",models: [{id: "claude-opus-5",name: "Claude Opus 5 (Bourse)",contextWindow: 1000000,maxTokens: 128000}],},},},}
+
+```
+
+
+
+Remember to allowlist the model as well as defining the provider, or requests fail with "model not allowed" on a valid key. Context and output limits are per listing rather than global - `claude-opus-5` is 1000000/128000, and the current catalogue is at https://api.bourse.run/public/models.
+
+
+
 ### Synthetic
 
 Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
