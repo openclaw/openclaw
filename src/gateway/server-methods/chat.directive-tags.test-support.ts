@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   loadExactSessionEntryCandidates,
@@ -25,8 +27,61 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import type { DedupeEntry } from "../server-shared.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
+import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
+
+export function expectManagedAudioBlock(
+  block: Record<string, unknown> | undefined,
+  fileName: string,
+  isVoiceNote?: boolean,
+) {
+  expect(block).toEqual(
+    expect.objectContaining({
+      type: "audio",
+      artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+      fileName,
+      mimeType: "audio/mpeg",
+      ...(isVoiceNote === undefined ? {} : { isVoiceNote }),
+    }),
+  );
+}
+
+export class ChatDirectiveDedupe extends Map<string, DedupeEntry> {
+  private readonly pending = new Map<string, ReturnType<typeof createDeferred<void>>>();
+
+  constructor(private readonly signal: AbortSignal) {
+    super();
+  }
+
+  override set(key: string, entry: DedupeEntry): this {
+    super.set(key, entry);
+    if (key.startsWith("chat:")) {
+      const runId = key.slice("chat:".length);
+      if (readChatSendDedupeResponse(this, runId)) {
+        this.pending.get(runId)?.resolve();
+      }
+    }
+    return this;
+  }
+
+  async waitForResponse(runId: string): Promise<void> {
+    if (!readChatSendDedupeResponse(this, runId)) {
+      const publication = this.pending.get(runId) ?? createDeferred();
+      this.pending.set(runId, publication);
+      try {
+        await withinTest(publication.promise, this.signal);
+      } finally {
+        this.pending.delete(runId);
+      }
+    }
+    this.signal.throwIfAborted();
+    // Admission retains request identity before a response-bearing receipt exists.
+    expect(readChatSendDedupeResponse(this, runId)).toBeDefined();
+  }
+}
 
 type ChatDirectiveSessionState = {
   config: Record<string, unknown>;
@@ -52,16 +107,22 @@ export function readChatDirectiveConfig(
 }
 
 export function createChatDirectiveSuiteResources() {
+  const fixtureLifetime = createFixtureLifetime();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-directive-suite-"));
   const databasePath = path.join(root, "openclaw-agent.sqlite");
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  const previousEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
   let metadataOwner: GatewayPluginMetadataOwner | undefined;
   return {
     root,
     databasePath,
     env,
+    runFixture: fixtureLifetime.run,
+    verifyFixtureCleanup: fixtureLifetime.verifyCleanup,
+    settleFixtures: () => fixtureLifetime.cleanup(),
     // The caller retains cleanup ownership before opening can fail.
     open() {
+      setTestEnvValue("OPENCLAW_STATE_DIR", root);
       openOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
       // Session cases share the installed inventory through per-case runtime resets.
       metadataOwner = retainGatewayPluginMetadata(createTestGatewayScheduler());
@@ -116,13 +177,15 @@ export function createChatDirectiveSuiteResources() {
     },
     async close() {
       try {
+        const metadataCleanup = await metadataOwner?.close();
+        expect(metadataCleanup?.failures ?? []).toEqual([]);
         await drainAgentDatabaseResources({ path: databasePath, agentId: "main" }, async () =>
           disposeOpenClawAgentDatabaseByPath(databasePath, { env }),
         );
         await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
         fs.rmSync(root, { recursive: true, force: true });
       } finally {
-        await metadataOwner?.close();
+        previousEnv.restore();
       }
     },
   };
@@ -208,4 +271,49 @@ export function createChatDirectiveReplyBackend(params: {
           },
         }),
   };
+}
+
+export function createUnconfirmedTranscriptDelivery() {
+  const queueLifetime = createFixtureLifetime();
+  const delivery = createDeferred<{
+    transcriptCommit: "unconfirmed";
+    errorMessage: string;
+  }>();
+  const persisted = createDeferred();
+  void persisted.promise.catch(() => {});
+  const queueMessage = vi.fn<NonNullable<ReplyBackendHandle["queueMessage"]>>((_text, options) =>
+    queueLifetime.track(
+      (async () => {
+        options?.onQueueAccepted?.(true);
+        try {
+          await options?.userTurnTranscriptRecorder?.persistApproved();
+          persisted.resolve();
+        } catch (error) {
+          persisted.reject(error);
+          throw error;
+        }
+        return await delivery.promise;
+      })(),
+    ),
+  );
+  return {
+    ...delivery,
+    persisted: persisted.promise,
+    queueMessage,
+    settle: () => queueLifetime.cleanup(),
+  };
+}
+
+export function createChatDirectiveUserMessageReader(
+  readEntries: () => Array<Record<string, unknown>>,
+) {
+  return () =>
+    readEntries()
+      .map((entry) => entry.message)
+      .filter(
+        (candidate): candidate is Record<string, unknown> =>
+          typeof candidate === "object" &&
+          candidate !== null &&
+          (candidate as { role?: unknown }).role === "user",
+      );
 }

@@ -2535,7 +2535,7 @@ describe("updateNpmInstalledPlugins", () => {
     expect(withClawPackageLifecycleLeaseMock).toHaveBeenCalledWith(
       { kind: "plugin", source: "clawhub", ref: "demo" },
       expect.any(Function),
-      { required: true },
+      undefined,
     );
     expect(markClawPackageIndependentlyOwnedMock).toHaveBeenCalledWith({
       kind: "plugin",

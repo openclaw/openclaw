@@ -11,6 +11,7 @@ function createRootAdmissionObservation() {
   const admitted = new WeakMap<Promise<unknown>, { entered: boolean }>();
   const admissions = (
     [
+      "runWithGatewayDetachedWorkAdmission",
       "runWithGatewayIndependentRootWorkAdmission",
       "runWithGatewayIndependentRootWorkContinuation",
     ] as const

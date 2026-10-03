@@ -167,6 +167,7 @@ export async function readExecApprovalsPolicyReadOnlyAsync(
 type ExecApprovalsUpdate = {
   baseHash?: string;
   update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
+  assertCurrent?: () => void;
 };
 
 export function replaceExecApprovalsSnapshot(
@@ -202,6 +203,7 @@ function updateExecApprovalsInTransaction(
   assertNoPendingLegacyExecApprovals();
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
+      params.assertCurrent?.();
       const current = snapshotFromExecApprovalsRow({
         path: resolveExecApprovalsDisplayPath(),
         row: readExecApprovalsConfigRow(db),
@@ -225,10 +227,11 @@ function updateExecApprovalsInTransaction(
       if (current.exists && current.raw === raw) {
         return current;
       }
-      writeExecApprovalsConfigRow({ db, file: next, raw });
+      const persistedRaw = writeExecApprovalsConfigRow({ db, file: next });
+      params.assertCurrent?.();
       return snapshotFromExecApprovalsRow({
         path: current.path,
-        row: { raw_json: raw },
+        row: { raw_json: persistedRaw },
       });
     },
     options,

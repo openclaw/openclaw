@@ -136,29 +136,6 @@ function waitForTerminalEventHandlers(runId: string): Promise<void> {
   });
 }
 
-function getPluginRunContextNamespaces(
-  runId: string,
-  pluginId: string,
-  create = false,
-): PluginRunContextNamespaces | undefined {
-  const contexts = getPluginRunContexts();
-  let byPlugin = contexts.get(runId);
-  if (!byPlugin && create) {
-    byPlugin = new Map();
-    contexts.set(runId, byPlugin);
-  }
-  if (!byPlugin) {
-    return undefined;
-  }
-  let namespaces = byPlugin.get(pluginId);
-  if (create) {
-    // A new write owns its namespace map, even when it repeats the same value.
-    namespaces = new Map(namespaces);
-    byPlugin.set(pluginId, namespaces);
-  }
-  return namespaces;
-}
-
 /** Stores JSON-compatible plugin run context for one run/plugin/namespace tuple. */
 export function setPluginRunContext(params: {
   pluginId: string;
@@ -187,8 +164,13 @@ export function setPluginRunContext(params: {
   if (params.patch.value === undefined || !isPluginJsonValue(params.patch.value)) {
     return false;
   }
-  const namespaces = getPluginRunContextNamespaces(runId, params.pluginId, true);
-  namespaces?.set(namespace, structuredClone(params.patch.value));
+  const contexts = getPluginRunContexts();
+  const byPlugin = contexts.get(runId) ?? new Map<string, PluginRunContextNamespaces>();
+  contexts.set(runId, byPlugin);
+  // A new write owns its namespace map, even when it repeats the same value.
+  const namespaces = new Map(byPlugin.get(params.pluginId));
+  byPlugin.set(params.pluginId, namespaces);
+  namespaces.set(namespace, structuredClone(params.patch.value));
   return true;
 }
 
@@ -202,7 +184,7 @@ export function getPluginRunContext(params: {
   if (!runId || !namespace) {
     return undefined;
   }
-  const value = getPluginRunContextNamespaces(runId, params.pluginId)?.get(namespace);
+  const value = getPluginRunContexts().get(runId)?.get(params.pluginId)?.get(namespace);
   return value === undefined ? undefined : structuredClone(value);
 }
 

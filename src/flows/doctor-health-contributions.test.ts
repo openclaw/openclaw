@@ -79,7 +79,6 @@ const mocks = vi.hoisted(() => ({
       profileIds: readonly string[];
     }>,
   })),
-  maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
   removeAuthProfilesAcrossOwnerStores: vi.fn(async () => true),
   collectAuthProfileHealthFindings: vi.fn(async () => []),
   noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
@@ -141,8 +140,6 @@ const mocks = vi.hoisted(() => ({
     }),
   ),
   maybeRepairLegacyPluginManifestContracts: vi.fn().mockResolvedValue(undefined),
-  detectLegacyClawdBrowserProfileResidue: vi.fn(),
-  maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
     changes: [],
     warnings: [],
@@ -381,10 +378,6 @@ vi.mock("../commands/doctor-plugin-manifests.js", () => ({
   maybeRepairLegacyPluginManifestContracts: mocks.maybeRepairLegacyPluginManifestContracts,
 }));
 
-vi.mock("../commands/doctor-auth-oauth-sidecar.js", () => ({
-  maybeRepairLegacyOAuthSidecarProfiles: mocks.maybeRepairLegacyOAuthSidecarProfiles,
-}));
-
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles.js")>()),
   removeAuthProfilesAcrossOwnerStores: mocks.removeAuthProfilesAcrossOwnerStores,
@@ -461,8 +454,6 @@ vi.mock("../commands/doctor-gateway-health.js", () => ({
 
 vi.mock("../commands/doctor-browser.js", () => ({
   noteChromeMcpBrowserReadiness: mocks.noteChromeMcpBrowserReadiness,
-  detectLegacyClawdBrowserProfileResidue: mocks.detectLegacyClawdBrowserProfileResidue,
-  maybeArchiveLegacyClawdBrowserProfileResidue: mocks.maybeArchiveLegacyClawdBrowserProfileResidue,
   maybeRepairOwnedChromeExtensionNativeHosts: mocks.maybeRepairOwnedChromeExtensionNativeHosts,
 }));
 
@@ -723,7 +714,6 @@ describe("doctor health contributions", () => {
     });
     mocks.maybeRepairGatewayDaemon.mockResolvedValue(undefined);
     mocks.maybeRepairLegacyPluginManifestContracts.mockResolvedValue(undefined);
-    mocks.maybeRepairLegacyOAuthSidecarProfiles.mockResolvedValue(undefined);
     mocks.noteAuthProfileHealth.mockResolvedValue(undefined);
     mocks.noteMemorySearchHealth.mockResolvedValue(undefined);
     mocks.collectMemorySearchHealthFindings.mockResolvedValue([]);
@@ -750,14 +740,10 @@ describe("doctor health contributions", () => {
       warnings: [],
       stepReceipts: [],
     });
-    mocks.detectLegacyClawdBrowserProfileResidue.mockReturnValue(null);
-    mocks.maybeArchiveLegacyClawdBrowserProfileResidue.mockResolvedValue({
-      changes: [],
-      warnings: [],
-    });
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: true,
+      sourceConfig: {},
       config: {},
       issues: [],
     });
@@ -1551,7 +1537,6 @@ describe("doctor health contributions", () => {
     const cfg = { plugins: { entries: { codex: { enabled: true } } } };
 
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
-      target: "2026.6.1",
       version: null,
       nodeEngine: null,
       error: "HTTP 404",
@@ -1900,7 +1885,7 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("shared Gateway process environment"),
+      expect.stringContaining("gateway.controlUi.github.host matching gateway.github.host"),
       "GitHub projects",
     );
 
@@ -1958,7 +1943,6 @@ describe("doctor health contributions", () => {
       detected,
       config: cfg,
       legacySessionSurfaces,
-      recoverCorruptTargetStore: false,
     });
   });
 
@@ -2067,7 +2051,6 @@ describe("doctor health contributions", () => {
       config: cfg,
       doctorOnlyStateMigrations: true,
       legacySessionSurfaces,
-      recoverCorruptTargetStore: true,
     });
   });
 
@@ -2139,7 +2122,7 @@ describe("doctor health contributions", () => {
     },
   );
 
-  it("runs the receipted auth migration after repairing OAuth sidecars", async () => {
+  it("runs the receipted auth migration before model diagnostics", async () => {
     const contribution = requireDoctorContribution("doctor:auth-profiles");
     const ctx = createDoctorContext({
       cfg: {},
@@ -2151,10 +2134,6 @@ describe("doctor health contributions", () => {
     await requireDoctorContribution("doctor:auth-profile-migration").run(ctx);
     await contribution.run(ctx);
 
-    expect(mocks.maybeRepairLegacyOAuthSidecarProfiles).toHaveBeenCalledWith({
-      cfg: ctx.cfg,
-      prompter: ctx.prompter,
-    });
     expect(mocks.maybeMigrateAuthProfileJsonStoresToSqlite).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       env: process.env,
@@ -2162,9 +2141,6 @@ describe("doctor health contributions", () => {
       openAICodexAuthProfileIdMap:
         mocks.collectOpenAICodexAuthProfileStoreIdMap.mock.results[0]?.value,
     });
-    expect(mocks.maybeRepairLegacyOAuthSidecarProfiles.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mock.invocationCallOrder[0]!,
-    );
     expect(mocks.maybeMigrateLegacyPluginModelCatalogs).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       prompter: ctx.prompter,
@@ -3109,39 +3085,6 @@ describe("doctor health contributions", () => {
     ).toThrow("must specify health check ids when it declares multiple healthChecks");
   });
 
-  it("repairs browser residue before browser readiness notes", async () => {
-    const calls: string[] = [];
-    mocks.runDoctorHealthRepairs.mockImplementation(async () => {
-      calls.push("repair");
-      return {
-        config: {},
-        findings: [],
-        remainingFindings: [],
-        changes: [],
-        warnings: [],
-        diffs: [],
-        effects: [],
-        checksRun: 1,
-        checksRepaired: 1,
-        checksValidated: 0,
-      };
-    });
-    mocks.noteChromeMcpBrowserReadiness.mockImplementation(async () => {
-      calls.push("note");
-    });
-    const contribution = requireDoctorContribution("doctor:browser");
-    const ctx = createDoctorContext({
-      cfg: {},
-      cfgForPersistence: {},
-      configResult: { cfg: {} },
-      shouldRepair: true,
-    });
-
-    await contribution.run(ctx);
-
-    expect(calls).toEqual(["repair", "note"]);
-  });
-
   it("skips opt-in extension checks during routine repair", async () => {
     setRegisteredHealthChecks([
       { id: "core/example/internal", kind: "core" },
@@ -3167,7 +3110,6 @@ describe("doctor health contributions", () => {
 
   it.each([
     ["doctor:structured-health-repairs", "plugin/example/probe"],
-    ["doctor:browser", "core/doctor/browser-clawd-profile-residue"],
     ["doctor:default-account-routing", "core/doctor/default-account-routing"],
   ])("retains %s update warnings without resolved or non-warning findings", async (id, checkId) => {
     const contribution = requireDoctorContribution(id);

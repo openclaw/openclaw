@@ -32,6 +32,7 @@ it("admits an unavailable plugin while leaving legacy state for Doctor", async (
       const config = {
         gateway: { mode: "local" as const, auth: { mode: "none" as const } },
         plugins: { allow: [pluginId], entries: { [pluginId]: { enabled: true } } },
+        meta: { migrations: { webhookListeners: true as const } },
       };
       const configBytes = `${JSON.stringify(config)}\n`;
       const sourceBytes = '{"triggers":["leave-for-doctor"]}\n';

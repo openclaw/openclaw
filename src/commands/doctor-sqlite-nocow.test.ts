@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -233,6 +234,95 @@ describe("Doctor btrfs NOCOW", () => {
     );
   });
 
+  it.skipIf(process.platform === "win32")(
+    "preserves nested symlink bytes and empty lock files without following targets",
+    async () => {
+      seedDatabase();
+      const nested = path.join(directory, "tmp", "arg0");
+      fs.mkdirSync(nested, { recursive: true });
+      const external = path.join(root, "external");
+      fs.mkdirSync(external);
+      fs.writeFileSync(path.join(external, "untouched"), "outside the store");
+      const links = new Map([
+        [path.join(nested, "absolute"), Buffer.from(external)],
+        [path.join(nested, "relative"), Buffer.from("../../sibling.txt")],
+        [path.join(nested, "dangling.sqlite"), Buffer.from("missing-target")],
+        [path.join(nested, "raw-bytes"), Buffer.from([0x66, 0x80, 0xff])],
+      ]);
+      for (const [pathname, target] of links) {
+        fs.symlinkSync(target, pathname);
+      }
+      const owners = [...links.keys()].map((pathname) => fs.lstatSync(pathname));
+      const lock = path.join(nested, ".lock");
+      fs.writeFileSync(lock, "");
+      const originalLock = fs.statSync(lock);
+      const tool = vi.mocked(spawnSync).getMockImplementation()!;
+      vi.mocked(spawnSync).mockImplementation((command, args, options) => {
+        if (command === "fuser") {
+          expect(args).toContain(lock);
+          for (const pathname of args ?? []) {
+            expect(fs.lstatSync(pathname).isSymbolicLink()).toBe(false);
+            expect(pathname.startsWith(external)).toBe(false);
+          }
+        }
+        return tool(command, args, options);
+      });
+
+      expect((await repair()).join("\n")).toContain("Rewrote SQLite store directory with NOCOW");
+      expect(fixture.exchanges).toBe(1);
+      for (const [index, [pathname, target]] of [...links].entries()) {
+        const stat = fs.lstatSync(pathname);
+        expect(stat.isSymbolicLink()).toBe(true);
+        expect(fs.readlinkSync(pathname, { encoding: "buffer" })).toEqual(target);
+        expect([stat.uid, stat.gid]).toEqual([owners[index]!.uid, owners[index]!.gid]);
+      }
+      expect(fs.existsSync(path.join(nested, "dangling.sqlite"))).toBe(false);
+      expect(fs.statSync(lock).isFile()).toBe(true);
+      expect(fs.statSync(lock).ino).not.toBe(originalLock.ino);
+      expect(fs.readFileSync(lock)).toHaveLength(0);
+      expect(fs.readFileSync(path.join(external, "untouched"), "utf8")).toBe("outside the store");
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["FIFO", "socket", "hard-linked"] as const)(
+    "refuses a %s entry with its type and path before exchanging the store",
+    async (type) => {
+      seedDatabase();
+      const pathname = path.join(directory, "unsupported");
+      const original = fs.statSync(directory);
+      let server: net.Server | undefined;
+      if (type === "FIFO") {
+        const native =
+          await vi.importActual<typeof import("node:child_process")>("node:child_process");
+        expect(native.spawnSync("mkfifo", [pathname]).status).toBe(0);
+      } else if (type === "socket") {
+        server = net.createServer();
+        await new Promise<void>((resolve, reject) => {
+          server!.once("error", reject);
+          server!.listen(pathname, resolve);
+        });
+      } else {
+        fs.linkSync(path.join(directory, "sibling.txt"), pathname);
+      }
+      try {
+        const notes = (await repair()).join("\n");
+        expect(notes).toContain(
+          type === "hard-linked"
+            ? "hard-linked path:"
+            : `unsupported store directory entry (${type}): ${pathname}`,
+        );
+        expect(fixture.exchanges).toBe(0);
+        expect(fs.statSync(directory).ino).toBe(original.ino);
+      } finally {
+        if (server) {
+          await new Promise<void>((resolve, reject) => {
+            server!.close((error) => (error ? reject(error) : resolve()));
+          });
+        }
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32").each([false, true])(
     "preserves named access ACLs and exact source default ACLs (default=%s)",
     async (defaults) => {
@@ -432,6 +522,7 @@ describe("Doctor btrfs NOCOW", () => {
     "corrupt",
     "exchange-failed",
     "changed-source",
+    ...(process.platform === "win32" ? [] : ["changed-symlink" as const]),
     "new-wal",
     "changed-wal",
   ] as const)("leaves the previous store intact on %s refusal", async (failure) => {
@@ -473,6 +564,14 @@ describe("Doctor btrfs NOCOW", () => {
         fs.writeFileSync(path.join(directory, "sibling.txt"), "changed by another writer");
       });
     }
+    if (failure === "changed-symlink") {
+      const link = path.join(directory, "link");
+      fs.symlinkSync("sibling.txt", link);
+      vi.mocked(setSqliteDirectoryNoCow).mockImplementationOnce(() => {
+        fs.unlinkSync(link);
+        fs.symlinkSync("changed-target", link);
+      });
+    }
     const notes = await repair(() => {
       if (failure === "authority") {
         throw new Error("Gateway owns the store");
@@ -490,7 +589,12 @@ describe("Doctor btrfs NOCOW", () => {
         fs.readdirSync(root).filter((name) => name.startsWith("state.nocow-snapshots-")),
       ).toEqual([]);
     }
-    if (failure === "changed-source" || failure === "new-wal" || failure === "changed-wal") {
+    if (
+      failure === "changed-source" ||
+      failure === "changed-symlink" ||
+      failure === "new-wal" ||
+      failure === "changed-wal"
+    ) {
       expect(notes.join(",")).toContain("source store changed");
     }
   });

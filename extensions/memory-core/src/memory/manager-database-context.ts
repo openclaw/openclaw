@@ -7,6 +7,7 @@ import {
   resolveStateDir,
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { stopMemorySqliteWalMaintenance } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   borrowOpenClawAgentDatabase,
@@ -49,6 +50,24 @@ type PublicationWorker = {
   store: OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>;
   busyTimeoutMs: number;
 };
+
+function readConnectionPragmas(db: DatabaseSync, errorMessage: string) {
+  const read = (name: keyof MemoryPublicationConnection["pragmas"]): number => {
+    const row = db.prepare(`PRAGMA ${name}`).get();
+    const value = row?.[name] ?? row?.timeout;
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+      throw new Error(errorMessage);
+    }
+    return value;
+  };
+  return {
+    busy_timeout: read("busy_timeout"),
+    synchronous: read("synchronous"),
+    foreign_keys: read("foreign_keys"),
+    journal_size_limit: read("journal_size_limit"),
+    checkpoint_fullfsync: read("checkpoint_fullfsync"),
+  };
+}
 
 export class MemoryIndexDatabase {
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
@@ -96,24 +115,10 @@ export class MemoryIndexDatabase {
     );
     try {
       database = new MemoryIndexDatabase(db);
-      const readPragma = (name: keyof MemoryShadowConnection["pragmas"]): number => {
-        const row = db.prepare(`PRAGMA ${name}`).get();
-        const value = name === "busy_timeout" ? (row?.busy_timeout ?? row?.timeout) : row?.[name];
-        if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-          throw new Error("Invalid memory shadow connection policy");
-        }
-        return value;
-      };
       database.shadow = {
         path: filename,
         identity: readMemoryShadowIdentity(filename),
-        pragmas: {
-          busy_timeout: readPragma("busy_timeout"),
-          synchronous: readPragma("synchronous"),
-          foreign_keys: readPragma("foreign_keys"),
-          journal_size_limit: readPragma("journal_size_limit"),
-          checkpoint_fullfsync: readPragma("checkpoint_fullfsync"),
-        },
+        pragmas: readConnectionPragmas(db, "Invalid memory shadow connection policy"),
       };
       return database;
     } catch (error) {
@@ -240,21 +245,8 @@ export class MemoryIndexDatabase {
       if (!filename || this.readOnly || this.closed) {
         throw new Error("Memory publication requires its live file owner");
       }
-      const readPragma = (name: keyof MemoryPublicationConnection["pragmas"]): number => {
-        const row = this.db.prepare("PRAGMA " + name).get();
-        const value = row?.[name] ?? row?.timeout;
-        if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-          throw new Error("Invalid memory connection policy");
-        }
-        return value;
-      };
-      const pragmas = this.shadow?.pragmas ?? {
-        busy_timeout: readPragma("busy_timeout"),
-        synchronous: readPragma("synchronous"),
-        foreign_keys: readPragma("foreign_keys"),
-        journal_size_limit: readPragma("journal_size_limit"),
-        checkpoint_fullfsync: readPragma("checkpoint_fullfsync"),
-      };
+      const pragmas =
+        this.shadow?.pragmas ?? readConnectionPragmas(this.db, "Invalid memory connection policy");
       const worker = {
         moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
         input: {
@@ -526,6 +518,7 @@ export class MemoryIndexDatabase {
   closeShadow(): Promise<void> {
     this.closed = true;
     this.shadowClose ??= (async () => {
+      await stopMemorySqliteWalMaintenance(this.db);
       await this.drainPrivateAccess();
       await this.closePublicationWorker();
       // Each accepted pool task has closed its native database or joined Worker

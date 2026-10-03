@@ -48,16 +48,6 @@ export type SkillUploadMetadataRow = InferResult<
   ReturnType<typeof selectSkillUploadMetadata>
 >[number];
 
-export function resolveSkillUploadDatabaseOptions(options: {
-  env?: NodeJS.ProcessEnv;
-  path?: string;
-}): OpenClawStateDatabaseOptions {
-  return {
-    ...(options.env ? { env: options.env } : {}),
-    ...(options.path ? { path: options.path } : {}),
-  };
-}
-
 function openSkillUploadDatabase(options: OpenClawStateDatabaseOptions) {
   const database = openOpenClawStateDatabase(options);
   return {

@@ -12,7 +12,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { updateSessionProfileInvolvement } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
@@ -77,7 +77,7 @@ export function createMentionInbox(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   onMentionCreated?: (notification: MentionNotification) => void;
 }): MentionInbox {
-  const { scheduler } = params;
+  const scheduler = params.scheduler.scope();
   const policy = createHumanMentionPolicy(params);
   const items = new Map<string, StoredMention>();
   const itemsByProfile = new Map<string, Set<StoredMention>>();
@@ -87,10 +87,7 @@ export function createMentionInbox(params: {
   const views = new WeakMap<GatewayClient, { signature: string; revision: number }>();
   const connectedTargets: SharingTargets = new Map();
   let targetConfig: OpenClawConfig | undefined;
-  let active = true;
   let profileVersion = readUserProfileVersion();
-  let expiryJob: GatewayScheduledJob | undefined;
-  let expiryDeadlineAt: number | undefined;
   let capacityReported = false;
   let profileInvalidationPending = false;
   let nextExpiryAt = Infinity;
@@ -184,9 +181,9 @@ export function createMentionInbox(params: {
     return changed || maintenance;
   }
 
-  function removeItem(item: StoredMention | null | undefined): boolean {
+  function removeItem(item: StoredMention | null | undefined): void {
     if (!item || !items.delete(item.id)) {
-      return false;
+      return;
     }
     const profileItems = itemsByProfile.get(item.recipientProfileId);
     profileItems?.delete(item);
@@ -195,7 +192,6 @@ export function createMentionInbox(params: {
     }
     item.source.recipients.set(item.recipientProfileId, null);
     dirtySources.add(item.source.key);
-    return true;
   }
 
   function trimItems(
@@ -217,13 +213,12 @@ export function createMentionInbox(params: {
     }
   }
 
-  function expireItems(): boolean {
+  function expireItems(): void {
     const now = scheduler.now();
     // Retention is bounded, but scanning it on every read and delivery makes a burst quadratic.
     if (now < nextExpiryAt) {
-      return false;
+      return;
     }
-    let changed = false;
     let next = Infinity;
     for (const [key, source] of processed) {
       if (source.expiresAt > now) {
@@ -231,7 +226,7 @@ export function createMentionInbox(params: {
         continue;
       }
       for (const item of source.recipients.values()) {
-        changed = removeItem(item) || changed;
+        removeItem(item);
       }
       processed.delete(key);
       dirtySources.add(key);
@@ -240,7 +235,6 @@ export function createMentionInbox(params: {
     if (processed.size < MAX_MENTION_SOURCES) {
       capacityReported = false;
     }
-    return changed;
   }
 
   function reconcileProfiles(): void {
@@ -285,7 +279,11 @@ export function createMentionInbox(params: {
   function currentTarget(item: StoredMention, cfg: OpenClawConfig, targets?: SharingTargets) {
     const { source, message } = item;
     const { agentId, sessionKey, senderProfileId } = message.content;
-    if (!active || items.get(item.id) !== item || source.expiresAt <= scheduler.now()) {
+    if (
+      scheduler.signal.aborted ||
+      items.get(item.id) !== item ||
+      source.expiresAt <= scheduler.now()
+    ) {
       return undefined;
     }
     const key = JSON.stringify([agentId, sessionKey]);
@@ -389,33 +387,19 @@ export function createMentionInbox(params: {
   }
 
   function scheduleExpiry(retryAfterMs?: number): void {
-    if (!active || (processed.size === 0 && retryAfterMs === undefined)) {
+    if (scheduler.signal.aborted || (processed.size === 0 && retryAfterMs === undefined)) {
       return;
     }
-    // Preserve an armed retry; only an earlier durable expiry replaces its current wake.
-    if (
-      expiryJob &&
-      (retryAfterMs !== undefined ||
-        expiryDeadlineAt === undefined ||
-        nextExpiryAt >= expiryDeadlineAt)
-    ) {
-      return;
-    }
-    expiryJob?.cancel();
-    expiryDeadlineAt = retryAfterMs === undefined ? nextExpiryAt : undefined;
-    expiryJob = scheduler.schedule({
+    scheduler.schedule({
       id: `mentions:expiry:${params.gatewayInstanceId}`,
+      mode: "earliest",
       ...(retryAfterMs === undefined ? { atMs: nextExpiryAt } : { delayMs: retryAfterMs }),
-      run: () => {
-        expiryJob = undefined;
-        expiryDeadlineAt = undefined;
-        refresh();
-      },
+      run: refresh,
     });
   }
 
   function refresh(): void {
-    if (!active) {
+    if (scheduler.signal.aborted) {
       return;
     }
     try {
@@ -478,7 +462,7 @@ export function createMentionInbox(params: {
   }
 
   function readOperation<T>(operation: () => Result<T, ErrorShape>): Result<T, ErrorShape> {
-    if (active) {
+    if (!scheduler.signal.aborted) {
       try {
         return operation();
       } catch {
@@ -541,7 +525,7 @@ export function createMentionInbox(params: {
     },
     recordCommittedInput(input: MentionCommittedInput): void {
       try {
-        if (!active || input.recipientProfileIds.length === 0) {
+        if (scheduler.signal.aborted || input.recipientProfileIds.length === 0) {
           return;
         }
         const references = [
@@ -706,7 +690,7 @@ export function createMentionInbox(params: {
             sessionTitle: projected.sessionTitle,
             isCurrent: () => {
               try {
-                if (!active) {
+                if (scheduler.signal.aborted) {
                   return false;
                 }
                 maintain();
@@ -723,19 +707,17 @@ export function createMentionInbox(params: {
       }
     },
     invalidate,
-    dispose(): void {
-      active = false;
+    dispose(): Promise<void> {
+      scheduler.beginClose();
       stopProfiles();
       stopSessions();
       stopRows();
       connectedTargets.clear();
       policy.dispose();
-      expiryJob?.cancel();
-      expiryJob = undefined;
-      expiryDeadlineAt = undefined;
       items.clear();
       itemsByProfile.clear();
       processed.clear();
+      return scheduler.stop();
     },
   };
 }

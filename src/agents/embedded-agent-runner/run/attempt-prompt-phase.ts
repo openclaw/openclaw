@@ -14,7 +14,10 @@ import { withSessionManagerWrite } from "../../sessions/session-manager-write-ad
 import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
-import { persistToolResultProjections } from "../session-prompt-state.js";
+import {
+  persistToolResultProjections,
+  persistSessionSystemPrompt,
+} from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { createAbortableError, isOpenClawAbortableWrapper } from "./abortable.js";
 import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
@@ -79,7 +82,7 @@ export async function runEmbeddedAttemptPromptPhase(
     state: sessionRuntimeState,
     toolResultPromptProjectionState,
     trajectoryRecorder,
-    transcriptPolicy: { appendOnlyRuntimeContext },
+    transcriptPolicy: { appendOnlyRuntimeContext, inHistorySystemUpdates },
     transport: {
       effectiveAgentTransport,
       effectiveExtraParams,
@@ -117,11 +120,11 @@ export async function runEmbeddedAttemptPromptPhase(
     promptState.preflightRecovery = state.preflightRecovery;
     setFailure(state.promptError, state.promptErrorSource);
   };
-  const releaseLeasedSteering = (error?: unknown) => {
+  const releaseLeasedSteering = async (error?: unknown) => {
     if (!leasedSteering) {
       return;
     }
-    releasePendingAgentSteeringItems({
+    await releasePendingAgentSteeringItems({
       runIds: leasedSteering.runIds,
       leaseId: leasedSteering.leaseId,
       error: error ? formatErrorMessage(error) : undefined,
@@ -198,6 +201,7 @@ export async function runEmbeddedAttemptPromptPhase(
         activeSession.agent.state.messages = messages;
       },
       appendOnlyRuntimeContext,
+      inHistorySystemUpdates,
       ...(boundaryTimezone ? { boundaryTimezone } : {}),
       includeBoundaryTimestamp,
       isRawModelRun,
@@ -247,11 +251,11 @@ export async function runEmbeddedAttemptPromptPhase(
         modelId: attempt.modelId,
         provider: attempt.provider,
         sessionManager: {
-          appendCustomEntry: async (customType, data) => {
+          appendCustomEntryAsync: async (customType, data) => {
             await withOwnedTranscriptWrite(() =>
-              withSessionManagerWrite(sessionManager, () => {
+              withSessionManagerWrite(sessionManager, async () => {
                 runAbortController.signal.throwIfAborted();
-                sessionManager.appendCustomEntry(customType, data);
+                await sessionManager.appendCustomEntryAsync(customType, data);
               }),
             );
           },
@@ -427,12 +431,31 @@ export async function runEmbeddedAttemptPromptPhase(
             );
             input.runAbortController.signal.throwIfAborted();
             promptAssembly.assertHostActive?.();
-            if (refresh) {
-              setActiveSessionSystemPrompt(refresh(activeSession.agent.state.systemPrompt));
+            const refreshedPrompt = refresh?.(activeSession.agent.state.systemPrompt);
+            const projection =
+              refreshedPrompt !== undefined && sessionRuntime.prepareSystemPromptUpdate
+                ? await sessionRuntime.prepareSystemPromptUpdate(
+                    refreshedPrompt,
+                    refresh?.freshlyRendered === true,
+                  )
+                : undefined;
+            if (refreshedPrompt !== undefined && !projection) {
+              setActiveSessionSystemPrompt(refreshedPrompt);
             }
             return () => ({
               tools: activeSession.agent.state.tools.slice(),
-              systemPrompt: activeSession.agent.state.systemPrompt,
+              systemPrompt: projection?.systemPrompt ?? activeSession.agent.state.systemPrompt,
+              ...(projection
+                ? {
+                    promptUpdate: {
+                      update: projection.update,
+                      commit: () => {
+                        projection.commit();
+                        setActiveSessionSystemPrompt(projection.systemPrompt);
+                      },
+                    },
+                  }
+                : {}),
             });
           }),
         onPrimaryModelRequest: (tools) => {
@@ -448,13 +471,22 @@ export async function runEmbeddedAttemptPromptPhase(
           leasedSteering = undefined;
         },
         persistToolResultProjections: async () => {
-          if (!isRawModelRun && toolResultPromptProjectionState.frozen.size > 0) {
+          if (
+            !isRawModelRun &&
+            (inHistorySystemUpdates || toolResultPromptProjectionState.frozen.size > 0)
+          ) {
             await withOwnedTranscriptWrite(() =>
-              withSessionManagerWrite(sessionManager, () => {
+              withSessionManagerWrite(sessionManager, async () => {
                 runAbortController.signal.throwIfAborted();
-                persistToolResultProjections(toolResultPromptProjectionState, (customType, data) =>
-                  sessionManager.appendCustomEntry(customType, data),
+                await persistToolResultProjections(
+                  toolResultPromptProjectionState,
+                  (customType, data) => sessionManager.appendCustomEntryAsync(customType, data),
                 );
+                if (sessionRuntime.prepareSystemPromptUpdate) {
+                  await persistSessionSystemPrompt(sessionPromptState, (customType, data) =>
+                    sessionManager.appendCustomEntryAsync(customType, data),
+                  );
+                }
               }),
             );
           }
@@ -476,7 +508,7 @@ export async function runEmbeddedAttemptPromptPhase(
         trajectoryRecorder,
       });
     } else {
-      releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
+      await releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
     }
     publishDispatchState(state);
   } catch (error) {
@@ -520,7 +552,7 @@ export async function runEmbeddedAttemptPromptPhase(
   if (pendingMidTurnPrecheckRequest) {
     await withOwnedTranscriptWrite(() =>
       withSessionManagerWrite(sessionManager, async () => {
-        removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
+        await removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
         const terminal = projectAgentRunAttemptTerminal(input.state.terminal);
         if (!promptState.preflightRecovery && terminal.promptErrorSource !== "precheck") {
           setFailure(null, null);

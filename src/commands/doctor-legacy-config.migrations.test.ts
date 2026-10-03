@@ -238,8 +238,8 @@ describe("normalizeCompatibilityConfigValues", () => {
       }),
     );
 
-    expect(res.config.channels?.discord?.token).toBeUndefined();
-    expect(res.config.channels?.discord?.accounts?.default?.token).toEqual({
+    expect(res.config.channels?.discord?.accounts?.default).toBeUndefined();
+    expect(res.config.channels?.discord?.token).toEqual({
       source: "env",
       provider: "gateway-env",
       id: "DISCORD_BOT_TOKEN",
@@ -250,7 +250,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       id: "DISCORD_WORK_TOKEN",
     });
     expect(res.changes).toContain(
-      "Moved channels.discord.accounts.default.token secretref-env:DISCORD_BOT_TOKEN marker → structured env SecretRef.",
+      "Moved channels.discord.token secretref-env:DISCORD_BOT_TOKEN marker → structured env SecretRef.",
     );
     expect(res.changes).toContain(
       "Moved channels.discord.accounts.work.token __env__:DISCORD_WORK_TOKEN marker → structured env SecretRef.",
@@ -277,47 +277,27 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toStrictEqual([]);
   });
 
-  it("preserves inherited WhatsApp access policy when seeding accounts.default", () => {
-    const res = normalizeCompatibilityConfigValues({
-      channels: {
-        whatsapp: {
-          enabled: true,
-          dmPolicy: "allowlist",
-          allowFrom: ["+15550001111"],
-          groupPolicy: "open",
-          groupAllowFrom: [],
-          accounts: {
-            work: {
-              enabled: true,
-              authDir: "/tmp/wa-work",
-            },
+  it.each(["whatsapp", "discord", "telegram", "slack", "signal", "mattermost"])(
+    "preserves the existing %s account set and shared policy",
+    (channelId) => {
+      const cfg = legacyConfig({
+        channels: {
+          [channelId]: {
+            dmPolicy: "allowlist",
+            allowFrom: ["sender-1"],
+            groupPolicy: "disabled",
+            groupAllowFrom: ["group-sender-1"],
+            accounts: { work: { enabled: true }, personal: { dmPolicy: "disabled" } },
           },
         },
-      },
-    });
-
-    expect(res.config.channels?.whatsapp?.dmPolicy).toBeUndefined();
-    expect(res.config.channels?.whatsapp?.allowFrom).toBeUndefined();
-    expect(res.config.channels?.whatsapp?.groupPolicy).toBeUndefined();
-    expect(res.config.channels?.whatsapp?.groupAllowFrom).toBeUndefined();
-    expect(res.config.channels?.whatsapp?.accounts?.default).toEqual({
-      dmPolicy: "allowlist",
-      allowFrom: ["+15550001111"],
-      groupPolicy: "open",
-      groupAllowFrom: [],
-    });
-    expect(res.config.channels?.whatsapp?.accounts?.work).toEqual({
-      enabled: true,
-      authDir: "/tmp/wa-work",
-      dmPolicy: "allowlist",
-      allowFrom: ["+15550001111"],
-      groupPolicy: "open",
-      groupAllowFrom: [],
-    });
-    expect(res.changes).toContain(
-      "Moved channels.whatsapp single-account top-level values into channels.whatsapp.accounts.default.",
-    );
-  });
+      });
+      const before = structuredClone(cfg);
+      const result = normalizeCompatibilityConfigValues(cfg);
+      expect(result.config).toEqual(before);
+      expect(result.changes).toEqual([]);
+      expect(normalizeCompatibilityConfigValues(result.config).changes).toEqual([]);
+    },
+  );
 
   it("defers the whole promotion for uncovered keys on an undeclared channel", () => {
     const config = legacyConfig({
@@ -326,7 +306,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           dmPolicy: "allowlist",
           appToken: "covered-legacy-key",
           customAuth: "keep-at-root",
-          accounts: { work: { enabled: true } },
+          accounts: {},
         },
       },
     });
@@ -359,7 +339,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           "undeclared-demo": {
             dmPolicy: "allowlist",
             appToken: "legacy-app-token",
-            accounts: { work: { enabled: true } },
+            accounts: {},
           },
         },
       }),
@@ -374,7 +354,6 @@ describe("normalizeCompatibilityConfigValues", () => {
       dmPolicy: "allowlist",
       appToken: "legacy-app-token",
     });
-    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
   });
 
   it("promotes generic and declared keys together after the plugin becomes available", () => {
@@ -400,7 +379,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           "late-demo": {
             dmPolicy: "allowlist",
             customAuth: "move-with-plugin",
-            accounts: { work: { enabled: true } },
+            accounts: {},
           },
         },
       }),
@@ -415,180 +394,6 @@ describe("normalizeCompatibilityConfigValues", () => {
       dmPolicy: "allowlist",
       customAuth: "move-with-plugin",
     });
-    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
-  });
-
-  it.each(["discord", "telegram"])(
-    "preserves inherited %s access policy when seeding accounts.default",
-    (channelId) => {
-      const res = normalizeCompatibilityConfigValues(
-        legacyConfig({
-          channels: {
-            [channelId]: {
-              dmPolicy: "allowlist",
-              allowFrom: ["sender-1"],
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["group-sender-1"],
-              accounts: {
-                work: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        }),
-      );
-      const channel = (
-        res.config.channels as Record<string, { accounts?: Record<string, unknown> }>
-      )?.[channelId];
-
-      expect(channel?.accounts?.default).toEqual({
-        dmPolicy: "allowlist",
-        allowFrom: ["sender-1"],
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["group-sender-1"],
-      });
-      expect(channel?.accounts?.work).toEqual({
-        enabled: true,
-        dmPolicy: "allowlist",
-        allowFrom: ["sender-1"],
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["group-sender-1"],
-      });
-    },
-  );
-
-  it("keeps named-account access policy overrides when seeding accounts.default", () => {
-    const res = normalizeCompatibilityConfigValues(
-      legacyConfig({
-        channels: {
-          discord: {
-            dmPolicy: "allowlist",
-            allowFrom: ["top-dm"],
-            groupPolicy: "allowlist",
-            groupAllowFrom: ["top-group"],
-            accounts: {
-              work: {
-                token: "work-token",
-                allowFrom: ["work-dm"],
-                groupPolicy: "disabled",
-              },
-            },
-          },
-        },
-      }),
-    );
-
-    expect(res.config.channels?.discord?.accounts?.work).toEqual({
-      token: "work-token",
-      dmPolicy: "allowlist",
-      allowFrom: ["work-dm"],
-      groupPolicy: "disabled",
-      groupAllowFrom: ["top-group"],
-    });
-  });
-
-  it("preserves inherited Mattermost access policy when seeding accounts.default", () => {
-    const res = normalizeCompatibilityConfigValues({
-      channels: {
-        mattermost: {
-          dmPolicy: "open",
-          groupPolicy: "open",
-          allowFrom: ["*"],
-          groupAllowFrom: ["*"],
-          accounts: {
-            tony: {
-              name: "Tony",
-              enabled: true,
-              botToken: "tony-token",
-              groups: {
-                tboek5jq9fremk5ecmd6n7f5nw: { requireMention: false },
-              },
-            },
-            research: {
-              name: "Research",
-              enabled: true,
-              botToken: "research-token",
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.config.channels?.mattermost?.dmPolicy).toBeUndefined();
-    expect(res.config.channels?.mattermost?.allowFrom).toBeUndefined();
-    expect(res.config.channels?.mattermost?.groupPolicy).toBeUndefined();
-    expect(res.config.channels?.mattermost?.groupAllowFrom).toBeUndefined();
-    expect(res.config.channels?.mattermost?.accounts?.default).toEqual({
-      dmPolicy: "open",
-      groupPolicy: "open",
-      allowFrom: ["*"],
-      groupAllowFrom: ["*"],
-    });
-    expect(res.config.channels?.mattermost?.accounts?.tony).toEqual({
-      name: "Tony",
-      enabled: true,
-      botToken: "tony-token",
-      dmPolicy: "open",
-      groupPolicy: "open",
-      allowFrom: ["*"],
-      groupAllowFrom: ["*"],
-      groups: {
-        tboek5jq9fremk5ecmd6n7f5nw: { requireMention: false },
-      },
-    });
-    expect(res.config.channels?.mattermost?.accounts?.research).toEqual({
-      name: "Research",
-      enabled: true,
-      botToken: "research-token",
-      dmPolicy: "open",
-      groupPolicy: "open",
-      allowFrom: ["*"],
-      groupAllowFrom: ["*"],
-    });
-  });
-
-  it("migrates browser ssrfPolicy allowPrivateNetwork to dangerouslyAllowPrivateNetwork", () => {
-    const res = normalizeCompatibilityConfigValues(
-      legacyConfig({
-        browser: {
-          ssrfPolicy: {
-            allowPrivateNetwork: true,
-            allowedHostnames: ["localhost"],
-          },
-        },
-      }),
-    );
-
-    expect(
-      (res.config.browser?.ssrfPolicy as Record<string, unknown> | undefined)?.allowPrivateNetwork,
-    ).toBeUndefined();
-    expect(res.config.browser?.ssrfPolicy?.dangerouslyAllowPrivateNetwork).toBe(true);
-    expect(res.config.browser?.ssrfPolicy?.allowedHostnames).toEqual(["localhost"]);
-    expect(res.changes).toContain(
-      "Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (true).",
-    );
-  });
-
-  it("normalizes conflicting browser SSRF alias keys without changing effective behavior", () => {
-    const res = normalizeCompatibilityConfigValues(
-      legacyConfig({
-        browser: {
-          ssrfPolicy: {
-            allowPrivateNetwork: true,
-            dangerouslyAllowPrivateNetwork: false,
-          },
-        },
-      }),
-    );
-
-    expect(
-      (res.config.browser?.ssrfPolicy as Record<string, unknown> | undefined)?.allowPrivateNetwork,
-    ).toBeUndefined();
-    expect(res.config.browser?.ssrfPolicy?.dangerouslyAllowPrivateNetwork).toBe(true);
-    expect(res.changes).toContain(
-      "Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (true).",
-    );
   });
 
   it("migrates nano-banana skill config to native image generation config", () => {
@@ -1018,7 +823,6 @@ describe("normalizeCompatibilityConfigValues", () => {
       legacyConfig({
         agents: {
           defaults: {
-            agentRuntime: { id: "auto" },
             model: {
               primary: "codex/gpt-5.6-sol",
               fallbacks: ["anthropic/claude-sonnet-4-6", "codex/gpt-5.4-mini"],
@@ -1047,7 +851,6 @@ describe("normalizeCompatibilityConfigValues", () => {
       primary: "openai/gpt-5.6-sol",
       fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4-mini"],
     });
-    expect(repaired.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(repaired.cfg.agents?.defaults?.models).toEqual({
       "openai/gpt-5.6-sol": {
         alias: "gpt",
@@ -1421,67 +1224,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.agents?.defaults?.modelPolicy).toEqual({
       allow: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
     });
-  });
-
-  it("preserves legacy whole-agent Claude CLI intent for canonical Anthropic defaults", () => {
-    const res = normalizeCompatibilityConfigValues(
-      legacyConfig({
-        agents: {
-          defaults: {
-            agentRuntime: { id: "claude-cli" },
-            model: {
-              primary: "anthropic/claude-opus-4-7",
-              fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
-            },
-            models: {
-              "anthropic/claude-opus-4-7": {
-                alias: "Opus",
-                agentRuntime: { id: "auto", mode: "strict" },
-              },
-            },
-          },
-        },
-      }),
-    );
-
-    expect(res.config.agents?.defaults?.agentRuntime).toEqual({ id: "claude-cli" });
-    expect(res.config.agents?.defaults?.models).toEqual({
-      "anthropic/claude-opus-4-7": {
-        alias: "Opus",
-        agentRuntime: { id: "claude-cli", mode: "strict" },
-      },
-      "anthropic/claude-sonnet-4-6": {
-        agentRuntime: { id: "claude-cli" },
-      },
-    });
-    expect(res.changes).toContain(
-      "Moved agents.defaults.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
-    );
-  });
-
-  it("does not overwrite explicit model runtime while preserving legacy whole-agent CLI intent", () => {
-    const res = normalizeCompatibilityConfigValues(
-      legacyConfig({
-        agents: {
-          list: [
-            {
-              id: "paige",
-              agentRuntime: { id: "claude-cli" },
-              model: "anthropic/claude-opus-4-7",
-              models: {
-                "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
-              },
-            },
-          ],
-        },
-      }),
-    );
-
-    expect(res.config.agents?.list?.[0]?.agentRuntime).toEqual({ id: "claude-cli" });
-    expect(res.config.agents?.list?.[0]?.models).toEqual({
-      "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
-    });
-    expect(res.changes).toStrictEqual([]);
   });
 
   it("migrates legacy Codex CLI primary refs to the Codex app-server route", () => {

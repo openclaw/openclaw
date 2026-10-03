@@ -13,8 +13,12 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import { loadSkillLibrarySelection, readSelectedSkillLibraryFiles } from "../library/selection.js";
+import {
+  prepareSkillLibrarySelection,
+  readSelectedSkillLibraryFiles,
+} from "../library/selection.js";
 import { getSkillsSnapshotVersion, getSkillsResourceVersion } from "../runtime/refresh-state.js";
+import { resolveSkillSnapshotExecutionFileHost } from "../runtime/skill-snapshot-provenance.js";
 import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-fingerprint.js";
 import type {
   SkillEligibilityContext,
@@ -117,9 +121,11 @@ export async function syncWorkspaceSkills(params: {
     const manifestPath = path.join(targetSkillsDir, SYNCED_SKILLS_MANIFEST_NAME);
     const skillsSnapshot = params.skillsSnapshot;
     const skillRoots = skillsSnapshot?.skillRoots;
+    const executionWorkspaceFileHost = resolveSkillSnapshotExecutionFileHost(skillsSnapshot);
     const sourceWorkspace = skillRoots?.agentWorkspaceDir ?? sourceDir;
     const sourceScope = {
       executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
+      executionWorkspaceFileHost,
       agentId: params.agentId,
     };
     // Names and versions do not identify a source tree. Both reuse paths must
@@ -134,6 +140,7 @@ export async function syncWorkspaceSkills(params: {
         params.pluginSkillsDir,
         skillRoots?.agentWorkspaceDir,
         skillRoots?.executionWorkspaceDir,
+        executionWorkspaceFileHost,
         skillsSnapshot?.librarySelections,
       ]),
     );
@@ -180,6 +187,7 @@ export async function syncWorkspaceSkills(params: {
       entries = await prepareWorkspaceSkills(skillRoots?.agentWorkspaceDir ?? sourceDir, {
         ...loadOptions,
         executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
+        executionWorkspaceFileHost,
       });
       if (
         getSkillsSnapshotVersion(sourceWorkspace) === skillsVersion &&
@@ -191,9 +199,9 @@ export async function syncWorkspaceSkills(params: {
     if (skillsSnapshot?.librarySelections?.length) {
       const selectedNames = new Set(skillsSnapshot.skills.map((skill) => skill.name));
       entries.push(
-        ...loadSkillLibrarySelection(skillsSnapshot.librarySelections).filter((entry) =>
-          selectedNames.has(entry.skill.name),
-        ),
+        ...(
+          await prepareSkillLibrarySelection(skillsSnapshot.librarySelections, {}, () => {})
+        ).filter((entry) => selectedNames.has(entry.skill.name)),
       );
     }
 

@@ -2,6 +2,7 @@ import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
 
 const BRANCH_HEADLINE_MAX_CHARS = 120;
 export type SessionBranchTranscriptEntry = Record<string, unknown> & {
@@ -21,13 +22,8 @@ export function projectSessionBranchEntry(
   const entry: SessionBranchTranscriptEntry = {
     seq,
     headlineCandidate: record.type === "message" && (role === "user" || role === "assistant"),
+    ...projectTranscriptNavigationFields(record),
   };
-  // Keep own-field presence and values intact; the tree scanner owns navigation normalization.
-  for (const key of ["type", "id", "parentId", "targetId", "appendParentId", "appendMode"]) {
-    if (Object.hasOwn(record, key)) {
-      entry[key] = record[key];
-    }
-  }
   if (typeof record.timestamp === "string" && record.timestamp.trim()) {
     entry.timestamp = record.timestamp;
   }

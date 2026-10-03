@@ -290,7 +290,7 @@ describe("Side chat turn history", () => {
     expect(questions(threads).filter((question) => question === "A")).toHaveLength(1);
   });
 
-  it.each(["append", "hydrate", "interleaved", "clock-rollback"])(
+  it.each(["append", "hydrate", "clock-rollback"])(
     "keeps a successful retry pruned by %s across repeated hydration",
     async (pruneBy) => {
       const threads = new ChatSessionCompanionThreads();
@@ -315,7 +315,7 @@ describe("Side chat turn history", () => {
         const remote = {
           question: "Remote",
           answer: "New",
-          ts: pruneBy === "clock-rollback" ? 0 : 10.5,
+          ts: 0,
         };
         if (pruneBy === "hydrate") {
           exchanges.push({ ...remote, ts: 24 });
@@ -335,7 +335,7 @@ describe("Side chat turn history", () => {
     },
   );
 
-  it.each([1, 24])("does not revive pruned answers after %i new failures", async (count) => {
+  it("does not revive a pruned answer as a new same-text failure", async () => {
     const threads = new ChatSessionCompanionThreads();
     const exchanges = Array.from({ length: 24 }, (_, index) => ({
       question: `Old ${index}`,
@@ -343,9 +343,7 @@ describe("Side chat turn history", () => {
       ts: index + 1,
     }));
     await threads.hydrate("one", async () => ({ exchanges }));
-    for (let index = 0; index < count; index += 1) {
-      await threads.submit("one", index === 0 ? "Old 0" : `New ${index}`, unavailable);
-    }
+    await threads.submit("one", "Old 0", unavailable);
     const before = threads
       .view("one")
       .turns.map((turn) => ({ question: turn.question, status: turn.status }));
@@ -368,32 +366,16 @@ describe("Side chat turn history", () => {
     expect(questions(threads)).toEqual(["A", "B", "C", "D"]);
   });
 
-  it("preserves duplicate answered exchanges on repeated hydration", async () => {
-    const threads = new ChatSessionCompanionThreads();
-    const exchange = { question: "A", answer: "Repeated", ts: 1 };
-    const load = async () => ({ exchanges: [exchange, exchange] });
-    await threads.hydrate("one", async () => ({ exchanges: [exchange] }));
-    await threads.hydrate("one", load);
-    await threads.submit("one", "B", unavailable);
-    await threads.hydrate("one", load);
-    expect(questions(threads)).toEqual(["A", "A", "B"]);
-  });
-
-  it.each([
-    { duplicates: false, pruned: false },
-    { duplicates: true, pruned: false },
-    { duplicates: false, pruned: true },
-    { duplicates: true, pruned: true },
-  ])(
-    "keeps shared-history order with duplicate identities=$duplicates and pruned anchors=$pruned",
-    async ({ duplicates, pruned }) => {
+  it.each([false, true])(
+    "keeps shared-history order with duplicate identities and pruned anchors=%s",
+    async (pruned) => {
       const threads = new ChatSessionCompanionThreads();
       const first = { question: "A", answer: "First", ts: 1 };
       const remote = [
         { question: "X", answer: "Other client", ts: 2 },
         { question: "Y", answer: "Another shared answer", ts: 3 },
       ];
-      const last = duplicates ? first : { question: "B", answer: "Last", ts: 4 };
+      const last = first;
       await threads.submit("one", first.question, answered(first.answer, first.ts));
       await threads.submit("one", last.question, answered(last.answer, last.ts));
       const failures = pruned

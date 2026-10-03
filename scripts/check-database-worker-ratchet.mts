@@ -4,7 +4,6 @@ import {
   compareRatchetCounts,
   parseRatchetArgs,
   reportRatchetFailures,
-  reportRatchetSuccess,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 
@@ -48,7 +47,7 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     ) {
       return 1;
     }
-    reportRatchetSuccess("SQLite worker ratchet OK: no T1 call-count growth against " + base + ".");
+    console.log("SQLite worker ratchet OK: no T1 call-count growth against " + base + ".");
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

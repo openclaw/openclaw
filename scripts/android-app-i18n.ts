@@ -3,7 +3,12 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.ts";
+import { compareAscii as compareText } from "./lib/canonical-json.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import {
+  type NativeI18nInventoryEntry,
+  parseNativeI18nInventory,
+} from "./native-i18n-inventory.ts";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -84,13 +89,6 @@ const WEAR_STRINGS_REPO_PATH = "apps/android/wear/src/main/res/values/strings.xm
 const WEAR_GENERATED_RESOURCE_RE =
   /^apps\/android\/wear\/src\/main\/res\/values-[^/]+\/strings\.xml$/;
 
-type NativeInventoryEntry = {
-  id: string;
-  source: string;
-  sites: Array<{ kind: string; path: string }>;
-  surface: "android" | "apple";
-};
-
 type NativeTranslations = Record<string, string>;
 
 type ResourceString = {
@@ -106,15 +104,7 @@ const GENERATED_TRANSLATION_LINT_IGNORES = [
   "TypographyEllipsis",
 ] as const;
 
-type TranslationContradiction = {
-  locale: string;
-  selected: string;
-  source: string;
-  translations: string[];
-};
-
 export type GeneratedCatalog = {
-  contradictions: TranslationContradiction[];
   kotlin: string;
   resources: Map<string, string>;
   sources: Set<string>;
@@ -125,10 +115,6 @@ export type AndroidUiLiteralFinding = {
   path: string;
   source: string;
 };
-
-function compareText(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
 
 function decodeXml(value: string): string {
   return value
@@ -378,7 +364,7 @@ export function findUnusedAndroidResourceKeys(
   return [...keys].filter((key) => !references.has(key));
 }
 
-function lineNumber(source: string, offset: number): number {
+export function lineNumber(source: string, offset: number): number {
   return source.slice(0, offset).split("\n").length;
 }
 
@@ -602,7 +588,7 @@ function createDoubleQuoteScanner() {
   };
 }
 
-function findClosingDelimiter(
+export function findClosingDelimiter(
   source: string,
   openingOffset: number,
   opening: string,
@@ -1029,11 +1015,10 @@ export function selectDeterministicTranslation(source: string, values: readonly 
   );
 }
 
-async function readInventory(): Promise<NativeInventoryEntry[]> {
-  const parsed = JSON.parse(await readFile(INVENTORY_PATH, "utf8")) as {
-    entries?: NativeInventoryEntry[];
-  };
-  return (parsed.entries ?? []).filter((entry) => entry.surface === "android");
+async function readInventory(): Promise<NativeI18nInventoryEntry[]> {
+  return parseNativeI18nInventory(await readFile(INVENTORY_PATH, "utf8")).filter(
+    (entry) => entry.surface === "android",
+  );
 }
 
 async function readArtifacts(): Promise<Map<string, NativeTranslations>> {
@@ -1050,14 +1035,14 @@ async function readArtifacts(): Promise<Map<string, NativeTranslations>> {
 }
 
 function translationsBySource(
-  inventory: readonly NativeInventoryEntry[],
+  inventory: readonly NativeI18nInventoryEntry[],
   translationsById: Readonly<NativeTranslations>,
-): Map<string, string[]> {
-  const translations = new Map<string, string[]>();
+): Map<string, string> {
+  const translations = new Map<string, string>();
   for (const entry of inventory) {
     const translated = translationsById[entry.id];
     if (translated !== undefined) {
-      translations.set(entry.source, [translated]);
+      translations.set(entry.source, translated);
     }
   }
   return translations;
@@ -1065,7 +1050,7 @@ function translationsBySource(
 
 function localizeManualStrings(
   base: ReadonlyMap<string, ResourceString>,
-  inventoryBySource: ReadonlyMap<string, NativeInventoryEntry>,
+  inventoryBySource: ReadonlyMap<string, NativeI18nInventoryEntry>,
   translations: Readonly<NativeTranslations>,
   surface: string,
 ): ResourceString[] {
@@ -1181,10 +1166,7 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
   const manualSourceToKey = new Map(manualBase.map((entry) => [entry.value, entry.key]));
   const sources = new Set<string>();
   for (const entry of inventory) {
-    if (
-      entry.surface !== "android" ||
-      entry.sites.every((site) => site.kind === "resource-string")
-    ) {
+    if (entry.sites.every((site) => site.kind === "resource-string")) {
       continue;
     }
     sources.add(entry.source);
@@ -1200,7 +1182,6 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     sourceToKey.set(source, manualSourceToKey.get(source) ?? resourceKey(source));
   }
   const resources = new Map<string, string>();
-  const contradictions: TranslationContradiction[] = [];
   for (const locale of NATIVE_I18N_LOCALES) {
     const localeTranslations = artifacts.get(locale) ?? {};
     const artifactTranslationsBySource = translationsBySource(inventory, localeTranslations);
@@ -1210,20 +1191,9 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
       if (!key || !key.startsWith(MANAGED_PREFIX)) {
         continue;
       }
-      const translations = artifactTranslationsBySource.get(source) ?? [];
-      const selected = selectDeterministicTranslation(source, translations);
-      if (selected === source && translations.some((translation) => translation !== source)) {
-        throw new Error(
-          `Android translation selection kept the source despite a translated candidate: ${locale} ${JSON.stringify(source)}`,
-        );
-      }
-      const unique = [...new Set(translations)].toSorted(compareText);
-      if (unique.length > 1) {
-        contradictions.push({ locale, selected, source, translations: unique });
-      }
       generated.set(key, {
         source,
-        value: selected || source,
+        value: artifactTranslationsBySource.get(source) || source,
       });
     }
     resources.set(
@@ -1278,8 +1248,7 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
   for (const [locale, localeTranslations] of artifacts) {
     const translatedBySource = translationsBySource(inventory, localeTranslations);
     const translatedItems = assistantItems.map(
-      (source) =>
-        selectDeterministicTranslation(source, translatedBySource.get(source) ?? []) || source,
+      (source) => translatedBySource.get(source) || source,
     );
     resources.set(
       path.join(RESOURCE_ROOT, localeDirectory(locale), "assistant.xml"),
@@ -1288,7 +1257,6 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
   }
 
   return {
-    contradictions,
     kotlin: renderKotlin(sourceToKey),
     resources,
     sources,
@@ -1347,22 +1315,6 @@ export async function syncAndroidAppI18n(
   }
   if (options.check && drift.length > 0) {
     throw new Error(`Android generated localization drift:\n${drift.join("\n")}`);
-  }
-  if (catalog.contradictions.length > 0) {
-    const limit = 20;
-    const visible = catalog.contradictions.slice(0, limit);
-    const remaining = catalog.contradictions.length - visible.length;
-    process.stderr.write(
-      [
-        `android-app-i18n: contradictions=${catalog.contradictions.length}`,
-        ...visible.map(
-          (finding) =>
-            `${finding.locale}: ${JSON.stringify(finding.source)} -> ${JSON.stringify(finding.selected)} (${finding.translations.map((translation) => JSON.stringify(translation)).join(", ")})`,
-        ),
-        ...(remaining > 0 ? [`android-app-i18n: ${remaining} more contradictions omitted`] : []),
-        "",
-      ].join("\n"),
-    );
   }
   return catalog;
 }

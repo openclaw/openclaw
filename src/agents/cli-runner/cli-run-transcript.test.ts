@@ -13,6 +13,7 @@ import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/hook-types
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   onInternalSessionTranscriptUpdate,
+  readSessionTranscriptRunId,
   type InternalSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -81,6 +82,7 @@ it.each([
       expect(Reflect.get(messages[0]!, "display") === false).toBe(hidden);
       expect(updates).toHaveLength(1);
       expect(Reflect.get(updates[0]!.message!, "display") === false).toBe(hidden);
+      expect(readSessionTranscriptRunId(updates[0]!.message)).toBe("cli-coordination-run");
     } finally {
       unsubscribe();
     }

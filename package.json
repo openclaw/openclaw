@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.9.7",
+  "version": "2026.9.8",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "schemaVersions": {
@@ -53,6 +53,8 @@
     "README.md",
     "THIRD_PARTY_NOTICES.md",
     "dist/",
+    "!dist/worker/**",
+    "dist/worker-artifacts/*.tar.gz",
     ".openclaw-lifecycle-pending",
     "!dist/.buildstamp",
     "!dist/.runtime-postbuildstamp",
@@ -150,7 +152,6 @@
     "!dist/plugin-sdk/memory-core-host-status.d.ts",
     "!dist/plugin-sdk/memory-host-events.d.ts",
     "!dist/plugin-sdk/memory-host-markdown.d.ts",
-    "!dist/plugin-sdk/memory-host-search.d.ts",
     "!dist/plugin-sdk/message-tool-delivery-hints.d.ts",
     "!dist/plugin-sdk/migration.d.ts",
     "!dist/plugin-sdk/migration-runtime.d.ts",
@@ -412,9 +413,12 @@
     "scripts/lib/freebsd-service-discovery.d.mts",
     "scripts/lib/freebsd-service-discovery.mjs",
     "scripts/lib/fs-safe-prebuild.mjs",
+    "scripts/lib/bun-cli-launcher.mjs",
     "scripts/lib/javascript-statements.mjs",
     "scripts/install-cli.sh",
+    "scripts/install-policy.sh",
     "scripts/install.ps1",
+    "scripts/openclaw-immutable-launcher.mjs",
     "scripts/prepare-git-hooks.mjs",
     "scripts/prepare-native-protocol.mjs",
     "scripts/runtime-postbuild-shared.mjs",
@@ -426,6 +430,7 @@
     "scripts/lib/package-lifecycle-marker.mjs",
     "scripts/lib/recommended-tool-installs.json",
     "scripts/postinstall-bundled-plugins.mjs",
+    "scripts/postinstall-bun-cli-launcher.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "!dist/plugin-sdk/model-catalog-pricing.d.ts",
     "!dist/plugin-sdk/blob-runtime.d.ts",
@@ -447,7 +452,10 @@
     "!dist/plugin-sdk/text-grapheme.d.ts",
     "!dist/plugin-sdk/agent-harness-session-runtime.d.ts",
     "!dist/plugin-sdk/agent-harness-attempt-runtime.d.ts",
-    "!dist/plugin-sdk/secret-egress-runtime.d.ts"
+    "!dist/plugin-sdk/secret-egress-runtime.d.ts",
+    "!dist/plugin-sdk/compiled-subprocess-testing.d.ts",
+    "!dist/plugin-sdk/compiled-subprocess-testing.js",
+    "!dist/plugin-sdk/memory-host-search.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1033,10 +1041,6 @@
     "./plugin-sdk/dangerous-name-runtime": {
       "default": "./dist/plugin-sdk/dangerous-name-runtime.js"
     },
-    "./plugin-sdk/command-auth": {
-      "types": "./dist/plugin-sdk/command-auth.d.ts",
-      "default": "./dist/plugin-sdk/command-auth.js"
-    },
     "./plugin-sdk/command-auth-native": {
       "types": "./dist/plugin-sdk/command-auth-native.d.ts",
       "default": "./dist/plugin-sdk/command-auth-native.js"
@@ -1065,10 +1069,6 @@
     },
     "./plugin-sdk/direct-dm-guard-policy": {
       "default": "./dist/plugin-sdk/direct-dm-guard-policy.js"
-    },
-    "./plugin-sdk/discord": {
-      "types": "./dist/plugin-sdk/discord.d.ts",
-      "default": "./dist/plugin-sdk/discord.js"
     },
     "./plugin-sdk/device-bootstrap": {
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
@@ -1580,10 +1580,6 @@
     "./plugin-sdk/target-resolver-runtime": {
       "default": "./dist/plugin-sdk/target-resolver-runtime.js"
     },
-    "./plugin-sdk/telegram-account": {
-      "types": "./dist/plugin-sdk/telegram-account.d.ts",
-      "default": "./dist/plugin-sdk/telegram-account.js"
-    },
     "./plugin-sdk/text-autolink-runtime": {
       "default": "./dist/plugin-sdk/text-autolink-runtime.js"
     },
@@ -1680,6 +1676,7 @@
     "android:version:pin": "node --import ./scripts/tsx.mjs scripts/android-pin-version.ts",
     "android:version:sync": "node --import ./scripts/tsx.mjs scripts/android-sync-versioning.ts --write",
     "audit:seams": "node --import ./scripts/tsx.mjs scripts/audit-seams.mts",
+    "bench:agent-database-holds": "node --import ./scripts/tsx.mjs scripts/bench-agent-database-holds.ts",
     "bench:plugins:invocation": "node --import ./scripts/tsx.mjs scripts/bench-plugin-invocation.ts",
     "bench:plugins:stream": "node --expose-gc --import ./scripts/tsx.mjs scripts/bench-plugin-stream.ts",
     "bench:usage-refresh-memory": "node --import ./scripts/tsx.mjs scripts/bench-usage-refresh-memory.ts",
@@ -2245,8 +2242,8 @@
     "undici"
   ],
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.4.0",
-    "@anthropic-ai/sdk": "0.127.0",
+    "@agentclientprotocol/sdk": "1.5.0",
+    "@anthropic-ai/sdk": "0.128.0",
     "@babel/generator": "8.0.6",
     "@babel/parser": "8.0.6",
     "@babel/traverse": "8.0.6",
@@ -2258,21 +2255,21 @@
     "@homebridge/ciao": "1.3.12",
     "@lydell/node-pty": "1.2.0-beta.15",
     "@mistralai/mistralai": "2.7.0",
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.30.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.22.0",
+    "@openclaw/fs-safe": "0.23.0",
     "@openclaw/proxyline": "0.3.12",
     "@silvia-odwyer/photon-node": "0.3.4",
     "@trycua/cua-driver": "0.28.2",
     "acorn": "8.18.0",
     "chalk": "6.0.0",
-    "chrome-devtools-mcp": "1.9.0",
+    "chrome-devtools-mcp": "1.10.1",
     "clawpdf": "0.3.2",
     "commander": "15.0.0",
     "croner": "10.0.1",
     "diff": "9.0.0",
-    "dotenv": "18.0.1",
+    "dotenv": "18.0.3",
     "entities": "8.1.0",
     "esbuild": "0.28.2",
     "execa": "10.0.1",
@@ -2304,7 +2301,7 @@
     "tar": "7.5.22",
     "tslog": "5.2.0",
     "typebox": "1.3.34",
-    "undici": "8.10.2",
+    "undici": "8.11.2",
     "web-push": "3.6.7",
     "web-tree-sitter": "0.27.0",
     "ws": "8.21.3",
@@ -2320,7 +2317,7 @@
     "@lit/context": "1.1.6",
     "@lit/task": "1.0.3",
     "@mdx-js/mdx": "3.1.1",
-    "@openclaw/crabline": "0.1.27",
+    "@openclaw/crabline": "0.1.28",
     "@openclaw/session-url-contract": "workspace:*",
     "@opentelemetry/sdk-node": "0.222.0",
     "@pnpm/parse-overrides": "1001.0.4",
@@ -2344,7 +2341,7 @@
     "baileys": "7.0.0-rc14",
     "htmlparser2": "12.0.0",
     "ipaddr.js": "2.5.0",
-    "jscpd": "5.3.0",
+    "jscpd": "5.3.2",
     "jsdom": "30.1.1",
     "lit": "3.3.3",
     "lit-analyzer": "2.0.3",
@@ -2373,7 +2370,7 @@
     "tsx": "4.23.15",
     "typescript": "7.1.0-dev.20260920.1",
     "unrun": "0.3.1",
-    "vite": "8.3.0",
+    "vite": "8.3.1",
     "vitest": "5.0.1"
   },
   "optionalDependencies": {

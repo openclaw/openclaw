@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   assertTransactionUsable,
-  runSqliteImmediateTransactionSync,
+  runSqliteWorkerTransactionSync,
   runSqliteDeferredTransactionSync,
 } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
 import { reportCommittedInlineAuthFailure } from "./constants.js";
 import {
@@ -17,11 +17,7 @@ import { inspectAuthProfileJsonCell } from "./sqlite-json.js";
 /** The canonical agent executor lends its connection and transaction/commit admission. */
 export function bindSqliteWorkerBackend(
   _input: unknown,
-  context: {
-    databasePath: string;
-    database: DatabaseSync;
-    admit(stage: "transaction" | "commit"): void;
-  },
+  context: SqliteWorkerDatabaseContext,
 ): SqliteWorkerBackend<InlineAuthFailureOperations> {
   return {
     execute(command) {
@@ -35,10 +31,9 @@ export function bindSqliteWorkerBackend(
       let receipt: InlineAuthFailureReceipt | undefined;
       let committed = false;
       try {
-        runSqliteImmediateTransactionSync(
-          context.database,
+        runSqliteWorkerTransactionSync(
+          context,
           () => {
-            context.admit("transaction");
             receipt = recordInlineAuthFailureInDatabase(
               context.database,
               context.databasePath,
@@ -47,7 +42,6 @@ export function bindSqliteWorkerBackend(
           },
           {
             withCommit(commit) {
-              context.admit("commit");
               commit();
               committed = true;
             },

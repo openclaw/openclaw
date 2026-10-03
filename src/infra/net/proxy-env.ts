@@ -275,7 +275,7 @@ function matchesIpv4NoProxyPattern(target: number | undefined, entryHost: string
     return false;
   }
   const patternParts = entryHost.split(".");
-  if (patternParts.length > 4 || patternParts.length === 0) {
+  if (patternParts.length > 4) {
     return false;
   }
   for (const [index, part] of patternParts.entries()) {

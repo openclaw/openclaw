@@ -889,7 +889,7 @@ extension OnboardingAISetupModel {
                     originalServerLease: lease)
             } else {
                 let failure = Self.failure(label: request.label, status: result.status, error: result.error)
-                _ = await self.settleFailedActivation(
+                await self.settleFailedActivation(
                     failure, request: request, context: context, activationOwner: activationOwner, serverLease: lease)
             }
         } catch {
@@ -934,18 +934,17 @@ extension OnboardingAISetupModel {
         }
     }
 
-    @discardableResult
     private func settleFailedActivation(
         _ failure: Failure,
         request: ActivationRequest,
         context: AttemptContext,
         activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner,
-        serverLease: GatewayConnection.ServerLease) async -> Bool
+        serverLease: GatewayConnection.ServerLease) async
     {
         let leaseIsCurrent = await self.gateway.isCurrentServerLease(serverLease)
         // Lease validation can yield to a new UI attempt. Retire only the exact
         // failed owner, and never let its late continuation reset replacement state.
-        guard self.isCurrentAttempt(context) else { return false }
+        guard self.isCurrentAttempt(context) else { return }
         self.exposeActivationFailure(failure, for: request)
         self.pendingActivationVerification = false
         self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
@@ -953,15 +952,14 @@ extension OnboardingAISetupModel {
             self.detectError = failure
             self.beginPendingActivationDeadlineWait()
             self.onPendingActivationDeadline?(deadline, context.routeIdentity)
-            return false
+            return
         }
         guard leaseIsCurrent else {
             requireFreshDetection(after: failure)
-            return false
+            return
         }
         self.phase = .ready
         if !request.isManual { self.showManualEntry = !self.manualProviders.isEmpty }
-        return true
     }
 
     private func requestActivation(

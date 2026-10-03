@@ -1,8 +1,14 @@
+import type { ContentBlock } from "@modelcontextprotocol/client";
 import type { AppBridge } from "@modelcontextprotocol/ext-apps/app-bridge";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../i18n/index.ts";
+import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
+import { mcpAppMessageText } from "../lib/mcp-app-message-content.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
 type McpAppHostCapabilities = ConstructorParameters<typeof AppBridge>[2];
+registerMcpAppEnglish();
+
 export type McpAppHostSandboxCsp = NonNullable<
   NonNullable<McpAppHostCapabilities["sandbox"]>["csp"]
 >;
@@ -17,18 +23,6 @@ const WIDGET_PROMPT_RATE_WINDOW_MS = 60_000;
 const WIDGET_PROMPT_RATE_MAX = 10;
 const WIDGET_PROMPT_RATE_KEYS_MAX = 100;
 const widgetPromptTimestampsByKey = new Map<string, number[]>();
-
-function resolveWidgetPromptText(raw: unknown): string | null {
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const text = raw.trim();
-  const isHostCommand = text.startsWith("/") || text.startsWith("!");
-  if (!text || text.length > WIDGET_PROMPT_MAX_CHARS || isHostCommand) {
-    return null;
-  }
-  return text;
-}
 
 export function allowWidgetPrompt(key: string, nowMs: number): boolean {
   const cutoff = nowMs - WIDGET_PROMPT_RATE_WINDOW_MS;
@@ -51,7 +45,7 @@ export function allowWidgetPrompt(key: string, nowMs: number): boolean {
   return true;
 }
 
-function isWidgetFrameInteractable(frame: HTMLIFrameElement): boolean {
+export function isWidgetFrameInteractable(frame: HTMLIFrameElement): boolean {
   if (!frame.isConnected) {
     return false;
   }
@@ -79,9 +73,12 @@ export function dispatchWidgetPrompt(
   rateKey: string,
   confirmPrompt?: (text: string) => boolean,
 ): boolean {
-  const text = resolveWidgetPromptText(raw);
+  const text = typeof raw === "string" ? raw.trim() : "";
   if (
     !text ||
+    text.length > WIDGET_PROMPT_MAX_CHARS ||
+    text.startsWith("/") ||
+    text.startsWith("!") ||
     !isWidgetFrameInteractable(frame) ||
     !allowWidgetPrompt(rateKey, Date.now()) ||
     (confirmPrompt && !confirmPrompt(text))
@@ -103,14 +100,42 @@ export function buildMcpAppHostCapabilities(
   supportsMessage = false,
   supportsUpdateModelContext = false,
   supportsServerResources = false,
+  extensions: {
+    richModelContext?: boolean;
+    richMessage?: boolean;
+    fileResources?: boolean;
+    openFiles?: boolean;
+  } = {},
 ): McpAppHostCapabilities {
   return {
     openLinks: {},
     serverTools: {},
     sandbox: { csp: csp ?? {} },
     ...(supportsServerResources ? { serverResources: {} } : {}),
-    ...(supportsMessage ? { message: { text: {} } } : {}),
-    ...(supportsUpdateModelContext ? { updateModelContext: { text: {} } } : {}),
+    ...(supportsMessage
+      ? {
+          message: {
+            text: {},
+            ...(extensions.richMessage ? { image: {}, resource: {}, resourceLink: {} } : {}),
+          },
+        }
+      : {}),
+    ...(supportsUpdateModelContext
+      ? {
+          updateModelContext: {
+            text: {},
+            ...(extensions.richModelContext
+              ? { image: {}, resource: {}, resourceLink: {}, structuredContent: {} }
+              : {}),
+          },
+        }
+      : {}),
+    experimental: {
+      ...(extensions.richModelContext ? { "openai/modelContext": {} } : {}),
+      ...(extensions.richMessage ? { "openai/message": {} } : {}),
+      ...(extensions.fileResources ? { "openai/resource": {} } : {}),
+      ...(extensions.openFiles ? { "openai/files": {} } : {}),
+    },
   };
 }
 
@@ -129,4 +154,155 @@ export function resolveMcpAppSandboxUrl(
     hostOrigin,
     t("mcpApp.errors.invalidSandboxUrl"),
   );
+}
+
+/** The normal conversation/file owner must acknowledge custody; dispatch alone is not acceptance. */
+export const MCP_APP_MESSAGE_EVENT = "openclaw-mcp-app-message";
+export const MCP_APP_CONTEXT_EVENT = "openclaw-mcp-app-context";
+export const MCP_APP_FILE_OPEN_EVENT = "openclaw-mcp-app-file-open";
+export type McpAppMessageEventDetail = {
+  sessionKey: string;
+  viewId: string;
+  content: ContentBlock[];
+  target: "active" | "new";
+  respond: (accepted: boolean) => void;
+};
+export type McpAppContextState = {
+  updateId: string;
+  content?: ContentBlock[];
+  structuredContent?: Record<string, unknown>;
+} | null;
+export type McpAppContextEventDetail = {
+  sessionKey: string;
+  viewId: string;
+  state: McpAppContextState;
+};
+export type McpAppFileOpenEventDetail = {
+  sessionKey: string;
+  viewId: string;
+  path: string;
+  name: string;
+  respond: (accepted: boolean) => void;
+};
+
+function isSupportedMcpAppContent(block: ContentBlock): boolean {
+  switch (block.type) {
+    case "text":
+      return typeof block.text === "string" && block.text.trim().length > 0;
+    case "image":
+      return typeof block.data === "string" && Boolean(block.mimeType);
+    case "resource_link":
+      return (
+        typeof block.uri === "string" &&
+        Boolean(block.uri) &&
+        typeof block.name === "string" &&
+        Boolean(block.name)
+      );
+    case "resource":
+      return (
+        Boolean(block.resource) &&
+        typeof block.resource.uri === "string" &&
+        (("text" in block.resource && typeof block.resource.text === "string") ||
+          ("blob" in block.resource && typeof block.resource.blob === "string"))
+      );
+    default:
+      return false;
+  }
+}
+
+export async function dispatchMcpAppMessage(
+  frame: HTMLIFrameElement,
+  binding: { sessionKey: string; viewId: string },
+  params: { role: string; content: ContentBlock[]; _meta?: Record<string, unknown> },
+  confirm: (preview: string) => boolean,
+): Promise<boolean> {
+  const options = params._meta?.["openai/message"];
+  const messageOptions = asOptionalRecord(options);
+  if (options !== undefined && !messageOptions) {
+    return false;
+  }
+  if (
+    params.role !== "user" ||
+    !params.content.length ||
+    params.content.some((block) => !isSupportedMcpAppContent(block)) ||
+    (messageOptions?.target !== undefined &&
+      messageOptions.target !== "active" &&
+      messageOptions.target !== "new") ||
+    (messageOptions?.send !== undefined && messageOptions.send !== true) ||
+    JSON.stringify(params.content).length > 8 * 1024 * 1024 ||
+    !isWidgetFrameInteractable(frame) ||
+    !allowWidgetPrompt(binding.sessionKey + "\0" + binding.viewId, Date.now())
+  ) {
+    return false;
+  }
+  // Commands are host actions, never an untrusted App's conversational shortcut.
+  if (/^[!/]/u.test(mcpAppMessageText(params.content).trimStart())) {
+    return false;
+  }
+  const preview = params.content
+    .map((block) => {
+      const title = block._meta?.["openai/title"];
+      if (typeof title === "string" && title.trim()) {
+        return title;
+      }
+      if (block.type === "text") {
+        return block.text;
+      }
+      if (block.type === "resource_link") {
+        return block.title ?? block.name;
+      }
+      if (block.type === "resource") {
+        return block.resource.uri;
+      }
+      return block.type;
+    })
+    .join("\n\n");
+  if (!confirm(preview)) {
+    return false;
+  }
+  return new Promise<boolean>((respond) => {
+    const claimed = !frame.dispatchEvent(
+      new CustomEvent<McpAppMessageEventDetail>(MCP_APP_MESSAGE_EVENT, {
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+        detail: {
+          ...binding,
+          content: params.content,
+          target: messageOptions?.target === "new" ? "new" : "active",
+          respond,
+        },
+      }),
+    );
+    if (!claimed) {
+      respond(false);
+    }
+  });
+}
+
+export function negotiateMcpAppDisplayModes(
+  resource:
+    | {
+        availableDisplayModes?: Array<"inline" | "fullscreen">;
+        preferredDisplayMode?: "inline" | "fullscreen";
+      }
+    | undefined,
+  appModes?: readonly string[],
+): { available: Array<"inline" | "fullscreen">; initial: "inline" | "fullscreen" } {
+  const hints =
+    resource?.availableDisplayModes ??
+    (resource?.preferredDisplayMode ? [resource.preferredDisplayMode] : appModes);
+  const available = (["inline", "fullscreen"] as const).filter(
+    (mode) => (!hints || hints.includes(mode)) && (!appModes || appModes.includes(mode)),
+  );
+  if (!available.length) {
+    throw new Error("MCP App supports no available host display mode");
+  }
+  return {
+    available,
+    initial:
+      resource?.preferredDisplayMode && available.includes(resource.preferredDisplayMode)
+        ? resource.preferredDisplayMode
+        : available[0]!,
+  };
 }

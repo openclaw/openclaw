@@ -261,6 +261,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     now,
     signal: scope.signal,
     warn,
+    resolveHumanPresenceDemand: options.resolveHumanPresenceDemand,
+    presenceDemandStore: options.presenceDemandStore,
   });
   const schedulePreparedRefill = (environmentId?: string) =>
     void trackOperation(preparedPool.maintain(environmentId));
@@ -630,6 +632,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     getPreparedCandidates: (intent: WorkerProviderPreparedIntent) =>
       preparedPool.candidates(intent).map(environmentAccess.project),
     schedulePreparedRefill,
+    setHumanPresence: preparedPool.setHumanPresence,
     inventoryVersion: store.inventoryVersion,
     machineShapeVersion: providerLifecycle.machineShapeVersion,
     subscribeMachineShapeChanged: providerLifecycle.subscribeMachineShapeChanged,
@@ -694,8 +697,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     prepareComputer: options.prepareComputer,
     startInference: turnRpc.startInference,
     cancelInference: turnRpc.cancelInference,
-    cancelInferenceForSession: turnRpc.cancelInferenceForSession,
-    hasInferenceForSession: turnRpc.hasInferenceForSession,
     resolveSshIdentity: environmentAccess.resolveSshIdentity,
     attachSession: credentialBroker.attachSession,
     takeMintedCredential: credentialBroker.takeMintedCredential,
@@ -722,11 +723,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     start,
     stop,
   };
-  registerWorkerInferenceSessionControl(service, {
-    reserveDrain: inference.reserveSessionDrain,
-    captureCancel: inference.captureSessionCancellation,
-    resolveTarget: inference.resolveSessionTargetForRunId,
-  });
+  registerWorkerInferenceSessionControl(service, inference);
   return service;
 }
 

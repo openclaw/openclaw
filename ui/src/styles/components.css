@@ -2328,7 +2328,13 @@ select.input {
   margin-top: 8px;
 }
 
+.lazy-view-error__details {
+  max-width: 100%;
+  color: var(--muted);
+}
+
 .lazy-view-error__detail {
+  display: block;
   margin-top: 8px;
   max-width: 100%;
   color: var(--muted);
@@ -2891,16 +2897,19 @@ select.input {
   z-index: 2;
 }
 
-.data-table th.data-table-checkbox-col {
+.data-table th.data-table-checkbox-col,
+.data-table th.data-table-key-col {
   z-index: 4;
   background: var(--bg-elevated);
 }
 
-td.data-table-checkbox-col {
+td.data-table-checkbox-col,
+td.data-table-key-col {
   background: var(--card);
 }
 
-.data-table tbody tr:hover td.data-table-checkbox-col {
+.data-table tbody tr:hover td.data-table-checkbox-col,
+.data-table tbody tr:hover td.data-table-key-col {
   background: var(--bg-hover);
 }
 
@@ -2919,18 +2928,8 @@ td.data-table-checkbox-col {
   min-width: 180px;
 }
 
-.data-table th.data-table-key-col {
-  z-index: 4;
-  background: var(--bg-elevated);
-}
-
 td.data-table-key-col {
-  background: var(--card);
   box-shadow: 2px 0 4px rgba(0, 0, 0, 0.08);
-}
-
-.data-table tbody tr:hover td.data-table-key-col {
-  background: var(--bg-hover);
 }
 
 .data-table-bulk-bar {
@@ -3484,7 +3483,9 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.agent-select__chevron svg {
+.agent-select__chevron svg,
+.agent-select__avatar--icon svg,
+.agent-select__footer-icon svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -3548,17 +3549,6 @@ td.data-table-key-col {
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
-}
-
-.agent-select__avatar--icon svg,
-.agent-select__footer-icon svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .agent-select__badge {

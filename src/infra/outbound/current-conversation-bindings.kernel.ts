@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
+  createSqliteQueryCache,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
@@ -142,19 +143,9 @@ function createCurrentConversationBindingQueries(db: DatabaseSync) {
 }
 
 // Cache SQL templates per handle; native statements and their invalidation remain executor-owned.
-const currentConversationBindingQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof createCurrentConversationBindingQueries>
->();
-
-function getCurrentConversationBindingQueries(db: DatabaseSync) {
-  let queries = currentConversationBindingQueries.get(db);
-  if (!queries) {
-    queries = createCurrentConversationBindingQueries(db);
-    currentConversationBindingQueries.set(db, queries);
-  }
-  return queries;
-}
+const getCurrentConversationBindingQueries = createSqliteQueryCache(
+  createCurrentConversationBindingQueries,
+);
 
 function buildConversationKey(ref: ConversationRef): string {
   return [ref.channel, ref.accountId, ref.parentConversationId ?? "", ref.conversationId].join(

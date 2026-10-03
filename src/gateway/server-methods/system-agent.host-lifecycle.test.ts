@@ -186,6 +186,9 @@ describe("openclaw.chat hosted lifecycle", () => {
       const requestResponses = makeRespond();
       const rootsAtResponse: number[] = [];
       const persistedHistoryAtResponse: unknown[][] = [];
+      const appendHistory = fullPermission
+        ? transcriptStoreMocks.appendTranscriptTurn
+        : transcriptStoreMocks.appendTranscriptTurnAsync;
       const pendingChat = withGatewayToolCallerIdentity(identity, () =>
         handleGatewayRequest({
           req: {
@@ -201,9 +204,7 @@ describe("openclaw.chat hosted lifecycle", () => {
           },
           respond: (ok, payload, error) => {
             rootsAtResponse.push(getActiveGatewayRootWorkCount());
-            persistedHistoryAtResponse.push(
-              transcriptStoreMocks.appendTranscriptTurn.mock.calls.map(([turn]) => turn),
-            );
+            persistedHistoryAtResponse.push(appendHistory.mock.calls.map(([turn]) => turn));
             requestResponses.respond(ok, payload, error);
           },
           client: {
@@ -329,7 +330,7 @@ describe("openclaw.chat hosted lifecycle", () => {
         }
         expect(systemAgentLane()).toMatchObject({ activeCount: 0, queuedCount: 0 });
         expect(getActiveGatewayRootWorkCount()).toBe(0);
-        expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenCalledWith(
+        expect(appendHistory).toHaveBeenCalledWith(
           expect.objectContaining({
             role: "assistant",
             text: expect.stringContaining(expectedReply),

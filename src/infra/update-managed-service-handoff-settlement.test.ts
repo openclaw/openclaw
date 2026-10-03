@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
@@ -8,6 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+const UPDATER_CLEANUP_GUARD_MS = 5_000;
 beforeEach(async () => {
   // resetModules gives each outcome a fresh owner; install spies on that same module instance.
   const [tmpOwner, systemdScope] = await Promise.all([
@@ -153,7 +155,8 @@ it.runIf(process.platform === "linux").each(["SIGTERM", "success", "failed"] as 
         getFileLockProcessStartTime(updaterPid) === updaterStart
       ) {
         updater?.write("finish");
-        await waitForDead(updaterPid, 5_000);
+        // Cleanup hang guard after the owner requested updater settlement, not a readiness race.
+        await waitForDead(updaterPid, AbortSignal.timeout(UPDATER_CLEANUP_GUARD_MS));
       }
       updater?.destroy();
       if (

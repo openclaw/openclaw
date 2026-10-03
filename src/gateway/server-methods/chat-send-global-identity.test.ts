@@ -14,6 +14,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { readSessionPendingInputByKey } from "../../config/sessions/session-accessor.sqlite-pending-inputs.js";
+import { SessionPendingInputCustodyError } from "../../config/sessions/session-pending-input-custody-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -225,7 +226,8 @@ it.each<{
       await replaceSessionEntry(row, {
         sessionId: row.sessionId,
         lifecycleRevision: "original",
-        updatedAt: 1,
+        // Identity assertions require live rows, not fixtures eligible for age-retention archiving.
+        updatedAt: Date.now(),
         status: "done",
       });
       await appendTranscriptMessage(row, {
@@ -541,7 +543,11 @@ it.each<{
             owned.userTurn.persist(
               scenario.pendingReplacement ? undefined : { contextFreeCommand: true },
             ),
-          ).rejects.toThrow(/database|identity|changed/i);
+          ).rejects.toThrow(
+            scenario.pendingReplacement
+              ? SessionPendingInputCustodyError
+              : /database|identity|changed/i,
+          );
           expect(replaceAtPersistence).toHaveBeenCalledOnce();
           if (scenario.pendingReplacement) {
             expect(readPending(source.path)).toEqual(pendingBefore);

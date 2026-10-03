@@ -847,9 +847,13 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       }
       const createsBefore = createEmbeddingProviderMock.mock.calls.length;
       const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
+      // Concurrent provider admission needs distinct connections; each socket owns serial requests.
       const firstPromise = postEmbeddings(
         { model: "openclaw/default", input: "first" },
-        modelOverride ? { "x-openclaw-model": "openai/model-a" } : undefined,
+        {
+          connection: "close",
+          ...(modelOverride ? { "x-openclaw-model": "openai/model-a" } : {}),
+        },
       );
       const requests = [firstPromise];
       try {
@@ -863,7 +867,10 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
         });
         const secondPromise = postEmbeddings(
           { model: "openclaw/default", input: "second" },
-          modelOverride ? { "x-openclaw-model": "openai/model-b" } : undefined,
+          {
+            connection: "close",
+            ...(modelOverride ? { "x-openclaw-model": "openai/model-b" } : {}),
+          },
         );
         requests.push(secondPromise);
         await waitForProviderEntry(secondEntered.promise, secondPromise);

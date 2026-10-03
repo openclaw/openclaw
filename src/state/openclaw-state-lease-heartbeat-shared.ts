@@ -38,6 +38,11 @@ export type LeaseHeartbeatRenewalFailure = {
   elapsedMs: number;
 };
 
+export type LeaseHeartbeatLoss = {
+  path: "automatic-renewal" | "activation" | "explicit-verify" | "explicit-renew";
+  outcome: "no-current-owned-unexpired-row" | "operation-error";
+};
+
 export type LeaseHeartbeatWorkerData = {
   path: string;
   expectedIdentity: string;
@@ -62,6 +67,7 @@ export type LeaseHeartbeatParentMessage = LeaseHeartbeatRequest | { startup: "ac
 
 export type LeaseHeartbeatReply =
   | LeaseHeartbeatRenewalFailure
+  | { loss: LeaseHeartbeatLoss }
   | { startup: "prepared" }
   | { id: number; ok: true; expiresAt: number }
   | { id: number; ok: false; message: string; payload?: OpenClawStateWorkerErrorPayload };

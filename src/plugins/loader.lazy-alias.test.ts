@@ -13,7 +13,7 @@ import {
   createPluginCliLoadSession,
   loadPluginCliRegistrationEntriesWithDefaults,
 } from "./cli-registry-loader.js";
-import { registerPluginCliCommands } from "./cli.js";
+import { registerPluginCliCommandsFromValidatedConfig } from "./cli.js";
 import { createPluginModuleLoader } from "./loader-module-runtime.js";
 import { createPluginCache, resetPluginCache, withPluginCache } from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
@@ -334,7 +334,7 @@ describe("native plugin alias preparation", () => {
     },
   );
 
-  it("captures private QA denial before late use even if ambient authorization changes", () => {
+  it("captures private QA denial before late use even if ambient authorization changes", async () => {
     const f = fixture();
     writeFile(
       f.root,
@@ -344,11 +344,18 @@ describe("native plugin alias preparation", () => {
     writeFile(f.root, "dist/plugin-sdk/qa-runtime.js", "export const privateValue = true;");
     vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "0");
     const load = createPluginModuleLoader({ devSourceRoot: f.root, pluginSdkResolution: "dist" });
-    const metadata = load(f.entry) as { load: (name: string) => unknown };
+    const metadata = load(f.entry) as {
+      load: (name: string) => unknown;
+      loadEsm: (name: string) => Promise<unknown>;
+    };
     vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "1");
     expect(() => metadata.load("@openclaw/plugin-sdk/qa-runtime")).toThrow();
+    await expect(metadata.loadEsm("@openclaw/plugin-sdk/qa-runtime")).rejects.toThrow();
     installOpenClawPluginSdkNativeResolver({ pluginModulePath: f.entry, devSourceRoot: f.root });
     expect(metadata.load("@openclaw/plugin-sdk/qa-runtime")).toMatchObject({ privateValue: true });
+    await expect(metadata.loadEsm("@openclaw/plugin-sdk/qa-runtime")).resolves.toMatchObject({
+      privateValue: true,
+    });
   });
 
   it("does not reuse a bundled private alias grant for an external plugin", () => {
@@ -495,17 +502,20 @@ describe("native plugin alias preparation", () => {
       session.close();
       await expect(registrar!.register(new Command())).rejects.toThrow(/preparation is closed/);
       await withPluginCache(createPluginCache(), () => session.withCache(parse));
-    } else if (registration === "standalone" || registration === "deferred") {
-      await registerPluginCliCommands(program, cfg, env, undefined, {
-        mode: registration === "deferred" ? "lazy" : "eager",
-      });
-      await parse();
     } else {
       clearRuntimeConfigSnapshot();
       for (const [key, value] of Object.entries(env)) {
         vi.stubEnv(key, value);
       }
       fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
+      if (registration === "standalone" || registration === "deferred") {
+        await registerPluginCliCommandsFromValidatedConfig(program, env, undefined, {
+          mode: registration === "deferred" ? "lazy" : "eager",
+        });
+        await parse();
+        expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual(["source", "unused"]);
+        return;
+      }
       const name =
         registration === "nodes"
           ? "nodes"

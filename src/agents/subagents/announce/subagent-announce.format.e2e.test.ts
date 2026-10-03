@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
@@ -38,7 +39,10 @@ import {
 } from "../../announce-idempotency.js";
 import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
 import { FailoverError } from "../../failover-error.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
+import { immutableSubagentRun, subagentRuns } from "../registry/subagent-registry-memory.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
@@ -202,8 +206,8 @@ function completedAnnounceRun(
   text: string,
   runId: string,
   childSessionKey = "agent:main:subagent:test",
-): MockSubagentRun {
-  const child: MockSubagentRun = {
+): SubagentRunRecord {
+  const child = publishAnnounceRunFixture({
     runId,
     childSessionKey,
     requesterSessionKey: "agent:main:main",
@@ -216,7 +220,7 @@ function completedAnnounceRun(
       required: true,
       terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text }),
     },
-  };
+  });
   subagentRegistryMock.getLatestSubagentRunByChildSessionKey.mockImplementation((key) =>
     key === childSessionKey ? child : undefined,
   );
@@ -365,8 +369,40 @@ function loadSessionStoreFixture(): Record<string, SessionEntry> {
   }) as unknown as Record<string, SessionEntry>;
 }
 
-vi.mock("../registry/subagent-registry.js", () => subagentRegistryMock);
-vi.mock("../registry/subagent-registry-read.js", () => subagentRegistryMock);
+function publishAnnounceRunFixture(fixture: MockSubagentRun): SubagentRunRecord {
+  const canonical = createSubagentRunRecord({
+    ...fixture,
+    execution:
+      typeof fixture.execution.endedAt === "number"
+        ? { status: "terminal", ...fixture.execution }
+        : { status: "running" },
+  });
+  const current = subagentRuns.get(canonical.runId);
+  if (current && isDeepStrictEqual(current, canonical)) {
+    return current;
+  }
+  const published = immutableSubagentRun(structuredClone(canonical));
+  subagentRuns.set(published.runId, published);
+  return published;
+}
+
+function createRegistryDiscoveryFixture() {
+  return {
+    ...subagentRegistryMock,
+    getLatestSubagentRunByChildSessionKey(childSessionKey: string) {
+      const fixture = subagentRegistryMock.getLatestSubagentRunByChildSessionKey(childSessionKey);
+      return fixture ? publishAnnounceRunFixture(fixture) : undefined;
+    },
+    listSubagentRunsForRequester(sessionKey: string, scope?: { requesterRunId?: string }) {
+      return subagentRegistryMock
+        .listSubagentRunsForRequester(sessionKey, scope)
+        .map(publishAnnounceRunFixture);
+    },
+  };
+}
+
+vi.mock("../registry/subagent-registry.js", () => createRegistryDiscoveryFixture());
+vi.mock("../registry/subagent-registry-read.js", () => createRegistryDiscoveryFixture());
 
 describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;
@@ -395,10 +431,12 @@ describe("subagent announce formatting", () => {
   });
 
   afterEach(() => {
+    subagentRuns.clear();
     vi.useRealTimers();
   });
 
   beforeEach(() => {
+    subagentRuns.clear();
     vi.useRealTimers();
     // OPENCLAW_TEST_FAST is set in beforeAll before module import
     // to ensure the module-level constant picks it up.
@@ -3075,9 +3113,9 @@ describe("subagent announce formatting", () => {
     });
 
     expect(didAnnounce).toBe("retryable");
-    expect(subagentRegistryMock.resolveRequesterForChildSession).toHaveBeenCalledWith(
-      "agent:main:subagent:orchestrator",
-    );
+    expect(subagentRegistryMock.resolveRequesterForChildSession.mock.calls).toEqual([
+      ["agent:main:subagent:orchestrator", undefined],
+    ]);
     expect(agentSpy).not.toHaveBeenCalled();
     expect(sessionsDeleteSpy).not.toHaveBeenCalled();
   });

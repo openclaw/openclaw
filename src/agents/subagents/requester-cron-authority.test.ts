@@ -1,5 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { readOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import {
@@ -10,6 +11,10 @@ import {
   rotateAgentRunRegistryLifecycleGeneration,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -26,14 +31,17 @@ import {
   withGatewayToolCallerIdentity,
 } from "../tools/gateway-caller-context.js";
 import { consumeSubagentPauseNotice } from "./registry/subagent-delivery-state.js";
-import { settleRequesterTurnAfterSessionSpawns } from "./registry/subagent-registry-requester-yield.js";
+import { mutateSubagentRuns } from "./registry/subagent-registry-persistence.js";
 import {
-  createRequesterInitialTransferFixture,
-  markRequesterTurnYieldedWithAuthority,
-} from "./registry/subagent-registry-requester-yield.test-support.js";
+  markRequesterTurnYieldedInRuns,
+  settleRequesterTurnAfterSessionSpawns,
+} from "./registry/subagent-registry-requester-yield.js";
+import { createRequesterInitialTransferFixture } from "./registry/subagent-registry-requester-yield.test-support.js";
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
+import { isSameSubagentRunOwner } from "./registry/subagent-run-generation.js";
 import {
   consumeRequesterCronAuthorityAdmission,
+  prepareRequesterCronAuthority,
   replaceRequesterCronAuthorityEntry,
   revokeRequesterCronAuthority,
   revokeRequesterCronAuthorityBatch,
@@ -79,6 +87,13 @@ vi.mock("../../gateway/session-sharing-preparation.js", () => ({
 
 const SESSION = "agent:main:control-ui";
 const runs = new Map<string, SubagentRunRecord>();
+let state: OpenClawTestState;
+beforeAll(async () => {
+  state = await createOpenClawTestState({ scenario: "minimal" });
+});
+afterAll(async () => {
+  await state.cleanup();
+});
 
 afterEach(() => {
   revokeRequesterCronAuthority(SESSION);
@@ -104,6 +119,7 @@ function createBatch(requesterTurnRunId: string, count = 1): SubagentRunRecord[]
       createdAt: 1,
       execution: { status: "terminal", endedAt: 2 },
       expectsCompletionMessage: true,
+      completion: { required: true },
       delivery: { status: "delivered" },
     };
     runs.set(runId, entry);
@@ -164,14 +180,71 @@ async function inAdminRun<T>(
   }
 }
 
+function ownBatchTransfer(
+  batch: SubagentRunRecord[],
+  beforeWrite?: () => void,
+  assertCurrent?: () => void,
+) {
+  const transfer = createRequesterInitialTransferFixture(runs, beforeWrite, { assertCurrent });
+  return async (params: Parameters<typeof transfer>[0]) => {
+    await transfer({
+      ...params,
+      afterRelease(published) {
+        params.afterRelease?.(published);
+        batch.splice(0, batch.length, ...published);
+      },
+    });
+  };
+}
+
+async function updateBatch(
+  batch: SubagentRunRecord[],
+  update: (drafts: SubagentRunRecord[]) => void,
+): Promise<void> {
+  const observed = [...batch];
+  await mutateSubagentRuns(
+    observed.map((entry) => entry.runId),
+    (rows) => {
+      const drafts = observed.map((entry) => {
+        const current = expectDefined(rows.get(entry.runId), "current fixture batch member");
+        expect(isSameSubagentRunOwner(current, entry)).toBe(true);
+        return structuredClone(current);
+      });
+      update(drafts);
+      return { value: undefined, postimages: new Map(drafts.map((entry) => [entry.runId, entry])) };
+    },
+    {
+      runs,
+      onPublished(postimages) {
+        batch.splice(
+          0,
+          batch.length,
+          ...observed.map((entry) =>
+            expectDefined(postimages.get(entry.runId), "acknowledged fixture batch member"),
+          ),
+        );
+      },
+    },
+  );
+}
+
 async function mark(batch: SubagentRunRecord[], persistOrThrow: () => void = () => {}) {
-  return await markRequesterTurnYieldedWithAuthority({
+  const requester = {
     requesterSessionKey: SESSION,
     requesterAgentId: "main",
     requesterTurnRunId: batch[0]!.requesterTurnRunId!,
-    runs,
-    transfer: createRequesterInitialTransferFixture(runs, persistOrThrow),
-  });
+  };
+  const preparedAuthority = prepareRequesterCronAuthority(requester);
+  try {
+    return await markRequesterTurnYieldedInRuns({
+      ...requester,
+      preparedAuthority: preparedAuthority ?? null,
+      runs,
+      transfer: ownBatchTransfer(batch, persistOrThrow, () => preparedAuthority?.assertCurrent()),
+    });
+  } finally {
+    await preparedAuthority?.release();
+  }
 }
 
 function settle(batch: SubagentRunRecord[]) {
@@ -186,7 +259,7 @@ function settle(batch: SubagentRunRecord[]) {
       expectsCompletionMessage: true,
     })),
     runs,
-    transfer: createRequesterInitialTransferFixture(runs, () => undefined),
+    transfer: ownBatchTransfer(batch),
     schedule: () => undefined,
   });
 }
@@ -213,14 +286,18 @@ function dispatch<T>(batch: SubagentRunRecord[], run: () => Promise<T>, runId = 
   );
 }
 
-function consume(batch: SubagentRunRecord[], runId = "continuation") {
+function consume(
+  batch: SubagentRunRecord[],
+  runId = "continuation",
+  sourceTool = "subagent_settle",
+) {
   return consumeRequesterCronAuthorityAdmission({
     runId,
     sessionKey: SESSION,
     sessionId: "requester-session",
     inputProvenance: {
       kind: "inter_session",
-      sourceTool: "subagent_settle",
+      sourceTool,
       sourceSessionKey: batch[0]!.childSessionKey,
     },
   });
@@ -245,9 +322,11 @@ describe("requester cron authority lifetime", () => {
         operator,
       );
       expect(await settle(batch)).toBe(true);
-      const paused = batch[0]!;
-      paused.pauseReason = "sessions_yield";
-      paused.requesterSettleWake!.pauseNotice = { acknowledgment: "Need a continuation." };
+      await updateBatch(batch, ([paused]) => {
+        paused!.pauseReason = "sessions_yield";
+        paused!.requesterSettleWake!.pauseNotice = { acknowledgment: "Need a continuation." };
+      });
+      let paused = batch[0]!;
       let pauseAdmission: ReturnType<typeof consume>;
       await dispatch(
         [paused],
@@ -268,7 +347,10 @@ describe("requester cron authority lifetime", () => {
             if (outcome === "reset") {
               fixture.session.lifecycleRevision = "replacement";
             } else if (outcome === "completion") {
-              expect(consumeSubagentPauseNotice(paused)).toBe(true);
+              await updateBatch(batch, ([draft]) =>
+                expect(consumeSubagentPauseNotice(draft!)).toBe(true),
+              );
+              paused = batch[0]!;
               revokeRequesterCronAuthorityBatch([paused], 1);
             }
             expect(pauseAdmission!.isCurrent()).toBe(outcome !== "reset");
@@ -284,7 +366,10 @@ describe("requester cron authority lifetime", () => {
         return;
       }
       if (outcome === "scope ended") {
-        expect(consumeSubagentPauseNotice(paused)).toBe(true);
+        await updateBatch(batch, ([draft]) =>
+          expect(consumeSubagentPauseNotice(draft!)).toBe(true),
+        );
+        paused = batch[0]!;
         revokeRequesterCronAuthorityBatch([paused], 1);
       }
 
@@ -292,22 +377,44 @@ describe("requester cron authority lifetime", () => {
       continued.runId = "continued-child";
       continued.taskRunId = paused.runId;
       continued.pauseReason = undefined;
-      const nextBatch = [continued, batch[1]!];
+      const nextBatch = [continued, structuredClone(batch[1]!)];
       const batchRunIds = nextBatch.map((entry) => entry.runId).toSorted();
       for (const entry of nextBatch) {
         entry.requesterSettleWake!.batchRunIds = batchRunIds;
       }
-      runs.delete(paused.runId);
-      runs.set(continued.runId, continued);
-      replaceRequesterCronAuthorityEntry({ previous: paused, next: continued, preserve: true });
+      await mutateSubagentRuns(
+        [paused.runId, ...nextBatch.map((entry) => entry.runId)],
+        () => ({
+          value: undefined,
+          postimages: new Map<string, SubagentRunRecord | null>([
+            [paused.runId, null],
+            ...nextBatch.map((entry) => [entry.runId, entry] as const),
+          ]),
+        }),
+        {
+          runs,
+          onPublished(postimages) {
+            nextBatch.splice(
+              0,
+              nextBatch.length,
+              ...nextBatch.map((entry) =>
+                expectDefined(postimages.get(entry.runId), "acknowledged continued batch member"),
+              ),
+            );
+          },
+        },
+      );
+      replaceRequesterCronAuthorityEntry({ previous: paused, next: nextBatch[0]!, preserve: true });
       await dispatch(nextBatch, async () => {
         expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority).toBe(operator);
         const completionAdmission = consume(nextBatch)!;
         expect(completionAdmission.managementEntitlement.source).toBe("control-ui-admin");
         expect(completionAdmission.isCurrent()).toBe(true);
-        for (const entry of nextBatch) {
-          entry.requesterSettleWake = undefined;
-        }
+        await updateBatch(nextBatch, (drafts) => {
+          for (const entry of drafts) {
+            entry.requesterSettleWake = undefined;
+          }
+        });
         revokeRequesterCronAuthorityBatch(nextBatch, 1);
         expect(completionAdmission.isCurrent()).toBe(false);
       });
@@ -409,154 +516,127 @@ describe("requester cron authority lifetime", () => {
     },
   );
 
-  it("carries separately admitted owner identity through explicit yield and expires retained bindings", async () => {
-    let current = true;
-    const owner = {
-      isCurrent: () => current,
-      senderId: "original-owner",
-      channel: "discord",
-      accountId: "original-account",
-    };
-    const entitlement = { source: "channel-owner" as const, isCurrent: owner.isCurrent };
-    const batch = createBatch("owner-source");
-    await inAdminRun(
-      "owner-source",
-      async () => expect(await mark(batch)).toBe(1),
-      undefined,
-      entitlement,
-      owner,
-    );
-    expect(await settle(batch)).toBe(true);
-    let retained: ReturnType<typeof bindRequesterOwnerIdentity>;
-    await dispatch(batch, async () => {
-      const admission = consume(batch)!;
-      expect(admission.requesterOwner).toBe(owner);
+  it.each([true, false])(
+    "carries only explicitly admitted plugin ownership: %s",
+    async (hasOwner) => {
+      let current = true;
+      const owner = {
+        isCurrent: () => current,
+        senderId: "original-owner",
+        channel: "discord",
+        accountId: "original-account",
+      };
+      const entitlement = hasOwner
+        ? { source: "channel-owner" as const, isCurrent: owner.isCurrent }
+        : { source: "control-ui-admin" as const };
+      const batch = createBatch("owner-source");
       await inAdminRun(
-        "continuation",
-        async () => {
-          const identity = {
-            runId: "continuation",
-            sessionKey: SESSION,
-            sessionId: "requester-session",
-            agentId: "main",
-          };
-          expect(
-            bindRequesterOwnerIdentity({ ...identity, sessionKey: "agent:main:unrelated" }),
-          ).toBeUndefined();
-          retained = bindRequesterOwnerIdentity(identity);
-          expect(retained).toMatchObject({
-            senderId: "original-owner",
-            channel: "discord",
-            accountId: "original-account",
-          });
-          expect(retained?.isCurrent()).toBe(true);
-          current = false;
-          expect(() => retained?.assertCurrent()).toThrow("owner identity");
-          current = true;
-          expect(retained?.isCurrent()).toBe(true);
-        },
-        admission.isCurrent,
-        admission.managementEntitlement,
-        admission.requesterOwner,
+        "owner-source",
+        async () => expect(await mark(batch)).toBe(1),
+        undefined,
+        entitlement,
+        hasOwner ? owner : undefined,
       );
-    });
-    expect(retained?.isCurrent()).toBe(false);
-    expect(() => retained?.assertCurrent()).toThrow("owner identity");
-  });
-
-  it("does not turn management-only yield authority into plugin ownership", async () => {
-    const batch = await capture();
-    await dispatch(batch, async () => {
-      const admission = consume(batch)!;
-      expect(admission.requesterOwner).toBeUndefined();
-      await inAdminRun(
-        "continuation",
-        async () => {
-          expect(
-            bindRequesterOwnerIdentity({
+      expect(await settle(batch)).toBe(true);
+      let retained: ReturnType<typeof bindRequesterOwnerIdentity>;
+      await dispatch(batch, async () => {
+        const admission = consume(batch)!;
+        expect(admission.requesterOwner).toBe(hasOwner ? owner : undefined);
+        await inAdminRun(
+          "continuation",
+          async () => {
+            const identity = {
               runId: "continuation",
               sessionKey: SESSION,
               sessionId: "requester-session",
               agentId: "main",
-            }),
-          ).toBeUndefined();
-        },
-        admission.isCurrent,
-        admission.managementEntitlement,
-      );
-    });
-  });
-
-  it.each(["before dispatch", "after admission", "after second yield"])(
-    "rechecks original channel ownership %s without retaining a closed run",
-    async (when) => {
-      let owner = true;
-      const entitlement = { source: "channel-owner" as const, isCurrent: () => owner };
-      const first = createBatch("owner-original");
-      await inAdminRun(
-        "owner-original",
-        async () => expect(await mark(first)).toBe(1),
-        undefined,
-        entitlement,
-      );
-      expect(await settle(first)).toBe(true);
-      if (when === "before dispatch") {
-        owner = false;
-      }
-      await dispatch(first, async () => {
-        const admission = consume(first);
-        if (when === "before dispatch") {
-          expect(admission).toBeUndefined();
-          return;
-        }
-        expect(admission?.managementEntitlement.source).toBe("channel-owner");
-        expect(admission?.callerOrigin).toEqual({ kind: "unknown" });
-        expect(admission?.isCurrent()).toBe(true);
-        if (when === "after admission") {
-          owner = false;
-          expect(admission?.isCurrent()).toBe(false);
-          return;
-        }
-        const next = createBatch("continuation");
-        await inAdminRun(
-          "continuation",
-          async () => expect(await mark(next)).toBe(1),
-          admission!.isCurrent,
-          admission!.managementEntitlement,
-        );
-        expect(await settle(next)).toBe(true);
-        await dispatch(
-          next,
-          async () => {
-            const second = consume(next, "second-continuation");
-            expect(second?.isCurrent()).toBe(true);
-            owner = false;
-            expect(second?.isCurrent()).toBe(false);
+            };
+            expect(
+              bindRequesterOwnerIdentity({ ...identity, sessionKey: "agent:main:unrelated" }),
+            ).toBeUndefined();
+            retained = bindRequesterOwnerIdentity(identity);
+            if (!hasOwner) {
+              expect(retained).toBeUndefined();
+              return;
+            }
+            expect(retained).toMatchObject({
+              senderId: "original-owner",
+              channel: "discord",
+              accountId: "original-account",
+            });
+            expect(retained?.isCurrent()).toBe(true);
+            current = false;
+            expect(() => retained?.assertCurrent()).toThrow("owner identity");
+            current = true;
+            expect(retained?.isCurrent()).toBe(true);
           },
-          "second-continuation",
+          admission.isCurrent,
+          admission.managementEntitlement,
+          admission.requesterOwner,
         );
       });
+      if (hasOwner) {
+        expect(retained?.isCurrent()).toBe(false);
+        expect(() => retained?.assertCurrent()).toThrow("owner identity");
+      }
     },
   );
 
-  it("does not admit an arbitrary child message from the expected child", async () => {
-    const batch = await capture();
-    await dispatch(batch, async () => {
-      expect(
-        consumeRequesterCronAuthorityAdmission({
-          runId: "continuation",
-          sessionKey: SESSION,
-          sessionId: "requester-session",
-          inputProvenance: {
-            kind: "inter_session",
-            sourceTool: "sessions_send",
-            sourceSessionKey: batch[0]!.childSessionKey,
-          },
-        }),
-      ).toBeUndefined();
-      expect(consume(batch)).toBeDefined();
+  it.each([
+    ["channel-owner", "before dispatch"],
+    ["channel-owner", "after second yield"],
+    ["control-ui-admin", "after second yield"],
+  ] as const)("retains %s authority %s without retaining a closed run", async (source, when) => {
+    let owner = true;
+    const entitlement =
+      source === "channel-owner" ? { source, isCurrent: () => owner } : { source };
+    const first = createBatch("owner-original");
+    await inAdminRun(
+      "owner-original",
+      async () => expect(await mark(first)).toBe(1),
+      undefined,
+      entitlement,
+    );
+    expect(await settle(first)).toBe(true);
+    if (when === "before dispatch") {
+      owner = false;
+    }
+    let next: SubagentRunRecord[] = [];
+    await dispatch(first, async () => {
+      const admission = consume(first);
+      if (when === "before dispatch") {
+        expect(admission).toBeUndefined();
+        return;
+      }
+      expect(admission?.managementEntitlement.source).toBe(source);
+      expect(admission?.callerOrigin).toEqual({ kind: "unknown" });
+      expect(admission?.isCurrent()).toBe(true);
+      next = createBatch("continuation");
+      await inAdminRun(
+        "continuation",
+        async () => expect(await mark(next)).toBe(1),
+        admission!.isCurrent,
+        admission!.managementEntitlement,
+      );
+      expect(await settle(next)).toBe(true);
     });
+    if (when === "after second yield") {
+      await dispatch(
+        next,
+        async () => {
+          const second = consume(next, "second-continuation");
+          expect(second?.callerOrigin).toEqual({ kind: "unknown" });
+          expect(second?.isCurrent()).toBe(true);
+          if (source === "channel-owner") {
+            owner = false;
+            expect(second?.isCurrent()).toBe(false);
+          }
+        },
+        "second-continuation",
+      );
+    }
   });
+
   it("transfers cleanup to the exact successor scope without losing session revocation", async () => {
     const batch = await capture();
     await dispatch(batch, async () => {
@@ -570,8 +650,14 @@ describe("requester cron authority lifetime", () => {
       admission.bindRunScope(scope);
       expect(() => admission.bindRunScope(scope)).toThrow("no longer owns");
       await runWithCronCreatorAuthorityCapability(scope, async () => {
-        batch[0]!.requesterSettleWake = undefined;
-        runs.clear();
+        await mutateSubagentRuns(
+          batch.map((entry) => entry.runId),
+          () => ({
+            value: undefined,
+            postimages: new Map(batch.map((entry) => [entry.runId, null])),
+          }),
+          { runs },
+        );
         await Promise.resolve();
         expect(admission.isCurrent()).toBe(true);
         fixture.session.lifecycleRevision = "reset";
@@ -609,7 +695,6 @@ describe("requester cron authority lifetime", () => {
   );
 
   it.each([
-    ["fresh user turn", () => revokeRequesterCronAuthority(SESSION)],
     [
       "reset",
       () => {
@@ -630,9 +715,10 @@ describe("requester cron authority lifetime", () => {
     ],
     [
       "cancel",
-      (batch: SubagentRunRecord[]) => {
-        batch[0]!.killIntent = { requestedAt: 3, reason: "stop", suppressTaskDelivery: true };
-      },
+      (batch: SubagentRunRecord[]) =>
+        updateBatch(batch, ([entry]) => {
+          entry!.killIntent = { requestedAt: 3, reason: "stop", suppressTaskDelivery: true };
+        }),
     ],
     [
       "batch replacement",
@@ -642,9 +728,10 @@ describe("requester cron authority lifetime", () => {
     ],
     [
       "new yield generation",
-      (batch: SubagentRunRecord[]) => {
-        batch[0]!.requesterSettleWake!.rearmGeneration = 2;
-      },
+      (batch: SubagentRunRecord[]) =>
+        updateBatch(batch, ([entry]) => {
+          entry!.requesterSettleWake!.rearmGeneration = 2;
+        }),
     ],
   ] as const)("revokes an admitted continuation after %s", async (_label, invalidate) => {
     const batch = await capture();
@@ -652,53 +739,45 @@ describe("requester cron authority lifetime", () => {
       const admission = consume(batch)!;
       expect(admission.isCurrent()).toBe(true);
       await Promise.resolve();
-      invalidate(batch);
+      await invalidate(batch);
       expect(admission.isCurrent()).toBe(false);
     });
   });
 
-  it("keeps the parent authorized when only one child is stopped", async () => {
+  it.each([
+    "partial cohort",
+    "reconstructed cohort",
+    "arbitrary child message",
+    "one stopped child",
+  ] as const)("admits only an owned cohort continuation: %s", async (input) => {
     const batch = await capture("original", 2);
-    batch[0]!.killIntent = { requestedAt: 3, reason: "stop" };
-    batch[0]!.suppressCompletionDelivery = true;
-    await dispatch(batch, async () => expect(consume(batch)?.isCurrent()).toBe(true));
-  });
-
-  it("retains an unadmitted handoff after a returned retryable delivery failure", async () => {
-    const batch = await capture();
-    await dispatch(batch, async () => ({ delivered: false, path: "none" }));
-    await dispatch(batch, async () => expect(consume(batch)?.isCurrent()).toBe(true));
-  });
-
-  it("does not promote a partial or reconstructed batch", async () => {
-    const batch = await capture("original", 2);
-    await dispatch(batch.slice(0, 1), async () => expect(consume(batch)).toBeUndefined());
-    await dispatch(structuredClone(batch), async () => expect(consume(batch)).toBeUndefined());
-    await dispatch(batch, async () => expect(consume(batch)).toBeDefined());
-  });
-
-  it("preserves the next yielded batch when the preceding delivery completes", async () => {
-    const first = await capture();
-    let next: SubagentRunRecord[] = [];
-    await dispatch(first, async () => {
-      const admission = consume(first)!;
-      next = createBatch(admission.runId);
-      await inAdminRun(
-        admission.runId,
-        async () => expect(await mark(next)).toBe(1),
-        admission.isCurrent,
-      );
-      expect(await settle(next)).toBe(true);
+    if (input === "one stopped child") {
+      await updateBatch(batch, ([entry]) => {
+        entry!.killIntent = { requestedAt: 3, reason: "stop" };
+        entry!.suppressCompletionDelivery = true;
+      });
+    }
+    const candidate =
+      input === "partial cohort"
+        ? batch.slice(0, 1)
+        : input === "reconstructed cohort"
+          ? structuredClone(batch)
+          : batch;
+    await dispatch(candidate, async () => {
+      if (input === "partial cohort" || input === "reconstructed cohort") {
+        expect(consume(batch)).toBeUndefined();
+        return;
+      }
+      if (input === "arbitrary child message") {
+        expect(consume(batch, "continuation", "sessions_send")).toBeUndefined();
+      }
+      const admission = consume(batch);
+      expect(admission).toBeDefined();
+      expect(admission?.isCurrent()).toBe(true);
     });
-    await dispatch(
-      next,
-      async () => {
-        const admission = consume(next, "second-continuation")!;
-        expect(admission.callerOrigin).toEqual({ kind: "unknown" });
-        expect(admission.isCurrent()).toBe(true);
-      },
-      "second-continuation",
-    );
+    if (candidate !== batch) {
+      await dispatch(batch, async () => expect(consume(batch)).toBeDefined());
+    }
   });
 
   it.each([true, false])(
@@ -710,37 +789,63 @@ describe("requester cron authority lifetime", () => {
       next.runId = "child-successor";
       next.taskRunId = previous.runId;
       next.requesterSettleWake!.batchRunIds = [next.runId];
-      runs.delete(previous.runId);
-      runs.set(next.runId, next);
-      replaceRequesterCronAuthorityEntry({ previous, next, preserve });
-      await dispatch([next], async () => {
-        expect(Boolean(consume([next]))).toBe(preserve);
+      const replacement = [next];
+      await mutateSubagentRuns(
+        [previous.runId, next.runId],
+        () => ({
+          value: undefined,
+          postimages: new Map<string, SubagentRunRecord | null>([
+            [previous.runId, null],
+            [next.runId, next],
+          ]),
+        }),
+        {
+          runs,
+          onPublished(postimages) {
+            replacement[0] = expectDefined(
+              postimages.get(next.runId),
+              "acknowledged replacement child",
+            );
+          },
+        },
+      );
+      replaceRequesterCronAuthorityEntry({ previous, next: replacement[0]!, preserve });
+      await dispatch(replacement, async () => {
+        expect(Boolean(consume(replacement))).toBe(preserve);
       });
     },
   );
 
-  it("can retry an unadmitted transport failure without replaying admitted authority", async () => {
-    const batch = await capture();
-    await expect(
-      dispatch(batch, async () => {
-        throw new Error("before admission");
-      }),
-    ).rejects.toThrow("before admission");
-    let admitted: ReturnType<typeof consume>;
-    await expect(
-      dispatch(batch, async () => {
-        admitted = consume(batch);
-        expect(admitted).toBeDefined();
-        expect(consume(batch)).toBeUndefined();
-        throw new Error("ambiguous transport");
-      }),
-    ).rejects.toThrow("ambiguous transport");
-    expect(admitted!.isCurrent()).toBe(true);
-    await dispatch(batch, async () => expect(consume(batch)).toBeUndefined());
-    expect(admitted!.isCurrent()).toBe(true);
-    revokeRequesterCronAuthority(SESSION);
-    expect(admitted!.isCurrent()).toBe(false);
-  });
+  it.each(["returned", "thrown"] as const)(
+    "can retry a %s unadmitted failure without replaying admitted authority",
+    async (failure) => {
+      const batch = await capture();
+      if (failure === "returned") {
+        await dispatch(batch, async () => ({ delivered: false, path: "none" }));
+      } else {
+        await expect(
+          dispatch(batch, async () => {
+            throw new Error("before admission");
+          }),
+        ).rejects.toThrow("before admission");
+      }
+      let admitted: ReturnType<typeof consume>;
+      await expect(
+        dispatch(batch, async () => {
+          admitted = consume(batch);
+          expect(admitted).toBeDefined();
+          expect(admitted?.isCurrent()).toBe(true);
+          expect(consume(batch)).toBeUndefined();
+          throw new Error("ambiguous transport");
+        }),
+      ).rejects.toThrow("ambiguous transport");
+      expect(admitted!.isCurrent()).toBe(true);
+      await dispatch(batch, async () => expect(consume(batch)).toBeUndefined());
+      expect(admitted!.isCurrent()).toBe(true);
+      revokeRequesterCronAuthority(SESSION);
+      expect(admitted!.isCurrent()).toBe(false);
+    },
+  );
 
   it.each(["failed persistence", "fresh user during persistence"] as const)(
     "does not retain provisional authority after %s",
@@ -755,10 +860,19 @@ describe("requester cron authority lifetime", () => {
         };
         if (kind === "failed persistence") {
           await expect(mark(batch, persist)).rejects.toThrow("write failed");
-          batch[0]!.requesterTurnYielded = true;
         } else {
-          await expect(mark(batch, persist)).rejects.toThrow("Requester authority retired");
-          expect(batch[0]!.requesterTurnYielded).toBe(true);
+          await expect(mark(batch, persist)).rejects.toMatchObject({
+            outcome: "not-committed",
+            cause: expect.objectContaining({
+              message: expect.stringContaining("Requester authority retired"),
+            }),
+          });
+        }
+      });
+      expect(runs.get(batch[0]!.runId)?.requesterTurnYielded).toBeUndefined();
+      await updateBatch(batch, (drafts) => {
+        for (const entry of drafts) {
+          entry.requesterTurnYielded = true;
         }
       });
       expect(await settle(batch)).toBe(true);

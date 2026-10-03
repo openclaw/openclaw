@@ -20,7 +20,7 @@ const controlUiAssetsMocks = vi.hoisted(() => ({
 }));
 const retentionMocks = vi.hoisted(() => ({
   prepare: vi.fn<(options?: { signal?: AbortSignal }) => Promise<void>>(async () => {}),
-  resolveAsset: vi.fn(() => null),
+  resolveAsset: vi.fn(async () => null),
 }));
 
 vi.mock("../infra/control-ui-assets.js", () => controlUiAssetsMocks);
@@ -52,7 +52,7 @@ describe("createGatewayControlUiRootLifecycle", () => {
     controlUiAssetsMocks.resolveControlUiRootOverrideSync.mockReturnValue(null);
     controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue(null);
     retentionMocks.prepare.mockResolvedValue(undefined);
-    retentionMocks.resolveAsset.mockReturnValue(null);
+    retentionMocks.resolveAsset.mockResolvedValue(null);
   });
 
   afterEach(() => {

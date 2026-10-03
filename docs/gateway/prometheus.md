@@ -102,6 +102,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gc_duration_seconds`                       | histogram | none                                                                                      |
 | `openclaw_gateway_rpc_requests_total`                | counter   | `method`                                                                                  |
 | `openclaw_gateway_rpc_first_response_seconds`        | histogram | `method`                                                                                  |
+| `openclaw_gateway_rpc_response_bytes`                | histogram | `method`                                                                                  |
+| `openclaw_gateway_rpc_handler_heap_delta_bytes`      | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_handler_seconds`               | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_admission_seconds`             | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_queue_wait_seconds`            | histogram | `method`                                                                                  |
@@ -158,12 +160,13 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_payload_large_total`                       | counter   | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
 | `openclaw_payload_large_bytes`                       | histogram | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
 | `openclaw_memory_bytes`                              | gauge     | `kind`                                                                                    |
+| `openclaw_heap_space_bytes`                          | gauge     | `space`, `stat`                                                                           |
 | `openclaw_worker_count`                              | gauge     | none                                                                                      |
 | `openclaw_worker_heap_sampled_count`                 | gauge     | none                                                                                      |
 | `openclaw_worker_heap_used_bytes`                    | gauge     | `script`                                                                                  |
 | `openclaw_worker_started_total`                      | counter   | `script`                                                                                  |
 | `openclaw_worker_retired_total`                      | counter   | `script`, `reason`                                                                        |
-| `openclaw_child_process_spawn_total`                 | counter   | `family`                                                                                  |
+| `openclaw_child_process_spawn_total`                 | counter   | `family`, `operation`                                                                     |
 | `openclaw_memory_rss_bytes`                          | histogram | none                                                                                      |
 | `openclaw_memory_pressure_total`                     | counter   | `level`, `reason`                                                                         |
 | `openclaw_telemetry_exporter_total`                  | counter   | `exporter`, `reason`, `signal`, `status`                                                  |
@@ -193,11 +196,16 @@ observations: an unfinished handler has no handler-duration sample yet. Compare
 request counts, completed timings, and event-loop observations when investigating
 a timeout; low handler latency alone does not establish a responsive client path.
 
-RPC method labels contain canonical core method names, `other` for plugin
-methods, or `unknown`. Outcome totals aggregate by phase and outcome without a
-method dimension. Each method with all four timings occupies five aggregate
+RPC method labels contain exact core and registered plugin method names, `other`
+for unregistered requests, or `unknown` for unrecognized dedicated worker RPCs.
+Catalog membership is checked at request receipt, so plugin registry replacement
+affects subsequent requests without a separate label cache.
+Outcome totals aggregate by phase and outcome without a
+method dimension. Each method with all four timings and both byte histograms occupies seven aggregate
 samples in the shared 2,048-sample cap. A duration histogram occupies one sample
-but expands into 19 scrape series (buckets, sum, and count). Existing samples keep
+but expands into 19 scrape series (buckets, sum, and count). The response-size
+and signed heap-delta histograms expand into 20 and 38 series respectively; see
+[RPC response size and heap changes](/gateway/diagnostics#rpc-response-size-and-heap-changes). Existing samples keep
 updating when the cap fills; unseen RPC or other operational samples are refused
 and increment `openclaw_prometheus_series_dropped_total`. Monitor that counter:
 coverage of every core method can fill the cap, so a zero value matters when
@@ -337,17 +345,34 @@ include pending retirements until native exit and disappear when a pool has no
 live Workers. Direct Workers contribute to `workerCount` without a pool entry.
 These are JavaScript Worker counts, not an operating-system thread census.
 
-`openclaw_child_process_spawn_total{family="..."}` counts successful launches
+`openclaw_child_process_spawn_total{family="...",operation="..."}` counts successful launches
 through OpenClaw's shared spawn and exec owners, including brokered launches.
 Diagnostics must be enabled. The existing heartbeat publishes accumulated
 counts after at least one minute, with debug logs reporting counts and rates
 using the actual elapsed interval. Failed launches, direct calls bypassing
 these owners, and descendants started by children are excluded. Families are
 a fixed executable-name allowlist; unrecognized commands become `other`.
-Arguments and paths are never recorded. For launches per minute, use
-`60 * rate(openclaw_child_process_spawn_total[5m])`; this window accommodates
+Git launches carry a bounded owner/operation label: `repository.identities`,
+`repository.branches`, `checkout.revision`, `checkout.context`, `checkout.diff`,
+`checkout.baseline`, `pull-request.branch-facts`, `worktree.snapshot`,
+`worktree.cleanup`, `worktree.provision`, `worktree.inspect`,
+`worktree.recovery`, `workspace.inventory`, `workspace.manifest`, `project.clone`,
+`workspace.result-cleanup`, `session.materialize`, or `publication`. Worker operations retain their admitted
+owner when the parent launches Git, including parallel batches and retries.
+Unattributed Git launches use `unknown`; other executable families use `none`.
+Arguments, repository paths, session IDs, and free-text caller names are never recorded.
+For launches per minute grouped by Git owner, use
+`60 * sum by (operation) (rate(openclaw_child_process_spawn_total{family="git"}[5m]))`.
+To retain the previous per-family view, use
+`60 * sum by (family) (rate(openclaw_child_process_spawn_total[5m]))`; this window accommodates
 the minute-batched publication. Neither accounting path changes pressure
 thresholds or user-tool execution.
+
+`workspace.result-cleanup` identifies the post-start worker-placement orphan-ref
+inventory. It examines at most eight checkout roots per full recovery sweep,
+serially, and yields to active Gateway requests. The existing recovery scheduler
+continues unfinished work; completed roots remain recorded only for that startup
+cleanup pass. Normal result settlement still removes its own refs immediately.
 
 ### Garbage collection duration
 

@@ -7,18 +7,13 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
-const scopeRegistryKey = Symbol.for("openclaw.agentHarnessCompletionScope.registry");
-
 // Host-issued scopes prevent plugins from fabricating requester ownership for completions.
-type ScopeRegistry = {
-  hostIssuedScopes: WeakSet<object>;
-};
-
-function getScopeRegistry(): ScopeRegistry {
-  return resolveGlobalSingleton(scopeRegistryKey, () => ({
+const scopeRegistry = resolveGlobalSingleton(
+  Symbol.for("openclaw.agentHarnessCompletionScope.registry"),
+  () => ({
     hostIssuedScopes: new WeakSet<object>(),
-  }));
-}
+  }),
+);
 
 export type AgentHarnessCompletionScope = {
   readonly requesterSessionKey: string;
@@ -48,7 +43,7 @@ export function createAgentHarnessCompletionScope(params: {
     requesterAgentId,
     ...(requesterOrigin ? { requesterOrigin } : {}),
   };
-  getScopeRegistry().hostIssuedScopes.add(scope);
+  scopeRegistry.hostIssuedScopes.add(scope);
   bindGatewayContextResolver(scope, params.gatewayContextResolver);
   return scope;
 }
@@ -56,7 +51,7 @@ export function createAgentHarnessCompletionScope(params: {
 export function assertAgentHarnessCompletionScope(
   scope: AgentHarnessCompletionScope,
 ): AgentHarnessCompletionScope {
-  if (!getScopeRegistry().hostIssuedScopes.has(scope)) {
+  if (!scopeRegistry.hostIssuedScopes.has(scope)) {
     throw new Error("Harness completion requires a host-issued scope");
   }
   return scope;

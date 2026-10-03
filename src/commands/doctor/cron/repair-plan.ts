@@ -1,11 +1,9 @@
 // Cron doctor repair planning helpers for previewing and merging legacy rows.
-import { normalizeOptionalStringifiedId } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 import {
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
 } from "../shared/legacy-tool-name-migration.js";
-import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
 
 type CronLegacyIssueCounts = Partial<Record<string, number>>;
 
@@ -122,40 +120,6 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
     }
   }
   return lines;
-}
-
-function cronJobMigrationKey(job: Record<string, unknown>): string | undefined {
-  return (
-    normalizeOptionalStringifiedId(job.id) ??
-    normalizeOptionalStringifiedId(job.jobId) ??
-    resolveLegacyCronMigrationId(job)
-  );
-}
-
-/** Merge legacy JSON jobs into current jobs without duplicating matching ids/jobIds. */
-export function mergeLegacyCronJobs(params: {
-  currentJobs: Array<Record<string, unknown>>;
-  legacyJobs: Array<Record<string, unknown>>;
-}): { jobs: Array<Record<string, unknown>>; importedCount: number } {
-  const merged = [...params.currentJobs];
-  const currentKeys = new Set(
-    params.currentJobs.map((job) => cronJobMigrationKey(job)).filter((key) => key !== undefined),
-  );
-  let importedCount = 0;
-
-  for (const legacyJob of params.legacyJobs) {
-    const key = cronJobMigrationKey(legacyJob);
-    if (key && currentKeys.has(key)) {
-      continue;
-    }
-    if (key) {
-      currentKeys.add(key);
-    }
-    merged.push(legacyJob);
-    importedCount += 1;
-  }
-
-  return { jobs: merged, importedCount };
 }
 
 export function mergeRuntimeEntryIntoConfigJob(params: {

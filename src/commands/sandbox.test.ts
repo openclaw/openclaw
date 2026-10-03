@@ -20,6 +20,14 @@ vi.mock("../agents/sandbox.js", () => ({
   removeSandboxBrowserContainer: mocks.removeSandboxBrowserContainer,
 }));
 
+vi.mock("../cli/local-state-owner.js", () => ({
+  runWithLocalStateOwner: async ({
+    runLocal,
+  }: {
+    runLocal: (scope: { assertCurrent: () => void }) => Promise<void>;
+  }) => runLocal({ assertCurrent: () => {} }),
+}));
+
 vi.mock("@clack/prompts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@clack/prompts")>()),
   confirm: mocks.clackConfirm,

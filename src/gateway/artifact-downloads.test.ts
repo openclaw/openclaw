@@ -2,18 +2,28 @@ import { ServerResponse } from "node:http";
 import { crc32 } from "node:zlib";
 import { expect, it, vi } from "vitest";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createImageProcessor } from "../media/image-processor.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createArtifactDownload,
+  pruneExpiredArtifactDownloads,
+} from "./artifact-download-grants.js";
 import {
   prepareArtifactDownload,
   prepareArtifactDownloadResponse,
 } from "./artifact-download-projection.js";
-import { createArtifactDownload, handleArtifactDownloadHttpRequest } from "./artifact-downloads.js";
+import { handleArtifactDownloadHttpRequest } from "./artifact-downloads.js";
 import { createGatewayRequest as createRequest } from "./hooks-test-helpers.js";
 import { ANIMATED_GIF_BYTES, APNG_BYTES } from "./http-image.test-support.js";
 import { encodeImageThumbnail } from "./managed-image-thumbnail-cache.js";
 import type { ArtifactRecord } from "./server-methods/artifacts-content.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
+import {
+  prepareSessionMutationFacts,
+  SessionMutationFactsUnavailableError,
+} from "./session-sharing-preparation.js";
 
 function createResponse() {
   const res = new ServerResponse(createRequest({ path: "/" }));
@@ -64,6 +74,7 @@ it.each(["source", "connection", "expiry"] as const)(
     const grantOptions: Parameters<typeof createArtifactDownload>[0] = {
       client,
       prepared: prepareArtifactDownload(artifact)!,
+      release: vi.fn(),
       assertCurrent() {
         if (!sourceCurrent) {
           throw new Error("Captured artifact authority retired");
@@ -146,6 +157,7 @@ it.each(["image", "file", "invalid-image", "gif", "apng", "apng-metadata", "comp
     const grant = createArtifactDownload({
       client,
       prepared: prepareArtifactDownload(artifact)!,
+      release: vi.fn(),
       assertCurrent() {},
       read: async (request) => prepareArtifactDownloadResponse(artifact, request),
     });
@@ -200,3 +212,61 @@ it.each(["image", "file", "invalid-image", "gif", "apng", "apng-metadata", "comp
     expect(range.end).toHaveBeenCalledExactlyOnceWith(bytes.subarray(0, 8));
   },
 );
+
+it("releases retained sharing facts on unused expiry, eviction, and disconnect", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(1_000);
+    const cfg = {};
+    const sessionKey = "agent:main:grant-lifetime";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      { sessionId: "grant-lifetime", updatedAt: 1 },
+    );
+    const prepared = prepareArtifactDownload({
+      id: "artifact_lifetime",
+      type: "file",
+      title: "lifetime.txt",
+      mimeType: "text/plain",
+      download: { mode: "bytes" },
+      data: "aGVsbG8=",
+    })!;
+    for (const reason of ["expiry", "eviction", "disconnect"]) {
+      const controller = new AbortController();
+      const client = createClient(controller.signal);
+      const facts = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
+      const release = vi.fn(facts.release);
+      const read = vi.fn(async () => undefined);
+      try {
+        const grant = createArtifactDownload({
+          client,
+          prepared,
+          assertCurrent: () => {
+            facts.readCurrent(cfg);
+          },
+          read,
+          release,
+        });
+        expect(facts.readCurrent(cfg).target.entry.sessionId).toBe("grant-lifetime");
+        if (reason === "expiry") {
+          pruneExpiredArtifactDownloads([client], Date.parse(grant.expiresAt));
+        } else if (reason === "eviction") {
+          for (let index = 0; index < 128; index += 1) {
+            createArtifactDownload({ client, prepared, assertCurrent() {}, read, release() {} });
+          }
+        } else {
+          controller.abort();
+        }
+        expect(release, reason).toHaveBeenCalledOnce();
+        expect(() => facts.readCurrent(cfg), reason).toThrow(SessionMutationFactsUnavailableError);
+        expect(read).not.toHaveBeenCalled();
+        controller.abort();
+        pruneExpiredArtifactDownloads([client], Number.MAX_SAFE_INTEGER);
+        expect(release, reason).toHaveBeenCalledOnce();
+      } finally {
+        controller.abort();
+        facts.release();
+      }
+    }
+  });
+});

@@ -44,6 +44,7 @@ export async function linkUpdateCandidatePluginTrees(
     candidateRoot: string;
     assertCurrent: () => void;
     onProgress?: () => void | Promise<void>;
+    onMaterialized?: () => void;
   },
 ): Promise<{ linked: number; copied: number }> {
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
@@ -152,6 +153,7 @@ export async function linkUpdateCandidatePluginTrees(
     await prepareDirectory(directory, entry.kind === "directory" ? entry.mode | 0o700 : 0o700);
     if (entry.kind === "directory") {
       directories.push(entry);
+      params.onMaterialized?.();
       return;
     }
     if (entry.kind === "symlink") {
@@ -170,6 +172,7 @@ export async function linkUpdateCandidatePluginTrees(
         path.resolve(path.dirname(destination), await fs.readlink(destination)),
         { privateRoot, candidateRoot },
       );
+      params.onMaterialized?.();
       return;
     }
     if (
@@ -179,6 +182,7 @@ export async function linkUpdateCandidatePluginTrees(
     ) {
       await copyEntry(entry, destination);
       counts.copied += 1;
+      params.onMaterialized?.();
       return;
     }
     params.assertCurrent();
@@ -190,6 +194,7 @@ export async function linkUpdateCandidatePluginTrees(
       }
       await copyEntry(entry, destination);
       counts.copied += 1;
+      params.onMaterialized?.();
       return;
     }
     // The private name must reference the inventoried inode, never a newer file.
@@ -206,6 +211,7 @@ export async function linkUpdateCandidatePluginTrees(
     assertUpdateCandidatePluginEntryStat({ ...entry, ctimeNs: linked.ctimeNs.toString() }, linked);
     linkedInodes.set(`${entry.dev}:${entry.ino}`, linked.ctimeNs.toString());
     counts.linked += 1;
+    params.onMaterialized?.();
   };
   const files: Array<Extract<UpdateCandidatePluginEntry, { kind: "file" }>> = [];
   const inodes = new Set<string>();
@@ -253,6 +259,7 @@ export async function linkUpdateCandidatePluginTrees(
   for (const entry of directories.toSorted((left, right) => right.path.length - left.path.length)) {
     params.assertCurrent();
     await fs.chmod(destinationFor(entry.path), entry.mode);
+    params.onMaterialized?.();
   }
   return counts;
 }

@@ -67,12 +67,8 @@ stage matrix, exact workflow job names, profile differences, the `npm-beta-v1`
 and `npm-stable-v1` coverage policies, artifacts, and focused rerun handles.
 
 The `normal_ci` child dispatches `ci.yml` with the exact target and release scope,
-without `release_gate`. In FRV only, `windows-node-ci` failures and eligible jobs
-with authenticated `recorded-flake` receipts are advisory. Receipts bind exact
-failed job attempts and retain the reason and fix-in-parallel issue/PR in the
-manifest and release notes. Other children stay strict; coverage, package,
-install/update, and artifact gates cannot be classified. See
-[record a flake](/reference/full-release-validation/continuation#record-a-flake).
+without `release_gate`. Every selected failure remains blocking, including
+Windows Node failures.
 Complete campaigns (`rerun_group=all`) retain QA Smoke's
 full scenario profile and Control UI performance independently of changed paths.
 Docker seed runs all six lanes in every ordinary manual/release scope:
@@ -99,9 +95,9 @@ For targets with [test runtime selection](/ci/pipeline#test-runtime-selection),
 Bun-compatible selection on Bun. Both results are required; they share existing
 jobs and execute sequentially within each worker slot. Older targets without this
 capability retain Node-only testing.
-This includes the Control UI config when the target's runtime owner admits it;
-its Bun pass excludes two GC-sensitive files retained in the full Node pass.
-An older unit-only runtime owner retains the UI's Node pass.
+This includes the complete Control UI selection on both runtimes, including the
+retention assertions, when the target's runtime owner admits it. Older targets
+retain the UI's Node pass and only the Bun selections their runtime owner admits.
 
 Package Acceptance separately retains expanded published-upgrade scenarios:
 current unpublished candidates include native operator state, and stable/full

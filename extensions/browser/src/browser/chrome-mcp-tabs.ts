@@ -30,7 +30,7 @@ import { BrowserCdpEndpointBlockedError } from "./errors.js";
 
 export async function ensureChromeMcpAvailable(
   profileName: string,
-  profileOptions?: string | ChromeMcpProfileOptions,
+  profileOptions?: ChromeMcpProfileOptions,
   options: ChromeMcpCallOptions = {},
 ): Promise<void> {
   await withChromeMcpLease(profileName, profileOptions, options, async (lease, normalized) => {
@@ -54,7 +54,7 @@ export async function ensureChromeMcpAvailable(
 
 async function readChromeMcpTabs(
   profileName: string,
-  profileOptions?: string | ChromeMcpProfileOptions,
+  profileOptions?: ChromeMcpProfileOptions,
   options: ChromeMcpCallOptions = {},
 ): Promise<BrowserTab[]> {
   for (let attempt = 0; ; attempt += 1) {
@@ -90,7 +90,7 @@ async function readChromeMcpTabs(
 /** List Chrome MCP pages converted to persistent BrowserTab handles. */
 export async function listChromeMcpTabs(
   profileName: string,
-  profileOptions?: string | ChromeMcpProfileOptions,
+  profileOptions?: ChromeMcpProfileOptions,
   options: ChromeMcpOperationOptions = {},
 ): Promise<BrowserTab[]> {
   return await readChromeMcpTabs(profileName, profileOptions, {
@@ -102,7 +102,7 @@ export async function listChromeMcpTabs(
 /** Count Chrome MCP pages without returning handles from an ephemeral session. */
 export async function countChromeMcpTabs(
   profileName: string,
-  profileOptions?: string | ChromeMcpProfileOptions,
+  profileOptions?: ChromeMcpProfileOptions,
   options: ChromeMcpCallOptions = {},
 ): Promise<number> {
   return (await readChromeMcpTabs(profileName, profileOptions, options)).length;
@@ -184,7 +184,7 @@ async function captureChromeMcpTabOwnership(params: {
 export async function openChromeMcpTab(
   profileName: string,
   url: string,
-  profileOptions?: string | ChromeMcpProfileOptions,
+  profileOptions?: ChromeMcpProfileOptions,
   options: ChromeMcpOpenOptions = {},
 ): Promise<BrowserOpenResult> {
   const targetUrl = url.trim() || "about:blank";

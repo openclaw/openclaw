@@ -258,7 +258,7 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
 }): PluginAutoEnableResult {
   let next = params.config ?? {};
   const changes: string[] = [];
-  const autoEnabledReasons = new Map<string, string[]>();
+  const autoEnabledReasons: Record<string, string[]> = Object.create(null);
 
   if (
     next.plugins?.enabled === false ||
@@ -332,10 +332,9 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
       next = ensurePluginAllowlisted(next, entry.pluginId);
     }
     const reason = resolvePluginAutoEnableCandidateReason(entry);
-    autoEnabledReasons.set(entry.pluginId, [
-      ...(autoEnabledReasons.get(entry.pluginId) ?? []),
-      reason,
-    ]);
+    if (!isBlockedObjectKey(entry.pluginId)) {
+      (autoEnabledReasons[entry.pluginId] ??= []).push(reason);
+    }
     changes.push(formatAutoEnableChange(entry, params.manifestRegistry));
   }
 
@@ -345,12 +344,5 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
     manifestRegistry: params.manifestRegistry,
   });
 
-  const autoEnabledReasonRecord: Record<string, string[]> = Object.create(null);
-  for (const [pluginId, reasons] of autoEnabledReasons) {
-    if (!isBlockedObjectKey(pluginId)) {
-      autoEnabledReasonRecord[pluginId] = [...reasons];
-    }
-  }
-
-  return { config: next, changes, autoEnabledReasons: autoEnabledReasonRecord };
+  return { config: next, changes, autoEnabledReasons };
 }

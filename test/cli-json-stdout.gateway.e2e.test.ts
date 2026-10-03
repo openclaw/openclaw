@@ -91,10 +91,12 @@ describe("cli json stdout contract", () => {
         const configPath = path.join(tempHome, "missing-openclaw.json");
         const stateDir = path.join(tempHome, "isolated-state");
         const gatewayError = "AUTOQA_INJECTED_GATEWAY_FAILURE";
+        const concurrentSparkplug = "AUTOQA_CONCURRENT_SPARKPLUG";
         const preload = Buffer.from(
           [
             'import net from "node:net";',
             `net.Socket.prototype.connect = function () { throw new Error(${JSON.stringify(gatewayError)}); };`,
+            `if (!process.versions.bun && !process.execArgv.includes("--no-concurrent-sparkplug")) process.stderr.write(${JSON.stringify(`${concurrentSparkplug}\n`)});`,
             ...("configReadFailure" in testCase
               ? [
                   'import fs from "node:fs";',
@@ -129,6 +131,8 @@ describe("cli json stdout contract", () => {
           { execArgv: [`--import=data:text/javascript;base64,${preload}`] },
         );
 
+        // Concurrent Sparkplug can deadlock process.exit, so the child times out with status null.
+        expect(result.stderr).not.toContain(concurrentSparkplug);
         expect(result.status, result.stderr).toBe(1);
         expect(result.stdout, result.stderr).not.toContain("\u001B");
         expect(result.stdout, result.stderr).not.toContain("\u0007");
@@ -163,10 +167,9 @@ describe("cli json stdout contract", () => {
             },
           });
           if ("configReadFailure" in testCase && !("commander" in testCase)) {
-            expect(result.stderr).toContain(testCase.message);
-          } else {
-            expect(result.stderr).not.toContain(testCase.message);
+            expect(result.stderr).toContain("[openclaw] The CLI command failed.");
           }
+          expect(result.stderr).not.toContain(testCase.message);
         }
         if ("tty" in testCase) {
           expect(result.stderr).toContain("\u001B[?25h");
@@ -229,7 +232,8 @@ describe("cli json stdout contract", () => {
           ok: false,
           error: { type: "cli_error", message },
         });
-        expect(result.stderr).toContain(message);
+        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+        expect(result.stderr).not.toContain(message);
         if ("tty" in testCase) {
           expect(result.stderr).toContain("\u001B[?25h");
         }
@@ -323,6 +327,7 @@ describe("cli json stdout contract", () => {
         if ("human" in testCase && testCase.human) {
           expect(result.stdout).toBe("");
           expect(result.stderr).toContain(`nodes ${testCase.args[1]} failed:`);
+          expect(result.stderr).toContain(testCase.message);
         } else {
           expect(JSON.parse(result.stdout)).toEqual({
             ok: false,
@@ -331,8 +336,9 @@ describe("cli json stdout contract", () => {
               message: expect.stringContaining(testCase.message),
             },
           });
+          expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+          expect(result.stderr).not.toContain(testCase.message);
         }
-        expect(result.stderr).toContain(testCase.message);
         expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
       },
       { prefix: "openclaw-nodes-json-failure-e2e-" },

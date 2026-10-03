@@ -29,7 +29,6 @@ import {
   resolveSupportedVoiceModelRefs,
   type VoiceModelProvider,
 } from "../../tts/voice-models.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
 
 export function normalizeTalkSessionMode(params: { mode?: string; transport?: string }): TalkMode {
   return (
@@ -65,11 +64,6 @@ export async function resolveTalkRealtimeProviderInstructions(params: {
   return [params.configuredInstructions, await resolveRealtimeVoiceAgentContextInstructions(params)]
     .filter((entry): entry is string => Boolean(entry?.trim()))
     .join("\n\n");
-}
-
-export function canUseTalkDirectTools(client: { connect?: { scopes?: string[] } } | null): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
 }
 
 export function broadcastTalkRoomEvents(

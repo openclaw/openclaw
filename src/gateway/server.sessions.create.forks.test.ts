@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, test } from "vitest";
+import { expect, onTestFinished, test } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getContextWindowCaches } from "../agents/context-cache.js";
 import {
   applyDiscoveredContextWindows,
@@ -26,6 +27,17 @@ import {
   seedSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
+const forkableClaudeCliBackend = {
+  id: "claude-cli",
+  pluginId: "anthropic",
+  modelProvider: "anthropic",
+  config: { command: "claude", forkArg: "--fork-session", resumeAtArg: "--resume-session-at" },
+  bundleMcp: false,
+  ownsNativeCompaction: false,
+} satisfies ReturnType<
+  (typeof import("../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
+>[number];
+
 const { createSessionStoreDir } = setupSessionCreateTestHarness();
 
 test.each([undefined, "main"])(
@@ -41,6 +53,7 @@ test.each([undefined, "main"])(
           providerOverride: "anthropic",
           modelOverride: "parent-model",
           modelOverrideSource: "user",
+          conversationLink: { url: "https://chat.example.test/main", label: "Main Conversation" },
         },
       },
     });
@@ -67,6 +80,7 @@ test.each([undefined, "main"])(
       loadSessionEntry({ sessionKey: "agent:main:main", storePath }),
       "grouping parent session",
     );
+    expect(child.conversationLink).toBeUndefined();
     const { createModelSelectionState } = await import("../auto-reply/reply/model-selection.js");
     const cfg = getRuntimeConfig();
     const reply = await createModelSelectionState({
@@ -95,11 +109,12 @@ test.each([undefined, "main"])(
 );
 
 test("sessions.create preserves an explicit parent under main dmScope", async () => {
-  await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   testState.sessionConfig = { dmScope: "main" };
+  const conversationLink = { url: "https://chat.example.test/thread/123", label: "Source Thread" };
   await writeSessionStore({
     entries: {
-      "agent:main:explicit-parent": sessionStoreEntry("sess-explicit-parent"),
+      "agent:main:explicit-parent": sessionStoreEntry("sess-explicit-parent", { conversationLink }),
     },
   });
 
@@ -113,6 +128,10 @@ test("sessions.create preserves an explicit parent under main dmScope", async ()
 
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+  const childKey = requireNonEmptyString(created.payload?.key, "child session key");
+  expect(loadSessionEntry({ sessionKey: childKey, storePath })?.conversationLink).toEqual(
+    conversationLink,
+  );
   // Operator creations with a parent (UI forks/threads) are still roots: only a
   // declared spawnDepth marks spawn lineage.
   expect(created.payload?.entry?.spawnDepth).toBe(0);
@@ -126,6 +145,9 @@ test("sessions.create preserves an explicit parent under main dmScope", async ()
 
   expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
   expect(reused.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+  expect(loadSessionEntry({ sessionKey: childKey, storePath })?.conversationLink).toEqual(
+    conversationLink,
+  );
 });
 
 test("sessions.create persists declared spawn lineage for spawn-owned creations", async () => {
@@ -220,14 +242,21 @@ test("sessions.create rejects unknown parentSessionKey", async () => {
 });
 
 test("sessions.create forks the parent transcript into the new session", async () => {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [forkableClaudeCliBackend],
+    resolvePluginSetupCliBackend: () => undefined,
+  });
+  onTestFinished(() => cliBackendsTesting.resetDepsForTest());
   const { dir, storePath } = await createSessionStoreDir();
   testState.sessionConfig = { scope: "per-sender" };
   const parent = await createCompactedSessionFixture(dir);
+  const conversationLink = { url: "https://chat.example.test/thread/fork", label: "Source Thread" };
   const projectRoot = path.join(dir, "qa-writer");
   await fs.mkdir(projectRoot);
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(parent.sessionId, {
+        conversationLink,
         sessionFile: parent.sessionFile,
         projectId: "qa-writer",
         spawnedCwd: projectRoot,
@@ -235,6 +264,9 @@ test("sessions.create forks the parent transcript into the new session", async (
         totalTokens: 123,
         totalTokensFresh: true,
         totalTokensVersion: 1,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "native-parent", resumeCheckpointId: "parent-checkpoint" },
+        },
       }),
     },
   });
@@ -315,6 +347,13 @@ test("sessions.create forks the parent transcript into the new session", async (
     spawnedCwd: projectRoot,
     sessionRoot: projectRoot,
     sessionId: created.payload?.sessionId,
+    cliSessionBindings: {
+      "claude-cli": {
+        sessionId: "native-parent",
+        resumeCheckpointId: "parent-checkpoint",
+        forkNextResume: true,
+      },
+    },
     forkSource: {
       sessionKey: "agent:main:main",
       sessionId: parent.sessionId,
@@ -322,9 +361,16 @@ test("sessions.create forks the parent transcript into the new session", async (
   });
   expect(loadSessionEntry({ sessionKey: key, storePath })).not.toHaveProperty("forkedFromParent");
   const listed = await directSessionReq<{
-    sessions?: Array<{ key: string; forkedFromParent?: boolean }>;
+    sessions?: Array<{
+      key: string;
+      forkedFromParent?: boolean;
+      conversationLink?: typeof conversationLink;
+    }>;
   }>("sessions.list", {});
   expect(listed.payload?.sessions?.find((row) => row.key === key)?.forkedFromParent).toBe(true);
+  expect(listed.payload?.sessions?.find((row) => row.key === key)?.conversationLink).toEqual(
+    conversationLink,
+  );
   testState.sessionConfig = undefined;
 });
 

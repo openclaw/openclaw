@@ -1,11 +1,11 @@
 // Covers canonical config writes, roster migration, include ownership, and authored env refs.
 import { describe, expect, it, vi } from "vitest";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { collectChangedPaths } from "./config-change-paths.js";
 import { applyUnsetPathsForWrite } from "./config-path-mutation.js";
 import { createConfigValidationFailedError } from "./io.write-errors.js";
 import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
 import { tryResolveLegacyCompatibilityAgentId } from "./legacy.default-agent-owner.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { setConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -812,7 +812,7 @@ describe("config io write prepare", () => {
       agents: { entries: { ops: {}, research: { default: true } } },
       gateway: { port: 18789 },
     };
-    const migrated = migratePersistedImplicitMainRoster(authored).config as OpenClawConfig;
+    const migrated = createCanonicalAgentConfigFixture(authored).config;
 
     const persisted = resolvePersistCandidateForWrite({
       runtimeConfig: migrated,
@@ -826,7 +826,7 @@ describe("config io write prepare", () => {
     }) as OpenClawConfig;
 
     expect(persisted.agents?.entries?.research?.default).toBe(true);
-    const reloaded = migratePersistedImplicitMainRoster(persisted).config as OpenClawConfig;
+    const reloaded = createCanonicalAgentConfigFixture(persisted).config;
     expect(tryResolveLegacyCompatibilityAgentId(reloaded)).toBe("research");
   });
 

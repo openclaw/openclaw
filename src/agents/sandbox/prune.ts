@@ -148,9 +148,7 @@ async function pruneSandboxBrowsers(config: OpenClawConfig) {
           config,
           agentId: resolveSandboxAgentId(current.sessionKey),
         });
-        removeSandboxRegistryGeneration("browser", current, () =>
-          assertSandboxBrowserRegistryEntryCurrent(current),
-        );
+        await removeSandboxRegistryGeneration("browser", current);
       });
     },
   });

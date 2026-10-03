@@ -129,7 +129,7 @@ it("models.list preserves provider starters and retires unavailable account rows
       },
       agents: {
         defaults: { modelPolicy: { allow: providers.map((provider) => `${provider}/*`) } },
-        list: [{ id: "main", workspace: state.workspaceDir }],
+        entries: { main: { workspace: state.workspaceDir } },
       },
       plugins: {
         allow: ["lifecycle-catalog"],

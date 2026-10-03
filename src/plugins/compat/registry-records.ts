@@ -4,7 +4,10 @@ import {
   BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   PLUGIN_SDK_SUBPATH_RECORDS,
 } from "./plugin-sdk-subpath-records.js";
+import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
 import type { PluginCompatRecord } from "./types.js";
+import { WATCHED_SESSIONS_COMPAT_RECORD } from "./watched-sessions.js";
+import { WORKSPACE_MUTATION_GUARD_COMPAT_RECORD } from "./workspace-mutation-guard.js";
 
 const ACTIVATION_HINT_METADATA = {
   status: "active",
@@ -16,6 +19,63 @@ const ACTIVATION_HINT_METADATA = {
 } as const;
 
 export const PLUGIN_COMPAT_RECORDS = [
+  WORKSPACE_MUTATION_GUARD_COMPAT_RECORD,
+  ...SESSION_PERSISTENCE_COMPAT_RECORDS,
+  WATCHED_SESSIONS_COMPAT_RECORD,
+  {
+    code: "gateway-placement-sync-results",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-09-07",
+    deprecated: "2026-10-02",
+    warningStarts: "2026-10-02",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await listPendingWorkspaceResultsAsync, getWorkspaceResultReconcilingSessionIdsAsync, and deferOrphanedRequestsAsync on the Gateway context. Released synchronous methods retain their return values and completion timing until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath:
+      "/plugins/sdk-migration/compatibility-policy#gateway-placement-and-publication-readers",
+    surfaces: [
+      "GatewayRequestHandlerOptions.context.workerSessionPlacementService.listPendingWorkspaceResults",
+      "GatewayRequestHandlerOptions.context.workerSessionPlacementService.getWorkspaceResultReconcilingSessionIds",
+      "GatewayRequestHandlerOptions.context.githubPublicationService.deferOrphanedRequests",
+      "getPluginRuntimeGatewayRequestScope().context",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/gateway-placement-compat.test.ts",
+      "src/gateway/worker-environments/placement-store.test.ts",
+      "src/gateway/github-publication-boundaries.test.ts",
+      "src/gateway/github-repository-publication.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Placement result readers and GitHub orphan deferral expose awaited methods while retaining the synchronous Gateway-context contracts shipped to plugins in 2026.9.7. Internal placement readers use the SQLite worker; stored data and update behavior are unchanged.",
+  },
+  {
+    code: "memory-session-sync-inventory",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-08-09",
+    deprecated: "2026-10-01",
+    warningStarts: "2026-10-01",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await loadArchivedSessionsAsync and resolveMemorySessionTargetsAsync from memory-core-host-engine-sessions. Synchronous readers retain their existing signatures and results until the next Plugin SDK major.",
+    docsPath: "/plugins/sdk-migration/compatibility-policy#memory-session-inventory-readers",
+    surfaces: ["loadArchivedSessions", "resolveMemorySessionTargets"],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/memory-core-host-engine-sessions.test.ts",
+      "src/plugins/compat/registry.test.ts",
+      "extensions/memory-core/src/memory-forget.participants.test.ts",
+    ],
+    releaseNote:
+      "Memory archive discovery and forget target selection can be awaited through worker-backed SDK readers; synchronous readers remain compatible until the next Plugin SDK major.",
+  },
   {
     code: "channel-webhook-listener-config-inputs",
     status: "deprecated",
@@ -444,25 +504,6 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: ["src/auto-reply/reply/inbound-context.test.ts"],
     releaseNote:
       "Untrusted-named prompt-context SDK identifiers remain wired as deprecated aliases of the channel-named fields while plugins migrate.",
-  },
-  {
-    code: "bundled-channel-sdk-compat-facades",
-    status: "active",
-    owner: "sdk",
-    introduced: "2026-04-28",
-    replacement:
-      "generic channel SDK subpaths or plugin-local `api.ts` / `runtime-api.ts` barrels for new plugins",
-    docsPath: "/plugins/sdk-overview",
-    surfaces: [
-      "openclaw/plugin-sdk/discord component message helpers",
-      "openclaw/plugin-sdk/telegram-account resolveTelegramAccount",
-    ],
-    diagnostics: ["plugin SDK compatibility registry"],
-    tests: [
-      "src/plugin-sdk/discord.test.ts",
-      "src/plugin-sdk/telegram-account.test.ts",
-      "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
-    ],
   },
   {
     code: "channel-explicit-target-parser",

@@ -5,8 +5,9 @@ import { useChatAbortRegistryFixture } from "../../gateway/server-methods/chat.a
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import * as registryPersistence from "../../agents/subagents/registry/subagent-registry-state.js";
+import { isSubagentRegistryWriteCommand } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
+import { rowToSubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.store.codec.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -17,6 +18,7 @@ import {
   type SessionAbortTargetResult,
 } from "../../config/sessions/session-accessor.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 import { stopSubagentsForRequester } from "./abort-operation.js";
 import { getAbortMemory, isAbortRequestText, setAbortMemory } from "./abort-primitives.js";
@@ -1161,21 +1163,32 @@ describe("abort detection", () => {
       await addSubagentFixture(fixture);
     }
     let failedTombstone = false;
-    const persist = registryPersistence.persistSubagentRunsToDiskAsyncOrThrow;
-    vi.spyOn(registryPersistence, "persistSubagentRunsToDiskAsyncOrThrow").mockImplementation(
-      (runs, changedRunIds, options) => {
-        const first = runs.get("run-persistence-failure-first");
-        if (
-          !failedTombstone &&
-          changedRunIds?.includes("run-persistence-failure-first") &&
-          first?.execution.status === "terminal" &&
-          first.endedReason === "subagent-killed"
-        ) {
-          failedTombstone = true;
-          throw new Error("sqlite busy");
-        }
-        return persist(runs, changedRunIds, options);
-      },
+    const execute = stateWorker.runOpenClawStateWorkerOperation;
+    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
+      (context, operation, options) =>
+        execute(
+          context,
+          (scope) =>
+            operation({
+              execute: async (command, executeOptions) => {
+                if (isSubagentRegistryWriteCommand(command) && !failedTombstone) {
+                  const firstRow = command.input.values.find(
+                    (row) => row.run_id === "run-persistence-failure-first",
+                  );
+                  const first = firstRow && rowToSubagentRunRecord(firstRow);
+                  if (
+                    first?.execution.status === "terminal" &&
+                    first.endedReason === "subagent-killed"
+                  ) {
+                    failedTombstone = true;
+                    throw new Error("sqlite busy");
+                  }
+                }
+                return scope.execute(command, executeOptions);
+              },
+            }),
+          options,
+        ),
     );
 
     await expect(

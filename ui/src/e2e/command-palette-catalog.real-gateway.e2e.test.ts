@@ -74,10 +74,10 @@ const suite = createControlUiE2eSuite({
               model: "fixture/anchor",
               modelPolicy: { allow: ["fixture/*", "ollama/*"] },
             },
-            list: [
-              { id: "main", identity: { name: "Main fixture" } },
-              { id: "reviewer", identity: { name: "Reviewer fixture" } },
-            ],
+            entries: {
+              main: { identity: { name: "Main fixture" } },
+              reviewer: { identity: { name: "Reviewer fixture" } },
+            },
           },
           models: {
             catalogRefresh: { enabled: false },

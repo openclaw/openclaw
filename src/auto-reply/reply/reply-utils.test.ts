@@ -204,7 +204,6 @@ describe("typing controller", () => {
     const typing = createTypingController({
       onReplyStart,
       typingIntervalSeconds: 1,
-      typingTtlMs: 30_000,
       keepalive,
     });
     return { typing, onReplyStart };
@@ -456,19 +455,6 @@ describe("block reply coalescer", () => {
       { text: "Compacting context...", isCompactionNotice: true },
       { text: "Model Fallback: openai/gpt-5.5", isFallbackNotice: true },
     ]);
-    coalescer.stop();
-  });
-
-  it("flushes immediately per enqueue when flushOnEnqueue is set", async () => {
-    const { flushes, coalescer } = createCoalescer({
-      minChars: 10,
-      idleMs: 50,
-      flushOnEnqueue: true,
-    });
-    coalescer.enqueue({ text: "Hi" });
-    coalescer.enqueue({ text: "Next" });
-    await Promise.resolve();
-    expect(flushes).toEqual([{ text: "Hi" }, { text: "Next" }]);
     coalescer.stop();
   });
 

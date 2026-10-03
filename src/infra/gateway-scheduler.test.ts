@@ -137,34 +137,26 @@ describe("Gateway timed work", () => {
   });
 
   it.each([
-    { mode: undefined, nextWakeAtMs: 3_000 },
-    { mode: "replace" as const, nextWakeAtMs: 3_000 },
-    { mode: "earliest" as const, nextWakeAtMs: 2_000 },
-  ])("reschedules a pending deadline in $mode mode", async ({ mode, nextWakeAtMs }) => {
-    const { time, scheduler } = fixture();
-    const retiredRun = vi.fn();
-    const run = vi.fn();
-    const retired = scheduler.schedule({ id: "queue", atMs: 2_000, run: retiredRun });
-    scheduler.schedule({ id: "queue", atMs: 3_000, mode, run });
-    retired.cancel();
-    expect(scheduler.nextWakeAtMs).toBe(nextWakeAtMs);
-    await time.advanceTo(nextWakeAtMs);
-    expect(run).toHaveBeenCalledOnce();
-    expect(retiredRun).not.toHaveBeenCalled();
-    expect(scheduler.nextWakeAtMs).toBeNull();
-    await scheduler.stop();
-  });
-
-  it("brings a pending deadline forward in earliest mode", async () => {
-    const { time, scheduler } = fixture();
-    const run = vi.fn();
-    scheduler.schedule({ id: "queue", atMs: 10_000, run });
-    scheduler.schedule({ id: "queue", atMs: 5_000, mode: "earliest", run });
-    expect(scheduler.nextWakeAtMs).toBe(5_000);
-    await time.advanceTo(5_000);
-    expect(run).toHaveBeenCalledOnce();
-    await scheduler.stop();
-  });
+    { mode: undefined, atMs: 3_000, nextWakeAtMs: 3_000 },
+    { mode: "earliest" as const, atMs: 3_000, nextWakeAtMs: 2_000 },
+    { mode: "earliest" as const, atMs: 1_500, nextWakeAtMs: 1_500 },
+  ])(
+    "reschedules a pending deadline to $atMs in $mode mode",
+    async ({ mode, atMs, nextWakeAtMs }) => {
+      const { time, scheduler } = fixture();
+      const retiredRun = vi.fn();
+      const run = vi.fn();
+      const retired = scheduler.schedule({ id: "queue", atMs: 2_000, run: retiredRun });
+      scheduler.schedule({ id: "queue", atMs, mode, run });
+      retired.cancel();
+      expect(scheduler.nextWakeAtMs).toBe(nextWakeAtMs);
+      await time.advanceTo(nextWakeAtMs);
+      expect(run).toHaveBeenCalledOnce();
+      expect(retiredRun).not.toHaveBeenCalled();
+      expect(scheduler.nextWakeAtMs).toBeNull();
+      await scheduler.stop();
+    },
+  );
 
   it.each([{ delayMs: 2_000 }, { atMs: 6_500 }])(
     "does not postpone elapsed eligibility after a backward wall-clock correction: %j",

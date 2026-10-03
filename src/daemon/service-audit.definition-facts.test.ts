@@ -381,21 +381,17 @@ it("reports failed native task inspection independently from legacy issues", asy
   expect(JSON.stringify(result)).not.toContain("operator-secret");
 });
 
-it.each(["legacy", "edited-file", "edited-inline", "canonical"])(
-  "preserves operator PATH edits while admitting released Darwin defaults: %s",
-  async (kind) => {
-    const home = dirs.make("definition-facts-legacy-path-");
-    await fs.mkdir(path.join(home, ".bun/bin"), { recursive: true });
-    await fs.mkdir(path.join(home, "Library/pnpm"), { recursive: true });
+it.each(["edited-file", "edited-inline", "canonical"])(
+  "preserves operator PATH edits while admitting canonical Darwin defaults: %s",
+  (kind) => {
+    const home = "/home/fixture";
     const canonical = `${home}/.n/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
-    // Captured from the published 2026.4.29 installer with a synthetic HOME.
-    const legacy = `${home}/.n/bin:${home}/.local/bin:${home}/.npm-global/bin:${home}/bin:${home}/.bun/bin:${home}/.nix-profile/bin:${home}/Library/pnpm:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`;
     const edited = kind.startsWith("edited");
     const command: GatewayServiceCommandConfig = {
       programArguments: [`${home}/.n/bin/node`, "/opt/openclaw/index.js", "gateway"],
       environment: {
         HOME: home,
-        PATH: kind === "canonical" ? canonical : `${legacy}${edited ? ":/operator-private" : ""}`,
+        PATH: `${canonical}${edited ? ":/operator-private" : ""}`,
       },
       environmentValueSources: { PATH: kind === "edited-inline" ? "inline" : "file" },
     };
@@ -409,7 +405,6 @@ it.each(["legacy", "edited-file", "edited-inline", "canonical"])(
     expect(findings).toEqual(
       edited ? [expect.objectContaining({ kind: "unknown-edit", key: "Environment.PATH" })] : [],
     );
-    expect(JSON.stringify(findings)).not.toContain("operator-private");
   },
 );
 
@@ -441,10 +436,16 @@ const discardedSettings: Array<{
     gateway: [],
     environment: { NODE_OPTIONS: "--max-old-space-size=4096 --require=/operator-private" },
   },
+  {
+    key: "Environment.OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS",
+    native: [],
+    gateway: [],
+    environment: { OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS: "30000" },
+  },
 ];
 
 it.each(discardedSettings)(
-  "blocks a rewrite plan that discards $key without exposing values",
+  "blocks a rewrite plan that discards $key with a safe environment diff",
   async ({ key, native: nativeArguments, gateway, cwd, environment }) => {
     const fixture = await systemdFixture((unit) => unit);
     const command = {
@@ -470,7 +471,20 @@ it.each(discardedSettings)(
     expect(result.definitionDrift).toContainEqual(
       expect.objectContaining({ kind: "unknown-edit", key }),
     );
-    expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
+    if (key === "Environment.PATH") {
+      expect(result.definitionDrift?.[0]?.message).toContain(
+        'Current: "/usr/bin:/operator-private"; installer: "/usr/bin:/bin"',
+      );
+    } else if (key === "Environment.OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS") {
+      expect(result.definitionDrift?.[0]?.message).toContain(
+        'Current: "30000"; installer: <absent>',
+      );
+    } else {
+      expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
+      if (key.startsWith("Environment.")) {
+        expect(result.definitionDrift?.[0]?.message).toContain("Current: <redacted>; installer:");
+      }
+    }
     expect(await fs.readFile(fixture.sourcePath, "utf8")).toBe(fixture.content);
   },
 );
@@ -514,6 +528,65 @@ it("accepts retained heap aliases, custom environment and owned environment rege
   });
   expect(result.definitionDrift).toBeUndefined();
 });
+
+it("bounds environment diffs and redacts nonnumeric timeout values", () => {
+  const command = {
+    programArguments: ["/usr/bin/node", "/opt/openclaw/index.js", "gateway"],
+    environment: {
+      PATH: `/usr/bin:${"/long-directory".repeat(100)}\nforged diagnostic`,
+      OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS: "operator-secret",
+    },
+  };
+  const findings: ServiceDefinitionDrift[] = [];
+  auditGatewayInstallPreservation(
+    command,
+    { ...command, environment: { PATH: "/usr/bin" } },
+    "linux",
+    findings,
+  );
+  expect(findings).toHaveLength(2);
+  expect(findings[0]?.message).toContain('…; installer: "/usr/bin"');
+  expect(findings[0]!.message.length).toBeLessThan(420);
+  expect(findings[1]?.message).toContain("Current: <redacted>; installer: <absent>");
+  expect(JSON.stringify(findings)).not.toContain("operator-secret");
+  expect(findings.some((finding) => finding.message.includes("\n"))).toBe(false);
+});
+
+it.each([false, true])(
+  "reports a missing managed value unless a drop-in supplies it: %s",
+  async (dropIn) => {
+    const key = "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS";
+    const fixture = await systemdFixture((unit) => unit);
+    const managedDefinition = {
+      ...fixture.command,
+      environment: { ...fixture.command.environment, OPENCLAW_SERVICE_MANAGED_ENV_KEYS: key },
+    };
+    const result = await auditGatewayServiceConfig({
+      ...fixture,
+      command: {
+        ...managedDefinition,
+        managedDefinition,
+        environment: { ...managedDefinition.environment, ...(dropIn ? { [key]: "30000" } : {}) },
+      },
+      expectedCommand: {
+        ...managedDefinition,
+        environment: { ...managedDefinition.environment, [key]: "30000" },
+      },
+      platform: "linux",
+    });
+    expect(result.definitionDrift).toEqual(
+      dropIn
+        ? undefined
+        : [
+            expect.objectContaining({
+              kind: "outdated",
+              key: `Environment.${key}`,
+              message: expect.stringContaining('Current: <absent>; installer: "30000"'),
+            }),
+          ],
+    );
+  },
+);
 
 it.each(["OpenClaw Gateway (v2026.9.4)", "operator-private"])(
   "classifies systemd description before a rewrite: %s",

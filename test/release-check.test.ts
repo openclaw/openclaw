@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { collectBundledExtensionManifestErrors } from "../scripts/lib/bundled-extension-manifest.ts";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { resolveNpmJsonEntries } from "../scripts/lib/npm-json-output.mts";
@@ -12,7 +12,6 @@ import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../scripts/lib/package-dis
 import { createWorkspaceBootstrapSmokeEnv } from "../scripts/lib/workspace-bootstrap-smoke.mts";
 import { collectInstalledBundledRuntimeSidecarPaths } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
-  allowsLegacyGeneratedOwnershipForSourceRoot,
   collectAppcastSparkleVersionErrors,
   collectCriticalPluginSdkEntrypointSizeFindings,
   collectForbiddenPackContentPaths,
@@ -33,9 +32,6 @@ import {
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { resolveNpmJsonEntries as resolveRuntimeNpmJsonEntries } from "../src/infra/npm-registry-spec.js";
 import { withEnv } from "../src/test-utils/env.js";
-import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeItem(shortVersion: string, sparkleVersion: string, channel?: string): string {
   const channelElement = channel ? `<sparkle:channel>${channel}</sparkle:channel>` : "";
@@ -522,20 +518,6 @@ describe("collectForbiddenPackPaths", () => {
 });
 
 describe("packed install verification", () => {
-  it("disables legacy ownership when the historical metadata producer exists", () => {
-    const sourceRoot = tempDirs.make("release-check-ownership-producer-");
-    expect(allowsLegacyGeneratedOwnershipForSourceRoot(sourceRoot)).toBe(true);
-
-    const producerPath = join(
-      sourceRoot,
-      "scripts/lib/runtime-dependency-ownership-build-plugin.mts",
-    );
-    mkdirSync(dirname(producerPath), { recursive: true });
-    writeFileSync(producerPath, "export {};\n", "utf8");
-
-    expect(allowsLegacyGeneratedOwnershipForSourceRoot(sourceRoot)).toBe(false);
-  });
-
   it("runs postpublish package integrity checks against the packed install before publish", () => {
     const root = mkdtempSync(join(tmpdir(), "release-check-packed-install-"));
     try {

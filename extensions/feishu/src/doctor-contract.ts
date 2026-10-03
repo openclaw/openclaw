@@ -12,6 +12,7 @@ import {
   hasLegacyAccountStreamingAliases,
   normalizeChannelConfigEntries,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { listFeishuAccountIds, mergeFeishuAccountConfig } from "./accounts.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
 
@@ -20,6 +21,7 @@ const webhookListenerMigration = createLegacyWebhookListenerDoctorContract({
   defaultPort: 3000,
   defaultHost: "127.0.0.1",
 });
+export const { historicalWebhookListener } = webhookListenerMigration;
 
 // Feishu's legacy boolean `streaming` gated streaming-card replies with an
 // enabled default, so it migrates through the mode path (true → "partial",
@@ -199,5 +201,12 @@ export function normalizeCompatibilityConfig({
   return {
     config: stray.config,
     changes: [...changes, ...stray.changes],
+    historicalWebhookAccountIds:
+      stray.config.channels?.feishu?.enabled === false
+        ? []
+        : listFeishuAccountIds(stray.config).filter((accountId) => {
+            const account = mergeFeishuAccountConfig(stray.config, accountId);
+            return account.enabled !== false && account.connectionMode === "webhook";
+          }),
   };
 }

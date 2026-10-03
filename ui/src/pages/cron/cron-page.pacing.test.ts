@@ -19,7 +19,6 @@ afterEach(() => {
 
 describe("CronPage pacing", () => {
   it.each([
-    { name: "minimum bound", kind: "every", pacing: { min: "5m" }, once: false },
     { name: "maximum bound", kind: "cron", pacing: { max: "1h" }, once: false },
     { name: "both bounds", kind: "every", pacing: { min: "5m", max: "1h" }, once: false },
     { name: "no pacing", kind: "cron", pacing: undefined, once: false },

@@ -2,6 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
 import { readSessionEntriesFromStoreInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
@@ -31,6 +32,7 @@ import {
   hasVisibleCompletionResult,
 } from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
+import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
 import {
   SOURCE_OWNER_CHANGED,
   resolveActiveWakeWithRetries,
@@ -89,6 +91,7 @@ export type SubagentAnnounceDirectParams = {
   sourceTool?: string;
   settleWakeSourceSessionKeys?: readonly string[];
   isSourceSessionEffectsAllowed?: () => boolean;
+  sourceReceiptAdmission?: GatewayToolCallerReceiptAdmission;
   /** Additional source guard released by the accepting Gateway or injection owner. */
   isSourceSessionAdmissionAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
@@ -98,6 +101,17 @@ export type SubagentAnnounceDirectParams = {
   signal?: AbortSignal;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 };
+
+/** Another owner (a yielded requester or an idle cron turn) settles this completion. */
+function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
+  return {
+    delivered: false,
+    path: "none",
+    reason: "completion_handoff_pending",
+    terminal: true,
+    disposition: "intentional_non_delivery",
+  };
+}
 
 export async function sendSubagentAnnounceDirectly(
   params: SubagentAnnounceDirectParams,
@@ -133,12 +147,7 @@ export async function sendSubagentAnnounceDirectly(
     const requesterLifecycleRevision = requesterEntry?.lifecycleRevision;
     const deliveryTarget =
       !parentOnly && !params.requesterIsSubagent
-        ? resolveExternalBestEffortDeliveryTarget({
-            channel: effectiveDirectOrigin?.channel,
-            to: effectiveDirectOrigin?.to,
-            accountId: effectiveDirectOrigin?.accountId,
-            threadId: effectiveDirectOrigin?.threadId,
-          })
+        ? resolveExternalBestEffortDeliveryTarget(effectiveDirectOrigin ?? {})
         : { deliver: false };
     const normalizedSessionOnlyOriginChannel = !params.requesterIsSubagent
       ? normalizeMessageChannel(sessionOnlyOrigin?.channel)
@@ -249,13 +258,7 @@ export async function sendSubagentAnnounceDirectly(
     if (!isCompletionAdmissionAllowed()) {
       // sessions_yield owns the post-turn synthesis. Starting or steering a
       // requester turn here would replay the original fanout during handoff.
-      return {
-        delivered: false,
-        path: "none",
-        reason: "completion_handoff_pending",
-        terminal: true,
-        disposition: "intentional_non_delivery",
-      };
+      return completionHandoffPendingResult();
     }
     // A recovered requester already owns this admitted input. Reuse its final
     // receipt through the normal delivery checks; never execute the old wake again.
@@ -360,13 +363,7 @@ export async function sendSubagentAnnounceDirectly(
       ).isActive &&
       !agentMediatedCompletion
     ) {
-      return {
-        delivered: false,
-        path: "none",
-        reason: "completion_handoff_pending",
-        terminal: true,
-        disposition: "intentional_non_delivery",
-      };
+      return completionHandoffPendingResult();
     }
     if (params.signal?.aborted) {
       return { delivered: false, path: "none" };
@@ -378,7 +375,7 @@ export async function sendSubagentAnnounceDirectly(
         : undefined;
     // A private completion gets its own serialized turn. Steering into a public
     // turn would inherit that turn's delivery policy and expose child output.
-    const directAgentParams: Record<string, unknown> = {
+    let directAgentParams: Record<string, unknown> = {
       ...(requesterSessionBound
         ? {
             expectedExistingSessionId: params.completionRequesterSessionId,
@@ -406,6 +403,14 @@ export async function sendSubagentAnnounceDirectly(
         : {}),
       idempotencyKey: params.directIdempotencyKey,
     };
+    if (requesterSessionBound && params.completionRequesterSessionId) {
+      directAgentParams = bindInProcessSessionRun(directAgentParams, {
+        sessionKey: canonicalRequesterSessionKey,
+        sessionId: params.completionRequesterSessionId,
+        lifecycleRevision: params.completionRequesterLifecycleRevision ?? null,
+        runId: params.directIdempotencyKey,
+      });
+    }
     const classifyResponse = createDirectAnnounceResponseClassifier({
       params,
       parentOnly,
@@ -477,6 +482,7 @@ export async function sendSubagentAnnounceDirectly(
                               settleBatch: {
                                 sourceSessionKeys: params.settleWakeSourceSessionKeys,
                                 isCurrent: isCompletionDeliveryAllowed,
+                                receiptAdmission: params.sourceReceiptAdmission,
                               },
                             }
                           : {}),

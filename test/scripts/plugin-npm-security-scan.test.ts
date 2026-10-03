@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { c as createTar } from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveNpmJsonEntries } from "../../scripts/lib/npm-json-output.mts";
 import {
@@ -58,6 +59,7 @@ function writePluginArtifact(params: {
   files: Record<string, string | Buffer>;
   manifest?: Record<string, unknown>;
   packageName: string;
+  syntheticArchive?: boolean;
   version?: string;
 }) {
   const root = params.artifactRoot
@@ -87,17 +89,35 @@ function writePluginArtifact(params: {
     mkdirSync(join(filePath, ".."), { recursive: true });
     writeFileSync(filePath, content);
   }
-  const packOutput = execFileSync(
-    "npm",
-    ["pack", "--json", "--ignore-scripts", "--pack-destination", artifactDir],
-    { cwd: packageRoot, encoding: "utf8" },
-  );
-  const packEntries = resolveNpmJsonEntries(JSON.parse(packOutput)) as Array<{
-    filename?: unknown;
-  }>;
-  const tarballName = packEntries[0]?.filename;
-  if (typeof tarballName !== "string") {
-    throw new Error("npm pack fixture did not return a tarball filename");
+  let tarballName: string;
+  if (params.syntheticArchive) {
+    tarballName = "synthetic.tgz";
+    createTar(
+      {
+        cwd: packageRoot,
+        file: join(artifactDir, tarballName),
+        gzip: true,
+        portable: true,
+        noPax: true,
+        mtime: new Date("1985-10-26T08:15:00.000Z"),
+        prefix: "package",
+        sync: true,
+      },
+      ["package.json", "openclaw.plugin.json", ...Object.keys(params.files)],
+    );
+  } else {
+    const packOutput = execFileSync(
+      "npm",
+      ["pack", "--json", "--ignore-scripts", "--pack-destination", artifactDir],
+      { cwd: packageRoot, encoding: "utf8" },
+    );
+    const packEntries = resolveNpmJsonEntries(JSON.parse(packOutput)) as Array<{
+      filename?: unknown;
+    }>;
+    if (typeof packEntries[0]?.filename !== "string") {
+      throw new Error("npm pack fixture did not return a tarball filename");
+    }
+    tarballName = packEntries[0].filename;
   }
   const tarballPath = join(artifactDir, tarballName);
   const tarballSha256 = createHash("sha256").update(readFileSync(tarballPath)).digest("hex");
@@ -242,12 +262,14 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       "release/2026.9.5",
       "release/2026.9.6",
       "release/2026.9.7",
+      "release/2026.9.8",
+      "release/2026.10.1",
     ]) {
       expect(resolveReviewedSourceLayout(current, context)?.id, context).toBe("current");
     }
     expect(resolveReviewedSourceLayout(frozenLegacy, "release/2026.9.1")).toBeUndefined();
     expect(resolveReviewedSourceLayout(current, "release/2099.1.1")).toBeUndefined();
-    expect(resolveReviewedSourceLayout(current, "release/2026.9.8")).toBeUndefined();
+    expect(resolveReviewedSourceLayout(current, "release/2026.10.2")).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy)).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.6.33")?.id).toBe(
       "extended-stable-2026.6.33",
@@ -303,6 +325,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       "@openclaw/discord:dangerous-exec:src/voice/audio.ts",
       "@openclaw/imessage:dangerous-exec:src/client.ts",
       "@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-install.ts",
+      "@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-vc-runtime.ts",
       "@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts",
       "@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts",
       "@openclaw/raft:dangerous-exec:src/gateway.ts",
@@ -775,11 +798,14 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
           "extended-stable/2026.7.33",
           "release/2026.9.7",
           "release/2026.9.8",
+          "release/2026.10.1",
         ]) {
           const admitted =
             context === "" ||
             context === "release/2026.9.6" ||
             context === "release/2026.9.7" ||
+            context === "release/2026.9.8" ||
+            context === "release/2026.10.1" ||
             (context === "release/2026.9.5" && reviewedIn95);
           const label = `${context || "current"}: ${count ?? "absent"}`;
           const scanned = await scanPublishablePluginPackages([artifact.artifact], context);
@@ -822,12 +848,212 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     },
   );
 
+  it("freezes the 9.8 acpx proxy asset while matching the current packed inventory", () => {
+    const packageName = "@openclaw/acpx";
+    const authBridgeKey = `${packageName}:dangerous-exec:src/codex-auth-bridge.ts`;
+    const proxyKey = `${packageName}:dangerous-exec:src/runtime-internals/mcp-proxy.mjs`;
+    const reportErrors = (findings: string[], targetContextRef: string) =>
+      buildPluginNpmSecurityScanReport({
+        candidateSha: CANDIDATE_SHA,
+        packageResults: [
+          syntheticResult(packageName, { reviewedCriticalFindings: findings }),
+          syntheticResult("@openclaw/codex", { reviewedCriticalFindings: currentLayoutFindings() }),
+        ],
+        targetContextRef,
+        toolingSha: TOOLING_SHA,
+      }).errors.filter((error) => error.startsWith(`${packageName}:`));
+
+    expect(reportErrors([authBridgeKey], "release/2026.10.1")).toEqual([]);
+    expect(reportErrors([authBridgeKey], "release/2026.9.8")).toEqual([
+      expect.stringContaining(proxyKey),
+    ]);
+    expect(reportErrors([authBridgeKey, proxyKey], "release/2026.9.8")).toEqual([]);
+    expect(reportErrors([authBridgeKey, proxyKey], "release/2026.10.1")).toEqual([
+      expect.stringContaining(proxyKey),
+    ]);
+  });
+
+  it("reviews exactly one current MXC SDK wire-contract probe", async () => {
+    const packageName = "@openclaw/mxc-sandbox";
+    const readinessKey = `${packageName}:dangerous-exec:src/readiness.ts`;
+    const fixturePath = "test/mxc-sdk-wire-contract.integration.test.ts";
+    const fixtureKey = `${packageName}:dangerous-exec:${fixturePath}`;
+    const probe =
+      'import { execFileSync } from "node:child_process";\nexecFileSync(process.execPath, []);\n';
+    const source = readFileSync(join(process.cwd(), "extensions/mxc", fixturePath), "utf8");
+    const artifact = writePluginArtifact({
+      extensionId: "mxc",
+      files: {
+        "src/readiness.ts": probe.repeat(2),
+        [fixturePath]: source,
+      },
+      packageName,
+    });
+    const changedBytes = writePluginArtifact({
+      extensionId: "mxc-changed",
+      files: {
+        "src/readiness.ts": probe.repeat(2),
+        [fixturePath]: source.replace("timeout: 30_000", "timeout: 30_001"),
+      },
+      packageName,
+    });
+
+    for (const context of ["", "release/2026.10.1"] as const) {
+      const scanned = await scanPublishablePluginPackages([artifact.artifact], context);
+      expect(scanned.scanErrors, context).toEqual([]);
+      const result = scanned.packageResults[0]!;
+      expect(result.expectedReviewedCriticalFindings, context).toEqual([fixtureKey]);
+      expect(result.reviewedCriticalFindings, context).toEqual([
+        readinessKey,
+        readinessKey,
+        fixtureKey,
+      ]);
+      expect(result.unexpectedCriticalFindings, context).toEqual([]);
+      for (const count of [0, 1, 2]) {
+        const report = buildPluginNpmSecurityScanReport({
+          candidateSha: CANDIDATE_SHA,
+          packageResults: [
+            {
+              ...result,
+              reviewedCriticalFindings: [
+                readinessKey,
+                readinessKey,
+                ...Array.from({ length: count }, () => fixtureKey),
+              ],
+            },
+            syntheticResult("@openclaw/codex", {
+              reviewedCriticalFindings: currentLayoutFindings(),
+            }),
+          ],
+          targetContextRef: context,
+          toolingSha: TOOLING_SHA,
+        });
+        expect(
+          report.errors.filter((error) => error.startsWith(`${packageName}:`)),
+          `${context || "current"}: ${count}`,
+        ).toHaveLength(count === 1 ? 0 : 1);
+      }
+      const changed = await scanPublishablePluginPackages([changedBytes.artifact], context);
+      expect(changed.scanErrors, context).toEqual([]);
+      expect(changed.packageResults[0]?.expectedReviewedCriticalFindings, context).toEqual([
+        fixtureKey,
+      ]);
+      expect(changed.packageResults[0]?.reviewedCriticalFindings, context).toEqual([
+        readinessKey,
+        readinessKey,
+      ]);
+      expect(changed.packageResults[0]?.unexpectedCriticalFindings, context).toEqual([
+        { line: 40, path: fixturePath, ruleId: "dangerous-exec" },
+      ]);
+    }
+
+    const frozen = await scanPublishablePluginPackages([artifact.artifact], "release/2026.9.8");
+    expect(frozen.scanErrors).toEqual([]);
+    expect(frozen.packageResults[0]?.expectedReviewedCriticalFindings).toEqual([]);
+    expect(frozen.packageResults[0]?.reviewedCriticalFindings).toEqual([
+      readinessKey,
+      readinessKey,
+    ]);
+    expect(frozen.packageResults[0]?.unexpectedCriticalFindings).toEqual([
+      { line: 40, path: fixturePath, ruleId: "dangerous-exec" },
+    ]);
+  });
+
+  it.each([
+    "exact",
+    "changed bytes",
+    "changed path",
+    "changed package",
+    "removed exec",
+    "extra exec",
+  ])("qualifies only the exact reviewed native persona fixture: %s", async (variant) => {
+    const fixturePath = "src/app-server/run-attempt.skills.native.test.ts";
+    const source = readFileSync(join(process.cwd(), "extensions/codex", fixturePath), "utf8");
+    const packageName = variant === "changed package" ? "@openclaw/other" : "@openclaw/codex";
+    const packedPath = variant === "changed path" ? "src/unreviewed.test.ts" : fixturePath;
+    const content =
+      variant === "changed bytes"
+        ? source.replace('"ws://127.0.0.1:0"', '"ws://127.0.0.1:1"')
+        : variant === "removed exec"
+          ? source.replace("spawn(native.command", "startFixture(native.command")
+          : variant === "extra exec"
+            ? `${source}\nspawn(process.execPath, []);\n`
+            : source;
+    const existingProbe =
+      'import { spawn } from "node:child_process";\nspawn(process.execPath, []);\n';
+    const { artifact } = writePluginArtifact({
+      extensionId: "codex",
+      packageName,
+      files: {
+        [packedPath]: content,
+        ...(variant === "removed exec"
+          ? {
+              "src/app-server/transport-stdio.ts": existingProbe,
+              "src/app-server/sandbox-exec-server/sandbox-child.ts": existingProbe,
+              "src/app-server/transport-process-snapshot.ts": existingProbe,
+            }
+          : {}),
+      },
+      syntheticArchive: true,
+    });
+    const key = `@openclaw/codex:dangerous-exec:${fixturePath}`;
+    const current = await scanPublishablePluginPackages([artifact]);
+    expect(current.scanErrors).toEqual([]);
+    const result = current.packageResults[0]!;
+    expect(result.expectedReviewedCriticalFindings).toEqual(
+      packageName === "@openclaw/codex" && packedPath === fixturePath ? [key] : [],
+    );
+    expect(result.reviewedCriticalFindings.filter((finding) => finding === key)).toEqual(
+      variant === "exact" ? [key] : [],
+    );
+    expect(result.unexpectedCriticalFindings).toHaveLength(
+      variant === "exact" || variant === "removed exec" ? 0 : variant === "extra exec" ? 2 : 1,
+    );
+    const release = await scanPublishablePluginPackages([artifact], "release/2026.10.1");
+    expect(release.scanErrors).toEqual([]);
+    const releaseResult = release.packageResults[0]!;
+    expect(releaseResult.expectedReviewedCriticalFindings).toEqual(
+      packageName === "@openclaw/codex" && packedPath === fixturePath ? [key] : [],
+    );
+    expect(releaseResult.reviewedCriticalFindings.filter((finding) => finding === key)).toEqual(
+      variant === "exact" ? [key] : [],
+    );
+    expect(releaseResult.unexpectedCriticalFindings).toHaveLength(
+      variant === "exact" || variant === "removed exec" ? 0 : variant === "extra exec" ? 2 : 1,
+    );
+    if (variant === "removed exec") {
+      const report = buildPluginNpmSecurityScanReport({
+        candidateSha: CANDIDATE_SHA,
+        packageResults: current.packageResults,
+        toolingSha: TOOLING_SHA,
+      });
+      expect(report.status).toBe("fail");
+      expect(report.layout).toBe("current");
+      expect(report.errors).toContainEqual(expect.stringContaining(key));
+    }
+    if (variant === "exact") {
+      for (const context of [
+        "release/2026.9.1",
+        "release/2026.9.6",
+        "release/2026.9.7",
+        "extended-stable/2026.8.33",
+      ]) {
+        const frozen = await scanPublishablePluginPackages([artifact], context);
+        expect(frozen.scanErrors, context).toEqual([]);
+        expect(frozen.packageResults[0]?.expectedReviewedCriticalFindings, context).toEqual([]);
+        expect(frozen.packageResults[0]?.reviewedCriticalFindings, context).toEqual([]);
+        expect(frozen.packageResults[0]?.unexpectedCriticalFindings, context).toHaveLength(1);
+      }
+    }
+  });
+
   it.each([1, 2])(
     "reviews exactly one current hardware probe, preserving frozen policy: %s",
     async (count) => {
       const packageName = "@openclaw/llama-cpp-provider";
       const hardwareKey = `${packageName}:dangerous-exec:src/hardware.ts`;
       const installerKey = `${packageName}:dangerous-exec:src/llama-server-install.ts`;
+      const vcRuntimeKey = `${packageName}:dangerous-exec:src/llama-server-vc-runtime.ts`;
       const probe =
         'import { execFile } from "node:child_process";\nexecFile("/usr/bin/vm_stat", []);\n';
       const artifact = writePluginArtifact({
@@ -835,6 +1061,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
         files: {
           "src/hardware.ts": probe + (count === 2 ? 'execFile("/bin/df", ["-P", "/tmp"]);\n' : ""),
           "src/llama-server-install.ts": probe,
+          "src/llama-server-vc-runtime.ts": probe,
         },
         packageName,
       });
@@ -844,6 +1071,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       expect(current.packageResults[0]?.reviewedCriticalFindings).toEqual([
         ...Array.from({ length: count }, () => hardwareKey),
         installerKey,
+        vcRuntimeKey,
       ]);
       const currentReport = buildPluginNpmSecurityScanReport({
         candidateSha: CANDIDATE_SHA,
@@ -863,10 +1091,47 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       const frozen = await scanPublishablePluginPackages([artifact.artifact], "release/2026.9.1");
       expect(frozen.scanErrors).toEqual([]);
       expect(frozen.packageResults[0]?.reviewedCriticalFindings).toEqual([installerKey]);
-      expect(frozen.packageResults[0]?.unexpectedCriticalFindings).toHaveLength(count);
+      expect(frozen.packageResults[0]?.unexpectedCriticalFindings).toHaveLength(count + 1);
       expect(frozen.packageResults[0]?.unexpectedCriticalFindings).toEqual(
-        expect.arrayContaining([{ line: 2, path: "src/hardware.ts", ruleId: "dangerous-exec" }]),
+        expect.arrayContaining([
+          { line: 2, path: "src/hardware.ts", ruleId: "dangerous-exec" },
+          {
+            line: 2,
+            path: "src/llama-server-vc-runtime.ts",
+            ruleId: "dangerous-exec",
+          },
+        ]),
       );
+    },
+  );
+
+  it.each(["release/2026.9.6", "release/2026.9.7"])(
+    "keeps the %s source inventory frozen before VC runtime extraction",
+    async (targetContextRef) => {
+      const packageName = "@openclaw/llama-cpp-provider";
+      const probe =
+        'import { execFile } from "node:child_process";\nexecFile("/usr/bin/vm_stat", []);\n';
+      const artifact = writePluginArtifact({
+        extensionId: "llama-cpp",
+        files: {
+          "src/hardware.ts": probe,
+          "src/llama-server-install.ts": probe,
+        },
+        packageName,
+      });
+      const frozen = await scanPublishablePluginPackages([artifact.artifact], targetContextRef);
+      expect(frozen.scanErrors).toEqual([]);
+      expect(frozen.packageResults[0]?.unexpectedCriticalFindings).toEqual([]);
+      const report = buildPluginNpmSecurityScanReport({
+        candidateSha: CANDIDATE_SHA,
+        packageResults: [
+          ...frozen.packageResults,
+          syntheticResult("@openclaw/codex", { reviewedCriticalFindings: currentLayoutFindings() }),
+        ],
+        targetContextRef,
+        toolingSha: TOOLING_SHA,
+      });
+      expect(report.errors.filter((error) => error.startsWith(`${packageName}:`))).toEqual([]);
     },
   );
 

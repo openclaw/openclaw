@@ -50,14 +50,14 @@ async function createRebuildingFixture() {
       )
       .run(fixture.scope.sessionId);
   };
-  const assertNoDispatch = () => {
+  const assertNoDispatch = async () => {
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     expect(fixture.context.chatAbortControllers.size).toBe(0);
     expect(fixture.context.chatQueuedTurns.size).toBe(0);
     expect(
       fixture.context.dedupe.has(pendingChatSendDedupeKey(fixture.params.idempotencyKey)),
     ).toBe(false);
-    expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+    expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
     expect(loadTranscriptEventsSync(fixture.scope)).toEqual(before);
     expect(getActiveSessionWorkAdmissionCount()).toBe(0);
   };
@@ -106,7 +106,7 @@ describe("registered chat.send during SQLite projection rebuild", () => {
       fixture.markRebuilding();
       const rejected = await fixture.send();
       expectRebuildingResponse(rejected);
-      fixture.assertNoDispatch();
+      await fixture.assertNoDispatch();
       expect(loadSessionEntry(fixture.scope)).toEqual(fixture.beforeSession);
       await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
       const accepted = await fixture.send();
@@ -141,7 +141,7 @@ describe("registered chat.send during SQLite projection rebuild", () => {
         fixture.params.expectedPermissionMode = null;
         fixture.markRebuilding();
         expectRebuildingResponse(await fixture.send());
-        fixture.assertNoDispatch();
+        await fixture.assertNoDispatch();
         await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
         if (change === "active leaf") {
           fixture.params.expectedLeafEntryId = "obsolete-leaf";
@@ -155,7 +155,7 @@ describe("registered chat.send during SQLite projection rebuild", () => {
             reason: change === "active leaf" ? "active-leaf-changed" : "session-settings-changed",
           },
         });
-        fixture.assertNoDispatch();
+        await fixture.assertNoDispatch();
       } finally {
         await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
         await fixture.cleanup();
@@ -216,7 +216,7 @@ describe("registered chat.send during SQLite projection rebuild", () => {
         await writer;
         const response = await request;
         expect(JSON.stringify(response.mock.calls)).not.toContain("cloud-session");
-        fixture.assertNoDispatch();
+        await fixture.assertNoDispatch();
         await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
         expect(response.mock.calls[0]?.[1]).toMatchObject({
           status: "timeout",
@@ -224,7 +224,7 @@ describe("registered chat.send during SQLite projection rebuild", () => {
         });
         const retry = await fixture.send();
         expect(retry.mock.calls[0]?.[1]).toMatchObject({ status: "timeout", summary: "aborted" });
-        fixture.assertNoDispatch();
+        await fixture.assertNoDispatch();
       } finally {
         release.resolve();
         await writer;

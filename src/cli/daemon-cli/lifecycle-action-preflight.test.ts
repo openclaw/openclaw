@@ -45,7 +45,7 @@ describe("getServiceActionPreflightFailure", () => {
     },
   );
 
-  it("allows stopping before plugin config migration while retaining the newer-writer guard", async () => {
+  it("reports plugin migration issues for recovery diagnostics", async () => {
     await withIsolatedLifecycleState(async ({ configPath }) => {
       const pluginRoot = path.join(path.dirname(configPath), "migration-fixture");
       await fs.mkdir(pluginRoot);
@@ -86,7 +86,7 @@ describe("getServiceActionPreflightFailure", () => {
       ).toBe(true);
       expect(await getServiceActionPreflightFailure("start")).not.toBeNull();
       expect(await getServiceActionPreflightFailure("restart")).not.toBeNull();
-      expect(await getServiceActionPreflightFailure("stop")).toBeNull();
+      expect(await getServiceActionPreflightFailure("stop")).not.toBeNull();
 
       await fs.writeFile(
         configPath,
@@ -94,7 +94,7 @@ describe("getServiceActionPreflightFailure", () => {
       );
       resetConfigRuntimeState();
       expect((await getServiceActionPreflightFailure("stop"))?.message).toContain(
-        "older than the config",
+        "migration-fixture",
       );
     });
   });

@@ -202,6 +202,31 @@ describe("cron store", () => {
     ]);
   });
 
+  it("rejects alias-only job identities without replacing existing rows", async () => {
+    await withOpenClawTestState({ label: "cron-canonical-identity" }, async (state) => {
+      const storePath = state.statePath("cron", "jobs.json");
+      const store = makeStore("retained", true);
+      await saveCronStore(storePath, store);
+      const database = openOpenClawStateDatabase().db;
+      const rows = () =>
+        database
+          .prepare("SELECT * FROM cron_jobs WHERE store_key = ? ORDER BY job_id")
+          .all(cronStoreKey(storePath));
+      const before = rows();
+      const aliasOnly = { ...makeStore("alias-only", true).jobs[0], jobId: "alias-only" };
+      Reflect.deleteProperty(aliasOnly, "id");
+
+      await expect(
+        saveCronStore(storePath, {
+          version: 1,
+          jobs: [{ ...store.jobs[0], name: "must not change" }, aliasOnly],
+        }),
+      ).rejects.toThrow("Cannot persist cron store with 1 invalid job(s)");
+
+      expect(rows()).toEqual(before);
+    });
+  });
+
   it("replaces cron jobs in SQLite without rewriting legacy files", async () => {
     const store = await makeStorePath();
     const first = makeStore("job-1", true);

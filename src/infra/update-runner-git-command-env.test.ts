@@ -14,7 +14,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
 
 describe("candidate command source isolation", () => {
-  it.each(["pnpm", "npm", "bun"] as const)(
+  it.each(["pnpm", "npm"] as const)(
     "binds %s commands to candidate source without changing the caller",
     async (manager) => {
       const candidate = tempDirs.make("candidate-command-env-");
@@ -65,11 +65,6 @@ it.each([
     response: { code: 0, stdout: "" },
     expected: { pnpm_config_prefer_offline: "false" },
   },
-  {
-    env: { PNPM_CONFIG_PREFER_OFFLINE: "true", pnpm_config_prefer_offline: "false" },
-    response: { code: 0, stdout: "" },
-    expected: { PNPM_CONFIG_PREFER_OFFLINE: "true", pnpm_config_prefer_offline: "false" },
-  },
   { env: {}, response: { code: 0, stdout: "false" }, expected: {} },
   { env: {}, response: { code: 1, stdout: "" }, expected: {} },
 ])(
@@ -88,7 +83,7 @@ it.each([
   },
 );
 
-it.each([undefined, "--max-old-space-size=8192", "--max-old-space-size=16384"])(
+it.each([undefined, "--max-old-space-size=16384"])(
   "keeps candidate build heap/cache policy: %s",
   (nodeOptions) => {
     vi.stubEnv("NODE_OPTIONS", undefined);

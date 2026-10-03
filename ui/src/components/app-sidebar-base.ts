@@ -3,7 +3,6 @@ import { property, state } from "lit/decorators.js";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
-import type { OutboxStoreRuntime } from "../app/app-shell-gateway.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -12,6 +11,7 @@ import {
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
+import type { SidebarOutboxSummary } from "../lib/chat/outbox-store-projection.ts";
 import type { GatewayStatus } from "../lib/gateway-status.ts";
 import {
   readSessionMethodAccess,
@@ -39,9 +39,7 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) connectionStatus: GatewayStatus | null = null;
   @property({ attribute: false }) lastError: string | null = null;
-  @property({ attribute: false }) storedOutboxes:
-    | ReturnType<OutboxStoreRuntime["read"]>
-    | undefined;
+  @property({ attribute: false }) storedOutboxes: SidebarOutboxSummary | undefined;
   @property({ attribute: false }) terminalAvailable = false;
   @property({ attribute: false }) catalogOpenTarget: CatalogOpenTarget = "viewer";
   @property({ attribute: false }) canPairDevice = false;

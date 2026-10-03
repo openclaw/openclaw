@@ -26,7 +26,7 @@ it("models.authSetApiKey validates the old wire request before the real credenti
   });
   const token = "api-key-contract-fixture-token";
   const cfg = {
-    agents: { list: [{ id: "main", workspace: state.workspaceDir }] },
+    agents: { entries: { main: { workspace: state.workspaceDir } } },
     plugins: { enabled: false },
     gateway: { mode: "local", auth: { mode: "token", token }, reload: { mode: "off" } },
   };

@@ -111,26 +111,12 @@ export async function filterLiveShortTermRecallEntries(params: {
   return results.filter((result) => result.exists).map((result) => result.entry);
 }
 
-function buildMemoryRecallSkippedEvent(params: {
-  timestamp: string;
-  query: string;
-  eligibleResultCount: number;
-  skipped: MemorySearchResult[];
-}) {
+function recallEventResult(result: MemorySearchResult) {
   return {
-    type: "memory.recall.skipped" as const,
-    timestamp: params.timestamp,
-    query: params.query,
-    reason: "non-short-term-memory-path" as const,
-    eligibleResultCount: params.eligibleResultCount,
-    skippedResultCount: params.skipped.length,
-    results: params.skipped.map((result) => ({
-      path: normalizeMemoryPath(result.path),
-      startLine: Math.max(1, Math.floor(result.startLine)),
-      endLine: Math.max(1, Math.floor(result.endLine)),
-      score: clampScore(result.score),
-      reason: "non-short-term-memory-path" as const,
-    })),
+    path: normalizeMemoryPath(result.path),
+    startLine: Math.max(1, Math.floor(result.startLine)),
+    endLine: Math.max(1, Math.floor(result.endLine)),
+    score: clampScore(result.score),
   };
 }
 
@@ -170,16 +156,21 @@ export async function recordShortTermRecalls(params: {
 
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
+  const appendSkippedEvent = (eligibleResultCount: number) =>
+    appendMemoryHostEvent(workspaceDir, {
+      type: "memory.recall.skipped",
+      timestamp: nowIso,
+      query,
+      reason: "non-short-term-memory-path",
+      eligibleResultCount,
+      skippedResultCount: skipped.length,
+      results: skipped.map((result) => ({
+        ...recallEventResult(result),
+        reason: "non-short-term-memory-path" as const,
+      })),
+    });
   if (relevant.length === 0) {
-    await appendMemoryHostEvent(
-      workspaceDir,
-      buildMemoryRecallSkippedEvent({
-        timestamp: nowIso,
-        query,
-        eligibleResultCount: relevant.length,
-        skipped,
-      }),
-    );
+    await appendSkippedEvent(0);
     return;
   }
   const sourceSessions = new Map<string, Set<string>>();
@@ -322,7 +313,7 @@ export async function recordShortTermRecalls(params: {
         ? (existing?.lastRecalledAt ?? nowIso)
         : nowIso;
       // Daily claim keys omit the file path; retain the first source citation
-      // while observations from distinct days accumulate on the same claim. A
+      // while observations from distinct days accumulate on the same claim.
       // A later non-daily signal cites it the same way, so the claim never
       // adopts the path of whichever file the search or backfill happened to hit.
       const preserveFirstDailySource =
@@ -383,23 +374,10 @@ export async function recordShortTermRecalls(params: {
       timestamp: nowIso,
       query,
       resultCount: admitted.length,
-      results: admitted.map((result) => ({
-        path: normalizeMemoryPath(result.path),
-        startLine: Math.max(1, Math.floor(result.startLine)),
-        endLine: Math.max(1, Math.floor(result.endLine)),
-        score: clampScore(result.score),
-      })),
+      results: admitted.map(recallEventResult),
     });
     if (skipped.length > 0) {
-      await appendMemoryHostEvent(
-        workspaceDir,
-        buildMemoryRecallSkippedEvent({
-          timestamp: nowIso,
-          query,
-          eligibleResultCount: admitted.length,
-          skipped,
-        }),
-      );
+      await appendSkippedEvent(admitted.length);
     }
   });
 }

@@ -2,165 +2,34 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionGitHubStatusResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
-import { getRuntimeConfig } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  disconnectUserGitHubConnection,
   updateUserGitHubConnection,
   type UserGitHubConnection,
 } from "../../state/user-github-connections.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as prRead from "../control-ui-session-pr-read.js";
-import {
-  createPersonalGitHubOAuthLifecycle,
-  personalGitHubStatus,
-  type PersonalGitHubAction,
-} from "../github-personal-oauth.js";
+import { personalGitHubStatus } from "../github-personal-oauth.js";
 import * as publicationAvailability from "../github-publication-availability.js";
 import * as relevance from "../github-publication-relevance.js";
-import { sessionsGitHubHandlers } from "./sessions-github.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import {
+  publisher,
+  receipt,
+  sessionId,
+  sessionKey,
+  withReadFixture,
+} from "./sessions-github-read.test-support.js";
 
 const mocks = vi.hoisted(() => ({ runCommandBuffered: vi.fn() }));
 vi.mock("../../process/exec.js", () => ({ runCommandBuffered: mocks.runCommandBuffered }));
-vi.mock("../../agents/tools/gateway-caller-context.js", () => ({
+vi.mock("../../agents/tools/gateway-caller-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/tools/gateway-caller-context.js")>()),
   getGatewayToolCallerIdentity: () => undefined,
 }));
 vi.mock("../github-oauth-lifecycle.js", () => ({
   requestCurrentGitHubOAuthRefresh: vi.fn(async () => {}),
 }));
-
-const sessionKey = "agent:main:publication-read";
-const sessionId = "publication-read-session";
-const publisher = { source: "agent-override" as const, accountId: 7, login: "shared-bot" };
-const receipt = {
-  result: {
-    requestId: "8c698e8a-bdc7-4927-a0f2-73a842c2d7b1",
-    publisher,
-    status: "publishing" as const,
-    message: "The shared publication is in progress.",
-  },
-  confirmation: null,
-};
-
-async function withReadFixture(
-  run: (fixture: ReturnType<typeof createFixture>) => Promise<void>,
-  options: { personal?: boolean } = {},
-) {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const profile = options.personal
-      ? ensureProfileForEmail("publication-reader@example.test")
-      : undefined;
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        sessionId,
-        updatedAt: 1,
-        ...(profile
-          ? { createdActor: { type: "human", source: "profile", id: profile.id } as const }
-          : {}),
-      },
-    );
-    const fixture = createFixture(profile);
-    try {
-      await run(fixture);
-    } finally {
-      await fixture.personalLifecycle.stop();
-    }
-  });
-}
-
-function createFixture(profile?: ReturnType<typeof ensureProfileForEmail>) {
-  const client: GatewayClient = {
-    connId: "publication-reader",
-    ...(profile
-      ? {
-          authenticatedUserProfile: {
-            profileId: profile.id,
-            displayName: profile.displayName,
-            hasAvatar: false,
-            updatedAt: profile.updatedAt,
-          },
-        }
-      : {}),
-    connect: {
-      role: "operator",
-      scopes: ["operator.read"],
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", mode: "test", platform: "test", version: "1" },
-    },
-  };
-  let connected = true;
-  const sharedStatus = vi.fn().mockResolvedValue(receipt);
-  const latestShared = vi.fn().mockResolvedValue(receipt);
-  const personalStatus = vi.fn();
-  const personalPending = vi
-    .fn<() => Promise<SessionGitHubStatusResult | null>>()
-    .mockResolvedValue(null);
-  const personalLifecycle = createPersonalGitHubOAuthLifecycle();
-  const personalConnectionStatus = vi.fn(async (action: PersonalGitHubAction) =>
-    personalGitHubStatus(action),
-  );
-  const requestForSession = vi.fn();
-  const pullRequests = { subscribe: vi.fn(), unsubscribe: vi.fn(), read: vi.fn(), stop: vi.fn() };
-  // Only these services belong to the read handler; the authorization helpers stay real.
-  const context = {
-    getRuntimeConfig,
-    controlUiSessionPullRequests: pullRequests,
-    getClientConnIds: (filter?: (candidate: GatewayClient) => boolean) =>
-      new Set(connected && (!filter || filter(client)) ? [client.connId] : []),
-    githubPublicationService: {
-      preparePersonalStatus: vi.fn(async () => undefined),
-      sharedStatus,
-      latestShared,
-      personalStatus,
-      personalPending,
-      requestForSession,
-    },
-    githubOAuthService: {
-      personal: {
-        ...personalLifecycle,
-        status: personalConnectionStatus,
-      },
-    },
-  } as unknown as GatewayRequestContext;
-  const invoke = async (
-    method: "sessions.github.options" | "sessions.github.status",
-    params: Record<string, unknown>,
-    respond = vi.fn(),
-  ) => {
-    await expectDefined(
-      sessionsGitHubHandlers[method],
-      method,
-    )({
-      params,
-      respond: respond as never,
-      context,
-      client,
-      req: { type: "req", id: "publication-read", method },
-      isWebchatConnect: () => false,
-    });
-    return respond;
-  };
-  return {
-    client,
-    invoke,
-    sharedStatus,
-    latestShared,
-    personalStatus,
-    personalPending,
-    personalLifecycle,
-    personalConnectionStatus,
-    requestForSession,
-    pullRequests,
-    disconnect: () => {
-      connected = false;
-    },
-  };
-}
 
 beforeEach(() => {
   clearGitHubCredentialVerificationCache();
@@ -365,8 +234,8 @@ describe("publication receipt reads", () => {
     });
   });
 
-  it.each(
-    [
+  it.each([
+    ...[
       "unchanged",
       "scope",
       "connection",
@@ -376,9 +245,10 @@ describe("publication receipt reads", () => {
       "github-unavailable",
       "github-generation",
       "github-account",
-      "github-disconnect",
-    ].flatMap((change) => ["personal", "shared"].map((phase) => ({ change, phase }))),
-  )("rechecks $change authority after a pending $phase read", async ({ change, phase }) => {
+    ].map((change) => ({ change, phase: "personal" })),
+    // Both authority owners must also run after the later shared read.
+    ...["connection", "github-generation"].map((change) => ({ change, phase: "shared" })),
+  ])("rechecks $change authority after a pending $phase read", async ({ change, phase }) => {
     await withReadFixture(
       async (fixture) => {
         const owner = expectDefined(
@@ -478,8 +348,6 @@ describe("publication receipt reads", () => {
               }),
               () => {},
             );
-          } else if (change === "github-disconnect") {
-            disconnectUserGitHubConnection(owner, () => {});
           }
           const pendingPersonal = hasGitHubConnection ? null : personalReceipt;
           pending.resolve(phase === "personal" ? pendingPersonal : receipt);
@@ -534,54 +402,45 @@ describe("publication receipt reads", () => {
     );
   });
 
-  it.each(["sessions.github.options", "sessions.github.status"] as const)(
-    "%s rechecks the connection after an awaited shared receipt read",
-    async (method) => {
-      await withReadFixture(
-        async (fixture) => {
-          const entered = createDeferredCore();
-          const pending = createDeferredCore<SessionGitHubStatusResult>();
-          const sharedRead =
-            method === "sessions.github.options" ? fixture.latestShared : fixture.sharedStatus;
-          sharedRead.mockImplementationOnce(() => {
-            entered.resolve();
-            return pending.promise;
-          });
-          const respond = vi.fn();
-          const request = fixture.invoke(
-            method,
-            {
-              sessionKey,
-              ...(method === "sessions.github.status"
-                ? { requestId: receipt.result.requestId }
-                : {}),
-            },
-            respond,
+  it("sessions.github.status rechecks the connection after an awaited shared receipt read", async () => {
+    await withReadFixture(
+      async (fixture) => {
+        const entered = createDeferredCore();
+        const pending = createDeferredCore<SessionGitHubStatusResult>();
+        const sharedRead = fixture.sharedStatus;
+        sharedRead.mockImplementationOnce(() => {
+          entered.resolve();
+          return pending.promise;
+        });
+        const respond = vi.fn();
+        const request = fixture.invoke(
+          "sessions.github.status",
+          { sessionKey, requestId: receipt.result.requestId },
+          respond,
+        );
+        try {
+          await Promise.race([
+            entered.promise,
+            request.then(() => {
+              throw new Error("Read completed before entering the held shared receipt read");
+            }),
+          ]);
+          expect(respond).not.toHaveBeenCalled();
+          fixture.disconnect();
+          pending.resolve(receipt);
+          await request;
+          expect(sharedRead).toHaveBeenCalledOnce();
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({ code: "FORBIDDEN" }),
           );
-          try {
-            await Promise.race([
-              entered.promise,
-              request.then(() => {
-                throw new Error("Read completed before entering the held shared receipt read");
-              }),
-            ]);
-            expect(respond).not.toHaveBeenCalled();
-            fixture.disconnect();
-            pending.resolve(receipt);
-            await request;
-            expect(sharedRead).toHaveBeenCalledOnce();
-            expect(respond).toHaveBeenCalledExactlyOnceWith(
-              false,
-              undefined,
-              expect.objectContaining({ code: "FORBIDDEN" }),
-            );
-          } finally {
-            pending.resolve(receipt);
-            await request;
-          }
-        },
-        { personal: true },
-      );
-    },
-  );
+        } finally {
+          pending.resolve(receipt);
+          await request;
+        }
+      },
+      { personal: true },
+    );
+  });
 });

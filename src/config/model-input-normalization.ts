@@ -3,16 +3,66 @@ import {
   normalizeConfiguredProviderCatalogModelId,
   type ManifestModelIdNormalizationProvider,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
   normalizeAgentModelSelectionForConfig,
+  toAgentModelListLike,
 } from "./model-input.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const MODEL_SELECTION_KEYS = ["model", "imageModel", "voiceModel", "pdfModel"] as const;
 const MEDIA_MODEL_KEYS = ["image", "video", "music"] as const;
+
+/** Preserve a string model when a path write enters its supported object form. */
+export function normalizeConfigModelSelectionParent(
+  value: unknown,
+  path: readonly string[],
+  parentIndex: number,
+): ReturnType<typeof toAgentModelListLike> {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const member = path[parentIndex + 1];
+  if (member !== "primary" && member !== "fallbacks" && member !== "timeoutMs") {
+    return undefined;
+  }
+  const isDefaults = path[0] === "agents" && path[1] === "defaults";
+  const isAgentEntry =
+    path[0] === "agents" &&
+    ((path[1] === "entries" && Boolean(path[2])) ||
+      (path[1] === "list" && parseConfigPathArrayIndex(path[2] ?? "") !== undefined));
+  const scopeIndex = isDefaults ? 2 : isAgentEntry ? 3 : undefined;
+  const isAgentModel =
+    scopeIndex !== undefined &&
+    ((parentIndex === scopeIndex && path[scopeIndex] === "model") ||
+      (parentIndex === scopeIndex + 1 &&
+        path[scopeIndex] === "subagents" &&
+        path[parentIndex] === "model"));
+  const isToolModel =
+    isDefaults &&
+    ((parentIndex === 2 &&
+      MODEL_SELECTION_KEYS.some((key) => key !== "model" && key === path[2])) ||
+      (parentIndex === 3 &&
+        path[2] === "mediaModels" &&
+        MEDIA_MODEL_KEYS.some((key) => key === path[3])));
+  const reviewerStart = isAgentEntry ? 3 : 0;
+  const isReviewerModel =
+    parentIndex === reviewerStart + 3 &&
+    path[reviewerStart] === "tools" &&
+    path[reviewerStart + 1] === "exec" &&
+    path[reviewerStart + 2] === "reviewer" &&
+    path[parentIndex] === "model";
+  if (
+    (!isAgentModel && !isToolModel && !isReviewerModel) ||
+    (member === "timeoutMs" && !isToolModel)
+  ) {
+    return undefined;
+  }
+  return toAgentModelListLike(value);
+}
 
 function normalizeStringModelRef(value: unknown): unknown {
   return typeof value === "string" ? normalizeAgentModelRefForConfig(value) : value;

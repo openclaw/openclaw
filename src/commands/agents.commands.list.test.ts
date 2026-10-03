@@ -2,10 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -101,7 +101,7 @@ describe("agentsListCommand", () => {
         list: ["main", "research"].map((id) => ({ id, default: id === agentId })),
       },
     };
-    const migrated = migratePersistedImplicitMainRoster(legacy).config as OpenClawConfig;
+    const migrated = createCanonicalAgentConfigFixture(legacy).config;
     const persisted = structuredClone<OpenClawConfig>({
       ...migrated,
       agents: { ...migrated.agents, ownership: "explicit" },

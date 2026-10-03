@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { generateSecureToken } from "../../infra/secure-random.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { NodeWorkspaceTransferHttpRoute } from "./node-workspace-transfer-http-contract.js";
 import {
@@ -14,7 +15,6 @@ import {
   prepareNodeWorkspaceTransferSnapshot,
   type NodeWorkspaceTransferSnapshot,
 } from "./node-workspace-transfer-snapshot.js";
-import { mintNodeWorkspaceTransferToken } from "./node-workspace-transfer-token.js";
 import {
   readNodeWorkspaceUpload,
   type NodeWorkspaceTransferUpload,
@@ -36,22 +36,22 @@ type TransferBinding = {
   generation: number;
 };
 
-type DownloadCapability = TransferBinding & {
+type DownloadCapability = {
   direction: "download";
   token: string;
   manifestRef: string;
   expiresAtMs: number;
-  isAuthorized?: () => boolean;
+  isAuthorized: () => boolean;
   signal?: AbortSignal;
 };
 
-type UploadOperation = TransferBinding & {
+type UploadOperation = {
   direction: "upload";
   token: string;
   baseManifestRef: string;
   expiresAtMs: number;
   state: "ready" | "receiving" | "completed";
-  isAuthorized?: () => boolean;
+  isAuthorized: () => boolean;
   uploaded?: NodeWorkspaceTransferUpload;
   abortController: AbortController;
   receiving?: { result: Promise<{ manifestRef: string }>; signal: AbortSignal };
@@ -84,18 +84,6 @@ type TransferPreparation = Pick<
 > & { signal?: AbortSignal; authorize?: () => void };
 type RepositoryPreparation = TransferPreparation & { baseCommit: string; baseManifestRef: string };
 type SyncPreparation = TransferPreparation & { localPath: string };
-
-function capabilityMatchesContext(
-  capability: DownloadCapability | UploadOperation,
-  context: TransferContext,
-): boolean {
-  return (
-    capability.environmentId === context.environmentId &&
-    capability.ownerEpoch === context.ownerEpoch &&
-    capability.sessionId === context.sessionId &&
-    capability.generation === context.generation
-  );
-}
 
 function watchTransferOwnerSignal(context: TransferContext, signal?: AbortSignal): void {
   if (!signal) {
@@ -196,24 +184,20 @@ export function createNodeWorkspaceTransferService(options: {
   const mintDownload = (
     context: TransferContext,
     manifestRef: string,
-    isAuthorized?: () => boolean,
+    isAuthorized: () => boolean,
     signal?: AbortSignal,
   ): string => {
     signal?.throwIfAborted();
-    if (!isCurrentContext(context) || isAuthorized?.() === false) {
+    if (!isCurrentContext(context) || !isAuthorized()) {
       throw new Error("Node workspace transfer owner is no longer current");
     }
-    const token = mintNodeWorkspaceTransferToken();
+    const token = generateSecureToken({ bytes: 32, redact: true });
     context.downloads.set(token, {
       direction: "download",
       token,
-      environmentId: context.environmentId,
-      ownerEpoch: context.ownerEpoch,
-      sessionId: context.sessionId,
-      generation: context.generation,
       manifestRef,
       expiresAtMs: now() + TRANSFER_TIMEOUT_MS,
-      ...(isAuthorized ? { isAuthorized } : {}),
+      isAuthorized,
       ...(signal ? { signal } : {}),
     });
     return token;
@@ -233,19 +217,16 @@ export function createNodeWorkspaceTransferService(options: {
 
   const authorizationCurrent = (authorization: TransferAuthorization): boolean => {
     const { capability, context } = authorization;
-    if (
-      !isCurrentContext(context) ||
-      !capabilityMatchesContext(capability, context) ||
-      capability.expiresAtMs <= now()
-    ) {
+    if (!isCurrentContext(context) || capability.expiresAtMs <= now()) {
       return false;
     }
+    // Exact object membership binds the capability to this live context's owner.
     return capability.direction === "download"
       ? context.downloads.get(capability.token) === capability &&
           !capability.signal?.aborted &&
-          capability.isAuthorized?.() !== false
+          capability.isAuthorized()
       : context.upload === capability &&
-          capability.isAuthorized?.() !== false &&
+          capability.isAuthorized() &&
           !capability.abortController.signal.aborted &&
           (capability.state === "receiving" || capability.state === "completed");
   };
@@ -299,7 +280,6 @@ export function createNodeWorkspaceTransferService(options: {
       assertCurrent();
       const context: TransferContext = {
         ...owner,
-        localPath: params.kind === "sync" ? await fsp.realpath(params.localPath) : undefined,
         temporaryRoot: await fsp.mkdtemp(path.join(temporaryBaseRoot, "context-")),
         currentManifestRef: params.kind === "repository" ? params.baseManifestRef : "",
         baseCommit: params.kind === "repository" ? params.baseCommit : null,
@@ -322,6 +302,7 @@ export function createNodeWorkspaceTransferService(options: {
           });
           assertCurrent();
           context.snapshots.set(snapshot.manifestRef, snapshot);
+          context.localPath = snapshot.root;
           context.baseCommit = snapshot.manifest.baseCommit;
           context.currentManifestRef = snapshot.manifestRef;
         }
@@ -389,7 +370,7 @@ export function createNodeWorkspaceTransferService(options: {
       if (context.upload) {
         throw new Error("Node workspace transfer upload is already active");
       }
-      const token = mintNodeWorkspaceTransferToken();
+      const token = generateSecureToken({ bytes: 32, redact: true });
       const { isOperationAuthorized } = createNodeWorkspaceSyncAuthorization(
         context,
         authorize,
@@ -398,10 +379,6 @@ export function createNodeWorkspaceTransferService(options: {
       context.upload = {
         direction: "upload",
         token,
-        environmentId: context.environmentId,
-        ownerEpoch: context.ownerEpoch,
-        sessionId: context.sessionId,
-        generation: context.generation,
         baseManifestRef,
         expiresAtMs: now() + TRANSFER_TIMEOUT_MS,
         state: "ready",
@@ -418,7 +395,7 @@ export function createNodeWorkspaceTransferService(options: {
         !context ||
         !operation ||
         operation.state !== "completed" ||
-        operation.isAuthorized?.() === false ||
+        !operation.isAuthorized() ||
         operation.abortController.signal.aborted ||
         operation.baseManifestRef !== baseManifestRef ||
         !operation.uploaded ||
@@ -504,9 +481,8 @@ export function createNodeWorkspaceTransferService(options: {
         !isCurrentContext(context) ||
         upload.token !== params.token ||
         upload.state !== "ready" ||
-        upload.isAuthorized?.() === false ||
+        !upload.isAuthorized() ||
         upload.expiresAtMs <= now() ||
-        !capabilityMatchesContext(upload, context) ||
         params.route.kind !== "reconcile" ||
         params.route.environmentId !== context.environmentId ||
         params.route.baseManifestRef !== upload.baseManifestRef

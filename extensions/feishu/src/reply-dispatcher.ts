@@ -867,7 +867,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               },
       });
       if (degradedVoiceFallbackText && !sentFallbackText) {
-        sentFallbackText = true;
         results.push(await sendPostReply(degradedVoiceFallbackText, "final"));
       }
     } catch (error: unknown) {
@@ -942,15 +941,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return result;
   };
 
-  const markClosedStreamingContentClaimed = (generation: number | undefined): void => {
-    if (generation !== undefined) {
-      const settlement = closedStreamingSettlements.get(generation);
-      if (settlement) {
-        settlement.contentClaimed = true;
-      }
-    }
-  };
-
   const ensureVisibleStreamingDelivery = async (
     result: FeishuReplyDeliveryResult | undefined,
     content: string | undefined,
@@ -984,7 +974,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             closeOutcome.generation !== undefined &&
             completion.streamingGeneration === closeOutcome.generation;
           if (completions.some((completion) => ownsCurrentClose(completion))) {
-            markClosedStreamingContentClaimed(closeOutcome.generation);
+            claimClosedStreamingResult(closeOutcome.generation, undefined);
           }
           for (const completion of completions) {
             const claimedSettlement = ownsCurrentClose(completion)
@@ -1607,13 +1597,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onCompactionEnd: previewStreamingEnabled ? () => updateStreamingStatusLine("") : undefined,
     },
     ensureNoVisibleReplyFallback,
-    getVisibleReplyState: () => ({
-      visibleReplySent,
-      skippedFinalReason:
-        replyOutcome?.kind === "skipped" || replyOutcome?.kind === "suppressed"
-          ? replyOutcome.reason
-          : null,
-    }),
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

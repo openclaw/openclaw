@@ -24,7 +24,11 @@ import {
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import type { ExistingOpenClawStateWriter } from "./openclaw-state-db-existing-write.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
-import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "./openclaw-state-db.js";
 import {
   acquireOpenClawStateLeaseInWorker,
   executeOpenClawStateLeaseCommand,
@@ -100,6 +104,7 @@ function createSharedStateWorkerBackend(
   let updateRunWriter: ExistingOpenClawStateWriter | undefined;
   let borrow = nativeDatabase ? retainOpenClawStateDatabase(nativeDatabase) : undefined;
   let closed = false;
+  let secretSchemaAdmitted = false;
   const open = (): OpenClawStateDatabase => {
     if (!nativeDatabase) {
       const opened = openOpenClawStateDatabase({
@@ -290,6 +295,16 @@ function createSharedStateWorkerBackend(
       if (!currentRuntime) {
         throw new Error("Shared-state worker command runtime is not prepared");
       }
+      if (command.type === "secrets.write" && !secretSchemaAdmitted) {
+        runOpenClawStateWriteTransaction(
+          ({ db }) => ensureSecretStoreSchema(db),
+          { database: open() },
+          {
+            operationLabel: "secrets.store.admit",
+          },
+        );
+        secretSchemaAdmitted = true;
+      }
       return currentRuntime.executeSharedStateCommand(
         command,
         context,
@@ -313,12 +328,12 @@ function createSharedStateWorkerBackend(
         }
       }
     },
-    close() {
+    async close() {
       closed = true;
       try {
         updateRunWriter?.close();
       } finally {
-        borrow?.release();
+        await borrow?.releaseAsync();
       }
     },
   };

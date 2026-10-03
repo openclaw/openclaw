@@ -44,8 +44,8 @@ export async function persistUpdatedJob(params: {
   const defaultAgentId = state.deps.resolveDefaultAgentId
     ? state.deps.resolveDefaultAgentId()
     : state.deps.defaultAgentId;
-  resolveCronJobEffectiveAgentId(previousJob, defaultAgentId, state.deps.legacyDefaultAgentId);
-  resolveCronJobEffectiveAgentId(nextJob, defaultAgentId, state.deps.legacyDefaultAgentId);
+  resolveCronJobEffectiveAgentId(previousJob, defaultAgentId);
+  resolveCronJobEffectiveAgentId(nextJob, defaultAgentId);
   const reservation = state.queuedRunReservationsByJobId.get(nextJob.id);
   const preservesOnExitRearm =
     reservation?.onExit === true &&
@@ -98,16 +98,8 @@ export async function persistUpdatedJob(params: {
       const currentDefaultAgentId = state.deps.resolveDefaultAgentId
         ? state.deps.resolveDefaultAgentId()
         : state.deps.defaultAgentId;
-      resolveCronJobEffectiveAgentId(
-        previousJob,
-        currentDefaultAgentId,
-        state.deps.legacyDefaultAgentId,
-      );
-      resolveCronJobEffectiveAgentId(
-        nextJob,
-        currentDefaultAgentId,
-        state.deps.legacyDefaultAgentId,
-      );
+      resolveCronJobEffectiveAgentId(previousJob, currentDefaultAgentId);
+      resolveCronJobEffectiveAgentId(nextJob, currentDefaultAgentId);
     },
     agentId: params.agentId,
     preconditionJob: params.preconditionJob,

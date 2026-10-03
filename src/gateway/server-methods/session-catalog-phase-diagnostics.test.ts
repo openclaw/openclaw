@@ -4,7 +4,6 @@ import {
   onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
-  setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
@@ -62,7 +61,7 @@ describe("registered catalog list phase diagnostics", () => {
     trustedFlags = [];
     config = { agents: { list: [{ id: "main" }] } };
     projection = createSessionRowProjectionFixture({ cfg: config, store: {} });
-    Object.defineProperty(projection, "needsMaterialization", { get: () => dirty });
+    vi.spyOn(projection, "needsSelectionPreparation").mockImplementation(() => dirty);
     vi.spyOn(projectionAccess, "requireSessionRowProjection").mockReturnValue(projection);
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     vi.spyOn(Date, "now").mockImplementation(() => 1_700_000_000_000 + clock);
@@ -87,7 +86,7 @@ describe("registered catalog list phase diagnostics", () => {
     const final = createDeferredCore();
     const finalStarted = createDeferredCore();
     dirty = true;
-    vi.spyOn(projection, "ensureMaterialized")
+    vi.spyOn(projection, "prepareSelection")
       .mockImplementationOnce(async () => {
         await initial.promise;
         dirty = false;
@@ -210,7 +209,7 @@ describe("registered catalog list phase diagnostics", () => {
     observe();
     const failure = new Error(privateText);
     dirty = true;
-    vi.spyOn(projection, "ensureMaterialized").mockImplementation(async () => {
+    vi.spyOn(projection, "prepareSelection").mockImplementation(async () => {
       clock = 25;
       throw failure;
     });
@@ -224,17 +223,12 @@ describe("registered catalog list phase diagnostics", () => {
     expect(JSON.stringify(phases)).not.toContain(privateText);
   });
 
-  it.each(["disabled", "no trusted consumer"])("avoids CPU sampling with %s", async (mode) => {
-    if (mode === "disabled") {
-      observe();
-      setDiagnosticsEnabledForProcess(false);
-    } else {
-      onInternalDiagnosticEvent((event) => {
-        if (event.type === "diagnostic.phase.completed") {
-          phases.push(event);
-        }
-      });
-    }
+  it("avoids CPU sampling without a trusted consumer", async () => {
+    onInternalDiagnosticEvent((event) => {
+      if (event.type === "diagnostic.phase.completed") {
+        phases.push(event);
+      }
+    });
     hoisted.activeRegistry.sessionCatalogs = [{ provider: provider(privateText) }];
     const call = startCall("sessions.catalog.list", {}, config);
     await call.completion;

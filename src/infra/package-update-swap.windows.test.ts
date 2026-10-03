@@ -55,51 +55,61 @@ it.each(["EPERM", "EACCES", "EBUSY"])(
   },
 );
 
+async function expectPersistentRenameFailure(
+  platform: NodeJS.Platform,
+  code: string,
+  retries: boolean,
+) {
+  backupPlatform = platform;
+  const { params, packageRoot, launcher } = await createPackageSwapFixture(
+    dirs.make("openclaw-swap-locked-"),
+  );
+  const rename = fs.rename.bind(fs);
+  let attempts = 0;
+  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+    if (String(from) === packageRoot) {
+      attempts++;
+      throw Object.assign(new Error(`${code}: package is in use`), { code });
+    }
+    return rename(from, to);
+  });
+  const result = await swapStagedPackageInstall(params);
+  expect(result).toMatchObject({
+    status: "failed",
+    activePackageRoot: packageRoot,
+    packageRollbackVerified: true,
+    step: { exitCode: 1, failureFacts: [expect.objectContaining({ code })] },
+  });
+  if (retries) {
+    expect(attempts).toBe(16);
+    expect(result.step.warnings).toHaveLength(attempts - 1);
+    expect(result.step.stderrTail).toContain(packageRoot);
+    expect(result.step.stderrTail).toContain("after 16 attempts");
+    expect(wait.mock.calls.reduce((total, [ms]) => total + ms, 0)).toBe(57_750);
+  } else {
+    expect(attempts).toBe(1);
+    expect(wait).not.toHaveBeenCalled();
+    expect(result.step.warnings).toBeUndefined();
+  }
+  await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+    '"version":"1.0.0"',
+  );
+  await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
+}
+
 it.each([
   { platform: "win32", code: "EPERM", retries: true },
   { platform: "win32", code: "EBUSY", retries: true },
   { platform: "win32", code: "EACCES", retries: true },
   { platform: "win32", code: "EXDEV", retries: false },
-  { platform: "linux", code: "EPERM", retries: false },
 ] as const)(
   "preserves the package after persistent $code on $platform (retries=$retries)",
-  async ({ platform, code, retries }) => {
-    backupPlatform = platform;
-    const { params, packageRoot, launcher } = await createPackageSwapFixture(
-      dirs.make("openclaw-swap-locked-"),
-    );
-    const rename = fs.rename.bind(fs);
-    let attempts = 0;
-    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      if (String(from) === packageRoot) {
-        attempts++;
-        throw Object.assign(new Error(`${code}: package is in use`), { code });
-      }
-      return rename(from, to);
-    });
-    const result = await swapStagedPackageInstall(params);
-    expect(result).toMatchObject({
-      status: "failed",
-      activePackageRoot: packageRoot,
-      packageRollbackVerified: true,
-      step: { exitCode: 1, failureFacts: [expect.objectContaining({ code })] },
-    });
-    if (retries) {
-      expect(attempts).toBe(16);
-      expect(result.step.warnings).toHaveLength(attempts - 1);
-      expect(result.step.stderrTail).toContain(packageRoot);
-      expect(result.step.stderrTail).toContain("after 16 attempts");
-      expect(wait.mock.calls.reduce((total, [ms]) => total + ms, 0)).toBe(57_750);
-    } else {
-      expect(attempts).toBe(1);
-      expect(wait).not.toHaveBeenCalled();
-      expect(result.step.warnings).toBeUndefined();
-    }
-    await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-      '"version":"1.0.0"',
-    );
-    await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
-  },
+  ({ platform, code, retries }) => expectPersistentRenameFailure(platform, code, retries),
+);
+
+it.skipIf(process.platform === "win32")(
+  "preserves the package without retries after a persistent POSIX EPERM",
+  () => expectPersistentRenameFailure(process.platform, "EPERM", false),
 );
 
 it.each(["authority", "source", "destination"])(

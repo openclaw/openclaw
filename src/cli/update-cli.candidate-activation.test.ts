@@ -644,8 +644,7 @@ describe("update-cli", () => {
     const { nodeModules, entryPath } = await setupInstalledPackageAtNodeModules(
       path.join(tempDir, "lib", "node_modules"),
     );
-    const nodeRunner = path.join(tempDir, "bin", "node");
-    primeServiceCommand([nodeRunner, entryPath, "gateway", "run"], {
+    primeServiceCommand([nodeExecutable, entryPath, "gateway", "run"], {
       OPENCLAW_STATE_DIR: profileStateDir(),
     });
     serviceLoaded.mockResolvedValue(true);

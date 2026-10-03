@@ -12,6 +12,10 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  type AgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { ChannelManager } from "./server-channels.js";
 import {
@@ -727,6 +731,13 @@ describe("gateway probe endpoints", () => {
   it("reports startup lifecycle independently of hard channel failures", async () => {
     let startupPending = true;
     let gatewayDraining = false;
+    const pending = createAgentDatabaseInspectionRefusal({
+      agentId: "optional-worker",
+      paths: ["/isolated/optional-worker.sqlite"],
+      reason: "Inspection continues in the background.",
+      pending: true,
+    });
+    let refusals: AgentDatabaseAdmissionRefusal[] = [pending];
     const startedAt = Date.now() - 5_000;
     const account = {
       accountId: "default",
@@ -734,7 +745,7 @@ describe("gateway probe endpoints", () => {
       connected: true,
       enabled: true,
       configured: true,
-      lifecycle: "blocked" as const,
+      lifecycle: "ready" as "ready" | "blocked",
       lastStartAt: startedAt,
     };
     const channelManager = {
@@ -751,7 +762,7 @@ describe("gateway probe endpoints", () => {
       getStartupPendingReason: () => "plugin-convergence",
       getGatewayDraining: () => gatewayDraining,
     };
-    const getStartup = createStartupChecker(startupDeps);
+    const getStartup = createStartupChecker(startupDeps, () => refusals);
     const getReadiness = createReadinessChecker({
       channelManager,
       ...startupDeps,
@@ -792,6 +803,19 @@ describe("gateway probe endpoints", () => {
         gatewayDraining = false;
 
         startupPending = false;
+        const inspecting = await sendRequest(server, { path: "/startupz" });
+        expect(inspecting.res.statusCode).toBe(503);
+        expect(JSON.parse(inspecting.getBody())).toMatchObject({
+          ok: false,
+          status: "starting",
+          pendingReason: "agent-database-inspection",
+        });
+        const readyWhileInspecting = await sendRequest(server, { path: "/readyz" });
+        expect(readyWhileInspecting.res.statusCode).toBe(200);
+        const liveWhileInspecting = await sendRequest(server, { path: "/healthz" });
+        expect(liveWhileInspecting.res.statusCode).toBe(200);
+
+        refusals = [createAgentDatabaseInspectionRefusal({ ...pending, pending: false })];
         const started = await sendRequest(server, { path: "/startupz" });
         expect(started.res.statusCode).toBe(200);
         expect(JSON.parse(started.getBody())).toMatchObject({
@@ -801,6 +825,8 @@ describe("gateway probe endpoints", () => {
           uptimeMs: expect.any(Number),
         });
 
+        refusals = [];
+        account.lifecycle = "blocked";
         const readiness = await sendRequest(server, { path: "/readyz" });
         expect(readiness.res.statusCode).toBe(503);
         expect(JSON.parse(readiness.getBody())).toMatchObject({

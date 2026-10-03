@@ -93,12 +93,11 @@ describe("Teams mention policy in bot-created channel threads", () => {
   });
 
   it.each([
-    ["prefilled top-level post", false, "bot-id", channelConversationId, true, false],
-    ["proactive reply is not a root", true, "bot-id", channelConversationId, false, false],
-    ["another bot's root", false, "other-bot", channelConversationId, false, false],
-    ["another channel's root", false, "bot-id", "19:other@thread.tacv2", false, false],
-    ["expired ownership", false, "bot-id", channelConversationId, false, true],
-  ] as const)("%s", async (_name, threaded, botId, conversationId, allowed, expired) => {
+    ["prefilled top-level post", false, "bot-id", channelConversationId, true],
+    ["proactive reply is not a root", true, "bot-id", channelConversationId, false],
+    ["another bot's root", false, "other-bot", channelConversationId, false],
+    ["another channel's root", false, "bot-id", "19:other@thread.tacv2", false],
+  ] as const)("%s", async (_name, threaded, botId, conversationId, allowed) => {
     const rootId = `bot-thread-root-${++sequence}`;
     const config: MSTeamsConfig = {
       groupPolicy: "open",
@@ -115,20 +114,12 @@ describe("Teams mention policy in bot-created channel threads", () => {
     };
     MSTeamsConfigSchema.parse(config);
     const { deps } = createMessageHandlerDeps({ channels: { msteams: config } });
-    const clock = expired
-      ? vi.spyOn(Date, "now").mockReturnValue(Date.now() - 25 * 60 * 60 * 1000)
-      : undefined;
-    let destination: string | undefined;
-    try {
-      destination = await sendChannelMessage({
-        messageId: rootId,
-        botId,
-        conversationId: `${conversationId};messageid=stale-source-thread`,
-        threadActivityId: threaded ? "human-thread-root" : undefined,
-      });
-    } finally {
-      clock?.mockRestore();
-    }
+    const destination = await sendChannelMessage({
+      messageId: rootId,
+      botId,
+      conversationId: `${conversationId};messageid=stale-source-thread`,
+      threadActivityId: threaded ? "human-thread-root" : undefined,
+    });
     expect(destination).toBe(
       threaded ? `${conversationId};messageid=human-thread-root` : conversationId,
     );
@@ -176,43 +167,40 @@ describe("Teams mention policy in bot-created channel threads", () => {
   });
 
   it.each([
-    { name: "sender revoked", change: { groupAllowFrom: ["other-user-aad"] }, expected: 0 },
-    { name: "group disabled", change: { groupPolicy: "disabled" as const }, expected: 0 },
-    { name: "mention required", change: { requireMentionInBotThreads: true }, expected: 0 },
-  ])(
-    "uses current admission policy after ownership lookup: $name",
-    async ({ change, expected }) => {
-      const rootId = `bot-thread-reread-${++sequence}`;
-      const cfg: OpenClawConfig = {
-        channels: {
-          msteams: {
-            groupPolicy: "allowlist",
-            groupAllowFrom: ["user-aad"],
-            requireMention: true,
-            requireMentionInBotThreads: false,
-          },
+    { name: "sender revoked", change: { groupAllowFrom: ["other-user-aad"] } },
+    { name: "group disabled", change: { groupPolicy: "disabled" as const } },
+    { name: "mention required", change: { requireMentionInBotThreads: true } },
+  ])("uses current admission policy after ownership lookup: $name", async ({ change }) => {
+    const rootId = `bot-thread-reread-${++sequence}`;
+    const cfg: OpenClawConfig = {
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["user-aad"],
+          requireMention: true,
+          requireMentionInBotThreads: false,
         },
-      };
-      setRuntimeConfigSnapshot(cfg);
-      const { deps } = createMessageHandlerDeps(cfg);
-      const handler = createMSTeamsMessageHandler(deps);
-      await sendChannelMessage({ messageId: rootId });
-      const lookup = sentMessages.wasMSTeamsMessageSentWithPersistence;
-      vi.spyOn(sentMessages, "wasMSTeamsMessageSentWithPersistence").mockImplementationOnce(
-        async (params) => {
-          const owned = await lookup(params);
-          setRuntimeConfigSnapshot({
-            channels: { msteams: { ...cfg.channels?.msteams, ...change } },
-          });
-          return owned;
-        },
-      );
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const { deps } = createMessageHandlerDeps(cfg);
+    const handler = createMSTeamsMessageHandler(deps);
+    await sendChannelMessage({ messageId: rootId });
+    const lookup = sentMessages.wasMSTeamsMessageSentWithPersistence;
+    vi.spyOn(sentMessages, "wasMSTeamsMessageSentWithPersistence").mockImplementationOnce(
+      async (params) => {
+        const owned = await lookup(params);
+        setRuntimeConfigSnapshot({
+          channels: { msteams: { ...cfg.channels?.msteams, ...change } },
+        });
+        return owned;
+      },
+    );
 
-      await handler(incoming({ conversation: conversation(rootId) }));
+    await handler(incoming({ conversation: conversation(rootId) }));
 
-      expect(dispatch).toHaveBeenCalledTimes(expected);
-    },
-  );
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 
   it("does not combine another thread's text into an unmentioned bot-thread turn", async () => {
     const queued = createDeferred<void>();

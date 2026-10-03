@@ -1,87 +1,97 @@
-import { vi, type Mock } from "vitest";
+import { vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { withSubagentRegistryWriteAuthority } from "./subagent-registry-persistence.js";
+import type {
+  SqliteWorkerAdmissionFactory,
+  SqliteWorkerOperationAdmission,
+} from "../../../infra/sqlite-worker-operation-admission.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { closeSwarmScheduler } from "../swarm/swarm-scheduler.js";
+import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
 import type { RegisterSubagentRunParams } from "./subagent-registry-run-launch-record.js";
-import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
 
-export function createQueuedRegistrationFixture(mocks: {
-  register: Mock<SubagentLaunchManager["registerSubagentRun"]>;
-  persisted: Set<() => void>;
-}) {
-  const runs = new Map<string, SubagentRunRecord>();
-  let syncRevision = 0;
-  let acknowledgeAll = false;
-  let acknowledgeControlWrite = false;
-  const writes: Array<{
+function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecord>()) {
+  const pending: Promise<unknown>[] = [];
+  const track = <T>(work: T | Promise<T>): Promise<T> => {
+    const promise = Promise.resolve(work);
+    pending.push(promise);
+    void promise.catch(() => {});
+    return promise;
+  };
+  const holds: Array<{
+    phase: "before" | "ack";
+    entered: ReturnType<typeof createDeferred<void>>;
     gate: ReturnType<typeof createDeferred<void>>;
-    snapshot: Map<string, SubagentRunRecord>;
-    assertCurrent: () => void;
-    afterPublicationFailure?: { error: unknown };
+    loseNativeReceipt?: boolean;
   }> = [];
-  let nextWrite = createDeferred<(typeof writes)[number]>();
-  const persist = vi.fn<SubagentManagerOptions["persistAsyncOrThrow"]>(
-    (context, callbacks, ...runIds) => {
-      if (acknowledgeControlWrite) {
-        // Claims use this same transport, but these cases hold registration writes only.
-        return withSubagentRegistryWriteAuthority(
-          runIds,
-          { context, ...callbacks },
-          async (authority) => {
-            await Promise.resolve();
-            authority.assertCurrent();
-            syncRevision += 1;
-            callbacks.onCommitted?.();
-            for (const listener of mocks.persisted) {
-              listener();
-            }
-          },
-        );
-      }
-      const gate = createDeferred();
-      const admittedRevision = syncRevision;
-      const write: (typeof writes)[number] = {
-        gate,
-        snapshot: structuredClone(runs),
-        assertCurrent: callbacks.assertCurrent,
-      };
-      writes.push(write);
-      nextWrite.resolve(write);
-      nextWrite = createDeferred<(typeof writes)[number]>();
-      if (acknowledgeAll) {
-        gate.resolve();
-      }
-      return gate.promise.then(() => {
-        if (syncRevision === admittedRevision) {
-          callbacks.onCommitted?.();
-        }
-        for (const listener of mocks.persisted) {
-          listener();
-        }
-        if (write.afterPublicationFailure) {
-          throw write.afterPublicationFailure.error;
-        }
-      });
-    },
-  );
+  const allHolds: typeof holds = [];
+  const execute = stateWorker.runOpenClawStateWorkerOperation;
+  let writes = 0;
+  const worker = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockImplementation((context, operation, options) => {
+      let admission: SqliteWorkerOperationAdmission | undefined;
+      const createAdmission = options?.createAdmission;
+      return execute(
+        context,
+        (scope) =>
+          operation({
+            execute: async (command, executeOptions) => {
+              if (command.type !== "subagents.persistChanges") {
+                return scope.execute(command, executeOptions);
+              }
+              writes += 1;
+              const hold = holds.shift();
+              if (hold?.phase === "before") {
+                hold.entered.resolve();
+                await hold.gate.promise;
+              }
+              const receipt = await scope.execute(command, executeOptions);
+              if (hold?.phase === "ack") {
+                hold.entered.resolve();
+                try {
+                  await hold.gate.promise;
+                } catch (error) {
+                  if (hold.loseNativeReceipt && admission) {
+                    // Losing only the transport reply is recoverable from this native receipt.
+                    Object.defineProperty(admission, "committed", { value: undefined });
+                  }
+                  throw error;
+                }
+              }
+              return receipt;
+            },
+          }),
+        {
+          ...options,
+          ...(createAdmission
+            ? {
+                createAdmission: (nativeOperation: Parameters<SqliteWorkerAdmissionFactory>[0]) => {
+                  const prepared = createAdmission(nativeOperation);
+                  admission = prepared.admission;
+                  return prepared;
+                },
+              }
+            : {}),
+        },
+      );
+    });
   const options = {
     runs,
     getRunsForChildSession: (key) =>
-      [...runs.values()].filter((entry) => entry.childSessionKey === key),
-    resumedRuns: new Set(),
-    persist: vi.fn(),
-    persistOrThrow: vi.fn<SubagentManagerOptions["persistOrThrow"]>(() => {
-      syncRevision += 1;
-      for (const listener of mocks.persisted) {
-        listener();
-      }
-    }),
-    persistAsyncOrThrow: persist,
+      [...runs.values()].filter((row) => row.childSessionKey === key),
+    resumedRuns: new Set<object>(),
     acquireTerminalCompletionLock: async () => () => {},
     callGateway: async () => {
-      throw new Error("Unexpected Gateway call");
+      throw new Error("Unexpected collector wait");
     },
     getRuntimeConfig: () => ({}),
     ensureListener: vi.fn(),
@@ -99,15 +109,6 @@ export function createQueuedRegistrationFixture(mocks: {
     completeSubagentRun: async () => {},
   } satisfies SubagentManagerOptions;
   const manager = createSubagentRunManager(options);
-  const commitControl = <T>(operation: () => Promise<T>): Promise<T> => {
-    acknowledgeControlWrite = true;
-    try {
-      return operation();
-    } finally {
-      acknowledgeControlWrite = false;
-    }
-  };
-  mocks.register.mockImplementation(manager.registerSubagentRun);
   const registration: RegisterSubagentRunParams = {
     runId: "queued-original",
     childSessionKey: "agent:main:subagent:synthetic",
@@ -115,6 +116,7 @@ export function createQueuedRegistrationFixture(mocks: {
     requesterDisplayKey: "main",
     task: "synthetic queued work",
     cleanup: "keep",
+    retainAttachmentsOnKeep: true,
     collect: true,
     queued: true,
     queuedLaunch: {
@@ -127,36 +129,96 @@ export function createQueuedRegistrationFixture(mocks: {
   let scope: SubagentRegistrationScope | undefined;
   return {
     runs,
-    writes,
-    get nextWrite() {
-      return nextWrite.promise;
-    },
     options,
     manager,
-    claimSubagentRunKill: (input: Parameters<typeof manager.claimSubagentRunKill>[0]) =>
-      commitControl(() => manager.claimSubagentRunKill(input)),
-    releaseSubagentRunKillClaim: (
-      input: Parameters<typeof manager.releaseSubagentRunKillClaim>[0],
-    ) => commitControl(() => manager.releaseSubagentRunKillClaim(input)),
-    get persistenceObservers() {
-      return mocks.persisted;
-    },
     registration,
-    acknowledgeAllWrites: () => {
-      acknowledgeAll = true;
-      for (const write of writes) {
-        write.gate.resolve();
-      }
+    track,
+    get writes() {
+      return writes;
     },
     get scope() {
-      return scope!;
+      if (!scope) {
+        throw new Error("Queued intent has not published its scope");
+      }
+      return scope;
+    },
+    current: () => {
+      const row = runs.get(registration.runId);
+      if (!row) {
+        throw new Error("Queued row has not published");
+      }
+      return row;
+    },
+    stored: () => loadSubagentRegistryFromSqlite().get(registration.runId),
+    holdNextWrite: (phase: "before" | "ack" = "ack") => {
+      const hold: (typeof holds)[number] = {
+        phase,
+        entered: createDeferred(),
+        gate: createDeferred(),
+      };
+      holds.push(hold);
+      allHolds.push(hold);
+      return {
+        entered: hold.entered.promise,
+        release: hold.gate.resolve,
+        reject: hold.gate.reject,
+        loseReceipt: (error: unknown) => {
+          hold.loseNativeReceipt = true;
+          hold.gate.reject(error);
+        },
+      };
     },
     register: (assertCurrent?: () => void) =>
-      manager.registerSubagentRun(registration, {
-        assertCurrent,
-        retainOwnership: (value) => {
-          scope = value;
-        },
-      }),
+      track(
+        manager.registerSubagentRun(registration, {
+          assertCurrent,
+          retainOwnership: (value) => {
+            scope = value;
+          },
+        }),
+      ),
+    change: (plan: (draft: SubagentRunRecord) => void) =>
+      track(
+        mutateSubagentRuns(
+          [registration.runId],
+          (rows) => {
+            const current = rows.get(registration.runId);
+            if (!current) {
+              throw new Error("Fixture row is absent");
+            }
+            const draft = structuredClone(current);
+            plan(draft);
+            return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
+          },
+          { runs },
+        ),
+      ),
+    async close() {
+      for (const hold of allHolds) {
+        hold.gate.resolve();
+      }
+      await Promise.allSettled(pending);
+      await closeSwarmScheduler();
+      worker.mockRestore();
+      await restoreSubagentRunsFromDisk({ runs });
+      runs.clear();
+      schedulerTesting.reset();
+    },
   };
+}
+
+export type QueuedRegistrationFixture = ReturnType<typeof createQueuedRegistrationFixture>;
+
+export async function withQueuedRegistrationFixture(
+  run: (fixture: QueuedRegistrationFixture) => Promise<void>,
+  runs?: Map<string, SubagentRunRecord>,
+): Promise<void> {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const fixture = createQueuedRegistrationFixture(runs);
+    try {
+      await run(fixture);
+    } finally {
+      await fixture.close();
+    }
+  });
 }

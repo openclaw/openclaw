@@ -15,6 +15,7 @@ import { CodexAppServerRpcError } from "./client.js";
 import { threadStartResult as nativeThreadStartResult } from "./codex-app-server.test-fixtures.js";
 import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
+import { createCodexManagedThreadStore } from "./managed-thread-store.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import { buildCodexProjectDocThreadConfig } from "./project-doc-thread-config.js";
@@ -1387,14 +1388,12 @@ describe("Codex plugin binding recovery", () => {
       path.join(tempDir, "workspace-managed-failure"),
     );
     const stateStore = createCodexTestBindingStateStore();
+    const registerIfAbsent = vi.fn().mockRejectedValue(new Error("managed ownership unavailable"));
     const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
-      managedThreads: {
-        has: vi.fn(async () => false),
-        mark: vi.fn(async () => {
-          throw new Error("managed ownership unavailable");
-        }),
-        snapshot: vi.fn(async () => new Map()),
-      },
+      managedThreads: createCodexManagedThreadStore({
+        entries: async () => [],
+        registerIfAbsent,
+      }),
     });
     const request = createLifecycleRequest(async (method: string) => {
       if (method === "thread/start") {
@@ -1416,6 +1415,7 @@ describe("Codex plugin binding recovery", () => {
         bindingStore,
       }),
     ).resolves.toMatchObject({ threadId: "thread-managed-without-index" });
+    expect(registerIfAbsent).toHaveBeenCalledOnce();
   });
 
   it("applies a settled plugin denial before resume without replacing the native binding", async () => {

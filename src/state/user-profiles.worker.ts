@@ -10,7 +10,7 @@ import {
 } from "./user-profile-github-identity.js";
 import { listUserProfilesSync, readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import {
-  executeUserProfileWrite,
+  createUserProfileWriteOperation,
   linkEmail,
   mergeProfiles,
   setAvatar,
@@ -34,106 +34,67 @@ import type { ProfileDisplayRow, UserProfileAvatarMime } from "./user-profiles.t
 import type { WorkerOperationHandlers, WorkerOperations } from "./worker-operation-registry.js";
 
 const userProfileWriteOperations = {
-  "userProfiles.setRole": (
-    input: { profileId: string; role: string | null },
-    { open, stateOptions },
-  ) =>
-    executeUserProfileWrite(
-      "userProfiles.setRole",
-      { ...stateOptions(), database: open() },
-      (owned) => setUserProfileRole(input.profileId, input.role, owned),
-    ),
-  "userProfiles.linkEmail": (
-    input: { email: string; targetProfileId: string },
-    { open, stateOptions },
-  ) =>
-    executeUserProfileWrite(
-      "userProfiles.linkEmail",
-      { ...stateOptions(), database: open() },
-      (owned, display) => ({
-        profile: linkEmail(input.email, input.targetProfileId, owned),
-        display: display(),
+  "userProfiles.setRole": createUserProfileWriteOperation(
+    "userProfiles.setRole",
+    (input: { profileId: string; role: string | null }, owned) =>
+      setUserProfileRole(input.profileId, input.role, owned),
+  ),
+  "userProfiles.linkEmail": createUserProfileWriteOperation(
+    "userProfiles.linkEmail",
+    (input: { email: string; targetProfileId: string }, owned, display) => ({
+      profile: linkEmail(input.email, input.targetProfileId, owned),
+      display: display(),
+    }),
+    (input) => input.targetProfileId,
+  ),
+  "userProfiles.merge": createUserProfileWriteOperation(
+    "userProfiles.merge",
+    (input: { sourceProfileId: string; targetProfileId: string }, owned, display) => ({
+      ...mergeProfiles(input.sourceProfileId, input.targetProfileId, owned),
+      display: display(),
+    }),
+    (input) => input.targetProfileId,
+  ),
+  "userProfiles.ensureEmail": createUserProfileWriteOperation(
+    "userProfiles.ensureEmail",
+    (input: { email: string; expectedGitHubAccountId?: number }, owned) =>
+      ensureProfileForEmail(input.email, {
+        ...owned,
+        expectedGitHubAccountId: input.expectedGitHubAccountId,
       }),
-      input.targetProfileId,
-    ),
-  "userProfiles.merge": (
-    input: { sourceProfileId: string; targetProfileId: string },
-    { open, stateOptions },
-  ) =>
-    executeUserProfileWrite(
-      "userProfiles.merge",
-      { ...stateOptions(), database: open() },
-      (owned, display) => ({
-        ...mergeProfiles(input.sourceProfileId, input.targetProfileId, owned),
-        display: display(),
-      }),
-      input.targetProfileId,
-    ),
-  "userProfiles.ensureEmail": (
-    input: { email: string; expectedGitHubAccountId?: number },
-    { open, stateOptions },
-  ) =>
-    executeUserProfileWrite(
-      "userProfiles.ensureEmail",
-      { ...stateOptions(), database: open() },
-      (owned) =>
-        ensureProfileForEmail(input.email, {
-          ...owned,
-          expectedGitHubAccountId: input.expectedGitHubAccountId,
-        }),
-    ),
-  "userProfiles.ensureTailscale": (
-    input: Parameters<typeof ensureProfileForTailscaleIdentity>[0],
-    { open, stateOptions },
-  ) =>
-    executeUserProfileWrite(
-      "userProfiles.ensureTailscale",
-      { ...stateOptions(), database: open() },
-      (owned) => ensureProfileForTailscaleIdentity(input, owned),
-    ),
-  "userProfiles.syncGitHub": (
-    input: Parameters<typeof syncGitHubIdentity>[0],
-    { open, stateOptions },
-  ) =>
-    executeUserProfileWrite(
-      "userProfiles.syncGitHub",
-      { ...stateOptions(), database: open() },
-      (owned) => syncGitHubIdentity(input, owned),
-    ),
-  "userProfiles.ensureOwner": (input: { displayName: string | null }, { open, stateOptions }) =>
-    executeUserProfileWrite(
-      "userProfiles.ensureOwner",
-      { ...stateOptions(), database: open() },
-      (owned) => ensureGatewayOwnerProfile(input.displayName, owned),
-    ),
-  "userProfiles.setDisplayName": (
-    input: { profileId: string; name: string | null },
-    { open, stateOptions },
-  ) =>
-    executeUserProfileWrite(
-      "userProfiles.setDisplayName",
-      { ...stateOptions(), database: open() },
-      (owned, display) => ({
-        profile: setDisplayName(input.profileId, input.name, owned),
-        display: display(),
-      }),
-      input.profileId,
-    ),
-  "userProfiles.setAvatar": (
-    input: { profileId: string; bytes: Uint8Array; mime: string },
-    { open, stateOptions },
-  ) =>
-    executeUserProfileWrite(
-      "userProfiles.setAvatar",
-      { ...stateOptions(), database: open() },
-      (owned, display) => {
-        const result = setAvatar(input.profileId, input.bytes, input.mime, owned);
-        return result.ok
-          ? { ok: true as const, value: { profile: result.value, display: display() } }
-          : result;
-      },
-      input.profileId,
-    ),
+  ),
+  "userProfiles.ensureTailscale": createUserProfileWriteOperation(
+    "userProfiles.ensureTailscale",
+    (input: Parameters<typeof ensureProfileForTailscaleIdentity>[0], owned) =>
+      ensureProfileForTailscaleIdentity(input, owned),
+  ),
+  "userProfiles.syncGitHub": createUserProfileWriteOperation(
+    "userProfiles.syncGitHub",
+    (input: Parameters<typeof syncGitHubIdentity>[0], owned) => syncGitHubIdentity(input, owned),
+  ),
+  "userProfiles.ensureOwner": createUserProfileWriteOperation(
+    "userProfiles.ensureOwner",
+    (input: { displayName: string | null }, owned) =>
+      ensureGatewayOwnerProfile(input.displayName, owned),
+  ),
+  "userProfiles.setDisplayName": createUserProfileWriteOperation(
+    "userProfiles.setDisplayName",
+    (input: { profileId: string; name: string | null }, owned, display) => ({
+      profile: setDisplayName(input.profileId, input.name, owned),
+      display: display(),
+    }),
+    (input) => input.profileId,
+  ),
+  "userProfiles.setAvatar": createUserProfileWriteOperation(
+    "userProfiles.setAvatar",
+    (input: { profileId: string; bytes: Uint8Array; mime: string }, owned, display) => {
+      const result = setAvatar(input.profileId, input.bytes, input.mime, owned);
+      return result.ok
+        ? { ok: true as const, value: { profile: result.value, display: display() } }
+        : result;
+    },
+    (input) => input.profileId,
+  ),
 } satisfies WorkerOperationHandlers;
 
 export type UserProfileWriteOperations = WorkerOperations<typeof userProfileWriteOperations>;

@@ -5,7 +5,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import * as chatMessage from "./chat-message.ts";
+import * as chatMessage from "./chat-message-group.ts";
 import {
   getTranscriptState,
   renderTranscriptSearch,

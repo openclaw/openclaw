@@ -68,6 +68,8 @@ export function createSessionRowRefresh(
         );
         if (selected.size > 0) {
           await owner.runAsOwner(() => readRows(selected, { archived: true }));
+          // Retained facts can finish through microtasks; let the loop run between row slices.
+          await yieldSessionListWork();
         }
       }
       for (const read of batch.values()) {

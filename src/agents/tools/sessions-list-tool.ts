@@ -374,7 +374,7 @@ export function createSessionsListTool(opts?: {
         offset = pageNextOffset;
       }
 
-      const stateVersions = getSessionStateVersions(
+      const stateVersions = await getSessionStateVersions(
         sessions.map(({ entry, agentId: stateAgentId }) => ({
           sessionKey: entry.key,
           agentId: stateAgentId,

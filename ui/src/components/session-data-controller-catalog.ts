@@ -9,7 +9,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import {
   buildCatalogSessionKey,
@@ -91,8 +91,11 @@ export function areSessionCatalogsSettled(
   const status = owner.sessionCatalogRefreshStatus;
   return (
     !status.error &&
-    (isGatewayMethodAdvertised(owner.context?.gateway.snapshot ?? {}, "sessions.catalog.list") !==
-      true ||
+    (!canCallGatewayMethod(
+      owner.context?.gateway.snapshot,
+      "sessions.catalog.list",
+      "operator.read",
+    ) ||
       (status.hasLoaded &&
         !status.awaitingGateway &&
         owner.sessionCatalogLive.requestGeneration === null &&
@@ -143,7 +146,7 @@ export function resolveSessionCatalogAgentId(
   // transient reconnect still preserves its rows until the replacement lands.
   if (
     gateway?.phase === "connected" &&
-    isGatewayMethodAdvertised(gateway, "sessions.catalog.list") === false
+    !canCallGatewayMethod(gateway, "sessions.catalog.list", "operator.read")
   ) {
     return null;
   }
@@ -181,7 +184,7 @@ export function resolveSessionCatalogAgentId(
 }
 
 export function scheduleSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
-  if (document.visibilityState === "hidden") {
+  if (!visibleSessionCatalogClient(owner)) {
     owner.sessionCatalogLive.cancelScheduledRefreshes();
     return;
   }
@@ -385,6 +388,7 @@ export async function loadMoreSessionCatalog(
   hostIds?: readonly string[],
   discovering = false,
 ): Promise<void> {
+  owner.synchronizeSessionScope();
   if (owner.loadingMoreSessionCatalogIds.has(catalogId)) {
     return;
   }
@@ -399,7 +403,7 @@ export async function loadMoreSessionCatalog(
   if (!catalog || Object.keys(cursors).length === 0) {
     return;
   }
-  const client = owner.context?.gateway.snapshot.client;
+  const client = owner.sessionCatalogGatewayClient();
   const agentId = resolveSessionCatalogAgentId(owner);
   if (
     !client ||

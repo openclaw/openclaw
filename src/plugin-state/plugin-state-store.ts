@@ -1,7 +1,10 @@
 // Plugin state store exposes persisted per-plugin state operations.
 import { toUSVString } from "node:util";
 import type { Result } from "@openclaw/normalization-core/result";
-import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntriesCurrentCheck,
+} from "../config/sessions/session-entry-current.types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { validatePluginStateComparison } from "./plugin-state-store.comparison.js";
 import {
@@ -137,7 +140,7 @@ function createAsyncKeyedStore<T>(
   prepared: PreparedKeyedStoreOptions,
   assertActive?: () => void,
   assertRangeActive = assertActive,
-  sessionEntryCurrent?: SessionEntryCurrentCheck,
+  sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck,
 ): PluginStateKeyedStore<T, 2> {
   const scope = {
     pluginId: prepared.pluginId,

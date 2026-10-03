@@ -33,6 +33,7 @@ export function projectSessionMessagePayload(params: {
   transcriptPosition?: TranscriptDisplayPosition;
   projectionState?: SessionMessageProjectionState;
   projectCurrentUserProfile?: (message: Record<string, unknown>) => Record<string, unknown>;
+  resolveCronJobName?: (jobId: string) => string | undefined;
   runId?: string;
   sessionKey: string;
   sessionSnapshot?: Record<string, unknown>;
@@ -55,6 +56,7 @@ export function projectSessionMessagePayload(params: {
     ? projectChatDisplayMessagesWithState([rawMessage], {
         ...params.projectionState,
         subagentCoordination: params.subagentCoordination,
+        resolveCronJobName: params.resolveCronJobName,
         includeCommentaryFallbacks: true,
         activity: false,
       })
@@ -85,11 +87,13 @@ export function projectSessionMessagePayload(params: {
             turnBoundaryPending: params.projectionState.turnBoundaryPending,
             activity: false,
             subagentCoordination: params.subagentCoordination,
+            resolveCronJobName: params.resolveCronJobName,
           })
         : {
             messages: [
               projectChatDisplayMessage(rawMessage, {
                 subagentCoordination: params.subagentCoordination,
+                resolveCronJobName: params.resolveCronJobName,
               }),
             ],
             assistantErrorPending: false,

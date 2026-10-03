@@ -15,13 +15,14 @@ import type { BrowserTabSelection } from "../../../components/browser/browser-ta
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import { t } from "../../../i18n/index.ts";
-import "../../../components/tooltip.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+import "../../../components/tooltip.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type {
   ChatAttachment,
@@ -32,6 +33,7 @@ import type {
 } from "../../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
+import type { PresentationValue } from "../../../lit/presentation-binding.ts";
 import type { TurnRecapWatch } from "../chat-progress.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
@@ -43,22 +45,21 @@ import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.t
 import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import { resolveChatContextCopy, usesNativeContextMenu } from "./chat-context-copy.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
-import { isConfirmedActionPopoverFocused } from "./chat-message-confirmation.ts";
-import type { MessageActionDetails } from "./chat-message-markdown.ts";
-import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
-import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import {
   dismissConfirmedActionPopovers,
+  isConfirmedActionPopoverFocused,
   openChatRewindConfirmation,
-  type MessageReplyTarget,
-} from "./chat-message.ts";
+} from "./chat-message-confirmation.ts";
+import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.ts";
+import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
+import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import type { ReplyMessageStatus } from "./chat-reply-preview.ts";
 import {
   handleChatSelectionPointerUp,
   isChatSelectionPopupFocused,
   removeChatSelectionPopup,
 } from "./chat-selection-popup.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
+import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -115,9 +116,9 @@ export type ChatThreadProps = ChatSendStatusActions & {
   /** Routing for peer sender names in a shared session. */
   personActivity?: PersonActivityRouting;
   sessionKey: string;
-  presented?: boolean;
+  presented?: PresentationValue;
   /** Mounted transcript visibility, independent of which split pane owns input. */
-  transcriptVisible?: boolean;
+  transcriptVisible?: PresentationValue;
   gatewayClient?: GatewayBrowserClient | null;
   selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;
@@ -147,6 +148,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   runWorking?: boolean;
   startupLabel?: string;
   waitingApproval?: boolean;
+  subagentSessions?: readonly GatewaySessionRow[];
   questionPrompts?: readonly QuestionPrompt[];
   asyncQuestions?: AsyncQuestionPresentation;
   sessions: SessionsListResult | null;
@@ -184,7 +186,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   typingActors?: readonly ChatTypingActorView[];
   typingOverflow?: ChatTypingOverflow;
   onOpenSidebar?: (content: SidebarContent) => void;
-  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+  onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
   onNavigate?: (routeId: "cron", options: { search: string }) => void;
   onRequestOpenImage?: () => number;
@@ -278,8 +280,9 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   const state = transcriptStates.get(paneId);
   if (state) {
     state.asyncQuestionDrafts = new Map();
-    // Search input belongs to the outgoing transcript. Other fields are pane
-    // preferences or dependency memos and invalidate themselves on new props.
+    // Parked rows must commit fresh bindings on return even when visible props match.
+    state.transcriptRenderDependencies = [];
+    // Search input belongs to the outgoing transcript; pane preferences survive.
     state.searchOpen = false;
     state.searchQuery = "";
     state.searchFocusPending = false;

@@ -2,7 +2,7 @@
   "id": "device-pair",
   "categories": ["security"],
   "doctorContract": {
-    "stateMigrations": [{ "id": "device-pair-notify-json-to-plugin-state" }]
+    "stateMigrations": [{ "id": "device-pair-retired-state" }]
   },
   "activation": {
     "onStartup": true

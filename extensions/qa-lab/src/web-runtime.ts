@@ -1,7 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  resolveOptionalIntegerOption,
+  resolvePositiveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
@@ -309,10 +312,7 @@ export async function qaWebSnapshot(params: QaWebSnapshotParams) {
   const body = session.page.locator("body");
   await body.waitFor({ timeout: timeoutMs });
   const text = (await body.textContent({ timeout: timeoutMs })) ?? "";
-  const maxChars =
-    typeof params.maxChars === "number" && Number.isFinite(params.maxChars)
-      ? Math.max(1, Math.floor(params.maxChars))
-      : undefined;
+  const maxChars = resolveOptionalIntegerOption(params.maxChars, { min: 1 });
   return {
     url: session.page.url(),
     title: await session.page.title().catch(() => ""),

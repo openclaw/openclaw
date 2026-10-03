@@ -35,7 +35,6 @@ const [
   { SessionManager: PersistentSessionManager },
   safetyTimeout,
   realSafetyTimeout,
-  { markRuntimeCompactionDelegate },
 ] = await Promise.all([
   import("../../auto-reply/reply/session-updates.js"),
   import("../../config/sessions/session-accessor.js"),
@@ -45,7 +44,6 @@ const [
   vi.importActual<typeof import("./compaction-safety-timeout.js")>(
     "./compaction-safety-timeout.js",
   ),
-  import("../../context-engine/compaction-watchdog.js"),
 ]);
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -623,6 +621,7 @@ describe("queued compaction successor ownership", () => {
           throw new Error("Expected the suite's replaceable safety-timeout mock");
         }
         const caller = new AbortController();
+        const backendEntered = createDeferred();
         const releaseBackend = createDeferred();
         const observed = createDeferred<{
           outcome: BackendAppendOutcome;
@@ -630,20 +629,15 @@ describe("queued compaction successor ownership", () => {
           queuedSettled: boolean;
         }>();
         let backendSignal: AbortSignal | undefined;
-        let progressReset: unknown;
         let backendWork: ReturnType<ContextEngine["compact"]> | undefined;
         let queuedSettled = false;
-        // A fresh function keeps the process-wide delegate tag off the shared mock.
-        const backend = vi.fn<ContextEngine["compact"]>((params) =>
-          contextEngineCompactMock(params),
-        );
         const engine = {
           info: {
             id: "timeout-fixture",
             name: "Timeout fixture",
             ownsCompaction: engineKind === "plugin",
           },
-          compact: engineKind === "delegate" ? markRuntimeCompactionDelegate(backend) : backend,
+          compact: contextEngineCompactMock,
           maintain,
         };
         resolveContextEngineMock.mockResolvedValueOnce(engine);
@@ -653,7 +647,6 @@ describe("queued compaction successor ownership", () => {
             throw new Error("Expected the real safety wrapper's composed backend signal");
           }
           backendSignal = signal;
-          progressReset = backendParams.runtimeContext?.compactionTimeoutReset;
           const append = createBackendAppend(entryId);
           // Timer dispatch owns a different async context. Retain the backend's
           // actual context without constructing any OpenClaw authority in the fixture.
@@ -673,6 +666,7 @@ describe("queued compaction successor ownership", () => {
               signal.removeEventListener("abort", onAbort);
             }
           })();
+          backendEntered.resolve();
           return backendWork;
         });
         const entryBefore = structuredClone(
@@ -689,17 +683,18 @@ describe("queued compaction successor ownership", () => {
             signal,
           ),
         );
-        const pending = compact(backendCompactParams(caller.signal)).then(
-          (result) => {
-            queuedSettled = true;
-            return result;
-          },
-          (error: unknown) => {
-            queuedSettled = true;
-            throw error;
-          },
-        );
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const pending = compact(backendCompactParams(caller.signal)).finally(() => {
+          queuedSettled = true;
+        });
         try {
+          await Promise.race([
+            backendEntered.promise,
+            pending.then(() => {
+              throw new Error("Queued compaction settled before the backend checkpoint");
+            }),
+          ]);
+          await vi.advanceTimersByTimeAsync(1);
           await expect(pending).resolves.toMatchObject({ ok: false, compacted: false });
           expect(backendSignal).not.toBe(caller.signal);
           expect(backendSignal?.aborted).toBe(true);
@@ -711,13 +706,10 @@ describe("queued compaction successor ownership", () => {
           expect(loadTranscriptEventsSync(target())).toEqual(transcriptBefore);
           expect(loadSessionEntry({ ...target(), readConsistency: "latest" })).toEqual(entryBefore);
           expect(observation.outcome).toMatchObject({ written: false, error: expect.any(Error) });
-          expect
-            .soft(typeof progressReset)
-            .toBe(engineKind === "delegate" ? "function" : "undefined");
-          expect(backend).toHaveBeenCalledOnce();
           expect(contextEngineCompactMock).toHaveBeenCalledOnce();
           expect(maintain).not.toHaveBeenCalled();
         } finally {
+          vi.useRealTimers();
           boundedCompact.mockImplementation(previousImplementation);
           releaseBackend.resolve();
           await pending.catch(() => undefined);

@@ -49,7 +49,7 @@ Telegram batches rapid text messages from the same sender into one agent turn by
 - Batches stay isolated by bot account, sender, chat, and topic. Reply metadata and source message IDs are preserved.
 - `messages.inbound.byChannel.telegram` overrides `messages.inbound.debounceMs`, which overrides the 300ms ordinary-text default. An explicit `0` disables ordinary burst batching but keeps automatic long-paste assembly.
 - Control commands bypass batching and dispatch immediately. Stop/abort commands cancel pending text for their target conversation.
-- Forwarded messages use a separate 80ms collection window, but share the sender's dispatch queue so they cannot overtake earlier text.
+- Forwarded messages use a separate 1-second collection window, but share the sender's dispatch queue so they cannot overtake earlier text. Telegram delivers each message of a multi-message forward as its own update, often in a later poll, so the window waits long enough for the rest of the burst to arrive. A single forward therefore starts its turn about one second after it arrives.
 
 Ordinary text batches are bounded to 12 messages and 50,000 characters. Their collection deadline is 7.5 seconds from the first message, or the configured quiet window if longer. Messages arriving after a batch flushes cannot join it. This heuristic does not guarantee that Telegram delivers every paste fragment together. See [Inbound debouncing](/concepts/messages#inbound-debouncing) for hot-reload behavior.
 
@@ -240,6 +240,7 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
   <Accordion title="Limits and CLI targets">
     - `channels.telegram.textChunkLimit` default 4000; `streaming.chunkMode="newline"` prefers paragraph boundaries (blank lines) before length splitting.
     - `channels.telegram.mediaMaxMb` (default 100) caps inbound and outbound media size.
+    - Inbound albums in one chat or topic reach the agent in arrival order, and an album waiting behind an earlier one keeps its delivery claim alive while the earlier album is still being processed.
     - When an inbound attachment cannot be downloaded and the message proceeds to the agent, its body includes a `[media unavailable: ...]` notice. Oversize notices include the effective size limit; partial albums include the failed and total attachment counts. This also applies to admitted channel posts, even when their separate chat warning is suppressed.
     - automatic group context uses `channels.telegram.historyLimit` or `messages.groupChat.historyLimit` (default 50); `0` disables the automatic window, not retained history.
     - reply/quote/forward supplemental context normalizes into one selected conversation context window when the gateway has observed the parent messages; the observed-message cache lives in OpenClaw SQLite plugin state. To import pre-June cache sidecars, [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions) and run its Doctor first. Telegram only includes one shallow `reply_to_message` per update, so chains older than the cache are limited to that payload.

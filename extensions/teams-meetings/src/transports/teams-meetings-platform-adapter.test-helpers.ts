@@ -1,8 +1,5 @@
 import { runInNewContext } from "node:vm";
-import {
-  teamsMeetingLeaveScript,
-  teamsMeetingStatusScript,
-} from "./teams-meetings-page-scripts.js";
+import { teamsMeetingPageScripts } from "./teams-meetings-page-scripts.js";
 import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./teams-meetings-platform-adapter.js";
 
 export const URL =
@@ -313,7 +310,7 @@ export async function runStatusScript(params: StatusScriptParams) {
   if (params.priorCaptions) {
     window["__openclawTeamsCaptions"] = params.priorCaptions;
   }
-  const script = teamsMeetingStatusScript({
+  const script = teamsMeetingPageScripts.status({
     allowMicrophone: params.allowMicrophone ?? false,
     allowSessionAdoption: params.allowSessionAdoption ?? true,
     autoJoin: params.autoJoin ?? true,
@@ -462,7 +459,7 @@ export function runLeaveScript(params: {
     window["__openclawTeamsAudioOutputs"] = params.priorAudioOutputs;
   }
   const run = runInNewContext(
-    `(${teamsMeetingLeaveScript({ leaveInitiated: params.leaveInitiated ?? false, meetingSessionId: params.meetingSessionId ?? "session-1", meetingUrl: URL })})`,
+    `(${teamsMeetingPageScripts.leave({ leaveInitiated: params.leaveInitiated ?? false, meetingSessionId: params.meetingSessionId ?? "session-1", meetingUrl: URL })})`,
     {
       URL: globalThis.URL,
       document,

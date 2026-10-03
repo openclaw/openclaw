@@ -1,6 +1,11 @@
 import { parentPort, type MessagePort, type Transferable } from "node:worker_threads";
 import { loggingState } from "../logging/state.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import {
+  applyAgentDatabaseReaderRequest,
+  decodeAgentDatabaseReaderRequest,
+  installDeletedAgentDatabaseFences,
+} from "./agent-database-readers.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
 import {
@@ -25,22 +30,18 @@ export type WorkerTaskChannel = {
   request: (
     value: unknown,
     transferList?: readonly Transferable[],
-  ) => Promise<{ input: unknown; consumed: () => void }>;
+  ) => Promise<WorkerChannelResponse>;
 };
 
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
 export function serveWorkerTasks<Output>(
-  handler: (
-    input: unknown,
-    channel: WorkerTaskChannel | undefined,
-    control: WorkerTaskControl,
-  ) => Output | Promise<Output>,
+  handler: Parameters<typeof serveOwnedWorkerTasks<Output>>[0],
   options: { transferList?: (value: Output) => Transferable[] } = {},
 ): void {
   serveOwnedWorkerTasks(handler, options);
 }
 
-/** Internal native owners additionally acknowledge resource cleanup between tasks. */
+/** Every served worker closes its agent database readers by path between tasks; owners may add more. */
 export function serveOwnedWorkerTasks<Output>(
   handler: (
     input: unknown,
@@ -72,6 +73,7 @@ export function serveOwnedWorkerTasks<Output>(
       interactive?: boolean;
       responseId?: number;
       nativeSections: SharedArrayBuffer;
+      deletedAgentDatabaseFences: [string, string][];
       closeResource?: true;
       key?: string;
       resourcePort?: MessagePort;
@@ -87,13 +89,17 @@ export function serveOwnedWorkerTasks<Output>(
         const precedingExecution = execution;
         resourceClosures = resourceClosures
           .then(() => precedingExecution)
-          .then(() => {
-            if (!options.closeResource) {
+          .then(async () => {
+            const request = decodeAgentDatabaseReaderRequest(message.key);
+            if (!request && !options.closeResource) {
               throw new Error("Worker does not own retained resources");
             }
-            return options.closeResource(message.key);
-          })
-          .then(() => {
+            if (request) {
+              await applyAgentDatabaseReaderRequest(request);
+            }
+            if (!request || request.kind === "close") {
+              await options.closeResource?.(message.key);
+            }
             receipt.postMessage({ ok: true }, []);
           })
           .catch((error: unknown) => {
@@ -216,6 +222,7 @@ export function serveOwnedWorkerTasks<Output>(
           try {
             await precedingClosures;
             control.throwIfCancelled();
+            installDeletedAgentDatabaseFences(message.deletedAgentDatabaseFences);
             return await withWorkerTaskNativeSectionScope(
               nativeSections,
               () => active === task,

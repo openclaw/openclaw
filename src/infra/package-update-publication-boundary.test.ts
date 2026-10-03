@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -21,10 +21,13 @@ import { createPackageActivationLifetimeFixture } from "./package-update-activat
 import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 import { assertNoPendingPackageActivation } from "./package-update-activation.js";
 import * as packageFilesystem from "./package-update-filesystem.js";
-import { writePackageRoot } from "./package-update-steps.test-support.js";
-import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
+import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
+import { createNpmTarget, writePackageRoot } from "./package-update-steps.test-support.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as snapshot from "./sqlite-snapshot.js";
+import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import { withRetainedUpdateRuntime } from "./update-retained-runtime.js";
 
 const fixtures = createPackageActivationLifetimeFixture();
@@ -45,12 +48,69 @@ afterEach(async () => {
   }
 });
 
+it.skipIf(process.platform === "win32")(
+  "accepts present and temporarily missing npm roots through a canonical directory alias",
+  () =>
+    fixtures.lifetime.run(async () => {
+      const f = await createPackageSwapFixture(root);
+      await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+      const aliasPrefix = path.join(root, "live-alias");
+      fs.symlinkSync(path.join(root, "live"), aliasPrefix, "dir");
+      const aliasGlobalRoot = path.join(aliasPrefix, "lib", "node_modules");
+      const aliasPackageRoot = path.join(aliasGlobalRoot, "openclaw");
+      const absentAliasPackageRoot = path.join(aliasGlobalRoot, "absent-openclaw");
+      expect(resolveUpdateInstallRoot(absentAliasPackageRoot)).toBe(
+        path.join(fs.realpathSync.native(aliasGlobalRoot), "absent-openclaw"),
+      );
+      const danglingAliasPackageRoot = path.join(aliasGlobalRoot, "dangling-openclaw");
+      fs.symlinkSync(path.join(root, "missing-target"), danglingAliasPackageRoot, "dir");
+      expect(resolveUpdateInstallRoot(danglingAliasPackageRoot)).toBe(
+        path.resolve(danglingAliasPackageRoot),
+      );
+      const installTarget = createNpmTarget(aliasGlobalRoot);
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(aliasPackageRoot);
+        let transaction: PackageUpdateTransaction | undefined;
+        const result = await swapStagedPackageInstall({
+          ...f.params,
+          installTarget,
+          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+          onTransaction: (issued) => {
+            transaction = issued;
+          },
+        });
+        expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
+        expect(transaction).toBeDefined();
+        await transaction!.complete({ activationVerified: true }, fence.assertCurrent);
+        expect(
+          JSON.parse(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")),
+        ).toEqual({ name: "openclaw", version: "2.0.0" });
+      });
+    }),
+);
+
 it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
   "completes real launcher publication and binds retirement to its %s directory",
   (retirement) =>
     fixtures.lifetime.run(async () => {
       const f = await createPackageSwapFixture(root);
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+      fs.writeFileSync(path.join(f.packageRoot, "previous.payload"), "previous bytes");
+      fs.writeFileSync(
+        path.join(f.params.stage.packageRoot, "candidate.payload"),
+        "candidate bytes",
+      );
+      const reads = { previous: 0, candidate: 0 };
+      interceptPackageFileHashes((file, _stat, next) => {
+        const name = path.basename(file);
+        if (name === "previous.payload") {
+          reads.previous++;
+        }
+        if (name === "candidate.payload") {
+          reads.candidate++;
+        }
+        return next();
+      });
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(f.packageRoot);
         let transaction: PackageUpdateTransaction | undefined;
@@ -73,6 +133,7 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
           { name: "openclaw", identity: packageActivationIdentity(f.launcher, "launcher") },
         ]);
         expect(transaction).toBeDefined();
+        expect(reads).toEqual({ previous: 2, candidate: 4 });
         if (retirement === "replacement") {
           const obsolete = path.join(anchor, "previous");
           const retained = path.join(root, "retained-previous");
@@ -101,7 +162,10 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
             name: "previous",
           });
         } else {
+          // Once the candidate is verified, obsolete backup bytes are not rollback input.
+          fs.writeFileSync(path.join(anchor, "previous", "previous.payload"), "obsolete bytes");
           await transaction!.complete({ activationVerified: true }, fence.assertCurrent);
+          expect(reads).toEqual({ previous: 2, candidate: 5 });
           expect(fs.existsSync(anchor)).toBe(false);
           // A completed transaction stays cached even after its one-slot receipt
           // is reused by another publication under the same executor.
@@ -132,6 +196,93 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
           ).toBe("3.0.0");
         }
         expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+      });
+    }),
+);
+
+it.skipIf(process.platform === "win32").each(["activation", "publication", "retirement"] as const)(
+  "refuses metadata-preserving candidate byte changes at %s",
+  (boundary) =>
+    fixtures.lifetime.run(async () => {
+      const f = await createPackageSwapFixture(root);
+      await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+      const previousIdentity = packageActivationIdentity(f.packageRoot, true);
+      const name = "mapped.payload";
+      const staged = path.join(f.params.stage.packageRoot, name);
+      fs.writeFileSync(staged, "previous bytes");
+      const unchanged = fs.lstatSync(staged, { bigint: true });
+      // A Linux writable mmap can change bytes without changing any stat field.
+      // Reproduce those filesystem observations without a native mmap dependency.
+      const lstat = fsp.lstat.bind(fsp);
+      vi.spyOn(fsp, "lstat").mockImplementation((...args) =>
+        path.basename(String(args[0])) === name && args[1]?.bigint
+          ? Promise.resolve(unchanged)
+          : lstat(...args),
+      );
+      let changedBytesRead = false;
+      interceptPackageFileHashes(async (file, _stat, next) => {
+        if (path.basename(file) === name) {
+          const contents = fs.readFileSync(file);
+          changedBytesRead ||= contents.toString() === "modified bytes";
+          return createHash("sha256").update(contents).digest("hex");
+        }
+        return next();
+      });
+      const anchor = resolvePackageActivationAnchor(f.packageRoot);
+      const change = (directory: string) =>
+        fs.writeFileSync(path.join(directory, name), "modified bytes");
+      const rename = fsp.rename.bind(fsp);
+      vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+        await rename(from, to);
+        if (
+          boundary === "publication" &&
+          from === path.join(anchor, "candidate") &&
+          to === f.packageRoot
+        ) {
+          change(f.packageRoot);
+        }
+      });
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(f.packageRoot);
+        let transaction: PackageUpdateTransaction | undefined;
+        const result = await swapStagedPackageInstall({
+          ...f.params,
+          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+          beforeActivate: async () => {
+            if (boundary === "activation") {
+              change(path.join(anchor, "candidate"));
+            }
+          },
+          onTransaction: (issued) => {
+            transaction = issued;
+          },
+        });
+        if (boundary === "retirement") {
+          expect(result.status).toBe("committed");
+          change(f.packageRoot);
+          await expect(
+            transaction!.complete({ activationVerified: true }, fence.assertCurrent),
+          ).rejects.toThrow("Package publication object changed");
+        } else {
+          expect(result.status).toBe("failed");
+          expect(result.step.stderrTail).toContain("Package publication object changed");
+        }
+        expect(changedBytesRead).toBe(true);
+        if (boundary === "activation") {
+          expect(packageActivationIdentity(f.packageRoot, true)).toBe(previousIdentity);
+          expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+          expect(fs.existsSync(path.join(anchor, "previous"))).toBe(false);
+        }
+        const previous = fs.existsSync(path.join(anchor, "previous"))
+          ? path.join(anchor, "previous")
+          : f.packageRoot;
+        expect(fs.readFileSync(path.join(previous, "package.json"), "utf8")).toContain(
+          '"version":"1.0.0"',
+        );
+        const candidate =
+          boundary === "activation" ? path.join(anchor, "candidate") : f.packageRoot;
+        expect(fs.readFileSync(path.join(candidate, name), "utf8")).toBe("modified bytes");
+        expect(await fsp.lstat(path.join(candidate, name), { bigint: true })).toEqual(unchanged);
       });
     }),
 );

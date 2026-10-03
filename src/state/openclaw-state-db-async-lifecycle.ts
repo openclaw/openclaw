@@ -522,7 +522,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     },
     close(
       pathname: string | undefined,
-      retireNative: (identity?: DatabasePathIdentity) => boolean,
+      retireNative: (identity?: DatabasePathIdentity) => boolean | Promise<boolean>,
     ): Promise<boolean> {
       const record = pathname === undefined ? undefined : resolveForNative(pathname);
       if (pathname !== undefined && !record) {
@@ -578,7 +578,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
             );
           }
           throwSqliteLifecycleErrors(errors, "OpenClaw state resource drainage failed");
-          const retired = retireNative(record?.identity);
+          const retired = await retireNative(record?.identity);
           attempts.delete(record);
           seals.delete(current.seal);
           if (record === undefined) {

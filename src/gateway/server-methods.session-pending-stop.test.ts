@@ -141,7 +141,7 @@ describe("pending Stop producer binding", () => {
       }
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const hold = runExclusiveSessionLifecycleMutation({
+      const hold = runExclusiveSessionLifecycleMutation("drain", {
         scope: session.value.storePath,
         identities: [key, "original"],
         run: async () => {

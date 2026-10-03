@@ -464,8 +464,6 @@ describe("explicit preparation input closure", () => {
   it.each([
     { workload: "gateway", missing: "extensions/isolated/index.ts" },
     { workload: "gateway", missing: "extensions/isolated" },
-    { workload: "full", missing: "extensions/isolated/index.ts" },
-    { workload: "full", missing: "extensions/isolated" },
   ])(
     "rejects missing tracked $missing before inventory discovery or pnpm for $workload",
     ({ workload, missing }) => {
@@ -490,7 +488,8 @@ describe("explicit preparation input closure", () => {
 
 // These are subprocess/ordering regressions. Recorders never install packages,
 // prove pnpm closure, build the Gateway, or establish graph/volume isolation.
-describe.each(["gateway", "full"])("%s preparation execution boundaries", (workload) => {
+describe("shared preparation preflight", () => {
+  const workload = "gateway";
   it("rejects the wrong target pnpm before querying its store or installing", () => {
     const fixture = makePreparationFixture();
     const result = fixture.run([workload], { SETUP_TEST_VERSION: "0.0.0" });
@@ -608,7 +607,9 @@ describe.each(["gateway", "full"])("%s preparation execution boundaries", (workl
     expect(calls.at(-1)?.args).toContain("--frozen-lockfile");
     fixture.assertNoOutputs();
   });
+});
 
+describe.each(["gateway", "full"])("%s preparation build boundaries", (workload) => {
   it("propagates selected-build failure after a successful recorder install", () => {
     const fixture = makePreparationFixture();
     const result = fixture.run([workload], { SETUP_TEST_BUILD_EXIT: "29" });

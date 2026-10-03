@@ -1,7 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
-  persistSubagentRunsToDiskOrThrow,
+  runSubagentStateWorkerOperation,
   useSubagentControlFixture,
 } from "./subagent-control.test-support.js";
 /** Explicit reset retires child work without erasing its durable conversations. */
@@ -25,17 +25,32 @@ import { sessionMutationHandlers } from "../../../gateway/server-methods/session
 import { registerInternalHook, unregisterInternalHook } from "../../../hooks/internal-hooks.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { killAllControlledSubagentRuns, killSessionSubagentRuns } from "./subagent-control-kill.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
 const parentKey = "agent:main:main";
 const controllerKey = "agent:main:telegram:default:direct:123";
 const childKey = (id: string) => "agent:main:subagent:" + id;
+
+async function updateRun(runId: string, update: (draft: SubagentRunRecord) => void): Promise<void> {
+  await mutateSubagentRuns([runId], (rows) => {
+    const current = rows.get(runId);
+    if (!current) {
+      throw new Error("Reset fixture run missing");
+    }
+    const draft = structuredClone(current);
+    update(draft);
+    return { value: undefined, postimages: new Map([[runId, draft]]) };
+  });
+}
 
 function expectUnfinishedYieldedRun(runId: string) {
   const entry = subagentRuns.get(runId);
@@ -97,25 +112,42 @@ it.each(
         cleanup: "keep",
         expectsCompletionMessage: true,
       });
-      const entry = subagentRuns.get(id)!;
-      if (id === "queued-child") {
-        entry.execution = { status: "queued" };
-      } else {
-        expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
-      }
-      persistSubagentRunsToDiskOrThrow(subagentRuns, [id]);
+      await updateRun(id, (entry) => {
+        if (id === "queued-child") {
+          entry.execution = { status: "queued" };
+        } else {
+          expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
+        }
+      });
     }
     const previousRevision = loadSessionEntry({
       storePath,
       sessionKey: parentKey,
     })?.lifecycleRevision;
     if (failed) {
-      fixture.persist.mockImplementation((runs, changedRunIds) => {
-        if (runs.get("requester-child")?.killIntent) {
-          throw new Error("termination persistence refused");
-        }
-        persistSubagentRunsToDiskOrThrow(runs, changedRunIds);
-      });
+      fixture.worker.mockImplementation((context, operation, options) =>
+        runSubagentStateWorkerOperation(
+          context,
+          (scope) =>
+            operation({
+              execute: async (...args) => {
+                const command = args[0];
+                if (
+                  isSubagentRegistryWriteCommand(command) &&
+                  command.input.values.some(
+                    (row) =>
+                      row.run_id === "requester-child" &&
+                      row.payload_json?.includes('"killIntent":{'),
+                  )
+                ) {
+                  throw new Error("termination persistence refused");
+                }
+                return scope.execute(...args);
+              },
+            }),
+          options,
+        ),
+      );
     }
     if (boundary === "chat") {
       const reset = initSessionState({
@@ -347,9 +379,9 @@ it("lifecycle requester cleanup respects agent ownership without granting ordina
       cleanup: "keep",
       expectsCompletionMessage: true,
     });
-    const entry = subagentRuns.get(agentId)!;
-    expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
-    persistSubagentRunsToDiskOrThrow(subagentRuns, [agentId]);
+    await updateRun(agentId, (entry) => {
+      expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
+    });
   }
   const ordinary = await killAllControlledSubagentRuns({
     cfg,
@@ -429,9 +461,9 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
         cleanup: "keep",
         expectsCompletionMessage: true,
       });
-      const entry = subagentRuns.get("replacement-child")!;
-      expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
-      persistSubagentRunsToDiskOrThrow(subagentRuns, [entry.runId]);
+      await updateRun("replacement-child", (entry) => {
+        expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
+      });
     };
     registerInternalHook("command:reset", replaceParent);
     const respond = vi.fn();

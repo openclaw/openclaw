@@ -242,7 +242,7 @@ describe("cloud worker milestone 2 fault injection", () => {
         if (outcome === "cancellation") {
           expect(payload).toHaveProperty("aborted", true);
         }
-        expect(harness.placementStore.listPendingWorkspaceResults()).toMatchObject([
+        expect(await harness.placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
           { sessionId: SESSION_ID, environmentId: ENVIRONMENT_ID, runId: RUN_ID },
         ]);
         expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBe(
@@ -403,7 +403,7 @@ describe("cloud worker milestone 2 fault injection", () => {
         expect(settled).toBe(false);
         expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(2);
         expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBeGreaterThan(0);
-        expect(harness.placementStore.listPendingWorkspaceResults()).toMatchObject([
+        expect(await harness.placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
           { sessionId: SESSION_ID, environmentId: ENVIRONMENT_ID, runId: RUN_ID },
         ]);
 

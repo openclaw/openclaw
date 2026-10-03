@@ -2,7 +2,6 @@ import fs from "node:fs";
 import readline from "node:readline";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CliSessionReseedReceipt } from "../config/sessions.js";
 import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
 import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
@@ -72,49 +71,13 @@ let snapshotCache: { key: string; pending: Promise<readonly Message[]> } | undef
 // Other sessions may replace the completed-cache slot while an import is still running.
 const pendingSnapshots = new Map<string, Promise<readonly Message[]>>();
 
-function normalizeOversizedEntry(value: unknown): ClaudeCliProjectEntry | null {
-  if (!isRecord(value) || (value.type !== "user" && value.type !== "assistant")) {
-    return null;
-  }
-  const message = value.message;
-  if (!isRecord(message) || message.role !== value.type) {
-    return null;
-  }
-  const usage = isRecord(message.usage) ? message.usage : undefined;
-  return {
-    type: value.type,
-    ...(typeof value.timestamp === "string" ? { timestamp: value.timestamp } : {}),
-    ...(typeof value.uuid === "string" ? { uuid: value.uuid } : {}),
-    ...(value.isSidechain === true ? { isSidechain: true } : {}),
-    ...(value.isMeta === true ? { isMeta: true } : {}),
-    ...(value.isCompactSummary === true ? { isCompactSummary: true } : {}),
-    ...(value.isVisibleInTranscriptOnly === true ? { isVisibleInTranscriptOnly: true } : {}),
-    message: {
-      role: value.type,
-      content: OVERSIZED_HISTORY_PLACEHOLDER,
-      ...(typeof message.model === "string" ? { model: message.model } : {}),
-      ...(typeof message.stop_reason === "string" ? { stop_reason: message.stop_reason } : {}),
-      ...(usage
-        ? {
-            usage: {
-              input_tokens: usage.input_tokens,
-              output_tokens: usage.output_tokens,
-              cache_read_input_tokens: usage.cache_read_input_tokens,
-              cache_creation_input_tokens: usage.cache_creation_input_tokens,
-            },
-          }
-        : {}),
-    },
-  };
-}
-
 async function decodeOversizedClaudeEntry(
   worker: Worker,
   line: string,
 ): Promise<ClaudeCliProjectEntry | null> {
   return await new Promise((resolve) => {
     let settled = false;
-    const finish = (value: unknown) => {
+    const finish = (value: ClaudeCliProjectEntry | null) => {
       if (settled) {
         return;
       }
@@ -122,7 +85,7 @@ async function decodeOversizedClaudeEntry(
       worker.off("message", finish);
       worker.off("error", fail);
       worker.off("exit", fail);
-      resolve(normalizeOversizedEntry(value));
+      resolve(value);
     };
     const fail = () => finish(null);
     worker.once("message", finish);

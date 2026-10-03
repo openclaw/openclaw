@@ -1,4 +1,3 @@
-// Irc plugin module implements control chars behavior.
 function isIrcControlChar(charCode: number): boolean {
   return charCode <= 0x1f || charCode === 0x7f;
 }

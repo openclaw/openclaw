@@ -322,6 +322,8 @@ suite.define(() => {
               match: { path: "notes.txt" },
               response: {
                 file: {
+                  previewKind: "text",
+                  contentEncoding: "utf8",
                   content: COMPOSER_LIGATURE_SEQUENCE,
                   hash: "a".repeat(64),
                   kind: "read",

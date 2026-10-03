@@ -3478,7 +3478,7 @@ async function createMockGatewayPlugin(
     name: "openclaw-control-ui-mock-gateway",
     transformIndexHtml(html) {
       const rosterPreferenceScript = `<script data-openclaw-sidebar-roster>
-        ${fixture === "sidebar-roster" ? 'localStorage.setItem("openclaw:control-ui:community-invite", JSON.stringify({ dismissedAtMs: Date.now() }));' : ""}
+        ${fixture === "sidebar-roster" ? 'localStorage.setItem("openclaw:control-ui:community-invite:v2", JSON.stringify({ dismissedAtMs: Date.now() }));' : ""}
         if (new URLSearchParams(location.search).get("sidebarAgents") === "roster") {
           const gatewayUrl = window["__OPENCLAW_NATIVE_CONTROL_AUTH__"].gatewayUrl;
           const key = "openclaw.control.settings.v1:" + gatewayUrl;

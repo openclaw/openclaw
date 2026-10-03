@@ -261,33 +261,30 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
         expect(observed.output).toBe("READY\r\ntail 🦞\r\n");
       });
 
-      it("reports exit after kill while the consumer keeps re-pausing output", async () => {
+      it("reports exit after kill while the consumer keeps re-pausing output", async ({
+        signal,
+      }) => {
         const cwd = tempDirs.make("openclaw-bun-pty-kill-");
-        fs.writeFileSync(path.join(cwd, "payload"), "x".repeat(4 * 1024 * 1024));
-        const { handle, observed } = await start(
-          [
-            "-c",
-            'stty -echo; printf "READY\\n"; read input; printf started > progress; cat payload',
-          ],
-          { cwd },
-        );
-        await vi.waitFor(() => expect(observed.output).toBe("READY\r\n"), deadline);
-        handle.pause();
-        handle.write("go\r");
-        await vi.waitFor(
-          () => expect(fs.readFileSync(path.join(cwd, "progress"), "utf8")).toBe("started"),
-          deadline,
-        );
+        const payload = path.join(cwd, "payload");
+        fs.writeFileSync(payload, "x".repeat(4 * 1024 * 1024));
+        // A shell can exit with its killed child's status before the tree kill reaches it.
+        const { handle, observed, exited, waitForOutput } = await start([payload], {
+          file: "/bin/cat",
+          cwd,
+        });
         // A viewer whose backlog stays full pauses again on every chunk it receives.
         handle.onData(() => handle.pause());
+        await waitForOutput("x", signal);
+        expect(observed.exit).toBeUndefined();
+        const beforeKill = observed.output.length;
         handle.kill();
-        await vi.waitFor(
-          () => expect(observed.exit).toEqual({ exitCode: 0, signal: constants.signals.SIGKILL }),
-          deadline,
-        );
+        expect(await withinTest(exited, signal)).toEqual({
+          exitCode: 0,
+          signal: constants.signals.SIGKILL,
+        });
         // Teardown delivered the dying tree's output before exit; nothing trails it.
         const atExit = observed.output.length;
-        expect(atExit).toBeGreaterThan("READY\r\n".length);
+        expect(atExit).toBeGreaterThan(beforeKill);
         handle.resume();
         expect(observed.output.length).toBe(atExit);
       });

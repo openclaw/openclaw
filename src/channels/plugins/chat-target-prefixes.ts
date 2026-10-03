@@ -247,3 +247,20 @@ export function parseChatAllowTargetPrefixes(
 ): ParsedChatTarget | null {
   return parseChatTargetPrefixes(params, false);
 }
+
+/** Remove one of the known provider prefixes from a free-form target string. */
+export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
+  const trimmed = raw.trim();
+  for (const provider of providers) {
+    const prefix = `${normalizeLowercaseStringOrEmpty(provider)}:`;
+    if (normalizeLowercaseStringOrEmpty(trimmed).startsWith(prefix)) {
+      return trimmed.slice(prefix.length).trim();
+    }
+  }
+  return trimmed;
+}
+
+/** Remove generic target-kind prefixes such as `user:` or `group:`. */
+export function stripTargetKindPrefix(raw: string): string {
+  return raw.replace(/^(user|channel|group|conversation|room|dm):/i, "").trim();
+}

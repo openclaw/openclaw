@@ -173,7 +173,12 @@ plugin instance and reruns registration with the new settings.
 
 The catalog is the registration API, not a promise that every runtime emits
 every hook. For example, `before_agent_run` is implemented by the embedded and
-CLI runners; do not rely on it as a Codex or Copilot input gate. Native tool,
+CLI runners and by Gateway admission for OpenClaw node worker turns. Node admission
+supplies the Gateway's triggering prompt and loaded history before persisting the
+user message or launching the worker. Blocks and hook failures persist only the
+redacted block message. Node admission omits `systemPrompt`: the node assembles its
+bootstrap and skill context afterward. Policies that require that final context
+must use a supported local runner. Do not rely on this hook as a Codex or Copilot input gate. Native tool,
 transcript, and compaction boundaries also differ. See
 [Codex hook boundaries](/plugins/codex-harness-runtime#hook-boundaries) and
 [Agent harness plugins](/plugins/sdk-agent-harness).

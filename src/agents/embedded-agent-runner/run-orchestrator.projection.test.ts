@@ -420,7 +420,7 @@ describe("embedded retry transcript ownership", () => {
             payloads: [
               failure === "output-limit-repeat"
                 ? {
-                    text: "⚠️ The provider returned an unfinished tool call. Earlier actions may have completed; verify their results before continuing.",
+                    text: "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.",
                     isError: true,
                   }
                 : { text: "Verified." },

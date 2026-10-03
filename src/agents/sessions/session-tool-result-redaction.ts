@@ -1,6 +1,8 @@
 import { prepareModelVisibleToolTextBlock } from "../../logging/redact.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { createSessionManagerRuntimeRegistry } from "../agent-hooks/session-manager-runtime-registry.js";
 import type { AgentEvent } from "../runtime/index.js";
+import { copyInternalToolResultState } from "../runtime/internal-hooks.js";
 import type { SessionManager } from "./session-manager.js";
 
 const preparers = createSessionManagerRuntimeRegistry<typeof prepareModelVisibleToolTextBlock>();
@@ -22,13 +24,28 @@ export function prepareSessionToolResult(
   }
   const prepare = preparers.get(sessionManager) ?? prepareModelVisibleToolTextBlock;
   let changed = false;
-  event.message.content = event.message.content.map((block) => {
+  let content: typeof event.message.content | undefined;
+  for (const [index, block] of event.message.content.entries()) {
     if (block.type !== "text") {
-      return block;
+      continue;
     }
     const prepared = prepare(block);
     changed ||= prepared.text !== block.text;
-    return prepared;
-  });
+    if (prepared !== block) {
+      content ??= [...event.message.content];
+      content[index] = prepared;
+    }
+  }
+  if (content) {
+    const message = event.message;
+    if (Object.isFrozen(message)) {
+      event.message = copyInternalToolResultState(
+        message,
+        freezeJsonSnapshot({ ...message, content }),
+      );
+    } else {
+      message.content = content;
+    }
+  }
   return changed;
 }

@@ -1,7 +1,12 @@
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import type { SessionTranscriptAccountingSnapshot } from "../../config/sessions/session-transcript-accounting.types.js";
 import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence.js";
-import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
+import {
+  readSessionMessagesAsync,
+  readSessionTranscriptAccountingAsync,
+} from "../../gateway/session-transcript-readers.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 
 type TranscriptScope = {
   agentId: string;
@@ -54,4 +59,45 @@ export async function readPreflightTranscriptContextMessages(
     }
   }
   throw new Error("Preflight transcript context retry exhausted");
+}
+
+export async function readSessionLogSnapshot(params: {
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  storePath?: string;
+  includeByteSize: boolean;
+  includeTurnTaint?: boolean;
+  includeUsage: boolean;
+  usageEventLimit?: number;
+  abortSignal?: AbortSignal;
+}): Promise<SessionTranscriptAccountingSnapshot> {
+  params.abortSignal?.throwIfAborted();
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  if (!params.sessionId || !params.storePath || !agentId) {
+    return params.includeTurnTaint ? { turnTainted: true } : {};
+  }
+  const scope = {
+    agentId,
+    sessionId: params.sessionId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    storePath: params.storePath,
+  };
+  try {
+    const snapshot = await readSessionTranscriptAccountingAsync(
+      scope,
+      {
+        includeByteSize: params.includeByteSize,
+        includeTurnTaint: params.includeTurnTaint,
+        includeUsage: params.includeUsage,
+        usageEventLimit: params.usageEventLimit,
+      },
+      params.abortSignal,
+    );
+    params.abortSignal?.throwIfAborted();
+    return snapshot;
+  } catch {
+    params.abortSignal?.throwIfAborted();
+    return params.includeTurnTaint ? { turnTainted: true } : {};
+  }
 }

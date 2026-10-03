@@ -7,6 +7,7 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillSnapshot } from "../types.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
+import { resolveSkillSnapshotExecutionFileHost } from "./skill-snapshot-provenance.js";
 
 // Start the suite cold so these hoisted mocks also apply after another file loaded the owner.
 vi.hoisted(() => {
@@ -121,6 +122,62 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
 
     getSkillsSnapshotVersionMock.mockReturnValue(2);
     await resolveReusableWorkspaceSkillSnapshot(params);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps equal-root snapshot caches separate by source host", async () => {
+    buildWorkspaceSkillSnapshotMock.mockImplementation((_workspace, options) => ({
+      prompt: options.executionWorkspaceFileHost ? "Gateway catalog" : "workspace catalog",
+      skills: [],
+      resolvedSkills: [],
+    }));
+    const params = {
+      workspaceDir,
+      executionWorkspaceDir: path.resolve(workspaceDir, "../execution"),
+      config: {},
+      watch: false,
+    };
+
+    const workspace = await resolveReusableWorkspaceSkillSnapshot(params);
+    const gateway = await resolveReusableWorkspaceSkillSnapshot({
+      ...params,
+      executionWorkspaceFileHost: "gateway",
+    });
+    const workspaceAgain = await resolveReusableWorkspaceSkillSnapshot(params);
+
+    expect(workspace.snapshot.prompt).toBe("workspace catalog");
+    expect(gateway.snapshot.prompt).toBe("Gateway catalog");
+    expect(resolveSkillSnapshotExecutionFileHost(workspace.snapshot)).toBeUndefined();
+    expect(resolveSkillSnapshotExecutionFileHost(gateway.snapshot)).toBe("gateway");
+    expect(workspaceAgain.snapshot).toBe(workspace.snapshot);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not coalesce concurrent equal-root builds from different source hosts", async () => {
+    const workspaceBuild = createDeferred<SnapshotFixture>();
+    const gatewayBuild = createDeferred<SnapshotFixture>();
+    buildWorkspaceSkillSnapshotMock.mockImplementation((_workspace, options) =>
+      options.executionWorkspaceFileHost ? gatewayBuild.promise : workspaceBuild.promise,
+    );
+    const params = {
+      workspaceDir,
+      executionWorkspaceDir: path.resolve(workspaceDir, "../execution"),
+      config: {},
+      watch: false,
+    };
+
+    const workspace = resolveReusableWorkspaceSkillSnapshot(params);
+    const gateway = resolveReusableWorkspaceSkillSnapshot({
+      ...params,
+      executionWorkspaceFileHost: "gateway",
+    });
+    workspaceBuild.resolve({ prompt: "workspace catalog", skills: [], resolvedSkills: [] });
+    gatewayBuild.resolve({ prompt: "Gateway catalog", skills: [], resolvedSkills: [] });
+
+    await expect(workspace).resolves.toMatchObject({
+      snapshot: { prompt: "workspace catalog" },
+    });
+    await expect(gateway).resolves.toMatchObject({ snapshot: { prompt: "Gateway catalog" } });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
   });
 

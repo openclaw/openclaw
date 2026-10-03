@@ -42,7 +42,16 @@ export function registerNodeWorkspaces(api: OpenClawPluginApi): void {
   };
   api.registerService({
     id: "file-transfer-workspaces",
-    reload: { configPrefixes: ["plugins.entries.file-transfer.config.workspaces", "agents"] },
+    reload: {
+      configPrefixes: [
+        "plugins.entries.file-transfer.config.workspaces",
+        "agents.defaults.workspace",
+        "agents.entries.*.workspace",
+        "agents.entries.*.default",
+        "agents.ownership",
+        "agents.list",
+      ],
+    },
     async start(ctx) {
       stop();
       const controller = new AbortController();

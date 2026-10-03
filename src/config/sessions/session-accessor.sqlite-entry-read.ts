@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { sql, type Selectable } from "kysely";
 import {
+  createSqliteQueryCache,
   getNodeSqliteKysely,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -11,8 +12,8 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { ExactSessionEntry, SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
 import {
@@ -126,19 +127,7 @@ function prepareExactSessionEntryQueries(database: DatabaseSync) {
 
 // Compile fixed reads once per connection; the shared executor still owns fresh
 // bindings, statement invalidation, and schema-driven SELECT * repreparation.
-const exactSessionEntryQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareExactSessionEntryQueries>
->();
-
-function getExactSessionEntryQueries(database: DatabaseSync) {
-  let queries = exactSessionEntryQueries.get(database);
-  if (!queries) {
-    queries = prepareExactSessionEntryQueries(database);
-    exactSessionEntryQueries.set(database, queries);
-  }
-  return queries;
-}
+const getExactSessionEntryQueries = createSqliteQueryCache(prepareExactSessionEntryQueries);
 
 export type ResolvedSessionEntryRow = {
   entry: SessionEntry;

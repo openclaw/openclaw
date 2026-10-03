@@ -19,7 +19,6 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, {
     prefix: "openclaw-agent-session-",
-    skipSessionCleanup: true,
   });
 }
 

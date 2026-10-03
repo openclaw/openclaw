@@ -195,31 +195,18 @@ export function collectTopLevelPublicSurfaceEntries(pluginDir) {
     return [];
   }
 
-  return fs
-    .readdirSync(pluginDir, { withFileTypes: true })
-    .flatMap((dirent) => {
-      if (!dirent.isFile()) {
-        return [];
-      }
-
-      if (!isTopLevelPublicSurfaceFile(dirent.name)) {
-        return [];
-      }
-
-      return [`./${dirent.name}`];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
+  return collectTopLevelPublicSurfaceEntriesFromFiles(
+    fs
+      .readdirSync(pluginDir, { withFileTypes: true })
+      .filter((dirent) => dirent.isFile())
+      .map((dirent) => dirent.name),
+  );
 }
 
 function collectTopLevelPublicSurfaceEntriesFromFiles(relativeFiles) {
   return relativeFiles
-    .flatMap((relativeFile) => {
-      if (!isTopLevelPublicSurfaceFile(relativeFile)) {
-        return [];
-      }
-
-      return [`./${relativeFile}`];
-    })
+    .filter(isTopLevelPublicSurfaceFile)
+    .map((relativeFile) => `./${relativeFile}`)
     .toSorted((left, right) => left.localeCompare(right));
 }
 

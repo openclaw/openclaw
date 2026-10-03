@@ -53,7 +53,7 @@ const MAX_PLAYBACK_BUFFERED_BYTES = 2 * 1024 * 1024;
 type FaceTimeAudioPump = {
   suppressionReady(): Promise<void>;
   routeReady(): Promise<void>;
-  processOutputSuppressed(): boolean;
+  processOutputSuppressed(this: void): boolean;
   writeOutputAudio(audio: Buffer, metadata?: RealtimeVoiceAudioChunkMetadata): void;
   getPlaybackState(): RealtimeVoicePlaybackItem[];
   finishOutputAudio(): void;

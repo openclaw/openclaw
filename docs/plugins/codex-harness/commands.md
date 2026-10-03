@@ -102,9 +102,16 @@ resolve to `on`, `off`, or `auto`.
 is not a synonym for `/fast off`, and it does not change the shared OpenClaw
 session policy. When a shared Fast-mode run control reaches a Codex harness
 turn, it supersedes `plugins.entries.codex.config.appServer.serviceTier` and
-any binding preference that applies to that turn: Fast on sends `priority`,
+any binding preference that applies to that turn: Fast on starts from `priority`,
 Fast off sends `null`, and auto decides for each model call. The configured or
 bound native tier is used only when no shared run control is supplied.
+
+Fast, active Auto, and unspecified shared run controls automatically upgrade to
+Ultrafast when the authenticated app-server catalog advertises it for the selected
+native model. Set `appServer.enableUltrafast: false` to keep the baseline tier;
+an explicit shared `"ultrafast"` preference still requests supported Ultrafast.
+See [app-server transport](/plugins/codex-harness-reference/app-server-transport)
+for catalog checks and fallback behavior.
 
 `/codex fast status` and `/codex binding` report native preference state, not
 the upstream tier that processed a completed provider request.

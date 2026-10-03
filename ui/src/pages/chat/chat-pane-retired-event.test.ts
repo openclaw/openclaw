@@ -185,7 +185,11 @@ it.each([
       return Array.isArray(ids) && ids.includes(runId);
     });
     expect(recoveryCalls).toEqual([
-      ["chat.history", { sessionKey: successor.key, inputRunIds: [runId], limit: 1000 }, undefined],
+      [
+        "chat.history",
+        { sessionKey: successor.key, inputRunIds: [runId], limit: 1000 },
+        { timeoutMs: 30_000 },
+      ],
     ]);
     expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
     expect(state.chatMessages).toEqual(observedTranscript);

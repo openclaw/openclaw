@@ -8,8 +8,8 @@ const mocks = vi.hoisted(() => {
     releaseToken,
     acquireToken: vi.fn(() => releaseToken),
     identity: vi.fn<(location: string, expected: string) => void>(),
-    openTracked: vi.fn(() => db),
-    openPrivate: vi.fn(() => db),
+    openTracked: vi.fn<() => typeof db>(),
+    openPrivate: vi.fn<() => typeof db>(),
     closeHandle: vi.fn<(owner: { db: typeof db; afterClose: () => void }) => unknown[]>(),
     schema: vi.fn<() => void>(),
     policy: vi.fn(() => false),
@@ -57,10 +57,10 @@ beforeEach(() => {
   mocks.policy.mockReset().mockReturnValue(false);
   mocks.acquireToken.mockClear();
   mocks.releaseToken.mockReset();
-  mocks.openTracked.mockClear();
-  mocks.openPrivate.mockClear();
-  mocks.db.isOpen = true;
-  mocks.db.close.mockReset().mockImplementation(() => {
+  mocks.db = { isOpen: true, close: vi.fn<() => void>() };
+  mocks.openTracked.mockReset().mockImplementation(() => mocks.db);
+  mocks.openPrivate.mockReset().mockImplementation(() => mocks.db);
+  mocks.db.close.mockImplementation(() => {
     mocks.db.isOpen = false;
   });
   mocks.closeHandle.mockReset().mockImplementation((owner) => {
@@ -246,6 +246,7 @@ it("refuses a changed physical identity before opening a native reader", () => {
 
 it("closes the opened reader before reporting a post-open identity change", () => {
   const primary = new Error("SQLite file identity changed after open");
+  const nativeClose = mocks.db.close;
   mocks.identity
     .mockImplementationOnce(() => {})
     .mockImplementationOnce(() => {
@@ -259,7 +260,7 @@ it("closes the opened reader before reporting a post-open identity change", () =
   expect(mocks.closeHandle).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ db: mocks.db, path: pathname }),
   );
-  expect(mocks.db.close).toHaveBeenCalledOnce();
+  expect(nativeClose).toHaveBeenCalledOnce();
   expect(mocks.db.isOpen).toBe(false);
 });
 

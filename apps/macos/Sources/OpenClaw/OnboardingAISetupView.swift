@@ -29,6 +29,7 @@ private struct OnboardingRecommendedInstallCard: View {
             if let website = OnboardingProviderAuthLink.safeURL(self.install.website) {
                 Link(destination: website) { self.content }
                     .buttonStyle(.plain)
+                    .environment(\.openURL, AppActivation.shared.openURLAction)
             } else {
                 self.content
             }
@@ -751,7 +752,7 @@ struct OnboardingErrorCard: View {
                     }
                     Button("Open help…") {
                         if let url = URL(string: "https://docs.openclaw.ai/\(docsSlug)") {
-                            NSWorkspace.shared.open(url)
+                            AppActivation.shared.open(url)
                         }
                     }
                     .buttonStyle(.link)

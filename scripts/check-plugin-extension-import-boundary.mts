@@ -120,8 +120,6 @@ async function runPluginExtensionImportBoundaryCheck(): Promise<0 | 1> {
   return 1;
 }
 
-async function main(): Promise<void> {
+runAsScript(import.meta.url, async () => {
   process.exitCode = await runPluginExtensionImportBoundaryCheck();
-}
-
-runAsScript(import.meta.url, main);
+});

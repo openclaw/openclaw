@@ -16,13 +16,21 @@ import {
   parseStoredChatOutboxScope,
   resolvePendingComposerSessions,
   storedChatOutboxScopeKey,
-  storageTargetForGateway,
+  storageTargetForComposer,
   subscribeStoredChatOutboxChanges,
   writeStoredOutboxStore,
   type ChatComposerScope,
 } from "./outbox-store.ts";
 
 export type StoredChatOutbox = StoredChatOutboxScope & { queue: ChatQueueItem[] };
+export type StoredSidebarSessionFacts = StoredChatOutboxScope & {
+  hasComposerDraft: boolean;
+  outboxAttentionCount: number;
+};
+export type SidebarOutboxSummary = Pick<
+  ReturnType<typeof summarizeStoredChatOutboxes>["summary"],
+  "total" | "attentionCountForSession" | "hasSessionDraft"
+>;
 
 type StoredOutboxReaderScope = ChatComposerScope &
   Required<Pick<ChatComposerScope, "client" | "connected">>;
@@ -69,6 +77,7 @@ export function createStoredChatOutboxReader() {
     state.client,
     state.client?.recoveryScope,
     state.client?.recoveryScopeReady,
+    owner?.recoveryScope,
     state.connected,
     presence,
   ];
@@ -144,7 +153,7 @@ export function createStoredChatOutboxReader() {
     },
     read(state: StoredOutboxReaderScope) {
       lastState = state;
-      const gatewayOwner = storageTargetForGateway(state.settings?.gatewayUrl).gatewayOwner;
+      const gatewayOwner = storageTargetForComposer(state).gatewayOwner;
       const recoveryScope = observeOutboxRecoveryOwner(state);
       if (owner?.gatewayOwner !== gatewayOwner || owner?.recoveryScope !== recoveryScope) {
         owner = recoveryScope ? { gatewayOwner, recoveryScope } : undefined;
@@ -171,7 +180,7 @@ function listStoredComposerRows(
     return [];
   }
   try {
-    const target = storageTargetForGateway(state.settings?.gatewayUrl);
+    const target = storageTargetForComposer(state);
     const store = readProjectedOutboxStore(storage, target);
     if (resolvePendingComposerSessions(store, state)) {
       try {
@@ -234,8 +243,10 @@ function summarizeStoredChatOutboxes(
 ) {
   const idsByScope = new Map<string, { all: Set<string>; attention: Set<string> }>();
   const drafts = new Map<string, DurableChatDraftPresence>();
+  const scopes = new Map<string, StoredChatOutboxScope>();
   for (const { scope, session } of listStoredComposerRows(state)) {
     const scopeKey = storedChatOutboxScopeKey(scope);
+    scopes.set(scopeKey, scope);
     if (!isIncognitoSessionKey(scope.sessionKey)) {
       drafts.set(scopeKey, {
         revision: session.draftRevision ?? 0,
@@ -270,6 +281,7 @@ function summarizeStoredChatOutboxes(
       durable.revision >= (drafts.get(scopeKey)?.revision ?? 0)
     ) {
       drafts.set(scopeKey, durable);
+      scopes.set(scopeKey, scope);
     }
   }
   const attentionCountsByScope = new Map<string, number>();
@@ -289,6 +301,16 @@ function summarizeStoredChatOutboxes(
     ),
     summary: {
       total,
+      sessions: [...scopes.entries()]
+        // Cleared drafts must not consume the native snapshot's bounded row budget.
+        .filter(([key]) => drafts.get(key)?.active || attentionCountsByScope.has(key))
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([key, scope]): StoredSidebarSessionFacts => ({
+          sessionKey: scope.sessionKey,
+          agentId: scope.agentId,
+          hasComposerDraft: Boolean(drafts.get(key)?.active),
+          outboxAttentionCount: attentionCountsByScope.get(key) ?? 0,
+        })),
       attentionCountForSession: (sessionKey: string) =>
         attentionCountsByScope.get(sessionScopeKey(sessionKey)) ?? 0,
       hasSessionDraft: (sessionKey: string) =>

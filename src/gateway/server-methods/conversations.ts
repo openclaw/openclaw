@@ -27,19 +27,12 @@ import {
   type GatewayInflightResult,
 } from "./inflight.js";
 import type {
-  GatewayClient,
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
   RespondFn,
 } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
-
-function isAuthenticatedOwner(client: GatewayClient | null): boolean {
-  // These RPCs require operator.admin. Derive owner status from the admitted
-  // socket anyway so no future schema field can self-assert channel authority.
-  return client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
-}
 
 function validateConversationSourceSession(params: {
   config: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
@@ -250,7 +243,7 @@ async function handleConversationWrite(
         config,
         readCurrentConfig,
         agentId: request.agentId,
-        senderIsOwner: isAuthenticatedOwner(client),
+        senderIsOwner: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
         ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),
         conversationRef: request.conversationRef,
         message: request.message,

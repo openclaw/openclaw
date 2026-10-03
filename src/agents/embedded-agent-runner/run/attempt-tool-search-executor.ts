@@ -10,7 +10,6 @@ import { notifyToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import { sanitizeToolResult } from "../../embedded-agent-tool-results.js";
 import {
   copyInternalToolResultState,
   getInternalToolExecutionPreparer,
@@ -74,7 +73,7 @@ export function createSubscribedToolSearchExecutor(params: {
               toolCallId: toolParams.toolCallId,
               toolName: toolParams.toolName,
               input: terminal.executedArguments,
-              result: sanitizeToolResult(terminal.result),
+              result: terminal.readSanitizedResult(),
               isError: terminal.isError,
               startedAt,
               timestamp: Date.now(),
@@ -84,7 +83,7 @@ export function createSubscribedToolSearchExecutor(params: {
           await runWithOwnedSessionTranscriptWrite(
             { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
             () =>
-              withSessionManagerWrite(manager, () => {
+              withSessionManagerWrite(manager, async () => {
                 // Revalidate the exact attempt after awaited acceptance and writer admission.
                 if (!params.isCurrent()) {
                   return;
@@ -92,7 +91,10 @@ export function createSubscribedToolSearchExecutor(params: {
                 if (isRecord(terminal.result)) {
                   copyInternalToolResultState(terminal.result, message);
                 }
-                manager.appendMessage(message);
+                await manager.appendMessageAsync(message);
+                if (!params.isCurrent()) {
+                  return;
+                }
                 const recorded = readNestedToolActivity(
                   redactTranscriptMessage(message, attempt.config),
                 );

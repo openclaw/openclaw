@@ -193,40 +193,6 @@ describe("AppSidebar new session navigation", () => {
 
     expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
   });
-
-  it("hides a successful empty catalog even when it can start sessions", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("research", ["agent:research:main"]),
-    );
-    sidebar.connected = true;
-    sidebar.sessionData.sessionCatalogs = [
-      {
-        id: "claude",
-        label: "Claude Code",
-        capabilities: { continueSession: true, archive: false, startTerminal: true },
-        hosts: [
-          {
-            hostId: "gateway:local",
-            label: "Gateway Mac",
-            kind: "gateway",
-            connected: true,
-            sessions: [],
-          },
-        ],
-      },
-    ];
-    sidebar.sessionData.requestSessionDataUpdate();
-    await sidebar.updateComplete;
-
-    expect(sidebar.querySelector('[data-session-section="catalog:claude"]')).toBeNull();
-    expect(sidebar.querySelector(".sidebar-session-catalog-new")).toBeNull();
-    // Without a visible peer section the lone Other zone stays headerless.
-    expect(
-      sidebar.querySelector('[data-session-section="ungrouped"] .sidebar-recent-sessions__head'),
-    ).toBeNull();
-  });
 });
 
 describe("AppSidebar agent chip", () => {

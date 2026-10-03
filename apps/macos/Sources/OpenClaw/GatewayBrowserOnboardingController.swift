@@ -69,9 +69,9 @@ final class GatewayBrowserOnboardingController: NSWindowController, NSWindowDele
         window.contentViewController = NSHostingController(rootView: content)
         self.window = window
         window.center()
-        self.showWindow(nil)
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.shared.showWindow(controller: self)
+        AppActivation.shared.makeKeyAndOrderFront(window: window)
+        AppActivation.shared.activate()
     }
 
     func windowWillClose(_ notification: Notification) {

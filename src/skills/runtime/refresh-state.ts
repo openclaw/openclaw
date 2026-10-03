@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { notifyListeners } from "../../shared/listeners.js";
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import type { Skill } from "../loading/skill-contract.js";
 import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 
@@ -20,7 +20,10 @@ type SkillsChangeEvent = {
   sourceScope?: SkillsSourceScope;
 };
 
-export type SkillsSourceScope = { executionWorkspaceDir?: string };
+export type SkillsSourceScope = {
+  executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
+};
 export type SkillsSourceRefreshInputs = {
   sourceScope: SkillsSourceScope;
   config?: OpenClawConfig;
@@ -77,10 +80,7 @@ export function setSkillsChangeListenerErrorHandler(handler?: (err: unknown) => 
 }
 
 export function registerSkillsChangeListener(listener: (event: SkillsChangeEvent) => void) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  return registerListener(listeners, listener);
 }
 
 /** Coverage recovery follows content reconciliation; it never creates a source revision. */
@@ -95,9 +95,12 @@ function sourceScopeKey(workspaceDir: string, scope: SkillsSourceScope = {}): st
   const { executionWorkspaceDir } = normalizeWorkspaceSkillRoots({
     agentWorkspaceDir: workspaceDir,
     executionWorkspaceDir: scope.executionWorkspaceDir,
+    executionWorkspaceFileHost: scope.executionWorkspaceFileHost,
   });
   // Files in an execution root are shared by every agent and inventory consumer of that root.
-  return executionWorkspaceDir ?? "";
+  return executionWorkspaceDir
+    ? JSON.stringify([executionWorkspaceDir, scope.executionWorkspaceFileHost])
+    : "";
 }
 
 /** Record resolved file-backed winners at the discovery boundary, before session filtering. */

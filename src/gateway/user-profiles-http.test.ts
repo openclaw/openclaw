@@ -1,14 +1,14 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { retainUserProfileCatalog } from "../state/user-profile-list.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { repairMergedGatewayOwnerProfile } from "../state/user-profiles-owner-migration.js";
 import { UserProfileNotFoundError } from "../state/user-profiles-schema.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -248,6 +248,8 @@ describe("profile avatar HTTP endpoint", () => {
     openOpenClawStateDatabase(options)
       .db.prepare("UPDATE user_profiles SET merged_into = ? WHERE id = ?")
       .run(person.id, owner.id);
+    const catalog = await prepareUserProfileCatalog(options);
+    onTestFinished(catalog.release);
     const { createProfileAvatarReader: createReader } = await vi.importActual<
       typeof import("../state/user-profiles-avatar.js")
     >("../state/user-profiles-avatar.js");
@@ -288,7 +290,8 @@ describe("profile avatar HTTP endpoint", () => {
     const profile = profiles.ensureProfileForEmail("reader@example.test", options);
     const bytes = new Uint8Array(1024).fill(7);
     expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
-    const release = retainUserProfileCatalog(options);
+    const catalog = await prepareUserProfileCatalog(options);
+    onTestFinished(catalog.release);
     const reader = createReader(profile.id, options);
     const warm = await reader.inspect();
     await warm.loadBytes();
@@ -352,7 +355,6 @@ describe("profile avatar HTTP endpoint", () => {
     } finally {
       read.mockRestore();
       sql.restore();
-      release();
     }
   });
 
@@ -374,7 +376,8 @@ describe("profile avatar HTTP endpoint", () => {
       const next = new Uint8Array([4, 5, 6]);
       setAvatar(original.id, new Uint8Array([1]), "image/png", options);
       setAvatar(target.id, next, "image/webp", options);
-      const release = retainUserProfileCatalog(options);
+      const catalog = await prepareUserProfileCatalog(options);
+      onTestFinished(catalog.release);
       const reader = createReader(original.id, options);
       await (await reader.inspect()).loadBytes();
       let changed = false;
@@ -413,7 +416,6 @@ describe("profile avatar HTTP endpoint", () => {
         }),
       );
       expect(res.end).toHaveBeenCalledWith(next);
-      release();
     },
   );
 
@@ -684,37 +686,47 @@ describe("profile avatar HTTP endpoint", () => {
     );
   });
 
-  it("falls through to a later linked email when the primary has no Gravatar", async () => {
-    const profileId = "profile-multi-email-fallthrough";
-    const primaryHash = emailHash("primary-miss@example.com");
-    avatarFixture.mockReturnValue(undefined);
-    profileFixture.mockReturnValue({
-      id: profileId,
-      emails: ["primary-miss@example.com", "secondary-hit@example.com"],
-      hasAvatar: false,
-    });
-    const fetchImpl = vi.fn(async (input: URL | RequestInfo) =>
-      fetchUrl(input).includes(primaryHash)
-        ? new Response(null, { status: 404 })
-        : new Response(new Uint8Array([2, 2, 2]), {
-            status: 200,
-            headers: { "content-type": "image/png" },
-          }),
-    );
-    const res = response();
+  it.each([404, 503])(
+    "only falls through after a definite Gravatar miss (primary %s)",
+    async (primaryStatus) => {
+      const fixtureId = `${primaryStatus}-${randomUUID()}`;
+      const profileId = `profile-multi-email-${fixtureId}`;
+      const primaryEmail = `primary-${fixtureId}@example.test`;
+      const primaryHash = emailHash(primaryEmail);
+      avatarFixture.mockReturnValue(undefined);
+      profileFixture.mockReturnValue({
+        id: profileId,
+        emails: [primaryEmail, `secondary-${fixtureId}@example.test`],
+        hasAvatar: false,
+      });
+      const fetchImpl = vi.fn(async (input: URL | RequestInfo) =>
+        fetchUrl(input).includes(primaryHash)
+          ? new Response(null, { status: primaryStatus })
+          : new Response(new Uint8Array([2, 2, 2]), {
+              status: 200,
+              headers: { "content-type": "image/png" },
+            }),
+      );
+      const res = response();
 
-    await handleUserProfileAvatarHttpRequest(
-      request("/ignored-by-handler"),
-      res.response,
-      `/api/users/${profileId}/avatar`,
-      { auth: {} as never, fetchImpl },
-    );
+      await handleUserProfileAvatarHttpRequest(
+        request("/ignored-by-handler"),
+        res.response,
+        `/api/users/${profileId}/avatar`,
+        { auth: {} as never, fetchImpl },
+      );
 
-    // A definite miss on the primary lets the request fall through to the
-    // secondary email under the shared deadline; the secondary hit is served.
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(res.end).toHaveBeenCalledWith(new Uint8Array([2, 2, 2]));
-  });
+      expect(fetchImpl).toHaveBeenCalledTimes(primaryStatus === 404 ? 2 : 1);
+      if (primaryStatus === 404) {
+        expect(res.end).toHaveBeenCalledWith(new Uint8Array([2, 2, 2]));
+      } else {
+        expect(res.response.statusCode).toBe(502);
+        expect(res.end).toHaveBeenCalledWith(
+          JSON.stringify({ ok: false, error: { type: "avatar_upstream_unavailable" } }),
+        );
+      }
+    },
+  );
 
   it("caps the Gravatar fan-out so a profile with many linked emails is bounded", async () => {
     const profileId = "profile-many-emails";

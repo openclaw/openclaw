@@ -6,20 +6,23 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
+import * as fileHashing from "./package-update-integrity-hasher.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 
 const MAX_TREE_BYTES = 1024 * 1024 * 1024;
 const MAX_TREE_ENTRIES = 50_000;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_LAUNCHER_BYTES = 1024 * 1024;
+const SETTLED_CTIME_MARGIN_MS = 5_000;
+const SETTLED_CTIME_MARGIN_NS = BigInt(SETTLED_CTIME_MARGIN_MS) * 1_000_000n;
 const log = createSubsystemLogger("update/package-integrity");
 let readerSequence = 0;
 
 export type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
 export type PackageDirectoryIdentity = Pick<PackageIntegrityFingerprint, "identity" | "version">;
 
-type EntryObservation = { fields: Map<string, string>; retained: string };
-// Diagnostics live only as long as the in-process baseline; journal fingerprints stay compact.
+type EntryObservation = { fields: Map<string, string>; retained: string; reusable: boolean };
+// Observations live only as long as their in-process fingerprint; journals stay compact.
 const observations = new WeakMap<PackageIntegrityFingerprint, Map<string, EntryObservation>>();
 
 export class PackageIntegrityMismatchError extends Error {
@@ -140,7 +143,15 @@ function metadata(stat: BigIntStats) {
 function unchanged(left: BigIntStats, right: BigIntStats): boolean {
   return (
     left.ino !== 0n &&
-    Object.values(metadata(left)).join("/") === Object.values(metadata(right)).join("/")
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mode === right.mode &&
+    left.uid === right.uid &&
+    left.gid === right.gid &&
+    left.nlink === right.nlink &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
   );
 }
 
@@ -250,7 +261,12 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     return children.toSorted();
   }
 
-  async function hashFile(file: string, stat: BigIntStats, remainingBytes: number) {
+  async function hashFile(
+    file: string,
+    stat: BigIntStats,
+    remainingBytes: number,
+    readBuffer?: Buffer,
+  ) {
     if (!stat.isFile()) {
       throw new Error("Package rollback verification byte limit exceeded");
     }
@@ -266,7 +282,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         throw new Error("Package rollback file changed before reading");
       }
       const hash = createHash("sha256");
-      const buffer = Buffer.allocUnsafe(64 * 1024);
+      const buffer = readBuffer ?? Buffer.allocUnsafe(64 * 1024);
       const size = Number(stat.size);
       let position = 0;
       // The final stat detects growth; an extra EOF read costs one OS call per file.
@@ -289,7 +305,12 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     }
   }
 
-  async function tree(root: string, originalRoot = root): Promise<PackageIntegrityFingerprint> {
+  async function tree(
+    root: string,
+    originalRoot = root,
+    reuse?: PackageIntegrityFingerprint,
+  ): Promise<PackageIntegrityFingerprint> {
+    const prior = reuse ? observations.get(reuse) : undefined;
     const digest = createHash("sha256");
     const observed: Array<{ file: string; stat: BigIntStats }> = [];
     const entriesObserved = new Map<string, EntryObservation>();
@@ -297,9 +318,72 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     let remainingEntries = MAX_TREE_ENTRIES - 1;
     let device: bigint | undefined;
     let rootIdentity = "";
+    type HashedEntry = {
+      relative: string;
+      fields: Map<string, string>;
+      retained: string[];
+      reusable: boolean;
+    };
+    type Outcome = { entry: HashedEntry } | { error: unknown };
+    // DFS post-order: settled entries (reused files, directories, links) wait only
+    // behind earlier hashes, then drain with them.
+    const pending: Array<{ entry: HashedEntry } | { outcome: Promise<Outcome> }> = [];
+    const hasher = fileHashing.createPackageFileHasher(
+      async (file, stat) => (await hashFile(file, stat, Number(stat.size))).digest,
+    );
+    const window = 64;
+    let pendingFiles = 0;
+    let fileFailed = false;
+    const appendEntry = ({ relative, fields, retained, reusable }: HashedEntry) => {
+      const retainedEntry = JSON.stringify([relative, retained]);
+      digest.update(retainedEntry);
+      entriesObserved.set(relative, { fields, retained: retainedEntry, reusable });
+    };
+    const settled = (entry: HashedEntry) => {
+      if (pending.length) {
+        pending.push({ entry });
+      } else {
+        appendEntry(entry);
+      }
+    };
+    const drainFiles = async (limit = pending.length) => {
+      let count = limit;
+      if (!count) {
+        return;
+      }
+      const settle = (items: typeof pending) =>
+        read(() => {
+          hasher.flush();
+          return Promise.all(
+            items.map((item) => ("outcome" in item ? item.outcome : Promise.resolve(item))),
+          );
+        });
+      let outcomes = await settle(pending.slice(0, count));
+      if (count < pending.length && outcomes.some((outcome) => "error" in outcome)) {
+        count = pending.length;
+        outcomes = await settle(pending);
+      }
+      for (let next = pending[count]; next && "entry" in next; next = pending[++count]) {
+        outcomes.push(next);
+      }
+      pendingFiles -= pending.splice(0, count).filter((item) => "outcome" in item).length;
+      // Journal digests and refusal precedence follow DFS order, not IO completion order.
+      for (const outcome of outcomes) {
+        if ("error" in outcome) {
+          throw outcome.error;
+        }
+        appendEntry(outcome.entry);
+      }
+    };
 
     async function visit(file: string, relative: string): Promise<void> {
+      if (fileFailed) {
+        await drainFiles();
+      }
       const stat = await read(() => fs.lstat(file, { bigint: true }));
+      if (fileFailed) {
+        await drainFiles();
+      }
       if (stat.ino === 0n || (device !== undefined && device !== stat.dev)) {
         throw new Error("Package rollback filesystem identity is unavailable");
       }
@@ -354,10 +438,49 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         fields.set("target", target);
         retained.push("symlink", target);
       } else if (stat.isFile()) {
-        const contents = await hashFile(file, stat, MAX_TREE_BYTES - bytes);
-        bytes += contents.bytes;
-        fields.set("sha256", contents.digest);
-        retained.push("file", contents.digest);
+        const remainingBytes = MAX_TREE_BYTES - bytes;
+        if (stat.size > BigInt(remainingBytes)) {
+          throw new PackageIntegrityLimitError("byte");
+        }
+        bytes += Number(stat.size);
+        const previous = prior?.get(relative);
+        const previousDigest = previous?.fields.get("sha256");
+        if (
+          previous?.reusable &&
+          previousDigest !== undefined &&
+          Object.entries(info).every(([field, value]) => previous.fields.get(field) === value)
+        ) {
+          fields.set("sha256", previousDigest);
+          retained.push("file", previousDigest);
+          // Keep reused entries behind earlier hashes without consuming a hash slot.
+          settled({ relative, fields, retained, reusable: true });
+          return;
+        }
+        pendingFiles++;
+        // Userspace cannot set ctime, but coarse filesystem clocks can hide same-tick
+        // writes, so reuse only bytes read well after the last change; admission
+        // precedes the worker or fallback read. Like the final sweep, this observes
+        // rather than excludes writers: a store to an already dirty shared mapping
+        // need not update timestamps.
+        const admittedAtNs = BigInt(Date.now()) * 1_000_000n;
+        const reusable = stat.ctimeNs + SETTLED_CTIME_MARGIN_NS <= admittedAtNs;
+        pending.push({
+          outcome: trackIo(() => hasher.hash(file, stat)).then(
+            (fileDigest) => {
+              fields.set("sha256", fileDigest);
+              retained.push("file", fileDigest);
+              return { entry: { relative, fields, retained, reusable } };
+            },
+            (error: unknown) => {
+              fileFailed = true;
+              return { error };
+            },
+          ),
+        });
+        if (pendingFiles === window) {
+          await drainFiles(pending.findIndex((item) => "outcome" in item) + 1);
+        }
+        return;
       } else if (stat.isDirectory()) {
         const children = await entries(file, remainingEntries);
         // Reserve pending siblings before descending so wide ancestor lists
@@ -369,26 +492,38 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       } else {
         throw new Error("Package rollback contains a non-file entry");
       }
-      const retainedEntry = JSON.stringify([relative, retained]);
-      digest.update(retainedEntry);
-      entriesObserved.set(relative, { fields, retained: retainedEntry });
+      settled({ relative, fields, retained, reusable: false });
     }
 
-    await visit(root, "");
-    // JSON parsing buffers the manifest, unlike the streamed tree hash. Bound
-    // that allocation separately, including growth after hashing.
-    const version = await read(() => readPackageVersion(root, { maxBytes: MAX_MANIFEST_BYTES }));
-    if (!version) {
-      throw new Error("Package rollback version is unavailable");
-    }
-    for (const entry of observed) {
-      if (!unchanged(entry.stat, await read(() => fs.lstat(entry.file, { bigint: true })))) {
-        throw new Error("Package rollback tree changed during verification");
+    try {
+      try {
+        await visit(root, "");
+        await drainFiles();
+      } catch (error) {
+        // A deadline abandons OS work; all other refusals join admitted hashes
+        // so a later walk error cannot hide an earlier DFS hash failure.
+        if (!(error instanceof PackageIntegrityTimeoutError)) {
+          await drainFiles();
+        }
+        throw error;
       }
+      // JSON parsing buffers the manifest, unlike the streamed tree hash. Bound
+      // that allocation separately, including growth after hashing.
+      const version = await read(() => readPackageVersion(root, { maxBytes: MAX_MANIFEST_BYTES }));
+      if (!version) {
+        throw new Error("Package rollback version is unavailable");
+      }
+      for (const entry of observed) {
+        if (!unchanged(entry.stat, await read(() => fs.lstat(entry.file, { bigint: true })))) {
+          throw new Error("Package rollback tree changed during verification");
+        }
+      }
+      const fingerprint = { digest: digest.digest("hex"), identity: rootIdentity, version };
+      observations.set(fingerprint, entriesObserved);
+      return fingerprint;
+    } finally {
+      hasher.close();
     }
-    const fingerprint = { digest: digest.digest("hex"), identity: rootIdentity, version };
-    observations.set(fingerprint, entriesObserved);
-    return fingerprint;
   }
 
   async function rootEntry(

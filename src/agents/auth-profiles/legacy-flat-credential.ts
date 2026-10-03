@@ -1,8 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { coerceSecretRef } from "../../config/types.secrets.js";
-import { parseLegacyCredentialEntry } from "./persisted.js";
-import type { AuthProfileCredential } from "./types.js";
+import { coercePersistedAuthProfileStore, parseAuthProfileCredential } from "./persisted.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
 function inferLegacyCredentialType(
   record: Record<string, unknown>,
@@ -61,4 +61,105 @@ export function hasUsableAuthProfileCredential(credential: AuthProfileCredential
     Boolean(readNonEmptyString(credential.refresh)) &&
     typeof credential.expires === "number"
   );
+}
+
+/** Doctor normalization also supports provider-scoped refusal diagnostics, never runtime credentials. */
+export function normalizeLegacyCredentialFields(
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  const entry = { ...raw };
+  const mode = entry.mode;
+  if (
+    !("type" in entry) &&
+    (mode === "apiKey" || mode === "api_key" || mode === "token" || mode === "oauth")
+  ) {
+    entry.type = mode;
+    delete entry.mode;
+  }
+  if (entry.type === "apiKey") {
+    entry.type = "api_key";
+  }
+  if (
+    entry.type === "api_key" &&
+    !readNonEmptyString(entry.key) &&
+    !coerceSecretRef(entry.key) &&
+    !coerceSecretRef(entry.keyRef)
+  ) {
+    for (const field of ["apiKey", "api_key"] as const) {
+      const key = readNonEmptyString(entry[field]) ?? coerceSecretRef(entry[field]);
+      if (key != null) {
+        entry.key = key;
+        delete entry[field];
+        break;
+      }
+    }
+  }
+  const fields =
+    entry.type === "api_key"
+      ? (["key", "keyRef"] as const)
+      : entry.type === "token"
+        ? (["token", "tokenRef"] as const)
+        : undefined;
+  if (fields) {
+    const [valueField, refField] = fields;
+    const value = entry[valueField];
+    const ref = isRecord(value) ? coerceSecretRef(value) : null;
+    if (ref && !coerceSecretRef(entry[refField])) {
+      entry[refField] = ref;
+      delete entry[valueField];
+    }
+  }
+  return entry;
+}
+
+export function parseLegacyCredentialEntry(
+  raw: unknown,
+  fallbackProvider?: string,
+): AuthProfileCredential | null {
+  return isRecord(raw)
+    ? parseAuthProfileCredential(normalizeLegacyCredentialFields(raw), fallbackProvider)
+    : null;
+}
+
+export function normalizeLegacyAuthProfileFields(raw: unknown): void {
+  if (!isRecord(raw) || !isRecord(raw.profiles)) {
+    return;
+  }
+  for (const [id, profile] of Object.entries(raw.profiles)) {
+    if (isRecord(profile) && parseLegacyCredentialEntry(profile)) {
+      raw.profiles[id] = normalizeLegacyCredentialFields(profile);
+    }
+  }
+}
+
+export function coerceLegacyAuthProfileStore(raw: unknown): AuthProfileStore | null {
+  const normalized = structuredClone(raw);
+  normalizeLegacyAuthProfileFields(normalized);
+  return coercePersistedAuthProfileStore(normalized);
+}
+
+type LegacyAuthStore = Record<string, AuthProfileCredential>;
+
+export function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
+  if (!isRecord(raw) || "profiles" in raw) {
+    return null;
+  }
+  const entries: LegacyAuthStore = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const parsed = parseLegacyCredentialEntry(value, key);
+    if (parsed) {
+      entries[key] = parsed;
+    }
+  }
+  return Object.keys(entries).length > 0 ? entries : null;
+}
+
+/** Applies legacy auth.json credentials into an auth profile store. */
+export function applyLegacyAuthStore(store: AuthProfileStore, legacy: LegacyAuthStore): void {
+  for (const [provider, cred] of Object.entries(legacy)) {
+    store.profiles[`${provider}:default`] = {
+      ...cred,
+      provider: cred.provider ?? provider,
+    };
+  }
 }

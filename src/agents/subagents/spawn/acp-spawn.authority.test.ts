@@ -120,7 +120,7 @@ beforeEach(async () => {
     artifactBasename: "browser-maintenance.js",
   });
   managerTesting.resetAcpSessionManagerForTests();
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(
     () => getActivePluginRegistry() ?? createTestRegistry([]),
   );
@@ -132,7 +132,7 @@ afterEach(async () => {
     managerTesting.resetAcpSessionManagerForTests();
     unregisterAcpRuntimeBackend(backendId);
     await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await cleanupSessionStateForTest({ stateDir });
   } finally {
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
@@ -167,10 +167,15 @@ it.each([
       ...parentScope,
       defaultSessionId: "parent-session",
     });
+    const conversationLink = {
+      url: "https://chat.example.test/thread/123",
+      label: "Source Thread",
+    };
     const live = closure === "live";
     const thread = stage === "thread";
     const readChild = (sessionKey: string) => loadSessionEntry({ sessionKey, agentId: "fixture" });
     if (live) {
+      await sessionAccessor.upsertSessionEntryCore(parentScope, { conversationLink });
       await recordSessionParticipant(parentScope, {
         identity: { type: "profile", id: "human-contributor" },
         promptedAt: 1,
@@ -301,6 +306,7 @@ it.each([
         if (live) {
           const entry = readChild(input.sessionKey);
           expect(entry?.inheritedGitContributorProfileIds).toEqual(["human-contributor"]);
+          expect(entry?.conversationLink).toEqual(conversationLink);
           expect(entry?.participants ?? []).toEqual([]);
         }
         ensuredSessions.push(input.sessionKey);
@@ -349,6 +355,9 @@ it.each([
     const source = createSessionsSpawnTool({
       config: cfg,
       agentSessionKey: parentSessionKey,
+      // Trusted tool construction facts the ACP child records in its lineage receipt.
+      senderIsOwner: true,
+      expectedParentSessionId: "parent-session",
       requesterRunId: parentRunId,
       requesterTurnRunId: parentRunId,
       ...(thread
@@ -441,6 +450,12 @@ it.each([
         .toHaveBeenCalledTimes(thread && live ? 1 : 0);
       if (live) {
         expect(result).toMatchObject({ details: { status: "accepted", childSessionKey } });
+        expect(sourceBoundary.entry).toMatchObject({
+          spawnedBy: parentSessionKey,
+          parentSessionKey,
+          spawnedBySessionId: "parent-session",
+          spawnedBySenderIsOwner: true,
+        });
         expect(dispatch).toHaveBeenCalledOnce();
         expect(subagentRuns.size).toBe(1);
         expect(subagentRuns.get(acceptedRunId!)).toMatchObject({

@@ -38,7 +38,7 @@ import { createPresenceActivityController } from "../../lit/presence-activity-co
 import { StreamAutoFollowController } from "../../lit/stream-auto-follow-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderCurrentWork } from "./current-work-view.ts";
-import { createLiveActivity, type LiveActivity } from "./live-activity.ts";
+import { createLiveActivity } from "./live-activity.ts";
 import {
   activityRunInspectorSearch,
   mergeDecisionPage,
@@ -99,7 +99,7 @@ class ActivityPage extends OpenClawLightDomElement {
     () => projectPresencePayload(this.presencePayload).users,
   );
 
-  private liveActivity: LiveActivity | null = null;
+  private liveActivity: ReturnType<typeof createLiveActivity> | null = null;
   private liveActivityRevision = -1;
   private readonly sessionActivity = new SessionActivityController(this);
   private sessionActivityRevision = -1;

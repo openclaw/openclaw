@@ -255,10 +255,6 @@ export function reportRatchetFailures(
   return active.length > 0;
 }
 
-export function reportRatchetSuccess(message: string) {
-  console.log(message);
-}
-
 type PerFileCountRatchetOptions = {
   baselinePath: string;
   baselineHeader: string;
@@ -366,7 +362,7 @@ export function runPerFileCountRatchet(
     } catch {
       if (args.prune && !args.staged && baseBaseline === null) {
         writeBaseline(current);
-        reportRatchetSuccess(
+        console.log(
           `Initialized ${baselinePath}: ${current.size} files, ${totalCount(current)} ${messages.countNoun}.`,
         );
         return 0;
@@ -376,7 +372,7 @@ export function runPerFileCountRatchet(
 
     if (args.prune && !args.staged && baseBaseline === null) {
       writeBaseline(current);
-      reportRatchetSuccess(
+      console.log(
         `Refreshed initial ${baselinePath}: ${current.size} files, ${totalCount(current)} ${messages.countNoun}.`,
       );
       return 0;
@@ -427,7 +423,7 @@ export function runPerFileCountRatchet(
       const oldFiles = baseline.size;
       const oldCount = totalCount(baseline);
       writeBaseline(current);
-      reportRatchetSuccess(
+      console.log(
         `Pruned ${baselinePath}: ${oldFiles} -> ${current.size} files; ${oldCount} -> ${totalCount(current)} ${messages.countNoun}.`,
       );
       return 0;
@@ -445,7 +441,7 @@ export function runPerFileCountRatchet(
       return 1;
     }
 
-    reportRatchetSuccess(
+    console.log(
       `${messages.successTitle}: ${current.size} files, ${totalCount(current)} grandfathered ${messages.countNoun}.`,
     );
     return 0;

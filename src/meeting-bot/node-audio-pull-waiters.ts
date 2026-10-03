@@ -1,3 +1,5 @@
+import { createDeferredCore } from "../shared/deferred.js";
+
 /** Internal pull-wait ownership used by the node-host long poll. */
 export class MeetingNodeAudioPullWaiters {
   readonly #waiters = new Set<() => void>();
@@ -7,11 +9,8 @@ export class MeetingNodeAudioPullWaiters {
   }
 
   async wait(timeoutMs: number): Promise<void> {
-    let wake!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      wake = resolve;
-      this.#waiters.add(wake);
-    });
+    const { promise: ready, resolve: wake } = createDeferredCore();
+    this.#waiters.add(wake);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<void>((resolve) => {
       timer = setTimeout(resolve, timeoutMs);

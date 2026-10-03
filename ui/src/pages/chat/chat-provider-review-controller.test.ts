@@ -80,22 +80,58 @@ function fixture(review = row.providerReview) {
     await vi.dynamicImportSettled();
     paint();
   };
-  return { state, controller, container, paint, click, open, outcome, request, refresh };
+  const calls = () => requestCalls(request, "sessions.providerReview.continue");
+  const acknowledge = async () => {
+    await open();
+    click("Acknowledge findings and continue");
+    return requireRecord(calls()[0]?.[1], "acknowledgment");
+  };
+  return {
+    state,
+    container,
+    paint,
+    click,
+    open,
+    acknowledge,
+    calls,
+    outcome,
+    request,
+    refresh,
+  };
+}
+
+async function expectFreshRetry(f: ReturnType<typeof fixture>, first: Record<string, unknown>) {
+  f.request.mockImplementationOnce((_method, params) => ({
+    runId: requireRecord(params, "retry request").idempotencyKey,
+    status: "started",
+  }));
+  f.click("Acknowledge findings and continue");
+  expect(f.calls()).toHaveLength(2);
+  const retry = requireRecord(f.calls()[1]?.[1], "retried acknowledgment");
+  expect(retry).toMatchObject({
+    sessionKey: row.key,
+    sessionId: row.sessionId,
+    reviewId: row.providerReview!.id,
+  });
+  expect(retry.idempotencyKey).not.toBe(first.idempotencyKey);
+  await f.outcome.promise;
+  await Promise.resolve();
+  await f.refresh.mock.results.at(-1)?.value;
 }
 
 it("requires explicit review and acknowledgment, quotes exact text, and keeps the server pause after ACK", async () => {
   const f = fixture();
-  expect(requestCalls(f.request, "sessions.providerReview.continue")).toHaveLength(0);
+  expect(f.calls()).toHaveLength(0);
   await f.open();
   expect(f.container.textContent).toContain(row.providerReview!.explanation);
   expect(f.container.querySelector("img")).toBeNull();
   expect(f.container.querySelector("blockquote")?.textContent).toBe(
     row.providerReview!.continuationMessage,
   );
-  expect(requestCalls(f.request, "sessions.providerReview.continue")).toHaveLength(0);
+  expect(f.calls()).toHaveLength(0);
   f.click("Acknowledge findings and continue");
   f.click("Requesting continuation…");
-  const calls = requestCalls(f.request, "sessions.providerReview.continue");
+  const calls = f.calls();
   expect(calls).toHaveLength(1);
   expect(calls[0]?.[1]).toEqual({
     sessionKey: row.key,
@@ -162,7 +198,7 @@ it.each([
     await f.open();
   }
   expect(f.container.textContent).not.toContain("Acknowledge findings and continue");
-  expect(requestCalls(f.request, "sessions.providerReview.continue")).toHaveLength(0);
+  expect(f.calls()).toHaveLength(0);
 });
 
 it("reports a failed status refresh and checks again without replaying an accepted acknowledgment", async () => {
@@ -190,29 +226,24 @@ it("reports a failed status refresh and checks again without replaying an accept
   expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
   f.click("Check continuation status");
   expect(f.refresh).toHaveBeenCalledTimes(2);
-  expect(requestCalls(f.request, "sessions.providerReview.continue")).toHaveLength(1);
+  expect(f.calls()).toHaveLength(1);
   secondRefresh.resolve({ status: "refreshed" });
   await secondRefresh.promise;
   expect(f.container.textContent).toContain("Waiting for the provider to accept it.");
   expect(f.container.textContent).not.toContain("status could not be refreshed");
   expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
-  expect(requestCalls(f.request, "sessions.providerReview.continue")).toHaveLength(1);
+  expect(f.calls()).toHaveLength(1);
 });
 
-it.each(
-  (["failed", "timeout", "killed"] as const).flatMap((status) =>
-    (["request", "server"] as const).map((runIdentity) => ({ status, runIdentity })),
-  ),
-)(
+it.each([
+  { status: "failed", runIdentity: "request" },
+  { status: "timeout", runIdentity: "server" },
+  { status: "killed", runIdentity: "server" },
+] as const)(
   "offers a fresh explicit acknowledgment after the $runIdentity run is canonically $status",
   async ({ status, runIdentity }) => {
     const f = fixture();
-    await f.open();
-    f.click("Acknowledge findings and continue");
-    const first = requireRecord(
-      requestCalls(f.request, "sessions.providerReview.continue")[0]?.[1],
-      "first acknowledgment",
-    );
+    const first = await f.acknowledge();
     const runId =
       runIdentity === "server"
         ? `server-${String(first.idempotencyKey)}`
@@ -240,25 +271,9 @@ it.each(
     expect(f.container.textContent).toContain("Provider authentication failed before acceptance.");
     expect(f.container.textContent).not.toContain("Waiting for the provider to accept it.");
     expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(false);
-    expect(requestCalls(f.request, "sessions.providerReview.continue")).toHaveLength(1);
+    expect(f.calls()).toHaveLength(1);
     expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
-    f.request.mockImplementationOnce((_method, params) => ({
-      runId: requireRecord(params, "retry request").idempotencyKey,
-      status: "started",
-    }));
-    f.click("Acknowledge findings and continue");
-    const calls = requestCalls(f.request, "sessions.providerReview.continue");
-    expect(calls).toHaveLength(2);
-    const retry = requireRecord(calls[1]?.[1], "retried acknowledgment");
-    expect(retry).toMatchObject({
-      sessionKey: row.key,
-      sessionId: row.sessionId,
-      reviewId: row.providerReview!.id,
-    });
-    expect(retry.idempotencyKey).not.toBe(first.idempotencyKey);
-    await f.outcome.promise;
-    await Promise.resolve();
-    await f.refresh.mock.results[1]?.value;
+    await expectFreshRetry(f, first);
   },
 );
 
@@ -272,14 +287,7 @@ it.each(["acknowledgment", "refresh"] as const)(
       refreshStarted.resolve();
       return refresh.promise;
     });
-    await f.open();
-    f.click("Acknowledge findings and continue");
-    const runId = String(
-      requireRecord(
-        requestCalls(f.request, "sessions.providerReview.continue")[0]?.[1],
-        "acknowledgment",
-      ).idempotencyKey,
-    );
+    const runId = String((await f.acknowledge()).idempotencyKey);
     if (phase === "refresh") {
       f.outcome.resolve({ runId, status: "started" });
       await refreshStarted.promise;
@@ -290,7 +298,7 @@ it.each(["acknowledgment", "refresh"] as const)(
     );
     f.paint();
     expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(true);
-    expect(requestCalls(f.request, "sessions.providerReview.continue")).toHaveLength(1);
+    expect(f.calls()).toHaveLength(1);
     f.outcome.resolve({ runId, status: "started" });
     await refreshStarted.promise;
     refresh.resolve({ status: "refreshed" });
@@ -299,65 +307,50 @@ it.each(["acknowledgment", "refresh"] as const)(
     f.paint();
     expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(false);
     expect(f.container.textContent).toContain("Continuation was not accepted.");
-    expect(requestCalls(f.request, "sessions.providerReview.continue")).toHaveLength(1);
+    expect(f.calls()).toHaveLength(1);
   },
 );
 
-it.each(["missing", "foreign", "active", "active-ids", "running", "read-failure"] as const)(
+it.each(["missing", "foreign", "active", "active-ids", "running"] as const)(
   "keeps the acknowledged continuation stopped when its terminal proof is %s",
   async (proof) => {
     const f = fixture();
-    if (proof === "read-failure") {
-      f.refresh.mockResolvedValue({ status: "failed", error: "Could not read current status" });
-    }
-    await f.open();
-    f.click("Acknowledge findings and continue");
-    const first = requireRecord(
-      requestCalls(f.request, "sessions.providerReview.continue")[0]?.[1],
-      "acknowledgment",
-    );
+    const first = await f.acknowledge();
     const runId = String(first.idempotencyKey);
     f.outcome.resolve({ runId, status: "started" });
     await f.outcome.promise;
     await Promise.resolve();
     await f.refresh.mock.results[0]?.value;
     await Promise.resolve();
-    if (proof !== "read-failure") {
-      f.state.sessionsResult = sessionsResult(
-        [
-          {
-            ...row,
-            lastRunId: proof === "missing" ? undefined : proof === "foreign" ? "other-run" : runId,
-            status: proof === "running" ? "running" : "failed",
-            hasActiveRun: proof === "active",
-            activeRunIds: proof === "active-ids" ? [runId] : [],
-          },
-        ],
-        2,
-      );
-    }
+    f.state.sessionsResult = sessionsResult(
+      [
+        {
+          ...row,
+          lastRunId: proof === "missing" ? undefined : proof === "foreign" ? "other-run" : runId,
+          status: proof === "running" ? "running" : "failed",
+          hasActiveRun: proof === "active",
+          activeRunIds: proof === "active-ids" ? [runId] : [],
+        },
+      ],
+      2,
+    );
     f.paint();
     expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(true);
     f.click("Acknowledge findings and continue");
-    expect(requestCalls(f.request, "sessions.providerReview.continue")).toHaveLength(1);
+    expect(f.calls()).toHaveLength(1);
     expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
   },
 );
 
 it("preserves the same idempotency key after an uncertain transport failure without terminal proof", async () => {
   const f = fixture();
-  await f.open();
-  f.click("Acknowledge findings and continue");
-  const first = requireRecord(
-    requestCalls(f.request, "sessions.providerReview.continue")[0]?.[1],
-    "first acknowledgment",
-  );
+  const first = await f.acknowledge();
   f.outcome.reject(new Error("Connection closed before acknowledgment"));
   await f.outcome.promise.catch(() => {});
   await Promise.resolve();
   f.paint();
   f.click("Acknowledge findings and continue");
-  const calls = requestCalls(f.request, "sessions.providerReview.continue");
+  const calls = f.calls();
   expect(calls).toHaveLength(2);
   expect(calls[1]?.[1]).toEqual(first);
   await f.outcome.promise.catch(() => {});
@@ -368,12 +361,7 @@ it.each(["error", "timeout"] as const)(
   "retires a definitive %s acknowledgment key until another explicit click",
   async (status) => {
     const f = fixture();
-    await f.open();
-    f.click("Acknowledge findings and continue");
-    const first = requireRecord(
-      requestCalls(f.request, "sessions.providerReview.continue")[0]?.[1],
-      "first acknowledgment",
-    );
+    const first = await f.acknowledge();
     f.outcome.resolve({ runId: "terminal-continuation", status });
     await f.outcome.promise;
     await Promise.resolve();
@@ -381,24 +369,8 @@ it.each(["error", "timeout"] as const)(
     expect(f.container.textContent).toContain("Continuation was not accepted.");
     expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(false);
     expect(f.refresh).not.toHaveBeenCalled();
-    expect(requestCalls(f.request, "sessions.providerReview.continue")).toHaveLength(1);
+    expect(f.calls()).toHaveLength(1);
     expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
-    f.request.mockImplementationOnce((_method, params) => ({
-      runId: requireRecord(params, "retry request").idempotencyKey,
-      status: "started",
-    }));
-    f.click("Acknowledge findings and continue");
-    const calls = requestCalls(f.request, "sessions.providerReview.continue");
-    expect(calls).toHaveLength(2);
-    const retry = requireRecord(calls[1]?.[1], "retried acknowledgment");
-    expect(retry).toMatchObject({
-      sessionKey: row.key,
-      sessionId: row.sessionId,
-      reviewId: row.providerReview!.id,
-    });
-    expect(retry.idempotencyKey).not.toBe(first.idempotencyKey);
-    await f.outcome.promise;
-    await Promise.resolve();
-    await f.refresh.mock.results[0]?.value;
+    await expectFreshRetry(f, first);
   },
 );

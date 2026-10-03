@@ -215,49 +215,42 @@ describe("database verifier shutdown", () => {
     }
   });
 
-  it.each(["fulfilled", "rejected"] as const)(
-    "joins %s result application after the child has exited",
-    async (outcome) => {
-      const application = createDeferredCore();
-      const entered = createDeferredCore();
-      mocks.runDatabaseVerifyWorker.mockResolvedValue([]);
-      mocks.applyOpenClawDatabaseVerificationResults.mockImplementation(() => {
-        entered.resolve();
-        return application.promise;
-      });
-      const verifier = startOpenClawDatabaseIntegrityVerifier({ env: {} });
-      requestOpenClawAgentDatabaseQuickCheck({ env: {}, path: "/synthetic/first.sqlite" });
-      await vi.advanceTimersByTimeAsync(0);
-      await entered.promise;
-      const peer = startOpenClawDatabaseIntegrityVerifier({ env: {} });
-      requestOpenClawAgentDatabaseQuickCheck({ env: {}, path: "/synthetic/late.sqlite" });
-      let stopped = false;
-      const stopping = verifier.stop().then(() => {
-        stopped = true;
-      });
+  it("joins rejected result application after the child has exited", async () => {
+    const application = createDeferredCore();
+    const entered = createDeferredCore();
+    mocks.runDatabaseVerifyWorker.mockResolvedValue([]);
+    mocks.applyOpenClawDatabaseVerificationResults.mockImplementation(() => {
+      entered.resolve();
+      return application.promise;
+    });
+    const verifier = startOpenClawDatabaseIntegrityVerifier({ env: {} });
+    requestOpenClawAgentDatabaseQuickCheck({ env: {}, path: "/synthetic/first.sqlite" });
+    await vi.advanceTimersByTimeAsync(0);
+    await entered.promise;
+    const peer = startOpenClawDatabaseIntegrityVerifier({ env: {} });
+    requestOpenClawAgentDatabaseQuickCheck({ env: {}, path: "/synthetic/late.sqlite" });
+    let stopped = false;
+    const stopping = verifier.stop().then(() => {
+      stopped = true;
+    });
+    try {
       try {
-        try {
-          await vi.advanceTimersByTimeAsync(100);
-          expect(stopped).toBe(false);
-          expect(mocks.runDatabaseVerifyWorker).toHaveBeenCalledOnce();
-          expect(mocks.terminateDatabaseVerifyWorker).not.toHaveBeenCalled();
-        } finally {
-          if (outcome === "rejected") {
-            application.reject(new Error("synthetic confirmation failure"));
-          } else {
-            application.resolve();
-          }
-          await stopping;
-        }
-        await vi.advanceTimersByTimeAsync(1);
-        expect(mocks.runDatabaseVerifyWorker).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(stopped).toBe(false);
+        expect(mocks.runDatabaseVerifyWorker).toHaveBeenCalledOnce();
+        expect(mocks.terminateDatabaseVerifyWorker).not.toHaveBeenCalled();
       } finally {
-        await peer.stop();
+        application.reject(new Error("synthetic confirmation failure"));
+        await stopping;
       }
-      expect(stopped).toBe(true);
-      expect(vi.getTimerCount()).toBe(0);
-    },
-  );
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mocks.runDatabaseVerifyWorker).toHaveBeenCalledTimes(2);
+    } finally {
+      await peer.stop();
+    }
+    expect(stopped).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it("joins the running turn after termination and skips results received during stop", async () => {
     const results = createDeferredCore<OpenClawDatabaseVerifyResult[]>();

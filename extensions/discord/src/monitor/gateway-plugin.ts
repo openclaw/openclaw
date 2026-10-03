@@ -186,7 +186,6 @@ function createGatewayPlugin(params: {
   options: {
     reconnect: { maxAttempts: number };
     intents: number;
-    autoInteractions: boolean;
   };
   gatewayInfoTimeoutMs: number;
   endpoint?: DiscordGatewayEndpoint;
@@ -444,8 +443,6 @@ export function createDiscordGatewayPlugin(params: {
     options: {
       reconnect: { maxAttempts: 50 },
       intents,
-      // OpenClaw registers its own async interaction listener.
-      autoInteractions: false,
     },
     gatewayInfoTimeoutMs,
     ...(endpoint ? { endpoint } : {}),

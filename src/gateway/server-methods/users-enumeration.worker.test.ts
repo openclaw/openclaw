@@ -105,6 +105,7 @@ it("enforces scoped, bounded users.list dispatch without filtering profiles or r
           avatarUrl: "https://avatars.githubusercontent.com/u/101?v=4",
         },
         hasAvatar: true,
+        roleSource: "default",
       },
       {
         id: retired.id,
@@ -116,6 +117,7 @@ it("enforces scoped, bounded users.list dispatch without filtering profiles or r
         emails: [],
         githubIdentity: null,
         hasAvatar: false,
+        roleSource: "default",
       },
       {
         id: grace.id,
@@ -128,6 +130,7 @@ it("enforces scoped, bounded users.list dispatch without filtering profiles or r
         githubIdentity: null,
         hasAvatar: false,
         role: "reader",
+        roleSource: "default",
       },
     ];
     const selected = {
@@ -264,7 +267,7 @@ it("observes native first-use role assignment after warming a legacy worker read
           req: {} as never,
           params: {},
           respond,
-          context: {} as never,
+          context: createContext(),
           client: null,
           isWebchatConnect: () => false,
         });
@@ -284,11 +287,14 @@ it("observes native first-use role assignment after warming a legacy worker read
       emails: ["legacy@example.test"],
       githubIdentity: null,
       hasAvatar: false,
+      roleSource: "default",
     });
     expect(tableHasColumn(db, "user_profiles", "role")).toBe(false);
 
     setUserProfileRole(profile.id, "maintainer");
-    await read(expect.objectContaining({ id: profile.id, role: "maintainer" }));
+    await read(
+      expect.objectContaining({ id: profile.id, role: "maintainer", roleSource: "default" }),
+    );
     expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
   } finally {
     await state.cleanup();

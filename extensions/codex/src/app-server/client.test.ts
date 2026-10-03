@@ -343,7 +343,10 @@ describe("CodexAppServerClient", () => {
         },
       },
     );
-    const rejection = expect(request).rejects.toBe(ownershipError);
+    const rejection = expect(request).rejects.toMatchObject({
+      name: "CodexAppServerScopedRequestRejectedError",
+      cause: ownershipError,
+    });
     await vi.advanceTimersByTimeAsync(0);
     const first = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
@@ -490,6 +493,7 @@ describe("CodexAppServerClient", () => {
           extensions: {
             "openai/standard-form-input": {},
             "openai/form": {},
+            "openai/elicitation": { form: {} },
             "io.modelcontextprotocol/ui": {
               mimeTypes: ["text/html;profile=mcp-app"],
             },

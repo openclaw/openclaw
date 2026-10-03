@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { isMainThread, threadId } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { visitSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
+import { visitSessionMessagesAsync } from "../../gateway/session-transcript-native.test-support.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -50,9 +50,9 @@ import {
 } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
+import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import {
-  getSessionColdStorageStatus,
   restoreSessionColdTranscript,
   runSessionColdStorageMaintenance,
 } from "./session-cold-storage.js";
@@ -662,13 +662,16 @@ it("counts hot and cold transcripts in one snapshot while another connection arc
     race.commitAfterMarkerRead(
       (query) => query.includes('from "session_windows" as "window"') && query.includes("count(*)"),
     );
-    const config = { agents: { entries: { main: { default: true } } } };
-    expect(await getSessionColdStorageStatus(config)).toMatchObject([
-      { hotTranscripts: 1, coldTranscripts: 0, embeddedArchiveBytes: 0 },
-    ]);
+    expect(readSessionColdStorageInventory(race.database)).toEqual({
+      hotTranscripts: 1,
+      coldTranscripts: 0,
+      embeddedArchiveBytes: 0,
+    });
     expect(race.committed()).toBe(true);
-    expect(await getSessionColdStorageStatus(config)).toMatchObject([
-      { hotTranscripts: 0, coldTranscripts: 1, embeddedArchiveBytes: 0 },
-    ]);
+    expect(readSessionColdStorageInventory(race.database)).toEqual({
+      hotTranscripts: 0,
+      coldTranscripts: 1,
+      embeddedArchiveBytes: 0,
+    });
   });
 });

@@ -328,12 +328,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       sweepScript.indexOf("run_success_scenario()"),
       sweepScript.indexOf("run_failure_scenario()"),
     );
-    expect(successScenario.indexOf('plugins install "${install_args[@]}" --force')).toBeLessThan(
-      successScenario.indexOf("configure_kitchen_sink_runtime"),
-    );
-    expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
-      successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"'),
-    );
+    const installIndex = successScenario.indexOf('plugins install "${install_args[@]}" --force');
+    const configureIndex = successScenario.indexOf("assertions.mjs configure-runtime");
+    const enableIndex = successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"');
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(configureIndex).toBeGreaterThan(installIndex);
+    expect(enableIndex).toBeGreaterThan(configureIndex);
     expect(successScenario).toContain('plugins inspect "$KITCHEN_SINK_ID" --runtime --json');
     expect(successScenario).toContain("plugins inspect --all --runtime --json");
     expect(sweepScript).toContain("run_failure_scenario");
@@ -355,7 +355,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     );
     expect(script).toContain("docker_e2e_sample_stats_until_exit");
     expect(script).toContain("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs");
-    expect(sweepScript).toContain("scan_logs_for_unexpected_errors");
+    expect(sweepScript).toContain("assertions.mjs scan-logs");
   });
 
   it("keeps kitchen-sink RPC coverage package-backed and resource-guarded", () => {
@@ -1209,7 +1209,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       .filter((row) => row.task === "extension-file-shard")
       .flatMap((row) => row.includePatterns ?? []);
     expect(new Set(fileTargets).size).toBe(fileTargets.length);
-    const sourceOnlyFile = "extensions/device-pair/doctor-contract-api.test.ts";
+    const sourceOnlyFile = "extensions/diffs/src/store.cleanup.test.ts";
     expect(fileTargets).not.toContain(sourceOnlyFile);
     for (const file of [sourceOnlyFile, "extensions/plugin-entry.cli-laziness.test.ts"]) {
       const config = resolveExtensionTestConfig(file);

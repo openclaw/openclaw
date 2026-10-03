@@ -546,6 +546,33 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "chat-composer-return")
     }
 
+    func testChatComposerPastesClipboardImageAsAttachment() throws {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "chat-composer-paste-image"))
+
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        // Match a cropped screenshot shared with "Copy and Delete": an image with no text.
+        UIPasteboard.general.image = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 64)).image { context in
+            UIColor.systemOrange.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+        }
+        input.tap()
+        input.press(forDuration: 1)
+        self.attachScreenshot(named: "chat-composer-paste-menu")
+
+        let paste = app.menuItems["Paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 5), "PASTE_MENU_MISSING")
+        paste.tap()
+        // Staging transcodes to JPEG, so the chip shows the converted name.
+        let attachment = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "pasted-image-1")).firstMatch
+        XCTAssertTrue(attachment.waitForExistence(timeout: 5), "PASTED_IMAGE_MISSING")
+        self.attachScreenshot(named: "chat-composer-paste-image")
+    }
+
     func testVoiceNoteDraftKeepsStopAvailableDuringActiveResponse() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone voice-note composer proof only")
         self.launchApp(

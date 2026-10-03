@@ -23,6 +23,7 @@ import type {
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { createNativeModelOwnedRuntimeModel } from "../defaults.js";
 import { extractObservedOverflowTokenCount } from "../embedded-agent-helpers/context-overflow-observation.js";
 import type { FailoverReason } from "../failover/signal.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
@@ -34,7 +35,8 @@ import type {
   PreparedModelRuntimeLeaseOptions,
 } from "../prepared-model-runtime.types.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
-import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import { makeAttemptResult, makeMockRuntimePlan } from "./run.overflow-compaction.fixture.js";
+import { createRunWorkspaceMock } from "./run.workspace-ownership.test-support.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -136,22 +138,6 @@ const mockedContextEngine = {
     reason: "nothing to compact",
   })),
 };
-
-type MockRuntimePlan = Pick<AgentRuntimePlan, "auth"> & {
-  observability: Pick<AgentRuntimePlan["observability"], "harnessId">;
-};
-
-function makeMockRuntimePlan(): MockRuntimePlan {
-  return {
-    auth: {
-      authProfileProviderForAuth: "openai",
-      providerForAuth: "openai",
-    },
-    observability: {
-      harnessId: "codex",
-    },
-  };
-}
 
 export const mockedCompactDirect = mockedContextEngine.compact;
 const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
@@ -854,16 +840,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     };
   });
 
-  vi.doMock("../workspace-run.js", () => ({
-    resolveRunWorkspaceDir: vi.fn((params: { workspaceDir: string; agentId?: string }) => ({
-      workspaceDir: params.workspaceDir,
-      usedFallback: false,
-      isCanonicalWorkspace: false,
-      fallbackReason: undefined,
-      agentId: params.agentId ?? "main",
-    })),
-    redactRunIdentifier: vi.fn((value?: string) => value ?? ""),
-  }));
+  vi.doMock("../workspace-run.js", createRunWorkspaceMock);
 
   vi.doMock("../embedded-agent-helpers.js", async () => ({
     ...(await vi.importActual<typeof import("../embedded-agent-helpers.js")>(
@@ -971,6 +948,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   });
 
   vi.doMock("../defaults.js", () => ({
+    createNativeModelOwnedRuntimeModel,
     DEFAULT_CONTEXT_TOKENS: 200000,
     DEFAULT_MODEL: "test-model",
     DEFAULT_PROVIDER: "anthropic",

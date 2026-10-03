@@ -1,9 +1,11 @@
 // Anchored filesystem bridge tests cover pinned parent/basename operations that
 // avoid path re-resolution inside Docker mutation commands.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import { FsSafeError } from "../../infra/fs-safe.js";
 import {
   createSandbox,
   expectOnlyCanonicalPathCommands,
@@ -31,7 +33,12 @@ function requireDockerCall(call: DockerRawCall | undefined, label: string): Dock
 }
 
 describe("sandbox fs bridge anchored ops", () => {
-  installFsBridgeTestHarness();
+  let readGate: ((fd: number) => Promise<void>) | undefined;
+  installFsBridgeTestHarness({
+    beforeAsyncRead: async (fd) => {
+      await readGate?.(fd);
+    },
+  });
 
   const pinnedReadCases = [
     {
@@ -97,9 +104,11 @@ describe("sandbox fs bridge anchored ops", () => {
       }
       const events: string[] = [];
       let heartbeat: Promise<void> | undefined;
+      let openedFd: number | undefined;
       mockedOpenRootFile.mockImplementationOnce(async (params) => {
         const opened = await openRootFile(params);
         if (opened.ok) {
+          openedFd = opened.fd;
           await fs.rename(
             path.join(workspaceDir, "from.txt"),
             path.join(workspaceDir, "pinned.txt"),
@@ -114,6 +123,11 @@ describe("sandbox fs bridge anchored ops", () => {
         }
         return opened;
       });
+      readGate = async (fd) => {
+        expect(fd).toBe(openedFd);
+        await heartbeat;
+        expect(fsSync.fstatSync(fd).isFile()).toBe(true);
+      };
 
       let contents: Buffer;
       try {
@@ -121,9 +135,15 @@ describe("sandbox fs bridge anchored ops", () => {
         events.push("read-complete");
       } finally {
         await heartbeat;
+        readGate = undefined;
       }
       expect(contents).toEqual(Buffer.from("hello"));
       expect(events).toEqual(["event-loop", "read-complete"]);
+      const closedFd = openedFd;
+      if (closedFd === undefined) {
+        throw new Error("expected a pinned read descriptor");
+      }
+      expect(() => fsSync.fstatSync(closedFd)).toThrow(expect.objectContaining({ code: "EBADF" }));
     });
   });
 
@@ -474,6 +494,9 @@ describe("sandbox fs bridge anchored ops", () => {
       });
 
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toBeNull();
+      await expect(
+        bridge.stat({ filePath: "note.txt", expectedPolicyPath: "/workspace/note.txt" }),
+      ).resolves.toBeNull();
 
       const statCall = requireDockerCall(
         findCallByScriptFragment('stat -c "%F|%s|%y" -- "$2"'),
@@ -511,6 +534,18 @@ describe("sandbox fs bridge anchored ops", () => {
       });
 
       await expect(bridge.stat({ filePath: "note.txt" })).rejects.toThrow("Permission denied");
+
+      const failure = new FsSafeError("path-mismatch", "descriptor identity changed", {
+        cause: Object.assign(new Error("missing during final admission"), { code: "ENOENT" }),
+      });
+      mockedOpenRootFile.mockResolvedValueOnce({
+        ok: false,
+        reason: "validation",
+        error: failure,
+      });
+      await expect(
+        bridge.stat({ filePath: "note.txt", expectedPolicyPath: "/workspace/note.txt" }),
+      ).rejects.toBe(failure);
     });
   });
 

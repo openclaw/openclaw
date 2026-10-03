@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runDoctorHealthFlow } from "../flows/doctor-health.js";
+import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -28,6 +29,9 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import * as configFlow from "./doctor-config-flow.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
+import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
+import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
 const { mocks } = await import("../flows/doctor-health.test-support.js");
@@ -148,6 +152,57 @@ describe("container image replacement Doctor repair and startup readiness", () =
       } finally {
         database.close();
       }
+      await cleanupSessionStateForTest();
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const inspect = () => inspectSessionSqliteRecovery({ cfg: {}, env });
+      const protectedBackups = inspect();
+      expect(protectedBackups.artifacts).toHaveLength(2);
+      expect(
+        protectedBackups.artifacts.every(
+          (item) =>
+            item.outcome === "protected" && item.reason === "awaiting-later-completed-update",
+        ),
+      ).toBe(true);
+      const legacyBackup = `${databasePath}.pre-startup-migration-legacy.bak`;
+      fs.writeFileSync(legacyBackup, "older unrecorded backup");
+      // Session archives and schema backups share a destination and the cleanup verifier.
+      const store = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      fs.mkdirSync(path.dirname(store), { recursive: true });
+      fs.writeFileSync(store, "{}");
+      await runDoctorSessionSqlite({ env, cfg: {}, agent: "main", store, mode: "import" });
+      await cleanupSessionStateForTest();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1000);
+      try {
+        const later = createUpdateRun({ trigger: "cli" }, { env });
+        expect(
+          inspect().artifacts.filter(
+            (item) => item.path.endsWith(".bak") && item.outcome === "candidate",
+          ),
+        ).toHaveLength(0);
+        finishUpdateRun(later.runId, { status: "succeeded" }, { env });
+      } finally {
+        clock.mockRestore();
+      }
+      await cleanupSessionStateForTest();
+      const preview = inspect();
+      expect(preview.artifacts.filter((item) => item.outcome === "candidate")).toHaveLength(3);
+      expect(preview.artifacts).toContainEqual(
+        expect.objectContaining({
+          path: legacyBackup,
+          outcome: "protected",
+          reason: "unmanifested-recovery-original",
+        }),
+      );
+      const retired = await retireSessionSqliteRecovery({
+        env,
+        preview,
+        readConfig: async () => ({}),
+        confirm: async () => true,
+      });
+      expect(retired.status).toBe("complete");
+      expect(retired.totals.removedFiles).toBe(3);
+      expect(fs.existsSync(legacyBackup)).toBe(true);
+      expect(fs.existsSync(databasePath)).toBe(true);
     });
   });
 

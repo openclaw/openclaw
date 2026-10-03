@@ -562,31 +562,6 @@ if(process.argv[2]==='inactive'){`,
   );
 
   itUnix(
-    "admits unsafe update triage with preserved activation and deferred health",
-    async ({ signal }) => {
-      const boundary = await start("update");
-      await ready(boundary);
-      expect(await boundary.control("park")).toBe("parked");
-      expect(await boundary.control("commit")).toBe("committed");
-      boundary.parent.kill();
-      await fixing(boundary, signal);
-      const events = await boundary.readEvents();
-      const kinds = events.map((event) => event.kind);
-      expect(events.find((event) => event.kind === "fixer")?.failure?.gateway).toBe("preserve");
-      expect(await boundary.log()).toContain('{"status":"error","reason":"original failure"}');
-      expect(await boundary.log()).toContain("exited code=7 signal=null");
-      expect(kinds.filter((kind) => kind === "updater")).toHaveLength(1);
-      expect(kinds.filter((kind) => kind === "triage-queued")).toHaveLength(1);
-      expect(
-        kinds.filter((kind) => kind === "start" || kind === "restart" || kind === "restore-failed"),
-      ).toEqual([]);
-      expect(kinds.indexOf("attached")).toBeLessThan(kinds.indexOf("fixer"));
-      await boundary.native("stop");
-      await closed(boundary, signal);
-    },
-  );
-
-  itUnix(
     "retargets the completed update owner after package-to-Git exposure",
     async ({ signal }) => {
       const boundary = await start("update", undefined, undefined, undefined, true);

@@ -10,19 +10,12 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { calculateUsageCost, normalizeResolvedPricing } from "@openclaw/llm-core";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  clampThinkingLevel,
-  type Api,
-  type Model,
-  type ModelThinkingLevel,
-} from "openclaw/plugin-sdk/llm";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { installTestEnv } from "../../test/test-env.js";
 import { discoverAuthStorage, discoverModels } from "../agents/agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { buildPortableAuthProfileStoreForAgentCopy } from "../agents/auth-profiles/portability.js";
-import { listProfilesForProvider } from "../agents/auth-profiles/profile-list.js";
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
@@ -134,11 +127,14 @@ import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visi
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
 import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { getFreePort, isPortFree } from "../test-utils/ports.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import { enterIsolatedGatewayLiveDiscoveryState } from "./gateway-models.profiles.live.discovery.test-helpers.js";
 import {
   isolateLiveGatewayConfig,
-  type ProviderThinkingModelCompat,
+  resolveGatewayLiveModelThinkingLevel,
+  resolveGatewayLiveThinkingLevel,
 } from "./gateway-models.profiles.live.test-helpers.js";
 import { restoreLiveEnv, snapshotLiveEnv } from "./live-env-test-helpers.js";
 import {
@@ -160,17 +156,6 @@ const GATEWAY_LIVE_SMOKE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_SM
 const GATEWAY_LIVE_OPENAI_API_DEFAULT = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT,
 );
-const GATEWAY_LIVE_THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultra",
-] as const;
-type GatewayLiveThinkingLevel = (typeof GATEWAY_LIVE_THINKING_LEVELS)[number];
 const THINKING_LEVEL = resolveGatewayLiveThinkingLevel({
   raw: process.env.OPENCLAW_LIVE_GATEWAY_THINKING,
   smoke: GATEWAY_LIVE_SMOKE,
@@ -2061,6 +2046,46 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
   });
 
   it.each([
+    { selector: "absent", compat: { supportsReasoningEffort: false } },
+    { selector: "empty", compat: { supportedReasoningEfforts: [] } },
+  ])("preserves mandatory OpenRouter thinking with an $selector effort selector", ({ compat }) => {
+    const model: Model<"openai-completions"> = {
+      ...createGatewayLiveTestModel("openrouter", "minimax/minimax-m2.7"),
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      thinkingLevelMap: { off: null },
+      compat,
+    };
+    expect(resolveGatewayLiveModelThinkingLevel({ model, requestedLevel: "off" })).toBe("low");
+
+    const cfg = OpenClawSchema.parse(
+      buildLiveGatewayConfig({
+        cfg: {},
+        candidates: [model],
+        liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+        liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
+      }),
+    );
+    const configured = expectDefined(
+      cfg.models?.providers?.openrouter?.models?.[0],
+      "configured OpenRouter model",
+    );
+    const profile = resolveEffectiveThinkingProfile({
+      provider: "openrouter",
+      context: {
+        provider: "openrouter",
+        modelId: configured.id,
+        api: configured.api,
+        reasoning: configured.reasoning,
+        thinkingLevelMap: configured.thinkingLevelMap,
+        compat: configured.compat,
+      },
+    });
+    expect(profile?.levels.map(({ id }) => id)).toEqual(["low"]);
+  });
+
+  it.each([
     ["openai-completions", "off"],
     ["anthropic-messages", "high"],
   ] as const)("uses the discovered %s transport for provider thinking policy", (api, expected) => {
@@ -3314,56 +3339,6 @@ function resolveGatewayLivePreparedProfileId(
     : undefined;
 }
 
-async function enterIsolatedGatewayLiveDiscoveryState(params: {
-  config: OpenClawConfig;
-  providers?: Iterable<string>;
-}): Promise<() => Promise<void>> {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const source = ensureAuthProfileStoreWithoutExternalProfiles(
-    resolveDefaultAgentDir(params.config),
-    {
-      allowKeychainPrompt: false,
-      readOnly: true,
-      syncExternalCli: false,
-    },
-  );
-  const selected = params.providers
-    ? new Set(
-        [...params.providers].flatMap((provider) => listProfilesForProvider(source, provider)),
-      )
-    : undefined;
-  const portable = buildPortableAuthProfileStoreForAgentCopy({
-    ...source,
-    profiles: Object.fromEntries(
-      Object.entries(source.profiles).filter(([id]) => !selected || selected.has(id)),
-    ),
-  });
-  if (portable.skippedProfileIds.length > 0) {
-    logProgress(
-      `[all-models] isolated discovery omitted ${portable.skippedProfileIds.length} non-portable auth profile(s)`,
-    );
-  }
-  const tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-discovery-state-"));
-  setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
-  const cleanup = async () => {
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-  };
-  try {
-    // Discovery may materialize env credentials; copy selected portable profiles
-    // first so it never writes the ambient store or duplicates native OAuth owners.
-    saveAuthProfileStore(portable.store, resolveDefaultAgentDir({}), { syncExternalCli: false });
-  } catch (error) {
-    await cleanup();
-    throw error;
-  }
-  return cleanup;
-}
-
 function createGatewayLiveModelSession(params: {
   agentId: string;
   credentialAttempt: number;
@@ -3607,6 +3582,7 @@ describe("buildLiveGatewayAuthProfileStore", () => {
             const leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState({
               config: {},
               providers: ["openai"],
+              logProgress,
             });
             try {
               const discoveryAgentDir = resolveDefaultAgentDir({});
@@ -3623,6 +3599,11 @@ describe("buildLiveGatewayAuthProfileStore", () => {
                 store: ensureAuthProfileStore(discoveryAgentDir, { allowKeychainPrompt: false }),
               });
               saveAuthProfileStore(prepared, discoveryAgentDir);
+              await ensureOpenClawModelsJson(
+                { plugins: { enabled: false }, models: { mode: "replace", providers: {} } },
+                discoveryAgentDir,
+                { providerDiscoveryProviderIds: [] },
+              );
             } finally {
               await leaveDiscoveryState();
             }
@@ -3635,10 +3616,14 @@ describe("buildLiveGatewayAuthProfileStore", () => {
         ensureAuthProfileStore(ambientAgentDir, { allowKeychainPrompt: false }).profiles,
       ).toEqual(ambientStore.profiles);
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      try {
+        await cleanupSessionStateForTest({ stateDir: ambientStateDir });
+      } finally {
+        if (previousStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
       }
       await fs.rm(ambientStateDir, { recursive: true, force: true });
     }
@@ -5443,6 +5428,7 @@ function toLiveModelConfig(model: Model): NonNullable<ModelProviderConfig["model
     baseUrl: model.baseUrl,
     input: model.input ?? ["text"],
     reasoning: model.reasoning,
+    ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
     cost: {
       ...model.cost,
       ...(model.cost.tieredPricing
@@ -5604,94 +5590,6 @@ function resolveExplicitLiveModelCandidates(params: {
   return candidates;
 }
 
-function resolveGatewayLiveModelThinkingLevel(params: {
-  model: Model;
-  requestedLevel: string;
-}): string {
-  const { model, requestedLevel } = params;
-  const normalized = requestedLevel.trim().toLowerCase();
-  if (!isGatewayLiveThinkingLevel(normalized)) {
-    return requestedLevel;
-  }
-  const profile = resolveEffectiveThinkingProfile({
-    provider: model.provider,
-    context: {
-      provider: model.provider,
-      modelId: model.id,
-      api: model.api,
-      agentRuntime: "openclaw",
-      reasoning: model.reasoning,
-      compat: getProviderThinkingModelCompat(model),
-    },
-  });
-  if (profile) {
-    const levelIds = profile.levels.map((level) => level.id);
-    if (levelIds.some((level) => level === normalized)) {
-      if (normalized === "ultra") {
-        return normalized;
-      }
-      const clamped = clampThinkingLevel(model, normalized as ModelThinkingLevel);
-      if (normalized === "max" && clamped !== normalized) {
-        throw new Error(
-          `${model.provider}/${model.id} advertises max but model metadata clamps it to ${clamped}`,
-        );
-      }
-      return clamped;
-    }
-    if (normalized === "max" || normalized === "ultra") {
-      throw new Error(`${model.provider}/${model.id} does not advertise ${normalized}`);
-    }
-    if (profile.defaultLevel) {
-      return clampThinkingLevel(model, profile.defaultLevel as ModelThinkingLevel);
-    }
-    if (levelIds.length === 1) {
-      const [onlyLevel] = levelIds;
-      return onlyLevel
-        ? clampThinkingLevel(model, onlyLevel as ModelThinkingLevel)
-        : requestedLevel;
-    }
-  }
-  if (normalized === "ultra") {
-    throw new Error(`${model.provider}/${model.id} does not advertise ultra`);
-  }
-  const clamped = clampThinkingLevel(model, normalized as ModelThinkingLevel);
-  if (normalized === "max" && clamped !== normalized) {
-    throw new Error(`${model.provider}/${model.id} clamps max to ${clamped}`);
-  }
-  return clamped;
-}
-
-function getProviderThinkingModelCompat(model: Model): ProviderThinkingModelCompat | undefined {
-  const compat = model.compat;
-  if (!compat || typeof compat !== "object") {
-    return undefined;
-  }
-  const record = compat as Record<string, unknown>;
-  const thinkingFormat =
-    typeof record.thinkingFormat === "string" ? record.thinkingFormat : undefined;
-  const supportedReasoningEfforts =
-    Array.isArray(record.supportedReasoningEfforts) &&
-    record.supportedReasoningEfforts.every((value) => typeof value === "string")
-      ? record.supportedReasoningEfforts
-      : record.supportedReasoningEfforts === null
-        ? null
-        : undefined;
-  return thinkingFormat || supportedReasoningEfforts !== undefined
-    ? {
-        ...(thinkingFormat ? { thinkingFormat } : {}),
-        ...(supportedReasoningEfforts !== undefined ? { supportedReasoningEfforts } : {}),
-      }
-    : undefined;
-}
-
-function resolveGatewayLiveThinkingLevel(params: { raw?: string; smoke: boolean }): string {
-  const raw = params.raw?.trim().toLowerCase();
-  if (!raw) {
-    return params.smoke ? "low" : "high";
-  }
-  return isGatewayLiveThinkingLevel(raw) ? raw : params.smoke ? "low" : "high";
-}
-
 async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> {
   const configured = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
   if (!GATEWAY_LIVE_OPENAI_API_DEFAULT) {
@@ -5718,7 +5616,6 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
     platform: "linux",
     deps: {
       probeLocalCommand: async (command) => ({ command, found: false }),
-      detectClaudeLoginState: async () => ({ credentials: false }),
       readCodexCliCredentials: () => null,
       readGeminiCliCredentials: () => null,
     },
@@ -5729,10 +5626,6 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
   }
   expect(selected.modelRef).toBe("openai/gpt-6-astra");
   return selected.modelRef;
-}
-
-function isGatewayLiveThinkingLevel(value: string): value is GatewayLiveThinkingLevel {
-  return GATEWAY_LIVE_THINKING_LEVELS.some((level) => level === value);
 }
 
 function buildLiveGatewayConfig(params: {
@@ -6840,6 +6733,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState({
       config: await readLiveTestConfig(),
       providers: PROVIDERS ?? undefined,
+      logProgress,
     });
   });
 

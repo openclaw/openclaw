@@ -236,14 +236,15 @@ export async function sendClickClackMedia(params: {
     }) ?? CLICKCLACK_MAX_UPLOAD_BYTES,
     CLICKCLACK_MAX_UPLOAD_BYTES,
   );
+  const mediaLoadOptions = {
+    maxBytes,
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
+  };
   const preloadedMedia = nonces.upload
     ? undefined
-    : await loadOutboundMediaFromUrl(params.mediaUrl, {
-        maxBytes,
-        mediaAccess: params.mediaAccess,
-        mediaLocalRoots: params.mediaLocalRoots,
-        mediaReadFile: params.mediaReadFile,
-      });
+    : await loadOutboundMediaFromUrl(params.mediaUrl, mediaLoadOptions);
   const workspaceId = await resolveWorkspaceId(client, account.workspace);
   const persistedUpload = nonces.upload
     ? await client.findUploadByNonce({ workspaceId, nonce: nonces.upload })
@@ -252,13 +253,7 @@ export async function sendClickClackMedia(params: {
   let mediaFilename = preloadedMedia?.fileName?.trim();
   if (!upload) {
     const media =
-      preloadedMedia ??
-      (await loadOutboundMediaFromUrl(params.mediaUrl, {
-        maxBytes,
-        mediaAccess: params.mediaAccess,
-        mediaLocalRoots: params.mediaLocalRoots,
-        mediaReadFile: params.mediaReadFile,
-      }));
+      preloadedMedia ?? (await loadOutboundMediaFromUrl(params.mediaUrl, mediaLoadOptions));
     const contentType = media.contentType?.trim() || "application/octet-stream";
     const filename = media.fileName?.trim() || `attachment${extensionForMime(contentType) ?? ""}`;
     mediaFilename = filename;

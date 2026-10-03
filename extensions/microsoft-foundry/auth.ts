@@ -30,15 +30,6 @@ import {
   resolveFoundryApi,
 } from "./shared.js";
 
-function shouldTestFoundryTextConnection(params: {
-  modelId: string;
-  modelNameHint?: string | null;
-}): boolean {
-  return !isFoundryMaiImageModel(
-    resolveConfiguredModelNameHint(params.modelId, params.modelNameHint),
-  );
-}
-
 export const entraIdAuthMethod: ProviderAuthMethod = {
   id: "entra-id",
   label: "Entra ID (az login)",
@@ -161,7 +152,7 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       ({ endpoint, modelId, modelNameHint, api } = await promptEndpointAndModelManually(ctx));
     }
 
-    if (shouldTestFoundryTextConnection({ modelId, modelNameHint })) {
+    if (!isFoundryMaiImageModel(resolveConfiguredModelNameHint(modelId, modelNameHint))) {
       await testFoundryConnection({
         ctx,
         endpoint,

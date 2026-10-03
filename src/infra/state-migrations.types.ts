@@ -44,8 +44,6 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
   oauthDir: string;
   pluginSessionStoreAgentIds: readonly string[];
   sessions: {
-    legacyDir: string;
-    legacyStorePath: string;
     targetDir: string;
     targetStorePath: string;
     hasLegacy: boolean;
@@ -78,11 +76,6 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
     hasLegacy: boolean;
     legacyIds: string[];
     pathRewrites: Array<{ id: string; fromPath: string; toPath: string }>;
-  };
-  deliveryQueues: {
-    outboundPath: string;
-    sessionPath: string;
-    hasLegacy: boolean;
   };
   pairingStores: { sourcePaths: string[]; hasLegacy: boolean };
   voiceWake: {

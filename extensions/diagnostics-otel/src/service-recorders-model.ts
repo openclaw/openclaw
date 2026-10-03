@@ -35,7 +35,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     takeTrackedTrustedSpan,
     setSpanAttrs,
     addRunAttrs,
-    contentCapturePolicy,
+    captureContent,
     tracesEnabled,
   } = runtime;
 
@@ -147,7 +147,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     assignModelCallSizeTimingAttrs(spanAttrs, evt);
     assignModelCallPromptStatsAttrs(spanAttrs, evt);
     assignModelCallUsageAttrs(spanAttrs, evt);
-    assignOtelModelContentAttributes(spanAttrs, modelContent, contentCapturePolicy);
+    assignOtelModelContentAttributes(spanAttrs, modelContent, captureContent);
     const span =
       takeTrackedTrustedSpan(evt, metadata) ??
       spanWithDuration(modelCallSpanName(evt), spanAttrs, evt.durationMs, {

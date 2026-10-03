@@ -20,6 +20,7 @@ import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.
 type MergedBundleMcpConfig = {
   config: BundleMcpConfig;
   diagnostics: BundleMcpDiagnostic[];
+  pluginIdsByServer?: Record<string, string>;
   prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership>;
 };
 
@@ -142,6 +143,12 @@ export function loadMergedBundleMcpConfig(params: {
       } satisfies BundleMcpConfig["mcpServers"],
     },
     diagnostics: bundleMcp.diagnostics,
+    pluginIdsByServer: Object.fromEntries(
+      Object.entries(bundleMcp.pluginIdsByServer).filter(
+        ([name]) =>
+          Object.hasOwn(enabledBundleMcp, name) && !Object.hasOwn(enabledConfiguredMcp, name),
+      ),
+    ),
     prepareDataDirsByServer,
   };
 }

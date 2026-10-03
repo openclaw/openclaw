@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import type { SecretRef } from "../../config/types.secrets.js";
 import {
   WorkerProviderError,
   type WorkerProfile,
@@ -11,10 +12,10 @@ import type {
   WorkerEnvironmentAbandonment,
   WorkerProviderLifecycleOptions,
 } from "./provider-lifecycle.types.js";
-import { createWorkerSshIdentityResolver } from "./provider-ssh-identity.js";
 import {
   requireProviderOperationTimeoutMs,
   requireWorkerAllocation,
+  resolveWorkerLeaseTransportError,
 } from "./service-validation.js";
 import type {
   WorkerEnvironmentRecord,
@@ -82,11 +83,47 @@ export function createWorkerProviderOwnerLifecycle(
     return current;
   };
 
-  const identityResolverFor = createWorkerSshIdentityResolver({
-    ...options,
-    requireCurrentOwner,
-    requireWorkerProfile,
-  });
+  const identityResolverFor = (
+    record: WorkerEnvironmentRecord,
+    provider: WorkerProvider,
+    leaseId: string,
+  ) => {
+    const profile = requireWorkerProfile(record.profileSnapshot.settings);
+    return async (keyRef: SecretRef, context: { assertCurrent: () => void }) => {
+      const resolveSshIdentity = options.resolveSshIdentity;
+      if (!resolveSshIdentity) {
+        throw new Error("Worker SSH identity resolution is unavailable");
+      }
+      let open = true;
+      const assertAuthorized = () => {
+        if (!open) {
+          throw new Error("Worker SSH identity invocation is closed");
+        }
+        context.assertCurrent();
+        const current = requireCurrentOwner(record);
+        if (options.isStopping() || current.destroyRequestedAtMs !== null) {
+          throw new Error("Worker identity owner is closed");
+        }
+      };
+      try {
+        return await callProvider(record.environmentId, async () => {
+          assertAuthorized();
+          const identity = await resolveSshIdentity({
+            provider,
+            leaseId,
+            profile,
+            keyRef,
+            assertAuthorized,
+          });
+          assertAuthorized();
+          return identity;
+        });
+      } finally {
+        // A caller-visible timeout closes authority, not the underlying provider queue owner.
+        open = false;
+      }
+    };
+  };
 
   const stopOwner = async (
     record: WorkerEnvironmentRecord,
@@ -100,10 +137,14 @@ export function createWorkerProviderOwnerLifecycle(
     if (sessionId && !runtimeRefresh) {
       // Runtime refresh hands off eligible results before capturing placement authority.
       // Other revocations transfer custody before making the old process unreachable.
-      options.placementStore?.prepareWorkspaceResultOwnerRevocation(
+      await options.placementStore?.prepareWorkspaceResultOwnerRevocation(
         { sessionId, environmentId: record.environmentId, ownerEpoch: record.ownerEpoch },
         new Error(record.lastError ?? "Cloud worker owner revoked before workspace recovery"),
+        () => {
+          requireCurrentOwner(record);
+        },
       );
+      requireCurrentOwner(record);
     }
     // Fence admission without erasing the attachment needed to stop a retained node worker.
     // A crash or failed stop leaves the exact scope available for teardown replay.
@@ -430,6 +471,27 @@ export function createWorkerProviderOwnerLifecycle(
     });
   };
 
+  const retireMismatchedLease = async (
+    record: WorkerEnvironmentRecord,
+    provider: WorkerProvider,
+  ): Promise<boolean> => {
+    const transport = record.nodeDeviceId ? "node" : record.sshEndpoint ? "ssh" : undefined;
+    const modeError = transport
+      ? resolveWorkerLeaseTransportError(provider, transport, record.profileSnapshot.executionMode)
+      : undefined;
+    if (!modeError || record.destroyRequestedAtMs !== null) {
+      return false;
+    }
+    const requested = await store.requestDestroy({
+      environmentId: record.environmentId,
+      state: record.state,
+      terminalState: "failed",
+      lastError: modeError.message,
+    });
+    await finishDestroy(requested, provider).catch(() => undefined);
+    return true;
+  };
+
   return {
     identityResolverFor,
     requireCurrentOwner,
@@ -442,5 +504,6 @@ export function createWorkerProviderOwnerLifecycle(
     finishConfirmedProvisionCleanup,
     preserveIndeterminateProvisionCleanup,
     destroy,
+    retireMismatchedLease,
   };
 }

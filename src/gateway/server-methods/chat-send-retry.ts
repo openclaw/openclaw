@@ -1,6 +1,10 @@
 import type { SessionTranscriptReadScope } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
+import {
+  AgentDatabaseAdmissionError,
+  createAgentDatabaseAdmissionErrorShape,
+} from "../../state/agent-database-admission.js";
 
 const ACCEPTED_CHAT_SEND_MAX_DISPATCH_ATTEMPTS = 3;
 
@@ -19,6 +23,13 @@ export function classifyAcceptedChatSendFailure(params: {
 }): AcceptedChatSendFailureDisposition {
   if (params.executionStarted || params.sideEffectsObserved) {
     return "reconcile";
+  }
+  if (
+    params.phase === "pre-ack" &&
+    params.error instanceof AgentDatabaseAdmissionError &&
+    createAgentDatabaseAdmissionErrorShape(params.error.refusal).retryable
+  ) {
+    return "client-retry";
   }
   if (!isSessionTranscriptProjectionUnavailableError(params.error)) {
     return "terminal";

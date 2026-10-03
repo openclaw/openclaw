@@ -149,20 +149,25 @@ alongside valid captures, with its directory and no sealed manifest reference.
 Keep current data and inspect the originals before attempting restoration.
 Older installed updaters may not preserve or forward an original capture; a
 newer Doctor reports that limitation instead of treating current bytes as the
-pre-update state. Take a [verified backup](/install/updating#before-updating-create-a-verified-backup)
+pre-update state. If capture discovery cannot verify an older driver's history,
+Doctor warns and continues repairs under its existing maintenance and update
+ownership. Required migration backups still apply.
+Take a [verified backup](/install/updating#before-updating-create-a-verified-backup)
 before an upgrade when you need a complete recovery copy.
 
 ### Retained updater runtime
 
 An update can retain its running code in an `openclaw-update-runtime-*` directory
 beside the installation or in the system temporary directory. The updater settles
-its workers and removes that directory after success, failure, an exception, or
-`SIGINT`/`SIGTERM`, including failures while reporting the outcome. If a worker
-cannot settle or removal fails, it records `Runtime retained at <path>: <reason>`
-and leaves cleanup available to Doctor. A cleanup warning does not replace the
-original update outcome. An earlier nonzero exit remains nonzero while cleanup
-is draining. Mutation and recovery owners must still drain; their failures produce
-a nonzero exit even if the printed command result was successful.
+its workers after success, failure, an exception, or `SIGINT`/`SIGTERM`, including
+failures while reporting the outcome. Complete projections record
+`Runtime retained at <path>: <reason>` for the next eligible update or Doctor
+cleanup, so recursive deletion does not delay command exit. Incomplete preparation
+keeps immediate best-effort cleanup. Unsettled workers retain their runtime with
+the failure reason. A cleanup warning does not replace the original update
+outcome. An earlier nonzero exit remains nonzero while workers are draining.
+Mutation and recovery owners must still drain; their failures produce a nonzero
+exit even if the printed command result was successful.
 
 Retention copies plugin manifests and files inspected by plugin safety checks,
 so retaining the updater does not make the checkout's plugins fail hardlink
@@ -578,8 +583,9 @@ openclaw --profile work update cleanup --dry-run --json
 Cleanup targets the selected profile and `OPENCLAW_STATE_DIR` / `OPENCLAW_CONFIG_PATH`
 overrides. It displays that state directory and does not redirect to a managed
 service. Confirm the displayed directory is the installation you intend to clean.
-`--dry-run` reads only configuration and recovery metadata, without opening
-databases, taking a maintenance lock, loading plugins, or creating state.
+`--dry-run` reads configuration and recovery metadata, including existing update
+history for startup-migration backups, without taking a maintenance lock, loading
+plugins, or creating state.
 Candidate bytes still require identity verification; historical artifacts are
 listed separately as requiring verification. Protected and blocked artifacts
 include reason codes.
@@ -618,6 +624,12 @@ eligible. Unknown or unimported history, malformed inputs, trajectories,
 forensic corrupt databases, operator backups, and unmanifested artifacts stay
 protected. Old manifests are verified offline where possible; missing evidence
 is a reason to retain an artifact. Cleanup has no automatic expiration policy.
+Doctor's `<database>.pre-startup-migration-<id>.bak` groups become eligible only
+after Doctor verifies migration completion and update history records a successful
+update that started later. Until then they appear as protected. Changed or
+unrecorded backups remain protected or blocked; cleanup never infers permission
+to delete from their filenames. Keep these files with your pre-upgrade backups
+while you still need to restore the matching database generation.
 Private package, command-shim, and Git runtime backups remain owned by the update
 transaction and are outside this migration cleanup. An interrupted entry in update
 history does not block cleanup of otherwise eligible migration archives.

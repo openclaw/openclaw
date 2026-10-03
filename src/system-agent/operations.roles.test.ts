@@ -385,16 +385,19 @@ describe("custodian role creation through persisted configuration", () => {
             : failure === "post-commit-later"
               ? ["coordinator", "researcher", "writer"]
               : ["coordinator", "researcher"];
-        if (failure === "post-commit-first" || failure === "post-commit-later") {
-          const failingAgentId = failure === "post-commit-first" ? "coordinator" : "writer";
-          const recordProvenance = agentProvenance.recordAgentProvenance;
-          vi.spyOn(agentProvenance, "recordAgentProvenance").mockImplementation((...args) => {
-            if (args[0] === failingAgentId) {
-              throw new Error("provenance unavailable");
-            }
-            return recordProvenance(...args);
-          });
-        }
+        let researcherRecorded = false;
+        const recordProvenance = agentProvenance.recordAgentProvenance;
+        vi.spyOn(agentProvenance, "recordAgentProvenance").mockImplementation((...args) => {
+          if (
+            (failure === "post-commit-first" && args[0] === "coordinator") ||
+            (failure === "post-commit-later" && args[0] === "writer")
+          ) {
+            throw new Error("provenance unavailable");
+          }
+          const result = recordProvenance(...args);
+          researcherRecorded ||= args[0] === "researcher";
+          return result;
+        });
         if (failure === "unfinished-bootstrap") {
           const unfinished = await ensureAgentWorkspace({
             dir: path.join(workspaceRoot, "writer"),
@@ -410,10 +413,7 @@ describe("custodian role creation through persisted configuration", () => {
           {
             approved: true,
             beforePersistentApply: () => {
-              if (
-                failure === "authority-revoked" &&
-                agentProvenance.readAgentProvenance("researcher")
-              ) {
+              if (failure === "authority-revoked" && researcherRecorded) {
                 throw new Error("authority closed");
               }
             },

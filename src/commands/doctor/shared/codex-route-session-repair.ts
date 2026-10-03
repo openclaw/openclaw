@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../../../agents/agent-scope.js";
+import { parseLegacyCredentialEntry } from "../../../agents/auth-profiles/legacy-flat-credential.js";
 import {
   areOAuthCredentialsEquivalent,
   hasMatchingOAuthIdentity,
@@ -10,12 +11,10 @@ import {
 import {
   loadPersistedAuthProfileStore,
   loadPersistedSharedAuthProfileStore,
-  parseLegacyCredentialEntry,
 } from "../../../agents/auth-profiles/persisted.js";
 import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
 import {
   applySessionEntryReplacements,
-  iterateDoctorSessionKeyBatches,
   scanDoctorSessionEntriesStrict,
   scanDoctorSessionEntriesTolerant,
 } from "../../../config/sessions/session-accessor.js";
@@ -58,6 +57,7 @@ import {
 import type { SessionModelRetirement } from "./retired-model-ref-repair.js";
 import { createRetiredModelRefRepairResolver } from "./retired-model-ref-repair.js";
 import { repairRetiredSessionModelRef } from "./retired-session-model-repair.js";
+import { iterateDoctorSessionKeyBatches } from "./session-entry-rewrite.js";
 
 function rewriteSessionModelPair(params: {
   entry: SessionEntry;
@@ -392,26 +392,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   ] = { repairCodexSessionStoreRoutes };
 }
 
-function scanCodexSessionStoreRoutes(
-  store: Record<string, SessionEntry>,
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
-  authProfileIdMap?: ReadonlyMap<string, string>,
-  retirement?: SessionModelRetirement,
-  warnings?: string[],
-  authProfileOnly = false,
-): string[] {
-  // Preview executes the same repair against copies, so scanning and mutation
-  // cannot disagree about a route, account pin, or retirement condition.
-  return repairCodexSessionStoreRoutes({
-    store: structuredClone(store),
-    blockedModelIdentities,
-    authProfileIdMap,
-    authProfileOnly,
-    retirement,
-    warnings,
-  }).sessionKeys;
-}
-
 function resolveVerifiedSessionAuthProfileIdMap(params: {
   agentId: string;
   cfg: OpenClawConfig;
@@ -548,18 +528,21 @@ export async function maybeRepairCodexSessionRoutes(params: {
     if (authProfileOnly && !authProfileIdMap?.size) {
       return [];
     }
+    const repair = (store: Record<string, SessionEntry>) =>
+      repairCodexSessionStoreRoutes({
+        store,
+        blockedModelIdentities: params.blockedModelIdentities,
+        authProfileIdMap,
+        authProfileOnly,
+        retirement,
+        warnings,
+      });
+    // Preview uses the same owner-bound repair against copies, preserving persisted entries.
+    const scan = (store: Record<string, SessionEntry>) =>
+      repair(structuredClone(store)).sessionKeys;
     const staleSqliteSessionKeys: string[] = [];
     const scanEntry = ({ entry, sessionKey }: { entry: SessionEntry; sessionKey: string }) => {
-      if (
-        scanCodexSessionStoreRoutes(
-          { [sessionKey]: entry },
-          params.blockedModelIdentities,
-          authProfileIdMap,
-          retirement,
-          warnings,
-          authProfileOnly,
-        ).length > 0
-      ) {
+      if (scan({ [sessionKey]: entry }).length > 0) {
         staleSqliteSessionKeys.push(sessionKey);
       }
     };
@@ -577,8 +560,8 @@ export async function maybeRepairCodexSessionRoutes(params: {
             ...target,
             staleSqliteSessionKeys,
             hasLegacyStore,
-            authProfileIdMap,
-            retirement,
+            scan,
+            repair,
           },
         ]
       : [];
@@ -587,14 +570,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
     const stale = targets.flatMap((target) => {
       const sessionKeys = new Set(target.staleSqliteSessionKeys);
       if (target.hasLegacyStore) {
-        for (const sessionKey of scanCodexSessionStoreRoutes(
-          loadLegacySessionStore(target.storePath),
-          params.blockedModelIdentities,
-          target.authProfileIdMap,
-          target.retirement,
-          warnings,
-          authProfileOnly,
-        )) {
+        for (const sessionKey of target.scan(loadLegacySessionStore(target.storePath))) {
           sessionKeys.add(sessionKey);
         }
       }
@@ -634,14 +610,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
           const store = Object.fromEntries(
             entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
           );
-          const repair = repairCodexSessionStoreRoutes({
-            store,
-            blockedModelIdentities: params.blockedModelIdentities,
-            authProfileIdMap: target.authProfileIdMap,
-            authProfileOnly,
-            retirement: target.retirement,
-            warnings,
-          });
+          const repair = target.repair(store);
           return {
             result: repair,
             replacements: repair.sessionKeys.map((sessionKey) => ({
@@ -657,28 +626,11 @@ export async function maybeRepairCodexSessionRoutes(params: {
     }
 
     if (target.hasLegacyStore) {
-      const staleLegacySessionKeys = scanCodexSessionStoreRoutes(
-        loadLegacySessionStore(target.storePath),
-        params.blockedModelIdentities,
-        target.authProfileIdMap,
-        target.retirement,
-        warnings,
-        authProfileOnly,
-      );
+      const staleLegacySessionKeys = target.scan(loadLegacySessionStore(target.storePath));
       if (staleLegacySessionKeys.length > 0) {
-        const result = await updateLegacySessionStore(
-          target.storePath,
-          (store) =>
-            repairCodexSessionStoreRoutes({
-              store,
-              blockedModelIdentities: params.blockedModelIdentities,
-              authProfileIdMap: target.authProfileIdMap,
-              authProfileOnly,
-              retirement: target.retirement,
-              warnings,
-            }),
-          { skipMaintenance: true },
-        );
+        const result = await updateLegacySessionStore(target.storePath, target.repair, {
+          skipMaintenance: true,
+        });
         for (const sessionKey of result.sessionKeys) {
           repairedSessionKeys.add(sessionKey);
         }

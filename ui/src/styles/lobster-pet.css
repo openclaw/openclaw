@@ -376,7 +376,8 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 .lobster-pet--palette-nebula .lob-twinkle,
-.lobster-pet--palette-geode .lob-twinkle {
+.lobster-pet--palette-geode .lob-twinkle,
+.lobster-pet--palette-glass .lob-glass-glints {
   transform-box: fill-box;
   transform-origin: center;
   animation: lobster-pet-twinkle 2s ease-in-out infinite;
@@ -384,12 +385,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 .lobster-pet--palette-glass .lobster-pet__svg {
   opacity: 0.38;
-}
-
-.lobster-pet--palette-glass .lob-glass-glints {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: lobster-pet-twinkle 2s ease-in-out infinite;
 }
 
 /* Flicker owns opacity only. Breathe remains in the list because setting
@@ -927,11 +922,13 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 /* Petting: content closed eyes and a floating heart. */
-.lobster-pet--act-pet .lob-eye-open {
+.lobster-pet--act-pet .lob-eye-open,
+.lobster-pet--act-nap .lob-eye-open {
   opacity: 0;
 }
 
-.lobster-pet--act-pet .lob-eye-closed {
+.lobster-pet--act-pet .lob-eye-closed,
+.lobster-pet--act-nap .lob-eye-closed {
   opacity: 1;
 }
 
@@ -1014,14 +1011,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 /* ---- Nap: eyes shut, z's drift up ---- */
-
-.lobster-pet--act-nap .lob-eye-open {
-  opacity: 0;
-}
-
-.lobster-pet--act-nap .lob-eye-closed {
-  opacity: 1;
-}
 
 .lobster-pet__z {
   position: absolute;

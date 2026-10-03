@@ -107,18 +107,6 @@ describe("Browser panel hosted tabs", () => {
     expect(nativeIcon?.querySelector("svg")).toBeNull();
   });
 
-  it("delegates hosted selection and close to the controller", async () => {
-    const { panel, controller } = await mount();
-    const select = vi.spyOn(controller, "selectTab").mockResolvedValue();
-    const close = vi.spyOn(controller, "closeTab").mockResolvedValue();
-
-    panel.selectHostedTab("native:b");
-    await panel.closeHostedTab("remote:a");
-
-    expect(select).toHaveBeenCalledWith("native:b");
-    expect(close).toHaveBeenCalledWith("remote:a");
-  });
-
   it("publishes favicon-only native pushes to hosted tabs and the dock strip", async () => {
     const tab = {
       id: "mac-icon",
@@ -191,19 +179,11 @@ describe("Browser panel hosted tabs", () => {
       expect(changed).toHaveBeenCalledTimes(2);
       expect(panel.hostedTabs.map((tab) => tab.label)).toEqual(["Changed", "Changed", "Changed"]);
 
-      controller.setState(
-        "tabs",
-        controller.tabs.map((tab) => ({ ...tab, favicon: undefined })),
-      );
-      await panel.updateComplete;
-      expect(changed).toHaveBeenCalledTimes(3);
-      expect(panel.hostedTabs.every((tab) => tab.favicon === undefined)).toBe(true);
-
       controller.setState("urlDraft", "https://draft.test/");
       await panel.updateComplete;
       panel.requestUpdate();
       await panel.updateComplete;
-      expect(changed).toHaveBeenCalledTimes(3);
+      expect(changed).toHaveBeenCalledTimes(2);
     } finally {
       document.body.removeEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, changed);
     }

@@ -10,7 +10,6 @@ import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
   DEFAULT_PROMOTION_MIN_SCORE,
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
-  type PromotionWeights,
 } from "./short-term-promotion-types.js";
 import {
   rankShortTermPromotionCandidates,
@@ -198,10 +197,10 @@ describe("short-term promotion score calibration", () => {
     const workspaceDir = await createTempWorkspace("promotion-score-boundary-");
     const boundary = createRecallEntry({
       key: "boundary",
-      signalCount: 1,
-      avgScore: DEFAULT_PROMOTION_MIN_SCORE,
-      queryHashes: ["query-a"],
-      recallDays: ["2026-04-03"],
+      signalCount: 10,
+      avgScore: 0,
+      queryHashes: ["query-a", "query-b", "query-c", "query-d", "query-e"],
+      recallDays: [],
       conceptTags: [],
     });
     await shortTermTestState.writeRawRecallStore(workspaceDir, {
@@ -209,32 +208,21 @@ describe("short-term promotion score calibration", () => {
       updatedAt: NOW_ISO,
       entries: { boundary },
     });
-    const relevanceOnly: PromotionWeights = {
-      frequency: 0,
-      relevance: 1,
-      diversity: 0,
-      recency: 0,
-      consolidation: 0,
-      conceptual: 0,
-    };
-
     await expect(
       rankShortTermPromotionCandidates({
         workspaceDir,
-        minScore: DEFAULT_PROMOTION_MIN_SCORE,
+        minScore: 0.54,
         minRecallCount: 0,
         minUniqueQueries: 0,
-        weights: relevanceOnly,
         nowMs: NOW_MS,
       }),
     ).resolves.toHaveLength(1);
     await expect(
       rankShortTermPromotionCandidates({
         workspaceDir,
-        minScore: DEFAULT_PROMOTION_MIN_SCORE + 0.000001,
+        minScore: 0.540001,
         minRecallCount: 0,
         minUniqueQueries: 0,
-        weights: relevanceOnly,
         nowMs: NOW_MS,
       }),
     ).resolves.toHaveLength(0);

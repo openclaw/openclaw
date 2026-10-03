@@ -30,7 +30,9 @@ import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-har
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   loadSessionEntry,
@@ -38,28 +40,26 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
-import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { createRestartSafeChatRequest } from "./chat-restart-recovery.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveSessionNativeRuntimeRestriction } from "./sessions-patch-model-selection.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 // Preparing the canonical creator defaults does not itself persist a session.
-export function prepareChatSendSessionEntry(params: {
+export async function prepareChatSendSessionEntry(params: {
   cfg: OpenClawConfig;
   client: GatewayRequestHandlerOptions["client"];
   agentId: string;
   getRuntimeConfig: () => OpenClawConfig;
-}): { entry: SessionEntry; assertSkillSelection: () => void } {
+}): Promise<{ entry: SessionEntry; assertSkillSelection: () => void }> {
   const { cfg, client, agentId, getRuntimeConfig } = params;
   const creationError = authorizeGatewaySessionCreation({ cfg, client, agentId });
   if (creationError) {
     throw new Error(creationError.message);
   }
-  const creation = prepareSkillLibrarySessionCreation(
+  const creation = await prepareSkillLibrarySessionCreation(
     client,
     getRuntimeConfig,
     resolveOperatorSessionCreation(client),
@@ -396,7 +396,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
       "Session changed before native confirmation. Retry.",
     );
   }
-  const prepared = prepareChatSendSessionEntry({
+  const prepared = await prepareChatSendSessionEntry({
     cfg,
     client,
     agentId,

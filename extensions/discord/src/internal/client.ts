@@ -1,6 +1,6 @@
 import type { APIInteraction } from "discord-api-types/v10";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
-import { DiscordCommandDeployer, type DeployCommandOptions } from "./command-deploy.js";
+import { DiscordCommandDeployer } from "./command-deploy.js";
 import type { DiscordCommand } from "./commands.js";
 import { ComponentRegistry } from "./component-registry.js";
 import { BaseMessageInteractiveComponent, type Modal } from "./components.js";
@@ -28,7 +28,6 @@ interface ClientOptions {
   token: string;
   requestOptions?: RequestClientOptions;
   commandDeployHashStore?: DiscordCommandDeployHashStore;
-  devGuilds?: string[];
   eventQueue?: DiscordEventQueueOptions;
   restCacheTtlMs?: number;
 }
@@ -78,7 +77,6 @@ export class Client {
     this.commandDeployer = new DiscordCommandDeployer({
       clientId: this.options.clientId,
       commands: this.commands,
-      devGuilds: this.options.devGuilds,
       hashStore: this.options.commandDeployHashStore,
       rest: () => this.rest,
     });
@@ -104,22 +102,6 @@ export class Client {
   getPlugin(id: string): RegisteredPlugin | undefined;
   getPlugin(id: string): RegisteredPlugin | undefined {
     return this.plugins.find((plugin) => plugin.id === id);
-  }
-
-  registerListener(listener: AnyListener): AnyListener {
-    if (!this.listeners.includes(listener)) {
-      this.listeners.push(listener);
-    }
-    return listener;
-  }
-
-  unregisterListener(listener: AnyListener): boolean {
-    const index = this.listeners.indexOf(listener);
-    if (index < 0) {
-      return false;
-    }
-    this.listeners.splice(index, 1);
-    return true;
   }
 
   getRuntimeMetrics() {
@@ -149,8 +131,8 @@ export class Client {
     return await this.entityCache.fetchGuildEmojis(guildId, fetcher);
   }
 
-  async deployCommands(options: DeployCommandOptions = {}) {
-    return await this.commandDeployer.deploy(options);
+  async deployCommands() {
+    return await this.commandDeployer.deploy();
   }
 
   async handleInteraction(rawData: APIInteraction): Promise<void> {

@@ -285,17 +285,21 @@ it("checks the captured registry after logical data cleanup", async () => {
     const rotate = pool.rotate.bind(pool);
     const closeResources = pool.closeResources.bind(pool);
     let cleanupCalled = false;
-    const cleanup = process.versions.bun
-      ? vi.spyOn(pool, "rotate").mockImplementation(async () => {
-          await rotate();
-          cleanupCalled = true;
-          invalidateRegisteredAgentDatabasesMemo({ env });
-        })
-      : vi.spyOn(pool, "closeResources").mockImplementation(async (key) => {
-          await closeResources(key);
-          cleanupCalled = true;
-          invalidateRegisteredAgentDatabasesMemo({ env });
-        });
+    const invalidateAfterCleanup = () => {
+      if (cleanupCalled) {
+        return;
+      }
+      cleanupCalled = true;
+      invalidateRegisteredAgentDatabasesMemo({ env });
+    };
+    const rotateCleanup = vi.spyOn(pool, "rotate").mockImplementation(async () => {
+      await rotate();
+      invalidateAfterCleanup();
+    });
+    const resourceCleanup = vi.spyOn(pool, "closeResources").mockImplementation(async (key) => {
+      await closeResources(key);
+      invalidateAfterCleanup();
+    });
     let consumed = false;
     try {
       const pending = withSessionEntryReadOnlyInWorker(
@@ -313,7 +317,8 @@ it("checks the captured registry after logical data cleanup", async () => {
       expect(cleanupCalled).toBe(true);
       expect(consumed).toBe(true);
     } finally {
-      cleanup.mockRestore();
+      rotateCleanup.mockRestore();
+      resourceCleanup.mockRestore();
     }
   });
 });

@@ -1,4 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import { openWarmImageStore } from "./crabbox-state.test-support.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
@@ -186,7 +188,7 @@ describe("Crabbox idle image maintenance", () => {
     expect(store.lookup("expired")).toEqual(expired);
   });
 
-  it.each(["scrubbing", "creating", "uncertain"] as const)(
+  it.each(["creating", "uncertain"] as const)(
     "preserves ownership and pins while reporting an old %s capture",
     async (phase) => {
       const { provider, calls, warn } = createWarmProvider();
@@ -244,26 +246,6 @@ describe("Crabbox idle image maintenance", () => {
       }
     },
   );
-
-  it("retains failed deletion for a later idle sweep", async () => {
-    let fails = true;
-    const { provider, warn } = createWarmProvider(({ argv }) =>
-      argv[2] === "delete" && fails
-        ? commandResult({ code: 7, stderr: "fixture deletion unavailable" })
-        : undefined,
-    );
-    const store = openWarmImageStore();
-    store.register("expired", expiredImage("chk_expired"));
-    await provider.maintain!(context());
-    expect(store.lookup("expired")?.operation).toEqual({
-      type: "retire",
-      checkpointId: "chk_expired",
-    });
-    expect(warn).toHaveBeenCalledOnce();
-    fails = false;
-    await provider.maintain!(context());
-    expect(store.lookup("expired")).toBeUndefined();
-  });
 
   it("reports paused captures once per ownership snapshot without attempting capture", async () => {
     const { provider, calls, warn } = createWarmProvider();
@@ -378,9 +360,18 @@ describe("Crabbox idle image maintenance", () => {
       expect(calls.filter(({ argv }) => argv[2] === "delete").map(({ argv }) => argv)).toEqual([
         ["/opt/a/crabbox", "checkpoint", "delete", "chk_expired"],
       ]);
-      const replacement = createWarmProvider(undefined, stateDir);
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+      const replacement = createWarmProvider(
+        () => commandResult({ stdout: "checkpoint absent id=chk_expired\n" }),
+        stateDir,
+      );
       await replacement.provider.maintain!(context());
-      expect(store.lookup("expired")).toBeUndefined();
+      expect(openWarmImageStore().lookup("expired")).toBeUndefined();
+      await replacement.provider.maintain!(context());
+      expect(replacement.calls.map(({ argv }) => argv.slice(1))).toEqual([
+        ["checkpoint", "delete", "chk_expired"],
+      ]);
       if (boundary !== "authority") {
         expect(stopped).toBe(true);
         expect(() => provider.maintain!(context())).toThrow();
@@ -422,7 +413,11 @@ describe("Crabbox idle image maintenance", () => {
   it.each(["exit", "command"])(
     "retains a deletion after a first-executable %s error without consulting another catalog",
     async (failure) => {
+      let fails = true;
       const { provider, calls, warn } = createWarmProvider(() => {
+        if (!fails) {
+          return commandResult({ stdout: "checkpoint absent id=chk_expired\n" });
+        }
         if (failure === "command") {
           throw new Error("fixture command unavailable");
         }
@@ -444,6 +439,14 @@ describe("Crabbox idle image maintenance", () => {
       ]);
       expect(warn).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("deletion obligation retained"));
+      fails = false;
+      calls.length = 0;
+      await provider.maintain!(context());
+      expect(store.lookup("expired")).toBeUndefined();
+      expect(calls.map(({ argv }) => argv.slice(1))).toEqual([
+        ["checkpoint", "delete", "chk_expired"],
+      ]);
+      expect(warn).toHaveBeenCalledOnce();
     },
   );
 
@@ -488,34 +491,17 @@ describe("Crabbox idle image maintenance", () => {
     },
   );
 
-  it.each(["", "checkpoint absent id=chk_expired_other\n"])(
-    "accepts successful deletion without an exact absent line: %j",
-    async (stdout) => {
-      const { provider, calls, warn } = createWarmProvider(() => commandResult({ stdout }));
-      const store = openWarmImageStore();
-      store.register("expired", expiredImage("chk_expired"));
-
-      await provider.maintain!(mixedContext());
-
-      expect(calls.map(({ argv }) => argv)).toEqual([
-        ["/opt/a/crabbox", "checkpoint", "delete", "chk_expired"],
-      ]);
-      expect(store.lookup("expired")).toBeUndefined();
-      expect(warn).not.toHaveBeenCalled();
-    },
-  );
-
-  it("clears an absent checkpoint after one successful single-executable command", async () => {
+  it("does not confuse another checkpoint's absence with the deletion result", async () => {
     const { provider, calls, warn } = createWarmProvider(() =>
-      commandResult({ stdout: "checkpoint absent id=chk_expired\n" }),
+      commandResult({ stdout: "checkpoint absent id=chk_expired_other\n" }),
     );
     const store = openWarmImageStore();
     store.register("expired", expiredImage("chk_expired"));
 
-    await provider.maintain!(context());
+    await provider.maintain!(mixedContext());
 
-    expect(calls.map(({ argv }) => argv.slice(1))).toEqual([
-      ["checkpoint", "delete", "chk_expired"],
+    expect(calls.map(({ argv }) => argv)).toEqual([
+      ["/opt/a/crabbox", "checkpoint", "delete", "chk_expired"],
     ]);
     expect(store.lookup("expired")).toBeUndefined();
     expect(warn).not.toHaveBeenCalled();

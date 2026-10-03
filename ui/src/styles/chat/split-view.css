@@ -249,7 +249,9 @@
   min-width: 0;
 }
 
-.chat-pane__placement-menu {
+.chat-pane__placement-menu,
+.chat-pane__branches-menu,
+.chat-pane__sharing-menu {
   flex: 0 0 auto;
 }
 
@@ -321,10 +323,6 @@
   color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
   font-size: 11px;
   line-height: 1.3;
-}
-
-.chat-pane__branches-menu {
-  flex: 0 0 auto;
 }
 
 /* Menu-item check only. The branches trigger is a .chat-icon-btn in the header
@@ -420,10 +418,6 @@
   stroke-width: 1.6px;
 }
 
-.chat-pane__sharing-menu {
-  flex: 0 0 auto;
-}
-
 .chat-pane__public-share-indicator {
   display: inline-flex;
   flex: 0 0 auto;
@@ -454,15 +448,19 @@
   transform: translateY(-50%);
 }
 
-.chat-pane__header-center .chat-pane__sharing-trigger {
+.chat-pane__header-center .chat-pane__sharing-trigger,
+.chat-pane__header-center .chat-pane__draft-indicator {
   width: 28px;
-  min-width: 28px;
   height: 28px;
-  min-height: 28px;
-  padding: 0;
   border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   border-radius: 0 var(--radius-full) var(--radius-full) 0;
   background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
+}
+
+.chat-pane__header-center .chat-pane__sharing-trigger {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
 }
 
 .chat-pane__sharing-menu::part(menu) {
@@ -571,13 +569,8 @@
 }
 
 .chat-pane__header-center .chat-pane__draft-indicator {
-  width: 28px;
-  height: 28px;
   align-items: center;
   justify-content: center;
-  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: 0 var(--radius-full) var(--radius-full) 0;
-  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
 }
 
 /* A full split header measures 793px including insets, so secondary controls

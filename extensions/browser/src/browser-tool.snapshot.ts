@@ -1,6 +1,4 @@
 /**
- * Browser agent tool snapshot execution and inline page-state feedback.
- *
  * Owns the model-facing snapshot result shape (untrusted-content wrapping,
  * caps, dialog states) and attaches fresh page state to actions that changed
  * the page document so the model does not need a follow-up snapshot call.
@@ -183,7 +181,6 @@ function isAriaRefsUnsupportedError(err: unknown): boolean {
   return msg.includes("refs=aria") && msg.includes("not support");
 }
 
-/** Execute and format browser snapshots for agent consumption. */
 export async function executeSnapshotAction(params: {
   input: Record<string, unknown>;
   baseUrl?: string;

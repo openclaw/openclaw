@@ -21,7 +21,7 @@ export function photoUpdate(params: { updateId: number; messageId: number; capti
   };
 }
 
-// forward_origin puts the entry on the forward debounce lane (80ms window).
+// forward_origin puts the entry on the forward debounce lane (1 s window).
 const forwardOrigin = {
   type: "user" as const,
   date: 1_736_300_000,

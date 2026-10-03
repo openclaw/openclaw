@@ -43,6 +43,7 @@ import {
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { bindEmbeddedSessionRowProjection } from "../agents/tools/embedded-gateway-stub.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
+import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import { executeSessionGoalCommand, parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import {
@@ -60,7 +61,6 @@ import {
   mergeAssistantText,
   resolveAssistantTextInput,
 } from "../gateway/agent-event-assistant-text.js";
-import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../gateway/chat-display-projection.js";
 import {
   capLiveAssistantText,
@@ -244,10 +244,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
       this.emit(event.event, event.payload);
     });
     const config = getRuntimeConfig();
-    this.unsubscribeConfigWrites = registerConfigWriteListener((event) => {
-      this.preparedModelRuntime.publish(event.runtimeConfig);
-    });
-    this.preparedModelRuntime.publish(config);
     // Local mode shares the Gateway's session-store readiness checks.
     this.sessionProjection = (async () => {
       const { runSessionStartupMigration } =
@@ -257,6 +253,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
         env: process.env,
         log: embeddedSessionStartupMigrationLog,
       });
+      // Maintenance can retire auth read owners; publish only after it finishes.
+      this.unsubscribeConfigWrites = registerConfigWriteListener((event) => {
+        this.preparedModelRuntime.publish(event.runtimeConfig);
+      });
+      this.preparedModelRuntime.publish(getRuntimeConfig());
       return createSessionRowProjection({ cfg: getRuntimeConfig(), getConfig: getRuntimeConfig });
     })();
     this.ready = this.sessionProjection.then(() => {});
@@ -268,8 +269,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async stop() {
     this.scheduler.beginClose();
-    this.unsubscribeConfigWrites?.();
-    this.unsubscribeConfigWrites = undefined;
     clearEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
     this.unsubscribePluginApprovals?.();
     this.unsubscribePluginApprovals = undefined;
@@ -303,6 +302,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const projection = this.sessionProjection;
     this.sessionProjection = undefined;
     await projection?.catch(() => undefined).then((value) => value?.dispose());
+    this.unsubscribeConfigWrites?.();
+    this.unsubscribeConfigWrites = undefined;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.pendingLifecycleErrors.forEach(clearTimeout);
@@ -337,7 +338,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       agentId,
     };
     const abortableSessionRun = this.hasAbortableSessionRun(runScope);
-    const stopCommand = abortableSessionRun && isChatStopCommandText(opts.message);
+    const stopCommand = abortableSessionRun && isAbortRequestText(opts.message);
     const queuedAfter =
       question || stopCommand || isQueueCommand
         ? undefined

@@ -18,7 +18,7 @@ import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { buildExecApprovalPendingToolResult } from "./bash-tools.exec-host-shared.js";
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
-import { disposeAllCodeModeRuns } from "./code-mode-state.js";
+import { disposeAllCodeModeRuns, waitForPendingBridgeSettlement } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness as subscribeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { addClientToolsToCodeModeCatalog, applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -480,7 +480,10 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         expect(payloads).toEqual([expect.objectContaining({ text: answer })]);
       } else {
         expect(payloads).toEqual([
-          expect.objectContaining({ isError: true, text: expect.stringMatching(/rate limit/i) }),
+          expect.objectContaining({
+            isError: true,
+            text: expect.stringContaining("The AI service needs a short break"),
+          }),
         ]);
       }
     },
@@ -593,7 +596,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     // Both exec calls have returned; no wait is in flight to perform owner cleanup.
     clearToolSearchCatalog(owner);
     expect([...testing.activeRuns.keys()]).toEqual([survivorId]);
-    await expect(pending.promise).resolves.toBeUndefined();
+    await waitForPendingBridgeSettlement([pending], { kind: "awaiting" });
     expect(() => pending.reply.take()).toThrow("unavailable");
     expect(testing.activeRuns.get(survivorId)).toBe(survivorState);
     expect(otherPending.settled).toBeUndefined();
@@ -653,7 +656,10 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     });
     expect(testing.activeRuns.size).toBe(0);
     expect(testing.resumingRunIds.size).toBe(0);
-    await Promise.all(pending.map((entry) => entry.promise));
+    await waitForPendingBridgeSettlement(pending, {
+      kind: "draining",
+      requiredRequestIds: pending.map((entry) => entry.id),
+    });
     expect(getEventListeners(finalState.owner.signal, "abort")).toHaveLength(0);
     expect(finalState.owner.signal.aborted).toBe(true);
     expect(owner.catalogRef.onDispose?.size ?? 0).toBe(0);
@@ -857,8 +863,6 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         if (!parked || !pending) {
           throw new Error("expected one parked subscribed tool call");
         }
-        const settlements = vi.fn();
-        void pending.promise.then(settlements);
         const wait = expectDefined(harness.tools[1], "Code Mode wait test invariant");
         const waiting =
           close === "expire"
@@ -874,7 +878,6 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           await disposeAllCodeModeRuns();
         }
 
-        await expect(pending.promise).resolves.toBeUndefined();
         if (waiting) {
           const result = resultDetails(await waiting);
           expect(result.status).not.toBe("waiting");
@@ -885,13 +888,13 @@ describe("Code Mode subscribed bridge lifecycle", () => {
             });
           }
         } else {
+          await waitForPendingBridgeSettlement([pending], { kind: "awaiting" });
           await expect(
             wait.execute("code-wait-after-expiry", { runId: suspended.runId }),
           ).rejects.toThrow("code mode run is unavailable or expired");
         }
         expect(() => pending.reply.take()).toThrow("unavailable");
         await vi.waitFor(() => expect(countActiveToolExecutions(harness.runId)).toBe(0));
-        expect(settlements).toHaveBeenCalledOnce();
         expect(toolAbort).toHaveBeenCalledOnce();
         expect(harness.subscription.getItemLifecycle().activeCount).toBe(0);
         expect(testing.activeRuns.size).toBe(0);
@@ -901,7 +904,6 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         await Promise.resolve();
         expect(target.execute).toHaveBeenCalledOnce();
         expect(continuation.execute).not.toHaveBeenCalled();
-        expect(settlements).toHaveBeenCalledOnce();
         expect(toolAbort).toHaveBeenCalledOnce();
       } finally {
         downstream.resolve();

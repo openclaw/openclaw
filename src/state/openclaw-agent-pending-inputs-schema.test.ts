@@ -12,6 +12,7 @@ import { withoutCanonicalSessionValidationSchema } from "./openclaw-agent-canoni
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
 import { ensureSessionPendingInputsSchema } from "./openclaw-agent-pending-inputs-schema.js";
@@ -33,6 +34,7 @@ describe("pending input additive schema", () => {
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const filename = openOpenClawAgentDatabase(options).path;
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const previous = new DatabaseSync(filename);
     previous.exec("DROP TABLE session_pending_inputs");
@@ -41,7 +43,7 @@ describe("pending input additive schema", () => {
       .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
       .get();
     previous.close();
-    expect(listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
+    expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
     const candidate = openOpenClawAgentDatabase(options);
     expect(
       candidate.db
@@ -60,6 +62,7 @@ describe("pending input additive schema", () => {
     });
     receipt!.finish("interrupted");
     ensureSessionPendingInputsSchema(candidate.db);
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const older = new DatabaseSync(filename);
     const previousSql = OPENCLAW_AGENT_SCHEMA_SQL.slice(
@@ -77,7 +80,7 @@ describe("pending input additive schema", () => {
         .get(),
     ).toEqual(metadata);
     older.close();
-    expect(listSessionPendingInputs(scope)).toMatchObject({
+    expect(await listSessionPendingInputs(scope)).toMatchObject({
       total: 1,
       items: [{ state: "interrupted", message: { content: "Retain this accepted input" } }],
     });
@@ -86,12 +89,13 @@ describe("pending input additive schema", () => {
     );
   });
 
-  it("rejects a drifted optional table rather than treating it as absent", () => {
+  it("rejects a drifted optional table rather than treating it as absent", async () => {
     const options = {
       agentId: "main",
       env: { OPENCLAW_STATE_DIR: sessionDirs.make() },
     };
     const filename = openOpenClawAgentDatabase(options).path;
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const drifted = new DatabaseSync(filename);
     drifted.exec(
@@ -122,6 +126,7 @@ describe("pending input additive schema", () => {
       });
       receipt!.finish("interrupted");
       const filename = openOpenClawAgentDatabase(options).path;
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const old = new DatabaseSync(filename);
       old.exec("ALTER TABLE session_pending_inputs DROP COLUMN consumed_event_id");
@@ -129,12 +134,13 @@ describe("pending input additive schema", () => {
       const metadata = old.prepare("SELECT * FROM schema_meta").all();
       const original = old.prepare("SELECT message_json FROM session_pending_inputs").get();
       old.close();
-      expect(listSessionPendingInputs(scope)).toMatchObject({
+      expect(await listSessionPendingInputs(scope)).toMatchObject({
         total: 1,
         items: [{ state: "interrupted", message: receipt!.message }],
       });
       if (path === "open") {
         openOpenClawAgentDatabase(options);
+        await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
       } else {
         const current = new DatabaseSync(filename);

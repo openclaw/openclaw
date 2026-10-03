@@ -19,7 +19,7 @@ import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-
 const { makeTempDir } = usePreparedCatalogWorkerFixtures();
 
 it("bounds catalog worker retention across repeated fleet preparations", async () => {
-  const fixture = createCatalogFixture(makeTempDir, 0);
+  const fixture = await createCatalogFixture(makeTempDir, 0);
   fs.writeFileSync(
     path.join(fixture.root, "plugin", "index.cjs"),
     `

@@ -48,15 +48,6 @@ describe("existing-only SQLite worker admission", () => {
     await seed(file, "ordinary creation remains available");
   });
 
-  it("does not initialize an existing empty file", async () => {
-    const file = databasePath();
-    await writeFile(file, "");
-    const store = await open(file, true);
-    assert.ok(store);
-    await store.close();
-    expect(await readFile(file)).toEqual(Buffer.alloc(0));
-  });
-
   it("requires explicit backend support instead of invoking the ordinary factory", async () => {
     const file = databasePath();
     await writeFile(file, "");
@@ -92,7 +83,11 @@ describe("existing-only SQLite worker admission", () => {
         settled = true;
         return receipt;
       });
-    await ordinary.close();
+    const closed = ordinary.close();
+    await expect(
+      ordinary.execute({ type: "append", input: { value: "after close" } }),
+    ).rejects.toMatchObject({ code: "closed" });
+    await closed;
     expect(settled).toBe(true);
     const first = await pending;
     const second = await existing.execute({ type: "append", input: { value: "existing" } });

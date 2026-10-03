@@ -145,6 +145,15 @@ describe("unit-fast vitest lane", () => {
         paths.isUnitFastTimerTestFile(file),
       ]);
       console.log("UNIT_FAST_MEMBERSHIP_PROBE", JSON.stringify({ membership, unselectedFileReads }));
+      const { resolveCiTestRuntimeSelections } = await import("./scripts/lib/ci-test-runtime.mts");
+      const runtimeSelections = ["unit-fast", "unit-fast-isolated"].map((name, index) => ({
+        target: resolveCiTestRuntimeSelections({ targets: [selectedTests[index]] }, "bun-compatible"),
+        group: resolveCiTestRuntimeSelections({
+          configs: ["test/vitest/vitest." + name + ".config.ts"],
+          includePatterns: selectedTests,
+        }, "bun-compatible"),
+      }));
+      console.log("UNIT_FAST_RUNTIME_PROBE", JSON.stringify({ runtimeSelections, unselectedFileReads }));
       hookFileReads = 0;
       outsideFileReads = 0;
       unselectedFileReads = 0;
@@ -224,6 +233,26 @@ describe("unit-fast vitest lane", () => {
         [true, true, false],
         [true, false, true],
         [false, false, false],
+      ],
+      unselectedFileReads: 0,
+    });
+    const runtime = configProbeResult.stdout.match(/UNIT_FAST_RUNTIME_PROBE (.+)/u);
+    expect(runtime, configProbeResult.stdout).not.toBeNull();
+    expect(JSON.parse(runtime?.[1] ?? "null")).toEqual({
+      runtimeSelections: [
+        {
+          target: [{ runtime: "bun" }],
+          group: [
+            {
+              runtime: "bun",
+              includePatterns: ["src/agents/agent-tools.deferred-followup-guidance.test.ts"],
+            },
+          ],
+        },
+        {
+          target: [{ runtime: "bun" }],
+          group: [{ runtime: "bun" }],
+        },
       ],
       unselectedFileReads: 0,
     });
@@ -491,6 +520,7 @@ describe("unit-fast vitest lane", () => {
       "src/agents/code-mode-quickjs.integration.test.ts",
       "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
       "src/agents/provider-transport-fetch.headers.test.ts",
+      "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
       "src/commands/status-overview-values.test.ts",
     ]) {
       expect(isUnitFastTestFile(file), file).toBe(false);
@@ -575,7 +605,6 @@ describe("unit-fast vitest lane", () => {
       "src/agents/tools/computer-tool.context.test.ts",
       "src/agents/tools/computer-tool.schema.test.ts",
       "src/agents/tools/computer-tool.v2.test.ts",
-      "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
       "src/infra/provider-usage.test.ts",
     ];
     for (const file of files) {

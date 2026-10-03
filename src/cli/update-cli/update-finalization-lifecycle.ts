@@ -1,11 +1,13 @@
 import { writeSync } from "node:fs";
 import os from "node:os";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../../config/paths.js";
 import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "../../infra/sqlite-readonly-worker.js";
 import { readUpdateStateDatabaseSizes } from "../../infra/update-candidate-state.sizes.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import {
+  collectUpdateDoctorFailureFacts,
   DoctorMaintenanceRefusalError,
   UpdateDoctorError,
 } from "../../infra/update-doctor-result.js";
@@ -26,12 +28,16 @@ import {
   recordUpdateRunRepairContinuation,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
   UPDATE_RUN_HEARTBEAT_MS,
   UPDATE_RUNNER_TIMEOUT_MS,
 } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
+import { formatConsoleDiagnosticLine } from "../../logging/json-console-line.js";
+import { getLogger } from "../../logging/logger.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { resolveCommandProcessSignal, withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -169,7 +175,15 @@ export class UpdateFinalizationLifecycle {
         : {}),
       ...(status === "in_progress" ? { startedAtMs: at } : { endedAtMs: at }),
     };
-    defaultRuntime.error(`[update finalize] ${JSON.stringify(step)}`);
+    const message = `[update finalize] ${JSON.stringify(step)}`;
+    if (status === "failed") {
+      defaultRuntime.error(message);
+    } else if (name.startsWith("warning:")) {
+      console.warn(message);
+    } else {
+      getLogger().info(message);
+      process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message })}\n`);
+    }
     if (this.runId) {
       try {
         recordUpdateRunStep(this.runId, step, this.ledgerOptions);
@@ -183,6 +197,20 @@ export class UpdateFinalizationLifecycle {
     warnings.forEach((detail, index) => {
       this.record(`warning:finalize:${phase}:${index}`, "completed", Date.now(), detail);
     });
+  }
+
+  recordDoctorStep(step: UpdateStepResult): void {
+    const endedAtMs = Date.now();
+    for (const row of updateRunStepsFromResultStep(step)) {
+      this.record(
+        row.step,
+        row.status === "failed" ? "failed" : "completed",
+        endedAtMs,
+        row.detail,
+        row.failureFacts,
+        row.exitCode,
+      );
+    }
   }
 
   budget(phase: DoctorPhase): number | undefined;
@@ -360,6 +388,9 @@ export class UpdateFinalizationLifecycle {
       if (failure) {
         this.record(`warning:finalize:${phase}:deadline`, "completed", Date.now(), failure.message);
       }
+      const doctorFailure = collectNestedErrorCandidates(error).find(
+        (cause): cause is UpdateDoctorError => cause instanceof UpdateDoctorError,
+      );
       const facts = failure
         ? [
             createUpdateFailureFact({
@@ -368,8 +399,8 @@ export class UpdateFinalizationLifecycle {
               message: failure.message,
             }),
           ]
-        : error instanceof UpdateDoctorError
-          ? error.failureFacts
+        : doctorFailure
+          ? collectUpdateDoctorFailureFacts(error)
           : [
               createUpdateFailureFact({
                 check: phase,
@@ -390,7 +421,7 @@ export class UpdateFinalizationLifecycle {
               stateDir: resolveStateDir(process.env),
             }),
         deferred ? undefined : facts,
-        !deferred && error instanceof UpdateDoctorError ? error.exitCode : undefined,
+        deferred ? undefined : doctorFailure?.exitCode,
       );
       throw error;
     } finally {

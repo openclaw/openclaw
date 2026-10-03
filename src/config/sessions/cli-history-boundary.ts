@@ -6,7 +6,6 @@ export type CliHistoryWriter = {
   runId: string;
   authFingerprint: string;
   lifecycleRevision?: string;
-  expectedWriterRunId?: string;
   assertCurrent: () => void;
   assertReadable: () => void;
 };
@@ -18,7 +17,7 @@ export function runWithCliHistoryWriter<T>(writer: CliHistoryWriter | undefined,
 }
 
 export function getCliHistoryWriter(
-  target: SessionTranscriptRuntimeTarget,
+  target: Partial<SessionTranscriptRuntimeTarget>,
 ): CliHistoryWriter | undefined {
   const writer = cliHistoryWriter.getStore();
   return writer &&

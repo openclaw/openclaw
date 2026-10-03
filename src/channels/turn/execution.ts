@@ -117,20 +117,16 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
   });
 }
 
-function resolveBotLoopProtectionDrop<TDispatchResult>(
+function dropPreparedChannelTurn<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
-): ChannelTurnResult<TDispatchResult> | undefined {
-  if (!params.botLoopProtection) {
-    return undefined;
-  }
-  const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection);
-  if (!botLoopResult.suppressed) {
-    return undefined;
-  }
-  const admission: ChannelTurnAdmission = { kind: "drop", reason: "bot-loop-protection" };
+  reason: "bot-loop-protection" | "outbound-echo",
+  messageId = params.messageId,
+): ChannelTurnResult<TDispatchResult> {
+  const admission: ChannelTurnAdmission = { kind: "drop", reason };
   emit(params, {
     stage: "authorize",
     event: "drop",
+    messageId,
     admission: admission.kind,
     reason: admission.reason,
   });
@@ -140,6 +136,15 @@ function resolveBotLoopProtectionDrop<TDispatchResult>(
     ctxPayload: params.ctxPayload,
     routeSessionKey: params.routeSessionKey,
   };
+}
+
+function resolveBotLoopProtectionDrop<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): ChannelTurnResult<TDispatchResult> | undefined {
+  return params.botLoopProtection &&
+    recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection).suppressed
+    ? dropPreparedChannelTurn(params, "bot-loop-protection")
+    : undefined;
 }
 
 function resolveOutboundEchoDrop<TDispatchResult>(
@@ -178,20 +183,7 @@ function resolveOutboundEchoDrop<TDispatchResult>(
   if (!matchedMessageId && !matchesSource) {
     return undefined;
   }
-  const admission: ChannelTurnAdmission = { kind: "drop", reason: "outbound-echo" };
-  emit(params, {
-    stage: "authorize",
-    event: "drop",
-    messageId: params.messageId ?? matchedMessageId,
-    admission: admission.kind,
-    reason: admission.reason,
-  });
-  return {
-    admission,
-    dispatched: false,
-    ctxPayload: params.ctxPayload,
-    routeSessionKey: params.routeSessionKey,
-  };
+  return dropPreparedChannelTurn(params, "outbound-echo", params.messageId ?? matchedMessageId);
 }
 
 export async function runPreparedChannelTurnCore<

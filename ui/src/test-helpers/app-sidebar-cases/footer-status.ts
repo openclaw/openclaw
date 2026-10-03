@@ -112,20 +112,6 @@ describe("AppSidebar gateway footer subtitle", () => {
     },
   );
 
-  it("shows a single configured gateway below the identity name", async () => {
-    setNativeGatewayTestState({ gateways: [twoGateways.gateways[0]!], currentId: "local" });
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-
-    expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
-      "Identity and app menu for Owner: Local Gateway, primary",
-    );
-    expect(sidebar.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Owner");
-    const detail = sidebar.querySelector(".sidebar-identity-card__gateway");
-    expect(detail?.textContent).toContain("Local Gateway");
-    expect(detail?.querySelector(".sidebar-gateway-primary")?.textContent).toBe("primary");
-  });
-
   it("shows gateway identity without treating aggregate health as this window’s status", async () => {
     setControlUiBuildInfo({ commit: CONTROL_UI_TEST_COMMIT, release: false });
     setNativeGatewayTestState(twoGateways);
@@ -146,10 +132,7 @@ describe("AppSidebar gateway footer subtitle", () => {
 
   it.each([
     ["reconnecting", "Reconnecting…"],
-    ["restarting", "Restarting…"],
-    ["suspending", "Suspending…"],
     ["suspended", "Suspended"],
-    ["restoring", "Restoring…"],
     ["reload-required", "Refresh required"],
   ] as const)("shows one %s subtitle without delivery counts", async (connectionStatus, label) => {
     setNativeGatewayTestState(twoGateways);

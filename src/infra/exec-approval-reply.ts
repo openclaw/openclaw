@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -86,22 +87,12 @@ export type ExecApprovalUnavailableReplyParams = {
   nodeId?: string;
 };
 
-function resolveNativeExecApprovalClientList(params?: { excludeChannel?: string }): string {
-  return formatHumanList(
-    listNativeExecApprovalClientLabels({
-      excludeChannel: params?.excludeChannel,
-    }),
-  );
-}
-
 function buildGenericNativeExecApprovalFallbackText(params?: {
   excludeChannel?: string;
   host?: ExecHost;
   nodeId?: string;
 }): string {
-  const clients = resolveNativeExecApprovalClientList({
-    excludeChannel: params?.excludeChannel,
-  });
+  const clients = formatHumanList(listNativeExecApprovalClientLabels(params));
   let manualRecovery =
     "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.";
   if (params?.host === "node") {
@@ -118,18 +109,6 @@ function resolveAllowedDecisions(params: {
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
 }): readonly ExecApprovalReplyDecision[] {
   return params.allowedDecisions ?? resolveExecApprovalAllowedDecisions({ ask: params.ask });
-}
-
-function buildApprovalCommandFence(
-  descriptors: readonly ExecApprovalActionDescriptor[],
-): string | null {
-  if (descriptors.length === 0) {
-    return null;
-  }
-  return formatFencedCodeBlock(
-    descriptors.map((descriptor) => descriptor.command).join("\n"),
-    "txt",
-  );
 }
 
 export function buildExecApprovalCommandText(params: {
@@ -202,10 +181,11 @@ export function buildTypedApprovalActionDescriptors(
   );
 }
 
-function buildApprovalPresentationButtons(
-  descriptors: readonly ExecApprovalActionDescriptor[],
-): MessagePresentationButton[] {
-  return descriptors.map((descriptor) => {
+/** Build portable approval controls from decision descriptors. */
+export function buildApprovalPresentationFromActionDescriptors(
+  actions: readonly ExecApprovalActionDescriptor[],
+): MessagePresentation | undefined {
+  const buttons: MessagePresentationButton[] = actions.map((descriptor) => {
     const action =
       descriptor.action ??
       ({ type: "command", command: descriptor.command } satisfies MessagePresentationAction);
@@ -216,13 +196,6 @@ function buildApprovalPresentationButtons(
       style: descriptor.style,
     };
   });
-}
-
-/** Build portable approval controls from decision descriptors. */
-export function buildApprovalPresentationFromActionDescriptors(
-  actions: readonly ExecApprovalActionDescriptor[],
-): MessagePresentation | undefined {
-  const buttons = buildApprovalPresentationButtons(actions);
   return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
 }
 
@@ -333,15 +306,10 @@ export function formatExecApprovalExpiresIn(expiresAtMs: number, nowMs: number):
 export function getExecApprovalReplyMetadata(
   payload: ReplyPayload,
 ): ExecApprovalReplyMetadata | null {
-  const channelData = payload.channelData;
-  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
+  const record = asOptionalRecord(asOptionalRecord(payload.channelData)?.execApproval);
+  if (!record) {
     return null;
   }
-  const execApproval = channelData.execApproval;
-  if (!execApproval || typeof execApproval !== "object" || Array.isArray(execApproval)) {
-    return null;
-  }
-  const record = execApproval as Record<string, unknown>;
   const approvalId = normalizeOptionalString(record.approvalId) ?? "";
   const approvalSlug = normalizeOptionalString(record.approvalSlug) ?? "";
   if (!approvalId || !approvalSlug) {
@@ -392,10 +360,14 @@ export function buildExecApprovalPendingReplyPayload(
   }
   lines.push("Pending command:");
   lines.push(formatFencedCodeBlock(params.command, "sh"));
-  const secondaryFence = buildApprovalCommandFence(secondaryActions);
-  if (secondaryFence) {
-    lines.push("Other options:");
-    lines.push(secondaryFence);
+  if (secondaryActions.length > 0) {
+    lines.push(
+      "Other options:",
+      formatFencedCodeBlock(
+        secondaryActions.map((descriptor) => descriptor.command).join("\n"),
+        "txt",
+      ),
+    );
   }
   if (!allowedDecisions.includes("allow-always")) {
     lines.push("Allow Always is unavailable for this command.");

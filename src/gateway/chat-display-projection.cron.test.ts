@@ -12,7 +12,11 @@ import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { projectForwardedMessages } from "./chat-display-projection.history.js";
+import {
+  prepareForwardedMessageCronJobNameResolver,
+  projectForwardedMessages,
+} from "./chat-display-projection.history.js";
+import { SerializedJsonArray } from "./serialized-json.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
 import {
   readSessionHistorySnapshotAsync,
@@ -101,7 +105,7 @@ it("batches automation names across history reads after rename and deletion with
       );
       try {
         const result = await read();
-        expect(counter.counts.names, operation).toBe(operation.startsWith("no-id-") ? 0 : 1);
+        expect(counter.counts.names, operation).toBe(0);
         return result;
       } finally {
         counter.restore();
@@ -123,10 +127,12 @@ it("batches automation names across history reads after rename and deletion with
     });
     expect(
       (
-        await measure("no-id-sse", () =>
-          emptySse.appendInlineMessage({
-            message: { role: "user", content: "An ordinary message." },
-          }),
+        await measure("no-id-sse", async () =>
+          (
+            await emptySse.prepareInlineMessage({
+              message: { role: "user", content: "An ordinary message." },
+            })
+          )(),
         )
       )?.message,
     ).toMatchObject({ role: "user", content: "An ordinary message." });
@@ -160,16 +166,15 @@ it("batches automation names across history reads after rename and deletion with
           label: name ? (index % jobCount === 0 ? name : `${name} ${index}`) : "Automation",
         },
       }));
-      expect(
-        (await measure(`${name}-rpc`, () => readChatHistoryPage(pageParams))).messages,
-      ).toMatchObject(expected);
-      expect(
-        (
-          await measure(`${name}-anchor`, () =>
-            readChatHistoryPage({ ...pageParams, messageId: "forwarded-result" }),
-          )
-        ).messages,
-      ).toMatchObject(expected);
+      for (const messageId of [undefined, "forwarded-result"]) {
+        const page = await measure(`${name}-${messageId ? "anchor" : "rpc"}`, () =>
+          readChatHistoryPage({ ...pageParams, messageId, encodeResponse: true }),
+        );
+        expect(page.encodedResponse?.messages).toBeInstanceOf(Uint8Array);
+        expect(new SerializedJsonArray(page.encodedResponse!.messages).materialize()).toMatchObject(
+          expected,
+        );
+      }
       for (const limit of [messages.length + 10, undefined]) {
         const snapshot = await measure(`${name}-http-${limit}`, () =>
           readSessionHistorySnapshotAsync({
@@ -186,10 +191,15 @@ it("batches automation names across history reads after rename and deletion with
             snapshot,
           });
           const currentSse = sse;
-          const appended = await measure(`${name}-sse`, () =>
-            currentSse.appendInlineMessage({
-              message: { role: "user", content: `Next message after ${name}.` },
-            }),
+          const appended = await measure(`${name}-sse`, async () =>
+            (
+              await currentSse.prepareInlineMessage({
+                message:
+                  name === "Renamed report"
+                    ? { role: "assistant", content: "NO_REPLY" }
+                    : { role: "user", content: `Next message after ${name}.` },
+              })
+            )(),
           );
           expect(currentSse.snapshot().messages.slice(0, messages.length)).toMatchObject(expected);
           if (name !== "Daily report") {
@@ -208,8 +218,12 @@ it("batches automation names across history reads after rename and deletion with
       }
       expect(
         (
-          await measure(`${name}-live`, () =>
-            projectSessionMessagePayload({ message, sessionKey: scope.sessionKey }),
+          await measure(`${name}-live`, async () =>
+            projectSessionMessagePayload({
+              message,
+              sessionKey: scope.sessionKey,
+              resolveCronJobName: await prepareForwardedMessageCronJobNameResolver([message]),
+            }),
           )
         ).payload?.message,
       ).toMatchObject(firstExpected);
@@ -224,9 +238,9 @@ it("batches automation names across history reads after rename and deletion with
     });
     try {
       expect(() => projectSessionMessagePayload({ message, sessionKey: scope.sessionKey })).toThrow(
-        /prohibited|not authorized|access/iu,
+        /prepared/iu,
       );
-      expect(deniedNameReads).toBe(1);
+      expect(deniedNameReads).toBe(0);
       database.db.setAuthorizer(() => constants.SQLITE_DENY);
       expect(projectForwardedMessages([])).toEqual([]);
       const ordinary = [{ role: "user", content: "No automation." }];

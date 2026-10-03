@@ -22,6 +22,7 @@ import {
   prepareUpdateCandidatePluginTrees,
 } from "./update-candidate-plugin-tree.js";
 import { resolveUpdateRehearsalRoot } from "./update-rehearsal-paths.js";
+import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 
 async function readOptionalFile(file: string): Promise<Buffer | undefined> {
   return fs.readFile(file).catch((error: unknown) => {
@@ -116,7 +117,19 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   for (const entry of entries) {
     assertPrivate(entry.rootDir);
     assertPrivate(entry.entryFile);
-    const copiedGraph = inspectUpdateCandidatePluginSource(entry, warnings);
+    const copiedGraph = inspectUpdateCandidatePluginSource(entry, warnings, {
+      root: privateRoot,
+      onUnresolvable: (name, importer) => {
+        if (warnings.length < UPDATE_RUN_DIAGNOSTIC_LIMIT) {
+          warnings.push(
+            `Plugin dependency ${name} is unresolvable inside the temporary update copy: undeclared ancestor lookup from ${importer}. Continuing without this optional dependency.`.slice(
+              0,
+              UPDATE_RUN_TEXT_LIMIT,
+            ),
+          );
+        }
+      },
+    });
     if (!copiedGraph) {
       continue;
     }

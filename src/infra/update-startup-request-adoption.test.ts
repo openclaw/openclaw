@@ -10,6 +10,11 @@ const checkUpdateStatus = vi.hoisted(() =>
   vi.fn<typeof import("./update-check.js").checkUpdateStatus>(),
 );
 
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  VERSION: "2026.9.7",
+}));
+
 vi.mock("./update-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-check.js")>()),
   checkUpdateStatus,

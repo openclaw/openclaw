@@ -593,11 +593,11 @@ class SettingsScreensContrastTest {
       File(evidence, "cron-readiness.json").writeText(
         JSONObject()
           .put("connected", model.isConnected.value)
-          .put("status", model.statusText.value)
+          .put("status", model.gatewayConnectionDisplay.value.statusText)
           .put("cronEnabled", model.cronStatus.value.enabled)
           .put("cronRefreshing", model.cronRefreshing.value)
           .put("runtimeConnected", runtime.isConnected.value)
-          .put("runtimeStatus", runtime.statusText.value)
+          .put("runtimeStatus", runtime.gatewayConnectionDisplay.value.statusText)
           .put("cronError", model.cronErrorText.value)
           .put("methods", JSONArray(gateway.methods))
           .toString(2),

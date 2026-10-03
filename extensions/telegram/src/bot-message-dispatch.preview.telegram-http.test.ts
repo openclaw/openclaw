@@ -582,7 +582,7 @@ describe("Telegram preview and presentation delivery through HTTP", () => {
     expect(visibleBeforeFailure).toEqual([partial]);
     const visible = [...visibleMessages.values()];
     expect(visible, JSON.stringify({ calls, acceptedCalls })).toHaveLength(1);
-    expect(visible[0]).toContain("Please try again");
+    expect(visible[0]).toContain("Check the conversation before trying again");
     expect(visible[0]).toContain(partial);
     expect(JSON.stringify(calls)).not.toContain("private-provider-failure");
   });

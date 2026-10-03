@@ -36,15 +36,6 @@ const DOCKER_E2E_CHUNKS = [
     profiles: "beta minimum stable full",
   },
   {
-    chunk_id: "package-update-self-upgrade",
-    label: "package/update self-upgrade",
-    // Each lane runs multiple updates measured at 540-720s each; retain its 3500s budget.
-    // Six weight-2 lanes need three waves at npm limit 5. Budget the weight-3 survivor
-    // separately despite overlap: 3 x 3500s + 20m survivor + 10m setup/artifacts = 205m.
-    timeout_minutes: 210,
-    profiles: "beta minimum stable full",
-  },
-  {
     chunk_id: "plugins-runtime-plugins",
     label: "plugins/runtime plugins",
     timeout_minutes: 60,
@@ -137,6 +128,11 @@ const LIVE_MODEL_PROVIDERS = [
   {
     provider_label: "OpenCode",
     providers: "opencode-go",
+    // The release workspace does not enable Global regions, so the default high-signal
+    // selection includes DeepSeek routes that reject every request. Keep this list aligned
+    // with models proven reachable from the release workspace.
+    models: "opencode-go/deepseek-v4-flash-vision-exp,opencode-go/glm-5.2,opencode-go/glm-5.3",
+    max_models: "3",
     profiles: "full",
   },
   {

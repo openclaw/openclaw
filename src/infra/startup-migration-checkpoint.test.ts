@@ -522,6 +522,21 @@ describe("startup migration lease", () => {
           "startup migration lease was lost",
         );
         expect(() => second.assertOwnedInTransaction(db)).not.toThrow();
+        expect(() => first.assertOwned()).toThrow("startup migration lease was lost");
+        expect(() => second.assertOwned()).not.toThrow();
+        const query = getNodeSqliteKysely<StartupMigrationLeaseTestDatabase>(db);
+        const replaceOwner = (owner: string) =>
+          executeSqliteQuerySync(
+            db,
+            query
+              .updateTable("state_leases")
+              .set({ owner })
+              .where("scope", "=", "startup-migrations")
+              .where("lease_key", "=", "global"),
+          );
+        replaceOwner("reassigned-before-commit");
+        expect(() => second.assertOwned()).toThrow("startup migration lease was lost");
+        replaceOwner(second.owner);
       },
       { env },
     );

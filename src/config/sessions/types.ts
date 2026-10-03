@@ -332,6 +332,10 @@ type SessionEntryCore = SessionRestartRecoveryState &
     lastActivityAt?: number;
     /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
     spawnedBy?: string;
+    /** Host-captured owner status of the spawning invocation; never inferred from child launch authority. */
+    spawnedBySenderIsOwner?: boolean;
+    /** Parent session id captured with the spawn authority receipt; navigation uses parentSessionId. */
+    spawnedBySessionId?: string;
     /** Immutable session key authorized to receive this child's completion handoff. */
     completionOwnerSessionKey?: string;
     /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
@@ -359,6 +363,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     parentSessionKey?: string;
     /** Exact parent incarnation captured when this child was created. */
     parentSessionId?: string;
+    /** Exact parent lifecycle captured for native spawn authority, including same-id resets. */
+    parentSessionLifecycleRevision?: string;
     /** How this session node came to exist; written once and retained across sessionId rotations. */
     createdVia?: SessionCreatedVia;
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
@@ -785,6 +791,9 @@ function mergeSessionEntryWithPolicy(
   }
   if (existing.createdAt !== undefined) {
     next.createdAt = existing.createdAt;
+  }
+  if (existing.conversationLink !== undefined) {
+    next.conversationLink = existing.conversationLink;
   }
   if (existing.projectId !== undefined) {
     next.projectId = existing.projectId;

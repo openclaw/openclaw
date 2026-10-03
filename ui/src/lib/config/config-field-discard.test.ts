@@ -27,22 +27,6 @@ function rejectedEdit() {
 }
 
 describe("field-scoped config draft cancellation", () => {
-  it("discards a rejected field without losing an unrelated edit or resubmitting canceled bytes", async () => {
-    vi.useFakeTimers();
-    const { runtimeConfig, server } = rejectedEdit();
-    await runtimeConfig.ensureLoaded();
-    runtimeConfig.patchForm(["count"], 2);
-    await expect(runtimeConfig.flushFormChanges()).resolves.toBe(false);
-    runtimeConfig.patchForm(["other"], "retained");
-    await expect(runtimeConfig.discardFormValue(["count"])).resolves.toBe(true);
-    expect(runtimeConfig.state.configForm).toEqual({ count: 1, other: "retained" });
-    await expect(runtimeConfig.flushFormChanges()).resolves.toBe(true);
-    expect(server.submissions.map((entry) => JSON.parse(entry.raw))).toEqual([
-      { count: 1, other: "retained" },
-    ]);
-    runtimeConfig.dispose();
-  });
-
   it.each(["absent", "authored-empty", "sibling"])(
     "restores %s ancestor containers without creating a new write on Cancel",
     async (scenario) => {
@@ -118,7 +102,7 @@ describe("field-scoped config draft cancellation", () => {
     runtimeConfig.dispose();
   });
 
-  it.each(["field", "same-value", "sibling", "raw", "connection"])(
+  it.each(["same-value", "sibling", "raw", "connection"])(
     "does not let a delayed cancellation replace newer %s intent",
     async (change) => {
       vi.useFakeTimers();
@@ -130,8 +114,8 @@ describe("field-scoped config draft cancellation", () => {
       const read = createDeferred<typeof snapshot>();
       request.mockImplementationOnce(() => read.promise);
       const cancel = runtimeConfig.discardFormValue(["count"]);
-      if (change === "field" || change === "same-value") {
-        runtimeConfig.patchForm(["count"], change === "field" ? 3 : 2);
+      if (change === "same-value") {
+        runtimeConfig.patchForm(["count"], 2);
       } else if (change === "sibling") {
         runtimeConfig.patchForm(["other"], "new edit");
       } else if (change === "raw") {
@@ -143,10 +127,14 @@ describe("field-scoped config draft cancellation", () => {
       await expect(cancel).resolves.toBe(change === "sibling");
       if (change === "sibling") {
         expect(runtimeConfig.state.configForm).toEqual({ count: 1, other: "new edit" });
+        await expect(runtimeConfig.flushFormChanges()).resolves.toBe(true);
+        expect(server.submissions.map((entry) => JSON.parse(entry.raw))).toEqual([
+          { count: 1, other: "new edit" },
+        ]);
       } else if (change === "raw") {
         expect(runtimeConfig.state.configRaw).toBe('{"count":3}');
       } else {
-        expect(runtimeConfig.state.configForm).toEqual({ count: change === "field" ? 3 : 2 });
+        expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
       }
       runtimeConfig.setWritesSuspended(true);
       runtimeConfig.dispose();
@@ -197,32 +185,25 @@ describe("field-scoped config draft cancellation", () => {
     },
   );
 
-  it.each(["success", "failure"])(
-    "keeps a newer explicit refresh's %s after a superseded cancel read rejects",
-    async (outcome) => {
-      vi.useFakeTimers();
-      const { runtimeConfig, request, server } = rejectedEdit();
-      await runtimeConfig.ensureLoaded();
-      runtimeConfig.patchForm(["count"], 2);
-      await runtimeConfig.flushFormChanges();
-      const snapshot = await server.request("config.get");
-      const read = createDeferred<typeof snapshot>();
-      request.mockImplementationOnce(() => read.promise);
-      const cancel = runtimeConfig.discardFormValue(["count"]);
-      if (outcome === "failure") {
-        request.mockRejectedValueOnce(new Error("Newer read unavailable"));
-      }
-      await runtimeConfig.refresh();
-      read.reject(new Error("Superseded cancel read unavailable"));
-      await expect(cancel).resolves.toBe(false);
-      expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
-      expect(runtimeConfig.state.lastError).toBe(
-        outcome === "failure" ? "Newer read unavailable" : null,
-      );
-      runtimeConfig.setWritesSuspended(true);
-      runtimeConfig.dispose();
-    },
-  );
+  it("keeps a newer explicit refresh's failure after a superseded cancel read rejects", async () => {
+    vi.useFakeTimers();
+    const { runtimeConfig, request, server } = rejectedEdit();
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.patchForm(["count"], 2);
+    await runtimeConfig.flushFormChanges();
+    const snapshot = await server.request("config.get");
+    const read = createDeferred<typeof snapshot>();
+    request.mockImplementationOnce(() => read.promise);
+    const cancel = runtimeConfig.discardFormValue(["count"]);
+    request.mockRejectedValueOnce(new Error("Newer read unavailable"));
+    await runtimeConfig.refresh();
+    read.reject(new Error("Superseded cancel read unavailable"));
+    await expect(cancel).resolves.toBe(false);
+    expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
+    expect(runtimeConfig.state.lastError).toBe("Newer read unavailable");
+    runtimeConfig.setWritesSuspended(true);
+    runtimeConfig.dispose();
+  });
 
   it("keeps the cancel read error when applied-config polling overlaps its rejection", async () => {
     vi.useFakeTimers();

@@ -92,7 +92,7 @@ export function createPrometheusMetricStore() {
     value: number | undefined,
     buckets = DURATION_BUCKETS_SECONDS,
   ) => {
-    if (value === undefined || !Number.isFinite(value) || value < 0) {
+    if (value === undefined || !Number.isFinite(value)) {
       return;
     }
     const key = metricKey(name, labels);

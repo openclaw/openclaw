@@ -33,7 +33,7 @@ enum OverlayPanelFactory {
     static func animatePresent(window: NSWindow, from start: NSRect, to target: NSRect, duration: TimeInterval = 0.18) {
         window.setFrame(start, display: true)
         window.alphaValue = 0
-        window.orderFrontRegardless()
+        AppActivation.shared.orderFrontRegardless(window: window)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)

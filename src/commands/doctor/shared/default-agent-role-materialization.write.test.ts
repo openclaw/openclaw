@@ -13,6 +13,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
+import { createCanonicalAgentConfigFixture } from "../../../test-utils/config-roster.js";
 
 const roots: string[] = [];
 
@@ -67,12 +68,13 @@ describe("default role materialization authored writes", () => {
     });
 
     const snapshot = await io.readConfigFileSnapshot();
-    expect(snapshot.config.agents?.entries?.ops).not.toHaveProperty("default");
-    expect(snapshot.config.agents?.defaults?.heartbeat?.agentId).toBe("ops");
-    const doctorCandidate = {
-      ...snapshot.config,
-      agents: { ...snapshot.config.agents, ownership: "explicit" as const },
-    };
+    expect(snapshot.valid).toBe(false);
+    expect(snapshot.sourceConfig.agents?.entries?.ops?.default).toBe(true);
+    expect(snapshot.sourceConfig.agents?.defaults?.heartbeat?.agentId).toBeUndefined();
+    const doctorCandidate = createCanonicalAgentConfigFixture(snapshot.sourceConfig, {
+      env: { HOME: root },
+      homedir: () => root,
+    }).config;
     await io.writeConfigFile(doctorCandidate, {
       baseSnapshot: snapshot,
       explicitSetPaths: [
@@ -331,10 +333,10 @@ describe("default role materialization authored writes", () => {
     );
     const io = configIO(root);
     const snapshot = await io.readConfigFileSnapshot();
-    const nextConfig: OpenClawConfig = {
-      ...snapshot.config,
-      agents: { ...snapshot.config.agents, ownership: "explicit" },
-    };
+    const nextConfig = createCanonicalAgentConfigFixture(snapshot.sourceConfig, {
+      env: { HOME: root },
+      homedir: () => root,
+    }).config;
 
     await io.writeConfigFile(nextConfig, {
       baseSnapshot: snapshot,
@@ -402,10 +404,10 @@ describe("default role materialization authored writes", () => {
     const beforeRows = readRows();
     const io = configIO(root, env);
     const snapshot = await io.readConfigFileSnapshot();
-    const nextConfig: OpenClawConfig = {
-      ...snapshot.config,
-      agents: { ...snapshot.config.agents, ownership: "explicit" },
-    };
+    const nextConfig = createCanonicalAgentConfigFixture(snapshot.sourceConfig, {
+      env,
+      homedir: () => root,
+    }).config;
 
     const write = io.writeConfigFile(nextConfig, {
       baseSnapshot: snapshot,
@@ -453,10 +455,10 @@ describe("default role materialization authored writes", () => {
     const beforeStore = await fs.readFile(storePath, "utf8");
     const io = configIO(root, env);
     const snapshot = await io.readConfigFileSnapshot();
-    const nextConfig: OpenClawConfig = {
-      ...snapshot.config,
-      agents: { ...snapshot.config.agents, ownership: "explicit" },
-    };
+    const nextConfig = createCanonicalAgentConfigFixture(snapshot.sourceConfig, {
+      env,
+      homedir: () => root,
+    }).config;
 
     const write = io.writeConfigFile(nextConfig, {
       baseSnapshot: snapshot,
@@ -498,10 +500,10 @@ describe("default role materialization authored writes", () => {
       .run("not json", cronStoreKey(storePath), "corrupt");
     const io = configIO(root, env);
     const snapshot = await io.readConfigFileSnapshot();
-    const nextConfig: OpenClawConfig = {
-      ...snapshot.config,
-      agents: { ...snapshot.config.agents, ownership: "explicit" },
-    };
+    const nextConfig = createCanonicalAgentConfigFixture(snapshot.sourceConfig, {
+      env,
+      homedir: () => root,
+    }).config;
 
     await expect(
       io.writeConfigFile(nextConfig, {
@@ -513,7 +515,7 @@ describe("default role materialization authored writes", () => {
     await expect(fs.readFile(configPath, "utf8")).resolves.toBe(source);
   });
 
-  it("preserves migrated legacy ownership during an unrelated write", async () => {
+  it("requires roster migration before an unrelated write and preserves the canonical owner", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-owner-roundtrip-"));
     roots.push(root);
     const configPath = path.join(root, "openclaw.json");
@@ -531,16 +533,47 @@ describe("default role materialization authored writes", () => {
     );
     const io = configIO(root);
     const snapshot = await io.readConfigFileSnapshot();
-    expect(tryResolveLegacyCompatibilityAgentId(snapshot.config)).toBe("research");
+    expect(snapshot.valid).toBe(false);
+    const original = await fs.readFile(configPath, "utf8");
+
+    await expect(
+      io.writeConfigFile(
+        { ...snapshot.config, gateway: { ...snapshot.config.gateway, port: 19001 } },
+        { baseSnapshot: snapshot, explicitSetPaths: [["gateway", "port"]] },
+      ),
+    ).rejects.toMatchObject({
+      code: "CONFIG_VALIDATION_FAILED",
+      issues: expect.arrayContaining([
+        expect.objectContaining({
+          path: "agents.entries",
+          message: expect.stringContaining("doctor --fix"),
+        }),
+      ]),
+    });
+    await expect(fs.readFile(configPath, "utf8")).resolves.toBe(original);
+
+    const doctorCandidate = createCanonicalAgentConfigFixture(snapshot.sourceConfig, {
+      env: { HOME: root },
+      homedir: () => root,
+    }).config;
+    await io.writeConfigFile(doctorCandidate, {
+      baseSnapshot: snapshot,
+      persistCanonicalAgentRoster: true,
+    });
+    const canonical = await io.readConfigFileSnapshot();
+    expect(canonical.valid).toBe(true);
+    expect(tryResolveLegacyCompatibilityAgentId(canonical.config)).toBe("research");
 
     await io.writeConfigFile(
-      { ...snapshot.config, gateway: { ...snapshot.config.gateway, port: 19001 } },
-      { baseSnapshot: snapshot, explicitSetPaths: [["gateway", "port"]] },
+      { ...canonical.config, gateway: { ...canonical.config.gateway, port: 19001 } },
+      { baseSnapshot: canonical, explicitSetPaths: [["gateway", "port"]] },
     );
 
     const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-    expect(persisted.agents?.ownership).toBeUndefined();
-    expect(persisted.agents?.entries?.research?.default).toBe(true);
+    expect(persisted.gateway?.port).toBe(19001);
+    expect(persisted.agents?.ownership).toBe("explicit");
+    expect(persisted.agents?.entries?.research).not.toHaveProperty("default");
+    expect(persisted.agents?.defaults?.systemAgent?.agentId).toBe("research");
     const reread = await io.readConfigFileSnapshot();
     expect(tryResolveLegacyCompatibilityAgentId(reread.config)).toBe("research");
   });

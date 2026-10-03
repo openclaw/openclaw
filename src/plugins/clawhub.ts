@@ -19,6 +19,7 @@ import {
   isDefaultClawHubBaseUrl,
   resolveClawHubBaseUrl,
 } from "../infra/clawhub-client.js";
+import { formatClawHubReleaseLabel } from "../infra/clawhub-display.js";
 import { checkClawHubPackageTrust } from "../infra/clawhub-install-trust.js";
 import {
   normalizeClawHubSha256Integrity,
@@ -48,7 +49,6 @@ import type { RuntimeVersionEnv } from "../version.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, type ClawHubInstallErrorCode } from "./clawhub-error-codes.js";
 import type { ClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import {
-  formatClawHubReleaseLabel,
   formatClawHubSpecifier,
   logClawHubPackageSummary,
   type PluginInstallLogger,

@@ -399,7 +399,7 @@ describe("outbound session persistence", () => {
       established!.entry.updatedAt + 1,
     );
 
-    const discovered = listConversations({ agentId: "main", storePath }, { channel: "reef" });
+    const discovered = await listConversations({ agentId: "main", storePath }, { channel: "reef" });
     expect(discovered[0]?.conversationRef).toBe(threadlessIdentity!.conversationRef);
     expect(discovered[0]).not.toMatchObject({ sessionId: expect.any(String) });
 

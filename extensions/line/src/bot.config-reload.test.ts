@@ -48,8 +48,6 @@ function createDeliverableBot(startupConfig: OpenClawConfig): {
   });
 
   createLineBot({
-    channelAccessToken: "test-token",
-    channelSecret: "test-secret",
     config: startupConfig,
   });
 

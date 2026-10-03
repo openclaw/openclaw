@@ -21,6 +21,7 @@ import type {
   WorkerSessionPlacementRecord,
   WorkerPlacementExecutionMode,
 } from "./placement-record.js";
+import type { WorkerPlacementCancellationTarget } from "./placement-target.js";
 import type {
   WorkerEnvironmentAttachment,
   WorkerEnvironmentAttachmentRecord,
@@ -245,14 +246,13 @@ export type WorkerPlacementMoveRequest = Pick<
 /** Closure-bound request authority; in-process only and never part of durable placement intent. */
 export type WorkerPlacementAuthorization = () => void;
 
-export type WorkerPlacementCancellationTarget = Readonly<
-  Pick<WorkerSessionPlacementRecord, "state" | "generation" | "environmentId" | "activeOwnerEpoch">
->;
-
 /** Exact source eligibility may follow only transitions published by captured predecessors. */
-export type WorkerPlacementReclaimSourceCheck = (
+export type WorkerPlacementReclaimSourceCheck = ((
   predecessor?: WorkerPlacementCancellationTarget,
-) => void;
+) => void) & {
+  /** Host-only eligibility, without placement reads; ends when drain commits. */
+  assertCurrent?: WorkerPlacementAuthorization;
+};
 
 // Leaf dispatch contract: GatewayRequestContext must not import the dispatch
 // runtime (it reaches agents/plugins and closes an import cycle through core).

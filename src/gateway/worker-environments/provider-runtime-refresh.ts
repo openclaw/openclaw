@@ -1,5 +1,6 @@
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
@@ -81,22 +82,9 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
     const listeners = new Set<() => void>();
     const fact: WorkerRuntimeRefreshInFlight = {
       settled: settled.promise,
-      onProgress(listener) {
-        listeners.add(listener);
-        return () => {
-          listeners.delete(listener);
-        };
-      },
+      onProgress: (listener) => registerListener(listeners, listener),
     };
-    const reportProgress = () => {
-      for (const listener of listeners) {
-        try {
-          listener();
-        } catch {
-          // Progress observers must not interrupt installation.
-        }
-      }
-    };
+    const reportProgress = () => notifyListeners(listeners, undefined);
     inFlight.set(record.environmentId, fact);
     try {
       const sessionId = record.state === "attached" ? record.attachedSessionIds[0] : undefined;

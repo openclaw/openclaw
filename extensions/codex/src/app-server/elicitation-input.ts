@@ -10,6 +10,7 @@ type CodexOrdinaryElicitation =
 export function compileCodexOrdinaryElicitation(params: {
   snapshot: Record<string, unknown>;
   turnId: string;
+  resourceContext?: Parameters<typeof structuredInput.compileForm>[0]["options"]["resourceContext"];
 }): CodexOrdinaryElicitation {
   const requestTurnId = readValue(params.snapshot, "turnId");
   if (typeof requestTurnId === "string" && requestTurnId !== params.turnId) {
@@ -37,7 +38,7 @@ export function compileCodexOrdinaryElicitation(params: {
       }),
     };
   }
-  if (mode !== "form" && mode !== "openai/form") {
+  if (mode !== "form" && mode !== "openai/form" && mode !== "openaiForm") {
     return {
       kind: "compiled",
       input: {
@@ -53,7 +54,10 @@ export function compileCodexOrdinaryElicitation(params: {
       message: readCodexElicitationString(params.snapshot, "message"),
       fallbackMessage: "Codex needs input",
       options: {
-        protocolName: mode === "openai/form" ? "OpenAI" : "MCP",
+        protocolName: mode === "form" ? "MCP" : "OpenAI",
+        // Legacy forms keep their label-based question/answer contract.
+        allowRichForms: mode === "openaiForm",
+        resourceContext: params.resourceContext,
         allowEmptyForm: true,
         minimumChoiceCount: 1,
         allowEnumNames: true,

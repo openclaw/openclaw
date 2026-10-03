@@ -373,8 +373,37 @@ export async function assertTelegramRichObservationFlow(
           providerMode: "mock-openai",
           cfg: { channels: { telegram: { accounts: { sut: { richMessages: true } } } } },
           gateway: {
-            call: async (method: string, args: { message: string }) => {
+            call: async (
+              method: string,
+              args: {
+                message?: string;
+                action?: string;
+                params?: { messageId?: number; content?: string };
+              },
+            ) => {
+              if (method === "message.action") {
+                assert.equal(args.action, "edit");
+                assert.equal(args.params?.messageId, 1);
+                edits += 1;
+                const firstMarker = [...markers][0];
+                assert.ok(firstMarker !== undefined);
+                const marker = readMarker(args.params?.content);
+                deliver("edit", () => {
+                  observed[0] = observation(
+                    testCase === "wrong-edit-id" ? Number(args.params?.messageId) + 40 : 1,
+                    list,
+                    testCase === "wrong-edit-kind" ? "message" : "edit",
+                    testCase === "wrong-edit-marker"
+                      ? marker + "-wrong"
+                      : testCase === "stale-edit"
+                        ? firstMarker
+                        : marker,
+                  );
+                });
+                return { ok: true };
+              }
               assert.equal(method, "send");
+              assert.ok(args.message);
               // Telegram extracts Markdown images before dispatching to its renderer.
               const [planned] = createOutboundPayloadPlan([{ text: args.message }], {
                 extractMarkdownImages: true,
@@ -448,27 +477,6 @@ export async function assertTelegramRichObservationFlow(
             }
             await joined;
           }
-        },
-        runQaCli: async (_env: unknown, args: string[]) => {
-          assert.deepEqual(args.slice(0, 2), ["message", "edit"]);
-          const id = Number(args[args.indexOf("--message-id") + 1]);
-          assert.equal(id, 1);
-          edits += 1;
-          const firstMarker = [...markers][0];
-          assert.ok(firstMarker !== undefined);
-          const marker = readMarker(args[args.indexOf("--message") + 1]);
-          deliver("edit", () => {
-            observed[0] = observation(
-              testCase === "wrong-edit-id" ? id + 40 : id,
-              list,
-              testCase === "wrong-edit-kind" ? "message" : "edit",
-              testCase === "wrong-edit-marker"
-                ? marker + "-wrong"
-                : testCase === "stale-edit"
-                  ? firstMarker
-                  : marker,
-            );
-          });
         },
         runAgentPrompt: () => {
           throw new Error("direct delivery must not invoke a model");

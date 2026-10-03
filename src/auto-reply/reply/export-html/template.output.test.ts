@@ -12,6 +12,32 @@ function messageEntry(id: string, parentId: string | null, message: unknown): Se
 }
 
 describe("export html tool output lines", () => {
+  it("renders read line-range arguments as text", async () => {
+    const offset = "<b data-offset-probe>untrusted</b>";
+    const { document } = await renderTemplate({
+      header: { id: "session-read-lines", timestamp: now() },
+      entries: [
+        messageEntry("read", null, {
+          role: "assistant",
+          content: [{ offset: 2, limit: 3 }, { offset }].map((args, index) => ({
+            type: "toolCall",
+            id: `read-${index}`,
+            name: "read",
+            arguments: { path: "safe.txt", ...args },
+          })),
+        }),
+      ],
+      leafId: "read",
+      systemPrompt: "",
+      tools: [],
+    });
+
+    expect(
+      Array.from(document.querySelectorAll(".line-numbers"), (node) => node.textContent),
+    ).toEqual([":2-4", `:${offset}`]);
+    expect(document.querySelector("#messages [data-offset-probe]")).toBeNull();
+  });
+
   it.each([
     { name: "bash", filePath: "", maxLines: 5, code: false },
     { name: "custom", filePath: "", maxLines: 10, code: false },
@@ -105,4 +131,40 @@ describe("export html tool output lines", () => {
       }
     },
   );
+});
+
+describe("export html navigation", () => {
+  it("restores all tree rows when Escape clears a search", async () => {
+    const { document } = await renderTemplate({
+      header: { id: "session-search", timestamp: now() },
+      entries: [
+        messageEntry("root", null, { role: "user", content: "search-me" }),
+        messageEntry("middle", "root", { role: "assistant", content: "middle reply" }),
+        messageEntry("leaf", "middle", { role: "assistant", content: "current reply" }),
+      ],
+      leafId: "leaf",
+      systemPrompt: "",
+      tools: [],
+    });
+    const treeIds = () =>
+      Array.from(document.querySelectorAll(".tree-node"), (node) => node.getAttribute("data-id"));
+    const search = requireElement(
+      document.querySelector<HTMLInputElement>("#tree-search"),
+      "search input missing",
+    );
+    expect(treeIds()).toEqual(["root", "middle", "leaf"]);
+    search.value = "search-me";
+    const input = document.createEvent("Event");
+    input.initEvent("input", true, false);
+    search.dispatchEvent(input);
+    expect(treeIds()).toEqual(["root", "leaf"]);
+
+    const escape = document.createEvent("Event");
+    escape.initEvent("keydown", true, true);
+    Object.defineProperty(escape, "key", { value: "Escape" });
+    document.dispatchEvent(escape);
+
+    expect(search.value).toBe("");
+    expect(treeIds()).toEqual(["root", "middle", "leaf"]);
+  });
 });

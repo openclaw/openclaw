@@ -8,6 +8,7 @@ import {
   type SandboxContainerInfo,
 } from "../agents/sandbox.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
@@ -80,7 +81,24 @@ export async function sandboxRecreateCommand(
     return;
   }
 
+  const selected = { ...opts };
+  await runWithLocalStateOwner({
+    method: "sandbox.recreate",
+    params: {},
+    target: selected.session ?? selected.agent ?? "all sandbox runtimes",
+    onForeignOwner: "refuse",
+    runLocal: ({ assertCurrent }) => recreateOwnedSandboxes(selected, runtime, assertCurrent),
+  });
+}
+
+async function recreateOwnedSandboxes(
+  opts: SandboxRecreateOptions,
+  runtime: RuntimeEnv,
+  assertCurrent: () => void,
+): Promise<void> {
+  assertCurrent();
   const filtered = await fetchAndFilterContainers(opts);
+  assertCurrent();
 
   if (filtered.containers.length + filtered.browsers.length === 0) {
     runtime.log(
@@ -102,7 +120,8 @@ export async function sandboxRecreateCommand(
     return;
   }
 
-  const result = await removeContainers(filtered, runtime);
+  assertCurrent();
+  const result = await removeContainers(filtered, runtime, assertCurrent);
   displayRecreateResult(result, runtime);
 
   if (result.failCount > 0) {
@@ -134,6 +153,7 @@ function createAgentMatcher(agentId: string) {
 async function removeContainers(
   filtered: FilteredContainers,
   runtime: RuntimeEnv,
+  assertCurrent: () => void,
 ): Promise<{ successCount: number; failCount: number }> {
   runtime.log("\nRemoving sandbox runtimes...\n");
 
@@ -148,6 +168,7 @@ async function removeContainers(
   ] as const) {
     for (const { containerName } of containers) {
       try {
+        assertCurrent();
         await remove(containerName);
         runtime.log(`✓ Removed ${containerName}`);
         successCount++;

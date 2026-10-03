@@ -325,19 +325,19 @@ class SidebarShellLogicTest {
 
     assertEquals(
       "Working",
-      sidebarSessionSubtitle(session, activeRunLabel = "Working", nowMs = 1_000),
+      sessionListSubtitle(session, fallback = sessionSourceLabel(session.key), activeRunLabel = "Working", nowMs = 1_000),
     )
     assertEquals(
       "Telegram",
-      sidebarSessionSubtitle(session.copy(hasActiveRun = false), activeRunLabel = null, nowMs = 1_000),
+      sessionListSubtitle(session.copy(hasActiveRun = false), fallback = sessionSourceLabel(session.key), activeRunLabel = null, nowMs = 1_000),
     )
     assertEquals(
       "Working",
-      sidebarSessionSubtitle(session.copy(hasActiveRun = null, status = " RUNNING "), activeRunLabel = "Working", nowMs = 1_000),
+      sessionListSubtitle(session.copy(hasActiveRun = null, status = " RUNNING "), fallback = sessionSourceLabel(session.key), activeRunLabel = "Working", nowMs = 1_000),
     )
     assertEquals(
       "Telegram",
-      sidebarSessionSubtitle(session.copy(hasActiveRun = false, status = "running"), activeRunLabel = "Working", nowMs = 1_000),
+      sessionListSubtitle(session.copy(hasActiveRun = false, status = "running"), fallback = sessionSourceLabel(session.key), activeRunLabel = "Working", nowMs = 1_000),
     )
     assertNull(sidebarSessionActivity("running", lastRunError = null, hasActiveRun = false, unread = false))
     assertNull(sidebarSessionActivity("done", lastRunError = null, hasActiveRun = true, unread = false))

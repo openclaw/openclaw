@@ -19,6 +19,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
 import * as capacity from "./capacity.js";
+import { addManagedWorktree } from "./checkout.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import type { WorktreeFilesystemBackend } from "./filesystem-backend.types.js";
@@ -86,6 +87,31 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     expect(await git(created.path, "status", "--porcelain")).toBe("");
     expect(listTemplates(env)).toEqual([]);
     expect(backend.cloneTemplate).not.toHaveBeenCalled();
+  });
+
+  it("preserves relative Git environment paths during registration and checkout", async () => {
+    const destination = path.join(path.dirname(repo), "relative-env");
+    const commit = await git(repo, "rev-parse", "HEAD");
+    vi.stubEnv("GIT_COMMON_DIR", "../repo/.git");
+
+    const result = await addManagedWorktree({
+      env,
+      now: () => now,
+      enabled: false,
+      repoRoot: repo,
+      commonDir: path.join(repo, ".git"),
+      worktreeRoot: path.dirname(destination),
+      destination,
+      base: commit,
+      requireSpace: () => {},
+      commitGuard: () => {},
+    });
+
+    expect(result.code).toBe(0);
+    expect(await fs.readFile(path.join(destination, "README.md"), "utf8")).toBe("base\n");
+    expect(await git(destination, "rev-parse", "HEAD")).toBe(commit);
+    expect(await git(destination, "status", "--porcelain")).toBe("");
+    expect(await git(repo, "status", "--porcelain")).toBe("");
   });
 
   it.each(["small", "remote-restore", "invalid", "fallback"])(
@@ -233,7 +259,11 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     ).toBe("origin/racing");
   });
 
-  it("reuses clean source while including current ignored files and running setup for each checkout", async () => {
+  it("reuses deep source while including current ignored files and running setup for each checkout", async () => {
+    const root = path.dirname(repo);
+    const deepRepo = path.join(root, "repository-".padEnd(190 - root.length - 1, "r"));
+    await fs.rename(repo, deepRepo);
+    repo = await fs.realpath(deepRepo);
     await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\nprivate.txt\nsetup-ran.txt\n");
     await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
     await git(repo, "add", ".gitignore", ".worktreeinclude");
@@ -251,17 +281,28 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       );
     }
 
-    const first = await service.create({ repoRoot: repo, name: "first", baseRef: "HEAD" });
+    const sourceStatus = await git(repo, "status", "--porcelain", "--untracked-files=all");
+    const first = await service.create({
+      repoRoot: repo,
+      name: "first-deep-source-checkout",
+      baseRef: "HEAD",
+    });
+    expect((await git(first.path, "rev-parse", "--absolute-git-dir")).length).toBeGreaterThan(220);
     const template = listTemplates(env)[0];
     assert(template);
     expect(template?.status).toBe("ready");
     await fs.writeFile(path.join(repo, ".env.local"), "second\n");
     await fs.writeFile(path.join(first.path, "README.md"), "first checkout edit\n");
-    const second = await service.create({ repoRoot: repo, name: "second", baseRef: "HEAD" });
+    const second = await service.create({
+      repoRoot: repo,
+      name: "second-deep-source-checkout",
+      baseRef: "HEAD",
+    });
 
     expect(backend.createTemplate).toHaveBeenCalledTimes(1);
     expect(backend.cloneTemplate).toHaveBeenCalledTimes(2);
     expect(listTemplates(env).map((entry) => entry.id)).toEqual([template.id]);
+    expect(await git(repo, "status", "--porcelain", "--untracked-files=all")).toBe(sourceStatus);
     expect(await fs.readFile(path.join(second.path, "README.md"), "utf8")).toBe("base\n");
     expect(await fs.readFile(path.join(first.path, "README.md"), "utf8")).toBe(
       "first checkout edit\n",
@@ -379,7 +420,9 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       expect(await fs.readFile(path.join(destination, "sentinel.txt"), "utf8")).toBe(
         "new owner's files\n",
       );
-      expect(await git(repo, "worktree", "list", "--porcelain")).toContain(destination);
+      expect(await git(repo, "worktree", "list", "--porcelain")).toContain(
+        destination.split(path.sep).join("/"),
+      );
       expect(await git(repo, "rev-parse", `refs/heads/${branch}`)).toBe(
         change === "advanced" ? later : initial,
       );

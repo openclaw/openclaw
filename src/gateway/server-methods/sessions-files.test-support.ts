@@ -3,11 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, vi } from "vitest";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type SessionFilesMethod =
   | "sessions.files.list"
   | "sessions.files.get"
+  | "sessions.files.assets"
   | "sessions.files.set"
   | "sessions.files.reveal";
 
@@ -36,6 +37,12 @@ export function createSessionFilesHandlerInvoker(handlers: GatewayRequestHandler
     method: SessionFilesMethod,
     params: Record<string, unknown>,
     context: Record<string, unknown> = {},
+    options: Partial<
+      Pick<
+        GatewayRequestHandlerOptions,
+        "client" | "withSessionTurnAuthority" | "sessionMutationAuthorization"
+      >
+    > = {},
   ) => {
     const responder = createResponder();
     await handlers[method]?.({
@@ -48,6 +55,7 @@ export function createSessionFilesHandlerInvoker(handlers: GatewayRequestHandler
         getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
         ...context,
       } as never,
+      ...options,
     });
     return responder.calls;
   };

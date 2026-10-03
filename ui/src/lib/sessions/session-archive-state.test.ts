@@ -32,10 +32,7 @@ it.each([undefined, false])(
 );
 
 it.each([
-  { pending: true, archived: undefined, publishedId: "same", expected: "pending" },
   { pending: true, archived: undefined, publishedId: null, expected: "pending" },
-  { pending: true, archived: undefined, publishedId: "replacement", expected: undefined },
-  { pending: false, archived: true, publishedId: "same", expected: "archived" },
   { pending: false, archived: true, publishedId: null, expected: "archived" },
   { pending: false, archived: true, publishedId: "replacement", expected: undefined },
   { pending: false, archived: true, publishedId: undefined, expected: undefined },

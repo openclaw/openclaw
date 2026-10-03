@@ -70,18 +70,8 @@ let cachedWindowsOemCodePage: number | null | undefined;
 
 /** Extracts a Windows console code page number from localized `chcp` output. */
 function parseWindowsCodePage(raw: string): number | null {
-  if (!raw) {
-    return null;
-  }
-  const match = raw.match(/\b(\d{3,5})\b/);
-  if (!match?.[1]) {
-    return null;
-  }
-  const codePage = Number.parseInt(match[1], 10);
-  if (!Number.isFinite(codePage) || codePage <= 0) {
-    return null;
-  }
-  return codePage;
+  const codePage = Number(raw.match(/\b(\d{3,5})\b/)?.[1]);
+  return codePage > 0 ? codePage : null;
 }
 
 /** Resolves and caches the current Windows console encoding for subprocess output. */

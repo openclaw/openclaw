@@ -175,6 +175,10 @@ recorded rollback outcome. Failed steps use stable identifiers such as
 `candidate-state-snapshot`, `candidate-doctor-lint`, and `post-install-verify` in
 the report body and issue title; command arguments and private paths remain redacted.
 Snapshot errors identify the active database, execution approvals, or plugin phase.
+Schema inspection failures put recognized worker error codes and causes before private
+source context, including causes after warning lines, so they survive redaction. Saved
+diagnostic lines omit a path and its trailing text, including quoted paths whose filenames
+may themselves contain spaces or quotes.
 A completed database snapshot does not establish that later plugin paths are readable;
 inspect the source path and filesystem error named by the failing phase.
 A failure during installation or target resolution keeps
@@ -202,6 +206,56 @@ and leaves the installed package in place. Close processes holding that installa
 and check its permissions before retrying. This protection belongs to the installed
 updater; a newer candidate cannot add it to an older updater already running.
 
+## Immutable release installations
+
+An explicitly adopted Linux installation can prepare sealed releases with
+`openclaw update`. Its root contains `releases/<full-commit-sha>` and a `current`
+symlink selecting the running generation. A matching directory layout alone does
+not grant update ownership.
+
+This first slice prepares only: it resolves official `main` once, or accepts an
+exact `--sha <40-hex-commit>`, builds off-path, verifies and seals the candidate,
+and records its preparation. It never publishes `current`, stops or restarts the
+service, runs live migrations, or removes retained generations. Preparation
+failure leaves the serving generation in place. An already-current target skips
+the build. JSON distinguishes `prepared`, `already-current`, `dry-run`, and
+`error`; `prepared` does not mean activated.
+
+`openclaw update --dry-run` reports the immutable target without adoption,
+preparation, or publication. `openclaw update status` includes the current and
+prepared generation identities. Immutable preparation does not switch stored
+channels and rejects package targets such as `--tag`. `--sha` is available only
+for adopted immutable installations. Gateway `update.run` and `update repair`
+refuse activation or post-update maintenance in this slice and direct the
+installation owner to preparation through the CLI.
+
+Explicit adoption belongs to the existing updater CLI:
+
+```bash
+openclaw update adopt-immutable \
+  --root /opt/example \
+  --service example.service \
+  --account openclaw \
+  --state-dir /var/lib/example \
+  --config /etc/example/openclaw.json \
+  --runtime /usr/bin/node \
+  --previous-updater-stopped
+```
+
+Run adoption as root only after the previous updater has settled and stopped
+scheduling. The acknowledgement does not stop another updater for you. Adoption
+verifies the existing systemd unit, fixed nonroot service account, explicit
+effective state/configuration paths and optional `--profile`, external Node
+executable, and sealed current generation before recording ownership. Existing
+systemd environment files are read through the native service reader. Services
+with a different filesystem root, dynamic accounts, or command-line profile
+overrides are not supported. Adoption never edits or restarts the service.
+
+The [immutable update design](/reference/team-immutable-update-design#three-proposed-prs)
+separates preparation from the later activation and recovery work. Existing
+published updaters need explicit adoption after installing an immutable-capable
+release; candidate code cannot change the behavior of an older installed updater.
+
 ## Candidate-owned admission
 
 For package-manager updates, `openclaw update` privately stages the selected
@@ -221,6 +275,10 @@ Other supported filesystems keep the hard-link fast path and copy fallback.
 
 SQLite read-only workers use that retained generation through post-install
 verification, even after the package manager removes the previous package path.
+The updater joins those workers before returning. It records completed runtime
+projections for cleanup by the next eligible update or `openclaw doctor --fix`,
+so recursive deletion does not delay command exit after the final result.
+Cleanup keeps projections while another OpenClaw process may still use them.
 Already-installed older updaters, including 2026.9.6, still run their original
 worker-launch code; installing a corrected candidate cannot repair that first hop.
 
