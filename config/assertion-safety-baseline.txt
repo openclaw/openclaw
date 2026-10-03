@@ -178,12 +178,12 @@ extensions/codex/src/web-search-provider.ts	1
 extensions/cohere/stream.ts	2
 extensions/comfy/workflow-runtime.ts	2
 extensions/copilot-proxy/index.ts	1
-extensions/copilot/harness.ts	8
+extensions/copilot/harness.ts	7
 extensions/copilot/src/attempt-config.ts	10
 extensions/copilot/src/attempt-execution.ts	2
 extensions/copilot/src/attempt-finalize.ts	2
 extensions/copilot/src/attempt-prepare.ts	4
-extensions/copilot/src/attempt-transcript-journal.ts	22
+extensions/copilot/src/attempt-transcript-journal.ts	20
 extensions/copilot/src/byok-proxy.ts	1
 extensions/copilot/src/event-bridge-transcript.ts	4
 extensions/copilot/src/event-bridge.ts	1

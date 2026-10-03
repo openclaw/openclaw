@@ -3,9 +3,19 @@ import { normalize, resolve, sep } from "node:path";
 import type { CopilotClient, CopilotClientOptions } from "@github/copilot-sdk";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClientCreateOptions, PoolKey } from "./runtime.js";
 import { createCopilotClientPool } from "./runtime.js";
+
+const artifactMock = vi.hoisted(() => ({ capture: vi.fn(), validate: vi.fn() }));
+vi.mock("./runtime-artifact.js", () => ({
+  captureCopilotRuntimeArtifact: artifactMock.capture,
+  validateCopilotRuntimeArtifact: artifactMock.validate,
+}));
+beforeEach(() => {
+  artifactMock.capture.mockReset();
+  artifactMock.validate.mockReset();
+});
 
 interface FakeClient {
   readonly id: number;
@@ -94,6 +104,69 @@ afterEach(() => {
 });
 
 describe("createCopilotClientPool", () => {
+  it("binds verified clients separately and rejects a changed implementation before creating a client", async () => {
+    const sdk = makeFake();
+    const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
+    const binding = { id: "copilot-runtime-fixture", fingerprint: "implementation-a" };
+    const connection = { kind: "stdio", path: "/fixture/copilot-runtime" };
+    artifactMock.capture.mockResolvedValue({ binding, connection });
+    artifactMock.validate.mockResolvedValue(true);
+    try {
+      const normal = await pool.acquire(makeKey(), makeOptions());
+      const verified = await pool.acquire(makeKey(), makeOptions(), {});
+      const resumed = await pool.acquire(makeKey(), makeOptions(), { expected: binding });
+      expect(verified.client).not.toBe(normal.client);
+      expect(resumed.client).toBe(verified.client);
+      expect(verified.runtimeArtifact).toEqual(binding);
+      expect(sdk.ctorCalls[1]?.connection).toEqual(connection);
+      expect(sdk.instances[1]?.start).toHaveBeenCalledOnce();
+      artifactMock.capture.mockResolvedValue({
+        binding: { ...binding, fingerprint: "implementation-b" },
+        connection,
+      });
+      await expect(pool.acquire(makeKey(), makeOptions(), { expected: binding })).rejects.toThrow(
+        "verified runtime changed",
+      );
+      expect(sdk.instances).toHaveLength(2);
+      // Both verified handles share the same release identity and settle together.
+      await pool.release(verified);
+      await pool.release(resumed);
+      await pool.release(normal);
+    } finally {
+      await pool.dispose();
+    }
+    expect(sdk.stops.toSorted((left, right) => left - right)).toEqual([1, 2]);
+  });
+
+  it("stops a client whose runtime changes during awaited startup", async () => {
+    const startup = createDeferred<void>();
+    const started = createDeferred<void>();
+    const sdk = makeFake();
+    const pool = createCopilotClientPool({
+      sdkFactory: async (options) => {
+        const client = await sdk.fake(options);
+        client.start = vi.fn(async () => {
+          started.resolve();
+          await startup.promise;
+        });
+        return client;
+      },
+    });
+    const binding = { id: "copilot-runtime-fixture", fingerprint: "implementation-a" };
+    artifactMock.capture.mockResolvedValue({ binding, connection: { kind: "stdio" } });
+    artifactMock.validate.mockResolvedValue(true);
+    const acquire = pool.acquire(makeKey(), makeOptions(), {});
+    const rejected = expect(acquire).rejects.toThrow("runtime changed while starting");
+    await started.promise;
+    artifactMock.validate.mockResolvedValue(false);
+    startup.resolve();
+    await rejected;
+    expect(sdk.stops).toEqual([1]);
+    expect(sdk.instances[0]?.createSession).not.toHaveBeenCalled();
+    expect(pool.size()).toBe(0);
+    await pool.dispose();
+  });
+
   it("keeps hardened empty-mode clients separate from normal clients", async () => {
     const sdk = makeFake();
     const pool = createCopilotClientPool({ sdkFactory: sdk.fake });

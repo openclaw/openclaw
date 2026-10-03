@@ -39,6 +39,7 @@ export async function completeCopilotAttempt(params: {
   promptError: Error | undefined;
   releaseError: Error | undefined;
   resumeFailureRecovered: boolean;
+  runtimeArtifact?: AgentHarnessAttemptResult["runtimeArtifact"];
   sdkSessionId: string | undefined;
   sentTurnStarted: boolean;
   settledFinalizationAssistantCompleted: boolean;
@@ -96,6 +97,7 @@ export async function completeCopilotAttempt(params: {
           currentRunUserKey,
         ));
   const result = createResult(input, {
+    runtimeArtifact: params.runtimeArtifact,
     acceptedSessionSpawns,
     aborted,
     assistantTexts,

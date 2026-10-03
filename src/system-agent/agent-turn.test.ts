@@ -264,13 +264,28 @@ describe("runSystemAgentTurn", () => {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
       };
 
-      for (const session of [first, second, first]) {
+      const turns = [
+        { session: first, input: "hello" },
+        { session: second, input: "new conversation" },
+        { session: first, input: "continue this conversation" },
+      ];
+      for (const { session, input } of turns) {
         await runSystemAgentTurnWithDeps(
-          { input: "hello", overview, surface: "gateway", approvalArmed: false, session },
+          { input, overview, surface: "gateway", approvalArmed: false, session },
           deps,
         );
       }
 
+      const recorders = mocks.runEmbeddedAgent.mock.calls.map(([params]) =>
+        expectDefined(params.userTurnTranscriptRecorder, "missing system-agent user-turn recorder"),
+      );
+      expect(new Set(recorders).size).toBe(turns.length);
+      for (const [index, recorder] of recorders.entries()) {
+        await expect(recorder.resolveMessage()).resolves.toMatchObject({
+          role: "user",
+          content: turns[index]?.input,
+        });
+      }
       const [firstCall, secondCall, resumedCall] = mocks.runEmbeddedAgent.mock.calls.map(
         ([params]) => params,
       );

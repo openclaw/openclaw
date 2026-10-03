@@ -27,6 +27,7 @@ import { createCopilotByokAuth, resolveCopilotAuth, tokenFingerprint } from "./s
 import { createCopilotByokProxy } from "./src/byok-proxy.js";
 import {
   buildCopilotCompactionHookContext,
+  compactTrackedSdkSession,
   isStaleSdkSessionError,
   throwIfAborted,
   type CopilotHistoryCompactResult,
@@ -230,41 +231,6 @@ async function deleteStoredBinding(
   } catch {
     // Failed durable cleanup must not block fresh sessions or tracked-session reset.
     return false;
-  }
-}
-
-async function compactTrackedSdkSession(params: {
-  abortSignal?: AbortSignal;
-  assertCurrent: () => void;
-  client: CopilotClient;
-  customInstructions?: string;
-  gitHubToken?: string;
-  onSession?: (session: CopilotHistoryCompactSession) => void;
-  sessionConfig: CopilotSessionConfig;
-  sdkSessionId: string;
-}): Promise<CopilotHistoryCompactResult> {
-  params.assertCurrent();
-  throwIfAborted(params.abortSignal);
-  const session = (await params.client.resumeSession(params.sdkSessionId, {
-    ...params.sessionConfig,
-    continuePendingWork: false,
-    ...(params.gitHubToken ? { gitHubToken: params.gitHubToken } : {}),
-    suppressResumeEvent: true,
-  })) as unknown as CopilotHistoryCompactSession;
-  params.onSession?.(session);
-  const request = params.customInstructions?.trim()
-    ? { customInstructions: params.customInstructions }
-    : undefined;
-  try {
-    params.assertCurrent();
-    throwIfAborted(params.abortSignal);
-    return await session.rpc.history.compact(request);
-  } finally {
-    try {
-      await session.disconnect();
-    } catch {
-      // Preserve the compaction or cancellation outcome; cleanup is best-effort here.
-    }
   }
 }
 
@@ -744,6 +710,12 @@ export function createCopilotAgentHarness(
     label: options?.label ?? "GitHub Copilot agent runtime",
     autoSelection: { providerIds: [] },
     conversationToolPolicySupport: "exact",
+    runtimeArtifact: {
+      async validate(binding) {
+        const { validateCopilotRuntimeArtifact } = await import("./src/runtime-artifact.js");
+        return await validateCopilotRuntimeArtifact(binding);
+      },
+    },
 
     supports(ctx) {
       const requestedRuntime = String(ctx.requestedRuntime ?? "")

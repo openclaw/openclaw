@@ -68,6 +68,12 @@ The runtime resolves the SDK in this order:
 A missing SDK surfaces one error with code `COPILOT_SDK_MISSING` and the
 reinstall command above.
 
+Setup verification binds the installed SDK and packaged native runtime to the
+verified session. Replacing either implementation invalidates that binding;
+restart OpenClaw after an SDK update and repeat verification. Verified setup
+currently requires the SDK's packaged stdio runtime; a custom `COPILOT_CLI_PATH`
+outside that bundle or an in-process default transport cannot supply this binding.
+
 ## Quickstart
 
 Pin one model (or one provider) to the harness:
@@ -254,6 +260,11 @@ groups, so a crash between groups leaves a valid transcript prefix.
 `before_message_write` hooks may redact content but cannot change role or
 tool topology; a structurally destructive rewrite suppresses the whole group
 instead of persisting a false replay.
+
+Ephemeral helper turns, including setup inference probes, use the caller-owned
+in-memory session manager. The journal retains the same hooks, event identity,
+and complete tool groups without creating durable session state. Ordinary
+persistent attempts still require an exact runtime session target.
 
 Persistence failures fail closed. The first write failure marks the journal
 failed, aborts the in-flight SDK session, and flags the attempt's replay as

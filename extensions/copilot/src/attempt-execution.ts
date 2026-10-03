@@ -98,6 +98,7 @@ export async function runCopilotExecution(context: {
   let timedOut = false;
   let promptError: Error | undefined;
   let sdkSessionId: string | undefined;
+  let runtimeArtifact: AgentHarnessAttemptResult["runtimeArtifact"];
   // Resumed sessions may predate the atomic journal or survive a crash. Only a
   // session created under this journal can be deleted after incomplete cleanup.
   let nativeSessionCreatedFresh = false;
@@ -310,7 +311,17 @@ export async function runCopilotExecution(context: {
         return finishAttempt(result);
       }
     }
-    handle = await deps.pool.acquire(poolAcquire.key, poolAcquire.options);
+    const artifactRequest =
+      input.captureRuntimeArtifact || input.expectedRuntimeArtifact
+        ? { expected: input.expectedRuntimeArtifact }
+        : undefined;
+    handle = artifactRequest
+      ? await deps.pool.acquire(poolAcquire.key, poolAcquire.options, artifactRequest)
+      : await deps.pool.acquire(poolAcquire.key, poolAcquire.options);
+    runtimeArtifact = handle.runtimeArtifact;
+    if (artifactRequest && !runtimeArtifact) {
+      throw new Error("[copilot] verified attempt requires a captured runtime artifact");
+    }
     const client = handle.client;
     const sessionSetup = await createCopilotSessionSetup({
       attempt: input,
@@ -647,6 +658,7 @@ export async function runCopilotExecution(context: {
     promptError,
     releaseError,
     resumeFailureRecovered,
+    runtimeArtifact,
     sdkSessionId,
     sentTurnStarted,
     settledFinalizationAssistantCompleted,

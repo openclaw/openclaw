@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { FailoverError } from "../agents/failover-error.js";
@@ -350,9 +351,18 @@ describe("setup probe projection", () => {
       try {
         const result = await runSetupInferenceTurn({
           route,
+          prompt: "Check the configured model without using tools.",
           requireExecutionOwner: false,
           deps: {
             runEmbeddedAgent: async (params) => {
+              const recorder = expectDefined(
+                params.userTurnTranscriptRecorder,
+                "missing custom setup probe user-turn recorder",
+              );
+              await expect(recorder.resolveMessage()).resolves.toMatchObject({
+                role: "user",
+                content: "Check the configured model without using tools.",
+              });
               runId = params.runId;
               unsubscribe = onAgentEventForRun(params.runId, (event) => events.push(event));
               sessionMessageSubscribers.subscribe("probe-viewer", params.sessionKey!);

@@ -20,6 +20,7 @@ import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import type { SystemAgentProposalRef } from "./operator-approval.js";
 import type { SystemAgentOverview } from "./overview.js";
+import { createSystemAgentUserTurnRecorder } from "./user-turn-transcript.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
   resolveSystemAgentVerifiedInferenceRoute,
@@ -311,6 +312,7 @@ async function runSystemAgentTurnWithDeps(
     extraSystemPrompt: systemPrompt,
     ...(plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
     prompt: params.input,
+    userTurnTranscriptRecorder: createSystemAgentUserTurnRecorder(params.input),
     timeoutMs: resolveAgentTimeoutMs({ cfg: plan.runConfig }),
     thinkLevel: "off" as const,
     runId,

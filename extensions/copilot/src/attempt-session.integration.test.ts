@@ -1,5 +1,6 @@
 import type { CopilotClient } from "@github/copilot-sdk";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -8,12 +9,99 @@ import {
   event,
   transcriptMessages,
 } from "./attempt-transcript-journal.test-helpers.js";
-import type { AttemptResultWithSdkSessionId } from "./attempt-types.js";
+import type { AttemptParamsLike, AttemptResultWithSdkSessionId } from "./attempt-types.js";
 import { runCopilotAttempt } from "./attempt.js";
+import { makeAssistantMessageEvent, makeFakePool, makeFakeSdk } from "./attempt.test-support.js";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import type { CopilotClientPool } from "./runtime.js";
 
+function withAttemptRuntime(attempt: AttemptParamsLike, tempDir: string) {
+  return {
+    ...attempt,
+    agentDir: tempDir,
+    model: {
+      api: "openai-responses",
+      id: "gpt-5.6-luna",
+      name: "Luna",
+      provider: "github-copilot",
+      baseUrl: "https://api.githubcopilot.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 4096,
+    } satisfies AgentHarnessAttemptParamsV2["model"],
+    auth: { useLoggedInUser: true },
+    hostCapabilities: createCopilotTestHostCapabilities(),
+    promptMode: "none" as const,
+    disableTools: true,
+  };
+}
+
 describe("Copilot canonical session identity", () => {
+  it("answers a detached setup probe through its caller-owned in-memory transcript", async () => {
+    const { attempt, tempDir, bridge } = await createFixture();
+    bridge.detach();
+    const manager = SessionManager.inMemory(tempDir);
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait = vi.fn(async () => {
+        session.emit("user.message", { content: attempt.prompt });
+        session.emit("assistant.message", { content: "OK", messageId: "probe-answer" });
+        session.emit("session.idle", {});
+        return makeAssistantMessageEvent("OK", { messageId: "probe-answer" });
+      });
+    });
+    const params = {
+      ...withAttemptRuntime(attempt, tempDir),
+      sessionTarget: undefined,
+      sessionManager: manager,
+      sessionPersistence: "detached" as const,
+    };
+    const result = await runCopilotAttempt(params, {
+      pool: makeFakePool(sdk),
+      createToolBridge: async () => ({
+        sourceTools: [],
+        promptToolPolicy: { apply: () => ({ tools: [], callableToolNames: [] }) },
+      }),
+    });
+
+    expect(result.terminal).toEqual({ kind: "ok" });
+    expect(result.lastAssistant).toMatchObject({ content: [{ type: "text", text: "OK" }] });
+    expect(sdk.sessions[0]?.sendAndWait).toHaveBeenCalledOnce();
+    expect(transcriptMessages(manager.getEntries()).map((row) => row.message.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+    expect(manager.getSessionTarget()).toBeUndefined();
+  });
+
+  it("requires an exact durable target even when a persistent manager is supplied", async () => {
+    const { attempt, target, tempDir, bridge } = await createFixture();
+    bridge.detach();
+    const manager = await SessionManager.openAsync(target, tempDir);
+    const sdk = makeFakeSdk();
+    const result = await runCopilotAttempt(
+      {
+        ...withAttemptRuntime(attempt, tempDir),
+        sessionTarget: undefined,
+        sessionManager: manager,
+      },
+      { pool: makeFakePool(sdk) },
+    );
+
+    expect(result.terminal).toMatchObject({
+      kind: "failed",
+      source: "prompt",
+      error: {
+        code: "transcript_persistence_failed",
+        message:
+          "[copilot-attempt] canonical transcript persistence requires an exact runtime session target",
+      },
+    });
+    expect(sdk.sessions[0]?.sendAndWait).not.toHaveBeenCalled();
+    expect(transcriptMessages(await readSessionTranscriptEvents(target))).toEqual([]);
+  });
+
   it("keeps the host session through provider failure, retry, resume, and finalization", async () => {
     const { attempt, target, tempDir, bridge } = await createFixture();
     bridge.detach();
@@ -49,26 +137,7 @@ describe("Copilot canonical session identity", () => {
       dispose: vi.fn(async () => []),
       size: () => 0,
     } satisfies CopilotClientPool;
-    const params = {
-      ...attempt,
-      agentDir: tempDir,
-      model: {
-        api: "openai-responses",
-        id: "gpt-5.6-luna",
-        name: "Luna",
-        provider: "github-copilot",
-        baseUrl: "https://api.githubcopilot.com",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 4096,
-      } satisfies AgentHarnessAttemptParamsV2["model"],
-      auth: { useLoggedInUser: true },
-      hostCapabilities: createCopilotTestHostCapabilities(),
-      promptMode: "none" as const,
-      disableTools: true,
-    };
+    const params = withAttemptRuntime(attempt, tempDir);
     const deps = {
       pool,
       createToolBridge: async () => ({
