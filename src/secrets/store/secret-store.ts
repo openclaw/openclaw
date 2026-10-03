@@ -126,7 +126,7 @@ export function listSecretStoreEntries(params: {
   redactedOnly?: boolean;
   database?: OpenClawStateDatabaseOptions;
 }): SecretStoreEntryMetadata[] {
-  const { scopeKind, scopeId } = normalizeScope(params.scope);
+  const { scopeKind, scopeId } = normalizeScope();
   try {
     return (
       withExistingOpenClawStateDatabaseReadOnly(({ db: sqlite }) => {
@@ -292,7 +292,7 @@ export function readSecretStoreValue(params: {
 }): Result<string, SecretStoreReadError> {
   try {
     assertSecretStoreEnvName(params.name);
-    const { scopeKind, scopeId } = normalizeScope(params.scope);
+    const { scopeKind, scopeId } = normalizeScope();
     const row = withExistingOpenClawStateDatabaseReadOnly(({ db: sqlite }) => {
       const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
       return executeSqliteQueryTakeFirstSync(
@@ -385,7 +385,7 @@ export function updateSecretStoreAllowedHosts(params: {
 }): void {
   assertSecretStoreEnvName(params.name);
   const allowedHosts = normalizeSecretAllowedHosts(params.allowedHosts);
-  const { scopeKind, scopeId } = normalizeScope(params.scope);
+  const { scopeKind, scopeId } = normalizeScope();
   const now = Date.now();
   runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
@@ -424,7 +424,7 @@ export function deleteSecretStoreEntry(params: {
   database?: OpenClawStateDatabaseOptions;
 }): void {
   assertSecretStoreMutationName(params.name);
-  const { scopeKind, scopeId } = normalizeScope(params.scope);
+  const { scopeKind, scopeId } = normalizeScope();
   const state = openOpenClawStateDatabase(params.database);
   const now = Date.now();
   try {
