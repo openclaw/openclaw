@@ -230,6 +230,9 @@ describe("Sessions board rules and live facts", () => {
         ]);
         expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
         expect(result.warning).toContain("pull-request information is unavailable");
+        expect(result.sessions.find((session) => session.label === "unknown")?.reason).toBe(
+          "facts-unavailable",
+        );
         expect(request).toHaveBeenCalledWith(
           "sessions.list",
           expect.objectContaining({
@@ -398,7 +401,7 @@ describe("Sessions board rules and live facts", () => {
     );
   });
 
-  it("announces new sessions on an empty board and retries unavailable PR facts after one minute", async () => {
+  it("announces new sessions and refreshes unavailable PR facts only on publication", async () => {
     await withService({ facts: [] }, async ({ service, store, state, emit, readSessionFacts }) => {
       expect((await service.read(BOARD_ID)).sessions).toEqual([]);
       const changed = vi.spyOn(store, "announceChangeEpoch");
@@ -409,25 +412,27 @@ describe("Sessions board rules and live facts", () => {
       expect((await service.read(BOARD_ID)).warning).toContain(
         "pull-request information is unavailable",
       );
-      const readAt = Date.now();
       state.facts = [facts("new", { pullRequests: [{ number: 1, state: "open" }] })];
       expect((await service.read(BOARD_ID)).warning).toContain(
         "pull-request information is unavailable",
       );
-      vi.setSystemTime(readAt + 59_999);
+      vi.setSystemTime(NOW + 30 * 60_000);
       await service.read(BOARD_ID);
       expect(readSessionFacts).toHaveBeenCalledOnce();
-      vi.setSystemTime(readAt + 60_000);
+      emit(facts("new").key);
       expect((await service.read(BOARD_ID)).warning).toBeUndefined();
       expect(readSessionFacts).toHaveBeenCalledTimes(2);
     });
   });
 
-  it("refetches stale facts on demand in batches of 40", async () => {
+  it("shares a concurrent roster and facts pass, retaining unchanged facts without age expiry", async () => {
     await withService(
       { facts: Array.from({ length: 81 }, (_, index) => facts(String(index))) },
-      async ({ service, readSessionFacts }) => {
-        await service.read(BOARD_ID);
+      async ({ service, request, readSessionFacts }) => {
+        const [first, second] = await Promise.all([service.read(BOARD_ID), service.read(BOARD_ID)]);
+        expect(first).toEqual(second);
+        expect(first.sessions).toHaveLength(81);
+        expect(request).toHaveBeenCalledOnce();
         expect(readSessionFacts.mock.calls.map(([input]) => input.sessionKeys.length)).toEqual([
           40, 40, 1,
         ]);
@@ -436,9 +441,30 @@ describe("Sessions board rules and live facts", () => {
         expect(readSessionFacts).toHaveBeenCalledTimes(3);
         vi.setSystemTime(NOW + 10 * 60_000);
         await service.read(BOARD_ID);
-        expect(readSessionFacts.mock.calls.map(([input]) => input.sessionKeys.length)).toEqual([
-          40, 40, 1, 40, 40, 1,
+        expect(readSessionFacts).toHaveBeenCalledTimes(3);
+      },
+    );
+  });
+
+  it("shares a board facts pass while preserving each caller's visible roster and people", async () => {
+    await withService(
+      { facts: [facts("shared"), facts("private")] },
+      async ({ service, request, readSessionFacts }) => {
+        const people = [
+          { identity: { type: "profile", id: "one" }, label: "One", sessionCount: 2 },
+        ];
+        request
+          .mockResolvedValueOnce({ sessions: [facts("shared"), facts("private")], people })
+          .mockResolvedValueOnce({ sessions: [facts("shared")], people: [] });
+        const [owner, viewer] = await Promise.all([
+          service.read(BOARD_ID, { includePeople: true }, { assertCurrent() {} }),
+          service.read(BOARD_ID, { includePeople: true }, { assertCurrent() {} }),
         ]);
+        expect(owner.sessions.map(({ label }) => label)).toEqual(["shared", "private"]);
+        expect(owner.people).toEqual(people);
+        expect(viewer.sessions.map(({ label }) => label)).toEqual(["shared"]);
+        expect(viewer.people).toEqual([]);
+        expect(readSessionFacts).toHaveBeenCalledOnce();
       },
     );
   });

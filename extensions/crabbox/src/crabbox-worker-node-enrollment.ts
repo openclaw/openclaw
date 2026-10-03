@@ -108,6 +108,23 @@ setPhase("preparation");
   const setupFile = path.join(stateDir, "setup-code");
   const runtimeLink = path.join(stateDir, "runtime");
   const nodeEnv = { ...process.env, ...(mode ? { OPENCLAW_STATE_DIR: stateDir } : {}) };
+  const subprocessError = (message, result) => {
+    let detail = [result.error?.message, result.stderr].filter(Boolean).join("\\n");
+    // Sanitize complete values before truncation can leave an unrecognizable credential fragment.
+    const privateValues = [credentials, setupCode, ...Object.values(tokens), ...Object.values(nodeEnv)]
+      .filter((value) => typeof value === "string" && value.length > 0)
+      .sort((a, b) => b.length - a.length);
+    for (const value of privateValues) detail = detail.replaceAll(value, "[redacted]");
+    detail = detail
+      .replace(/\\b(?:Bearer|Basic)\\s+\\S+/gi, "[redacted]")
+      .replace(/([A-Za-z_][A-Za-z0-9_]*\\s*=\\s*)(?:"[^"]*"|'[^']*'|[^\\s]+)/g, "$1[redacted]")
+      .replace(/\\s+/g, " ").trim();
+    const bytes = Buffer.from(detail);
+    let start = Math.max(0, bytes.length - 512);
+    while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++;
+    const cause = new Error("exit code " + (result.status ?? "unknown") + ", signal " + (result.signal ?? "none") + (detail ? ": " + bytes.subarray(start).toString("utf8") : ""));
+    return new Error(message + ": " + cause.message, { cause });
+  };
   const finishDesktopSetup = () => {
     if (!desktopSetup) return;
     setPhase("desktop setup");
@@ -152,7 +169,7 @@ setPhase("preparation");
     const probe = spawnSync(process.execPath, [path.join(packageRoot, "openclaw.mjs"), "--version"], { env: nodeEnv, encoding: "utf8", timeout: 60000 });
     const version = probe.stdout?.trim();
     const expected = "OpenClaw " + bootstrap.openclawVersion;
-    if (probe.status !== 0 || (version !== expected && !version?.startsWith(expected + " "))) throw new Error("Cloud worker bootstrap CLI could not verify its Gateway version");
+    if (probe.status !== 0 || (version !== expected && !version?.startsWith(expected + " "))) throw subprocessError("Cloud worker bootstrap CLI could not verify its Gateway version", probe);
   };
   const verifyArchive = async (source, artifact) => {
     const hash = crypto.createHash("sha256");
@@ -399,7 +416,7 @@ setPhase("preparation");
   if (pluginIds.length > 0) {
     // One CLI process retains the combined per-plugin time and output allowances.
     const enabled = spawnSync(process.execPath, [cli, "plugins", "enable", ...pluginIds], { env: nodeEnv, encoding: "utf8", timeout: 60000 * pluginIds.length, maxBuffer: 1024 * 1024 * pluginIds.length });
-    if (enabled.status !== 0) throw new Error("Cloud worker bootstrap could not enable plugins " + pluginIds.join(", "));
+    if (enabled.status !== 0) throw subprocessError("Cloud worker bootstrap could not enable plugins " + pluginIds.join(", "), enabled);
   }
   // Publishing this pointer earlier makes fresh state look like a legacy installation.
   fs.symlinkSync(runtimeDir, runtimeLink, process.platform === "win32" ? "junction" : "dir");

@@ -257,33 +257,26 @@ function openOpenClawStateDatabaseWithBusyTimeout(
 ): OpenClawStateDatabase {
   getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
   const env = options.env ?? process.env;
-  if (options.database) {
-    assertStateDatabaseSchemaAdmission(options.database);
-    assertOpenClawStateWriteAllowed({
-      database: options.database.db,
-      databasePath: options.database.path,
-      env,
-    });
-    observeOpenClawDatabaseMaintenanceResource(options.database.db);
-    stateDbCache.touchStateDatabase(options.database);
-    return options.database;
-  }
-  const pathname = resolveDatabasePath(options);
-  const existingSchema = isExistingOpenClawStateSchema(pathname);
-  const cached = stateDbCache.getCachedOpenClawStateDatabase(pathname);
-  if (cached?.db.isOpen) {
-    // A refused cache borrow did not open or damage the database. Failure owners
-    // publish their own retirement events; caller admission must not retire it.
-    stateDbCache.assertOpenClawStateDatabaseOpenAllowed(pathname);
+  const pathname = options.database?.path ?? resolveDatabasePath(options);
+  const existingSchema = !options.database && isExistingOpenClawStateSchema(pathname);
+  const cached = options.database ?? stateDbCache.getCachedOpenClawStateDatabase(pathname);
+  if (cached && (options.database || cached.db.isOpen)) {
+    if (!options.database) {
+      // A refused cache borrow did not open or damage the database. Failure owners
+      // publish their own retirement events; caller admission must not retire it.
+      stateDbCache.assertOpenClawStateDatabaseOpenAllowed(pathname);
+    }
     assertStateDatabaseSchemaAdmission(cached);
     assertOpenClawStateWriteAllowed({
       database: cached.db,
       databasePath: pathname,
       env,
-      schemaReady: true,
+      schemaReady: stateDbCache.isOpenClawStateDatabaseSchemaReady(cached),
     });
     observeOpenClawDatabaseMaintenanceResource(cached.db);
-    if (!existingSchema && deferredStateDatabases.has(cached.db)) {
+    if (options.database) {
+      stateDbCache.touchStateDatabase(cached);
+    } else if (!existingSchema && deferredStateDatabases.has(cached.db)) {
       reconcileOpenClawStateSchemaPublication(options);
       if (readSqliteUserVersion(cached.db) === OPENCLAW_STATE_SCHEMA_VERSION) {
         deferredStateDatabases.delete(cached.db);
@@ -472,11 +465,15 @@ export function runOpenClawStateWriteTransaction<T>(
       acquired.db,
       () => {
         assertStateDatabaseSchemaAdmission(acquired);
+        // Recheck cached-path admission after a cold-open contention retry.
+        if (!options.database) {
+          getOpenClawStateDatabaseIfOpen(options);
+        }
         assertOpenClawStateWriteAllowed({
           database: acquired.db,
           databasePath: acquired.path,
           env: options.env ?? process.env,
-          schemaReady: !options.database && acquired === getOpenClawStateDatabaseIfOpen(options),
+          schemaReady: stateDbCache.isOpenClawStateDatabaseSchemaReady(acquired),
         });
         observeOpenClawDatabaseMaintenanceResource(acquired.db);
         callbackEntered = true;

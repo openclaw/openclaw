@@ -292,7 +292,6 @@ describe("startup admission before persistent writes", () => {
           fs.writeFileSync(
             configPath,
             JSON.stringify({
-              meta: { migrations: { webhookListeners: true } },
               gateway:
                 config === "missing-mode"
                   ? {}

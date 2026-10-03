@@ -232,7 +232,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         agentId,
       });
     let assertBindingCurrent: (() => void) | undefined;
-    return await runExclusiveSessionLifecycleMutation({
+    return await runExclusiveSessionLifecycleMutation("placement-reclaim", {
       scope: target.storePath,
       identities: lifecycleIdentities,
       prepare: async (lifecycle) => {
@@ -325,7 +325,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         // fence before provider cleanup or the failed-to-local transition becomes durable.
         authorize?.();
       };
-      return await runExclusiveSessionLifecycleMutation({
+      return await runExclusiveSessionLifecycleMutation("placement-failed-reclaim", {
         scope: target.storePath,
         identities: lifecycleIdentities,
         prepare: async (lifecycle) => {

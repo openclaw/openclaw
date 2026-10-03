@@ -7,14 +7,19 @@ import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 
 type OmittedMediaItem = Extract<MessageContentItem, { type: "omitted_media" }>;
 
-type AttachmentFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
+type AttachmentFailureCode = Extract<
+  MessageContentItem,
+  { type: "attachment_error" }
+>["attachment"]["code"];
 
 export function attachmentFailureReason(code: AttachmentFailureCode): string {
   return code === "file-not-found"
     ? t("chat.attachments.failureFileNotFound")
     : code === "unsupported-format"
       ? t("chat.attachments.failureUnsupportedFormat")
-      : t("chat.attachments.failureDeliveryFailed");
+      : code === "invalid-reference"
+        ? t("chat.attachments.failureInvalidReference")
+        : t("chat.attachments.failureDeliveryFailed");
 }
 
 export function renderOmittedMedia(items: OmittedMediaItem[]) {

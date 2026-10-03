@@ -1083,7 +1083,7 @@ describe("dispatchReplyFromConfig", () => {
         }
         abort.abort(cancellation);
         mutation = externalLifecycleRequest.runInAsyncScope(async () =>
-          runExclusiveSessionLifecycleMutation({
+          runExclusiveSessionLifecycleMutation("patch", {
             scope: "/tmp/mock-sessions.json",
             identities: [sessionKey, sessionId],
             prepare: async () => {
@@ -1184,7 +1184,7 @@ describe("dispatchReplyFromConfig", () => {
     let mutationRan = false;
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("patch", {
           scope: "/tmp/mock-sessions.json",
           identities: [sessionKey, sessionId],
           prepare: async () => {
@@ -1258,7 +1258,7 @@ describe("dispatchReplyFromConfig", () => {
     let mutationRan = false;
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("patch", {
           scope: "/tmp/mock-sessions.json",
           identities: [sessionKey, sessionId],
           prepare: async () => {
@@ -1336,7 +1336,7 @@ describe("dispatchReplyFromConfig", () => {
 
     let mutationRan = false;
     const mutation = runWithReplyOperationLifecycleAdmission(ownerOperation, async () =>
-      runExclusiveSessionLifecycleMutation({
+      runExclusiveSessionLifecycleMutation("patch", {
         scope: "/tmp/mock-sessions.json",
         identities: [sessionKey, sessionId],
         prepare: async () => {
@@ -1427,7 +1427,7 @@ describe("dispatchReplyFromConfig", () => {
     const externalLifecycleRequest = new AsyncResource("interrupted-fallback-lifecycle");
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("patch", {
           scope: "/tmp/mock-sessions.json",
           identities: [sessionKey, sessionId],
           prepare: async () => {

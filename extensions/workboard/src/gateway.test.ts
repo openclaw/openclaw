@@ -446,7 +446,9 @@ describe("workboard gateway methods", () => {
           view,
         });
         expect(response.mock.calls[0]?.[0]).toBe(true);
-        expect(readSpy).toHaveBeenLastCalledWith("sessions", view);
+        expect(readSpy).toHaveBeenLastCalledWith("sessions", view, {
+          assertCurrent: expect.any(Function),
+        });
       }
       const updated = await invoke("workboard.sessionsBoard.update", {
         boardId: "sessions",

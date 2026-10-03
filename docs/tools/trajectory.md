@@ -120,7 +120,9 @@ omitted when the session did not capture the corresponding runtime data.
 ## Capture storage
 
 Runtime trajectory events are stored with the session in the per-agent SQLite
-database. Exporting a trajectory materializes a redacted JSONL support bundle;
+database. Active runs persist events in batches; cleanup drains the final batch.
+Queued events follow the same rolling byte limit while the database writer is busy.
+Exporting a trajectory materializes a redacted JSONL support bundle;
 the live runtime capture is not a session-adjacent JSONL sidecar.
 
 Legacy `.trajectory.jsonl` and `.trajectory-path.json` files may still appear
@@ -140,8 +142,8 @@ missing.
 
 ## Tune flush timeout
 
-OpenClaw flushes runtime trajectory rows during agent cleanup. The default
-cleanup timeout is 10,000 ms. On slow disks or large stores, set
+OpenClaw drains any pending runtime trajectory rows during agent cleanup. The
+default cleanup timeout is 10,000 ms. On slow disks or large stores, set
 `OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS` before starting OpenClaw:
 
 ```bash

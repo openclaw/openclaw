@@ -31,83 +31,129 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   } = http;
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(["rejected", "no-message-id"] as const)(
-    "keeps continuation custody local after a %s provider response",
-    async (response) => {
+  it.each(["rejected", "no-message-id", "media", "buttons"] as const)(
+    "delivers the continuation instead of adopting a %s progress card",
+    async (outcome) => {
+      const waitingText = "Waiting for delegated work.";
+      const missingReceipt = outcome === "rejected" || outcome === "no-message-id";
+      const reply: ReplyPayload = { text: waitingText };
       let adopted = false;
-      http.respondToCall = (call) =>
-        call.method === "sendMessage" && String(call.fields.text).includes("Pending delegation")
-          ? response === "no-message-id"
-            ? response
-            : { error_code: 400, description: "Bad Request: progress rejected" }
-          : undefined;
+      if (missingReceipt) {
+        http.respondToCall = (call) =>
+          call.method === "sendMessage" && String(call.fields.text).includes("Pending delegation")
+            ? outcome === "no-message-id"
+              ? outcome
+              : { error_code: 400, description: "Bad Request: progress rejected" }
+            : undefined;
+      } else if (outcome === "media") {
+        reply.mediaUrl = "https://example.test/report.pdf";
+        vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+          buffer: Buffer.from("delegated report bytes"),
+          contentType: "application/pdf",
+          kind: undefined,
+          fileName: "report.pdf",
+        });
+      } else {
+        reply.interactive = {
+          blocks: [{ type: "buttons", buttons: [{ label: "Continue", value: "go" }] }],
+        };
+      }
       await dispatchProgressTurn(
         async (options) => {
-          await options?.onItemEvent?.({
-            kind: "preamble",
-            itemId: "pending-parent",
-            phase: "end",
-            progressText: "Pending delegation",
-          });
+          if (missingReceipt) {
+            await options?.onItemEvent?.({
+              kind: "preamble",
+              itemId: "pending-parent",
+              phase: "end",
+              progressText: "Pending delegation",
+            });
+          } else {
+            await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "delegate" });
+            await waitForBotApiCall((call) => call.method === "sendMessage");
+          }
         },
         {
           mode: "progress",
           toolProgress: true,
-          finalReply: setReplyPayloadMetadata(
-            { text: "Waiting for delegated work." },
-            {
-              progressContinuation: {
-                adopt: async () => {
-                  adopted = true;
-                  return true;
-                },
-                close: () => undefined,
+          finalReply: setReplyPayloadMetadata(reply, {
+            progressContinuation: {
+              adopt: async () => {
+                adopted = true;
+                return true;
               },
+              close: () => undefined,
             },
-          ),
+          }),
         },
       );
       expect(adopted).toBe(false);
-      expect([...visibleMessages.values()]).toEqual(["Waiting for delegated work."]);
-      expect(calls.some((call) => String(call.fields.text).includes("Pending delegation"))).toBe(
-        true,
-      );
+      if (missingReceipt) {
+        expect([...visibleMessages.values()]).toEqual([waitingText]);
+        expect(calls.some((call) => String(call.fields.text).includes("Pending delegation"))).toBe(
+          true,
+        );
+      } else if (outcome === "media") {
+        const document = acceptedCalls.find((call) => call.method === "sendDocument");
+        const upload = resolveTelegramTestUpload(document!.fields, "document");
+        expect(await upload.text()).toBe("delegated report bytes");
+        expect(document?.fields.caption).toContain(waitingText);
+      } else {
+        expect([...visibleMarkup.values()]).toEqual([
+          { inline_keyboard: [[{ text: "Continue", callback_data: "go" }]] },
+        ]);
+      }
     },
   );
 
-  it("settles an empty final after a hook without a fallback", async () => {
-    const registry = createEmptyPluginRegistry();
-    addTestHook({
-      registry,
-      pluginId: "http-outcome-policy",
-      hookName: "reply_payload_sending",
-      handler: (event: PluginHookReplyPayloadSendingEvent) =>
-        event.payload.text === "empty-hook"
-          ? { payload: { ...event.payload, text: "" } }
-          : undefined,
-    });
-    initializeGlobalHookRunner(registry);
-    await dispatchProgressTurn(async () => undefined, {
-      mode: "off",
-      toolProgress: true,
-      textLimit: 80,
-      producer: async ({ dispatcher }) => {
-        dispatcher.sendFinalReply({ text: "empty-hook" });
-        const counts = dispatcher.getQueuedCounts();
-        return { queuedFinal: counts.final > 0, counts };
-      },
-      allowErrors: true,
-    });
-    expect(
-      calls.filter(
-        (call) =>
+  it.each(["empty-hook", "rejected-final"] as const)(
+    "settles a %s without claiming visible delivery",
+    async (outcome) => {
+      const text = outcome === "empty-hook" ? outcome : "fail";
+      if (outcome === "empty-hook") {
+        const registry = createEmptyPluginRegistry();
+        addTestHook({
+          registry,
+          pluginId: "http-outcome-policy",
+          hookName: "reply_payload_sending",
+          handler: (event: PluginHookReplyPayloadSendingEvent) =>
+            event.payload.text === text ? { payload: { ...event.payload, text: "" } } : undefined,
+        });
+        initializeGlobalHookRunner(registry);
+      } else {
+        http.respondToCall = (call) =>
           call.method === "sendMessage" &&
-          String(call.fields.text).startsWith(DELIVERY_WARNING_PREFIX),
-      ),
-    ).toHaveLength(0);
-    expect(JSON.stringify(acceptedCalls)).not.toContain("cancel");
-    expect([...visibleMessages.values()]).toEqual([]);
-  });
+          (call.fields.text === text || DELIVERY_WARNING.includes(String(call.fields.text)))
+            ? { error_code: 400, description: "Bad Request: fixture delivery rejected" }
+            : undefined;
+      }
+      await dispatchProgressTurn(async () => undefined, {
+        mode: "off",
+        toolProgress: true,
+        textLimit: 80,
+        producer: async ({ dispatcher }) => {
+          dispatcher.sendFinalReply({ text });
+          const counts = dispatcher.getQueuedCounts();
+          return { queuedFinal: counts.final > 0, counts };
+        },
+        allowErrors: true,
+      });
+      expect(
+        calls.filter(
+          (call) =>
+            call.method === "sendMessage" &&
+            String(call.fields.text).startsWith(DELIVERY_WARNING_PREFIX),
+        ),
+      ).toHaveLength(outcome === "empty-hook" ? 0 : 1);
+      if (outcome === "empty-hook") {
+        expect(JSON.stringify(acceptedCalls)).not.toContain("cancel");
+      } else {
+        expect(
+          calls.some((call) => call.method === "sendMessage" && call.fields.text === text),
+        ).toBe(true);
+      }
+      expect([...visibleMessages.values()]).toEqual([]);
+    },
+  );
 
   it("delivers the final answer through repeated Telegram flood waits", async () => {
     const floodedAt: number[] = [];
@@ -258,63 +304,6 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     },
   );
 
-  it.each(["media", "buttons"] as const)(
-    "delivers continuation %s instead of swallowing it in card adoption",
-    async (content) => {
-      let adopted = false;
-      if (content === "media") {
-        vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-          buffer: Buffer.from("delegated report bytes"),
-          contentType: "application/pdf",
-          kind: undefined,
-          fileName: "report.pdf",
-        });
-      }
-      await dispatchProgressTurn(
-        async (options) => {
-          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "delegate" });
-          await waitForBotApiCall((call) => call.method === "sendMessage");
-        },
-        {
-          mode: "progress",
-          toolProgress: true,
-          finalReply: setReplyPayloadMetadata<ReplyPayload>(
-            {
-              text: "Waiting for delegated work.",
-              ...(content === "media"
-                ? { mediaUrl: "https://example.test/report.pdf" }
-                : {
-                    interactive: {
-                      blocks: [{ type: "buttons", buttons: [{ label: "Continue", value: "go" }] }],
-                    },
-                  }),
-            },
-            {
-              progressContinuation: {
-                adopt: async () => {
-                  adopted = true;
-                  return true;
-                },
-                close: () => undefined,
-              },
-            },
-          ),
-        },
-      );
-      expect(adopted).toBe(false);
-      if (content === "media") {
-        const document = acceptedCalls.find((call) => call.method === "sendDocument");
-        const upload = resolveTelegramTestUpload(document!.fields, "document");
-        expect(await upload.text()).toBe("delegated report bytes");
-        expect(document?.fields.caption).toContain("Waiting for delegated work.");
-      } else {
-        expect([...visibleMarkup.values()]).toEqual([
-          { inline_keyboard: [[{ text: "Continue", callback_data: "go" }]] },
-        ]);
-      }
-    },
-  );
-
   it("shows compaction transitions and retires progress only after the final is accepted", async () => {
     const snapshots: string[] = [];
     let progressId: number | undefined;
@@ -454,34 +443,4 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       ]);
     },
   );
-
-  it("records a rejected final without claiming the rejected delivery warning was visible", async () => {
-    http.respondToCall = (call) =>
-      call.method === "sendMessage" &&
-      (call.fields.text === "fail" || DELIVERY_WARNING.includes(String(call.fields.text)))
-        ? { error_code: 400, description: "Bad Request: fixture delivery rejected" }
-        : undefined;
-    await dispatchProgressTurn(async () => undefined, {
-      mode: "off",
-      toolProgress: true,
-      textLimit: 80,
-      producer: async ({ dispatcher }) => {
-        dispatcher.sendFinalReply({ text: "fail" });
-        const counts = dispatcher.getQueuedCounts();
-        return { queuedFinal: counts.final > 0, counts };
-      },
-      allowErrors: true,
-    });
-    expect(calls.some((call) => call.method === "sendMessage" && call.fields.text === "fail")).toBe(
-      true,
-    );
-    expect(
-      calls.filter(
-        (call) =>
-          call.method === "sendMessage" &&
-          String(call.fields.text).startsWith(DELIVERY_WARNING_PREFIX),
-      ),
-    ).toHaveLength(1);
-    expect([...visibleMessages.values()]).toEqual([]);
-  });
 });

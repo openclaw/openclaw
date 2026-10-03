@@ -175,6 +175,15 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             )) ||
           (input.command.scope.kind === "ids" && isStringArray(input.command.scope.runIds)))) ||
       input.command.type === "exec-approvals.read" ||
+      (input.command.type === "skillLibrary.read" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.kind === "string" &&
+        ["presentation", "list", "read", "seed", "change", "pins"].includes(
+          input.command.input.kind,
+        ) &&
+        isRecord(input.command.input.authority) &&
+        isStringArray(input.command.input.authority.scopes) &&
+        isRecord(input.command.input.authority.config)) ||
       ((input.command.type === "skills.library.descriptions" ||
         input.command.type === "skills.library.manifests") &&
         Array.isArray(input.command.input) &&

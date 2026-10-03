@@ -5,6 +5,7 @@ import { registerUpdateCli } from "./update-cli.js";
 
 const mocks = vi.hoisted(() => ({
   updateCleanupCommand: vi.fn(async (_opts: unknown) => {}),
+  updateAdoptImmutableCommand: vi.fn(async (_opts: unknown) => {}),
   updateCommand: vi.fn(async (_opts: unknown) => {}),
   updateFinalizeCommand: vi.fn(async (_opts: unknown) => {}),
   updateStatusCommand: vi.fn(async (_opts: unknown) => {}),
@@ -39,6 +40,9 @@ vi.mock("./update-cli/update-repair-command.js", () => ({
 }));
 
 vi.mock("./update-cli/cleanup.js", () => ({ updateCleanupCommand: mocks.updateCleanupCommand }));
+vi.mock("./update-cli/update-command-immutable.js", () => ({
+  updateAdoptImmutableCommand: mocks.updateAdoptImmutableCommand,
+}));
 
 vi.mock("./update-cli/status.js", () => ({
   updateStatusCommand: (opts: unknown) => mocks.updateStatusCommand(opts),
@@ -66,6 +70,61 @@ function firstCallOptions(mock: { mock: { calls: unknown[][] } }) {
 
 describe("update cli option collisions", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  const adoptionArgs = [
+    "update",
+    "adopt-immutable",
+    "--root",
+    "/opt/example",
+    "--service",
+    "example.service",
+    "--account",
+    "openclaw",
+    "--state-dir",
+    "/var/lib/example",
+    "--config",
+    "/etc/example/openclaw.json",
+    "--runtime",
+    "/usr/bin/node",
+  ];
+  it("requires explicit prior-updater acknowledgement for immutable adoption", async () => {
+    await run(adoptionArgs);
+    expect(mocks.updateAdoptImmutableCommand).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("--previous-updater-stopped"),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("binds explicit immutable adoption to the selected service and existing state", async () => {
+    await run([...adoptionArgs, "--previous-updater-stopped", "--json"]);
+    expect(mocks.updateAdoptImmutableCommand).toHaveBeenCalledWith({
+      root: "/opt/example",
+      service: {
+        unit: "example.service",
+        scope: "system",
+        account: "openclaw",
+        stateDir: "/var/lib/example",
+        configPath: "/etc/example/openclaw.json",
+        profile: null,
+      },
+      runtime: "/usr/bin/node",
+      previousUpdaterStopped: true,
+      json: true,
+    });
+    expect(updateCommand).not.toHaveBeenCalled();
+  });
+
+  it("passes exact immutable SHA selection only to the update action", async () => {
+    const sha = "a".repeat(40);
+    await run(["update", "--sha", sha]);
+    expect(updateCommand).toHaveBeenCalledWith(expect.objectContaining({ sha }));
+    await run(["update", "--sha", sha, "status"]);
+    expect(updateStatusCommand).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("--sha is supported only"),
+    );
+  });
 
   it.each([
     ["update", "--dry-run", "--json", "--yes", "cleanup"],

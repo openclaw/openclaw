@@ -148,6 +148,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   runWorking?: boolean;
   startupLabel?: string;
   waitingApproval?: boolean;
+  subagentSessions?: readonly GatewaySessionRow[];
   questionPrompts?: readonly QuestionPrompt[];
   asyncQuestions?: AsyncQuestionPresentation;
   sessions: SessionsListResult | null;

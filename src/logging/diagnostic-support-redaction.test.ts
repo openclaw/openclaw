@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   redactPublicSupportDiagnosticLine,
+  redactSupportDiagnosticLine,
   redactSupportString,
   redactTextForSupport,
   sanitizeSupportConfigValue,
@@ -43,6 +44,22 @@ function fakeRepeatedToken(chars: readonly string[], length = 40): string {
 
 describe("diagnostic support redaction", () => {
   const tempDir = path.join(os.tmpdir(), "openclaw-support-redaction-test");
+
+  it.each([
+    `'/synthetic/private owner/state.sqlite' private suffix`,
+    `'/synthetic/o'brien/customer.sqlite' private suffix`,
+    `"/synthetic/private "quoted" owner/state.sqlite" private suffix`,
+    String.raw`"C:\Users\Private Owner\state.sqlite" private suffix`,
+    String.raw`'\\private-server\private share\state.sqlite' private suffix`,
+    `"file:///synthetic/private owner/state.sqlite" private suffix`,
+  ])("hides the complete quoted path suffix in %s", (source) => {
+    expect(
+      redactSupportDiagnosticLine(`EACCES: permission denied, open ${source}`, {
+        env: {},
+        stateDir: tempDir,
+      }),
+    ).toBe("EACCES: permission denied, open [redacted-path]");
+  });
 
   it.each([
     ['"dist/index.js": fields=size,mtimeNs,ctimeNs,sha256', true],

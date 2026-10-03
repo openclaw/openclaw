@@ -14,7 +14,6 @@ type CachedResult = {
   output: ResultSnapshot;
   result: object;
 };
-const sanitizedResults = new WeakMap<object, CachedResult>();
 
 // Keep string references, not serialized copies: validation walks properties, never text.
 function captureResultSnapshot(root: object): ResultSnapshot | undefined {
@@ -81,27 +80,27 @@ function matchesResultSnapshot(snapshot: ResultSnapshot): boolean {
   });
 }
 
-/** Reuse only unchanged data under the current policy; callers retain mutable ownership. */
-export function memoizeSanitizedToolResult(result: object, sanitize: () => object): object {
-  const loggingConfig = readLoggingConfig();
-  const cached = sanitizedResults.get(result);
-  if (
-    cached &&
-    matchesModelVisibleRedactionPolicy(cached.policy, loggingConfig) &&
-    matchesResultSnapshot(cached.input) &&
-    (cached.input === cached.output || matchesResultSnapshot(cached.output))
-  ) {
-    return cached.result;
-  }
-  sanitizedResults.delete(result);
-  const input = captureResultSnapshot(result);
-  const policy = captureModelVisibleRedactionPolicy(loggingConfig);
-  const sanitized = sanitize();
-  const output = input && captureResultSnapshot(sanitized);
-  if (input && output) {
-    sanitizedResults.set(result, { policy, input, output, result: sanitized });
-    // Retaining sanitized output must not retain the original unredacted input.
-    sanitizedResults.set(sanitized, { policy, input: output, output, result: sanitized });
-  }
-  return sanitized;
+/** The event owner shares mutable-safe facts only until its consumers settle. */
+export function createToolResultPreparation(result: object, sanitize: () => object): () => object {
+  let cached: CachedResult | undefined;
+  return () => {
+    const loggingConfig = readLoggingConfig();
+    if (
+      cached &&
+      matchesModelVisibleRedactionPolicy(cached.policy, loggingConfig) &&
+      matchesResultSnapshot(cached.input) &&
+      matchesResultSnapshot(cached.output)
+    ) {
+      return cached.result;
+    }
+    cached = undefined;
+    const input = captureResultSnapshot(result);
+    const policy = captureModelVisibleRedactionPolicy(loggingConfig);
+    const sanitized = sanitize();
+    const output = input && captureResultSnapshot(sanitized);
+    if (input && output) {
+      cached = { policy, input, output, result: sanitized };
+    }
+    return sanitized;
+  };
 }

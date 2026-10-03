@@ -137,7 +137,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
         }
         return result;
       });
-      const previous = runExclusiveSessionLifecycleMutation({
+      const previous = runExclusiveSessionLifecycleMutation("delete", {
         scope: storePath,
         identities: [current.sessionKey, current.sessionId],
         run: async () => {

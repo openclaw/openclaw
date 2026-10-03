@@ -271,6 +271,11 @@ targeted environment and placement reconciliation; explicit removal waits for
 the credential fence before returning success, and the periodic sweep retries
 failed provider or placement cleanup.
 
+While a device runner is unavailable, including after session hosting is disabled,
+the Gateway pauses advisory disk-space probes and retains the last sample for
+that placement. Probes resume on the next scheduled sweep after the current
+runner reconnects. Disabling hosting does not discard the session's workspace.
+
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
 

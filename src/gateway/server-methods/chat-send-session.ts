@@ -48,18 +48,18 @@ import { resolveSessionNativeRuntimeRestriction } from "./sessions-patch-model-s
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 // Preparing the canonical creator defaults does not itself persist a session.
-export function prepareChatSendSessionEntry(params: {
+export async function prepareChatSendSessionEntry(params: {
   cfg: OpenClawConfig;
   client: GatewayRequestHandlerOptions["client"];
   agentId: string;
   getRuntimeConfig: () => OpenClawConfig;
-}): { entry: SessionEntry; assertSkillSelection: () => void } {
+}): Promise<{ entry: SessionEntry; assertSkillSelection: () => void }> {
   const { cfg, client, agentId, getRuntimeConfig } = params;
   const creationError = authorizeGatewaySessionCreation({ cfg, client, agentId });
   if (creationError) {
     throw new Error(creationError.message);
   }
-  const creation = prepareSkillLibrarySessionCreation(
+  const creation = await prepareSkillLibrarySessionCreation(
     client,
     getRuntimeConfig,
     resolveOperatorSessionCreation(client),
@@ -396,7 +396,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
       "Session changed before native confirmation. Retry.",
     );
   }
-  const prepared = prepareChatSendSessionEntry({
+  const prepared = await prepareChatSendSessionEntry({
     cfg,
     client,
     agentId,

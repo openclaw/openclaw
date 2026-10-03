@@ -116,11 +116,6 @@ export function createGatewayWorkerPlacementRuntime(
     publishAcceptedWorkspace,
     reconcilePublications,
   } = params.githubPublicationRuntime ?? createGatewayGitHubPublicationRuntime(params);
-  const diskSpace = createWorkerPlacementDiskSpaceMonitor({
-    placements: params.placements,
-    environments: params.environments,
-    warn: params.warn,
-  });
   const withPreparedRecovery = createWorkerWorkspaceRecoveryPreparer({
     loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
     getConfig: getRuntimeConfig,
@@ -137,6 +132,12 @@ export function createGatewayWorkerPlacementRuntime(
     environments: params.environments,
     hasCurrentDeviceRunner: (deviceId) =>
       nodeWorkerSupervisorTransport?.hasCurrentRunner(deviceId) === true,
+  });
+  const diskSpace = createWorkerPlacementDiskSpaceMonitor({
+    placements: params.placements,
+    environments: params.environments,
+    runnerAvailability,
+    warn: params.warn,
   });
   const reclaimBarriers = createGatewayWorkerPlacementReclaimBarriers({
     placements: params.placements,

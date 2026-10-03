@@ -4,11 +4,11 @@ import type { TrustedSessionCreation } from "./server-methods/session-creation-p
 import type { GatewayClient } from "./server-methods/shared-types.js";
 
 /** Selection is prepared from this request's real principal, never reconstructed from provenance. */
-export function prepareSkillLibrarySessionCreation(
+export async function prepareSkillLibrarySessionCreation(
   client: GatewayClient | null | undefined,
   cfg: OpenClawConfig | (() => OpenClawConfig),
   creation: TrustedSessionCreation,
-): TrustedSessionCreation {
+): Promise<TrustedSessionCreation> {
   if (
     !client?.authenticatedUserProfile ||
     client.internal?.syntheticClient ||
@@ -18,7 +18,7 @@ export function prepareSkillLibrarySessionCreation(
   }
   return {
     ...creation,
-    skillLibrarySelections: seedSkillLibrarySelection({
+    skillLibrarySelections: await seedSkillLibrarySelection({
       profileId: client.authenticatedUserProfile.profileId,
       scopes: client.connect.scopes ?? [],
       getConfig: typeof cfg === "function" ? cfg : () => cfg,
