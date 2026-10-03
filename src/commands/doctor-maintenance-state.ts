@@ -46,6 +46,11 @@ export function createDoctorMaintenanceState(options: {
     warn: options.warn,
   });
   const closeResources = async () => {
+    if (resources) {
+      const { closeOpenClawAgentDatabasesAsync } =
+        await import("../state/openclaw-agent-db-lifecycle.js");
+      await resources.run(() => closeOpenClawAgentDatabasesAsync(resolveStateDir(selectedEnv)));
+    }
     await resources?.close();
     await inspections?.close();
     // Auth inspection readers are pooled separately from canonical agent handles.
@@ -149,14 +154,11 @@ export function createDoctorMaintenanceState(options: {
       if (!pending || path.resolve(sourceDir) !== path.resolve(pending.source)) {
         return;
       }
-      const { closeOpenClawAgentDatabasesAsync } =
-        await import("../state/openclaw-agent-db-lifecycle.js");
       owner!.assertCurrent(options.assertCurrent);
       const sourceDatabase = resolveOpenClawStateSqlitePath(env);
-      // This runs before the long-lived Doctor callback: closing its own tracked
-      // callback would self-wait. Include CLI/bootstrap resources predating this scope.
+      // This runs before the long-lived Doctor callback. Include CLI/bootstrap
+      // resources predating this scope before moving the owned state root.
       await closeResources();
-      await closeOpenClawAgentDatabasesAsync(sourceDir);
       await closeOpenClawStateDatabaseByPathAsync(sourceDatabase);
       await settleCapture();
       const migration = owner!.run(() => {
@@ -190,8 +192,6 @@ export function createDoctorMaintenanceState(options: {
         return { changes: [], warnings: [] };
       }
       const { repairDoctorSqliteNoCow } = await import("./doctor-sqlite-nocow.js");
-      const { closeOpenClawAgentDatabasesAsync } =
-        await import("../state/openclaw-agent-db-lifecycle.js");
       const stateDir = resolveStateDir(selectedEnv);
       const databasePath = resolveOpenClawStateSqlitePath(selectedEnv);
       options.assertCurrent?.();
@@ -226,14 +226,16 @@ export function createDoctorMaintenanceState(options: {
       options.signal.throwIfAborted();
       options.assertCurrent?.();
       owner!.assertCurrent();
+      await resources!.run(async () => {
+        for (const agent of agents) {
+          await closeOpenClawAgentDatabaseByPathAsync(agent.path, agent.agentId);
+        }
+      });
       await closeResources();
       let operationError: Error | undefined;
       let result: { warnings: string[] } | undefined;
       try {
         result = await owner!.run(async () => {
-          for (const agent of agents) {
-            await closeOpenClawAgentDatabaseByPathAsync(agent.path, agent.agentId);
-          }
           await closeOpenClawStateDatabaseByPathAsync(databasePath);
           await assertDoctorAgentLeaseAdmission(selectedEnv);
           return enableDoctorSqliteReclamation({
