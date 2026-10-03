@@ -22,6 +22,7 @@ import type {
   GatewayOwnerLeaseIdentity,
   GatewayOwnerSupervisor,
 } from "./gateway-owner-lease.types.js";
+import { captureGatewayStateOwner } from "./gateway-state-owner.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { STARTUP_MIGRATION_LEASE_TTL_MS } from "./startup-migration-checkpoint.js";
@@ -64,6 +65,7 @@ export function acquireGatewayOwnerLease(params: {
 }): GatewayOwnerLease {
   const env = params.env ?? process.env;
   const databasePath = resolveOpenClawStateSqlitePath(env);
+  const custody = captureGatewayStateOwner(databasePath);
   const identity = { ...gatewayOwnerKey, owner: params.owner ?? randomUUID() };
   const processOwner = {
     pid: process.pid,
@@ -164,7 +166,16 @@ export function acquireGatewayOwnerLease(params: {
         });
       }
       await heartbeat?.stop();
-      releaseRow();
+      try {
+        // Lost custody may join its worker, but cannot mutate the recorded lease.
+        if (!custody?.signal.aborted) {
+          releaseRow();
+        }
+      } catch (error) {
+        if (!custody?.signal.aborted) {
+          throw error;
+        }
+      }
       released = true;
     },
   };

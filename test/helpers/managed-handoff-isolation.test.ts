@@ -89,6 +89,64 @@ describe("explicit managed handoff test binding", () => {
     expect(fs.existsSync(binding.databasePath)).toBe(false);
   });
 
+  it("admits a second worker while another is publishing its resolver shim", () => {
+    const { root, binding, program } = fixture();
+    const workerPath = path.join(root, "paused-consumer.mjs");
+    fs.writeFileSync(
+      workerPath,
+      `import fs from "node:fs";
+import { parentPort, workerData } from "node:worker_threads";
+const write = fs.writeFileSync;
+let paused = false;
+fs.writeFileSync = (file, source, options) => {
+  if (workerData.pause && !paused && String(file).includes("fs-safe-temp-")) {
+    paused = true;
+    const fd = fs.openSync(file, "wx", 0o600);
+    try {
+      parentPort.postMessage("publishing");
+      Atomics.wait(new Int32Array(workerData.gate), 0, 0);
+      return write(fd, source);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+  return write(file, source, options);
+};
+await import(${JSON.stringify(pathToFileURL(binding.preloadPath).href)});
+parentPort.close();
+`,
+    );
+    fs.writeFileSync(
+      program,
+      `import assert from "node:assert/strict";
+import { once } from "node:events";
+import { Worker } from "node:worker_threads";
+const gate = new SharedArrayBuffer(4);
+const launch = (pause) => new Worker(${JSON.stringify(workerPath)}, {
+  execArgv: [], workerData: { pause, gate },
+});
+const first = launch(true);
+const firstExit = once(first, "exit");
+assert.deepEqual(await once(first, "message"), ["publishing"]);
+try {
+  const second = launch(false);
+  assert.deepEqual(await once(second, "exit"), [0]);
+} finally {
+  Atomics.store(new Int32Array(gate), 0, 1);
+  Atomics.notify(new Int32Array(gate), 0);
+  assert.deepEqual(await firstExit, [0]);
+}
+`,
+    );
+    const child = spawnSync(requireNodeTool("node"), [program], {
+      env: resolveServiceManagerEnv(),
+      encoding: "utf8",
+      timeout: 15_000,
+    });
+    expect(child.error).toBeUndefined();
+    expect(child.status, child.stderr).toBe(0);
+  });
+
   it.each([
     ["create", "dev"],
     ["validate", "ino"],

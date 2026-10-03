@@ -197,6 +197,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/infra/update-managed-service-handoff-database-recovery.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["recoverManagedUpdateLeaseJournal.read"],
+        evidence:
+          "Explicit update recover CLI -> recoverImmutableUpdate -> withImmutableUpdateOwner({ recover: true }) only; ordinary lease and Gateway readers never call this cold-journal admission",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
     [
       {

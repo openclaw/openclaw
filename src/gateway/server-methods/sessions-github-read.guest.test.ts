@@ -42,20 +42,40 @@ function expectNoPersonalReads(fixture: Parameters<Parameters<typeof withReadFix
 
 describe.each(methods)("registered guest %s", (method) => {
   it.each([
-    { scope: "operator.sessions.read", foreign: false, others: "view" },
-    { scope: "operator.sessions.write", foreign: false, others: "view" },
-    { scope: "operator.sessions.write", foreign: true, others: "view" },
-    { scope: "operator.sessions.write", foreign: true, others: "none" },
+    { scope: "operator.sessions.read", foreign: false, others: "view", missing: false },
+    { scope: "operator.sessions.write", foreign: false, others: "view", missing: false },
+    { scope: "operator.sessions.write", foreign: true, others: "view", missing: false },
+    { scope: "operator.sessions.write", foreign: true, others: "none", missing: false },
+    ...(method === "sessions.github.status"
+      ? [
+          {
+            scope: "operator.sessions.write",
+            foreign: false,
+            others: "view",
+            missing: true,
+          } as const,
+        ]
+      : []),
   ] as const)(
-    "keeps $scope foreign=$foreign others=$others visibility and personal boundaries",
-    async ({ scope, foreign, others }) => {
+    "keeps $scope foreign=$foreign others=$others missing=$missing visibility and personal boundaries",
+    async ({ scope, foreign, others, missing }) => {
       await withReadFixture(
         async (fixture) => {
+          if (missing) {
+            fixture.sharedStatus.mockResolvedValue(undefined);
+          }
           const respond = await fixture.invoke(method, params(method));
           if (foreign && others === "none") {
             expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
             expect(fixture.latestShared).not.toHaveBeenCalled();
             expect(fixture.sharedStatus).not.toHaveBeenCalled();
+          } else if (missing) {
+            expect(respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({ code: "FORBIDDEN" }),
+            );
+            expect(fixture.sharedStatus).toHaveBeenCalledOnce();
           } else {
             expect(respond).toHaveBeenCalledWith(
               true,
@@ -148,25 +168,5 @@ describe.each(methods)("registered guest %s", (method) => {
         },
       );
     },
-  );
-});
-
-it("does not prepare or expose a personal receipt when a guest's shared receipt is absent", async () => {
-  await withReadFixture(
-    async (fixture) => {
-      fixture.sharedStatus.mockResolvedValue(undefined);
-      const respond = await fixture.invoke(
-        "sessions.github.status",
-        params("sessions.github.status"),
-      );
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
-      );
-      expect(fixture.sharedStatus).toHaveBeenCalledOnce();
-      expectNoPersonalReads(fixture);
-    },
-    { personal: true, scopes: ["operator.sessions.write"] },
   );
 });

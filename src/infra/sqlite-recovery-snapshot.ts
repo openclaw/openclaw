@@ -6,7 +6,7 @@ import { retainMutationAuthority } from "./mutation-authority.js";
 /** Keep recovery scratch attached to its original journal/control authority.
  * The callback must recheck the supplied guard after awaited transport, before
  * opening the result. Cleanup never adopts a successor directory or parent. */
-export async function withPackageRecoverySnapshot<T>(
+export async function withSqliteRecoverySnapshot<T>(
   control: string,
   assertCurrent: () => void,
   read: (targetPath: string, assertSnapshot: () => void) => Promise<T>,
@@ -27,7 +27,7 @@ export async function withPackageRecoverySnapshot<T>(
           current.dev !== original.dev ||
           current.ino !== original.ino))
     ) {
-      throw new Error("Package recovery snapshot directory changed.");
+      throw new Error("SQLite recovery snapshot directory changed.");
     }
   };
   let outcome: { value: T } | { error: unknown };
