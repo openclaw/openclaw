@@ -139,6 +139,7 @@ export const healthHandlers: GatewayRequestHandlers = {
     }
     if (
       !wantsProbe &&
+      !includeSensitive &&
       cached &&
       !cachedDiffersFromRuntime &&
       !isFutureDateTimestampMs(cached.ts, { nowMs: now }) &&
