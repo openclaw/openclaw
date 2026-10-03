@@ -41,7 +41,6 @@ import {
   withSessionAgentConfig,
 } from "./runtime-session.js";
 import { getGoogleMeetRuntimeSetupStatus } from "./runtime-setup.js";
-import { participateInChromeMeet } from "./transports/chrome-participation.js";
 import {
   launchChromeMeet,
   launchChromeMeetOnNode,
@@ -122,23 +121,12 @@ export class GoogleMeetRuntime {
             await getParticipationStore().registerIfAbsent(key, attempt),
           register: async (key, attempt) => await getParticipationStore().register(key, attempt),
         },
-        capabilities: (session) =>
-          isBrowserTransport(session.transport) &&
-          session.chrome?.launched &&
-          session.chrome.browserTab &&
-          session.chrome.health?.inCall === true &&
-          !session.chrome.health.manualAction
-            ? (adapter.browser.participation?.capabilities ?? [])
-            : [],
-        validateAction: (action) => adapter.browser.participation?.validateAction(action),
-        execute: async (session, request, assertCurrent) =>
-          await participateInChromeMeet({
-            runtime: params.runtime,
-            config: params.config,
-            session,
-            request,
-            assertCurrent,
-          }),
+        capabilities: () => [],
+        validateAction: () => undefined,
+        execute: async () => ({
+          status: "unsupported",
+          message: "Participation requires a supported tracked browser meeting.",
+        }),
       },
       logger: params.logger,
       logScope: "[google-meet]",

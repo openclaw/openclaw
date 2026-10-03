@@ -2,7 +2,6 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
-  SpeechProviderOverrides,
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
@@ -116,42 +115,34 @@ function readAzureSpeechProviderConfig(config: SpeechProviderConfig): AzureSpeec
   };
 }
 
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: SpeechProviderOverrides;
-} {
-  switch (ctx.key) {
-    case "voice":
-    case "voiceid":
-    case "voice_id":
-    case "azure_voice":
-    case "azurevoice":
-    case "azure_speech_voice":
-      if (!ctx.policy.allowVoice) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { ...ctx.currentOverrides, voice: ctx.value } };
-    case "lang":
-    case "language":
-    case "language_code":
-    case "languagecode":
-    case "azure_lang":
-    case "azure_language":
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { ...ctx.currentOverrides, lang: ctx.value } };
-    case "output_format":
-    case "outputformat":
-    case "azure_format":
-    case "azure_output_format":
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { ...ctx.currentOverrides, outputFormat: ctx.value } };
-    default:
-      return { handled: false };
+function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
+  const key = [
+    "voice",
+    "voiceid",
+    "voice_id",
+    "azure_voice",
+    "azurevoice",
+    "azure_speech_voice",
+  ].includes(ctx.key)
+    ? "voice"
+    : [
+          "lang",
+          "language",
+          "language_code",
+          "languagecode",
+          "azure_lang",
+          "azure_language",
+        ].includes(ctx.key)
+      ? "lang"
+      : ["output_format", "outputformat", "azure_format", "azure_output_format"].includes(ctx.key)
+        ? "outputFormat"
+        : undefined;
+  if (!key) {
+    return { handled: false };
   }
+  return (key === "voice" ? ctx.policy.allowVoice : ctx.policy.allowVoiceSettings)
+    ? { handled: true, overrides: { ...ctx.currentOverrides, [key]: ctx.value } }
+    : { handled: true };
 }
 
 function resolveApiKey(...candidates: Array<string | undefined>): string | undefined {
