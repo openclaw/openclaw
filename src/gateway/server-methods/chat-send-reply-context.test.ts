@@ -169,7 +169,7 @@ describe("resolveChatSendReplyContext", () => {
 
     const fields = await resolveChatSendReplyContext(baseParams());
 
-    expect(fields.ReplyToBody?.length).toBeLessThanOrEqual(2000);
+    expect(fields.ReplyToBody).toBe("x".repeat(2000));
   });
 });
 
