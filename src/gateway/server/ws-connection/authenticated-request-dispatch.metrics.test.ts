@@ -132,7 +132,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
       completion.resolve();
       await dispatch;
       await fixture.finished;
-      expect(fixture.events.find((event) => event.phase === "dispatch")).toMatchObject({
+      expect(fixture.events.find((event) => event.phase === "handler")).toMatchObject({
         heapDeltaBytes: main ? -2048 : undefined,
       });
       expect(sample).toHaveBeenCalledTimes(main ? 2 : 0);
@@ -145,14 +145,80 @@ describe("authenticated Gateway RPC diagnostics", () => {
     },
   );
 
+  it.each(["nested", "crossing", "unobserved"])(
+    "discards entire overlapping handler windows (%s) and resumes after settlement",
+    async (overlap) => {
+      const firstEntered = createDeferredCore();
+      const secondEntered = createDeferredCore();
+      const firstRelease = createDeferredCore();
+      const secondRelease = createDeferredCore();
+      let heapUsed = 1024;
+      const memory = process.memoryUsage();
+      vi.spyOn(process, "memoryUsage").mockImplementation(() => ({ ...memory, heapUsed }));
+      const first = createRequest(async () => {
+        firstEntered.resolve();
+        await firstRelease.promise;
+        heapUsed += 4096;
+      });
+      const second = createRequest(async () => {
+        secondEntered.resolve();
+        await secondRelease.promise;
+        heapUsed += 8192;
+      }, "cron.status");
+      const firstDispatch = first.dispatch();
+      await firstEntered.promise;
+      if (overlap === "unobserved") {
+        setDiagnosticsEnabledForProcess(false);
+      }
+      const secondDispatch = second.dispatch();
+      try {
+        await secondEntered.promise;
+        setDiagnosticsEnabledForProcess(true);
+        if (overlap === "crossing") {
+          firstRelease.resolve();
+          await firstDispatch;
+          secondRelease.resolve();
+        } else {
+          secondRelease.resolve();
+          await secondDispatch;
+          firstRelease.resolve();
+        }
+        await Promise.all([firstDispatch, secondDispatch]);
+        await waitForDiagnosticEventsDrained();
+        const handlers = first.events.filter((event) => event.phase === "handler");
+        expect(handlers).toHaveLength(overlap === "unobserved" ? 1 : 2);
+        expect(
+          first.events.filter(
+            (event) => "heapDeltaBytes" in event && event.heapDeltaBytes !== undefined,
+          ),
+        ).toEqual([]);
+        first.events.length = 0;
+        await first.dispatch();
+        await waitForDiagnosticEventsDrained();
+        expect(first.events.find((event) => event.phase === "handler")).toMatchObject({
+          heapDeltaBytes: 4096,
+        });
+      } finally {
+        setDiagnosticsEnabledForProcess(true);
+        firstRelease.resolve();
+        secondRelease.resolve();
+        await Promise.all([firstDispatch, secondDispatch]);
+      }
+    },
+  );
+
   it.each(["family", "nested family", "family rejection"])(
     "keeps %s preparation separate from actual handler entry",
     async (preparation) => {
       let now = 100;
+      let heapUsed = 1024;
+      const memory = process.memoryUsage();
+      vi.spyOn(process, "memoryUsage").mockImplementation(() => ({ ...memory, heapUsed }));
       vi.spyOn(performance, "now").mockImplementation(() => now);
       const reached = createDeferredCore();
       const release = createDeferredCore();
       const handler: GatewayRequestHandler = ({ respond }) => {
+        heapUsed += 2048;
         now = 240;
         respond(true);
       };
@@ -180,6 +246,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
       );
       try {
         await reached.promise;
+        heapUsed += 8192;
         now = 200;
         release.resolve();
         await observed.finished;
@@ -193,6 +260,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
           admissionMs: 100,
           durationMs: 40,
           outcome: "returned",
+          heapDeltaBytes: 2048,
         });
       } finally {
         release.resolve();

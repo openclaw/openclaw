@@ -40,6 +40,7 @@ import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 import {
   captureGatewayRpcReceivedAt,
   createWorkerRpcDiagnostics,
+  GatewayRpcDiagnostics,
   type GatewayRpcQueueTiming,
 } from "./request-diagnostics.js";
 import { runWorkerAdmissionBoundary } from "./worker-admission-boundary.js";
@@ -416,7 +417,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
           warn: (message) => params.logGateway.warn(message),
           ...(signal ? { signal } : {}),
         });
-      return diagnostics ? diagnostics.runHandler(invoke) : invoke();
+      return GatewayRpcDiagnostics.runHandler(invoke, diagnostics);
     };
     const isLongToolOperation =
       parsed.method === "worker.computer" || parsed.method === WORKER_GATEWAY_TOOL_METHODS.invoke;
