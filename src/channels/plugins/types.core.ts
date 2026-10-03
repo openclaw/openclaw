@@ -419,6 +419,8 @@ export type ChannelThreadingAdapter = {
   }) => string | undefined;
   resolveReplyTransport?: (params: {
     cfg: OpenClawConfig;
+    /** Host-resolved channel destination, including message-scoped targets. */
+    to?: string;
     accountId?: string | null;
     /** Originating inbound message in this routed channel; not an explicit reply target. */
     currentMessageId?: string;

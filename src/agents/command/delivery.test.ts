@@ -815,6 +815,35 @@ describe("deliverAgentCommandResult payload normalization", () => {
     },
   );
 
+  it("binds completion delivery to a message-scoped channel target", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+    const resolveReplyTransport = vi.fn(({ to, threadId }: ResolveReplyTransportParams) => ({
+      replyToId: to?.startsWith("message:") ? to.slice("message:".length) : undefined,
+      threadId,
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: { ...slackPluginForTest, threading: { resolveReplyTransport } },
+        },
+      ]),
+    );
+    await deliverAgentCommandResultForTest({
+      opts: { replyTo: "message:trigger-id", threadId: "email-thread" },
+      payloads: [{ text: "The AP run completed." }],
+    });
+    expect(resolveReplyTransport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "message:trigger-id",
+        threadId: "email-thread",
+      }),
+    );
+    expect(latestOutboundDeliveryArgs().replyToId).toBe("trigger-id");
+    expect(latestOutboundDeliveryArgs().threadId).toBe("email-thread");
+  });
+
   it("matches dedupe against the command thread instead of payload reply metadata", async () => {
     deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
 

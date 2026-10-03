@@ -454,6 +454,7 @@ export async function deliverAgentCommandResult(
     const replyTransport =
       deliveryPlugin?.threading?.resolveReplyTransport?.({
         cfg,
+        to: resolved.resolvedTo,
         accountId: resolvedAccountId,
         threadId: resolvedThreadId,
       }) ?? null;
