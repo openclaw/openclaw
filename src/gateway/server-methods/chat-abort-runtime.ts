@@ -201,7 +201,7 @@ export function abortQueuedCollectorSession(
           !sessionAbort ||
           (sessionAbort.ok &&
             !sessionAbort.value.result.unauthorized &&
-            sessionAbort.value.plan.canCascade),
+            sessionAbort.value.canCascade),
       });
       await killSubagentRunAdmin(
         {
