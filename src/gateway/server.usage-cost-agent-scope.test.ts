@@ -24,6 +24,20 @@ describe("gateway usage request validation", () => {
         },
       });
 
+      for (const [params, message] of [
+        [{ agentId: 42 }, "agentId must be a non-empty string"],
+        [{ agentId: "   " }, "agentId must be a non-empty string"],
+        [{ agentScope: "unexpected" }, "agentScope must be 'all' when provided"],
+      ] as const) {
+        expect(
+          await rpcReq(ws, "usage.cost", {
+            startDate: "2026-02-01",
+            endDate: "2026-02-02",
+            ...params,
+          }),
+        ).toMatchObject({ ok: false, error: { code: ErrorCodes.INVALID_REQUEST, message } });
+      }
+
       for (const params of [
         { agentId: "main" },
         { agentScope: "all" },
