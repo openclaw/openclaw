@@ -181,6 +181,7 @@ describe("dispatch active command admission", () => {
   it.each([
     ["login", "/login cancel"],
     ["reset", "/reset"],
+    ["new", "/new continue"],
   ])(
     "admits %s control (%s) past a pending command ticket while executable commands wait",
     async (controlName, controlBody) => {
