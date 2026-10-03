@@ -78,7 +78,8 @@ suite.define(() => {
         await page
           .getByText("I am delegating the backend implementation.", { exact: true })
           .waitFor();
-        const indicator = page.locator(".chat-pane-cache__pane--active .chat-working-indicator");
+        const activePane = page.locator(".chat-pane-cache__pane--active");
+        const indicator = activePane.locator(".chat-working-indicator");
         await indicator.waitFor();
         expect(await indicator.textContent()).not.toContain("Waiting on subagents");
 
@@ -183,7 +184,7 @@ suite.define(() => {
         await childLink.waitFor();
         expect(await indicator.locator("openclaw-elapsed-time").count()).toBe(1);
         expect(await indicator.textContent()).not.toContain("output tokens");
-        await page.getByText("Handed off and waiting", { exact: true }).waitFor();
+        await activePane.getByText("Handed off and waiting", { exact: true }).waitFor();
         await captureWaiting("light", 1280);
         await captureWaiting("dark", 1280);
         await captureWaiting("dark", 390);
@@ -191,6 +192,11 @@ suite.define(() => {
           await indicator.evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
         await page.setViewportSize({ width: 1280, height: 900 });
+        const childRosterQuery = { spawnedBy: parent.key, limit: 10_000 };
+        await gateway.waitForRequest("sessions.list", { match: childRosterQuery });
+        const childRosterReads = (await gateway.getRequests("sessions.list", childRosterQuery))
+          .length;
+        await gateway.deferNext("sessions.list", childRosterQuery);
         await childLink.click();
         const selectedTitle = page.locator(
           ".chat-pane-cache__pane--active .chat-pane__session-title-text",
@@ -198,7 +204,26 @@ suite.define(() => {
         await expect.poll(() => selectedTitle.textContent()).toBe("Backend implementation");
         await page.goBack();
         await expect.poll(() => selectedTitle.textContent()).toBe("Build the implementation");
-        await page.getByText("Handed off and waiting", { exact: true }).waitFor();
+        await activePane.getByText("Handed off and waiting", { exact: true }).waitFor();
+        await gateway.waitForRequest("sessions.list", {
+          after: childRosterReads,
+          match: childRosterQuery,
+        });
+        // Await the restored pane's hydration before measuring event-only updates.
+        await gateway.resolveDeferred(
+          "sessions.list",
+          sessionsListResponse([
+            {
+              ...runningChild,
+              label: "Backend implementation refreshed",
+              updatedAt: now + 63_000,
+              snapshotAt: now + 63_000,
+            },
+          ]),
+        );
+        await indicator
+          .getByRole("button", { name: "Backend implementation refreshed", exact: true })
+          .waitFor();
 
         const settledChild: GatewaySessionRow = {
           ...runningChild,
