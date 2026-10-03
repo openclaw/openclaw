@@ -7,7 +7,7 @@ import { labelRuntimeContextText } from "../../llm/types.js";
 import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
-import { buildCliSessionDriftNote } from "../cli-session.js";
+import { buildCliSessionDriftNote, buildCliSessionUnseenTurnsContext } from "../cli-session.js";
 import { buildTemporalContextText } from "../date-time.js";
 import type { ResolvedPromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
@@ -188,14 +188,28 @@ export async function prepareCliSystemPrompt(
   });
 }
 
-function prependCliSessionDriftUserContext(
-  context: RunCliAgentParams["currentInboundContext"],
+/** Resume notes lead the current turn: the drift note, then exchanges the session missed. */
+function prependCliSessionResumeUserContext(
+  run: Pick<RunCliAgentParams, "currentInboundContext" | "cliSessionBinding">,
   reusableCliSession: CliReusableSession,
 ): RunCliAgentParams["currentInboundContext"] {
-  if (reusableCliSession.mode !== "reuse-with-drift") {
+  const context = run.currentInboundContext;
+  const unseenTurns =
+    (reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift") &&
+    reusableCliSession.sessionId === run.cliSessionBinding?.sessionId
+      ? run.cliSessionBinding.unseenTurns
+      : undefined;
+  const note = [
+    reusableCliSession.mode === "reuse-with-drift"
+      ? buildCliSessionDriftNote(reusableCliSession.drift.reasons)
+      : undefined,
+    unseenTurns ? buildCliSessionUnseenTurnsContext(unseenTurns) : undefined,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n\n");
+  if (!note) {
     return context;
   }
-  const note = buildCliSessionDriftNote(reusableCliSession.drift.reasons);
   if (!context) {
     return { text: note };
   }
@@ -207,14 +221,14 @@ function prependCliSessionDriftUserContext(
 }
 
 export function createCliCurrentPromptRenderer(
-  params: Pick<RunCliAgentParams, "currentInboundContext" | "inputProvenance">,
+  params: Pick<
+    RunCliAgentParams,
+    "currentInboundContext" | "inputProvenance" | "cliSessionBinding"
+  >,
   reusableCliSession: CliReusableSession,
   inlineContext?: string,
 ) {
-  const context = prependCliSessionDriftUserContext(
-    params.currentInboundContext,
-    reusableCliSession,
-  );
+  const context = prependCliSessionResumeUserContext(params, reusableCliSession);
   return (prompt: string, preferResumableText = false) =>
     composeCliPromptContext(
       annotateInterSessionPromptText(

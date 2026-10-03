@@ -30,6 +30,7 @@ import {
   logCliCacheUsage,
   MCP_SCHEMA_PROBE_TOOL_NAME,
   prepareClaudeCacheProbeBackend,
+  verifyCliBackendAnnounceContinuity,
   verifyCliBackendAnnounceOrdering,
   type RuntimeBackendEntry,
 } from "./gateway-cli-backend.live-cache.test-helpers.js";
@@ -975,12 +976,20 @@ describeLive("gateway live (cli backend)", () => {
         // The announce probe spawns a separate CLI-backed session and can change the
         // process-wide MCP/tool topology. Keep it after continuity and cache assertions
         // so those probes measure consecutive turns in their owning native session.
-        await verifyCliBackendAnnounceOrdering({
+        const announce = await verifyCliBackendAnnounceOrdering({
           client: activeClient,
           announceBarrier,
           requestTimeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS,
           logStep: logCliBackendLiveStep,
         });
+        if (providerId === "claude-cli") {
+          await verifyCliBackendAnnounceContinuity({
+            client: activeClient,
+            announce,
+            requestTimeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS,
+            logStep: logCliBackendLiveStep,
+          });
+        }
       } finally {
         try {
           logCliBackendLiveStep("cleanup:start");

@@ -175,6 +175,14 @@ export function shouldPreserveUserFacingSessionStateForInputProvenance(value: un
   return sourceTool ? USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS.has(sourceTool) : false;
 }
 
+/** A state-preserving inter-session turn is still part of the requester's conversation. */
+export function isPreservedConversationTurnInputProvenance(value: unknown): boolean {
+  return (
+    normalizeInputProvenance(value)?.kind === "inter_session" &&
+    shouldPreserveUserFacingSessionStateForInputProvenance(value)
+  );
+}
+
 export function hasInterSessionUserProvenance(
   message: { role?: unknown; provenance?: unknown } | undefined,
 ): boolean {
