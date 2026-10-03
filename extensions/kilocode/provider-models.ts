@@ -129,10 +129,14 @@ function buildStaticCatalog(): ModelDefinitionConfig[] {
 }
 
 function asGatewayModelEntry(value: unknown): GatewayModelEntry {
-  if (!isRecord(value) || typeof value.id !== "string" || !isRecord(value.pricing)) {
+  if (!isRecord(value)) {
     throw new Error("Kilocode model list: malformed JSON response");
   }
-  return value as GatewayModelEntry;
+  const entry = value as Partial<GatewayModelEntry>;
+  if (typeof entry.id !== "string" || !isRecord(entry.pricing)) {
+    throw new Error("Kilocode model list: malformed JSON response");
+  }
+  return entry as GatewayModelEntry;
 }
 
 function readGatewayModelRows(body: unknown): readonly unknown[] {

@@ -53,11 +53,14 @@ function createOpencodeGoDeepSeekWrapper(
       model.provider === "opencode-go" && model.id === "deepseek-v4-flash",
     resolveReasoningEffort: (level) => (level === "low" ? "low" : level === "max" ? "max" : "high"),
   });
-  return createDeepSeekV4OpenAICompatibleThinkingWrapper({
-    baseStreamFn: flashStreamFn,
-    thinkingLevel,
-    shouldPatchModel: (model) => model.provider === "opencode-go" && model.id === "deepseek-v4-pro",
-  });
+  return (
+    createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn: flashStreamFn,
+      thinkingLevel,
+      shouldPatchModel: (model) =>
+        model.provider === "opencode-go" && model.id === "deepseek-v4-pro",
+    }) ?? baseStreamFn
+  );
 }
 
 export function createOpencodeGoWireWrapper(

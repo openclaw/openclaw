@@ -442,7 +442,7 @@ extensions/irc/src/monitor.ts	1
 extensions/irc/src/send.ts	1
 extensions/irc/src/setup-core.ts	6
 extensions/irc/src/setup-surface.ts	25
-extensions/kilocode/provider-models.ts	2
+extensions/kilocode/provider-models.ts	3
 extensions/kilocode/stream.ts	1
 extensions/kimi-coding/provider-policy-api.ts	2
 extensions/line/src/accounts.ts	3
