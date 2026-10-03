@@ -414,7 +414,11 @@ export async function recordUpdatePackageCompletion(
     return;
   }
   let cleanupFailure: unknown;
-  defaultRuntime.log("Finishing update: checking package backup retention and cleanup.");
+  // Progress goes to the human channel only; --json owns stdout and records the
+  // retention outcome as a step, so this line must not leak into machine output.
+  if (!params.opts.json) {
+    defaultRuntime.log("Finishing update: checking package backup retention and cleanup.");
+  }
   const retained: UpdateStepResult | void = await transaction
     .complete({ activationVerified: result.status === "ok" }, assertCurrent)
     .catch((error: unknown) => {
