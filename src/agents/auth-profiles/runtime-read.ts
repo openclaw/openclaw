@@ -191,18 +191,6 @@ export function createAuthProfileStoreRuntimeReader({
   loadRuntimeAuthProfileStore,
   captureScope,
 }: RuntimeReadHost) {
-  /**
-   * Synchronous SDK compatibility. Runtime callers should await loadAuthProfileStoreForRuntimeAsync;
-   * transaction-bound SDK callers retain this entrypoint until their own async cutover.
-   */
-  function loadAuthProfileStoreForRuntime(
-    agentDir?: string,
-    options?: LoadAuthProfileStoreOptions,
-    env?: NodeJS.ProcessEnv,
-  ): AuthProfileStore {
-    return loadRuntimeAuthProfileStore(agentDir, options, env);
-  }
-
   /** Capture sources once; the store owner decides which persisted facts it needs. */
   function withPreparedAuthProfileStoreReads(
     agentDir: string | undefined,
@@ -667,7 +655,12 @@ export function createAuthProfileStoreRuntimeReader({
   }
 
   return {
-    loadAuthProfileStoreForRuntime,
+    // Transaction-bound SDK callers retain the synchronous owner until their async cutover.
+    loadAuthProfileStoreForRuntime: (
+      agentDir?: string,
+      options?: LoadAuthProfileStoreOptions,
+      env?: NodeJS.ProcessEnv,
+    ): AuthProfileStore => loadRuntimeAuthProfileStore(agentDir, options, env),
     loadAuthProfileStoreForRuntimeAsync,
     withPreparedAuthProfileStoreReads,
   };

@@ -70,18 +70,11 @@ export function prepareAgentAuthProfileRowsRead(options: {
   } catch {
     identity = undefined;
   }
-  const captured: Result<
-    {
-      root: ReturnType<typeof captureOpenClawStateWorkerContext>;
-    },
-    unknown
-  > = (() => {
+  const captured: Result<OpenClawStateWorkerContext, unknown> = (() => {
     try {
       return {
         ok: true,
-        value: {
-          root: captureOpenClawStateWorkerContext({ env }),
-        },
+        value: captureOpenClawStateWorkerContext({ env }),
       };
     } catch (error) {
       return { ok: false, error };
@@ -105,8 +98,8 @@ export function prepareAgentAuthProfileRowsRead(options: {
     if (!captured.ok) {
       throw captured.error;
     }
-    captured.value.root.admission.assertCurrent();
-    captured.value.root.maintenanceScope?.assertAdmission();
+    captured.value.admission.assertCurrent();
+    captured.value.maintenanceScope?.assertAdmission();
     if (identity && inspectDatabasePathIdentitySync(databasePath)?.key !== identity.key) {
       throw new Error("Auth profile database file identity changed during its read");
     }
@@ -132,7 +125,7 @@ export function prepareAgentAuthProfileRowsRead(options: {
     if (unregisterAgent || !captured.ok) {
       return;
     }
-    const root = captured.value.root;
+    const root = captured.value;
     const registerOwners = () => {
       unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({
         agentId,
@@ -176,9 +169,6 @@ export function prepareAgentAuthProfileRowsRead(options: {
       }
       if (!identity.key.startsWith("file:")) {
         return missing;
-      }
-      if (!captured.ok) {
-        throw captured.error;
       }
       const rows = await runSqliteReadOnlyWorker(databasePath, {
         mode: "auth-profile-rows",
