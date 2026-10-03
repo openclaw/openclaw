@@ -732,7 +732,7 @@ export class McpAppView extends LitElement {
         this.inactive
           ? html`<div class="inactive" role="status">
               <span
-                >${t(this.inactive === "reconstructed" ? "mcpApp.reconstructed" : "mcpApp.sessionEnded")}</span
+                >${t(this.inactive === "ended" && this.onRelaunch ? "mcpApp.sessionEnded" : "mcpApp.reconstructed")}</span
               >
               ${this.inactive === "ended" && this.onRelaunch ? html`<button type="button" ?disabled=${this.relaunching} @click=${this.onRelaunch}>${t("mcpApp.relaunch")}</button>` : nothing}
             </div>`

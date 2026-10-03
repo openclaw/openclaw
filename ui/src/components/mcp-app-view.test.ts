@@ -342,7 +342,7 @@ describe("mcp-app-view localization", () => {
     await expect.poll(() => expired).toHaveBeenCalledOnce();
     await expect
       .poll(() => view.shadowRoot?.querySelector('[role="status"]')?.textContent)
-      .toContain("This app session ended. Relaunch to interact");
+      .toContain("Send a message to interact again");
   });
 
   it("relaunches an ended entrypoint through the panel's existing launch request", async () => {
@@ -464,7 +464,7 @@ describe("mcp-app-view localization", () => {
     ).rejects.toThrow("expired");
     await view.updateComplete;
     expect(view.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain(
-      "This app session ended. Relaunch to interact",
+      "Send a message to interact again",
     );
   });
 
