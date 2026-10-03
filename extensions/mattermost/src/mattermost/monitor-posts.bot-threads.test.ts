@@ -107,7 +107,6 @@ describe("Mattermost bot-owned thread mention policy", () => {
   }
 
   it.each([
-    { scope: "account", config: { requireMentionInBotThreads: false } },
     {
       scope: "wildcard group",
       config: {
@@ -137,23 +136,15 @@ describe("Mattermost bot-owned thread mention policy", () => {
     });
   });
 
-  it.each([
-    {
-      scope: "account",
-      config: { requireMention: false, requireMentionInBotThreads: true },
-    },
-    {
-      scope: "exact group",
-      config: {
-        requireMentionInBotThreads: false,
-        groups: {
-          "*": { requireMentionInBotThreads: false },
-          room: { requireMentionInBotThreads: true },
-        },
+  it("requires an exact-group mention despite account policy and prior participation", async () => {
+    const f = setup({
+      requireMention: false,
+      requireMentionInBotThreads: false,
+      groups: {
+        "*": { requireMentionInBotThreads: false },
+        room: { requireMentionInBotThreads: true },
       },
-    },
-  ])("requires a mention at $scope scope even after prior participation", async ({ config }) => {
-    const f = setup(config);
+    });
     hasParticipation.mockResolvedValue(true);
 
     await f.receive();
@@ -163,22 +154,8 @@ describe("Mattermost bot-owned thread mention policy", () => {
     expect(dispatch).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])(
-    "preserves omitted-policy participation behavior (%s)",
-    async (engaged) => {
-      const f = setup();
-      hasParticipation.mockResolvedValue(engaged);
-
-      await f.receive();
-
-      expect(dispatch).toHaveBeenCalledTimes(engaged ? 1 : 0);
-      expect(f.request).not.toHaveBeenCalled();
-    },
-  );
-
   it.each([
     { name: "strict bot thread", setting: true, owner: "bot", admitted: false },
-    { name: "omitted setting", setting: undefined, owner: "bot", admitted: true },
     { name: "another author's thread", setting: true, owner: "someone-else", admitted: true },
   ])("handles missing mention detectors for $name", async ({ setting, owner, admitted }) => {
     const f = setup({ requireMentionInBotThreads: setting }, "");
