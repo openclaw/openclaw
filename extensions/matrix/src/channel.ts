@@ -500,7 +500,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           try {
             const runtime = await loadMatrixChannelRuntime();
             const auth = await runtime.resolveMatrixAuth({
-              cfg: cfg as CoreConfig,
+              cfg,
               accountId: account.accountId,
             });
             return await runtime.probeMatrix({
@@ -589,7 +589,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           await (
             await loadMatrixChannelRuntime()
           ).sendMessageMatrix(`user:${id}`, message, {
-            cfg: cfg as CoreConfig,
+            cfg,
             ...(accountId ? { accountId } : {}),
           });
         },
