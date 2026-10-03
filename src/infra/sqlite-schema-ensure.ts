@@ -5,10 +5,10 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 export function createSqliteSchemaEnsurer(schemaSql: () => string) {
   const committed = new WeakSet<DatabaseSync>();
   return {
-    recordCommitted(database: DatabaseSync): void {
+    recordCommitted(this: void, database: DatabaseSync): void {
       committed.add(database);
     },
-    ensure(database: DatabaseSync): boolean {
+    ensure(this: void, database: DatabaseSync): boolean {
       if (committed.has(database)) {
         return false;
       }

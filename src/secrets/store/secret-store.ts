@@ -181,7 +181,7 @@ export function consumeGitHubSetupHandoff(params: {
             .where("deleted_at_ms", "is", null),
         );
         if (!row) {
-          return;
+          return undefined;
         }
         executeSqliteQuerySync(
           sqlite,
