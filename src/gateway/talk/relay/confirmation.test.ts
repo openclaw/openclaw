@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   authorizeObservedClientVoiceConfirmation,
+  consumeClientVoiceToolConfirmationPolicy,
+  readClientVoiceConfirmationReadiness,
   checkClientVoiceToolConfirmationPolicy,
 } from "../../../talk/client-voice-confirmation.js";
 import { resetClientVoiceConfirmationStateForTest } from "../../../talk/client-voice-confirmation.test-support.js";
@@ -16,14 +18,20 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { createChatRunState } from "../../server-chat-state.js";
 import type { TalkAgentConsultLifecycleMethods } from "../client-agent-consult.types.js";
 import { controlBridge, controlContext } from "../client-gateway-control.test-support.js";
+import { talkClientHandlers } from "../handlers/client.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
 import { createTalkRealtimeRelaySession, stopTalkRealtimeRelaySession } from "./index.js";
 import { closeRelaySession } from "./operations.js";
 import { relaySessions, type RelaySession } from "./state.js";
 
-const mocks = vi.hoisted(() => ({ run: vi.fn(), steer: vi.fn() }));
+const mocks = vi.hoisted(() => ({ run: vi.fn(), steer: vi.fn(), start: vi.fn() }));
+vi.mock("../agent-consult.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agent-consult.js")>()),
+  startTalkRealtimeAgentConsult: mocks.start,
+}));
 vi.mock("../client-agent-consult.js", () => ({
   createTalkClientAgentConsultRunner: () => ({
     runPrompt: Object.assign(mocks.run, {
@@ -46,6 +54,10 @@ describe("native relay confirmation transcript admission", () => {
     await ensureClientVoiceAgentSessionEntry({ agentId: "main", sessionKey: "agent:main:main" });
     mocks.run.mockReset().mockResolvedValue({ text: "Read result." });
     mocks.steer.mockReset().mockResolvedValue({ text: "Read result." });
+    mocks.start.mockReset().mockImplementation(async (_request, options) => {
+      options.onRunStarted?.("confirmed-app-run");
+      return { ok: true, runId: "confirmed-app-run", idempotencyKey: "confirmed-app-run" };
+    });
   });
 
   afterEach(async () => {
@@ -144,6 +156,104 @@ describe("native relay confirmation transcript admission", () => {
         persist.resolve();
         abort.abort();
         await pending.catch(() => {});
+      }
+    },
+  );
+
+  function callAppConsult(h: ReturnType<typeof createHarness>, confirmationId?: string) {
+    const respond = vi.fn();
+    const chatRunState = createChatRunState();
+    const request = {
+      params: {
+        sessionKey: "agent:main:main",
+        relaySessionId: h.relay.id,
+        callId: "premature-app-confirmation",
+        name: "openclaw_agent_consult",
+        args: { question: "The user confirmed", ...(confirmationId ? { confirmationId } : {}) },
+      },
+      client: { connId },
+      respond,
+      context: { ...controlContext(), getRuntimeConfig: () => ({}), chatRunState },
+      sessionMutationAuthorization: {
+        talkSessionTarget: h.relay.sessionTarget,
+        assertCurrent: vi.fn(),
+      },
+    };
+    const pending = Promise.resolve(talkClientHandlers["talk.client.toolCall"]!(request as never));
+    return { respond, pending, chatRunState };
+  }
+
+  it.each(["explicit", "observed"] as const)(
+    "holds an early app-routed %s confirmation consult until a durable spoken yes",
+    async (mode) => {
+      const h = createHarness();
+      const confirmationId = readClientVoiceConfirmationReadiness(
+        "main",
+        h.relay.id,
+      )!.confirmationId;
+      const persist = createDeferredCore();
+      h.relay.voiceTranscriptQueue.enqueue(() => persist.promise);
+      const call = callAppConsult(h, mode === "explicit" ? confirmationId : undefined);
+      try {
+        await nextEventLoopTurn();
+        expect(call.respond).not.toHaveBeenCalled();
+        expect(mocks.start).not.toHaveBeenCalled();
+        h.request.onTranscript?.("user", "yes", true);
+        await nextEventLoopTurn();
+        expect(call.respond).not.toHaveBeenCalled();
+        expect(mocks.start).not.toHaveBeenCalled();
+        persist.resolve();
+        await call.pending;
+        expect(call.respond).toHaveBeenCalledOnce();
+        expect(call.respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ runId: "confirmed-app-run" }),
+          undefined,
+        );
+        expect(mocks.start).toHaveBeenCalledOnce();
+        const action = {
+          agentId: "main",
+          voiceSessionId: h.relay.id,
+          runId: "confirmed-app-run",
+          toolName: "sessions_spawn",
+          toolParams: { task: "Create a helper", label: "helper" },
+        };
+        expect(consumeClientVoiceToolConfirmationPolicy(action)).toEqual({ allowed: true });
+        expect(consumeClientVoiceToolConfirmationPolicy(action).allowed).toBe(false);
+      } finally {
+        persist.resolve();
+        await stopTalkRealtimeRelaySession({ relaySessionId: h.relay.id, connId });
+        await call.pending;
+        call.chatRunState.clear();
+      }
+    },
+  );
+
+  it.each(["no", "close"] as const)(
+    "does not admit an early app confirmation after %s",
+    async (answer) => {
+      const h = createHarness();
+      const confirmationId = readClientVoiceConfirmationReadiness(
+        "main",
+        h.relay.id,
+      )!.confirmationId;
+      const call = callAppConsult(h, confirmationId);
+      try {
+        await nextEventLoopTurn();
+        expect(call.respond).not.toHaveBeenCalled();
+        if (answer === "no") h.request.onTranscript?.("user", "no", true);
+        else await stopTalkRealtimeRelaySession({ relaySessionId: h.relay.id, connId });
+        await call.pending;
+        expect(call.respond).toHaveBeenCalledOnce();
+        expect(call.respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+        expect(mocks.start).not.toHaveBeenCalled();
+        expect(
+          authorizeObservedClientVoiceConfirmation({ agentId: "main", voiceSessionId: h.relay.id }),
+        ).toBeUndefined();
+      } finally {
+        await closeRelaySession(h.relay, "completed");
+        await call.pending;
+        call.chatRunState.clear();
       }
     },
   );

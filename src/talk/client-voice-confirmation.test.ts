@@ -160,6 +160,25 @@ describe("client voice confirmation", () => {
     expect(unrelated.readReply()).toBeUndefined();
   });
 
+  it("returns one exact spoken question and forbids consulting again before the user answers", () => {
+    const observation = observeClientVoiceConfirmationRun({
+      agentId: "main",
+      voiceSessionId: "voice-1",
+      runId: "blocked",
+    });
+    const confirmationId = block({ voiceSessionId: "voice-1", runId: "blocked" });
+    const reply = observation.readReply({ includeConfirmationId: true })!;
+    expect(reply).toContain(`VOICE_CONFIRMATION_REQUIRED:${confirmationId}`);
+    expect(reply).toContain("Speak this exact question once");
+    expect(reply).toContain(
+      "Then stop and wait for the user's spoken answer. Do not call any tools while waiting.",
+    );
+    expect(reply.match(/One pending action has not run/g)).toHaveLength(1);
+    expect(() =>
+      authorizeClientVoiceConfirmation({ voiceSessionId: "voice-1", confirmationId }),
+    ).toThrow("explicit spoken confirmation");
+  });
+
   it("does not bind a prepared grant after a newer user utterance invalidates its yes", () => {
     const confirmationId = block({ voiceSessionId: "voice-1", runId: "original", now: 100 });
     noteClientVoiceConfirmationUtterance({

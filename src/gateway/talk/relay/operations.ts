@@ -470,12 +470,20 @@ export function cancelTalkRealtimeRelayProviderToolCall(
   return relayCallId;
 }
 
-/** Wait for server-owned final transcript appends before a relay consult is authorized. */
+/** Wait for server-owned speech before a relay consult is authorized. */
 export async function flushTalkRealtimeRelayVoiceWrites(params: {
   relaySessionId: string;
   connId: string;
+  waitForConfirmation?: boolean;
 }): Promise<void> {
-  await getRelaySession(params.relaySessionId, params.connId).voiceTranscriptQueue.flush();
+  const session = getRelaySession(params.relaySessionId, params.connId);
+  if (params.waitForConfirmation) {
+    // App-routed tool calls need the same future-speech barrier as native consults.
+    // A queue flush alone snapshots existing writes and cannot wait for a later yes.
+    await session.confirmationReadiness.wait();
+  } else {
+    await session.voiceTranscriptQueue.flush();
+  }
 }
 
 export async function steerTalkRealtimeRelayAgentRun(params: {
