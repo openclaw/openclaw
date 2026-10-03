@@ -48,17 +48,6 @@ const restoredQueuedFailureSettlementClaims = new WeakMap<object, object>();
 const RESTORE_RETRY_DELAY_MS = 1_000;
 const RESTORE_RETRY_MAX_DELAY_MS = 30_000;
 
-/** Retirement publications can chain; settle every one before touching the row. */
-async function drainRetirementPublications(entry: SubagentRunRecord): Promise<void> {
-  for (
-    let publication = waitForSubagentRetirementPublication(entry);
-    publication;
-    publication = waitForSubagentRetirementPublication(entry)
-  ) {
-    await publication;
-  }
-}
-
 export function isRestoredQueuedFailureSettlementClaimed(entry: SubagentRunRecord): boolean {
   return restoredQueuedFailureSettlementClaims.has(getSubagentRunRuntimeKey(entry));
 }
@@ -400,7 +389,13 @@ export function createSubagentRegistryRestorer(config: {
             if (error instanceof GatewayDrainingError) {
               return false;
             }
-            await drainRetirementPublications(entry);
+            for (
+              let publication = waitForSubagentRetirementPublication(entry);
+              publication;
+              publication = waitForSubagentRetirementPublication(entry)
+            ) {
+              await publication;
+            }
             if (pendingLaunchTermination && !launchTerminationConfirmed) {
               await terminateAcceptedRestoredCollectorRun({
                 entry,
@@ -544,7 +539,13 @@ export function createSubagentRegistryRestorer(config: {
     return runWithGatewayIndependentRootWorkAdmission(async () => {
       // Descriptorless restore failures enter here without onStartFailure; their
       // provisional session must survive the same pending cancellation receipt.
-      await drainRetirementPublications(entry);
+      for (
+        let publication = waitForSubagentRetirementPublication(entry);
+        publication;
+        publication = waitForSubagentRetirementPublication(entry)
+      ) {
+        await publication;
+      }
       const identity = getSubagentRunRuntimeKey(entry);
       const currentEntry = () => runs.get(runId);
       const ownsQueuedRun = (current = currentEntry()): current is SubagentRunRecord =>

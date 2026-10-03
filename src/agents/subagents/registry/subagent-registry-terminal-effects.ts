@@ -91,17 +91,6 @@ export async function completeTerminalEffects(
       await params.retireSupersededRun(currentEntry.runId, currentEntry);
     }
   };
-  /** False once this callback is stale or a newer generation owns the session (retired here). */
-  const stillOwnsSession = async () => {
-    if (!isCurrentTerminalCallback()) {
-      return false;
-    }
-    if (context.newerGenerationOwnsSession(entry)) {
-      await retireSupersededSession(entry);
-      return false;
-    }
-    return true;
-  };
   const warnMeta = (error: unknown) => ({
     error: buildSafeLifecycleErrorMeta(error),
     runId: maskLifecycleIdentifier(completeParams.runId, "run"),
@@ -150,7 +139,11 @@ export async function completeTerminalEffects(
     }
   }
   await refreshSessionEffectsSuppression();
-  if (!(await stillOwnsSession())) {
+  if (!isCurrentTerminalCallback()) {
+    return;
+  }
+  if (context.newerGenerationOwnsSession(entry)) {
+    await retireSupersededSession(entry);
     return;
   }
 
@@ -202,7 +195,11 @@ export async function completeTerminalEffects(
         !(await context.shouldSuppressSessionEffects(entry)) && isCurrentSessionEffectsOwner(),
     });
     await refreshSessionEffectsSuppression();
-    if (!(await stillOwnsSession())) {
+    if (!isCurrentTerminalCallback()) {
+      return;
+    }
+    if (context.newerGenerationOwnsSession(entry)) {
+      await retireSupersededSession(entry);
       return;
     }
   }
@@ -230,7 +227,11 @@ export async function completeTerminalEffects(
   }
 
   await refreshCleanupSuppression();
-  if (!(await stillOwnsSession())) {
+  if (!isCurrentTerminalCallback()) {
+    return;
+  }
+  if (context.newerGenerationOwnsSession(entry)) {
+    await retireSupersededSession(entry);
     return;
   }
 
@@ -250,7 +251,11 @@ export async function completeTerminalEffects(
       params.warn("failed to load browser cleanup for completed subagent", warnMeta(error));
     }
     if (cleanupBrowserSessions) {
-      if (!(await stillOwnsSession())) {
+      if (!isCurrentTerminalCallback()) {
+        return;
+      }
+      if (context.newerGenerationOwnsSession(entry)) {
+        await retireSupersededSession(entry);
         return;
       }
       // Claim only when this caller is about to dispatch. A concurrent caller
@@ -335,7 +340,11 @@ export async function completeTerminalEffects(
   }
 
   if (!suppressSessionEffects) {
-    if (!(await stillOwnsSession())) {
+    if (!isCurrentTerminalCallback()) {
+      return;
+    }
+    if (context.newerGenerationOwnsSession(entry)) {
+      await retireSupersededSession(entry);
       return;
     }
     try {

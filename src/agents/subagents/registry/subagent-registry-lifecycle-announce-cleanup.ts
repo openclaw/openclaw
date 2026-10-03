@@ -199,15 +199,6 @@ export const startSubagentAnnounceCleanupFlow = (
       skipAnnounce: true,
       ...options,
     });
-  /** A superseded attempt hands cleanup to its successor instead of finishing. */
-  const attemptSuperseded = async () => {
-    assertPersistenceCurrent();
-    if (context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-      return false;
-    }
-    await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
-    return true;
-  };
   if (!checkDescendants && alreadyDelivered()) {
     runDetachedCleanupAttempt(context, {
       runId,
@@ -259,7 +250,9 @@ export const startSubagentAnnounceCleanupFlow = (
         // This driver is detached. Yield once so synchronous successor
         // registration can invalidate it before sessions.delete is submitted.
         await Promise.resolve();
-        if (await attemptSuperseded()) {
+        assertPersistenceCurrent();
+        if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+          await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
           return;
         }
         if (
@@ -329,7 +322,9 @@ export const startSubagentAnnounceCleanupFlow = (
             }
           }
         }
-        if (await attemptSuperseded()) {
+        assertPersistenceCurrent();
+        if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+          await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
           return;
         }
         await finalizeDelivered({ skipRequesterDelivery });
@@ -353,7 +348,9 @@ export const startSubagentAnnounceCleanupFlow = (
   let latestDeliveryError = getDeliveryLastError(entry);
   let committedDeliveryOwner: SubagentRunRecord | undefined;
   const finalizeAnnounceCleanup = async (announceOutcome: SubagentAnnounceFlowOutcome) => {
-    if (await attemptSuperseded()) {
+    assertPersistenceCurrent();
+    if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+      await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
       return;
     }
     assertCurrent();
@@ -363,7 +360,9 @@ export const startSubagentAnnounceCleanupFlow = (
       announceOutcome !== "delivered" && entry.delivery?.status !== "delivered"
         ? await hasPriorRequesterDeliveryMirror(params, entry)
         : undefined;
-    if (await attemptSuperseded()) {
+    assertPersistenceCurrent();
+    if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+      await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
       return;
     }
     // Requester-settle can commit delivery while the mirror lookup is pending.
