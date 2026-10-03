@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { SANDBOX_WORKSPACE_BOOTSTRAP_CLEANUP_TIMEOUT_MS } from "./constants.js";
 import { createRemoteShellSandboxBackend } from "./remote-shell-backend.js";
 import {
   createRemoteShellSandboxSession,
@@ -193,6 +194,15 @@ async function createFixture() {
       params: RemoteShellUploadParams,
       run: (params: RemoteShellUploadParams) => Promise<void>,
     ) => Promise<void>,
+    runCommand?: (
+      params: { remoteCommand: string; signal?: AbortSignal; allowFailure?: boolean },
+      run: (params: {
+        remoteCommand: string;
+        signal?: AbortSignal;
+        allowFailure?: boolean;
+      }) => Promise<{ stdout: Buffer; stderr: Buffer; code: number }>,
+    ) => Promise<{ stdout: Buffer; stderr: Buffer; code: number }>,
+    observe?: { onDispose?: () => void },
   ) => {
     const workspaceDir = path.join(root, label, "workspace");
     const agentWorkspaceDir = path.join(root, label, "agent");
@@ -222,6 +232,14 @@ async function createFixture() {
               upload
                 ? upload(params, (input) => session.uploadDirectory(input))
                 : session.uploadDirectory(params),
+            runCommand: (params) =>
+              runCommand
+                ? runCommand(params, (input) => session.runCommand(input))
+                : session.runCommand(params),
+            dispose: async () => {
+              observe?.onDispose?.();
+              await session.dispose();
+            },
           };
         },
       },
@@ -380,6 +398,71 @@ describe.runIf(process.platform === "linux" || process.platform === "darwin")(
         }
       },
     );
+
+    it("rejects bootstrap when staging cleanup does not finish", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const fixture = await createFixture();
+      let disposed = false;
+      let cleanupSignal: AbortSignal | undefined;
+      let cleanupStarted!: () => void;
+      const cleanupEntered = new Promise<void>((resolve) => {
+        cleanupStarted = resolve;
+      });
+      try {
+        const backend = await fixture.createBackend(
+          "cleanup-bound",
+          async () => {
+            throw new Error("synthetic upload failure");
+          },
+          async (params, run) => {
+            if (!params.remoteCommand.includes("remove_owned_stage(sys.argv[1])")) {
+              return await run(params);
+            }
+            cleanupSignal = params.signal;
+            cleanupStarted();
+            if (!params.signal) {
+              return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 };
+            }
+            return await new Promise<never>((_resolve, reject) => {
+              const abort = () => reject(new Error("cleanup aborted"));
+              if (params.signal?.aborted) {
+                abort();
+                return;
+              }
+              params.signal?.addEventListener("abort", abort, { once: true });
+            });
+          },
+          {
+            onDispose: () => {
+              disposed = true;
+            },
+          },
+        );
+        const pending = backend.runShellCommand({ script: "true" });
+        const settled = pending.then(
+          () => "resolved" as const,
+          (error: unknown) => error,
+        );
+        await cleanupEntered;
+        expect(cleanupSignal).toBeInstanceOf(AbortSignal);
+        await vi.advanceTimersByTimeAsync(SANDBOX_WORKSPACE_BOOTSTRAP_CLEANUP_TIMEOUT_MS);
+        await expect(settled).resolves.toMatchObject({ message: "synthetic upload failure" });
+        expect(disposed).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("gives workspace bootstrap upload a deadline signal", async () => {
+      const fixture = await createFixture();
+      let uploadSignal: AbortSignal | undefined;
+      const backend = await fixture.createBackend("deadline", async (params, upload) => {
+        uploadSignal = params.signal;
+        await upload(params);
+      });
+      await backend.runShellCommand({ script: "true" });
+      expect(uploadSignal?.aborted).toBe(false);
+    });
 
     it("adopts existing unmarked remote workspaces without reseeding them", async () => {
       const fixture = await createFixture();

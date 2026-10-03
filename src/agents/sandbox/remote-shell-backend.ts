@@ -7,6 +7,10 @@ import type {
   SandboxBackendCommandResult,
 } from "./backend-handle.types.js";
 import type { CreateSandboxBackendParams, SandboxBackendHandle } from "./backend.types.js";
+import {
+  SANDBOX_WORKSPACE_BOOTSTRAP_CLEANUP_TIMEOUT_MS,
+  SANDBOX_WORKSPACE_BOOTSTRAP_TIMEOUT_MS,
+} from "./constants.js";
 import { hashTextSha256 } from "./hash.js";
 import {
   createRemoteShellSandboxFsBridge,
@@ -194,6 +198,11 @@ class RemoteShellSandboxBackendImpl {
     }
     const session = await this.createSession();
     let stagingRoot: string | undefined;
+    const bootstrapAbort = new AbortController();
+    const bootstrapTimer = setTimeout(() => {
+      bootstrapAbort.abort(new Error("Sandbox workspace bootstrap timed out"));
+    }, SANDBOX_WORKSPACE_BOOTSTRAP_TIMEOUT_MS);
+    const bootstrapSignal = bootstrapAbort.signal;
     try {
       this.params.createParams.assertRuntimeCurrent?.();
       const exists = await session.runCommand({
@@ -204,6 +213,7 @@ class RemoteShellSandboxBackendImpl {
           "openclaw-sandbox-check",
           this.params.runtimePaths.runtimeRootDir,
         ]),
+        signal: bootstrapSignal,
       });
       if (exists.stdout.toString("utf8").trim() === "1") {
         return;
@@ -219,6 +229,7 @@ class RemoteShellSandboxBackendImpl {
           path.posix.dirname(candidate),
           candidate,
         ]),
+        signal: bootstrapSignal,
       });
       stagingRoot = candidate;
       this.params.createParams.assertRuntimeCurrent?.();
@@ -226,6 +237,7 @@ class RemoteShellSandboxBackendImpl {
         localDir: this.params.createParams.workspaceDir,
         remoteDir: path.posix.join(stagingRoot, "workspace"),
         remoteRootDir: stagingRoot,
+        signal: bootstrapSignal,
       });
       if (
         this.params.createParams.cfg.workspaceAccess !== "none" &&
@@ -237,6 +249,7 @@ class RemoteShellSandboxBackendImpl {
           localDir: this.params.createParams.agentWorkspaceDir,
           remoteDir: path.posix.join(stagingRoot, "agent"),
           remoteRootDir: stagingRoot,
+          signal: bootstrapSignal,
         });
       }
       this.params.createParams.assertRuntimeCurrent?.();
@@ -248,23 +261,34 @@ class RemoteShellSandboxBackendImpl {
           stagingRoot,
           this.params.runtimePaths.runtimeRootDir,
         ]),
+        signal: bootstrapSignal,
       });
       stagingRoot = undefined;
     } finally {
+      clearTimeout(bootstrapTimer);
       if (stagingRoot) {
-        // Preserve the original failure. An unreachable orphan never becomes a
-        // completed workspace, and cleanup must not guess at other publishers.
-        await session
-          .runCommand({
-            remoteCommand: buildRemoteCommand([
-              "python3",
-              "-c",
-              CLEANUP_REMOTE_WORKSPACE_STAGE,
-              stagingRoot,
-            ]),
-            allowFailure: true,
-          })
-          .catch(() => undefined);
+        // Preserve the original failure. Cleanup has its own budget so a hung
+        // remove cannot keep the shared bootstrap promise open.
+        const cleanupAbort = new AbortController();
+        const cleanupTimer = setTimeout(() => {
+          cleanupAbort.abort(new Error("Sandbox workspace bootstrap cleanup timed out"));
+        }, SANDBOX_WORKSPACE_BOOTSTRAP_CLEANUP_TIMEOUT_MS);
+        try {
+          await session
+            .runCommand({
+              remoteCommand: buildRemoteCommand([
+                "python3",
+                "-c",
+                CLEANUP_REMOTE_WORKSPACE_STAGE,
+                stagingRoot,
+              ]),
+              allowFailure: true,
+              signal: cleanupAbort.signal,
+            })
+            .catch(() => undefined);
+        } finally {
+          clearTimeout(cleanupTimer);
+        }
       }
       await session.dispose();
     }
