@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, vi } from "vitest";
 import type { createRunNodePathClassifier } from "../../scripts/run-node-watch-paths.mts";
 import type { WatcherFactory } from "../../scripts/watch-node-observation.mts";
+import { createDeferred } from "../helpers/promise.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 type WatchExit = number | NodeJS.Signals;
@@ -39,7 +40,7 @@ afterEach(() => {
 });
 
 export function runWatch(params: WatchFixture): Promise<WatchExit> {
-  const admission = Promise.withResolvers<void>();
+  const admission = createDeferred<void>();
   ready = admission.promise;
   const run = (async () => {
     vi.resetModules();

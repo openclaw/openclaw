@@ -34,7 +34,7 @@ vi.mock("openclaw/plugin-sdk/persistent-dedupe", async (importOriginal) => {
 });
 
 class FakeBridge extends ChildProcess {
-  pid = 4242;
+  override pid = 4242;
   readonly started = createDeferred<{ endpoint: string; token: string }>();
 }
 
