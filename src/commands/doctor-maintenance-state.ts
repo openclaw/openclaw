@@ -47,8 +47,11 @@ export function createDoctorMaintenanceState(options: {
     assertCurrent: () => owner!.assertCurrent(options.assertCurrent),
     warn: options.warn,
   });
-  const closeResources = async (agentRoot?: string) => {
-    const drainRoot = agentRoot ?? (resourcesParent ? undefined : resolveStateDir(selectedEnv));
+  const closeResources = async (agentRoot?: string | null) => {
+    const drainRoot =
+      agentRoot === null
+        ? undefined
+        : (agentRoot ?? (resourcesParent ? undefined : resolveStateDir(selectedEnv)));
     await resources?.close(
       drainRoot === undefined
         ? undefined
@@ -238,7 +241,7 @@ export function createDoctorMaintenanceState(options: {
           await closeOpenClawAgentDatabaseByPathAsync(agent.path, agent.agentId);
         }
       });
-      await closeResources();
+      await closeResources(null);
       let operationError: Error | undefined;
       let result: { warnings: string[] } | undefined;
       try {
