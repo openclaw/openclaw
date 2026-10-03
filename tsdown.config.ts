@@ -998,6 +998,12 @@ const configs: UserConfig[] = [
   workerDeployBuildConfig({
     "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
   }),
+  workerDeployBuildConfig({
+    "worker/openclaw-state-read.worker": "src/worker/worker-deploy-state-read.ts",
+  }),
+  workerDeployBuildConfig({
+    "worker/worker-native-lifecycle.worker": "src/infra/worker-native-lifecycle.worker.ts",
+  }),
   ...createManagedHandoffBuildConfigs().map((config) =>
     Object.assign(config, { name: TSDOWN_UNIFIED_CONFIG_GROUP, env }),
   ),
