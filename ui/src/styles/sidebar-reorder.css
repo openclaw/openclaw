@@ -13,6 +13,19 @@
   flex: 0 0 auto;
 }
 
+/* The contents host exposes both the parent link and its list to this layout. */
+.sidebar-zone-entry--plugin-navigation {
+  position: relative;
+  display: block;
+  padding-inline-end: 24px;
+}
+
+.sidebar-zone-entry--plugin-navigation > .sidebar-reorder-menu {
+  position: absolute;
+  inset-inline-end: 0;
+  top: 4px;
+}
+
 .sidebar-reorder-trigger {
   display: flex;
   align-items: center;

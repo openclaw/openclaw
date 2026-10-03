@@ -1,6 +1,7 @@
-import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { render, type LitElement } from "lit";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiNavigationItem } from "../../../../src/plugin-sdk/control-ui.js";
+import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -340,6 +341,49 @@ describe("AppSidebar interleaved zone", () => {
     expect(link?.getAttribute("href")).toBe("/plugin?plugin=example&id=review");
     link?.click();
     expect(openPage).toHaveBeenCalledWith({ id: "review" });
+  });
+
+  it("keeps nested plugin links in block flow before the following sidebar entry", async () => {
+    const stylesheet = document.createElement("style");
+    stylesheet.textContent = readStyleSheet("ui/src/styles/sidebar-reorder.css");
+    document.head.append(stylesheet);
+    const originalLocation = window.location.href;
+    onTestFinished(() => {
+      stylesheet.remove();
+      window.history.replaceState(null, "", originalLocation);
+    });
+    window.history.replaceState(null, "", "/plugin?plugin=example&id=notes");
+    const { sidebar, context } = await mountZone();
+    pluginNavigation(context, sidebar, ["boards", "review", "notes"], false, (id) =>
+      id === "boards" ? {} : { parent: "boards" },
+    );
+    sidebar.sidebarEntries = ["plugin:example/boards", "plugin:example/notes", "route:usage"];
+    await sidebar.updateComplete;
+    const entry = zoneEntry(sidebar, "plugin:example/boards");
+    await entry.querySelector<LitElement>("openclaw-plugin-contributions")!.updateComplete;
+    expect(entry.querySelectorAll(".nav-item--child")).toHaveLength(2);
+    const parent = entry.querySelector("a");
+    const children = entry.querySelector(".nav-item__children");
+    expect(parent?.nextElementSibling).toBe(children);
+    expect(parent?.closest(".sidebar-zone-entry")).toBe(entry);
+    expect(children?.closest(".sidebar-zone-entry")).toBe(entry);
+    expect(entry.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+    expect(
+      entry.querySelector('[aria-current="page"]')?.classList.contains("nav-item--child"),
+    ).toBe(true);
+    expect(getComputedStyle(entry).display).toBe("block");
+    expect(["", "auto"]).toContain(getComputedStyle(entry).height);
+    const menu = entry.querySelector(".sidebar-reorder-menu")!;
+    expect(getComputedStyle(menu).position).toBe("absolute");
+    expect(getComputedStyle(menu).top).toBe("4px");
+    const pinned = zoneEntry(sidebar, "plugin:example/notes");
+    expect(entry.nextElementSibling).toBe(pinned);
+    expect(pinned.querySelector(".nav-item__children")).toBeNull();
+    expect(getComputedStyle(pinned).display).toBe("block");
+    expect(["", "auto"]).toContain(getComputedStyle(pinned).height);
+    const ordinary = zoneEntry(sidebar, "route:usage");
+    expect(pinned.nextElementSibling).toBe(ordinary);
+    expect(getComputedStyle(ordinary).display).toBe("flex");
   });
 
   it("hides an unavailable plugin pin without deleting its saved position", async () => {
