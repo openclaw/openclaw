@@ -254,12 +254,6 @@ export async function saveSkillLibrary(
       })),
   );
   assertProposalContainsNoLiteralSecrets(scan);
-  if (scan.critical > 0) {
-    throw new SkillLibraryError(
-      "POLICY_BLOCKED",
-      "Skill security scan found critical issues. Review the instructions and support files before publishing.",
-    );
-  }
   const staged = await stageSkillLibraryBundle(
     skillId,
     bundle,

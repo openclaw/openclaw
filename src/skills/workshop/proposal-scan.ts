@@ -1,4 +1,4 @@
-import { scanSkillContent, scanSource } from "../security/scanner.js";
+import { scanLiteralSecrets } from "../security/scanner.js";
 import type { PreparedSkillProposalSupportFile, SkillProposalScan } from "./types.js";
 
 export function scanProposalBundle(
@@ -7,33 +7,24 @@ export function scanProposalBundle(
   metadata: readonly { file: string; content: string | undefined }[] = [],
 ): SkillProposalScan {
   const scannedAt = new Date().toISOString();
+  // Admission rejects recognized credentials. Code heuristics remain diagnostics
+  // for explicit audits and plugin release scans, not publication policy.
   const findings = [
-    ...scanSkillContent(content, "PROPOSAL.md"),
-    ...scanSource(content, "PROPOSAL.md"),
+    ...scanLiteralSecrets(content, "PROPOSAL.md"),
     ...supportFiles.flatMap((file) => [
-      ...scanSkillContent(file.path, "support-file-path").filter(
-        (finding) => finding.ruleId === "literal-secret",
-      ),
-      ...scanSkillContent(file.content, file.path),
-      ...scanSource(file.content, file.path),
+      ...scanLiteralSecrets(file.path, "support-file-path"),
+      ...scanLiteralSecrets(file.content, file.path),
     ]),
     ...metadata.flatMap((entry) =>
-      entry.content
-        ? scanSkillContent(entry.content, entry.file).filter(
-            (finding) => finding.ruleId === "literal-secret",
-          )
-        : [],
+      entry.content ? scanLiteralSecrets(entry.content, entry.file) : [],
     ),
   ];
-  const critical = findings.filter((finding) => finding.severity === "critical").length;
-  const warn = findings.filter((finding) => finding.severity === "warn").length;
-  const info = findings.filter((finding) => finding.severity === "info").length;
   return {
-    state: critical > 0 ? "failed" : "clean",
+    state: findings.length > 0 ? "failed" : "clean",
     scannedAt,
-    critical,
-    warn,
-    info,
+    critical: findings.length,
+    warn: 0,
+    info: 0,
     findings,
   };
 }

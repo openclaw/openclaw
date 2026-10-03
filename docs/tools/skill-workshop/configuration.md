@@ -85,7 +85,7 @@ proposal scanner or create rollback snapshots. Use backups for unwanted edits.
 
 In `propose` mode, the reviewer can read or prepare an exact span before staging
 one pending mutation. Existing-skill proposals retain read receipts, content-hash
-binding, size validation, and normal apply-time scanning and rollback metadata.
+binding, size validation, apply-time credential checks, and rollback metadata.
 Immediate foreground repair also retains the normal proposal apply path in
 `auto` mode; it is separate from direct background maintenance.
 

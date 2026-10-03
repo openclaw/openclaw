@@ -370,7 +370,7 @@ different visible skill set per agent.
   suggestion nudge. `propose` creates pending proposals from corrections and
   substantial completed work. `auto` uses normal agent tools for direct per-turn
   and weekly Workshop maintenance, without proposal scanning or automatic rollback
-  snapshots. Immediate foreground repairs still use scanner-gated proposal apply.
+  snapshots. Immediate foreground repairs still use credential-checked proposal apply.
   User-prompted skill creation,
   `/learn`, and manual learning sessions continue to work in every mode.
 </ParamField>

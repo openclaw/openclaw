@@ -525,6 +525,10 @@ export function scanSkillContent(content: string, filePath: string): SkillScanFi
   return scanSourceRules(SKILL_CONTENT_RULES, content, filePath);
 }
 
+export function scanLiteralSecrets(content: string, filePath: string): SkillScanFinding[] {
+  return scanSourceRules([LITERAL_SECRET_SKILL_CONTENT_RULE], content, filePath);
+}
+
 function scanSourceRules(
   rules: readonly SourceRule[],
   source: string,

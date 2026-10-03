@@ -391,6 +391,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/state-migrations.workspace-setup.windows.test.ts",
   "src/infra/state-migrations.media-persistence.lifecycle-recovery.test.ts",
   "src/skills/library/resource-read.test.ts",
+  "src/skills/library/service-admission.test.ts",
   "src/skills/library/service.test.ts",
   "src/skills/workshop/collection-restore.test.ts",
   "src/skills/workshop/experience-review.apply.test.ts",

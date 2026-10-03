@@ -31,6 +31,7 @@ import {
   listSkillProposalEvents as listSkillProposalEventsImpl,
   proposeCreateSkill as proposeCreateSkillImpl,
   proposeUpdateSkill as proposeUpdateSkillImpl,
+  quarantineSkillProposal as quarantineSkillProposalImpl,
   rejectSkillProposal as rejectSkillProposalImpl,
 } from "./service.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
@@ -55,6 +56,9 @@ const proposeCreateSkill = (
 const proposeUpdateSkill = (
   input: OptionalWorkshopConfig<Parameters<typeof proposeUpdateSkillImpl>[0]>,
 ) => proposeUpdateSkillImpl({ config: workshopConfig, ...input });
+const quarantineSkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof quarantineSkillProposalImpl>[0]>,
+) => quarantineSkillProposalImpl({ config: workshopConfig, ...input });
 const rejectSkillProposal = (
   input: OptionalWorkshopConfig<Parameters<typeof rejectSkillProposalImpl>[0]>,
 ) => rejectSkillProposalImpl({ config: workshopConfig, ...input });
@@ -311,36 +315,35 @@ describe("Skill Workshop lifecycle hooks", () => {
     await expect(fs.readFile(untouchedAsset, "utf8")).resolves.toBe("changed after evaluation\n");
   });
 
-  it("records and dispatches scanner quarantine transitions", async () => {
+  it("records and dispatches manual quarantine transitions without publishing a skill", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-lifecycle-quarantine-");
     const proposal = await proposeCreateSkill({
       workspaceDir,
       agentId: "main",
-      name: "Unsafe Lifecycle",
-      description: "Unsafe proposal",
-      content: "# Unsafe\n\n```ts\nimport { exec } from 'child_process';\nexec('whoami');\n```\n",
+      name: "Reviewed Lifecycle",
+      description: "Await operator review",
+      content: "# Reviewed Lifecycle\n",
     });
     hookMocks.proposalChanged.mockClear();
 
-    await expect(
-      applySkillProposal({
-        workspaceDir,
-        agentId: "main",
-        proposalId: proposal.record.id,
-        expectedRevisionHash: proposal.revisionHash,
-      }),
-    ).rejects.toThrow("Proposal scan failed");
+    await quarantineSkillProposal({
+      workspaceDir,
+      agentId: "main",
+      proposalId: proposal.record.id,
+      expectedRevisionHash: proposal.revisionHash,
+      reason: "Needs operator review",
+    });
 
     await expect(
       inspectSkillProposal(proposal.record.id, { config: {}, agentId: "main" }),
     ).resolves.toMatchObject({
-      record: { status: "quarantined" },
+      record: { status: "quarantined", statusReason: "Needs operator review" },
     });
     expect(
       (await listSkillProposalEvents({ proposalId: proposal.record.id })).events.map(
         (event) => event.type,
       ),
-    ).toEqual(["created", "evaluation_completed", "quarantined"]);
+    ).toEqual(["created", "quarantined"]);
     expect(hookMocks.proposalChanged).toHaveBeenLastCalledWith(
       expect.objectContaining({
         action: "quarantined",
@@ -348,5 +351,9 @@ describe("Skill Workshop lifecycle hooks", () => {
       }),
       { workspaceDir, agentId: "main" },
     );
+    expect(hookMocks.skillChanged).not.toHaveBeenCalled();
+    await expect(fs.access(proposal.record.target.skillFile)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
