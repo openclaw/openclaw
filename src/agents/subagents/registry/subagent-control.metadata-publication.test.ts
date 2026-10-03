@@ -269,7 +269,7 @@ it.for([
     });
     const withKillScope = killScopeOwner.withSubagentKillScope;
     vi.spyOn(killScopeOwner, "withSubagentKillScope").mockImplementation(
-      (params, run, publish, preparePublication) =>
+      (params, run, captureResult, preparePublication, finishResult) =>
         withKillScope(
           params,
           async (scope, trees) => {
@@ -296,8 +296,9 @@ it.for([
             }
             return result;
           },
-          publish,
+          captureResult,
           preparePublication,
+          finishResult,
         ),
     );
     const onResult = vi.fn();

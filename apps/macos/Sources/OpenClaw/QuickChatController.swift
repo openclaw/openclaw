@@ -5,7 +5,7 @@ import SwiftUI
 
 private let quickChatLogger = Logger(subsystem: "ai.openclaw", category: "quickchat")
 
-private final class QuickChatPanel: NSPanel {
+final class QuickChatPanel: NSPanel {
     /// Quick Chat must accept typing without behaving like a normal activating app window.
     override var canBecomeKey: Bool {
         true
@@ -207,20 +207,15 @@ final class QuickChatController: NSObject {
         panel.alphaValue = 1
         if wasVisible {
             OverlayPanelFactory.applyFrame(window: panel, target: target, animate: true)
-            AppActivation.shared.makeKeyAndOrderFront(window: panel)
         } else {
             let start = QuickChatPlacement.scaledRect(target, factor: 0.96)
             OverlayPanelFactory.animatePresent(window: panel, from: start, to: target, duration: 0.16)
-            AppActivation.shared.makeKeyAndOrderFront(window: panel)
         }
+        AppActivation.shared.makeKeyAndOrderFront(window: panel)
         self.focusEditor()
     }
 
-    func dismiss() {
-        self.dismiss(immediate: false)
-    }
-
-    private func dismiss(immediate: Bool) {
+    func dismiss(immediate: Bool = false) {
         self.stopDictation()
         self.cancelPasteRequest()
         if self.isVisible {
@@ -536,8 +531,7 @@ final class QuickChatController: NSObject {
     }
 
     private func dismissIfFocusWasLost() {
-        guard self.canDismissForOutsideInteraction, !self.ownsWindow(NSApp?.keyWindow) else { return }
-        self.dismiss()
+        self.dismissIfClickOutside(window: NSApp?.keyWindow)
     }
 
     /// These flows intentionally move focus outside the bar without ending its presentation.

@@ -73,19 +73,15 @@ struct GatewayTLSRoute: Equatable, Sendable {
               other.allowsTrustedPinReplacement
         else { return false }
 
-        let firstUseRoute: GatewayTLSRoute
         let persistedRoute: GatewayTLSRoute
         if self.params.allowTOFU, self.params.expectedFingerprint == nil {
-            firstUseRoute = self
             persistedRoute = other
         } else if other.params.allowTOFU, other.params.expectedFingerprint == nil {
-            firstUseRoute = other
             persistedRoute = self
         } else {
             return false
         }
-        guard firstUseRoute.params.storeKey == persistedRoute.params.storeKey,
-              !persistedRoute.params.allowTOFU,
+        guard !persistedRoute.params.allowTOFU,
               let storeKey = persistedRoute.params.storeKey,
               let expectedFingerprint = persistedRoute.params.expectedFingerprint
         else { return false }

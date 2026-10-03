@@ -1,7 +1,10 @@
 import { cloneEnvWithPlatformSemantics } from "../../../config/config-env-vars.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { withSessionEntryWorker } from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
-import { prepareSessionGenerationFacts } from "../../../config/sessions/session-delivery-generation.js";
+import {
+  isSessionDeliveryGenerationRevokedError,
+  prepareSessionGenerationFacts,
+} from "../../../config/sessions/session-delivery-generation.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -140,6 +143,14 @@ export async function prepareSubagentKillSession(
           assertNativeCurrent();
           lifetime.assertCurrent();
         };
+        const prepareRead = () => {
+          assertNativeCurrent();
+          return lifetime.prepareRead()?.then(assertNativeCurrent);
+        };
+        for (let pending = prepareRead(); pending; pending = prepareRead()) {
+          await pending;
+          owner.assertCurrent();
+        }
         assertCurrent();
         return {
           agentId,
@@ -147,10 +158,22 @@ export async function prepareSubagentKillSession(
           entry,
           release,
           assertCurrent,
-          prepareRead: lifetime.prepareRead,
+          prepareRead,
           withPublication: (run) =>
-            // The consumer checks its retained authority after joining the writer FIFO.
-            runOpenClawAgentWriteAdmission(database, run),
+            runOpenClawAgentWriteAdmission(database, async () => {
+              try {
+                for (let pending = prepareRead(); pending; pending = prepareRead()) {
+                  await pending;
+                }
+              } catch (error) {
+                if (!isSessionDeliveryGenerationRevokedError(error)) {
+                  throw error;
+                }
+              }
+              // The consumer publishes a truthful revoked-owner outcome under the FIFO.
+              assertNativeCurrent();
+              return run();
+            }),
         };
       },
     );
@@ -175,18 +198,19 @@ export async function persistSubagentAbortedLastRun(params: {
   }
   try {
     let selected: SessionEntry | undefined;
+    const assertCommitAllowed = () => {
+      params.assertCommitAllowed?.();
+      if (selected && params.isCurrent?.(selected) === false) {
+        throw new Error("Subagent abort-marker owner changed before commit.");
+      }
+    };
     await applySessionEntryExactReplacements({
       storePath: params.storePath,
       sessionKeys: [params.childSessionKey],
       activeSessionKey: params.childSessionKey,
       requireWriteSuccess: true,
       skipMaintenance: true,
-      assertCommitAllowed: () => {
-        params.assertCommitAllowed?.();
-        if (selected && params.isCurrent?.(selected) === false) {
-          throw new Error("Subagent abort-marker owner changed before commit.");
-        }
-      },
+      assertCommitAllowed,
       update(entries) {
         selected = entries.find(({ sessionKey }) => sessionKey === params.childSessionKey)?.entry;
         const current = selected;
@@ -195,6 +219,10 @@ export async function persistSubagentAbortedLastRun(params: {
           current.sessionId === params.expectedSessionId &&
           current.lifecycleRevision === params.expectedLifecycleRevision &&
           params.isCurrent?.(current) !== false;
+        if (changed && current.abortedLastRun === params.abortedLastRun) {
+          assertCommitAllowed();
+          return { result: undefined };
+        }
         return {
           result: undefined,
           replacements: changed

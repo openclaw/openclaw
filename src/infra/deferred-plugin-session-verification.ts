@@ -23,6 +23,10 @@ import {
   readOnlySqliteValidationSnapshot,
 } from "./session-sqlite-migration-readers.js";
 import { verifyCanonicalSessionTranscriptSources } from "./session-sqlite-transcript-verification.js";
+import {
+  databaseFileIdentityKey,
+  readDatabaseIdentityBirthtime,
+} from "./sqlite-worker-identity.js";
 
 /** A replaced database cannot inherit completed-import authority from an old inode. */
 export async function verifyDeferredSessionDatabase(params: {
@@ -151,14 +155,20 @@ export function preservesRecordedIndexValue(
   );
 }
 
-export function databaseIdentity(sqlitePath: string): string {
+export function databaseIdentity(
+  sqlitePath: string,
+  kind: "receipt" | "physical" = "receipt",
+): string {
   const file = fs.lstatSync(sqlitePath, { bigint: true, throwIfNoEntry: false });
   if (!file?.isFile()) {
     throw new Error(
       `The imported session database is missing or no longer a regular file: ${sqlitePath}. Run ${formatCliCommand("openclaw doctor --session-sqlite recover --session-sqlite-all-agents")} against the same state/config before retrying repair.`,
     );
   }
-  return `${file.dev}:${file.ino}`;
+  // Device numbers can change after a VM reboot; durable receipts bind file creation instead.
+  return kind === "physical"
+    ? databaseFileIdentityKey(file)
+    : `inode:${file.ino}:birthtime:${readDatabaseIdentityBirthtime(file)}`;
 }
 
 export function sameSourceContent(

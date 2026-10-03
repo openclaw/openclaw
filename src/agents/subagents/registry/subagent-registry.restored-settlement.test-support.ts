@@ -1,8 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import {
+  bindGatewayContextResolver,
   getGatewayContextResolver,
   getSharedGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -34,6 +36,19 @@ type RestoredSettlementTestOptions = {
   >;
   hydrateAndActivateRegistry: () => Promise<void>;
 };
+
+export async function activateSubagentRegistryWithRecoveryRuntime(
+  mod: SubagentRegistryHarness,
+  recoveryRuntime: GatewayRecoveryRuntime,
+): Promise<void> {
+  const gatewayContext = {
+    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+    recoveryRuntime,
+    resolveGatewayContext: () => gatewayContext as never,
+  };
+  bindGatewayContextResolver(recoveryRuntime, gatewayContext.resolveGatewayContext);
+  await mod.activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+}
 
 export function registerRestoredRunningSettlementTest({
   getRegistry,
@@ -347,11 +362,14 @@ export function registerRestoredRequesterWakeSettlementTests({
       }
     });
     let gatewayOpen = true;
-    const instanceContext = { recoveryRuntime } as never;
+    const instanceContext = {
+      chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+      recoveryRuntime,
+    } as never;
     const resolveInstance = () => (gatewayOpen ? instanceContext : undefined);
     const resolveGatewayContext = () =>
       (restoreTiming === "without instance binding"
-        ? { recoveryRuntime }
+        ? instanceContext
         : { resolveGatewayContext: resolveInstance }) as never;
     const settleRootWork = observeRootWork();
     try {

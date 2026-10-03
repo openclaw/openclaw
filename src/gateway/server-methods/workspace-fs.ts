@@ -1,10 +1,11 @@
 // Shared workspace filesystem access for gateway file browsers and editors.
 // Local access uses fs-safe roots; remote access stays with the registered
 // workspace provider and its path/byte/lifecycle checks.
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { createAsyncLock, readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import {
   getAgentWorkspaceAccess,
@@ -277,7 +278,7 @@ export async function updateWorkspaceFile(
     if (typeof content === "string" && decodeUtf8Strict(current.buffer) === undefined) {
       return { status: "unsafe" };
     }
-    const currentHash = createHash("sha256").update(current.buffer).digest("hex");
+    const currentHash = sha256Hex(current.buffer);
     if (expectedHash !== undefined && currentHash !== expectedHash) {
       return { status: "conflict", currentHash };
     }
@@ -297,7 +298,7 @@ export async function updateWorkspaceFile(
         .relative(workspaceRoot.rootReal, current.realPath)
         .split(path.sep)
         .join("/"),
-      hash: createHash("sha256").update(content, "utf8").digest("hex"),
+      hash: sha256Hex(content),
       stat,
     };
   });
