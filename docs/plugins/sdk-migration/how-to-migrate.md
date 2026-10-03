@@ -29,6 +29,31 @@ The timing nuance is that the legacy check runs just before dispatch, while
 Prefer the typed guard for live revocation at commit. Callback errors continue
 to propagate. No schema, retention, durability, or update migration is required.
 
+## Await Mention Inbox operations
+
+Replace synchronous `context.mentionInbox.list(client)` and
+`context.mentionInbox.dismiss(client, ids)` calls with
+`listAsync(client, publish)` and `dismissAsync(client, ids, publish)`.
+Both methods prepare durable state in workers, then call `publish` synchronously
+with the current authorized result. Send the Gateway response inside that
+callback without awaiting more work:
+
+```ts
+await mentionInbox.listAsync(client, (result) => {
+  respond(result.ok, result.ok ? result.value : undefined, result.ok ? undefined : result.error);
+});
+```
+
+Await the returned promise before releasing request resources or starting work
+that depends on the operation. Dismissal IDs retain exact-match semantics.
+
+The shipped `list` and `dismiss` methods remain synchronous third-party adapters
+until the next Plugin SDK major and explicit breaking-release approval. Each
+emits a `DEP_SESSION_PERSISTENCE` deprecation warning once per plugin and method
+per process; calls outside a plugin invocation warn once per method. Existing
+return values and completion timing stay intact. This migration changes no
+schema, retained data, retention, or update behavior.
+
 ## Await session transcript persistence
 
 Use the awaited `SessionManager` methods from

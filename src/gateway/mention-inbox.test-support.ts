@@ -1,7 +1,9 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import { expect, vi } from "vitest";
 import {
   validateMentionsListResult,
   type ErrorShape,
+  type MentionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -152,7 +154,7 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
         };
         committedSources.set(sourceId, committedSource);
       }
-      target.recordCommittedInput({
+      return target.recordCommittedInput({
         sourceId,
         committedSource,
         sessionKey: SESSION_KEY,
@@ -168,8 +170,35 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
   };
 }
 
-export function readMentionInbox(inbox: MentionInbox, client: GatewayClient) {
-  const result = inbox.list(client);
+type InboxResult = Result<MentionsListResult, ErrorShape>;
+
+async function captureInboxResult(
+  operation: (publish: (result: InboxResult) => undefined) => Promise<void>,
+) {
+  let result: InboxResult | undefined;
+  await operation((value) => {
+    result = value;
+  });
+  if (!result) {
+    throw new Error("Mention Inbox did not publish a response");
+  }
+  return result;
+}
+
+export function listMentionInbox(inbox: MentionInbox, client: GatewayClient) {
+  return captureInboxResult((publish) => inbox.listAsync(client, publish));
+}
+
+export function dismissMentionInbox(
+  inbox: MentionInbox,
+  client: GatewayClient,
+  ids: readonly string[],
+) {
+  return captureInboxResult((publish) => inbox.dismissAsync(client, ids, publish));
+}
+
+export async function readMentionInbox(inbox: MentionInbox, client: GatewayClient) {
+  const result = await listMentionInbox(inbox, client);
   if (!result.ok) {
     throw new Error(result.error.message);
   }

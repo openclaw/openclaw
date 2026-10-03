@@ -588,6 +588,24 @@ owners, so a nested scope cannot close an executor retained by its parent.
 
 ## Carry facts, publish after commit
 
+Mention Inbox snapshots and mutations use the existing shared-state workers.
+The Inbox retains policy and disposable indexes, serializes its operations, and
+prepares mutations against a detached projection. The writer rereads the current
+revision and sequence inside its transaction; a conflict returns fresh durable
+facts for preparation. Dismissed recipients remain replay tombstones. Only an
+acknowledged commit installs the prepared indexes. Unknown outcomes invalidate
+the projection for a worker read and never replay the mutation.
+RPCs recheck current caller access and publish their response synchronously after
+preparation. Delayed mention notifications prepare durable facts before their
+final live check, and shutdown joins accepted Inbox work. Session involvement
+remains with the session owner, outside the shared-state transaction. Profile
+policy and the existing session-authority reads retain their current owners.
+Schemas, stored bytes, capacity, retention, and update behavior are unchanged.
+The synchronous `MentionInbox.list` and `dismiss` methods shipped in 2026.9.8
+retain native transactions as deprecated SDK compatibility through the next
+Plugin SDK major. Their kernel and transaction sites remain T1 inventory debt;
+all bundled callers use `listAsync` and `dismissAsync`.
+
 Message-tool-only completion records use the canonical per-agent writer. The
 host captures the original store and run facts before waiting; configured-store
 discovery uses the existing reader. First-use schema admission commits separately

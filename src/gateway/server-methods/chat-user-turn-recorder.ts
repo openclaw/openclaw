@@ -107,6 +107,7 @@ export function createGatewayChatUserTurnController(params: {
       }))
     : Promise.resolve(baseInput);
   let contextFreeCommand = false;
+  let mentionCommit: Promise<void> | undefined;
   const recorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
     ...(sender?.id && !request.goalOperation
       ? {
@@ -212,7 +213,7 @@ export function createGatewayChatUserTurnController(params: {
               );
               return;
             }
-            mentionInbox.recordCommittedInput({
+            mentionCommit = mentionInbox.recordCommittedInput({
               sourceId,
               committedSource: {
                 generation: anchor.generation,
@@ -227,6 +228,7 @@ export function createGatewayChatUserTurnController(params: {
               recipientProfileIds: retained.map((mention) => mention.profileId),
               excerpt: redactSensitiveText(text),
             });
+            return mentionCommit;
           },
         }
       : {}),
@@ -235,7 +237,7 @@ export function createGatewayChatUserTurnController(params: {
     if (options?.contextFreeCommand === true && !recorder.hasPersisted()) {
       contextFreeCommand = true;
     }
-    return await measureDiagnosticsTimelineSpan(
+    const persisted = await measureDiagnosticsTimelineSpan(
       "gateway.chat_send.persist_user_transcript",
       () => recorder.persistFallback(),
       {
@@ -244,6 +246,8 @@ export function createGatewayChatUserTurnController(params: {
         attributes: admission.chatSendTraceAttributes,
       },
     );
+    await mentionCommit;
+    return persisted;
   };
   return {
     baseInput,

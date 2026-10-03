@@ -6,13 +6,18 @@ const warned = resolveGlobalSingleton(
   () => new Set<string>(),
 );
 
-export function warnSessionPersistenceDeprecation(method: string, replacement: string): void {
-  if (warned.has(method)) {
+export function warnSessionPersistenceDeprecation(
+  method: string,
+  replacement: string,
+  options?: { pluginId: string },
+): void {
+  const key = options ? JSON.stringify([options.pluginId, method]) : method;
+  if (warned.has(key)) {
     return;
   }
-  warned.add(method);
+  warned.add(key);
   process.emitWarning(
-    `${method} is deprecated; await ${replacement} instead. Removal: next Plugin SDK major.`,
+    `${options ? `Plugin ${options.pluginId}: ` : ""}${method} is deprecated; await ${replacement} instead. Removal: next Plugin SDK major.`,
     { code: "DEP_SESSION_PERSISTENCE", type: "DeprecationWarning" },
   );
 }
