@@ -3,6 +3,11 @@ name: OpenClaw Repo E2E (Reusable)
 on:
   workflow_call:
     inputs:
+      test_runtime:
+        description: Native test runtime (node or bun); Bun is advisory
+        required: false
+        default: node
+        type: string
       runner_group:
         description: Optional dedicated release runner group; empty retains the current labels
         required: false
@@ -77,6 +82,7 @@ jobs:
           sparse-checkout: |
             /package.json
             /scripts/
+            /.github/actions/setup-test-bun/
             /src/shared/non-packaged-plugin-dirs.ts
           sparse-checkout-cone-mode: false
       - name: Setup Node environment
@@ -113,7 +119,7 @@ jobs:
           retention-days: 7
 
   test:
-    name: Repo E2E (${{ matrix.name }})
+    name: Repo E2E (${{ matrix.name }})${{ inputs.test_runtime == 'bun' && ' (Bun advisory)' || '' }}
     needs: build
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: 90
@@ -146,8 +152,12 @@ jobs:
         run: pnpm --dir ui exec playwright install --with-deps chromium
       - name: Build sandbox image
         run: scripts/sandbox-setup.sh
+      - name: Setup Bun test runtime
+        if: inputs.test_runtime == 'bun'
+        uses: ./.release-harness/.github/actions/setup-test-bun
       - name: Run repo E2E suite
         env:
+          OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
           OPENCLAW_E2E_WORKERS: "2"
           OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
           TARGET_REQUIRED_SCRIPT: ${{ matrix.target_script || '' }}

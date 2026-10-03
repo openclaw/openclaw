@@ -1,8 +1,18 @@
 name: OpenClaw Live And E2E Checks (Reusable)
 
+run-name: ${{ inputs.test_runtime == 'bun' && 'OpenClaw Live And E2E Checks (Bun advisory)' || 'OpenClaw Live And E2E Checks (Reusable)' }}
+
 on:
   workflow_dispatch:
     inputs:
+      test_runtime:
+        description: Native test runtime; Bun is advisory and Docker product lanes retain Node
+        required: false
+        default: node
+        type: choice
+        options:
+          - node
+          - bun
       ref:
         description: Ref, tag, or SHA to validate
         required: true
@@ -202,6 +212,11 @@ on:
         description: Docker image archive SHA-256
         value: ${{ jobs.prepare_docker_e2e_image.outputs.image_archive_sha256 }}
     inputs:
+      test_runtime:
+        description: Native test runtime (node or bun); Bun is advisory
+        required: false
+        default: node
+        type: string
       runner_group:
         description: Optional dedicated release runner group; empty retains the current labels
         required: false
@@ -629,6 +644,15 @@ jobs:
       upgrade_baselines: ${{ steps.upgrade_baselines.outputs.baselines }}
       upgrade_baseline_scope: ${{ steps.upgrade_baselines.outputs.baseline_scope }}
     steps:
+      - name: Validate test runtime
+        env:
+          TEST_RUNTIME: ${{ inputs.test_runtime }}
+        run: |
+          case "$TEST_RUNTIME" in
+            node|bun) ;;
+            *) echo "::error::test_runtime must be node or bun"; exit 1 ;;
+          esac
+
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -1195,6 +1219,7 @@ jobs:
         run: node scripts/plan-release-workflow-matrix.mjs >> "$GITHUB_OUTPUT"
 
   validate_release_live_cache:
+    name: ${{ inputs.test_runtime == 'bun' && 'validate_release_live_cache (Bun advisory)' || 'validate_release_live_cache' }}
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
@@ -1230,17 +1255,24 @@ jobs:
             exit 1
           fi
 
+      - name: Setup Bun test runtime
+        if: inputs.test_runtime == 'bun'
+        uses: ./.github/actions/setup-test-bun
+
       - name: Verify live prompt cache floors
+        env:
+          OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
         run: |
           set -euo pipefail
           timeout --foreground --kill-after=30s 8m pnpm test:live:cache
 
   validate_repo_e2e_gateway:
-    name: Gateway E2E
+    name: Gateway E2E${{ inputs.test_runtime == 'bun' && ' (Bun advisory)' || '' }}
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_repo_e2e && inputs.live_suite_filter == ''
     uses: ./.github/workflows/openclaw-repo-e2e-reusable.yml
     with:
+      test_runtime: ${{ inputs.test_runtime }}
       runner_group: ${{ inputs.runner_group }}
       ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       workflow_repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -1256,11 +1288,12 @@ jobs:
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
 
   validate_repo_e2e_runtime:
-    name: UI and plugin E2E
+    name: UI and plugin E2E${{ inputs.test_runtime == 'bun' && ' (Bun advisory)' || '' }}
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_repo_e2e && inputs.live_suite_filter == ''
     uses: ./.github/workflows/openclaw-repo-e2e-reusable.yml
     with:
+      test_runtime: ${{ inputs.test_runtime }}
       runner_group: ${{ inputs.runner_group }}
       ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       workflow_repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -1277,6 +1310,7 @@ jobs:
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
 
   validate_special_e2e:
+    name: ${{ inputs.test_runtime == 'bun' && 'validate_special_e2e (Bun advisory)' || 'validate_special_e2e' }}
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_repo_e2e && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'openshell-e2e')
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
@@ -1321,6 +1355,10 @@ jobs:
           OPENCLAW_BUILD_PRIVATE_QA: "1"
         run: pnpm build
 
+      - name: Setup Bun test runtime
+        if: inputs.test_runtime == 'bun' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        uses: ./.github/actions/setup-test-bun
+
       - name: Install OpenShell CLI
         if: |
           (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id) &&
@@ -1345,6 +1383,8 @@ jobs:
         if: |
           (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id) &&
           matrix.suite_id == 'openshell-e2e'
+        env:
+          OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
         shell: bash
         run: |
           set -euo pipefail
@@ -4248,6 +4288,7 @@ jobs:
         run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-models-docker.sh
 
   validate_live_provider_suites:
+    name: Native live suites (${{ matrix.label }})${{ inputs.test_runtime == 'bun' && ' (Bun advisory)' || '' }}
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || (startsWith(inputs.live_suite_filter, 'native-live-') && !startsWith(inputs.live_suite_filter, 'native-live-extensions-media') && inputs.live_suite_filter != 'native-live-extensions-a-k'))
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
@@ -4591,9 +4632,14 @@ jobs:
               ;;
           esac
 
+      - name: Setup Bun test runtime
+        if: inputs.test_runtime == 'bun' && steps.selection.outputs.run == 'true'
+        uses: ./.release-harness/.github/actions/setup-test-bun
+
       - name: Run ${{ matrix.label }}
         if: steps.selection.outputs.run == 'true'
         env:
+          OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
         shell: bash
         run: bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"
@@ -4789,7 +4835,7 @@ jobs:
         run: bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"
 
   validate_live_media_provider_suites:
-    name: Live media suites (${{ matrix.label }})
+    name: Live media suites (${{ matrix.label }})${{ inputs.test_runtime == 'bun' && ' (Bun advisory)' || '' }}
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'native-live-extensions-media') || inputs.live_suite_filter == 'native-live-extensions-a-k')
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
@@ -4983,9 +5029,14 @@ jobs:
             echo "OPENCLAW_DOCKER_PROFILE_ENV_ONLY=1" >> "$GITHUB_ENV"
           fi
 
+      - name: Setup Bun test runtime
+        if: inputs.test_runtime == 'bun' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
+        uses: ./.release-harness/.github/actions/setup-test-bun
+
       - name: Run ${{ matrix.label }}
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         env:
+          OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
         shell: bash
         run: bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"
