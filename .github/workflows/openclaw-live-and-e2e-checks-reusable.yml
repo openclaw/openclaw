@@ -462,6 +462,44 @@ on:
         default: true
         type: boolean
     secrets:
+      AZURE_SPEECH_KEY:
+        required: false
+      AZURE_SPEECH_REGION:
+        required: false
+      BASETEN_API_KEY:
+        required: false
+      OPENCLAW_LIVE_R2_ACCOUNT_ID:
+        required: false
+      OPENCLAW_LIVE_R2_BUCKET:
+        required: false
+      OPENCLAW_LIVE_R2_ACCESS_KEY_ID:
+        required: false
+      OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY:
+        required: false
+      ELEVENLABS_API_KEY:
+        required: false
+      FEATHERLESS_API_KEY:
+        required: false
+      OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN:
+        required: false
+      OPENCLAW_GOOGLE_MEET_LIVE_MEETING:
+        required: false
+      OPENCLAW_GOOGLE_MEET_CLIENT_ID:
+        required: false
+      OPENCLAW_GOOGLE_MEET_CLIENT_SECRET:
+        required: false
+      OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN:
+        required: false
+      GRADIUM_API_KEY:
+        required: false
+      INWORLD_API_KEY:
+        required: false
+      MODEL_API_KEY:
+        required: false
+      VOLCENGINE_TTS_API_KEY:
+        required: false
+      OPENCLAW_DISCORD_SMOKE_BOT_TOKEN:
+        required: false
       OPENAI_API_KEY:
         required: false
       OPENAI_BASE_URL:
@@ -4405,6 +4443,8 @@ jobs:
             profile_env_only: false
             profiles: full
     env:
+      VOLCENGINE_TTS_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-o-z-other' && secrets.VOLCENGINE_TTS_API_KEY || '' }}
+      MODEL_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-l-n' && secrets.MODEL_API_KEY || '' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -4816,6 +4856,23 @@ jobs:
             profile_env_only: false
             profiles: full
     env:
+      AZURE_SPEECH_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.AZURE_SPEECH_KEY || '' }}
+      AZURE_SPEECH_REGION: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.AZURE_SPEECH_REGION || '' }}
+      BASETEN_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.BASETEN_API_KEY || '' }}
+      OPENCLAW_LIVE_R2_ACCOUNT_ID: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_LIVE_R2_ACCOUNT_ID || '' }}
+      OPENCLAW_LIVE_R2_BUCKET: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_LIVE_R2_BUCKET || '' }}
+      OPENCLAW_LIVE_R2_ACCESS_KEY_ID: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_LIVE_R2_ACCESS_KEY_ID || '' }}
+      OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY || '' }}
+      ELEVENLABS_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.ELEVENLABS_API_KEY || '' }}
+      FEATHERLESS_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.FEATHERLESS_API_KEY || '' }}
+      OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN || '' }}
+      OPENCLAW_GOOGLE_MEET_LIVE_MEETING: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_GOOGLE_MEET_LIVE_MEETING || '' }}
+      OPENCLAW_GOOGLE_MEET_CLIENT_ID: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_GOOGLE_MEET_CLIENT_ID || '' }}
+      OPENCLAW_GOOGLE_MEET_CLIENT_SECRET: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_GOOGLE_MEET_CLIENT_SECRET || '' }}
+      OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN || '' }}
+      GRADIUM_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.GRADIUM_API_KEY || '' }}
+      INWORLD_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.INWORLD_API_KEY || '' }}
+      DISCORD_BOT_TOKEN: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN || '' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

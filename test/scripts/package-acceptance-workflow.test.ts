@@ -11236,18 +11236,74 @@ describe("package artifact reuse", () => {
         key,
       ).toBe("${{ secrets." + key + " }}");
     }
+    const nativeCredentialScopes = [
+      {
+        jobName: "validate_live_media_provider_suites",
+        suiteId: "native-live-extensions-a-k",
+        keys: [
+          "AZURE_SPEECH_KEY",
+          "AZURE_SPEECH_REGION",
+          "BASETEN_API_KEY",
+          "OPENCLAW_LIVE_R2_ACCOUNT_ID",
+          "OPENCLAW_LIVE_R2_BUCKET",
+          "OPENCLAW_LIVE_R2_ACCESS_KEY_ID",
+          "OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY",
+          "ELEVENLABS_API_KEY",
+          "FEATHERLESS_API_KEY",
+          "OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN",
+          "OPENCLAW_GOOGLE_MEET_LIVE_MEETING",
+          "OPENCLAW_GOOGLE_MEET_CLIENT_ID",
+          "OPENCLAW_GOOGLE_MEET_CLIENT_SECRET",
+          "OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN",
+          "GRADIUM_API_KEY",
+          "INWORLD_API_KEY",
+          "DISCORD_BOT_TOKEN",
+        ],
+      },
+      {
+        jobName: "validate_live_provider_suites",
+        suiteId: "native-live-extensions-l-n",
+        keys: ["MODEL_API_KEY"],
+      },
+      {
+        jobName: "validate_live_provider_suites",
+        suiteId: "native-live-extensions-o-z-other",
+        keys: ["VOLCENGINE_TTS_API_KEY"],
+      },
+    ];
+    const hydratedValues = {
+      DEEPSEEK_API_KEY: "deepseek-sentinel",
+      DEEPINFRA_API_KEY: "deepinfra-sentinel",
+      KIE_API_KEY: "kie-sentinel",
+      NOVITA_API_KEY: "novita-sentinel",
+      PIXVERSE_API_KEY: "pixverse-sentinel",
+      ...Object.fromEntries(
+        nativeCredentialScopes.flatMap(({ keys }) =>
+          keys
+            .filter((key) => key !== "DISCORD_BOT_TOKEN")
+            .map((key) => [key, key + "-native 'literal' $value"]),
+        ),
+      ),
+    };
     const hydrationHome = tempDirs.make("live-auth-hydration-");
     const hydrated = spawnSync(
       "bash",
       [
         "-euc",
-        `bash "$1" "$2"
-unset DEEPSEEK_API_KEY DEEPINFRA_API_KEY KIE_API_KEY NOVITA_API_KEY PIXVERSE_API_KEY
-source "$2"
-printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY" "$KIE_API_KEY" "$NOVITA_API_KEY" "$PIXVERSE_API_KEY"`,
+        [
+          'profile_path="$2"',
+          'bash "$1" "$profile_path"',
+          "shift 2",
+          'for key in "$@"; do unset "$key"; done',
+          "unset DISCORD_BOT_TOKEN OPENCLAW_DISCORD_SMOKE_BOT_TOKEN",
+          'source "$profile_path"',
+          'for key in "$@"; do printf \'%s\\n\' "${!key}"; done',
+          '[[ -z "${DISCORD_BOT_TOKEN+x}" && -z "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN+x}" ]]',
+        ].join("\n"),
         "hydrate-live-auth",
         CI_HYDRATE_LIVE_AUTH_SCRIPT,
         resolve(hydrationHome, "live.profile"),
+        ...Object.keys(hydratedValues),
       ],
       {
         encoding: "utf8",
@@ -11255,18 +11311,46 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY" "$KIE_API_KEY" "$NOVITA_
         env: {
           PATH: process.env.PATH,
           HOME: hydrationHome,
-          DEEPSEEK_API_KEY: "deepseek-sentinel",
-          DEEPINFRA_API_KEY: "deepinfra-sentinel",
-          KIE_API_KEY: "kie-sentinel",
-          NOVITA_API_KEY: "novita-sentinel",
-          PIXVERSE_API_KEY: "pixverse-sentinel",
+          ...hydratedValues,
+          DISCORD_BOT_TOKEN: "must-not-hydrate-discord",
+          OPENCLAW_DISCORD_SMOKE_BOT_TOKEN: "must-not-hydrate-smoke",
         },
       },
     );
     expect(hydrated.status, hydrated.stderr).toBe(0);
-    expect(hydrated.stdout).toBe(
-      "deepseek-sentinel\ndeepinfra-sentinel\nkie-sentinel\nnovita-sentinel\npixverse-sentinel\n",
-    );
+    expect(hydrated.stdout).toBe(Object.values(hydratedValues).join("\n") + "\n");
+    for (const { jobName, suiteId, keys } of nativeCredentialScopes) {
+      const nativeJob = workflowJob(LIVE_E2E_WORKFLOW, jobName);
+      const rows = nativeJob.strategy?.matrix?.include ?? [];
+      expect(rows.some((row) => row.suite_id === suiteId)).toBe(true);
+      for (const key of keys) {
+        const secretKey = key === "DISCORD_BOT_TOKEN" ? "OPENCLAW_DISCORD_SMOKE_BOT_TOKEN" : key;
+        const sentinel = key + "-scoped-sentinel";
+        expect(readWorkflow(LIVE_E2E_WORKFLOW).on?.workflow_call?.secrets?.[secretKey]).toEqual({
+          required: false,
+        });
+        for (const job of [
+          workflowJob(RELEASE_CHECKS_WORKFLOW, "live_repo_e2e_release_checks"),
+          workflowJob(SCHEDULED_LIVE_CHECKS_WORKFLOW, "live_and_openwebui_checks"),
+        ]) {
+          expect(job.secrets, secretKey).toMatchObject({
+            [secretKey]: "${{ secrets." + secretKey + " }}",
+          });
+        }
+        for (const row of rows) {
+          expect(
+            evaluateWorkflowExpression(nativeJob.env?.[key], {
+              eventName: "workflow_dispatch",
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              matrix: row,
+              secrets: { [secretKey]: sentinel },
+            }),
+            key + ":" + row.suite_id,
+          ).toBe(row.suite_id === suiteId ? sentinel : "");
+        }
+      }
+    }
     expect(reusableWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
     expect(packageAcceptanceWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
     expectTextToIncludeAll(reusableWorkflow, [
