@@ -21,8 +21,13 @@ scenario:
     - extensions/qa-lab/src/runtime-tool-fixture.ts
   execution:
     kind: flow
-    liveConfiguredRuntime: codex
-    summary: Exercise the session_status runtime tool family.
+    liveConfiguredRuntime:
+      id: codex
+      model: openai/gpt-5.5
+    summary: >-
+      For native Codex discovery proof, select --provider-mode live-frontier --model openai/gpt-5.5 --alt-model openai/gpt-5.5.
+      Other model selections retain their general runtime route.
+      Exercise the session_status runtime tool family.
     config:
       toolName: session_status
       toolCoverage:

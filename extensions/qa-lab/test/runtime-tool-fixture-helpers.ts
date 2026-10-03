@@ -285,6 +285,7 @@ export function writeToolSearchDiscoveryEvidence(
   toolName: string,
   phase: "happy" | "failure",
   targetCallId = `call-${toolName}-${phase}`,
+  options?: { callStatus?: string | null },
 ) {
   const sessionKey = `agent:qa:runtime-tool:${toolName}:${phase}`;
   const sessionId = sessionKey.replace(/[^a-z0-9]+/giu, "-");
@@ -311,7 +312,9 @@ export function writeToolSearchDiscoveryEvidence(
         search: {
           callId: `search-${phase}`,
           callExecution: "client",
-          callStatus: "completed",
+          ...(options?.callStatus === null
+            ? {}
+            : { callStatus: options?.callStatus ?? "completed" }),
           outputExecution: "client",
           outputStatus: "completed",
           tools: [{ namespace: "openclaw", name: toolName }],

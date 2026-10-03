@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
+import type { QaRuntimeSelection } from "./runtime-id.js";
 import type { requireToolSearchDiscoveryEvidence } from "./runtime-tool-search-evidence.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
@@ -50,6 +51,8 @@ async function runImageScenario(
     fault?: ImageFault;
     isGenerating?: () => boolean;
     liveCodexDiscovery?: "present" | "missing";
+    runtimeId?: "openclaw" | "codex";
+    runtimeSelection?: QaRuntimeSelection;
   } = {},
 ) {
   const scenario = readQaScenarioById("native-image-generation");
@@ -75,6 +78,9 @@ async function runImageScenario(
   const sessionKey = "agent:qa:image-generate:test";
   const env = {
     providerMode: "live-frontier",
+    runtimeId: options.runtimeId ?? (options.liveCodexDiscovery ? "codex" : "openclaw"),
+    runtimeSelection:
+      options.runtimeSelection ?? (options.liveCodexDiscovery ? "configured" : undefined),
     gateway: {
       call: async (method: string, params: unknown) => {
         if (method === "tools.invoke") {
@@ -159,7 +165,7 @@ async function runImageScenario(
       },
     },
     transport: { buildAgentDelivery: () => ({ channel: "qa-channel", to: "dm:qa-operator" }) },
-    primaryModel: options.liveCodexDiscovery ? "openai/gpt-5.6-luna" : undefined,
+    primaryModel: options.liveCodexDiscovery ? "openai/gpt-5.5" : undefined,
     mock: null,
   };
   const result = await runScenarioFlow({
@@ -258,7 +264,23 @@ describe("native image scenario delivery evidence", () => {
     },
   );
 
-  it("requires linked searchable discovery for live Codex image generation", async () => {
+  it("accepts direct OpenClaw image generation without Codex discovery", async () => {
+    await expect(
+      runImageScenario({ runtimeId: "openclaw", liveCodexDiscovery: "missing" }),
+    ).resolves.toMatchObject({ status: "pass" });
+  });
+
+  it("accepts forced Codex image generation without discovery receipts", async () => {
+    await expect(
+      runImageScenario({
+        runtimeId: "codex",
+        runtimeSelection: "forced",
+        liveCodexDiscovery: "missing",
+      }),
+    ).resolves.toMatchObject({ status: "pass" });
+  });
+
+  it("requires linked searchable discovery for configured live Codex image generation", async () => {
     await expect(runImageScenario({ liveCodexDiscovery: "missing" })).resolves.toMatchObject({
       status: "fail",
       details: expect.stringContaining(

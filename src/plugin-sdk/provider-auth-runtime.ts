@@ -11,7 +11,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { startOAuthLoopbackCallbackServer } from "../infra/oauth-loopback-callback.js";
 import { renderOAuthPage } from "../shared/oauth-page.js";
 
-export { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
 export { removeProviderAuthProfilesWithLock } from "../agents/auth-profiles/profiles.js";
 export { removeAuthProfileConfig } from "../plugins/provider-auth-helpers.js";

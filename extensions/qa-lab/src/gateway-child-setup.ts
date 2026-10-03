@@ -429,12 +429,11 @@ export async function prepareQaGatewayChild(
             claudeCliAuthMode: params.claudeCliAuthMode,
           });
         }
-        const codexAuthEnvPatch = assertQaLiveCodexAuthAvailable({
+        assertQaLiveCodexAuthAvailable({
           cfg,
           providerIds: liveProviderIds,
           env,
         });
-        Object.assign(env, codexAuthEnvPatch);
         await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, {
           encoding: "utf8",
           mode: 0o600,

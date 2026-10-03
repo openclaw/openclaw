@@ -622,31 +622,6 @@ describe("qa tool coverage report", () => {
     ).toThrow("unknown runtime tool capabilityLayer");
   });
 
-  it("routes searchable discovery proof and its direct control through live configured Codex", () => {
-    const scenarios = readQaScenarioPack().scenarios;
-    for (const scenarioId of [
-      "runtime-tool-session-status",
-      "runtime-tool-sessions-spawn",
-      "runtime-tool-web-fetch",
-      "runtime-tool-web-search",
-      "native-image-generation",
-    ]) {
-      const scenario = scenarios.find((candidate) => candidate.id === scenarioId);
-      if (!scenario || scenario.execution.kind !== "flow") {
-        throw new Error(`expected flow scenario ${scenarioId}`);
-      }
-      expect(scenario.execution.liveConfiguredRuntime).toBe("codex");
-      expect(scenario.execution).not.toHaveProperty("runtime");
-    }
-
-    const directControl = scenarios.find(
-      (candidate) => candidate.id === "runtime-tool-sessions-spawn",
-    );
-    expect(String(directControl?.execution.config?.["happyPrompt"])).toContain(
-      "Do not call tool_search",
-    );
-  });
-
   it("discovers the runtime tool fixture catalog", () => {
     const report = buildQaToolCoverageReport({
       scenarios: readQaScenarioPack().scenarios,

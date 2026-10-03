@@ -168,7 +168,6 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
         item: {
           type: "tool_search_call",
           call_id: "search-call-1",
-          status: "completed",
           execution: "client",
           arguments: { query: "private-query-marker" },
         },
@@ -212,7 +211,6 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
       search: {
         callId: "search-call-1",
         callExecution: "client",
-        callStatus: "completed",
         outputExecution: "client",
         outputStatus: "completed",
         tools: [

@@ -479,14 +479,11 @@ describe("buildQaGatewayConfig", () => {
       providerMode: "live-frontier",
       forcedRuntime: "codex",
       runtimeSelection: "configured",
-      primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
     });
 
-    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"]).toEqual({
-      agentRuntime: { id: "codex" },
-    });
-    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.4"]).toEqual({
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({
       agentRuntime: { id: "codex" },
     });
   });

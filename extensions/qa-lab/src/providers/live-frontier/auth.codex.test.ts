@@ -11,44 +11,26 @@ describe("Codex-backed live QA auth preflight", () => {
         providerIds: ["openai"],
         env: { CODEX_HOME: codexHome },
         readCodexCredentials: () => null,
-        readCodexApiKey: () => null,
       }),
     ).toThrow("QA live-frontier cannot run Codex-backed OpenAI models");
   });
 
-  it("returns an API-key-only Codex home credential for the child without mutating inputs", () => {
+  it("accepts an API key injected by the QA launcher without mutating inputs", () => {
     const cfg = {};
-    const env = { CODEX_HOME: codexHome };
     const apiKey = "synthetic-qa-key";
-    const readCodexCredentials = vi.fn(() => null);
-    const readCodexApiKey = vi.fn(() => ({
-      type: "api_key" as const,
-      provider: "openai" as const,
-      key: apiKey,
-    }));
+    const env = { CODEX_HOME: codexHome, CODEX_API_KEY: apiKey };
 
-    const childEnvPatch = assertQaLiveCodexAuthAvailable({
-      cfg,
-      providerIds: ["openai"],
-      env,
-      readCodexCredentials,
-      readCodexApiKey,
-    });
-
-    expect(childEnvPatch).toEqual({ CODEX_API_KEY: apiKey });
-    expect(env).toEqual({ CODEX_HOME: codexHome });
+    expect(() =>
+      assertQaLiveCodexAuthAvailable({
+        cfg,
+        providerIds: ["openai"],
+        env,
+        readCodexCredentials: () => null,
+      }),
+    ).not.toThrow();
+    expect(env).toEqual({ CODEX_HOME: codexHome, CODEX_API_KEY: apiKey });
     expect(cfg).toEqual({});
-    expect(JSON.stringify(env)).not.toContain(apiKey);
     expect(JSON.stringify(cfg)).not.toContain(apiKey);
-    expect(readCodexCredentials).toHaveBeenCalledWith({
-      codexHome,
-      allowKeychainPrompt: false,
-      ttlMs: 5_000,
-    });
-    expect(readCodexApiKey).toHaveBeenCalledWith({
-      codexHome,
-      allowKeychainPrompt: false,
-    });
   });
 
   it("retains OAuth-first Codex home acceptance", () => {
@@ -59,7 +41,6 @@ describe("Codex-backed live QA auth preflight", () => {
       refresh: "refresh-token",
       expires: Date.now() + 60_000,
     }));
-    const readCodexApiKey = vi.fn(() => null);
 
     expect(
       assertQaLiveCodexAuthAvailable({
@@ -67,7 +48,6 @@ describe("Codex-backed live QA auth preflight", () => {
         providerIds: ["openai"],
         env: { CODEX_HOME: codexHome },
         readCodexCredentials,
-        readCodexApiKey,
       }),
     ).toBeUndefined();
     expect(readCodexCredentials).toHaveBeenCalledWith({
@@ -75,6 +55,5 @@ describe("Codex-backed live QA auth preflight", () => {
       allowKeychainPrompt: false,
       ttlMs: 5_000,
     });
-    expect(readCodexApiKey).not.toHaveBeenCalled();
   });
 });

@@ -12,7 +12,7 @@ scenario:
   successCriteria:
     - image_generate appears in the effective tool inventory.
     - Agent triggers native image_generate.
-    - Live Codex proof records matching tool_search call/output discovery linked to the successful image_generate result.
+    - Configured live Codex proof records matching tool_search call/output discovery linked to the successful image_generate result.
     - Persisted history records exactly one successful generation action, independently of status queries.
     - Tool output returns a saved MEDIA path and the file exists.
     - The generated-media completion produces exactly one outbound channel delivery containing the saved PNG bytes.
@@ -24,8 +24,13 @@ scenario:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
-    liveConfiguredRuntime: codex
-    summary: Verify image_generate appears when configured and returns a real saved media artifact.
+    liveConfiguredRuntime:
+      id: codex
+      model: openai/gpt-5.5
+    summary: >-
+      For native Codex discovery proof, select --provider-mode live-frontier --model openai/gpt-5.5 --alt-model openai/gpt-5.5.
+      Other model selections retain their general runtime route.
+      Verify image_generate appears when configured and returns a real saved media artifact.
     channel: qa-channel
     config:
       prompt: "Image generation check: generate a QA lighthouse image and summarize it in one short sentence."
@@ -186,8 +191,8 @@ flow:
         - if:
             expr: >-
               !env.mock
-              && String(env.primaryModel ?? '').startsWith('openai/')
-              && env.gateway.runtimeEnv?.OPENCLAW_QA_FORCE_RUNTIME !== 'openclaw'
+              && env.runtimeId === 'codex'
+              && env.runtimeSelection === 'configured'
             then:
               - call: requireToolSearchDiscoveryEvidence
                 saveAs: imageSearchDiscovery

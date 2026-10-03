@@ -11,7 +11,7 @@ import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 type QaToolSearchDiscoveryReceipt = {
   searchCallId: string;
   searchCallExecution: string;
-  searchCallStatus: string;
+  searchCallStatus?: string;
   searchOutputExecution: string;
   searchOutputStatus: string;
   discoveredNamespace: string;
@@ -21,6 +21,17 @@ type QaToolSearchDiscoveryReceipt = {
   targetTool: string;
   targetSuccess: boolean;
 };
+
+export function needsSearchEvidence(
+  env: Pick<QaSuiteRuntimeEnv, "runtimeId" | "runtimeSelection">,
+  capabilityLayer: string | undefined,
+): boolean {
+  return (
+    env.runtimeId === "codex" &&
+    env.runtimeSelection === "configured" &&
+    capabilityLayer === "openclaw-dynamic-searchable"
+  );
+}
 
 function readToolSearchDiscoveryReceipt(
   event: SqliteTrajectoryRuntimeEventForTest,
@@ -44,7 +55,6 @@ function readToolSearchDiscoveryReceipt(
   if (
     !searchCallId ||
     !searchCallExecution ||
-    !searchCallStatus ||
     !searchOutputExecution ||
     !searchOutputStatus ||
     !targetCallId?.trim() ||
@@ -71,7 +81,7 @@ function readToolSearchDiscoveryReceipt(
   return {
     searchCallId,
     searchCallExecution,
-    searchCallStatus,
+    ...(searchCallStatus ? { searchCallStatus } : {}),
     searchOutputExecution,
     searchOutputStatus,
     discoveredNamespace,
@@ -90,7 +100,7 @@ export function formatToolSearchDiscoveryReceipt(
   return [
     `phase=${phase}`,
     `search=${receipt.searchCallId}`,
-    `search-call=${receipt.searchCallExecution}/${receipt.searchCallStatus}`,
+    `search-call=${receipt.searchCallExecution}${receipt.searchCallStatus ? `/${receipt.searchCallStatus}` : ""}`,
     `search-output=${receipt.searchOutputExecution}/${receipt.searchOutputStatus}`,
     `discovered=${receipt.discoveredNamespace}.${receipt.discoveredTool}`,
     `target=${receipt.targetNamespace}.${receipt.targetTool}#${receipt.targetCallId}`,

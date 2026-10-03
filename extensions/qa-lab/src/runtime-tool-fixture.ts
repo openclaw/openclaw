@@ -33,7 +33,7 @@ import {
   formatCodexNativeWorkspaceDetails,
   runCodexNativeWorkspaceFixture,
 } from "./runtime-tool-native-workspace.js";
-import { requireRuntimeToolSearchDiscoveryDetails } from "./runtime-tool-search-evidence.js";
+import * as searchEvidence from "./runtime-tool-search-evidence.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
@@ -762,16 +762,15 @@ export async function runRuntimeToolFixture(
         new Error("expected live apply_patch failure to explicitly reject the workspace boundary"),
       );
     }
-    const discoveryDetails =
-      metadata.capabilityLayer === "openclaw-dynamic-searchable"
-        ? await runFixtureOperation(() =>
-            requireRuntimeToolSearchDiscoveryDetails(env, {
-              sessionKeys: [happySessionKey, failureSessionKey],
-              callIds: [happyRequest.executedRequest?.id, failureRequest.executedRequest?.id],
-              toolName,
-            }),
-          )
-        : [];
+    const discoveryDetails = searchEvidence.needsSearchEvidence(env, metadata.capabilityLayer)
+      ? await runFixtureOperation(() =>
+          searchEvidence.requireRuntimeToolSearchDiscoveryDetails(env, {
+            sessionKeys: [happySessionKey, failureSessionKey],
+            callIds: [happyRequest.executedRequest?.id, failureRequest.executedRequest?.id],
+            toolName,
+          }),
+        )
+      : [];
     return withSessionDetails(
       [
         `${toolName} live provider happy planned args (diagnostic only): ${JSON.stringify(happyRequest.plannedRequest?.args ?? {})}`,

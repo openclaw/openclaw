@@ -18,6 +18,8 @@ import {
 import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
 import type { QaRuntimeSelection, RuntimeId } from "./runtime-id.js";
 
+const OPENCLAW_QA_CODEX_API_KEY_HANDOFF = "OPENCLAW_QA_CODEX_API_KEY_HANDOFF";
+
 const QA_GATEWAY_CHILD_BLOCKED_ENV_VARS = Object.freeze([
   // QA owns this child; parent service and test-runner markers describe a different process.
   ...SUPERVISOR_HINT_ENV_VARS,
@@ -27,6 +29,7 @@ const QA_GATEWAY_CHILD_BLOCKED_ENV_VARS = Object.freeze([
   "BASH_ENV",
   "BASHOPTS",
   "ENV",
+  OPENCLAW_QA_CODEX_API_KEY_HANDOFF,
   "OPENCLAW_QA_CONVEX_SECRET_CI",
   "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
   "OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL",
@@ -120,6 +123,13 @@ export function buildQaRuntimeEnv(params: {
   delete normalizedEnv.OPENCLAW_SKIP_PROVIDERS;
   delete normalizedEnv.OPENCLAW_SKIP_CRON;
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  const codexApiKeyHandoff =
+    params.providerMode === "live-frontier"
+      ? normalizedEnv[OPENCLAW_QA_CODEX_API_KEY_HANDOFF]?.trim()
+      : undefined;
+  if (codexApiKeyHandoff && !normalizedEnv.CODEX_API_KEY?.trim()) {
+    normalizedEnv.CODEX_API_KEY = codexApiKeyHandoff;
+  }
   // Child scratch and default compiler caches share the Gateway's joined cleanup lifetime.
   normalizedEnv.TMPDIR = params.tempRoot;
   normalizedEnv.TMP = params.tempRoot;

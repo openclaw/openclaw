@@ -9,7 +9,6 @@ import {
   resolveEnvApiKey,
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
-import { readCodexCliActiveApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { writeQaAuthProfiles } from "../shared/auth-store.js";
 
@@ -259,26 +258,21 @@ export async function stageQaLiveApiKeyProfiles(params: {
   return next;
 }
 
-export type QaLiveCodexAuthEnvPatch = {
-  CODEX_API_KEY: string;
-};
-
 export function assertQaLiveCodexAuthAvailable(params: {
   cfg: OpenClawConfig;
   providerIds: readonly string[];
   env?: NodeJS.ProcessEnv;
   readCodexCredentials?: typeof readCodexCliCredentialsCached;
-  readCodexApiKey?: typeof readCodexCliActiveApiKey;
-}): QaLiveCodexAuthEnvPatch | undefined {
+}): void {
   const env = params.env ?? process.env;
   if (!qaLiveRequiresCodexAuth({ cfg: params.cfg, providerIds: params.providerIds, env })) {
-    return undefined;
+    return;
   }
   if (
     resolveQaLiveEnvApiKey({ providerId: QA_OPENAI_PROVIDER_ID, env, cfg: params.cfg })?.apiKey ||
     hasQaLiveStagedApiKeyProfile({ cfg: params.cfg, providerId: QA_OPENAI_PROVIDER_ID })
   ) {
-    return undefined;
+    return;
   }
   const readCodexCredentials = params.readCodexCredentials ?? readCodexCliCredentialsCached;
   const codexHome = env.CODEX_HOME?.trim();
@@ -288,15 +282,7 @@ export function assertQaLiveCodexAuthAvailable(params: {
     ttlMs: 5_000,
   });
   if (codexCredential) {
-    return undefined;
-  }
-  const readCodexApiKey = params.readCodexApiKey ?? readCodexCliActiveApiKey;
-  const codexApiKey = readCodexApiKey({
-    ...(codexHome ? { codexHome } : {}),
-    allowKeychainPrompt: false,
-  });
-  if (codexApiKey) {
-    return { CODEX_API_KEY: codexApiKey.key };
+    return;
   }
   throw new Error(
     [

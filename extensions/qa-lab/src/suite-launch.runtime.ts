@@ -55,6 +55,7 @@ import { createQaSuiteProgressController } from "./suite-progress.js";
 import {
   partitionSharedQaFlowScenarios,
   resolveQaScenarioRuntimeRoute,
+  scenarioDeclaresQaRuntimeRoute,
 } from "./suite-runtime-route.js";
 import { rejectRemovedQaChannelDriverSelection } from "./suite-types.js";
 import {
@@ -616,9 +617,7 @@ async function resolveSuiteExecutionPlan(
     channelGroups.some(
       (group) => group.channel !== undefined && group.channel !== params?.channelId,
     ) ||
-    flowScenarios.some(
-      (scenario) => scenario.execution.kind === "flow" && scenario.execution.runtime !== undefined,
-    ) ||
+    flowScenarios.some(scenarioDeclaresQaRuntimeRoute) ||
     (flowScenarios.length > 1 && flowScenarios.some(scenarioRequiresIsolatedQaSuiteWorker));
   if (testFileScenariosByKind.size === 0 && !requiresFlowPartitions) {
     return { kind: "flow", expectedCells, scenarios: selectedScenarios };
@@ -1003,7 +1002,7 @@ async function runUnifiedQaSuite(params: {
         scenarioRequiresIsolatedQaSuiteWorker,
       );
       const runtimeFlowScenarios = isolatedFlowScenarios.flatMap((scenario) =>
-        resolveQaScenarioRuntimeRoute(scenario, providerMode),
+        resolveQaScenarioRuntimeRoute(scenario, providerMode, params.runParams),
       );
       const runtimeScenarioSet = new Set(runtimeFlowScenarios.map(({ scenario }) => scenario));
       const ordinaryIsolatedFlowScenarios = isolatedFlowScenarios.filter(
@@ -1105,9 +1104,10 @@ async function runUnifiedQaSuite(params: {
             if (unavailableDetails) {
               return buildCredentialUnavailableResult(unavailableDetails);
             }
+            const [partitionScenario] = partition.scenarios;
             const [scenarioRuntimeRoute] =
               partition.scenarios.length === 1
-                ? resolveQaScenarioRuntimeRoute(partition.scenarios[0]!, providerMode)
+                ? resolveQaScenarioRuntimeRoute(partitionScenario!, providerMode, params.runParams)
                 : [];
             const result = await runFlowSuite({
               ...params.runParams,
