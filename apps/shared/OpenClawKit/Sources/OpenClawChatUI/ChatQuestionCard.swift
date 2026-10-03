@@ -624,11 +624,6 @@ private enum QuestionLookupResult {
     case failed
 }
 
-private struct QuestionRefreshApplyResult {
-    let complete: Bool
-    let changed: Bool
-}
-
 extension OpenClawChatViewModel {
     /// Retained attachment controls may outlive a Gateway account, but its questions cannot.
     public func retireQuestionAuthority() {
@@ -748,7 +743,7 @@ extension OpenClawChatViewModel {
 
     private func applyQuestionRefresh(
         records: [QuestionRecord],
-        lookups: [(OpenClawQuestionCardModel, QuestionLookupResult)]) -> QuestionRefreshApplyResult
+        lookups: [(OpenClawQuestionCardModel, QuestionLookupResult)]) -> (complete: Bool, changed: Bool)
     {
         var changed = false
         for record in records {
@@ -778,7 +773,7 @@ extension OpenClawChatViewModel {
             self.questionStateRevision &+= 1
             self.markTimelineChanged()
         }
-        return QuestionRefreshApplyResult(complete: complete, changed: changed)
+        return (complete: complete, changed: changed)
     }
 
     private func clearPendingQuestionsForUnavailableList() {

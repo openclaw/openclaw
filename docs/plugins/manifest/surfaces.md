@@ -42,6 +42,11 @@ Set `doctorContract.configRepair: true` when the doctor-contract module exports
 non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
 both. One declaration covers the complete config-repair artifact.
 
+The config-repair module can export `historicalWebhookListener` to describe a
+retired default endpoint. The existing compatibility normalizer reports eligible
+accounts; the host owns the one-shot pin and completion write.
+See [webhook migration contracts](/plugins/sdk-overview/infrastructure#webhook-body-rejection).
+
 When Doctor renames saved credentials, it updates exact `authProfileId` and
 `defaultAuthProfileId` references inside plugin config and channel config. This
 preserves the shipped `authProfileId` migration and also covers defaults such as

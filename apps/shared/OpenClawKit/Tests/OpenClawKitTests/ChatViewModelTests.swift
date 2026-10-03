@@ -1840,7 +1840,7 @@ struct ChatViewModelTests {
 
         await MainActor.run {
             vm.pendingRuns = ["run-1"]
-            vm.clearPendingRuns(reason: nil)
+            vm.clearPendingRuns()
         }
         #expect(await MainActor.run { vm.progressCard?.revision } == 1)
         #expect(await fetchCalls.current() == 2)
@@ -5495,7 +5495,7 @@ struct ChatViewModelTests {
 
         #expect(await MainActor.run { vm.pendingRunCount } == 1)
         #expect(await MainActor.run { vm.streamingAssistantText } == "Here is the result so far")
-        await MainActor.run { vm.clearPendingRuns(reason: nil) }
+        await MainActor.run { vm.clearPendingRuns() }
     }
 
     @Test(arguments: ["agent-first", "delta-first", "delta-only"])

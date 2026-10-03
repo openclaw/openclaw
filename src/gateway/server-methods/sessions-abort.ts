@@ -35,6 +35,7 @@ import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/age
 import { waitForChatAbortTerminalPersistence } from "../chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
+import { formatStopRequest } from "../control-plane-audit.js";
 import { resolveSessionForRun } from "../server-session-key.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import {
@@ -165,6 +166,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsAbortParams, "sessions.abort", respond)) {
       return;
     }
+    context.logGateway.info(formatStopRequest("sessions.abort", client, params));
     const p = params;
     const cfg = context.getRuntimeConfig();
     const requestedRunId = readStringValue(p.runId);

@@ -1,10 +1,7 @@
-import { once } from "node:events";
-import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getActivePluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
@@ -22,22 +19,17 @@ import {
 } from "./monitor.webhook.test-helpers.js";
 
 const host = vi.hoisted(() => ({
-  ownsLegacyListeners: true,
   listener: undefined as { port: number; host?: string } | undefined,
 }));
 vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/webhook-ingress")>()),
-  get getWebhookLegacyListener() {
-    return host.ownsLegacyListeners ? () => host.listener : undefined;
-  },
+  getWebhookLegacyListener: () => host.listener,
 }));
 
 const running: Array<{ abort: AbortController; monitor: Promise<void> }> = [];
-const portClaims: Array<Awaited<ReturnType<typeof acquireTestPortBlock>>> = [];
 const payload = { schema: "2.0", event: {} };
 let gatewayPort: number;
 beforeEach(async () => {
-  host.ownsLegacyListeners = true;
   host.listener = undefined;
   gatewayPort = await getGatewayPort();
 });
@@ -46,10 +38,6 @@ afterEach(async () => {
     entry.abort.abort();
   }
   await Promise.allSettled(running.splice(0).map((entry) => entry.monitor));
-  await using claims = new AsyncDisposableStack();
-  for (const claim of portClaims.splice(0)) {
-    claims.defer(() => claim.release());
-  }
   await cleanupFeishuMonitorStateForTests();
 });
 afterAll(() => {
@@ -111,43 +99,22 @@ function start(
   };
 }
 
-async function reservePort(port: number) {
-  const server = createServer();
-  server.listen(port, "127.0.0.1");
-  await once(server, "listening");
-  return new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-}
-async function claimPort() {
-  const claim = await acquireTestPortBlock({ offsets: [0] });
-  portClaims.push(claim);
-  return claim.port;
-}
-async function startLegacy(
-  port: number,
-  options: {
-    accountId?: string;
-    disabled?: boolean;
-    abort?: AbortController;
-    invoke?: MonitorParams["invokeWebhookEvent"];
-  } = {},
-) {
-  const accountId = options.accountId ?? "floor";
-  const account = createFeishuWebhookTestAccount(accountId, `/hook-${accountId}`);
-  account.config.legacyWebhook = options.disabled ? false : { port, host: "127.0.0.1" };
-  const entry = start(accountId, { ...options, account });
-  await entry.ready;
-  return { ...entry, url: `http://127.0.0.1:${port}${account.config.webhookPath}` };
-}
-
 describe("Feishu webhook route configuration", () => {
   it.each(["finish", "timeout"] as const)(
     "drains an authenticated response during account shutdown until %s",
     async (ending) => {
+      const account = createFeishuWebhookTestAccount(
+        "shutdown-response",
+        "/hook-shutdown-response",
+      );
+      if (ending === "finish") {
+        account.config.legacyWebhook = { port: 3000, host: "127.0.0.1" };
+        host.listener = account.config.legacyWebhook;
+      }
       const invoked = createDeferred<void>();
       const releaseDispatch = createDeferred<void>();
       const entry = start("shutdown-response", {
+        account,
         invoke: async () => {
           invoked.resolve();
           await releaseDispatch.promise;
@@ -168,6 +135,11 @@ describe("Feishu webhook route configuration", () => {
       );
       try {
         await invoked.promise;
+        expect(
+          getActivePluginRegistry()?.httpRoutes.find(
+            (route) => route.path === account.config.webhookPath,
+          )?.legacyListeners ?? [],
+        ).toEqual(ending === "finish" ? [account.config.legacyWebhook] : []);
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         entry.abort.abort();
         await vi.advanceTimersByTimeAsync(0);
@@ -252,33 +224,39 @@ describe("Feishu webhook route configuration", () => {
     { path: "/health", reason: "is reserved for Gateway probes" },
     { path: "/%61pi/channels/feishu?tenant=test", reason: "requires Gateway authentication" },
   ])(
-    "keeps the default legacy listener for restricted path $path until explicitly disabled",
+    "keeps an explicit legacy listener for restricted path $path and rejects an omitted listener",
     async ({ path, reason }) => {
       const account = createFeishuWebhookTestAccount("reserved-path", path);
       const eventDispatcher = new Lark.EventDispatcher({ encryptKey: "encrypt_key" });
       const invoke = vi.spyOn(eventDispatcher, "invoke").mockResolvedValue({ accepted: true });
       const denied = start(account.accountId, {
-        account: {
-          ...account,
-          config: FeishuConfigSchema.parse({ ...account.config, legacyWebhook: false }),
-        },
+        account,
         eventDispatcher,
       });
       await expect(denied.ready).rejects.toThrow(`webhookPath ${JSON.stringify(path)} ${reason}`);
       host.listener = { port: 3000, host: "127.0.0.1" };
-      const entry = start(account.accountId, { account, eventDispatcher });
+      const entry = start(account.accountId, {
+        account: {
+          ...account,
+          config: FeishuConfigSchema.parse({ ...account.config, legacyWebhook: { port: 3000 } }),
+        },
+        eventDispatcher,
+      });
       await entry.ready;
       const response = await postSignedPayload(entry.url, payload);
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({ accepted: true });
       expect(invoke).toHaveBeenCalledOnce();
       expect(entry.runtime.log).toHaveBeenCalledWith(
-        expect.stringContaining("before setting legacyWebhook:false"),
+        expect.stringContaining("before removing the legacyWebhook pin"),
       );
     },
   );
 
-  it("disables an inherited legacy listener without disabling Gateway delivery", async () => {
+  it.each([
+    { label: "an omitted listener", root: undefined, accountSetting: undefined },
+    { label: "an inherited listener override", root: { port: 3100 }, accountSetting: false },
+  ] as const)("keeps Gateway delivery with $label", async ({ root, accountSetting }) => {
     const fixture = createFeishuWebhookTestAccount(
       "legacy-bind-address",
       "/hook-legacy-bind-address",
@@ -291,8 +269,8 @@ describe("Feishu webhook route configuration", () => {
             ...fixture.config,
             appId: "cli_test",
             appSecret: "secret_test",
-            legacyWebhook: { port: 3100 },
-            accounts: { [fixture.accountId]: { legacyWebhook: false } },
+            legacyWebhook: root,
+            accounts: { [fixture.accountId]: { legacyWebhook: accountSetting } },
           }),
         },
       },
@@ -369,109 +347,4 @@ describe("Feishu webhook route configuration", () => {
       await entry.monitor;
     }
   });
-});
-
-describe("Feishu webhook host compatibility", () => {
-  beforeEach(() => {
-    host.ownsLegacyListeners = false;
-  });
-  it("serves the shipped account endpoint with the existing signature and path checks", async () => {
-    const port = await claimPort();
-    const entry = await startLegacy(port);
-    const url = entry.url;
-    const wrongPath = await postSignedPayload(`${url}/other`, { schema: "2.0", event: {} });
-    expect(wrongPath.status).toBe(404);
-    await wrongPath.text();
-    const unsigned = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json", connection: "close" },
-      body: JSON.stringify({ schema: "2.0", event: {} }),
-    });
-    expect(unsigned.status).toBe(401);
-    await unsigned.text();
-    expect(entry.invoked).not.toHaveBeenCalled();
-    const accepted = await postSignedPayload(url, { schema: "2.0", event: {} });
-    expect(accepted.status).toBe(200);
-    await expect(accepted.json()).resolves.toEqual({ accountId: "floor" });
-    expect(entry.invoked).toHaveBeenCalledOnce();
-    expect(getActivePluginRegistry()?.httpRoutes[0]?.legacyListeners).toBeUndefined();
-  });
-
-  it("stops listener admission before draining an authenticated response and permits rebinding", async () => {
-    const port = await claimPort();
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    const entry = await startLegacy(port, {
-      invoke: async () => {
-        entered.resolve();
-        await release.promise;
-        return { kind: "non-durable", value: { completed: true } };
-      },
-    });
-    const url = entry.url;
-    const response = postSignedPayload(url, { schema: "2.0", event: {} });
-    let stopped = false;
-    void entry.monitor.then(() => {
-      stopped = true;
-    });
-    try {
-      await entered.promise;
-      entry.abort.abort();
-      await expect(fetch(url, { headers: { connection: "close" } })).rejects.toMatchObject(
-        process.versions.bun ? { code: "ECONNREFUSED" } : { cause: { code: "ECONNREFUSED" } },
-      );
-      expect(stopped).toBe(false);
-      release.resolve();
-      const accepted = await response;
-      expect(accepted.status).toBe(200);
-      await expect(accepted.json()).resolves.toEqual({ completed: true });
-      await entry.monitor;
-      await reservePort(port);
-    } finally {
-      release.resolve();
-      entry.abort.abort();
-      await response.catch(() => {});
-      await entry.monitor;
-    }
-  });
-
-  it("keeps the shipped per-account bind refusal without disturbing the live account", async () => {
-    const port = await claimPort();
-    const first = await startLegacy(port, { accountId: "first" });
-    await expect(startLegacy(port, { accountId: "second" })).rejects.toMatchObject({
-      code: "EADDRINUSE",
-    });
-    const response = await postSignedPayload(first.url, {
-      schema: "2.0",
-      event: {},
-    });
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ accountId: "first" });
-    expect(
-      getActivePluginRegistry()?.httpRoutes.some((route) => route.path === "/hook-second"),
-    ).toBe(false);
-  });
-
-  it.each(["capable-host", "disabled", "already-aborted"] as const)(
-    "does not own a listener for %s",
-    async (mode) => {
-      const port = await claimPort();
-      host.ownsLegacyListeners = mode === "capable-host";
-      const abort = new AbortController();
-      if (mode === "already-aborted") {
-        setFeishuBotIdentityState("floor", "ou_stopped");
-        abort.abort();
-      }
-      await startLegacy(port, { disabled: mode === "disabled", abort });
-      await reservePort(port);
-      const routes = getActivePluginRegistry()?.httpRoutes ?? [];
-      expect(routes).toHaveLength(mode === "already-aborted" ? 0 : 1);
-      if (mode === "already-aborted") {
-        expect(botOpenIds.has("floor")).toBe(false);
-      }
-      expect(routes[0]?.legacyListeners).toEqual(
-        mode === "capable-host" ? [{ port, host: "127.0.0.1" }] : undefined,
-      );
-    },
-  );
 });

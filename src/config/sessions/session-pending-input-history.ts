@@ -175,7 +175,10 @@ async function readPendingInputRows(
     });
     assertCurrent();
     const ids = snapshot.rows
-      .filter((row) => row.state === "queued" && !owns(path, row, snapshot.currentSessionId))
+      .filter(
+        (row) =>
+          row.state === "queued" && !owns(identity.canonicalPath, row, snapshot.currentSessionId),
+      )
       .map((row) => row.input_id);
     if (!ids.length) {
       return snapshot;
@@ -215,8 +218,12 @@ async function readPendingInputRows(
                     if (!isRecord(facts) || facts.kind !== "pending-input-history-custody") {
                       throw new Error("Pending input history omitted custody facts");
                     }
-                    // SAFETY: The paired bounded kernel owns this grant payload; it conveys facts, never authority.
-                    admitCustody(path, request.stage, facts as PendingInputHistoryGrant);
+                    admitCustody(
+                      identity.canonicalPath,
+                      request.stage,
+                      // SAFETY: The paired bounded kernel owns this grant payload; it conveys facts, never authority.
+                      facts as PendingInputHistoryGrant,
+                    );
                     if (request.stage === "commit") {
                       admitted = { admission, retained };
                     }

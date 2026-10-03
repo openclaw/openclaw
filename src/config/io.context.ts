@@ -43,7 +43,7 @@ import type {
   ConfigRecoveryCandidatePreparation,
 } from "./io.types.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
-import { copyConfigResolutionFacts } from "./resolution-facts.js";
+import { copyConfigResolutionFacts, setConfigResolutionFacts } from "./resolution-facts.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
@@ -222,7 +222,9 @@ export function createConfigIoContext(
       includeFileTargets,
     );
     const resolution = resolveConfigForRead(resolvedIncludes, env, deps.lowerPrecedenceEnv);
-    return coerceConfig(applyImplicitAgentRosterDefaults(resolution.resolvedConfigRaw));
+    const config = coerceConfig(applyImplicitAgentRosterDefaults(resolution.resolvedConfigRaw));
+    setConfigResolutionFacts(config, resolution.resolutionFacts);
+    return config;
   }
 
   function* prepareRecoveryBackupCandidateSteps(

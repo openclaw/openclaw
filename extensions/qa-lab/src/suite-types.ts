@@ -15,7 +15,7 @@ import type {
   QaTransportId,
 } from "./qa-transport-registry.js";
 import type { QaReportCheck } from "./report.js";
-import type { RuntimeId } from "./runtime-id.js";
+import type { QaRuntimeSelection, RuntimeId } from "./runtime-id.js";
 import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
@@ -99,6 +99,7 @@ export type QaSuiteRunParams = {
   transportReadyTimeoutMs?: number;
   workerStartStaggerMs?: number;
   forcedRuntime?: RuntimeId;
+  runtimeSelection?: QaRuntimeSelection;
   runtimePair?: [RuntimeId, RuntimeId];
   captureRuntimeParityCell?: boolean;
   roundTripProbe?: QaSuiteRoundTripProbe;

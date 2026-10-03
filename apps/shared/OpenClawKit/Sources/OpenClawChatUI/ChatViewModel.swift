@@ -880,7 +880,7 @@ extension OpenClawChatViewModel {
         self.invalidateProgressCardTarget()
         self.invalidateOutboxBranchReconciliation()
         self.healthOK = false
-        clearPendingRuns(reason: nil)
+        clearPendingRuns()
         self.clearStreamingActivity()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         self.sessionId = nil
@@ -992,9 +992,7 @@ extension OpenClawChatViewModel {
                 self.updateActiveSessionRunWithoutChatSnapshot(self.pendingRuns.isEmpty)
             } else {
                 self.updateActiveSessionRunWithoutChatSnapshot(false)
-                clearPendingRuns(
-                    reason: nil,
-                    hapticEvent: assistantHapticEventAfterLatestUser())
+                clearPendingRuns(hapticEvent: assistantHapticEventAfterLatestUser())
                 self.clearStreamingActivity()
             }
         }
@@ -1268,7 +1266,7 @@ extension OpenClawChatViewModel {
         self.sessionBranches = []
         self.isLoadingSessionBranches = false
         self.sessionBranchSwitchActivity = nil
-        clearPendingRuns(reason: nil)
+        clearPendingRuns()
     }
 
     func performReset() async {
