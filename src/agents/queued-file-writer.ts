@@ -8,7 +8,7 @@ import path from "node:path";
 import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { appendRegularFile } from "../infra/fs-safe.js";
 
-export type QueuedFileWriterDiagnostics = {
+type QueuedFileWriterDiagnostics = {
   pendingWrites: number;
   queuedBytes: number;
   activeOperation: "idle" | "mkdir" | "yield" | "file-append";

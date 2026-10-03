@@ -1146,7 +1146,7 @@ packages/ai/src/transports/openai-responses-client.ts	11
 packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
-packages/ai/src/transports/openai-responses-debug.ts	11
+packages/ai/src/transports/openai-responses-debug.ts	10
 packages/ai/src/transports/openai-responses-params-internal.ts	5
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
@@ -2428,7 +2428,7 @@ src/infra/windows-shell-command.ts	1
 src/interactive/payload.ts	1
 src/llm/providers/stream-wrappers/google-thinking-payload.ts	3
 src/llm/providers/stream-wrappers/moonshot-thinking.ts	2
-src/llm/providers/stream-wrappers/openai.ts	11
+src/llm/providers/stream-wrappers/openai.ts	8
 src/llm/providers/stream-wrappers/stream-payload-utils.ts	1
 src/llm/utils/node-http-proxy.ts	1
 src/llm/utils/oauth/anthropic.ts	2
@@ -2686,7 +2686,7 @@ src/process/supervisor/adapters/child.ts	2
 src/process/supervisor/adapters/pty.ts	1
 src/process/terminal-pty.ts	1
 src/process/windows-command.ts	1
-src/provider-runtime/operation-retry.ts	3
+src/provider-runtime/operation-retry.ts	2
 src/proxy-capture/env.ts	1
 src/proxy-capture/store.sqlite.ts	2
 src/realtime-transcription/websocket-session.ts	2
@@ -2796,7 +2796,7 @@ src/talk/exact-speech-protocol.ts	1
 src/talk/provider-internal.ts	2
 src/talk/provider-resolver.ts	1
 src/talk/turn-context-tracker.ts	2
-src/trajectory/export.ts	14
+src/trajectory/export.ts	9
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	4
 src/transcripts/config.ts	2
