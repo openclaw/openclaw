@@ -39,6 +39,7 @@ import { VERSION } from "../../version.js";
 import { registerGatewayCli } from "../gateway-cli/register.js";
 import { registerDaemonCli } from "./register.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
+import { registerStatusConfigReadTests } from "./status.gather.config-read.test-support.js";
 import { gatherDaemonStatus } from "./status.gather.js";
 import {
   callGatewayStatusProbe,
@@ -159,6 +160,7 @@ const readConfigFileSnapshotCalls = vi.fn((configPath: string) => configPath);
 const loadConfigCalls = vi.fn((configPath: string) => configPath);
 let daemonConfigWarnings: Array<{ path: string; message: string }> = [];
 let cliConfigWarnings: Array<{ path: string; message: string }> = [];
+let cliConfigIssues: Array<{ path: string; message: string }> = [];
 let daemonLoadedConfig: Record<string, unknown> = {
   gateway: {
     bind: "lan",
@@ -203,6 +205,7 @@ vi.mock("../../config/io.runtime.js", () => ({
     const isDaemon = configPath.includes("/openclaw-daemon/");
     const runtimeConfig = isDaemon ? daemonLoadedConfig : cliLoadedConfig;
     const warnings = isDaemon ? daemonConfigWarnings : cliConfigWarnings;
+    const issues = isDaemon ? [] : cliConfigIssues;
     createConfigIOCalls(configPath, pluginValidation, observe);
     return {
       readConfigFileSnapshot: async () => {
@@ -210,8 +213,8 @@ vi.mock("../../config/io.runtime.js", () => ({
         return {
           path: configPath,
           exists: true,
-          valid: true,
-          issues: [],
+          valid: issues.length === 0,
+          issues,
           warnings: pluginValidation === "full" ? warnings : [],
           runtimeConfig,
           config: runtimeConfig,
@@ -219,6 +222,9 @@ vi.mock("../../config/io.runtime.js", () => ({
       },
       loadConfig: () => {
         loadConfigCalls(configPath);
+        if (issues.length > 0) {
+          throw new Error(`Invalid config at ${configPath}`);
+        }
         return runtimeConfig;
       },
     };
@@ -516,6 +522,7 @@ describe("gatherDaemonStatus", () => {
     loadConfigCalls.mockClear();
     daemonConfigWarnings = [];
     cliConfigWarnings = [];
+    cliConfigIssues = [];
     daemonLoadedConfig = {
       gateway: {
         bind: "lan",
@@ -1193,6 +1200,19 @@ describe("gatherDaemonStatus", () => {
     ]);
   });
 
+  registerStatusConfigReadTests({
+    gatherStatus,
+    withStatusConfig,
+    createConfigIOCalls,
+    loadConfigCalls,
+    setCliConfigIssues: (issues) => {
+      cliConfigIssues = issues;
+    },
+    setCliConfig: (config) => {
+      cliLoadedConfig = config;
+    },
+  });
+
   registerStatusTimeoutTests({
     gatherStatus,
     serviceIsLoaded,
@@ -1537,47 +1557,6 @@ describe("gatherDaemonStatus", () => {
         expect(status.config?.daemon).toBe(status.config?.cli);
         expect(status.gateway?.bindMode).toBe("custom");
         expect(status.gateway?.customBindHost).toBe("10.0.0.5");
-      },
-      true,
-    );
-  });
-
-  it("uses the fast config path when the config file is missing", async () => {
-    await withStatusConfig(
-      undefined,
-      async (configPath) => {
-        const status = await gatherStatus({ probe: false });
-
-        expect(createConfigIOCalls).not.toHaveBeenCalled();
-        expect(status.config?.cli).toEqual({
-          path: configPath,
-          exists: false,
-          valid: true,
-        });
-        expect(status.config?.daemon).toBe(status.config?.cli);
-        expect(status.gateway).toMatchObject({
-          bindMode: "loopback",
-          port: 19001,
-        });
-      },
-      true,
-    );
-  });
-
-  it("keeps malformed JSON5 on the fast invalid-summary path", async () => {
-    await withStatusConfig(
-      "{ gateway:",
-      async (configPath) => {
-        const status = await gatherStatus({ probe: false });
-
-        expect(createConfigIOCalls).not.toHaveBeenCalled();
-        expect(status.config?.cli).toMatchObject({
-          path: configPath,
-          exists: true,
-          valid: false,
-        });
-        expect(status.config?.cli.issues?.[0]?.message).toContain("JSON5 parse failed");
-        expect(status.config?.daemon).toBe(status.config?.cli);
       },
       true,
     );

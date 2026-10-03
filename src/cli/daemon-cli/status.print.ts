@@ -224,7 +224,10 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           port: status.gateway.port,
           bind: status.gateway.bindMode,
           customBindHost: status.gateway.customBindHost,
-          basePath: status.config?.daemon?.controlUi?.basePath,
+          basePath:
+            typeof status.config?.daemon?.controlUi?.basePath === "string"
+              ? status.config.daemon.controlUi.basePath
+              : undefined,
           tlsEnabled: status.gateway.tlsEnabled === true,
         });
       printInfo("Dashboard:", links.httpUrl);

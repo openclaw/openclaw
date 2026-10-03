@@ -1,16 +1,9 @@
-import fs from "node:fs/promises";
-import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
-import JSON5 from "json5";
 import {
   isDefaultInstallIdentity,
   resolveConfigPath,
   resolveStateDir,
 } from "../../config/paths.js";
-import type {
-  OpenClawConfig,
-  ConfigFileSnapshot,
-  GatewayControlUiConfig,
-} from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectGatewayHeapLimit } from "../../daemon/gateway-heap.js";
@@ -26,7 +19,6 @@ import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
   readGatewaySecretInputValue,
 } from "../../gateway/secret-input-paths.js";
-import { hasErrnoCode } from "../../infra/errno.js";
 import { readGatewayLastShutdown } from "../../infra/gateway-boot-lifecycle.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
@@ -47,6 +39,7 @@ import { VERSION } from "../../version.js";
 import { resolveGatewayLocalPortOverride } from "../gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { normalizeListenerAddress } from "./shared.js";
+import { type ConfigSummary, readStatusConfig } from "./status.config-read.js";
 import {
   inspectDaemonPortStatuses,
   resolveGatewayStatusProbeConfig,
@@ -54,15 +47,6 @@ import {
 } from "./status.gateway.js";
 import { readDaemonServiceStatus } from "./status.service.js";
 import type { GatewayRpcOpts } from "./types.js";
-
-type ConfigSummary = {
-  path: string;
-  exists: boolean;
-  valid: boolean;
-  issues?: Array<{ path: string; message: string }>;
-  warnings?: ConfigFileSnapshot["warnings"];
-  controlUi?: GatewayControlUiConfig;
-};
 
 type DaemonConfigContext = {
   mergedDaemonEnv: Record<string, string | undefined>;
@@ -73,121 +57,18 @@ type DaemonConfigContext = {
   configMismatch: boolean;
 };
 
-type StatusConfigRead = {
-  summary: ConfigSummary;
-  cfg: OpenClawConfig;
-  mode: "fast" | "full";
-};
-
 type CliStatusSummary = {
   version: string;
   entrypoint?: string;
 };
 
 const loadGatewayProbeAuthModule = createLazyPromise(() => import("../../gateway/probe-auth.js"));
-const loadConfigIoRuntime = createLazyPromise(() => import("../../config/io.runtime.js"));
 const loadDaemonInspectModule = createLazyPromise(() => import("../../daemon/inspect.js"));
 const loadLaunchdDiagnosticsModule = createLazyPromise(() => import("./status.launchd.js"));
 const loadServiceAuditModule = createLazyPromise(() => import("../../daemon/service-audit.js"));
 const loadGatewayTlsModule = createLazyPromise(() => import("../../infra/tls/gateway.js"));
 const loadDaemonProbeModule = createLazyPromise(() => import("./probe.js"));
 const loadRestartHealthModule = createLazyPromise(() => import("./restart-health.js"));
-
-async function readFastStatusConfig(configPath: string): Promise<StatusConfigRead | null> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(configPath, "utf8");
-  } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    return {
-      summary: { path: configPath, exists: false, valid: true },
-      cfg: {},
-      mode: "fast",
-    };
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON5.parse(raw);
-  } catch (err) {
-    return {
-      summary: {
-        path: configPath,
-        exists: true,
-        valid: false,
-        issues: [{ path: "", message: `JSON5 parse failed: ${String(err)}` }],
-      },
-      cfg: {},
-      mode: "fast",
-    };
-  }
-
-  const cfg: OpenClawConfig = asNonArrayRecord(parsed);
-  // Includes and environment expansion require the full config owner.
-  if (raw.includes("$include") || raw.includes("${") || Object.hasOwn(cfg, "env")) {
-    return null;
-  }
-
-  return {
-    summary: {
-      path: configPath,
-      exists: true,
-      valid: true,
-      controlUi: cfg.gateway?.controlUi,
-    },
-    cfg,
-    mode: "fast",
-  };
-}
-
-async function readFullStatusConfig(params: {
-  env: NodeJS.ProcessEnv;
-  configPath: string;
-  pluginValidation?: "full" | "skip";
-}): Promise<StatusConfigRead> {
-  const { createConfigIO } = await loadConfigIoRuntime();
-  const io = createConfigIO({
-    env: params.env,
-    configPath: params.configPath,
-    observe: false,
-    pluginValidation: params.pluginValidation ?? "skip",
-    logger: {
-      error: () => {},
-      warn: () => {},
-    },
-  });
-  const snapshot = await io.readConfigFileSnapshot().catch(() => null);
-  const cfg = (snapshot?.valid && snapshot.runtimeConfig) || io.loadConfig();
-  return {
-    summary: {
-      path: snapshot?.path ?? params.configPath,
-      exists: snapshot?.exists ?? false,
-      valid: snapshot?.valid ?? true,
-      ...(snapshot?.issues?.length ? { issues: snapshot.issues } : {}),
-      ...(snapshot?.warnings?.length ? { warnings: snapshot.warnings } : {}),
-      controlUi: cfg.gateway?.controlUi,
-    },
-    cfg,
-    mode: "full",
-  };
-}
-
-async function readStatusConfig(params: {
-  env: NodeJS.ProcessEnv;
-  configPath: string;
-  deep?: boolean;
-}): Promise<StatusConfigRead> {
-  return (
-    (params.deep ? null : await readFastStatusConfig(params.configPath)) ??
-    (await readFullStatusConfig({
-      env: params.env,
-      configPath: params.configPath,
-      pluginValidation: params.deep ? "full" : "skip",
-    }))
-  );
-}
 
 function resolveCliStatusSummary(argv: string[] = process.argv): CliStatusSummary {
   const entrypoint = argv[1]?.trim();
@@ -614,7 +495,9 @@ async function gatherDaemonStatusImpl(
 
   return {
     cli: resolveCliStatusSummary(),
-    logFile: resolveConfiguredLogFilePath(cliCfg),
+    logFile: resolveConfiguredLogFilePath(
+      typeof cliCfg.logging?.file === "string" ? cliCfg : undefined,
+    ),
     service: {
       inspectionReason: serviceState.inspectionReason,
       label: formatServiceLabel(service.label, runtime),

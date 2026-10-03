@@ -513,6 +513,32 @@ describe("printDaemonStatus", () => {
     });
   });
 
+  it("drops a non-string daemon base path before dashboard link rendering", () => {
+    printDaemonStatus({
+      service: runningService,
+      config: {
+        cli: { path: "/tmp/openclaw-cli/openclaw.json", exists: true, valid: false },
+        daemon: {
+          path: "/tmp/openclaw-daemon/openclaw.json",
+          exists: true,
+          valid: false,
+          controlUi: { basePath: 42 as unknown as string },
+        },
+      },
+      gateway: {
+        bindMode: "loopback",
+        bindHost: "127.0.0.1",
+        port: 19001,
+        portSource: "env/config",
+        probeUrl: "ws://127.0.0.1:19001",
+      },
+    });
+
+    expect(resolveControlUiLinksMock).toHaveBeenCalledWith(
+      expect.objectContaining({ basePath: undefined }),
+    );
+  });
+
   it("prints extra gateways as warnings with cleanup scoped to the detected gateway", () => {
     const extraService = {
       platform: "darwin" as const,

@@ -83,6 +83,10 @@ export function resolveGatewayStatusProbeConfig(params: {
   };
 }
 
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 export async function resolveGatewayStatusSummary(params: {
   daemonCfg: OpenClawConfig;
   cliCfg: OpenClawConfig;
@@ -99,7 +103,8 @@ export async function resolveGatewayStatusSummary(params: {
   const portSource: GatewayStatusSummary["portSource"] =
     params.localPortOverride !== undefined ? "cli" : portFromArgs ? "service args" : "env/config";
   const bindMode: GatewayBindMode = params.daemonCfg.gateway?.bind ?? "loopback";
-  const customBindHost = params.daemonCfg.gateway?.customBindHost;
+  // Status also runs on invalid configs, so string fields may hold any JSON value.
+  const customBindHost = readString(params.daemonCfg.gateway?.customBindHost);
   const { bindHost, warning: bindHostWarning } = await resolveBestEffortGatewayBindHostForDisplay({
     bindMode,
     customBindHost,
@@ -124,7 +129,7 @@ export async function resolveGatewayStatusSummary(params: {
           port: daemonPort,
           bind: bindMode,
           customBindHost,
-          basePath: params.daemonCfg.gateway?.controlUi?.basePath,
+          basePath: readString(params.daemonCfg.gateway?.controlUi?.basePath),
           tlsEnabled,
         });
   let probeNote =
