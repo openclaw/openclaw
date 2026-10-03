@@ -7,6 +7,7 @@ import type {
 
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
   if (
+    command.type === "secrets.metadata" ||
     command.type === "sessionState.versions" ||
     command.type === "sessionState.events" ||
     command.type === "operatorApprovals.history" ||

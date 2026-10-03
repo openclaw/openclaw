@@ -36,15 +36,15 @@ function readStoredGatewayToken(): string | undefined {
  * the gateway unauthenticatable, while an entry whose config write later fails is simply
  * picked up by the next run.
  */
-export function provisionGatewayTokenStoreRef(params: {
+export async function provisionGatewayTokenStoreRef(params: {
   config: GatewayTokenStoreRefConfig;
   token?: string;
-}): { ref: SecretRef; token: string } {
+}): Promise<{ ref: SecretRef; token: string }> {
   const stored = params.token ? undefined : readStoredGatewayToken();
   const token = params.token ?? stored ?? randomToken();
   assertSecretStoreValue(token, "secret", GATEWAY_AUTH_TOKEN_STORE_NAME);
   if (token !== stored) {
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: GATEWAY_AUTH_TOKEN_STORE_SCOPE,
       name: GATEWAY_AUTH_TOKEN_STORE_NAME,
       value: token,

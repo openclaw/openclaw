@@ -212,7 +212,7 @@ export async function runNonInteractiveLocalSetup(params: {
 
   // Validate the complete Gateway proposal before provider methods or first-
   // agent creation can write credentials, config, or workspace state.
-  const gatewayResult = applyNonInteractiveGatewayConfig({
+  const gatewayResult = await applyNonInteractiveGatewayConfig({
     nextConfig,
     opts,
     runtime,

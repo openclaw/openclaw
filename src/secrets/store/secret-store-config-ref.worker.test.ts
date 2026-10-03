@@ -23,7 +23,7 @@ afterEach(async () => {
 });
 
 it("saves a chat secret beside an existing entry without touching it", async () => {
-  writeSecretStoreEntry({
+  await writeSecretStoreEntry({
     scope: team,
     name: "GATEWAY_REMOTE_TOKEN",
     value: "owned-elsewhere",
@@ -63,5 +63,5 @@ it("writes nothing when the requester is revoked after the caller's check", asyn
     }),
   ).rejects.toThrow("no longer active");
 
-  expect(listSecretStoreEntries({ scope: team, includeDeleted: true })).toEqual([]);
+  expect(await listSecretStoreEntries({ scope: team, includeDeleted: true })).toEqual([]);
 });

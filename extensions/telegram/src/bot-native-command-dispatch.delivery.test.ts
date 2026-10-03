@@ -129,6 +129,13 @@ describe("Telegram typed command delivery", () => {
         quote: { text: "Photo to check", position: 0 },
       },
     });
+    expect(harness.replySpy).toHaveBeenCalledTimes(1);
+    expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+      CommandSource: "native",
+      CommandTurn: { kind: "native", body: "/btw check this pls" },
+      ReplyToBody: expect.stringContaining("Photo to check"),
+      media: expect.arrayContaining([expect.objectContaining({ path: "/tmp/replied-photo.jpg" })]),
+    });
     expect(apiCalls).toHaveBeenCalledWith(
       "sendMessage",
       expect.objectContaining({
@@ -175,70 +182,66 @@ describe("Telegram typed command delivery", () => {
 });
 
 describe("Telegram native argument menus", () => {
-  it("inherits a user-selected parent model for a DM-topic keyboard", async () => {
-    const cfg = commandConfig({
-      agents: {
-        defaults: {
-          model: "native-test/plain",
-          thinkingDefault: "low",
-          models: { "native-test/reasoner": {} },
-        },
-      },
-    });
-    await upsertSessionEntry({
-      storePath: cfg.session!.store!,
-      sessionKey: "agent:main:main",
-      entry: {
-        sessionId: "parent",
-        updatedAt: 1,
-        providerOverride: "native-test",
-        modelOverride: "reasoner",
-        modelOverrideSource: "user",
-      },
-    });
-    await (
-      await createBot(true, true, cfg, true)
-    ).handleUpdate({
-      update_id: 3101,
-      message: { ...commandMessage("/think"), message_thread_id: 77 },
-    });
-    expect(sentMenu().reply_markup.inline_keyboard.flat()).toContainEqual({
-      text: "max",
-      callback_data: "tgcmd:/think max",
-    });
-    expect(apiCalls).toHaveBeenCalledWith(
-      "sendMessage",
-      expect.objectContaining({ message_thread_id: 77 }),
-    );
-  });
-
-  it.each(["high", "off"] as const)(
-    "shows the routed agent's per-model %s thinking level in its DM-topic menu",
+  it.each(["parent", "high", "off"] as const)(
+    "uses the %s model settings for a DM-topic keyboard",
     async (thinking) => {
-      const cfg = commandConfig({
-        agents: {
-          ownership: "explicit",
-          defaults: {
-            model: "native-test/reasoner",
-            thinkingDefault: "medium",
-            models: { "native-test/reasoner": { params: { thinking: "low" } } },
-          },
-          entries: {
-            main: {},
-            alpha: {
-              models: { "native-test/reasoner": { params: { thinking } } },
+      const inherited = thinking === "parent";
+      const cfg = commandConfig(
+        inherited
+          ? {
+              agents: {
+                defaults: {
+                  model: "native-test/plain",
+                  thinkingDefault: "low",
+                  models: { "native-test/reasoner": {} },
+                },
+              },
+            }
+          : {
+              agents: {
+                ownership: "explicit",
+                defaults: {
+                  model: "native-test/reasoner",
+                  thinkingDefault: "medium",
+                  models: { "native-test/reasoner": { params: { thinking: "low" } } },
+                },
+                entries: {
+                  main: {},
+                  alpha: { models: { "native-test/reasoner": { params: { thinking } } } },
+                },
+              },
+              bindings: [
+                { agentId: "alpha", match: { channel: "telegram", accountId: "default" } },
+              ],
             },
+      );
+      if (inherited) {
+        await upsertSessionEntry({
+          storePath: cfg.session!.store!,
+          sessionKey: "agent:main:main",
+          entry: {
+            sessionId: "parent",
+            updatedAt: 1,
+            providerOverride: "native-test",
+            modelOverride: "reasoner",
+            modelOverrideSource: "user",
           },
-        },
-        bindings: [{ agentId: "alpha", match: { channel: "telegram", accountId: "default" } }],
-      });
+        });
+      }
       await (
         await createBot(true, true, cfg, true)
       ).handleUpdate({
-        update_id: 3102,
+        update_id: 3101,
         message: { ...commandMessage("/think"), message_thread_id: 77 },
       });
-      expect(sentMenu().text).toContain(`Current thinking level: ${thinking}.\n`);
+      if (inherited) {
+        expect(sentMenu().reply_markup.inline_keyboard.flat()).toContainEqual({
+          text: "max",
+          callback_data: "tgcmd:/think max",
+        });
+      } else {
+        expect(sentMenu().text).toContain(`Current thinking level: ${thinking}.\n`);
+      }
       expect(apiCalls).toHaveBeenCalledWith(
         "sendMessage",
         expect.objectContaining({ message_thread_id: 77 }),
@@ -379,33 +382,49 @@ describe("Telegram registered plugin delivery", () => {
     );
   }
 
-  it("edits the accepted progress message with buttons and emits one accepted sent event", async () => {
+  it.each([false, true])("settles a progress edit once (rejected: %s)", async (rejected) => {
+    rejectEdit = rejected;
+    const cfg = pluginConfig();
+    cfg.channels!.telegram!.silentErrorReplies = rejected;
     const sent = vi.fn();
     addTestHook({ registry, pluginId: "delivery-test", hookName: "message_sent", handler: sent });
     initializeGlobalHookRunner(registry);
-    registerCommand(async () => ({
-      text: "Choose a deployment",
-      channelData: { telegram: { buttons: [[{ text: "Deploy", callback_data: "deploy" }]] } },
-    }));
+    registerCommand(async () =>
+      rejected
+        ? { text: "Deployment failed", isError: true }
+        : {
+            text: "Choose a deployment",
+            channelData: { telegram: { buttons: [[{ text: "Deploy", callback_data: "deploy" }]] } },
+          },
+    );
     await (
-      await createBot(true, true, pluginConfig())
-    ).handleUpdate({
-      update_id: 3200,
-      message: commandMessage("/plug"),
-    });
-    expect(effects().map(({ method }) => method)).toEqual(["sendMessage", "editMessageText"]);
-    expect([chat.id, String(chat.id)]).toContain(effects()[1]?.payload.chat_id);
-    expect(effects()[1]?.payload).toMatchObject({
-      message_id: 701,
-      text: "Choose a deployment",
-      reply_markup: { inline_keyboard: [[{ text: "Deploy", callback_data: "deploy" }]] },
-    });
-    expect(sent).toHaveBeenCalledOnce();
-    expect(sent.mock.calls[0]?.[0]).toMatchObject({
-      success: true,
-      messageId: "701",
-      content: "Choose a deployment",
-    });
+      await createBot(true, true, cfg)
+    ).handleUpdate({ update_id: 3200, message: commandMessage("/plug") });
+    expect(effects().map(({ method }) => method)).toEqual(
+      rejected
+        ? ["sendMessage", "editMessageText", "deleteMessage", "sendMessage"]
+        : ["sendMessage", "editMessageText"],
+    );
+    if (rejected) {
+      expect(effects()[2]?.payload).toMatchObject({ message_id: 701 });
+      expect(effects()[3]?.payload).toMatchObject({
+        text: "Deployment failed",
+        disable_notification: true,
+      });
+    } else {
+      expect([chat.id, String(chat.id)]).toContain(effects()[1]?.payload.chat_id);
+      expect(effects()[1]?.payload).toMatchObject({
+        message_id: 701,
+        text: "Choose a deployment",
+        reply_markup: { inline_keyboard: [[{ text: "Deploy", callback_data: "deploy" }]] },
+      });
+      expect(sent).toHaveBeenCalledOnce();
+      expect(sent.mock.calls[0]?.[0]).toMatchObject({
+        success: true,
+        messageId: "701",
+        content: "Choose a deployment",
+      });
+    }
   });
 
   it("delivers plugin media only from the routed agent workspace", async () => {
@@ -512,88 +531,57 @@ describe("Telegram registered plugin delivery", () => {
     },
   );
 
-  it("removes rejected progress before sending one silent final error", async () => {
-    rejectEdit = true;
+  it.each([
+    "local approval",
+    "explicit suppressReply",
+    "metadata-only",
+    "undefined",
+    "button-only",
+  ] as const)("distinguishes %s results from an empty response", async (kind) => {
+    const suppressed = kind === "local approval" || kind === "explicit suppressReply";
     const cfg = pluginConfig();
-    cfg.channels!.telegram!.silentErrorReplies = true;
-    registerCommand(async () => ({ text: "Deployment failed", isError: true }));
-    await (
-      await createBot(true, true, cfg)
-    ).handleUpdate({
-      update_id: 3202,
-      message: commandMessage("/plug"),
-    });
-    expect(effects().map(({ method }) => method)).toEqual([
-      "sendMessage",
-      "editMessageText",
-      "deleteMessage",
-      "sendMessage",
-    ]);
-    expect(effects()[2]?.payload).toMatchObject({ message_id: 701 });
-    expect(effects()[3]?.payload).toMatchObject({
-      text: "Deployment failed",
-      disable_notification: true,
-    });
-  });
-
-  it.each(["local approval", "explicit suppressReply"] as const)(
-    "leaves no placeholder or ordinary reply for %s",
-    async (kind) => {
-      const cfg = pluginConfig();
+    if (suppressed) {
       cfg.channels!.telegram!.execApprovals = {
         enabled: true,
         approvers: [String(from.id)],
         target: "dm",
       };
-      registerCommand(async () =>
+    }
+    registerCommand(
+      async () =>
         kind === "explicit suppressReply"
           ? { suppressReply: true }
-          : {
-              text: "Approval required.",
-              channelData: {
-                execApproval: {
-                  approvalId: "7f423fdc-1111-2222-3333-444444444444",
-                  approvalSlug: "7f423fdc",
-                  allowedDecisions: ["allow-once", "deny"],
+          : kind === "local approval"
+            ? {
+                text: "Approval required.",
+                channelData: {
+                  execApproval: {
+                    approvalId: "7f423fdc-1111-2222-3333-444444444444",
+                    approvalSlug: "7f423fdc",
+                    allowedDecisions: ["allow-once", "deny"],
+                  },
                 },
-              },
-            },
-      );
-      await (
-        await createBot(true, true, cfg)
-      ).handleUpdate({
-        update_id: 3203,
-        message: commandMessage("/plug"),
-      });
+              }
+            : kind === "undefined"
+              ? (undefined as never)
+              : kind === "metadata-only"
+                ? { channelData: { plugin: { traceId: "trace-1" } } }
+                : {
+                    channelData: {
+                      telegram: { buttons: [[{ text: "Retry", callback_data: "retry" }]] },
+                    },
+                  },
+      { progress: suppressed },
+    );
+    await (
+      await createBot(true, true, cfg)
+    ).handleUpdate({ update_id: 3203, message: commandMessage("/plug") });
+    if (suppressed) {
       expect(effects()).toMatchObject([
         { method: "sendMessage" },
         { method: "deleteMessage", payload: { message_id: 701 } },
       ]);
-    },
-  );
-
-  it.each(["metadata-only", "undefined", "button-only"] as const)(
-    "distinguishes %s results from an empty response",
-    async (kind) => {
-      registerCommand(
-        async () =>
-          kind === "undefined"
-            ? (undefined as never)
-            : kind === "metadata-only"
-              ? { channelData: { plugin: { traceId: "trace-1" } } }
-              : {
-                  channelData: {
-                    telegram: { buttons: [[{ text: "Retry", callback_data: "retry" }]] },
-                  },
-                },
-        { progress: false },
-      );
-      await (
-        await createBot(true, true, pluginConfig())
-      ).handleUpdate({
-        update_id: 3204,
-        message: commandMessage("/plug"),
-      });
+    } else {
       expect(effects()).toHaveLength(1);
       const delivered = effects()[0]?.payload;
       if (kind === "button-only") {
@@ -604,8 +592,8 @@ describe("Telegram registered plugin delivery", () => {
       } else {
         expect(delivered?.text).toContain("No response generated");
       }
-    },
-  );
+    }
+  });
 
   it.each([99, undefined])("rejects unmatched arguments in forum topic %s", async (threadId) => {
     registerCommand(
