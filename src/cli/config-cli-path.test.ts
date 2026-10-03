@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
+import { parseConcreteConfigPathWithProvenance } from "../shared/dot-path.js";
 import {
   assertNonDestructiveReplacement,
   isConfigSchemaPath,
@@ -458,9 +459,11 @@ describe("local refs across a nested $id resource boundary", () => {
   });
 });
 
-// A `$defs.Map` is a record, so a numeric segment below it names a key, not an array slot. The
-// walker has to resolve the `$ref` before it can tell: an unresolved `{$ref}` schema yields no
+// A `$defs.Map` is a record, so a dotted numeric segment below it names a key, not an array slot.
+// The walker has to resolve the `$ref` before it can tell: an unresolved `{$ref}` schema yields no
 // candidate, and the fallback builds an array, which rewrites a map-shaped setting on `config set`.
+// Explicit `values[0]` is a different contract: the runner forwards the parser's numeric token, so
+// `shouldCreateArrayForMissingPathSegment` picks array before it consults the schema.
 const objectMapRefSchema = {
   $defs: {
     Map: { type: "object", additionalProperties: { type: "string" } },
@@ -476,16 +479,34 @@ const objectMapRefSchema = {
   },
 };
 
+/**
+ * Mirrors production write provenance: the input parser keeps the bracket token numeric
+ * (`config-cli-input.ts:310-314`) and the runner forwards it (`config-cli-runner.ts:415-418`).
+ */
+function productionWritePath(rawPath: string) {
+  const { tokens, quotedNumericSegments } = parseConcreteConfigPathWithProvenance(rawPath);
+  return { path: tokens.map(String), options: { pathTokens: tokens, quotedNumericSegments } };
+}
+
 describe("local refs to an object-shaped definition", () => {
-  it.each(["block.values[0]", "block.values.0"])("builds an object for the %s write", (rawPath) => {
+  it("builds an object for the dotted numeric write", () => {
+    const { path, options } = productionWritePath("block.values.0");
     const root: Record<string, unknown> = {};
-    setAtPath(root, parseConfigSetPath(rawPath), "first", { schema: objectMapRefSchema });
+    setAtPath(root, path, "first", { ...options, schema: objectMapRefSchema });
     expect(root).toEqual({ block: { values: { 0: "first" } } });
   });
 
-  it("keeps an authored map when a numeric key is added to it", () => {
+  it("keeps the explicit bracket index as an array", () => {
+    const { path, options } = productionWritePath("block.values[0]");
+    const root: Record<string, unknown> = {};
+    setAtPath(root, path, "first", { ...options, schema: objectMapRefSchema });
+    expect(root).toEqual({ block: { values: ["first"] } });
+  });
+
+  it("keeps an authored map when a dotted numeric key is added to it", () => {
+    const { path, options } = productionWritePath("block.values.0");
     const root: Record<string, unknown> = { block: { values: { note: "keep" } } };
-    setAtPath(root, parseConfigSetPath("block.values.0"), "first", { schema: objectMapRefSchema });
+    setAtPath(root, path, "first", { ...options, schema: objectMapRefSchema });
     expect(root).toEqual({ block: { values: { note: "keep", 0: "first" } } });
   });
 });
