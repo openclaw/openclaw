@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { isMainThread } from "node:worker_threads";
 import { WORKER_PROTOCOL_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_INFERENCE_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { hasInternalDiagnosticEventInterest } from "../../../infra/diagnostic-event-listener-presence.js";
@@ -23,6 +24,7 @@ const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INF
 export type GatewayRpcQueueTiming = { receivedAt: number; dequeuedAt: number };
 
 class GatewayRpcDiagnostics {
+  private readonly heapUsedAtStart = isMainThread ? process.memoryUsage().heapUsed : undefined;
   private trace = getActiveDiagnosticTraceContext();
   private queueStartedAt?: number;
   private queueWaitMs?: number;
@@ -59,9 +61,10 @@ class GatewayRpcDiagnostics {
     }
   }
 
-  response(outcome: ResponseOutcome): void {
+  response(outcome: ResponseOutcome, responseBytes?: number): void {
     const sent = outcome === "ok" || outcome === "error";
-    if (sent ? this.responseState === "sent" : this.deliveryFailureRecorded) {
+    const firstResponse = this.responseState !== "sent";
+    if (sent ? !firstResponse && responseBytes === undefined : this.deliveryFailureRecorded) {
       return;
     }
     if (sent) {
@@ -73,12 +76,14 @@ class GatewayRpcDiagnostics {
       }
     }
     // Acceptance and final frames can share one request and outlive its handler.
-    // Retain only the first successful send and first delivery failure separately.
+    // Keep first-response timing separate from each encoded frame's byte count.
     this.emit({
       type: "gateway.rpc",
       method: this.method,
       phase: "response",
       outcome,
+      firstResponse: sent ? firstResponse : undefined,
+      responseBytes,
       durationMs: performance.now() - this.startedAt,
     });
   }
@@ -117,6 +122,10 @@ class GatewayRpcDiagnostics {
       durationMs: performance.now() - this.startedAt,
       ...(this.queueWaitMs !== undefined ? { queueWaitMs: this.queueWaitMs } : {}),
       response: this.responseState,
+      heapDeltaBytes:
+        this.heapUsedAtStart === undefined
+          ? undefined
+          : process.memoryUsage().heapUsed - this.heapUsedAtStart,
     });
   }
 }

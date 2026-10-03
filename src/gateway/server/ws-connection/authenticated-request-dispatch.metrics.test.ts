@@ -15,6 +15,8 @@ import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { resetLogger, setLoggerOverride } from "../../../logging/logger.js";
+import { loggingState } from "../../../logging/state.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -33,6 +35,14 @@ import { createGatewayRpcDiagnostics } from "./request-diagnostics.js";
 // Compile the real router before timed cases; family preparation remains controlled below.
 import "../../server-methods.js";
 
+const thread = vi.hoisted(() => ({ isMainThread: true }));
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  get isMainThread() {
+    return thread.isMainThread;
+  },
+}));
+
 const scheduling = vi.hoisted(() => ({ start: vi.fn<() => Promise<void> | null>() }));
 vi.mock("./request-start.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./request-start.js")>()),
@@ -40,6 +50,7 @@ vi.mock("./request-start.js", async (importOriginal) => ({
 }));
 
 beforeEach(() => {
+  thread.isMainThread = true;
   resetDiagnosticEventsForTest();
   scheduling.start.mockReset().mockImplementation(() => Promise.resolve());
 });
@@ -85,6 +96,55 @@ function createRequest(handler: GatewayRequestHandler, method = "health") {
 }
 
 describe("authenticated Gateway RPC diagnostics", () => {
+  it.each([true, false])(
+    "records frame bytes and logs, sampling heap only on the main thread (main=%s)",
+    async (main) => {
+      thread.isMainThread = main;
+      let heapUsed = 4096;
+      const memory = process.memoryUsage();
+      const sample = vi
+        .spyOn(process, "memoryUsage")
+        .mockImplementation(() => ({ ...memory, heapUsed }));
+      let now = 1000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const output = vi.fn();
+      setLoggerOverride({ level: "silent", consoleLevel: "info" });
+      loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+      onTestFinished(() => {
+        setLoggerOverride(null);
+        loggingState.rawConsole = null;
+        resetLogger();
+      });
+      const completion = createDeferredCore();
+      const fixture = createRequest(async ({ respond }) => {
+        now = 2000;
+        respond(true, { accepted: true });
+        await completion.promise;
+        respond(true, { final: true });
+        heapUsed = 2048;
+        fixture.send.mockReturnValue({ kind: "unavailable" });
+        respond(true);
+      });
+      fixture.send.mockReturnValue({ kind: "sent", bytes: 1234 });
+      const dispatch = fixture.dispatch();
+      await fixture.awaitResponseFrame("private-request-id");
+      fixture.send.mockReturnValue({ kind: "sent", bytes: 8192 });
+      completion.resolve();
+      await dispatch;
+      await fixture.finished;
+      expect(fixture.events.find((event) => event.phase === "dispatch")).toMatchObject({
+        heapDeltaBytes: main ? -2048 : undefined,
+      });
+      expect(sample).toHaveBeenCalledTimes(main ? 2 : 0);
+      expect(output).toHaveBeenCalledWith(expect.stringMatching(/res.*health.*1000ms.*bytes=1234/));
+      expect(fixture.events.filter((event) => event.phase === "response")).toMatchObject([
+        { responseBytes: 1234, firstResponse: true },
+        { responseBytes: 8192, firstResponse: false },
+        { outcome: "unavailable", firstResponse: undefined, responseBytes: undefined },
+      ]);
+    },
+  );
+
   it.each(["family", "nested family", "family rejection"])(
     "keeps %s preparation separate from actual handler entry",
     async (preparation) => {
@@ -390,12 +450,17 @@ describe("authenticated Gateway RPC diagnostics", () => {
           kind: "serialization",
           error: new Error("synthetic encoding fault"),
         })
-        .mockReturnValueOnce({ kind: fallback });
+        .mockReturnValueOnce(
+          fallback === "sent" ? { kind: "sent", bytes: 256 } : { kind: "unavailable" },
+        );
       await fixture.dispatch();
       await fixture.finished;
       expect(fixture.send).toHaveBeenCalledTimes(2);
       expect(fixture.events.filter((event) => event.phase === "response")).toMatchObject([
-        { outcome: fallback === "sent" ? "error" : "unavailable" },
+        {
+          outcome: fallback === "sent" ? "error" : "unavailable",
+          responseBytes: fallback === "sent" ? 256 : undefined,
+        },
       ]);
     },
   );
@@ -474,6 +539,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
 
   it("takes no clocks or registry lookups when diagnostics are disabled or uninterested", () => {
     const clock = vi.spyOn(performance, "now");
+    const memory = vi.spyOn(process, "memoryUsage");
     const registry = vi.fn();
     expect(createGatewayRpcDiagnostics("health", registry, {})).toBeUndefined();
     const stopPublic = onDiagnosticEvent(() => {});
@@ -485,6 +551,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
     expect(createGatewayRpcDiagnostics("health", registry, {})).toBeUndefined();
     unsubscribe();
     expect(clock).not.toHaveBeenCalled();
+    expect(memory).not.toHaveBeenCalled();
     expect(registry).not.toHaveBeenCalled();
   });
 
