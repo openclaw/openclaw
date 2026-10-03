@@ -1255,9 +1255,21 @@ jobs:
             exit 1
           fi
 
+      - &checkout_test_bun
+        name: Checkout trusted Bun test runtime action
+        if: inputs.test_runtime == 'bun'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          path: .release-harness
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: .github/actions/setup-test-bun
+
       - name: Setup Bun test runtime
         if: inputs.test_runtime == 'bun'
-        uses: ./.github/actions/setup-test-bun
+        uses: ./.release-harness/.github/actions/setup-test-bun
 
       - name: Verify live prompt cache floors
         env:
@@ -1355,9 +1367,11 @@ jobs:
           OPENCLAW_BUILD_PRIVATE_QA: "1"
         run: pnpm build
 
+      - *checkout_test_bun
+
       - name: Setup Bun test runtime
         if: inputs.test_runtime == 'bun' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
-        uses: ./.github/actions/setup-test-bun
+        uses: ./.release-harness/.github/actions/setup-test-bun
 
       - name: Install OpenShell CLI
         if: |
