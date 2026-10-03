@@ -172,15 +172,11 @@ async function relabelCandidate(from, to) {
   // so the candidate's own package-verify step still proves the dist bytes.
   const buildInfo = fs.readFileSync(path.join(dir, "package/dist/build-info.json"));
   const inventoryFile = path.join(dir, "package/dist/postinstall-content-inventory.json");
-  const inventory = readJson(inventoryFile).map((entry) =>
-    entry.path === "dist/build-info.json"
-      ? {
-          ...entry,
-          sha256: createHash("sha256").update(buildInfo).digest("hex"),
-          size: buildInfo.length,
-        }
-      : entry,
-  );
+  const inventory = readJson(inventoryFile);
+  const buildInfoEntry = inventory.find((entry) => entry.path === "dist/build-info.json");
+  assert(buildInfoEntry, "Candidate inventory does not list dist/build-info.json");
+  buildInfoEntry.sha256 = createHash("sha256").update(buildInfo).digest("hex");
+  buildInfoEntry.size = buildInfo.length;
   fs.writeFileSync(inventoryFile, `${JSON.stringify(inventory, null, 2)}\n`);
   const relabeled = path.join(runtime, "openclaw-candidate-relabeled.tgz");
   await run("candidate-relabel-pack", "tar", ["-czf", relabeled, "-C", dir, "package"]);
