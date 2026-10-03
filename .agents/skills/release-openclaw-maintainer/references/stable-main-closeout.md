@@ -2,7 +2,12 @@
 
 This gate starts only after stable publication. It is a narrow shipped-state
 closeout, not permission to heal broader `main`. Stable publication is not
-complete until `main` carries the actual shipped release state.
+complete until `main` carries the actual shipped release state and the handoff
+records the exact merged closeout commit. Publication from the release branch
+and closeout on `main` are separate state transitions; never imply that
+publishing stable also advanced `main`. From publication until that exact
+commit is recorded, the handoff must mark main-based deployment blocked pending
+closeout.
 
 Closeout requires the original strict stable/full publication evidence with
 soak, blocking performance, and successful selected validation lanes. Historical
@@ -52,9 +57,23 @@ new evidence. Invalid or mismatched assets remain blocking.
 4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog
    section to `main` until the operator explicitly starts that release train.
 5. Run `pnpm release:generated:check`, `pnpm deps:npm-lock:check`, and
-   `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, then verify `origin/main`
-   contains the exact shipped notes and the validator-accepted shipped-or-later
-   stable version before calling the stable release done.
+   `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, resolve the closeout PR's exact
+   merged commit as `mainCloseoutSha`, and verify that commit is present on
+   `origin/main`. Read the changelog and `package.json` from
+   `mainCloseoutSha` itself; require the exact shipped notes and the
+   validator-accepted shipped-or-later stable version, then record that version
+   as `mainCloseoutVersion`. Keep
+   `mainDeploymentSourceStatus: blocked-pending-closeout` until these exact-commit
+   checks pass, then set it to `core-ready-at-recorded-closeout-sha`. Do not hand
+   a deployer `main`, "current main", "latest main", or a separately sampled
+   branch tip: those are moving references and can still identify the
+   pre-closeout version during the publication-to-closeout window. A main-based
+   deployment may select the recorded closeout commit or a later exact commit.
+   In either case, the downstream deployment owner must verify the selected
+   commit's package version against every configured plugin requirement before
+   launch. Core source readiness does not claim compatibility with downstream
+   private plugins. Do not call the stable release done until this exact-commit
+   handoff is recorded.
 6. Keep repository variables `RELEASE_ROLLBACK_DRILL_ID` and
    `RELEASE_ROLLBACK_DRILL_DATE` current after each private rollback drill.
    `openclaw-stable-main-closeout.yml` starts from the `main` push carrying the
