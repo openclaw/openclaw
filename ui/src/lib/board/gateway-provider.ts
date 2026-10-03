@@ -348,7 +348,7 @@ export class GatewayBoardProvider implements BoardProvider {
   }
 
   private async runRefreshLoop(): Promise<void> {
-    let retryDelayMs = 1_000;
+    const retry = { delayMs: 1_000 };
     while (this.refreshRequested) {
       if (this.disposed) {
         this.refreshRequested = false;
@@ -393,7 +393,7 @@ export class GatewayBoardProvider implements BoardProvider {
         // fresh snapshot. A state-generation change above still forces a reread.
         this.refreshRequested = false;
         this.setSnapshot(snapshot, changedWidgets);
-        retryDelayMs = 1_000;
+        retry.delayMs = 1_000;
       } catch (error) {
         if (this.disposed) {
           return;
@@ -423,9 +423,9 @@ export class GatewayBoardProvider implements BoardProvider {
           }
           return;
         }
-        const delayMs = retryDelayMs;
+        const delayMs = retry.delayMs;
         // Carry backoff across failed loop iterations; successful refreshes reset it above.
-        retryDelayMs = Math.min(delayMs * 2, 30_000);
+        retry.delayMs = Math.min(delayMs * 2, 30_000);
         await this.waitForRetry(delayMs);
         continue;
       }

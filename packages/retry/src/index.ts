@@ -9,13 +9,14 @@ export function createAbortError(message: string, options?: ErrorOptions): Error
 export function racePromiseWithAbortSignal<T>(
   operation: Promise<T> | (() => Promise<T>),
   signal?: AbortSignal,
-  createError: (signal: AbortSignal) => unknown = (signal) =>
-    createAbortError("Operation aborted", { cause: signal.reason }),
+  createError: (abortedSignal: AbortSignal) => unknown = (abortedSignal) =>
+    createAbortError("Operation aborted", { cause: abortedSignal.reason }),
 ): Promise<T> {
   const run = () => {
     try {
       return typeof operation === "function" ? operation() : operation;
     } catch (error) {
+      // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve the operation's rejection identity, including non-Error values.
       return Promise.reject(error);
     }
   };
@@ -25,11 +26,13 @@ export function racePromiseWithAbortSignal<T>(
   const abortError = () => createError(signal);
   if (signal.aborted) {
     // Observe an already-running source while preserving the existing abort's precedence.
+    // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Callers own abort reasons, including non-Error values.
     const aborted = Promise.reject(abortError());
     return typeof operation === "function" ? aborted : Promise.race([aborted, operation]);
   }
   let onAbort!: () => void;
   const aborted = new Promise<never>((_, reject) => {
+    // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Callers own abort reasons, including non-Error values.
     onAbort = () => reject(abortError());
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) {
@@ -55,6 +58,7 @@ export async function raceWithTimeout<T, F>(
         try {
           resolve(onTimeout());
         } catch (error) {
+          // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve the timeout callback's rejection identity.
           reject(error);
         }
       }, timeoutMs);

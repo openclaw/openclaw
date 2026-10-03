@@ -430,7 +430,7 @@ export async function runWithTimeout<T>(params: {
     const result = await raceWithTimeout(
       () => params.task(deadlineAtMs),
       timeoutMs,
-      () => TIMEOUT,
+      (): typeof TIMEOUT => TIMEOUT,
       { ref: false },
     );
     if (result === TIMEOUT || Date.now() >= deadlineAtMs) {

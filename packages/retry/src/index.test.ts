@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   computeBackoff,
   computeBackoffSchedule,
@@ -65,7 +66,7 @@ describe("raceWithTimeout", () => {
 
   it.each([0, 25])("returns the timeout result after %i ms without cancelling work", async (ms) => {
     vi.useFakeTimers();
-    const source = Promise.withResolvers<string>();
+    const source = createDeferred<string>();
     const onTimeout = vi.fn(() => "expired");
     const pending = raceWithTimeout(source.promise, ms, onTimeout);
     expect(onTimeout).not.toHaveBeenCalled();
@@ -79,7 +80,7 @@ describe("raceWithTimeout", () => {
 
   it("preserves a timeout error and observes a late source rejection", async () => {
     vi.useFakeTimers();
-    const source = Promise.withResolvers<never>();
+    const source = createDeferred<never>();
     const timeoutError = new Error("expired");
     const pending = raceWithTimeout(source.promise, 10, () => {
       throw timeoutError;

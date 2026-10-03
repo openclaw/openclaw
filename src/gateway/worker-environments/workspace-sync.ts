@@ -106,10 +106,10 @@ export function createWorkerWorkspaceActions(
   ): Promise<PreparedWorkerSsh> => {
     signal?.throwIfAborted();
     const operation = withTimeout(options.waitForPrepared(), timeoutMs, { message });
-    return await racePromiseWithAbortSignal(operation, signal, (signal) =>
-      signal.reason instanceof Error
-        ? signal.reason
-        : new Error("Worker workspace command aborted", { cause: signal.reason }),
+    return await racePromiseWithAbortSignal(operation, signal, (abortedSignal) =>
+      abortedSignal.reason instanceof Error
+        ? abortedSignal.reason
+        : new Error("Worker workspace command aborted", { cause: abortedSignal.reason }),
     );
   };
 
