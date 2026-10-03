@@ -1,4 +1,5 @@
 import type { TalkVoiceChangeEvent } from "@openclaw/gateway-protocol";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadSettings, patchSettings, type UiSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
@@ -27,6 +28,7 @@ export type ChatRealtimeState = {
   lastError?: string | null;
   chatError?: string | null;
   realtimeTalkActive: boolean;
+  realtimeTalkWorking: boolean;
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
   realtimeTalkInputNotice: string | null;
@@ -53,6 +55,7 @@ export function createInitialChatRealtimeState(): Pick<
 > {
   return {
     realtimeTalkActive: false,
+    realtimeTalkWorking: false,
     realtimeTalkStatus: "idle",
     realtimeTalkDetail: null,
     realtimeTalkInputNotice: null,
@@ -85,6 +88,7 @@ export function stopChatRealtimeTalk(
   state.realtimeTalkSession = null;
   state.realtimeTalkUseSystemDefault = null;
   state.realtimeTalkActive = false;
+  state.realtimeTalkWorking = false;
   state.realtimeTalkStatus = "idle";
   state.realtimeTalkDetail = null;
   state.realtimeTalkInputNotice = null;
@@ -255,6 +259,7 @@ export function attachChatRealtimeActions(
     const autoEnableCamera = talkSettings.talkCameraAutoEnable === true;
     let autoEnableCameraAttempted = false;
     state.realtimeTalkActive = true;
+    state.realtimeTalkWorking = false;
     state.realtimeTalkStatus = "connecting";
     state.realtimeTalkDetail = null;
     state.realtimeTalkInputNotice = null;
@@ -272,6 +277,7 @@ export function attachChatRealtimeActions(
           callback(...args);
         }
       };
+    let activeConsultCallId: string | undefined;
     const session: RealtimeTalkSession = new RealtimeTalkSession(
       client,
       sessionKey,
@@ -283,6 +289,8 @@ export function attachChatRealtimeActions(
           state.realtimeTalkCameraError = false;
           state.realtimeTalkActive = status !== "idle";
           if (status === "idle" || status === "error") {
+            activeConsultCallId = undefined;
+            state.realtimeTalkWorking = false;
             state.realtimeTalkInputNotice = null;
             state.realtimeTalkInputLevel.set(0);
           }
@@ -360,9 +368,28 @@ export function attachChatRealtimeActions(
           if (state.client !== client || state.sessionKey !== sessionKey) {
             return;
           }
+          const payload = asOptionalObjectRecord(event.payload);
+          if (
+            event.type === "tool.call" &&
+            event.callId &&
+            payload?.name === "openclaw_agent_consult"
+          ) {
+            activeConsultCallId = event.callId;
+            state.realtimeTalkWorking = true;
+            state.requestUpdate();
+          } else if (
+            (event.type === "tool.result" || event.type === "tool.error") &&
+            event.callId === activeConsultCallId
+          ) {
+            activeConsultCallId = undefined;
+            state.realtimeTalkWorking = false;
+            state.requestUpdate();
+          }
           if (event.type === "session.ready") {
             voiceController?.ready(session);
           } else if (event.type === "session.closed") {
+            activeConsultCallId = undefined;
+            state.realtimeTalkWorking = false;
             voiceController?.failed(session);
           }
         }),

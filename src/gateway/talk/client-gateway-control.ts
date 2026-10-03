@@ -291,11 +291,19 @@ export function createTalkClientGatewayControlOwner(params: {
     }: TalkAgentConsultRequest) => {
       assertActive();
       const consultId = Symbol("provider-consult");
+      const talkCallId = `native-consult-${randomUUID()}`;
+      const talkTurnId = harness.ensureTurn();
       const controller = new AbortController();
       const delegatedSignal = AbortSignal.any([consultSignal, controller.signal]);
       // Spoken controls see both kinds of consult. Transport detachment still
       // leaves accepted provider work under its own cancellation owner.
       consultControllers.set(consultId, { controller, closeDisposition: "detach" });
+      harness.emit({
+        type: "tool.call",
+        turnId: talkTurnId,
+        callId: talkCallId,
+        payload: { name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME },
+      });
       // A retained final outlives this consult promise, so every append must
       // revalidate the exact Gateway owner immediately before provider I/O.
       const ownerBoundRequesterFinal = requesterFinal
@@ -310,6 +318,7 @@ export function createTalkClientGatewayControlOwner(params: {
             },
           }
         : undefined;
+      let outcome: "completed" | "cancelled" | "failed" = "completed";
       try {
         if (completionClaimsAdopted) {
           return await params.runAgentConsult(
@@ -328,8 +337,21 @@ export function createTalkClientGatewayControlOwner(params: {
           assertActive,
           "native-delegation",
         );
+      } catch (error) {
+        outcome =
+          delegatedSignal.aborted || readErrorName(error) === "AbortError" ? "cancelled" : "failed";
+        throw error;
       } finally {
         consultControllers.delete(consultId);
+        if (owners.get(params.voiceSessionId) === owner) {
+          harness.emit({
+            type: outcome === "failed" ? "tool.error" : "tool.result",
+            turnId: talkTurnId,
+            callId: talkCallId,
+            payload: { name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME, status: outcome },
+            final: true,
+          });
+        }
       }
     },
     {

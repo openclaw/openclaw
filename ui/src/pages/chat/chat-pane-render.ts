@@ -474,6 +474,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       queue: state.chatQueue,
       queuedOutboxCount: state.chatQueue.filter((item) => !item.pendingRunId).length,
       realtimeTalkActive: state.realtimeTalkActive,
+      realtimeTalkWorking: state.realtimeTalkWorking,
       realtimeTalkStatus: state.realtimeTalkStatus,
       realtimeTalkDetail: state.realtimeTalkDetail,
       realtimeTalkInputNotice: state.realtimeTalkInputNotice,

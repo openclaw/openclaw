@@ -4157,6 +4157,7 @@ export const en: TranslationMap & {
       preparing: "Preparing voice session...",
       connecting: "Connecting voice input...",
       listening: "Listening...",
+      working: "Working...",
       selectionFailed: "Could not change voices. Restart the call.",
       selectionTimedOut: "Voice change timed out. Restart the call.",
       selectionConfirmationFailed: "Voice change unconfirmed.",

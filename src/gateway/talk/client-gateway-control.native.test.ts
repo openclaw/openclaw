@@ -160,6 +160,51 @@ describe("native Talk control admission", () => {
 });
 
 describe("Talk client reusable Gateway consults", () => {
+  it("broadcasts a correlated lifecycle for native delegated work", async () => {
+    const events: Array<{
+      type: string;
+      payload: unknown;
+      callId?: string;
+      final?: boolean;
+    }> = [];
+    const runAgentConsult = Object.assign(
+      vi.fn(async () => ({ text: "done" })),
+      {
+        claimAppend: vi.fn(() => true),
+        claimFailureAppend: vi.fn(() => true),
+      },
+    );
+    const owner = createTalkClientGatewayControlOwner({
+      voiceSessionId: "native-lifecycle",
+      connId: "native-lifecycle",
+      sessionTarget,
+      context: controlContext(vi.fn(), (event) => events.push(event)),
+      runToolAgentConsult: vi.fn(async () => ({ text: "done" })),
+      runAgentConsult,
+      appendTranscript: vi.fn(async () => undefined),
+      flushTranscript: vi.fn(async () => undefined),
+      closeLogicalSession: vi.fn(async () => undefined),
+    });
+    owner.control.bindBridge(controlBridge());
+    await owner.adoptProvider(vi.fn(async () => undefined));
+    owner.activate();
+    try {
+      await expect(owner.runAgentConsult({ prompt: "Do the work" })).resolves.toEqual({
+        text: "done",
+      });
+      const lifecycle = events.filter((event) => event.type.startsWith("tool."));
+      expect(lifecycle.map((event) => event.type)).toEqual(["tool.call", "tool.result"]);
+      expect(lifecycle[0]?.callId).toMatch(/^native-consult-/);
+      expect(lifecycle[1]).toMatchObject({
+        callId: lifecycle[0]?.callId,
+        final: true,
+        payload: { name: "openclaw_agent_consult", status: "completed" },
+      });
+    } finally {
+      await owner.close();
+    }
+  });
+
   it.each([
     { ending: "explicit-close", replacing: true, preserveRuns: undefined },
     { ending: "provider-close", replacing: true, preserveRuns: undefined },

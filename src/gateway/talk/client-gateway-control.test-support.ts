@@ -10,14 +10,26 @@ export const sessionTarget = {
 
 export function controlContext(
   warn = vi.fn(),
-  onTalkEvent?: (event: { type: string; payload: unknown }) => void,
+  onTalkEvent?: (event: {
+    type: string;
+    payload: unknown;
+    callId?: string;
+    final?: boolean;
+  }) => void,
 ) {
   return {
     logGateway: { warn },
     chatAbortControllers: new Map(),
     broadcastToConnIds: vi.fn((_name: string, payload: { talkEvent?: unknown }) => {
       if (payload.talkEvent) {
-        onTalkEvent?.(payload.talkEvent as { type: string; payload: unknown });
+        onTalkEvent?.(
+          payload.talkEvent as {
+            type: string;
+            payload: unknown;
+            callId?: string;
+            final?: boolean;
+          },
+        );
       }
     }),
   } as never;

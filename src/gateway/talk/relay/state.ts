@@ -65,6 +65,7 @@ export type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "toolCallCancelled"; callId: string }
   | { relaySessionId: string; type: "toolResult"; callId: string }
   | { relaySessionId: string; type: "toolProgress"; result: RealtimeVoiceAgentControlResult }
+  | { relaySessionId: string; type: "talkEvent" }
   | {
       relaySessionId: string;
       type: "error";
