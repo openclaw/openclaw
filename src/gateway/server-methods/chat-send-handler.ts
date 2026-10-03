@@ -397,7 +397,7 @@ async function handleChatSendWithOptions(
           throw new Error("Goal and its input were not durably admitted.");
         }
         if (admitted.value.initialSessionEntry) {
-          recordSessionCreated(preparedSession.value.cfg, {
+          await recordSessionCreated(preparedSession.value.cfg, {
             sessionKey,
             agentId: preparedSession.value.agentId,
             entry: persistedUserTurn.sessionEntry,

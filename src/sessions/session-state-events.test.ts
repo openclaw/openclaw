@@ -1,6 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
@@ -227,7 +226,7 @@ describe("session state events", () => {
     const event = recordSessionStateEvent(eventInput(), { ...database, now });
     expect(await getSessionStateVersion(child, "main", database)).toBe(event?.sequence);
 
-    sweepSessionStateWatchNotices({
+    await sweepSessionStateWatchNotices({
       ...database,
       now: now + SESSION_STATE_RETENTION_MS + 1,
     });
@@ -298,7 +297,7 @@ describe("session state events", () => {
     });
     expect(peekSystemEventEntries(watcher)).toEqual([]);
 
-    sweepSessionStateWatchNotices(database);
+    await sweepSessionStateWatchNotices(database);
     expect(peekSystemEventEntries(watcher)).toEqual([]);
   });
 
@@ -404,7 +403,7 @@ describe("session state events", () => {
     const material = recordSessionStateEvent(eventInput(), database)!;
     resetSystemEventsForTest();
 
-    sweepSessionStateWatchNotices(database);
+    await sweepSessionStateWatchNotices(database);
 
     expect(peekSystemEventEntries(watcher)).toHaveLength(1);
     expect(readCursor(database)?.notified_sequence).toBe(material.sequence);
@@ -438,7 +437,7 @@ describe("session state events", () => {
       .prepare("SELECT max(sequence) AS sequence FROM session_state_events")
       .get() as { sequence: number };
 
-    sweepSessionStateWatchNotices({ ...database, now });
+    await sweepSessionStateWatchNotices({ ...database, now });
     const count = db.prepare("SELECT count(*) AS count FROM session_state_events").get() as {
       count: number;
     };
@@ -449,7 +448,7 @@ describe("session state events", () => {
     expect(await getSessionStateVersion(child, "main", database)).toBe(next.sequence);
   });
 
-  it("prunes many composite session heads without recreating or regressing them", () => {
+  it("prunes many composite session heads without recreating or regressing them", async () => {
     const database = createDatabaseOptions();
     const { db } = openOpenClawStateDatabase(database);
     const now = SESSION_STATE_RETENTION_MS + 100;
@@ -504,14 +503,7 @@ describe("session state events", () => {
       updated_at: now,
     });
 
-    const updates = trackSqliteStatementExecutions(db, ["watermarks"], (sql) =>
-      /\bupdate\s+"?session_state_heads"?\b/i.test(sql) ? "watermarks" : null,
-    );
-    try {
-      sweepSessionStateWatchNotices({ ...database, now });
-    } finally {
-      updates.restore();
-    }
+    await sweepSessionStateWatchNotices({ ...database, now });
 
     const heads = db.prepare("SELECT * FROM session_state_heads").all();
     expect(heads).toHaveLength(expected.length);
@@ -523,8 +515,6 @@ describe("session state events", () => {
     expect(
       openOpenClawStateDatabase(database).db.prepare("SELECT * FROM session_state_heads").all(),
     ).toEqual(heads);
-    expect(updates.counts.watermarks).toBeGreaterThan(0);
-    expect(updates.counts.watermarks).toBeLessThanOrEqual(4);
   });
 
   it("lists typed ascending deltas with truncation and history-gap signaling", async () => {
@@ -576,7 +566,7 @@ describe("session state events", () => {
       ...database,
       now: later,
     })!;
-    sweepSessionStateWatchNotices({ ...database, now: later });
+    await sweepSessionStateWatchNotices({ ...database, now: later });
 
     const sincePruned = await listSessionStateEventsSince(child, "main", 0, 200, database);
     expect(sincePruned.historyGap).toBe(true);
@@ -886,7 +876,7 @@ describe("session state events", () => {
       },
       { ...database, now: activeAt },
     );
-    sweepSessionStateWatchNotices({ ...database, now: activeAt });
+    await sweepSessionStateWatchNotices({ ...database, now: activeAt });
 
     expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set([group]));
     const cursors = openOpenClawStateDatabase(database)
@@ -1000,7 +990,7 @@ describe("session state events", () => {
 
   it("projects spawn, terminal, goal, and compaction producer helpers", async () => {
     const database = createDatabaseOptions();
-    recordSessionCreated(cfg, {
+    await recordSessionCreated(cfg, {
       sessionKey: child,
       agentId: "main",
       entry: {
@@ -1011,7 +1001,7 @@ describe("session state events", () => {
         createdAt: Date.now(),
       },
     });
-    recordSubagentSpawned({
+    await recordSubagentSpawned({
       childSessionKey: child,
       childRunId: "run-child",
       requesterSessionKey: watcher,
@@ -1043,12 +1033,12 @@ describe("session state events", () => {
       actor: { type: "human" },
       summary: "goal created",
     });
-    recordSessionCompacted({
+    await recordSessionCompacted({
       sessionKey: child,
       operationId: "compact-1",
       sessionId: "session-child",
     });
-    recordSessionCompacted({
+    await recordSessionCompacted({
       sessionKey: child,
       operationId: "compact-1",
       sessionId: "session-child",

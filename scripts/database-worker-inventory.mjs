@@ -366,7 +366,17 @@ const reviewedOperations = new Map([
           "isSessionStateUpstreamCurrentInDatabase",
         ],
         evidence:
-          "session-state-events.worker.ts:146,147 and session-upstream-links.worker.ts:18,25; shared event/prune and child-spawn seed sites stay T1",
+          "session-state-events.worker.ts and session-upstream-links.worker.ts; event/head SQL retains native adopted-event callers",
+      },
+      {
+        tier: "W",
+        operations: [
+          "upsertSeedCursor",
+          "pruneSessionStateEventsInDatabase",
+          "pruneSessionStateEventsInDatabase.stampPrunedWatermarks",
+        ],
+        evidence:
+          "Seed cursors run through sessionState.record/registerWatch; periodic and restart pruning dispatch sessionState.prune; adopted-event/native-binding producers remain native",
       },
       {
         tier: "W",

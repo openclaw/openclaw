@@ -28,7 +28,9 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { listSessionStateEventsSince } from "../../../sessions/session-state-events.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
@@ -452,6 +454,23 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
       expect(result.error).toBeUndefined();
       expect(result.status).toBe("accepted");
+      const childSessionKey = expectDefined(result.childSessionKey, "accepted child session");
+      const events = (await listSessionStateEventsSince(childSessionKey, "main", 0)).events;
+      expect(events.map((event) => event.kind)).toEqual(["created", "child_spawned"]);
+      const spawned = expectDefined(events[1], "spawned signal");
+      expect(spawned).toMatchObject({ actorId: "agent:main:main", runId: result.runId });
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare(
+            `SELECT last_seen_sequence, notified_sequence, material_sequence
+           FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?`,
+          )
+          .get("agent:main:main", childSessionKey),
+      ).toEqual({
+        last_seen_sequence: spawned.sequence,
+        notified_sequence: spawned.sequence,
+        material_sequence: spawned.sequence,
+      });
       expect(childIdentity?.executionIdentity).toBe(parentToken);
       expect(readAgentRuntimeExecutionLineage(childIdentity?.sessionSpawnContext)).toMatchObject({
         relation: "sessions_spawn",

@@ -1400,6 +1400,7 @@ src/sessions/session-diff-revisions.ts
 src/sessions/session-diff.runtime.ts
 src/sessions/session-key-utils.ts
 src/sessions/session-row-changes.ts
+src/sessions/session-state-events.prune.ts
 src/sessions/transcript-events.ts
 src/sessions/user-turn-transcript-admission.ts
 src/secrets/store/secret-store-validation-error.ts

@@ -34,9 +34,10 @@ nor update behavior.
 
 Placement claim/result mutations and notifying event cursor operations have
 reviewed worker-only entries. The event recorder's `registeredWatcherKeys`
-initializer is classified separately from its native event/head SQL. Native
-creation, compaction, adoption, and child-spawn producers are non-notifying;
-child-spawn cursor seeding remains T1. Placement restart clearing remains T2,
+initializer is classified separately from its native event/head SQL.
+Creation, compaction, adoption, and child-spawn producers are non-notifying.
+Creation, compaction, child-spawn cursor seeding, and periodic retention use the
+existing signal worker; adoption/native-binding recording remains T1. Placement restart clearing remains T2,
 while synchronous result compatibility readers and transition guards remain T1.
 
 Workspace alias registration and snapshot operations retain T2 for their native
@@ -658,6 +659,15 @@ retain their existing owner. Schemas, quotas, retention, publication security ch
 and update behavior are unchanged.
 
 ## Carry facts, publish after commit
+
+Native creation, compaction, and child-spawn signals use the existing shared-state
+writer. Their callers join recording before releasing their lifecycle; embedded
+compaction joins through its subscription event chain. Acknowledged notices precede
+bounded pruning, and unknown signal outcomes never replay the originating action.
+Pruning retains ambient-watch invalidation through worker settlement and preserves
+the 30-day and 50,000-row bounds. Adopted-event/native-binding producers retain their
+existing synchronous recorder, with periodic pruning delegated to the same worker.
+Schemas, stored bytes, retention, and update behavior are unchanged.
 
 Watched-session prompt preparation reads ambient targets through the shared-state
 reader and exact title entries through the session reader. It captures both stores
