@@ -196,3 +196,14 @@ export function isCronSystemEvent(evt: string) {
   }
   return !isHeartbeatNoiseEvent(evt) && !isExecCompletionEvent(evt);
 }
+
+/** Only the exec producer may select the dedicated completion route. */
+export function isExecCompletionSystemEvent(event: {
+  text: string;
+  contextKey?: string | null;
+}): boolean {
+  return (
+    (!event.contextKey || event.contextKey === "exec" || event.contextKey.startsWith("exec:")) &&
+    isExecCompletionEvent(event.text)
+  );
+}

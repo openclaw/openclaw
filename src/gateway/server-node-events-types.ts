@@ -3,6 +3,7 @@
 import type { DesktopAvailability } from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { NodeHostStatsPayload } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
+import type { PendingSystemRunEvent } from "./node-registry.invoke-stream.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 /** Runtime context available to node event handlers. */
@@ -29,8 +30,8 @@ export type NodeEventContext = Pick<
     connId?: string;
     runId?: string;
     sessionKey: string;
-    terminal: boolean;
-  }) => boolean;
+    event: "exec.started" | "exec.finished" | "exec.denied";
+  }) => boolean | Pick<PendingSystemRunEvent, "invocationDeliveryContext">;
   updateNodePresenceActivity?: (params: {
     nodeId: string;
     connId?: string;

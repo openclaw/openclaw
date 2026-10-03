@@ -17,6 +17,7 @@ import {
   type ReplyPayload,
 } from "../auto-reply/reply-payload.js";
 import { suppressPendingFinalDelivery } from "../auto-reply/reply/dispatch-from-config.pending-final.js";
+import { resolvePendingFinalDeliveryCompletion } from "../auto-reply/reply/pending-final-delivery.js";
 import { resolveReplyOperationAbortReason } from "../auto-reply/reply/reply-operation-abort.js";
 import {
   resolveReplyOperationAgentTurn,
@@ -36,9 +37,13 @@ import { mergeSessionEntry } from "../config/sessions/types.js";
 import { writeCronJobScratch } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { isDeliveryRecoveryOwnedRetry } from "./delivery-recovery.shared.js";
 import { formatErrorMessage } from "./errors.js";
 import { classifyHeartbeatAgentOutcome } from "./heartbeat-delivery-normalization.js";
-import { HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX } from "./heartbeat-events-filter.js";
+import {
+  HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX,
+  isExecCompletionSystemEvent,
+} from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
 import { persistHeartbeatOutcome } from "./heartbeat-outcome-store.js";
@@ -65,7 +70,12 @@ import {
 } from "./outbound/payloads.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { resolveSystemEventQueueKey, withSystemEventOwner } from "./system-event-ownership.js";
-import { consumeSelectedSystemEventEntries, enqueueSystemEvent } from "./system-events.js";
+import {
+  consumeSelectedSystemEventEntries,
+  enqueueSystemEvent,
+  holdSystemEventDelivery,
+  peekDeliverableSystemEventEntries,
+} from "./system-events.js";
 
 type HeartbeatDispatch = {
   opts: HeartbeatRunOptions;
@@ -73,6 +83,8 @@ type HeartbeatDispatch = {
   prepared: PreparedHeartbeatRun;
   result?: HeartbeatRunResult;
   deliveryError?: string;
+  retryUnqueuedDelivery?: boolean;
+  execEffectSettled?: boolean;
   deliveryReason?: string;
   deliverySilent?: boolean;
   projectTarget?: boolean;
@@ -274,6 +286,17 @@ async function prepareHeartbeatDispatchReply(
       durationMs: Date.now() - startedAt,
       accountId: delivery.accountId,
     });
+    const queueKey = resolveSystemEventQueueKey(sessionKey, agentId);
+    if (prepared.hasExecCompletion && preflight.shouldInspectPendingEvents && !consume) {
+      const execEvents = prepared.inspectedSystemEventsToConsume.filter(
+        isExecCompletionSystemEvent,
+      );
+      if (policy.execEffectSettled) {
+        consumeSelectedSystemEventEntries(queueKey, execEvents);
+      } else if (policy.deliveryError && !policy.retryUnqueuedDelivery) {
+        holdSystemEventDelivery(queueKey, execEvents);
+      }
+    }
     if (consume && preflight.shouldInspectPendingEvents) {
       consumeSelectedSystemEventEntries(resolveSystemEventQueueKey(sessionKey, agentId), [
         ...prepared.inspectedSystemEventsToConsume,
@@ -294,6 +317,30 @@ async function prepareHeartbeatDispatchReply(
               ? { accountId: wake.heartbeat.accountId }
               : {}),
           },
+        });
+      }
+    }
+    if (
+      prepared.hasExecCompletion &&
+      (consume ||
+        policy.execEffectSettled ||
+        (policy.deliveryError && !policy.retryUnqueuedDelivery)) &&
+      preflight.deferredEventEntries.length > 0
+    ) {
+      const next = peekDeliverableSystemEventEntries(queueKey);
+      if (next.length > 0) {
+        const source = next.some(isExecCompletionSystemEvent)
+          ? "exec-event"
+          : next.some((entry) => entry.contextKey?.startsWith("cron:"))
+            ? "cron"
+            : "hook";
+        requestHeartbeat({
+          source,
+          intent: source === "exec-event" ? "event" : "immediate",
+          reason: source === "exec-event" ? source : source + ":pending",
+          heartbeat: wake.heartbeat,
+          agentId,
+          sessionKey,
         });
       }
     }
@@ -425,6 +472,7 @@ async function prepareHeartbeatDispatchReply(
     const previousAt = stateEntry?.lastHeartbeatSentAt;
     if (
       !prepared.internalProjection &&
+      !prepared.hasExecCompletion &&
       !outcome.mediaUrls.length &&
       !outcome.hasStructuredReplyContent &&
       stateEntry?.lastHeartbeatText?.trim() &&
@@ -510,6 +558,9 @@ async function prepareHeartbeatDispatchReply(
     }),
     settle: async (result) => {
       const sent = result === "delivered";
+      if (sent) {
+        policy.execEffectSettled = true;
+      }
       if (!sent) {
         await unconfirmed(policy.deliveryError ?? policy.deliveryReason ?? result);
       }
@@ -548,7 +599,13 @@ async function prepareHeartbeatDispatchReply(
             },
         sent && !failed,
       );
-      if (policy.deliveryError && !failed) {
+      if (policy.retryUnqueuedDelivery) {
+        policy.result = {
+          status: "skipped",
+          reason: HEARTBEAT_SKIP_CHANNEL_NOT_READY,
+          retryAtMs: Date.now() + HEARTBEAT_IDLE_RETRY_GRACE_MS,
+        };
+      } else if (policy.deliveryError && !failed) {
         policy.result = { status: "failed", reason: policy.deliveryError };
       }
     },
@@ -573,6 +630,9 @@ export async function deliverHeartbeatDispatch(
         startedAt,
       })
     : undefined;
+  let publishedIntent = false;
+  let platformDispatchStarted = false;
+  const hasPendingFinalOwner = Boolean(resolvePendingFinalDeliveryCompletion([payload]));
   try {
     if (delivery.channel === "none" || !delivery.to) {
       // A failed attempt does not own the successful completion's receipt identity.
@@ -625,9 +685,18 @@ export async function deliverHeartbeatDispatch(
       signal,
       silent: policy.deliverySilent,
       onDeliveredPayload,
+      onDeliveryIntent: () => {
+        publishedIntent = true;
+      },
+      onPlatformSendDispatch: async () => {
+        platformDispatchStarted = true;
+      },
     });
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;
+    }
+    if (send.status === "suppressed" && send.reason === "adapter_returned_no_identity") {
+      policy.execEffectSettled = true;
     }
     if (send.status === "suppressed") {
       policy.deliveryReason = send.reason;
@@ -640,6 +709,15 @@ export async function deliverHeartbeatDispatch(
     };
   } catch (error) {
     policy.deliveryError = formatErrorMessage(error);
+    policy.execEffectSettled = isDeliveryRecoveryOwnedRetry(error);
+    // The queue owner marks uncertain publication as held even before its intent
+    // callback. Only an unowned attempt that never reached dispatch may regenerate.
+    policy.retryUnqueuedDelivery =
+      policy.prepared.hasExecCompletion &&
+      !policy.execEffectSettled &&
+      !publishedIntent &&
+      !platformDispatchStarted &&
+      !hasPendingFinalOwner;
     throw error;
   }
 }

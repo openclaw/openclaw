@@ -8,6 +8,7 @@ import {
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { NodeInvokeResult } from "./node-invoke.types.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 
@@ -17,6 +18,7 @@ export const NODE_INVOKE_NOT_READY = "NODE_NOT_READY";
 export type PendingSystemRunEvent = {
   runId: string;
   sessionKey?: string;
+  invocationDeliveryContext?: DeliveryContext;
   timeoutMs?: number | null;
 };
 

@@ -61,6 +61,16 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
     const nodeId = normalizeOptionalString(p.nodeId) ?? "";
     const command = normalizeOptionalString(p.command) ?? "";
     const sessionKey = normalizeOptionalString(p.sessionKey);
+    // Only the authenticated agent bridge can bind completion delivery. Payload
+    // route hints are approval replay metadata, not source-conversation authority.
+    const turnSource = client?.internal?.agentRuntimeIdentity
+      ? {
+          channel: p.turnSourceChannel,
+          to: p.turnSourceTo,
+          accountId: p.turnSourceAccountId,
+          threadId: p.turnSourceThreadId,
+        }
+      : undefined;
     const assertUploadAllowed = captureGatewayClientUploadCommitGuard({
       method: "node.invoke",
       requestParams: p,
@@ -521,6 +531,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           expectedPairingGeneration: generation.key,
           command,
           params: forwardedParams.params,
+          turnSource,
           timeoutMs: dispatchTimeoutMs,
           deadlineAtMs: invokeDeadlineAtMs,
           signal: invocationLifecycle,
