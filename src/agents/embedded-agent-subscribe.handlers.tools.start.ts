@@ -31,7 +31,9 @@ import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   cancelAskUserPromptDelivery,
+  isAskUserPromptPending,
   normalizeAskUserParams,
+  readAskUserPromptSignal,
   reserveAskUserPromptDelivery,
   settleAskUserPromptDelivery,
   waitForAskUserPromptReady,
@@ -577,8 +579,16 @@ export function handleToolExecutionStart(
             questionId,
             questions,
             config: ctx.params.config,
-            send: threadDelivery?.send ?? publishPrompt,
-            ...(threadDelivery ? { threadId } : {}),
+            send: threadDelivery
+              ? async (payload, options) => {
+                  // The reply pipeline's publication guards do not cover a direct send.
+                  if (!(await isAskUserPromptPending(questionId)) || options?.signal?.aborted) {
+                    return;
+                  }
+                  await threadDelivery.send(payload, options);
+                }
+              : publishPrompt,
+            ...(threadDelivery ? { threadId, signal: readAskUserPromptSignal(questionId) } : {}),
           });
         })
         .then(
