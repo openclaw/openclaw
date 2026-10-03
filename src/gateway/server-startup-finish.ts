@@ -149,6 +149,18 @@ export async function finishGatewayStartup(params: {
   } = runtime;
   const startupPluginRuntimeClaim = kernel.pluginRuntimeGeneration.currentClaim();
   const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
+  const activateAgentDatabases = () => {
+    if (databaseStartupAdmission && !opts.updateCanary && !lifecycle.closePreludeStarted) {
+      activateGatewayAgentDatabaseStartup({
+        admission: databaseStartupAdmission,
+        getConfig: getRuntimeConfig,
+        getPluginRegistry: () => pluginRuntime.registry,
+        getPluginMetadataSnapshot,
+        isCurrent: () => !lifecycle.closePreludeStarted,
+        log,
+      });
+    }
+  };
   const getReadiness = runtime.createHttpTransportOptions().getReadiness;
   const { attachGatewayWsConnectionHandler } = await startupTrace.measure(
     "gateway.ws-imports",
@@ -368,6 +380,7 @@ export async function finishGatewayStartup(params: {
             : {}),
           onSidecarsReady: () => {
             kernel.markSidecarsReady();
+            activateAgentDatabases();
             activateScheduledServicesWhenReady();
           },
           getReadiness,
@@ -381,23 +394,8 @@ export async function finishGatewayStartup(params: {
     ),
   );
   kernel.setPostAttachHandles(postAttachHandles);
-  if (databaseStartupAdmission && !opts.updateCanary) {
-    void postAttachHandles.startupSettled
-      .then(() => {
-        if (!lifecycle.closePreludeStarted) {
-          activateGatewayAgentDatabaseStartup({
-            admission: databaseStartupAdmission,
-            getConfig: getRuntimeConfig,
-            getPluginRegistry: () => pluginRuntime.registry,
-            getPluginMetadataSnapshot,
-            isCurrent: () => !lifecycle.closePreludeStarted,
-            log,
-          });
-        }
-      })
-      .catch((error: unknown) => {
-        log.warn(`agent database startup preparation could not activate: ${String(error)}`);
-      });
+  if (minimalTestGateway) {
+    activateAgentDatabases();
   }
   startupTrace.detail("memory.ready", [
     ...collectGatewayProcessMemoryUsageMb(),

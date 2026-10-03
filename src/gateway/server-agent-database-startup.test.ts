@@ -133,6 +133,26 @@ it.for([
 ] as const)(
   "applies startup admission while $agentId follows its $outcome lifecycle",
   async ({ outcome, agentId }, { signal }) => {
+    const holdSubagentRestoration = outcome === "recover" && agentId === "worker";
+    const checkHostJournalReads = outcome === "recover" && !holdSubagentRestoration;
+    const restorationEntered = createDeferredCore();
+    const restorationRelease = createDeferredCore();
+    let startupSettled = false;
+    let bootstrapSecrets: ReturnType<typeof getActiveSecretsRuntimeSnapshot> | undefined;
+    if (holdSubagentRestoration) {
+      vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", undefined);
+      const early = await import("./server-startup-early.js");
+      const startEarly = early.startGatewayEarlyRuntime;
+      vi.spyOn(early, "startGatewayEarlyRuntime").mockImplementation((params) => {
+        bootstrapSecrets = getActiveSecretsRuntimeSnapshot();
+        return startEarly(params);
+      });
+      const subagents = await import("../agents/subagents/registry/subagent-registry.js");
+      vi.spyOn(subagents, "activateSubagentRegistry").mockImplementation(async () => {
+        restorationEntered.resolve();
+        await restorationRelease.promise;
+      });
+    }
     const nativeBroker = process.platform === "linux" && !process.versions.bun;
     const brokerExpected =
       nativeBroker ||
@@ -317,7 +337,11 @@ it.for([
         }
         return spawnBroker.runWithSpawnBroker(suppliedBroker, () => {
           unadoptedPortClaim = undefined;
-          return startTestGatewayServer(portClaim, { bind: "loopback", auth: { mode: "none" } });
+          return startTestGatewayServer(portClaim, {
+            bind: "loopback",
+            auth: { mode: "none" },
+            ...(holdSubagentRestoration ? { sidecarStartup: "defer" as const } : {}),
+          });
         });
       }).then((started) => {
         server = started;
@@ -333,7 +357,17 @@ it.for([
         return;
       }
       server = await startup;
-      await server.startupSettled;
+      void server.startupSettled.then(
+        () => {
+          startupSettled = true;
+        },
+        () => {},
+      );
+      if (holdSubagentRestoration) {
+        await withinTest(restorationEntered.promise, signal);
+      } else {
+        await server.startupSettled;
+      }
       if (brokerExpected) {
         expect(brokerPid).toBeTypeOf("number");
       }
@@ -356,7 +390,11 @@ it.for([
         await vi.waitFor(() => expect(fs.existsSync(enteredPath)).toBe(true));
       }
       if (outcome === "recover") {
-        const snapshot = getActiveSecretsRuntimeSnapshot();
+        // Full post-attach model preparation can republish auth-store containers;
+        // assert the bootstrap fence before that independent publication.
+        const snapshot = holdSubagentRestoration
+          ? bootstrapSecrets
+          : getActiveSecretsRuntimeSnapshot();
         expect(snapshot?.authStores.some((entry) => entry.databasePath === agentPath)).toBe(false);
         expect(snapshot?.degradedOwners?.some((owner) => owner.paths.includes(agentPath))).toBe(
           true,
@@ -378,7 +416,7 @@ it.for([
       }
       const hostJournalRead = createDeferredCore();
       let hostJournalReads = 0;
-      if (outcome === "recover") {
+      if (checkHostJournalReads) {
         observeHostDataSql((sql) => {
           if (sql.includes("agent_deletion_journal")) {
             hostJournalReads++;
@@ -454,7 +492,14 @@ it.for([
           false,
         );
         expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
-        expect(hostJournalReads).toBe(0);
+        if (checkHostJournalReads) {
+          expect(hostJournalReads).toBe(0);
+        }
+        if (holdSubagentRestoration) {
+          expect(startupSettled).toBe(false);
+          restorationRelease.resolve();
+          await server.startupSettled;
+        }
       } else if (outcome === "corrupt") {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-failed",
@@ -475,6 +520,7 @@ it.for([
       }
     } finally {
       pendingFixtureCleanup = (async () => {
+        restorationRelease.resolve();
         preparationRelease.resolve();
         fs.writeFileSync(releasePath, "resume");
         if (pause) {
