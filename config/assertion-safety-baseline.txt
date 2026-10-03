@@ -1770,7 +1770,6 @@ src/cli/config-cli-path.ts	4
 src/cli/config-cli-runner.ts	2
 src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	4
-src/cli/config-set-input.ts	1
 src/cli/connect-cli.ts	1
 src/cli/cron-cli/list-jobs.ts	4
 src/cli/cron-cli/register.cron-add.ts	1
@@ -1871,8 +1870,8 @@ src/commands/doctor-session-snapshots.ts	4
 src/commands/doctor-session-sqlite-compact.ts	1
 src/commands/doctor-session-sqlite-recover-report.ts	1
 src/commands/doctor-session-state-providers.ts	3
-src/commands/doctor-session-transcript-headers.ts	5
-src/commands/doctor-session-transcript-labels.ts	4
+src/commands/doctor-session-transcript-headers.ts	4
+src/commands/doctor-session-transcript-labels.ts	1
 src/commands/doctor-session-transcripts.ts	1
 src/commands/doctor-skills.ts	1
 src/commands/doctor-sqlite-compact.ts	1
@@ -1902,7 +1901,7 @@ src/commands/doctor/shared/legacy-config-core-normalizers.ts	11
 src/commands/doctor/shared/legacy-config-issues.ts	1
 src/commands/doctor/shared/legacy-config-migrate.ts	2
 src/commands/doctor/shared/legacy-config-migrations.audio.ts	1
-src/commands/doctor/shared/legacy-config-migrations.runtime.models.catalog.ts	4
+src/commands/doctor/shared/legacy-config-migrations.runtime.models.catalog.ts	3
 src/commands/doctor/shared/legacy-config-migrations.runtime.models.codex.ts	4
 src/commands/doctor/shared/legacy-config-migrations.runtime.models.refs.ts	1
 src/commands/doctor/shared/legacy-config-state-migration-input.ts	2

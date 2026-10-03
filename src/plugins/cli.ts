@@ -14,7 +14,6 @@ import {
 import { getPluginCache } from "./plugin-cache.js";
 import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
 import { createPluginRuntimeLoaderLogger } from "./runtime/load-context.js";
-export { getPluginCliCommandDescriptors } from "./cli-root-descriptors.js";
 
 type PluginCliRegistrationMode = "eager" | "lazy" | "metadata";
 
@@ -27,18 +26,23 @@ type RegisterPluginCliOptions = {
 
 const logger = createPluginRuntimeLoaderLogger();
 
-export async function registerPluginCliCommands(
+export async function registerPluginCliCommandsFromValidatedConfig(
   program: Command,
-  cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
   loaderOptions?: PluginCliLoaderOptions,
   options?: RegisterPluginCliOptions,
-) {
-  const mode = options?.mode ?? "eager";
-  const primary = options?.primary ?? undefined;
-  // Standalone registration shares its caller's generation with later Commander actions.
+): Promise<OpenClawConfig> {
   const session = options?.session ?? createPluginCliLoadSession(getPluginCache());
   try {
+    const snapshot = await session.readConfig(() =>
+      readConfigFileSnapshot({ skipPluginValidation: options?.skipPluginValidation }),
+    );
+    if (!snapshot.valid) {
+      throw createInvalidConfigError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
+    }
+    const cfg = getRuntimeConfigSnapshot() ?? snapshot.runtimeConfig;
+    const mode = options?.mode ?? "eager";
+    const primary = options?.primary ?? undefined;
     const entries = await loadPluginCliRegistrationEntriesWithDefaults(
       {
         cfg,
@@ -103,30 +107,7 @@ export async function registerPluginCliCommands(
       existingCommands: new Set(program.commands.flatMap((cmd) => [cmd.name(), ...cmd.aliases()])),
       logger,
     });
-  } finally {
-    if (!options?.session) {
-      session.close();
-    }
-  }
-}
-
-export async function registerPluginCliCommandsFromValidatedConfig(
-  program: Command,
-  env?: NodeJS.ProcessEnv,
-  loaderOptions?: PluginCliLoaderOptions,
-  options?: RegisterPluginCliOptions,
-): Promise<OpenClawConfig> {
-  const session = options?.session ?? createPluginCliLoadSession(getPluginCache());
-  try {
-    const snapshot = await session.readConfig(() =>
-      readConfigFileSnapshot({ skipPluginValidation: options?.skipPluginValidation }),
-    );
-    if (!snapshot.valid) {
-      throw createInvalidConfigError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
-    }
-    const config = getRuntimeConfigSnapshot() ?? snapshot.runtimeConfig;
-    await registerPluginCliCommands(program, config, env, loaderOptions, { ...options, session });
-    return config;
+    return cfg;
   } finally {
     if (!options?.session) {
       session.close();
