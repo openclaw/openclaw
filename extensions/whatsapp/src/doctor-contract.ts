@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-core";
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -12,6 +13,7 @@ import {
   stripRetiredChannelKeys,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
+import { listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId } from "./account-ids.js";
 import { isWhatsAppBaileysAuthFileName } from "./creds-files.js";
 import { normalizeCompatibilityConfig as normalizeAckReactionConfig } from "./doctor.js";
 
@@ -33,14 +35,9 @@ const hasAckReaction = (value: unknown): boolean =>
   Boolean(asObjectRecord(asObjectRecord(value)?.ackReaction));
 
 // The old generic seeder moved only these shared WhatsApp policy fields.
-const synthesizedDefaultPolicyKeys = new Set([
-  "dmPolicy",
-  "allowFrom",
-  "groupPolicy",
-  "groupAllowFrom",
-]);
+const legacyDefaultPolicyKeys = new Set(["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"]);
 
-function hasSynthesizedDefault(cfg: OpenClawConfig): boolean {
+function hasPossibleLeftoverDefault(cfg: OpenClawConfig): boolean {
   const channel = asObjectRecord(cfg.channels?.whatsapp);
   const accounts = asObjectRecord(channel?.accounts);
   const fallback = asObjectRecord(accounts?.default);
@@ -58,7 +55,7 @@ function hasSynthesizedDefault(cfg: OpenClawConfig): boolean {
   const keys = Object.keys(fallback);
   if (
     keys.length === 0 ||
-    keys.some((key) => !synthesizedDefaultPolicyKeys.has(key)) ||
+    keys.some((key) => !legacyDefaultPolicyKeys.has(key)) ||
     Object.values(accounts).some((account) => !asObjectRecord(account)) ||
     cfg.bindings?.some(
       (binding) =>
@@ -85,29 +82,25 @@ function hasSynthesizedDefault(cfg: OpenClawConfig): boolean {
   return true;
 }
 
-function repairSynthesizedDefault(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
-  const channel = cfg.channels?.whatsapp;
-  if (!channel?.accounts || !hasSynthesizedDefault(cfg)) {
-    return cfg;
+function collectDefaultAccountWarnings(cfg: OpenClawConfig): string[] {
+  if (!hasPossibleLeftoverDefault(cfg)) {
+    return [];
   }
-  const { default: sharedPolicy, ...accounts } = channel.accounts;
-  changes.push(
-    "Removed synthesized channels.whatsapp.accounts.default; restored shared policy at the channel root and the existing account route.",
+  const namedAccountId = listWhatsAppAccountIds(cfg).find(
+    (id) => id !== "default" && normalizeOptionalAccountId(id) === id,
   );
-  return {
-    ...cfg,
-    channels: { ...cfg.channels, whatsapp: { ...channel, ...sharedPolicy, accounts } },
-  };
+  if (!namedAccountId) {
+    return [];
+  }
+  const currentAccountId = resolveDefaultWhatsAppAccountId(cfg);
+  const suggestedAccountId = currentAccountId === "default" ? namedAccountId : currentAccountId;
+  return [
+    `channels.whatsapp.accounts.default contains only shared policy and has no detected credentials. It may be a leftover of an earlier Doctor migration or an intentional account awaiting login. Unqualified WhatsApp operations currently select "${currentAccountId}". Doctor left all accounts and routing unchanged. To select a named account while keeping all accounts and shared policy, run \`openclaw config set channels.whatsapp.defaultAccount '${JSON.stringify(suggestedAccountId)}' --strict-json\`. Only if "default" is unwanted, preserve any shared policy you still need, then run \`openclaw channels remove --channel whatsapp --account default --delete\`.`,
+  ];
 }
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...streamingAliasMigration.legacyConfigRules,
-  {
-    path: ["channels", "whatsapp"],
-    message:
-      'A synthesized WhatsApp default account shadows named accounts; run "openclaw doctor --fix" to restore shared root policy and account routing.',
-    match: (_value, cfg) => hasSynthesizedDefault(cfg),
-  },
   {
     path: ["channels", "whatsapp", "ackReaction"],
     message:
@@ -147,13 +140,12 @@ export function normalizeCompatibilityConfig({
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const changes: string[] = [];
-  const repaired = repairSynthesizedDefault(cfg, changes);
-  const ackReaction = normalizeAckReactionConfig({ cfg: repaired });
-  ackReaction.changes.unshift(...changes);
+  const ackReaction = normalizeAckReactionConfig({ cfg });
   const retiredConfig = removeExposeErrorText(ackReaction.config, ackReaction.changes);
-  return streamingAliasMigration.normalizeChannelConfig({
+  const normalized = streamingAliasMigration.normalizeChannelConfig({
     cfg: retiredConfig,
     changes: ackReaction.changes,
   });
+  const warnings = collectDefaultAccountWarnings(normalized.config);
+  return { ...normalized, ...(warnings.length ? { warnings } : {}) };
 }

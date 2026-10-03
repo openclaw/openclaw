@@ -220,14 +220,19 @@ Shared root policy never creates an extra `accounts.default` beside named accoun
 An empty account map can still receive migrated single-account fields; plugins
 such as WhatsApp keep their supported shared policy at the root.
 
-For WhatsApp configs damaged by an earlier promotion, Doctor moves a policy-only,
-unlinked `accounts.default` back to the root and removes the synthesized account,
-with a visible repair note. Named-account overrides remain unchanged. Explicit
-default selections or bindings, account-specific settings, and credential files
-(including backups and legacy credentials) preserve the default account. If
-credential state cannot be inspected, Doctor leaves the account unchanged.
-The update-time Doctor pass uses the same repair and normal config backup flow;
-repeating Doctor does not change the repaired config.
+When a policy-only, unlinked WhatsApp `accounts.default` sits beside named
+accounts, Doctor warns that it may be left over from an earlier promotion or may
+be an intentional account awaiting login. It names the account currently selected
+for unqualified operations and leaves the account map, shared policy, and routing
+unchanged. Doctor cannot infer who created an account from this config shape.
+
+To explicitly select an existing named account while retaining all accounts and
+shared policy, run `openclaw config set channels.whatsapp.defaultAccount '"work"' --strict-json`
+(replace `work` with the desired account ID). If you decide the default account is
+unwanted, first preserve any shared policy inherited from it, then run
+`openclaw channels remove --channel whatsapp --account default --delete`.
+Doctor's warning provides the command for a configured named account. It does not
+perform either action, including during updates or repeated `doctor --fix` runs.
 
 ## Channel ownership during an update
 

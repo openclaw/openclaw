@@ -4,7 +4,6 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
 import { listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId } from "./account-ids.js";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 
@@ -142,7 +141,7 @@ describe("whatsapp normalizeCompatibilityConfig streaming aliases", () => {
   });
 });
 
-describe("WhatsApp Doctor account routing repair", () => {
+describe("WhatsApp Doctor account routing warning", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let oauthDir: string;
   beforeEach(() => {
@@ -154,43 +153,72 @@ describe("WhatsApp Doctor account routing repair", () => {
     vi.restoreAllMocks();
   });
 
-  const damagedConfig = (): OpenClawConfig =>
+  const ambiguousConfig = (): OpenClawConfig =>
     whatsappConfig({
       dmPolicy: "pairing",
       accounts: {
         default: { dmPolicy: "allowlist", allowFrom: ["+15550001111"], groupPolicy: "disabled" },
         work: { authDir: "/synthetic/work" },
-        personal: { authDir: "/synthetic/personal", dmPolicy: "disabled" },
+        "123": { authDir: "/synthetic/123", dmPolicy: "disabled" },
       },
     });
 
-  it("restores the implicit route and shared policy once without mutating input", () => {
-    const cfg = damagedConfig();
-    const before = structuredClone(cfg);
-    const policies = ["work", "personal"].map((accountId) =>
-      resolveMergedWhatsAppAccountConfig({ cfg, accountId }),
-    );
-    expect(resolveDefaultWhatsAppAccountId(cfg)).toBe("default");
-    expect(legacyConfigRules.some((rule) => rule.match?.(cfg.channels?.whatsapp, cfg))).toBe(true);
-    const first = normalizeCompatibilityConfig({ cfg });
-    expect(
-      legacyConfigRules.some((rule) => rule.match?.(first.config.channels?.whatsapp, first.config)),
-    ).toBe(false);
-    expect(listWhatsAppAccountIds(first.config)).toEqual(["personal", "work"]);
-    expect(resolveDefaultWhatsAppAccountId(first.config)).toBe("personal");
-    expect(
-      ["work", "personal"].map((accountId) =>
-        resolveMergedWhatsAppAccountConfig({ cfg: first.config, accountId }),
-      ),
-    ).toEqual(policies);
-    expect(first.changes).toEqual([
-      expect.stringContaining("Removed synthesized channels.whatsapp.accounts.default"),
-    ]);
-    expect(cfg).toEqual(before);
-    expect(normalizeCompatibilityConfig({ cfg: first.config })).toEqual({
-      config: first.config,
-      changes: [],
+  it.each([
+    { defaultAccount: undefined, selected: "default", suggested: "123" },
+    { defaultAccount: "work", selected: "work", suggested: "work" },
+  ])(
+    "warns without changing the configured route ($selected)",
+    ({ defaultAccount, selected, suggested }) => {
+      const cfg = ambiguousConfig();
+      if (defaultAccount) {
+        cfg.channels!.whatsapp!.defaultAccount = defaultAccount;
+      }
+      const before = structuredClone(cfg);
+      const first = normalizeCompatibilityConfig({ cfg });
+      expect(first.config).toEqual(before);
+      expect(cfg).toEqual(before);
+      expect(first.changes).toEqual([]);
+      expect(listWhatsAppAccountIds(first.config)).toEqual(["123", "default", "work"]);
+      expect(resolveDefaultWhatsAppAccountId(first.config)).toBe(selected);
+      expect(first.warnings).toEqual([
+        expect.stringContaining("may be a leftover of an earlier Doctor migration"),
+      ]);
+      expect(first.warnings?.[0]).toContain(
+        `Unqualified WhatsApp operations currently select "${selected}"`,
+      );
+      expect(first.warnings?.[0]).toContain(
+        `openclaw config set channels.whatsapp.defaultAccount '"${suggested}"' --strict-json`,
+      );
+      expect(first.warnings?.[0]).toContain(
+        "openclaw channels remove --channel whatsapp --account default --delete",
+      );
+      expect(first.warnings?.[0]).toContain("preserve any shared policy you still need");
+      expect(
+        legacyConfigRules.some(
+          (rule) =>
+            rule.path.join(".") === "channels.whatsapp" &&
+            rule.match?.(cfg.channels?.whatsapp, cfg),
+        ),
+      ).toBe(false);
+      expect(normalizeCompatibilityConfig({ cfg: first.config })).toEqual(first);
+    },
+  );
+
+  it("suggests a valid named account rather than an invalid config key", () => {
+    const cfg = whatsappConfig({
+      accounts: {
+        default: { dmPolicy: "pairing" },
+        "invalid'account": {},
+        work: { authDir: "/synthetic/work" },
+      },
     });
+    const result = normalizeCompatibilityConfig({ cfg });
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        `openclaw config set channels.whatsapp.defaultAccount '"work"' --strict-json`,
+      ),
+    ]);
+    expect(result.warnings?.[0]).not.toContain("invalid'account");
   });
 
   it.each([
@@ -203,11 +231,11 @@ describe("WhatsApp Doctor account routing repair", () => {
     "rootAuth",
     "onlyDefault",
     "defaultAlias",
-  ])("preserves an intentional default: %s", (kind) => {
-    const cfg = damagedConfig();
+  ])("does not flag an explicitly configured default: %s", (kind) => {
+    const cfg = ambiguousConfig();
     const channel = cfg.channels?.whatsapp;
     if (!channel?.accounts?.default) {
-      throw new Error("Expected the damaged WhatsApp fixture to contain a default account");
+      throw new Error("Expected the ambiguous WhatsApp fixture to contain a default account");
     }
     const defaultAccount = channel.accounts.default;
     if (kind === "authDir") {
@@ -246,7 +274,7 @@ describe("WhatsApp Doctor account routing repair", () => {
   });
 
   it("preserves the account when credential inspection fails", () => {
-    const cfg = damagedConfig();
+    const cfg = ambiguousConfig();
     vi.spyOn(fs, "readdirSync").mockImplementation(() => {
       throw Object.assign(new Error("denied"), { code: "EACCES" });
     });
@@ -259,7 +287,7 @@ describe("WhatsApp Doctor account routing repair", () => {
       for (const directory of [oauthDir, path.join(oauthDir, "whatsapp", "default")]) {
         fs.mkdirSync(directory, { recursive: true });
         fs.writeFileSync(path.join(directory, file), "synthetic");
-        const cfg = damagedConfig();
+        const cfg = ambiguousConfig();
         expect(normalizeCompatibilityConfig({ cfg })).toEqual({ config: cfg, changes: [] });
         fs.unlinkSync(path.join(directory, file));
       }
