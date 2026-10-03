@@ -9,7 +9,11 @@ import {
   type QaProviderMode,
 } from "./model-selection.js";
 import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
-import { getQaProvider, DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
+import {
+  getQaProvider,
+  DEFAULT_QA_PROVIDER_MODE,
+  QA_DEFAULT_IMAGE_MODEL,
+} from "./providers/index.js";
 import { QA_FRONTIER_PROVIDER_IDS } from "./providers/live-frontier/catalog.js";
 import {
   QA_SESSION_OBSERVER_HEADER,
@@ -92,9 +96,11 @@ export function buildQaGatewayConfig(params: {
   const imageGenerationModelRef =
     params.imageGenerationModel !== undefined
       ? params.imageGenerationModel
-      : provider.defaultImageGenerationModel({ modelProviderIds });
+      : modelProviderIds.includes("openai")
+        ? QA_DEFAULT_IMAGE_MODEL
+        : null;
   const selectedProviderIds =
-    provider.usesModelProviderPlugins || usesCodexMockAppServer
+    provider.kind === "live" || usesCodexMockAppServer
       ? [
           ...new Set(
             [...(params.enabledProviderIds ?? []), ...modelProviderIds, imageGenerationModelRef]
@@ -117,7 +123,7 @@ export function buildQaGatewayConfig(params: {
   );
   const providerSelectedPluginIds = usesCodexMockAppServer
     ? uniqueStrings([...configuredPluginIds, ...selectedProviderIds])
-    : provider.usesModelProviderPlugins
+    : provider.kind === "live"
       ? uniqueStrings([...configuredPluginIds, ...inferredProviderPluginIds])
       : configuredPluginIds;
   // A forced Codex cell must stage its harness even when the provider owner is

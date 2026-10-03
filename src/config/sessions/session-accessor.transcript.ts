@@ -1,12 +1,5 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
-import "./session-accessor.sqlite-compaction.js";
-import "./session-accessor.sqlite-delta.js";
-import "./session-accessor.sqlite-entry.js";
-import "./session-accessor.sqlite-events.js";
-import "./session-accessor.sqlite-metadata-read.js";
 import { readTranscriptStatsSync } from "./session-accessor.sqlite-read.js";
-import "./session-accessor.sqlite-suffix-read.js";
-import "./session-accessor.sqlite-transcript-message-rewrite.js";
 import { trimTranscriptForManualCompact } from "./session-accessor.sqlite-transcript-write.js";
 import type {
   SessionTranscriptRuntimeScope,

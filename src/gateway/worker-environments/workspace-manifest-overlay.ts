@@ -32,7 +32,9 @@ export function applyWorkspaceSourceOverlay(
       continue;
     }
     nodes.set(entryPath, entry);
-    // A caller child replaces a setup-created file at any required directory ancestor.
+  }
+  // Retained children preserve their parents; incoming children replace setup-only ancestor files.
+  for (const entryPath of nodes.keys()) {
     for (
       let parent = path.posix.dirname(entryPath);
       parent !== ".";
@@ -41,27 +43,15 @@ export function applyWorkspaceSourceOverlay(
       nodes.set(parent, { path: parent, type: "directory" });
     }
   }
-  // Removing the last pristine child does not remove setup-only siblings or their parents.
-  for (const entryPath of nodes.keys()) {
-    for (
-      let parent = path.posix.dirname(entryPath);
-      parent !== ".";
-      parent = path.posix.dirname(parent)
-    ) {
-      if (!nodes.has(parent)) {
-        nodes.set(parent, { path: parent, type: "directory" });
-      }
-    }
-  }
   return {
     version: 1,
     baseCommit: incoming.baseCommit,
     entries: [...nodes.values()].filter(
       (entry): entry is WorkerWorkspaceManifestEntry =>
-        entry?.type === "file" || entry?.type === "symlink",
+        entry.type === "file" || entry.type === "symlink",
     ),
     directories: [...nodes.values()].flatMap((entry) =>
-      entry?.type === "directory" ? [entry.path] : [],
+      entry.type === "directory" ? [entry.path] : [],
     ),
   };
 }

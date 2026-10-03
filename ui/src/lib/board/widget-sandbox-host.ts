@@ -1,5 +1,5 @@
 import { formatUiError } from "../format-error.ts";
-import { WidgetRenderTimeoutError, WidgetSandboxHost } from "../widget-sandbox-host.ts";
+import { WidgetSandboxHost } from "../widget-sandbox-host.ts";
 import type { BoardWidget } from "./types.ts";
 import type { BoardWidgetFrameUrl } from "./view-types.ts";
 import {
@@ -350,11 +350,6 @@ export class BoardWidgetSandboxHost {
       onError: (error) => {
         if (error instanceof WidgetDocumentError && error.kind === "unauthorized") {
           this.options.onUnauthorized(this.options.widget);
-        } else if (
-          error instanceof WidgetRenderTimeoutError ||
-          (error instanceof WidgetDocumentError && error.kind !== "unavailable")
-        ) {
-          this.options.onError(error);
         } else if (retryableDocumentError(error)) {
           this.options.onLoadFailed(this.options.widget);
         } else {

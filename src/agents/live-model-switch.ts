@@ -196,6 +196,9 @@ export function shouldSwitchToLiveModel(params: {
       cfg,
       sessionKey,
       agentId: params.agentId,
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.defaultModel,
+      expectedSelection: persisted,
     }).catch(() => {
       /* best-effort — fs/lock errors are non-fatal here */
     });
@@ -273,13 +276,15 @@ export async function consolidateLiveModelSwitchAfterRun(params: {
 }
 
 /**
- * Clear the `liveModelSwitchPending` flag from the session entry on disk so
- * subsequent retry iterations do not re-trigger the switch.
+ * Consume only the observed selection; a newer request may commit while this clear queues.
  */
 export async function clearLiveModelSwitchPending(params: {
-  cfg?: { session?: { store?: string } } | undefined;
+  cfg?: OpenClawConfig;
   sessionKey?: string;
   agentId?: string;
+  defaultProvider: string;
+  defaultModel: string;
+  expectedSelection: LiveSessionModelSelection;
 }): Promise<void> {
   const sessionKey = params.sessionKey?.trim();
   const cfg = params.cfg;
@@ -295,6 +300,21 @@ export async function clearLiveModelSwitchPending(params: {
   await patchSessionEntryCore(
     { storePath, sessionKey },
     (entry) => {
+      if (
+        !entry.liveModelSwitchPending ||
+        hasDifferentLiveSessionModelSelection(
+          params.expectedSelection,
+          resolveSelectionFromSessionEntry({
+            cfg,
+            entry,
+            agentId: params.agentId,
+            defaultProvider: params.defaultProvider,
+            defaultModel: params.defaultModel,
+          }),
+        )
+      ) {
+        return null;
+      }
       const next = { ...entry };
       delete next.liveModelSwitchPending;
       return next;

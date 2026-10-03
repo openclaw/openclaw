@@ -622,23 +622,6 @@ function dedupeLanes(poolLanes: DockerE2eLane[]): DockerE2eLane[] {
   return [...byName.values()];
 }
 
-function selectNamedLanes(
-  poolLanes: DockerE2eLane[],
-  selectedNames: string[],
-  label: string,
-): DockerE2eLane[] {
-  const byName = new Map(poolLanes.map((poolLane) => [poolLane.name, poolLane]));
-  const missing = selectedNames.filter((name) => !byName.has(name));
-  if (missing.length > 0) {
-    throw new Error(
-      `${label} unknown lane(s): ${missing.join(", ")}. Available lanes: ${[...byName.keys()]
-        .toSorted((a, b) => a.localeCompare(b))
-        .join(", ")}`,
-    );
-  }
-  return selectedNames.map((name) => byName.get(name)!);
-}
-
 export function parseLiveMode(raw: unknown): LiveMode {
   const mode = raw || "all";
   if (mode === "all" || mode === "skip" || mode === "only") {
@@ -698,20 +681,18 @@ export function lanesNeedOpenClawPackage(poolLanes: DockerE2eLane[]): boolean {
 }
 
 export function findLaneByName(name: string): DockerE2eLane | undefined {
-  return dedupeLanes(
-    expandUpgradeSurvivorBaselineLanes(
-      [
-        ...allReleasePathLanes({ includeOpenWebUI: true }),
-        ...publicInstallerLanes,
-        fleetCacheLane,
-        ...mainLanes,
-        ...tailLanes,
-      ],
-      process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
-      undefined,
-      process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
-    ).lanes,
-  ).find((poolLane) => poolLane.name === name);
+  return expandUpgradeSurvivorBaselineLanes(
+    [
+      ...allReleasePathLanes({ includeOpenWebUI: true }),
+      ...publicInstallerLanes,
+      fleetCacheLane,
+      ...mainLanes,
+      ...tailLanes,
+    ],
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
+    undefined,
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
+  ).lanes.find((poolLane) => poolLane.name === name);
 }
 
 function laneCredentialRequirements(poolLane: DockerE2eLane): string[] {
@@ -1046,8 +1027,12 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
             omittedUnsupportedLaneNames.add(selectedName);
             return [];
           }
-          selectNamedLanes(unfilteredSelectableLanes, [selectedName], "OPENCLAW_DOCKER_ALL_LANES");
-          return [];
+          throw new Error(
+            `OPENCLAW_DOCKER_ALL_LANES unknown lane(s): ${selectedName}. Available lanes: ${unfilteredSelectableLanes
+              .map((lane) => lane.name)
+              .toSorted((a, b) => a.localeCompare(b))
+              .join(", ")}`,
+          );
         })
       : undefined;
   let configuredLanes = selectedLanes
@@ -1058,36 +1043,17 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
         ? applyLiveMode([...mainLanes, ...tailLanes], options.liveMode)
         : applyLiveMode(mainLanes, options.liveMode);
   if (options.allowFrozenTargetScenarioOmissions) {
-    const unsupportedLaneRules = [
-      {
-        matches: (lane: DockerE2eLane) => isUpdateFirstHopCompatLane(lane.name),
-        supported: (lane: DockerE2eLane) =>
-          supportsUpdateFirstHopCompatForTarget(
-            lane.name,
-            options.upgradeSurvivorTargetRoot,
-            options.frozenTarget,
-          ),
-      },
-      {
-        matches: (lane: DockerE2eLane) => lane.name.includes("mobile-pairing-reconnect"),
-        supported: () =>
-          supportsMobilePairingReconnectForTarget(
-            options.upgradeSurvivorTargetRoot,
-            options.frozenTarget,
-          ),
-      },
-      {
-        matches: (lane: DockerE2eLane) => lane.name === "update-corrupt-plugin",
-        supported: () =>
-          supportsCorruptPluginUpdateForTarget(
-            options.upgradeSurvivorTargetRoot,
-            options.frozenTarget,
-          ),
-      },
-    ];
     configuredLanes = configuredLanes.filter((lane) => {
-      const rule = unsupportedLaneRules.find((entry) => entry.matches(lane));
-      if (!rule || rule.supported(lane)) {
+      const targetRoot = options.upgradeSurvivorTargetRoot;
+      const frozenTarget = options.frozenTarget;
+      const supported = isUpdateFirstHopCompatLane(lane.name)
+        ? supportsUpdateFirstHopCompatForTarget(lane.name, targetRoot, frozenTarget)
+        : lane.name.includes("mobile-pairing-reconnect")
+          ? supportsMobilePairingReconnectForTarget(targetRoot, frozenTarget)
+          : lane.name === "update-corrupt-plugin"
+            ? supportsCorruptPluginUpdateForTarget(targetRoot, frozenTarget)
+            : true;
+      if (supported) {
         return true;
       }
       omittedUnsupportedLaneNames.add(lane.name);

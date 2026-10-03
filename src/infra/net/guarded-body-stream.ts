@@ -28,14 +28,14 @@ function wrapBodyStream(
   params: BodyStreamOptions,
   errorSource: "cancellation" | "release",
 ): ReadableStream<Uint8Array> {
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const reader = params.body.getReader();
   let finalized = false;
   let abortAttached = false;
   let detachAbort = () => {};
   const cleanupRegistrationToken = {};
   const finalize = async (
     cancelReader: () => Promise<void> = async () => {
-      await reader?.cancel().catch(() => undefined);
+      await reader.cancel().catch(() => undefined);
     },
   ) => {
     if (finalized) {
@@ -48,7 +48,7 @@ function wrapBodyStream(
     // let request cleanup abort a retained capture tee before awaiting settlement.
     const [cancellation, readerRelease, cleanup] = await Promise.allSettled([
       cancelReader(),
-      (async () => reader?.releaseLock())(),
+      (async () => reader.releaseLock())(),
       (async () => await params.cleanup())(),
     ]);
     if (cleanup.status === "rejected" && errorSource === "release") {
@@ -63,9 +63,6 @@ function wrapBodyStream(
   };
   const wrappedBody = new ReadableStream<Uint8Array>(
     {
-      start() {
-        reader = params.body.getReader();
-      },
       async pull(controller) {
         const signal = params.signal;
         if (signal && !abortAttached) {
@@ -77,7 +74,7 @@ function wrapBodyStream(
               }
               const reason =
                 signal.reason ?? new DOMException("This operation was aborted", "AbortError");
-              const cleanup = finalize(async () => await reader?.cancel(reason));
+              const cleanup = finalize(async () => await reader.cancel(reason));
               controller.error(reason);
               void cleanup.catch(() => undefined);
             },
@@ -96,8 +93,8 @@ function wrapBodyStream(
           return;
         }
         try {
-          const chunk = await reader?.read();
-          if (!chunk || chunk.done) {
+          const chunk = await reader.read();
+          if (chunk.done) {
             controller.close();
             await finalize();
             return;
@@ -118,7 +115,7 @@ function wrapBodyStream(
         }
       },
       async cancel(reason) {
-        await finalize(async () => await reader?.cancel(reason));
+        await finalize(async () => await reader.cancel(reason));
       },
     },
     params.signal ? { highWaterMark: 0 } : undefined,

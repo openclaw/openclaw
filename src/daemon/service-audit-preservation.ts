@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
@@ -97,45 +95,6 @@ function retains(
   return index === current.length;
 }
 
-function isLegacyDarwinInstallerPath(command: NonNullable<GatewayServiceCommand>): boolean {
-  const home = command.environment?.HOME;
-  const runtime = command.programArguments[0];
-  if (
-    command.environmentValueSources?.PATH !== "file" ||
-    !home ||
-    !path.posix.isAbsolute(home) ||
-    !runtime ||
-    !path.posix.isAbsolute(runtime)
-  ) {
-    return false;
-  }
-  // v2026.4.29's default template, before 85ce75c005a canonicalized Darwin
-  // PATH. The generated-file header alone cannot establish an unedited value.
-  const optionalDirectories = [
-    ".volta/bin",
-    ".asdf/shims",
-    ".bun/bin",
-    "Library/Application Support/fnm/aliases/default/bin",
-    ".fnm/aliases/default/bin",
-    "Library/pnpm",
-    ".local/share/pnpm",
-  ].map((directory) => `${home}/${directory}`);
-  const legacy = [
-    path.posix.dirname(runtime),
-    `${home}/.local/bin`,
-    `${home}/.npm-global/bin`,
-    `${home}/bin`,
-    ...optionalDirectories.slice(0, 3).filter((directory) => fs.existsSync(directory)),
-    `${home}/.nix-profile/bin`,
-    ...optionalDirectories.slice(3).filter((directory) => fs.existsSync(directory)),
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    "/bin",
-  ];
-  return command.environment?.PATH === [...new Set(legacy)].join(":");
-}
-
 function describeEnvironmentValue(key: string, value: string | undefined): string {
   if (value === undefined) {
     return "<absent>";
@@ -208,9 +167,6 @@ export function auditGatewayInstallPreservation(
       continue;
     }
     if (upper === "PATH" && replacement !== undefined) {
-      if (platform === "darwin" && isLegacyDarwinInstallerPath(current)) {
-        continue;
-      }
       const paths = (text: string) =>
         text
           .split(platform === "win32" ? ";" : ":")

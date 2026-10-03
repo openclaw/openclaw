@@ -43,6 +43,15 @@ function nativeFailureDiagnostics(steps: UpdateRunRecord["steps"]): string {
   return diagnostics.length ? `${NATIVE_FAILURE_REPORT_SECTION}\n${diagnostics.join("\n\n")}` : "";
 }
 
+async function readSavedUpdateReport(filePath: string): Promise<string | undefined> {
+  return fs.readFile(filePath, "utf8").catch((error: unknown) => {
+    if (hasErrorCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  });
+}
+
 async function withUpdateReportWrite<T>(outputPath: string, write: () => Promise<T>): Promise<T> {
   await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
   return withFileLock(
@@ -69,12 +78,7 @@ export async function refreshUpdateRunReportArtifact(
   const id = z.uuid().parse(run.runId);
   const outputPath = path.join(stateDir, "update-reports", `${id}.md`);
   await withUpdateReportWrite(outputPath, async () => {
-    const previous = await fs.readFile(outputPath, "utf8").catch((error: unknown) => {
-      if (hasErrorCode(error, "ENOENT")) {
-        return "";
-      }
-      throw error;
-    });
+    const previous = (await readSavedUpdateReport(outputPath)) ?? "";
     // A child can commit the terminal ledger before its report is published.
     // Repair missing/pending projections, but retain terminal or user-authored bytes.
     if (previous && !isUpdateRunReportInProgress(previous)) {
@@ -168,12 +172,7 @@ export async function writeUpdateRunReportArtifact(params: {
     const run = params.readRun?.();
     const report = typeof params.report === "function" ? params.report(run) : params.report;
     if (params.readRun && !run) {
-      const previous = await fs.readFile(outputPath, "utf8").catch((error: unknown) => {
-        if (hasErrorCode(error, "ENOENT")) {
-          return "";
-        }
-        throw error;
-      });
+      const previous = await readSavedUpdateReport(outputPath);
       // An old reader can lose schema admission after the helper settles.
       // Its fallback result cannot replace already-published terminal details.
       if (previous && !isUpdateRunReportInProgress(previous)) {
@@ -357,14 +356,7 @@ export async function savePreparedUpdateFailureReport(
     if (!hasErrorCode(error, "EEXIST")) {
       throw error;
     }
-    const existing = await fs
-      .readFile(stagedReportPath(prepared), "utf8")
-      .catch((readError: unknown) => {
-        if (hasErrorCode(readError, "ENOENT")) {
-          return undefined;
-        }
-        throw readError;
-      });
+    const existing = await readSavedUpdateReport(stagedReportPath(prepared));
     if (existing !== undefined && existing !== prepared.body) {
       throw new Error("The saved update report does not match the reviewed preview.", {
         cause: error,

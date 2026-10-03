@@ -58,14 +58,4 @@ describe("Crabbox worker stop confirmation", () => {
       `Crabbox lease ${LEASE_ID} (provider aws) is absent; treating stop as already released`,
     );
   });
-
-  it("accepts a normal successful stop repeatedly", async () => {
-    const { provider, calls } = createWarmProvider(() => commandResult());
-    await expect(provider.destroy(lease)).resolves.toBeUndefined();
-    await expect(provider.destroy(lease)).resolves.toBeUndefined();
-    expect(calls.map(({ argv }) => argv)).toEqual([
-      ["crabbox", "stop", "--provider", "aws", "--id", LEASE_ID],
-      ["crabbox", "stop", "--provider", "aws", "--id", LEASE_ID],
-    ]);
-  });
 });

@@ -45,22 +45,21 @@ import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.t
 import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import { resolveChatContextCopy, usesNativeContextMenu } from "./chat-context-copy.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
-import { isConfirmedActionPopoverFocused } from "./chat-message-confirmation.ts";
-import type { MessageActionDetails } from "./chat-message-markdown.ts";
-import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
-import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import {
   dismissConfirmedActionPopovers,
+  isConfirmedActionPopoverFocused,
   openChatRewindConfirmation,
-  type MessageReplyTarget,
-} from "./chat-message.ts";
+} from "./chat-message-confirmation.ts";
+import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.ts";
+import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
+import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import type { ReplyMessageStatus } from "./chat-reply-preview.ts";
 import {
   handleChatSelectionPointerUp,
   isChatSelectionPopupFocused,
   removeChatSelectionPopup,
 } from "./chat-selection-popup.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
+import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 
 registerChatMessageMetadataEnglish();
 

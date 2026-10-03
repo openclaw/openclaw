@@ -380,6 +380,8 @@ Command-click or Control-click it to open a separate dashboard window. **Set as
 primary…** makes the viewed token-authenticated profile the Mac app's primary
 Gateway after confirmation. The app replaces the primary Gateway's credentials
 and closes its native chat window; independent saved-profile windows stay open.
+Native chat windows stay open while the same Gateway connects at launch or
+reconnects. This includes windows opened with `--chat` or `--no-activate --chat`.
 Dashboard windows displaying **Primary** follow the new connection, including
 windows opened separately. While connected, the sidebar footer also shows the
 current Gateway and marks it when it is primary. Password-only and browser

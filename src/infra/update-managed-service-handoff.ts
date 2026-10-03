@@ -45,6 +45,7 @@ import {
   resolveUpdateCliArgv,
 } from "./update-managed-service-handoff-command.js";
 import {
+  createHandoffLineReader,
   HANDOFF_OWNED_COMMAND_SCRIPT,
   HANDOFF_NOTICE_MARKER,
   HANDOFF_PARK_ADMITTED_MARKER,
@@ -1483,6 +1484,10 @@ async function spawnManagedServiceUpdateHandoff(
     channel: params.channel,
     tag: params.tag,
   };
+  const commandRuntime = {
+    execPath: handoffNodeExecutable,
+    argv1: params.argv1 ?? process.argv[1],
+  };
   const commandArgv = params.action
     ? [
         params.action.nodeRunner,
@@ -1490,11 +1495,7 @@ async function spawnManagedServiceUpdateHandoff(
         params.action.entrypoint,
         "triage",
       ]
-    : resolveUpdateCliArgv({
-        ...commandOptions,
-        execPath: handoffNodeExecutable,
-        argv1: params.argv1 ?? process.argv[1],
-      });
+    : resolveUpdateCliArgv({ ...commandOptions, ...commandRuntime });
   if (owner.operatorRestartWarning) {
     commandArgv.push("--no-restart");
   }
@@ -1576,15 +1577,18 @@ async function spawnManagedServiceUpdateHandoff(
     cwd: dir,
     invocationCwd: params.invocationCwd,
     commandArgv,
-    recoveryCommandArgv: resolveManagedServiceCliArgv(
-      { execPath: handoffNodeExecutable, argv1: params.argv1 ?? process.argv[1] },
-      ["gateway", "restart", "--preserve-definition", "--json"],
-    ),
+    recoveryCommandArgv: resolveManagedServiceCliArgv(commandRuntime, [
+      "gateway",
+      "restart",
+      "--preserve-definition",
+      "--json",
+    ]),
     recoveryTimeoutMs: owner.recoveryTimeoutMs,
-    triageCommandArgv: resolveManagedServiceCliArgv(
-      { execPath: handoffNodeExecutable, argv1: params.argv1 ?? process.argv[1] },
-      ["triage", "--json", "--non-interactive"],
-    ),
+    triageCommandArgv: resolveManagedServiceCliArgv(commandRuntime, [
+      "triage",
+      "--json",
+      "--non-interactive",
+    ]),
     triageContextPath,
     triageInputPath,
     triageContextCommand: formatInstallationTargetCommand(
@@ -1704,7 +1708,6 @@ async function spawnManagedServiceUpdateHandoff(
     throw err;
   }
   if (params.beforePark) {
-    let buffered = "";
     let noticePending = false;
     const requiresAcceptance =
       params.requester?.authorizationSource?.startsWith("profile:") === true;
@@ -1726,42 +1729,36 @@ async function spawnManagedServiceUpdateHandoff(
       }
     };
     const isCurrent = () => isCurrentOwner() && !owner.cancelling;
-    const onNotice = (chunk: Buffer | string) => {
-      buffered = `${buffered}${chunk.toString()}`.slice(-1024);
-      let newline: number;
-      while ((newline = buffered.indexOf("\n")) >= 0) {
-        const line = buffered.slice(0, newline + 1);
-        buffered = buffered.slice(newline + 1);
-        if (line === HANDOFF_PARK_ADMITTED_MARKER && requiresAcceptance && isCurrentOwner()) {
-          owner.parkAdmitted = true;
-          owner.releaseRequesterObserver?.();
-          owner.parkReady = true;
-          owner.closeForStop?.();
-          continue;
-        }
-        if (line !== HANDOFF_NOTICE_MARKER || noticePending || !isCurrent()) {
-          continue;
-        }
-        noticePending = true;
-        void (async () => {
-          owner.requesterAuthority?.assertCurrent();
-          await owner.beforePark?.();
-          owner.requesterAuthority?.assertCurrent();
-          owner.requesterAuthority?.signal?.throwIfAborted();
-          if (isCurrent()) {
-            if (!requiresAcceptance) {
-              owner.parkReady = true;
-              owner.closeForStop?.();
-            }
-            child.stdin.write("noticed\n");
-          }
-        })().catch(() => {
-          if (isCurrent()) {
-            child.stdin.write("notice-failed\n");
-          }
-        });
+    const onNotice = createHandoffLineReader((line) => {
+      if (line === HANDOFF_PARK_ADMITTED_MARKER && requiresAcceptance && isCurrentOwner()) {
+        owner.parkAdmitted = true;
+        owner.releaseRequesterObserver?.();
+        owner.parkReady = true;
+        owner.closeForStop?.();
+        return;
       }
-    };
+      if (line !== HANDOFF_NOTICE_MARKER || noticePending || !isCurrent()) {
+        return;
+      }
+      noticePending = true;
+      void (async () => {
+        owner.requesterAuthority?.assertCurrent();
+        await owner.beforePark?.();
+        owner.requesterAuthority?.assertCurrent();
+        owner.requesterAuthority?.signal?.throwIfAborted();
+        if (isCurrent()) {
+          if (!requiresAcceptance) {
+            owner.parkReady = true;
+            owner.closeForStop?.();
+          }
+          child.stdin.write("noticed\n");
+        }
+      })().catch(() => {
+        if (isCurrent()) {
+          child.stdin.write("notice-failed\n");
+        }
+      });
+    });
     child.stdout.on("data", onNotice);
     child.once("exit", () => child.stdout.off("data", onNotice));
   }

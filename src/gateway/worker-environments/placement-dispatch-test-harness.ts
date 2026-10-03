@@ -67,8 +67,7 @@ export function createHarness(
     reconcileChanged?: boolean;
     reconcileCommitsManifest?: boolean;
     reconcileCommitsManifestOnApply?: boolean;
-    verifyFails?: boolean;
-    verifyFailureCall?: number;
+    verifyFailurePhase?: "before-apply" | "after-apply";
     leaseFails?: boolean;
     leaseFailureCount?: number;
     leaseFailureCall?: number;
@@ -106,7 +105,7 @@ export function createHarness(
   let remainingReconcileFailures = options.reconcileFailureCount ?? 0;
   let remainingLeaseFailures = options.leaseFailureCount ?? 0;
   let leaseCalls = 0;
-  let verifyCalls = 0;
+  let pendingVerifyFailurePhase = options.verifyFailurePhase;
   const log: string[] = [];
   const reportWorkspaceResultConflict = vi.fn(async () => {});
   const reportWorkspaceResultRecoveryFailure = vi.fn(
@@ -283,6 +282,7 @@ export function createHarness(
         await stagedResult.record(stagedResult.ref);
       }
       await options.afterReconcile?.();
+      let applied = false;
       const verifyLocalStable = async () => {
         log.push("workspace:verify-local");
         if (options.localVerifyFails) {
@@ -296,8 +296,8 @@ export function createHarness(
         discardPreparedStagedResult: async () => {},
         verifyStable: async () => {
           log.push("workspace:verify");
-          verifyCalls += 1;
-          if (options.verifyFails || verifyCalls === options.verifyFailureCall) {
+          if (pendingVerifyFailurePhase === (applied ? "after-apply" : "before-apply")) {
+            pendingVerifyFailurePhase = undefined;
             throw new Error("workspace changed after reconciliation");
           }
         },
@@ -319,6 +319,7 @@ export function createHarness(
               applyPreparedStagedResult: async () => {
                 log.push("workspace:apply-prepared");
                 await journal.commit(reconciledManifestRef);
+                applied = true;
               },
             }
           : {}),

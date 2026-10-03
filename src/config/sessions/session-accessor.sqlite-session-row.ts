@@ -21,16 +21,13 @@ export function normalizeSessionEntryTimestamp(entry: SessionEntry): SessionEntr
   ].some((key) => key in entry);
   const delivery =
     entry.delivery ?? (hasLegacyDeliveryFields ? undefined : { kind: "none" as const });
-  if (typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)) {
+  if (asFiniteNumber(entry.updatedAt) !== undefined) {
     if (entry.delivery === delivery) {
       return entry;
     }
     return delivery ? { ...entry, delivery } : entry;
   }
-  const updatedAt =
-    typeof entry.sessionStartedAt === "number" && Number.isFinite(entry.sessionStartedAt)
-      ? entry.sessionStartedAt
-      : Date.now();
+  const updatedAt = asFiniteNumber(entry.sessionStartedAt) ?? Date.now();
   return delivery ? { ...entry, delivery, updatedAt } : { ...entry, updatedAt };
 }
 

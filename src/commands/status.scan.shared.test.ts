@@ -157,6 +157,7 @@ describe("resolveGatewayProbeSnapshot", () => {
       const result = await pending;
 
       expect(result.gatewayReachable).toBe(true);
+      expect(result.localGatewayHealthy).toBe(true);
       expect(readProbeCall()).toMatchObject({
         timeoutMs: 38_000,
         auth: { token: "tok", password: "pw" },
@@ -199,8 +200,38 @@ describe("resolveGatewayProbeSnapshot", () => {
 
       expect(result.gatewayProbe).toMatchObject({ ok: false, error });
       expect(result.gatewayProbe?.startupPhase).toBe(startupPhase);
+      expect(result.localGatewayHealthy).toBe(false);
       expect(mocks.probeGateway).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["remote", "plugin-errors", "channel-errors", "probe-failed"])(
+    "does not claim current local health from %s",
+    async (observation) => {
+      mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue(
+        observation === "remote"
+          ? undefined
+          : {
+              healthy: observation !== "channel-errors",
+              waitOutcome: observation === "channel-errors" ? "channel-errors" : "healthy",
+              ...(observation === "plugin-errors"
+                ? { activatedPluginErrors: ["fixture plugin failed"] }
+                : {}),
+              ...(observation === "channel-errors"
+                ? { channelProbeErrors: ["fixture channel failed"] }
+                : {}),
+            },
+      );
+      mocks.probeGateway.mockResolvedValue({
+        ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
+        ok: observation !== "probe-failed",
+      });
+      const result = await resolveGatewayProbeSnapshot({
+        cfg: {},
+        opts: createStatusGatewayProbeBudget(),
+      });
+      expect(result.localGatewayHealthy).toBe(false);
     },
   );
 

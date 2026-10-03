@@ -29,7 +29,7 @@ import { resolveRepository } from "./service-preparation.js";
 const preserved = (reason: string) =>
   new Error(`${reason}; remaining source and original snapshot preserved`);
 
-/** CLI-only recovery: reconstitute a clean checkout without replacing any surviving file,
+/** Explicit recovery: reconstitute a clean checkout without replacing any surviving file,
  * then let native non-force Git removal own deletion. Dirty/exact-state captures keep their
  * existing recovery owners; neither their index nor their snapshots can be reconstructed here.
  */

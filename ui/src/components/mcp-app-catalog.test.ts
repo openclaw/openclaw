@@ -4,7 +4,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { McpAppCatalog } from "./mcp-app-catalog.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "./mcp-app-launch.ts";
 
-afterEach(() => document.body.replaceChildren());
+afterEach(() => {
+  document.body.replaceChildren();
+  vi.unstubAllGlobals();
+});
 const result: McpAppDiscoverResult = {
   servers: [
     {
@@ -29,6 +32,52 @@ const result: McpAppDiscoverResult = {
 };
 
 describe("app launch catalog", () => {
+  it("onboards an app without crypto.randomUUID on insecure origins", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
+    const read = createDeferred<McpAppDiscoverResult>();
+    const request = vi.fn().mockReturnValueOnce(read.promise).mockResolvedValue({});
+    const navigate = vi.fn();
+    const element = new McpAppCatalog();
+    element.sessionKey = "agent:main:one";
+    Reflect.set(element, "context", {
+      gateway: {
+        snapshot: {
+          client: { request },
+          phase: "connected",
+          hello: { features: { methods: ["mcp.app.discover"] } },
+        },
+        connectionRevision: 1,
+        subscribe: () => () => {},
+        subscribeEvents: () => () => {},
+      },
+      agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
+      agents: { state: { agentsList: null } },
+      sessions: { state: { result: null } },
+      basePath: "",
+      navigate,
+    });
+    document.body.append(element);
+    await element.updateComplete;
+    read.resolve({ servers: [], onboarding: [{ pluginId: "parts", title: "Parts plugin" }] });
+    await read.promise;
+    await element.updateComplete;
+    const button = [...element.querySelectorAll<HTMLButtonElement>("button")].find((candidate) =>
+      candidate.textContent?.includes("Parts plugin"),
+    );
+    expect(button).toBeDefined();
+    button!.click();
+    await element.updateComplete;
+    expect(request).toHaveBeenCalledWith("mcp.app.onboard", {
+      sessionKey: "agent:main:one",
+      agentId: "main",
+      pluginId: "parts",
+      idempotencyKey: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+      ),
+    });
+    expect(navigate).toHaveBeenCalledWith("chat", expect.any(Object));
+    expect(element.querySelector('[role="alert"]')).toBeNull();
+  });
   it.each(["sidebar", "thread", "file"] as const)(
     "hides unsupported %s controls after empty discovery",
     async (surface) => {

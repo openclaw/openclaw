@@ -1,4 +1,3 @@
-// Tlon monitor tests cover authentication, inbound context, and shutdown lifecycle.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -438,14 +437,16 @@ it("continues startup after an initial group invite write fails", async () => {
 describe("monitorTlonProvider reply prefixes", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async () => {
-      // Retire background maintenance before removing its database or changing clocks.
-      for (const dir of tempDirs.dirs) {
-        await closeOpenClawAgentDatabasesAsync(dir);
-      }
-      cleanup();
-      // A case that failed before holding maintenance has no fake clock to inspect.
-      if (vi.isFakeTimers()) {
-        expect.soft(vi.getTimerCount()).toBe(0);
+      try {
+        for (const dir of tempDirs.dirs) {
+          await closeOpenClawAgentDatabasesAsync(dir);
+        }
+        cleanup();
+        if (vi.isFakeTimers()) {
+          expect.soft(vi.getTimerCount()).toBe(0);
+        }
+      } finally {
+        vi.useRealTimers();
       }
     }),
   );
@@ -528,6 +529,7 @@ describe("monitorTlonProvider reply prefixes", () => {
           add: { essay: { author: "~nec", content: [{ inline: ["hello"] }], sent: Date.now() } },
         },
       });
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
       const sends = sseClientMock.poke.mock.calls
         .map(([value]) => value)
         .filter((value) => value.mark === "chat-dm-action");

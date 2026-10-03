@@ -4,6 +4,7 @@ import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.j
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveClawHubBaseUrl } from "./clawhub-client.js";
+import { encodeClawHubPackagePath, formatClawHubReleaseLabel } from "./clawhub-display.js";
 import {
   fetchClawHubPackageSecurity,
   type ClawHubPackageSecurityResponse,
@@ -146,13 +147,6 @@ function buildClawHubTrustInstallRecordFields(params: {
   };
 }
 
-function encodeClawHubPackagePath(packageName: string): string {
-  return packageName
-    .split("/")
-    .map((part) => encodeURIComponent(part).replaceAll("%40", "@"))
-    .join("/");
-}
-
 function resolveClawHubSubjectUrl(params: {
   baseUrl?: string;
   subject: ClawHubTrustSubject;
@@ -247,10 +241,6 @@ function formatClawHubSecurityAudit(params: {
     "",
     `Details: ${sanitizeTerminalText(securityAuditUrl)}`,
   ]);
-}
-
-function formatClawHubReleaseLabel(packageName: string, version: string): string {
-  return `${sanitizeTerminalText(packageName)}@${sanitizeTerminalText(version)}`;
 }
 
 function formatClawHubSubjectPackageName(subject: ClawHubTrustSubject): string {

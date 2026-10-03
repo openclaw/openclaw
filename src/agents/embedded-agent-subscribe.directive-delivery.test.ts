@@ -8,10 +8,7 @@ import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { isAudioPayload } from "../auto-reply/reply/agent-runner-helpers.js";
-import {
-  createAudioAsVoiceBuffer,
-  createBlockReplyPipeline,
-} from "../auto-reply/reply/block-reply-pipeline.js";
+import { createBlockReplyPipeline } from "../auto-reply/reply/block-reply-pipeline.js";
 import { createBlockReplyDeliveryHandler } from "../auto-reply/reply/reply-delivery.js";
 import { createReplyToModeFilterForChannel } from "../auto-reply/reply/reply-threading.js";
 import { createTypingSignaler } from "../auto-reply/reply/typing-mode.js";
@@ -68,7 +65,7 @@ function createDeliveryHarness(
   const pipeline = createBlockReplyPipeline({
     onBlockReply: record,
     timeoutMs: 5000,
-    buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
+    isAudioPayload,
   });
   const typing = createTypingController({});
   const handler = createBlockReplyDeliveryHandler({

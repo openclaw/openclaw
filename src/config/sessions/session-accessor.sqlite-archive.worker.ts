@@ -260,20 +260,12 @@ async function encodeStagedTranscriptArchive(params: {
   })}${compressed ? ".zst" : ""}`;
   const encodedPath = `${archivePath}.${randomUUID()}.stage`;
   try {
-    if (compressed) {
-      await pipeline(
-        fs.createReadStream(params.stagedPath),
-        createZstdCompress.call(zlib),
-        createArchiveByteLimitTransform(),
-        fs.createWriteStream(encodedPath, { flags: "wx", mode: 0o600 }),
-      );
-    } else {
-      await pipeline(
-        fs.createReadStream(params.stagedPath),
-        createArchiveByteLimitTransform(),
-        fs.createWriteStream(encodedPath, { flags: "wx", mode: 0o600 }),
-      );
-    }
+    await pipeline([
+      fs.createReadStream(params.stagedPath),
+      ...(compressed ? [createZstdCompress.call(zlib)] : []),
+      createArchiveByteLimitTransform(),
+      fs.createWriteStream(encodedPath, { flags: "wx", mode: 0o600 }),
+    ]);
     const bytes = fs.readFileSync(encodedPath);
     return {
       archiveName: path.basename(archivePath),

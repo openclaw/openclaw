@@ -96,31 +96,19 @@ type ChatComposerViewContext = {
 };
 
 export function renderChatComposerQueue(props: ChatComposerProps, showAbortableUi: boolean) {
+  const canAct = props.connected && props.canSend && !props.submitDisabledReason;
   return renderChatQueue({
     queue: props.queue,
     displayQueue: props.displayQueue,
     offline: props.offline,
     canAbort: showAbortableUi,
-    canRemoveServerQueued: props.connected && props.canSend && !props.submitDisabledReason,
-    onQueueRetry:
-      props.connected && props.canSend && !props.submitDisabledReason
-        ? props.onQueueRetry
-        : undefined,
-    onQueueSteer:
-      props.connected && props.canSend && !props.submitDisabledReason
-        ? props.onQueueSteer
-        : undefined,
+    canRemoveServerQueued: canAct,
+    onQueueRetry: canAct ? props.onQueueRetry : undefined,
+    onQueueSteer: canAct ? props.onQueueSteer : undefined,
     // Reordering is local bookkeeping, so it stays available while offline —
     // exactly when a queue is long enough to need it.
     onQueueMove: props.onQueueMove,
-    onQueueEdit: props.queuedEdit?.onEdit,
-    onQueueEditChange: props.queuedEdit?.onEditChange,
-    onQueueEditSubmit: props.queuedEdit?.onEditSubmit,
-    onQueueEditCancel: props.queuedEdit?.onCancel,
-    editingId: props.queuedEdit?.editingId ?? null,
-    editingText: props.queuedEdit?.editingText,
-    editingMentions: props.queuedEdit?.editingMentions,
-    editingSource: props.queuedEdit?.source,
+    queuedEdit: props.queuedEdit,
     onQueueRemove: props.onQueueRemove,
   });
 }

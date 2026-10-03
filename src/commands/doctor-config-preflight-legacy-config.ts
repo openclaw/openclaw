@@ -81,12 +81,13 @@ export async function prepareDoctorConfigRecovery(params: {
   let snapshotRead = params.snapshotRead;
   let snapshot = snapshotRead.snapshot;
   // Refuse before backup recovery or unknown-key cleanup can discard authored settings.
-  const retired = findRetiredConfigUpgradeRequirement(
-    snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
-  );
-  if (retired) {
-    throw new Error(`${retired.message} ${retired.nextAction}`);
-  }
+  const assertSupportedConfig = (config: unknown) => {
+    const retired = findRetiredConfigUpgradeRequirement(config);
+    if (retired) {
+      throw new Error(`${retired.message} ${retired.nextAction}`);
+    }
+  };
+  assertSupportedConfig(snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig);
   assertNoRetiredStateFiles(
     "Cron state",
     await listRetiredCronStateFiles(
@@ -116,7 +117,10 @@ export async function prepareDoctorConfigRecovery(params: {
         ? params.planRepair(snapshot)
         : null;
     let configRepaired = false;
-    if (!activeConfigRepair && (await recoverConfigFromJsonRootSuffix(snapshot))) {
+    if (
+      !activeConfigRepair &&
+      (await recoverConfigFromJsonRootSuffix(snapshot, assertSupportedConfig))
+    ) {
       note("Removed non-JSON prefix from openclaw.json.", "Config");
       configRepaired = true;
     } else if (

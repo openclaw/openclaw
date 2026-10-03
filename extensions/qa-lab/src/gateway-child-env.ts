@@ -80,7 +80,7 @@ export function buildQaRuntimeEnv(params: {
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
     HOME: forwardedHostHome ?? params.homeDir,
-    ...(provider?.appliesLiveEnvAliases
+    ...(provider?.kind === "live"
       ? resolveQaLiveCliAuthEnv(baseEnv, {
           forwardHostHomeForClaudeCli: params.forwardHostHomeForClaudeCli,
           claudeCliAuthMode: params.claudeCliAuthMode,

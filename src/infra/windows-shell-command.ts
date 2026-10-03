@@ -167,7 +167,7 @@ export function analyzeWindowsShellCommand(params: {
     };
   }
   const argv = tokenizeWindowsSegment(effective);
-  if (!argv || argv.length === 0) {
+  if (!argv) {
     return { ok: false, reason: "unable to parse windows command", segments: [] };
   }
   return {

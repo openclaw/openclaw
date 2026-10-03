@@ -11,9 +11,8 @@ import {
   collectPnpmLockViolations,
   createNpmPackageLockInstallStrategyArgs,
   createNpmLockExecOptions,
-  createNpmLockCommand,
   disableDependencyShrinkwrapOverrideConflictSources,
-  exactOverrideRulesFromOverrides,
+  validationOverrideRulesFromOverrides,
   normalizeNpmVersionDrift,
   normalizeOverrides,
   packageJsonForNpmLock,
@@ -69,26 +68,6 @@ describe("generate-npm-package-lock", () => {
     expect(normalized).not.toHaveProperty("cpu");
     expect(normalized).not.toHaveProperty("libc");
     expect(normalized.dependencies).toEqual({ chalk: "5.6.2" });
-  });
-
-  it("runs npm package-lock generation through cmd.exe for Windows npm shims", () => {
-    const execPath = "C:\\nodejs\\node.exe";
-    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
-
-    expect(
-      createNpmLockCommand(["install", "--package-lock-only"], {
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
-        env: {},
-        execPath,
-        existsSync: (candidate: string) => candidate === npmCmdPath,
-        platform: "win32",
-      }),
-    ).toEqual({
-      args: ["/d", "/s", "/c", `${npmCmdPath} install --package-lock-only`],
-      command: "C:\\Windows\\System32\\cmd.exe",
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
   });
 
   it("bounds npm-lock command runtime and captured output by default", () => {
@@ -513,7 +492,7 @@ describe("generate-npm-package-lock", () => {
         },
       },
     };
-    const overrideRules = exactOverrideRulesFromOverrides({
+    const overrideRules = validationOverrideRulesFromOverrides({
       protobufjs: "8.4.0",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
     });
@@ -545,7 +524,7 @@ describe("generate-npm-package-lock", () => {
     expect(
       disableDependencyShrinkwrapOverrideConflictSources(
         lockfile,
-        exactOverrideRulesFromOverrides(overrides),
+        validationOverrideRulesFromOverrides(overrides),
         overrides,
       ),
     ).toEqual(["node_modules/parent"]);
@@ -572,7 +551,7 @@ describe("generate-npm-package-lock", () => {
     expect(
       disableDependencyShrinkwrapOverrideConflictSources(
         lockfile,
-        exactOverrideRulesFromOverrides(overrides),
+        validationOverrideRulesFromOverrides(overrides),
         overrides,
       ),
     ).toEqual(["node_modules/parent"]);
@@ -597,7 +576,7 @@ describe("generate-npm-package-lock", () => {
     expect(
       disableDependencyShrinkwrapOverrideConflictSources(
         lockfile,
-        exactOverrideRulesFromOverrides(overrides),
+        validationOverrideRulesFromOverrides(overrides),
         overrides,
       ),
     ).toEqual(["node_modules/parent"]);
@@ -674,7 +653,7 @@ describe("generate-npm-package-lock", () => {
     expect(
       disableDependencyShrinkwrapOverrideConflictSources(
         lockfile,
-        exactOverrideRulesFromOverrides(overrides),
+        validationOverrideRulesFromOverrides(overrides),
         overrides,
       ),
     ).toEqual(expected);
@@ -703,7 +682,7 @@ describe("generate-npm-package-lock", () => {
     expect(
       disableDependencyShrinkwrapOverrideConflictSources(
         lockfile,
-        exactOverrideRulesFromOverrides(overrides),
+        validationOverrideRulesFromOverrides(overrides),
         overrides,
       ),
     ).toEqual(["node_modules/wrapper"]);
@@ -729,7 +708,7 @@ describe("generate-npm-package-lock", () => {
     expect(
       disableDependencyShrinkwrapOverrideConflictSources(
         lockfile,
-        exactOverrideRulesFromOverrides(overrides),
+        validationOverrideRulesFromOverrides(overrides),
         overrides,
       ),
     ).toEqual(["node_modules/parent"]);
@@ -755,7 +734,7 @@ describe("generate-npm-package-lock", () => {
     expect(
       disableDependencyShrinkwrapOverrideConflictSources(
         lockfile,
-        exactOverrideRulesFromOverrides(overrides),
+        validationOverrideRulesFromOverrides(overrides),
         overrides,
       ),
     ).toEqual(expected);
@@ -780,7 +759,7 @@ describe("generate-npm-package-lock", () => {
     expect(
       disableDependencyShrinkwrapOverrideConflictSources(
         lockfile,
-        exactOverrideRulesFromOverrides(overrides),
+        validationOverrideRulesFromOverrides(overrides),
         overrides,
       ),
     ).toEqual([]);

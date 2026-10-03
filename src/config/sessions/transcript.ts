@@ -149,20 +149,14 @@ class SessionTranscriptAgentScopeMismatchError extends Error {
 export type LatestAssistantTranscriptText = LatestTranscriptAssistantText;
 
 function parseAssistantTranscriptText(line: string): LatestAssistantTranscriptText | undefined {
-  const parsed = JSON.parse(line) as {
+  const { id, message } = JSON.parse(line) as {
     id?: unknown;
     message?: unknown;
   };
-  const message = parsed.message as
-    | { role?: unknown; timestamp?: unknown; provider?: unknown; model?: unknown }
-    | undefined;
-  if (!message || message.role !== "assistant") {
-    return undefined;
-  }
   if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
     return undefined;
   }
-  return projectAssistantTranscriptText(message, parsed.id);
+  return projectAssistantTranscriptText(message, id);
 }
 
 function extractRecentConversationText(

@@ -154,12 +154,12 @@ export function createGatewayRpcDiagnostics(
   if (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventInterest("gateway.rpc")) {
     return undefined;
   }
-  // Only process-stable core names become dimensions. Plugin/unknown names may
-  // contain arbitrary caller data and must not create new metric series.
-  const label = isCoreGatewayMethodClassified(method)
-    ? method
-    : getMethodRegistry?.().getHandler(method) || Object.hasOwn(extraHandlers, method)
-      ? "other"
-      : "unknown";
+  // Only catalog-owned names become dimensions, never arbitrary request values.
+  const label =
+    isCoreGatewayMethodClassified(method) ||
+    getMethodRegistry?.().getHandler(method) ||
+    Object.hasOwn(extraHandlers, method)
+      ? method
+      : "other";
   return new GatewayRpcDiagnostics(label);
 }

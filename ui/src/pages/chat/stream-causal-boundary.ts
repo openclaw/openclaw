@@ -3,7 +3,10 @@ import {
   readSessionMessageIdentity,
 } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   advanceAccumulatedStreamText,
   streamSegmentUsesAccumulatedText,
@@ -26,9 +29,9 @@ type StreamRolloverState = {
   chatStreamSegments?: ChatStreamSegment[];
 };
 
-function lastUserMessageIndex(messages: unknown[], beforeIndex = messages.length): number {
+export function lastUserMessageIndex(messages: unknown[], beforeIndex = messages.length): number {
   for (let index = beforeIndex - 1; index >= 0; index -= 1) {
-    if (readSessionMessageIdentity(messages[index])?.role === "user") {
+    if (normalizeLowercaseStringOrEmpty(asNullableRecord(messages[index])?.role) === "user") {
       return index;
     }
   }

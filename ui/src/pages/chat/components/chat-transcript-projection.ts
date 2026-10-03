@@ -22,15 +22,13 @@ import {
 } from "../chat-thread.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { buildChatArchiveNotice, renderChatDivider, renderChatNotice } from "./chat-divider.ts";
-import { assistantMediaPolicyKey } from "./chat-message-media.ts";
+import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts";
+import { assistantMediaPolicyKey, getChatMediaRenderVersion } from "./chat-message-media.ts";
 import {
-  getChatMediaRenderVersion,
-  renderActivityGroup,
-  renderMessageGroup,
   renderStreamGroup,
   renderWorkGroupSummary,
   type StreamGroupOptions,
-} from "./chat-message.ts";
+} from "./chat-message-stream.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import {

@@ -159,6 +159,7 @@ export function registerAgentRunContext(
     "projectSessionActive",
     "projectSessionLifecycle",
     "projectSessionMessages",
+    "isHeartbeat",
   ] as const) {
     if (context[key] !== undefined) {
       existing[key] = context[key];
@@ -172,9 +173,6 @@ export function registerAgentRunContext(
     for (const [jobId, cronRun] of context.cronRunsByJobId) {
       existing.cronRunsByJobId.set(jobId, cronRun);
     }
-  }
-  if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
-    existing.isHeartbeat = context.isHeartbeat;
   }
   for (const key of ["registeredAt", "lastActiveAt"] as const) {
     if (context[key] !== undefined) {

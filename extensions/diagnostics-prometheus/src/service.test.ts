@@ -27,7 +27,7 @@ describe("diagnostics-prometheus service", () => {
     const base = {
       ...baseEvent(),
       type: "gateway.rpc" as const,
-      method: "sessions.list",
+      method: "workboard.cards.list",
       trace: { traceId: "4bf92f3577b34da6a3ce929d0e0e4736" },
     };
     for (const event of [
@@ -49,12 +49,14 @@ describe("diagnostics-prometheus service", () => {
     }
 
     const rendered = metrics.render();
-    expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="sessions.list"} 1');
+    expect(rendered).toContain(
+      'openclaw_gateway_rpc_requests_total{method="workboard.cards.list"} 1',
+    );
     for (const [method, metric, sum, count] of [
-      ["sessions.list", "first_response", 0.25, 1],
-      ["sessions.list", "handler", 0.4, 1],
-      ["sessions.list", "admission", 0.1, 1],
-      ["sessions.list", "queue_wait", 0.075, 1],
+      ["workboard.cards.list", "first_response", 0.25, 1],
+      ["workboard.cards.list", "handler", 0.4, 1],
+      ["workboard.cards.list", "admission", 0.1, 1],
+      ["workboard.cards.list", "queue_wait", 0.075, 1],
       ["health", "first_response", 0.03, 2],
     ]) {
       expect(rendered).toContain(
@@ -668,7 +670,7 @@ describe("diagnostics-prometheus service", () => {
       waitMs: 10,
     };
     metrics.record(queue);
-    // This covers the current core-method table's cardinality without importing core internals.
+    // Enough distinct methods to exhaust the shared cap without importing core internals.
     for (let index = 0; index < 426; index += 1) {
       const base = { ...baseEvent(), type: "gateway.rpc" as const, method: `core.method.${index}` };
       for (const event of [

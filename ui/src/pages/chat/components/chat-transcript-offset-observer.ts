@@ -363,14 +363,16 @@ export function observeTranscriptOffset(
   // Commit editor-induced geometry before Lit's bubble listener classifies
   // the native offset. Only the actual correction carries maintenance provenance.
   const commitComposerResize = () => owner.onComposerLayout(true);
-  element?.addEventListener("scroll", commitComposerResize, { capture: true, passive: true });
-  element?.addEventListener("touchmove", moveTouch, { passive: true });
+  const listeners = new AbortController();
+  const passive = { passive: true, signal: listeners.signal };
+  element?.addEventListener("scroll", commitComposerResize, { ...passive, capture: true });
+  element?.addEventListener("touchmove", moveTouch, passive);
   for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
-    element?.addEventListener(type, interrupt, { passive: true });
+    element?.addEventListener(type, interrupt, passive);
   }
-  element?.addEventListener("scrollend", finishScroll, { passive: true });
-  element?.addEventListener("touchend", finishTouch, { passive: true });
-  element?.addEventListener("touchcancel", finishTouch, { passive: true });
+  element?.addEventListener("scrollend", finishScroll, passive);
+  element?.addEventListener("touchend", finishTouch, passive);
+  element?.addEventListener("touchcancel", finishTouch, passive);
   const cleanup = observeElementOffset(instance, (offset, scrolling) => {
     if (element !== owner.getScrollElement()) {
       return;
@@ -435,13 +437,6 @@ export function observeTranscriptOffset(
     contactIds.clear();
     owner.state.touching = false;
     owner.state.touchScrolling = false;
-    element?.removeEventListener("scroll", commitComposerResize, true);
-    element?.removeEventListener("scrollend", finishScroll);
-    element?.removeEventListener("touchend", finishTouch);
-    element?.removeEventListener("touchmove", moveTouch);
-    element?.removeEventListener("touchcancel", finishTouch);
-    for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
-      element?.removeEventListener(type, interrupt);
-    }
+    listeners.abort();
   };
 }

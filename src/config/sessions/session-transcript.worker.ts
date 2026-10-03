@@ -7,6 +7,10 @@ import { serveOwnedWorkerTasks } from "../../infra/worker-task-server.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
 import {
+  isSessionHistoryReadOperation,
+  prepareSessionHistoryReadOperation,
+} from "./session-history-read-operation.worker.js";
+import {
   encodeSessionTranscriptWorkerError,
   encodeSessionTranscriptRequestError,
 } from "./session-history-worker-errors.js";
@@ -78,6 +82,10 @@ serveOwnedWorkerTasks(
     const readRequest = async (): Promise<
       SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]
     > => {
+      if (isSessionHistoryReadOperation(request)) {
+        const execute = await prepareSessionHistoryReadOperation(request);
+        return execute();
+      }
       if (request.kind === "lifecycle-artifact-plan") {
         const { readSessionLifecycleArtifactCleanup } =
           await import("./session-accessor.sqlite-lifecycle-artifacts.js");
@@ -229,34 +237,6 @@ serveOwnedWorkerTasks(
             }
           : { kind: request.kind, ...cold.readSessionColdStorageInventoryInWorker(options) };
       }
-      if (request.kind === "transcript-match") {
-        const { findTranscriptEventMatchingInDatabase } =
-          await import("./session-transcript-match.js");
-        const { withOpenClawAgentDatabaseReadOnly } =
-          await import("../../state/openclaw-agent-db-readonly.js");
-        const opened = withOpenClawAgentDatabaseReadOnly(
-          (database) => findTranscriptEventMatchingInDatabase(database, request.request),
-          {
-            ...request.database,
-            env: cloneEnvWithPlatformSemantics(request.request.target.env ?? process.env),
-          },
-        );
-        return {
-          kind: "transcript-match" as const,
-          result: opened.found ? opened.value : undefined,
-        };
-      }
-      if (request.kind === "transcript-search") {
-        const { searchSessionTranscriptsReadOnlySync } =
-          await import("./session-transcript-search.js");
-        return {
-          kind: "transcript-search" as const,
-          result: searchSessionTranscriptsReadOnlySync(request.params, {
-            ...request.database,
-            env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
-          }),
-        };
-      }
       if (request.kind === "session-store-target") {
         const { readSessionStoreTargetResult } =
           await import("./session-store-target-inventory.js");
@@ -393,11 +373,6 @@ serveOwnedWorkerTasks(
           request.request,
         );
       }
-      if (request.kind === "branch-summaries") {
-        const { readSessionBranchSummariesInWorker } =
-          await import("./session-accessor.sqlite-branches.js");
-        return readSessionBranchSummariesInWorker(request.request);
-      }
       if (request.kind === "session-membership-facts") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
@@ -476,23 +451,6 @@ serveOwnedWorkerTasks(
           snapshot: readPendingInputHistoryInWorker(request),
         };
       }
-      if (request.kind === "session-pending-input-receipts") {
-        const { listSessionPendingInputReceipts } =
-          await import("./session-accessor.sqlite-pending-input-receipts.js");
-        return {
-          kind: "session-pending-input-receipts" as const,
-          receipts: listSessionPendingInputReceipts(
-            {
-              agentId: request.agentId,
-              sessionKey: request.sessionKey,
-              sessionId: request.sessionId,
-              storePath: request.database.path,
-              env: cloneEnvWithPlatformSemantics(request.env),
-            },
-            { runIds: request.runIds },
-          ),
-        };
-      }
       if (request.kind === "conversation-rows") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
@@ -564,14 +522,6 @@ serveOwnedWorkerTasks(
           loadSessionEntryReadOnlyInScope({ ...request.scope, projection: "list" }) !== undefined
         );
       }
-      if (request.kind === "transcript-watermark") {
-        const { readSessionTranscriptWatermark } =
-          await import("./session-accessor.sqlite-transcript-watermark.js");
-        return {
-          kind: "transcript-watermark",
-          watermark: readSessionTranscriptWatermark(request.scope),
-        };
-      }
       return await runWithSessionTranscriptReadFence(
         request.admission,
         async (): Promise<SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]> => {
@@ -581,25 +531,6 @@ serveOwnedWorkerTasks(
             return {
               kind: "session-activity-summary-source" as const,
               source: readActivitySummaryBatch(request),
-            };
-          }
-          if (request.kind === "session-title-fields") {
-            const { readSessionTitleFieldsFromTranscript } =
-              await import("../../gateway/session-transcript-title-reader.js");
-            return {
-              kind: "session-title-fields" as const,
-              fields: readSessionTitleFieldsFromTranscript(request.scope, {
-                includeInterSession: request.includeInterSession,
-                readOnly: true,
-              }),
-            };
-          }
-          if (request.kind === "session-preview") {
-            const { readSessionPreviewItemsReadOnly } =
-              await import("../../gateway/session-transcript-preview-reader.js");
-            return {
-              kind: "session-preview" as const,
-              items: readSessionPreviewItemsReadOnly(request),
             };
           }
           if (
@@ -612,15 +543,6 @@ serveOwnedWorkerTasks(
             const { readSessionTranscriptHydrationRequest } =
               await import("./session-transcript-hydration-read.worker.js");
             return readSessionTranscriptHydrationRequest(request, channel, control);
-          }
-          if (request.kind === "model-context") {
-            const { readSessionTranscriptModelContext } =
-              await import("./session-accessor.sqlite-model-context.js");
-            return readSessionTranscriptModelContext(
-              request.target,
-              request.through,
-              request.limits,
-            );
           }
           if (request.kind === "history-page") {
             const { readSessionHistoryRequest } =

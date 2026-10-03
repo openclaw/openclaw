@@ -1,6 +1,9 @@
+import type {
+  QaBusInboundMessageInput,
+  QaBusOutboundMessageInput,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import type { QaBusInboundMessageInput, QaBusOutboundMessageInput } from "./runtime-api.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { waitForOutboundMessage } from "./suite-runtime-transport.js";
 

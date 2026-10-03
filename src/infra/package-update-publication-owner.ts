@@ -69,8 +69,8 @@ export function createPublicationOwner(
     "previous.candidate",
     "launchers",
     "previous-launchers",
-  ];
-  const assertInventory = (allowed = artifactNames) => {
+  ] as const;
+  const assertInventory = (allowed: readonly string[] = artifactNames) => {
     let entries: string[];
     try {
       entries = fs.readdirSync(custodyPath("anchor"));
@@ -473,13 +473,7 @@ export function createPublicationOwner(
           : record.publications;
       transition("retiring", { kind: "retire", selected }, publications);
     }
-    for (const name of [
-      "previous",
-      "candidate",
-      "previous.candidate",
-      "launchers",
-      "previous-launchers",
-    ] as const) {
+    for (const name of artifactNames) {
       const target = root(name);
       if (!(await packagePathEntryExists(target))) {
         assertCurrent();

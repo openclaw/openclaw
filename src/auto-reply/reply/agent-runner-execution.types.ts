@@ -49,28 +49,10 @@ type AbortedAgentTurn = {
   compaction?: AgentTurnCompaction;
 };
 
-/** Internal fallback-cycle result before caller-facing settlement projection. */
+/** Internal execution may reject before producing a settled turn. */
 export type AgentTurnInternalResult =
   | AbortedAgentTurn
-  | {
-      kind: "completed";
-      maintenanceAuthProfile?: CompletedAgentAuthSelection;
-      compactionRequestBudget?: CompactionRequestBudget;
-      result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
-      fallbackProvider?: string;
-      fallbackModel?: string;
-      fallbackExhausted?: true;
-      fallbackAttempts: RuntimeFallbackAttempt[];
-      didLogHeartbeatStrip: boolean;
-      autoCompactionCount: number;
-      /** Captured before cleanup; late settlements remain in the live receipts below. */
-      hasDirectlySentBlockReply?: true;
-      /** Delivery receipts for direct tool-flush payloads, including retry custody. */
-      directBlockDeliveries?: DirectBlockDelivery[];
-      /** Prepared terminal failure, appended only after delivery evidence settles. */
-      terminalFailurePayload?: ReplyPayload;
-      postCompactionModelFailure?: true;
-    }
+  | SettledAgentTurn
   | {
       kind: "final";
       payload: ReplyPayload;
@@ -88,7 +70,9 @@ type SettledAgentTurnBase = {
   autoCompactionCount: number;
   compaction?: AgentTurnCompaction;
   didLogHeartbeatStrip: boolean;
+  /** Captured before cleanup; late settlements remain in the live receipts below. */
   hasDirectlySentBlockReply?: true;
+  /** Delivery receipts for direct tool-flush payloads, including retry custody. */
   directBlockDeliveries?: DirectBlockDelivery[];
 };
 

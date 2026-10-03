@@ -125,6 +125,8 @@ Doctor also refuses these retired config inputs:
 - Queue modes `queue`, `steer-backlog`, and `steer+backlog` in `messages.queue.mode`
   or `messages.queue.byChannel`.
 - Top-level `heartbeat`, `routing.allowFrom`, and `routing.groupChat`.
+- Top-level Talk realtime selectors `talk.mode`, `talk.transport`, `talk.brain`,
+  `talk.model`, and `talk.voice`.
 - `channels.telegram.requireMention`, `channels.feishu.accounts.<id>.botName`,
   and the retired `channels.webchat` section.
 - `session.threadBindings.ttlHours` and Discord/LINE/Matrix/Telegram `threadBindings.ttlHours`,
@@ -212,6 +214,27 @@ guidance for a legacy row without replacing it. The update-time Doctor pass
 runs the same migration. Repeating Doctor leaves the normalized row and its IDs
 unchanged. Published SDK and operator input normalization remain available at
 the input boundary.
+
+## Channel account routing during an update
+
+Doctor preserves existing channel account maps and their implicit default route.
+Shared root policy never creates an extra `accounts.default` beside named accounts.
+An empty account map can still receive migrated single-account fields; plugins
+such as WhatsApp keep their supported shared policy at the root.
+
+When a policy-only, unlinked WhatsApp `accounts.default` sits beside named
+accounts, Doctor warns that it may be left over from an earlier promotion or may
+be an intentional account awaiting login. It names the account currently selected
+for unqualified operations and leaves the account map, shared policy, and routing
+unchanged. Doctor cannot infer who created an account from this config shape.
+
+To explicitly select an existing named account while retaining all accounts and
+shared policy, run `openclaw config set channels.whatsapp.defaultAccount '"work"' --strict-json`
+(replace `work` with the desired account ID). If you decide the default account is
+unwanted, first preserve any shared policy inherited from it, then run
+`openclaw channels remove --channel whatsapp --account default --delete`.
+Doctor's warning provides the command for a configured named account. It does not
+perform either action, including during updates or repeated `doctor --fix` runs.
 
 ## Channel ownership during an update
 
@@ -582,7 +605,7 @@ against the current SQLite owners before the import can rename profiles.
   <Accordion title="1. Config normalization">
     GitHub Copilot now requires explicit provider config, a saved Copilot auth profile, or `COPILOT_GITHUB_TOKEN`. Generic `GH_TOKEN` and `GITHUB_TOKEN` no longer activate it. Doctor reports this change once when only a generic GitHub token is present. Doctor removes the retired `plugins.entries.github-copilot.config.discovery.enabled` setting, including malformed values, before validating and saving the config. Ordinary config reads require the repaired config.
 
-    Doctor normalizes legacy value shapes into the current schema. Current Talk speech config is `talk.provider` + `talk.providers.<provider>`, with realtime voice config under `talk.realtime.*`. Doctor rewrites old `talk.voiceId` / `talk.voiceAliases` / `talk.modelId` / `talk.outputFormat` / `talk.apiKey` shapes into the provider map, and rewrites legacy top-level realtime selectors (`talk.mode`, `talk.transport`, `talk.brain`, `talk.model`, `talk.voice`) into `talk.realtime`.
+    Doctor normalizes legacy value shapes into the current schema. Current Talk speech config is `talk.provider` + `talk.providers.<provider>`, with realtime voice config under `talk.realtime.*`. Doctor rewrites old `talk.voiceId` / `talk.voiceAliases` / `talk.modelId` / `talk.outputFormat` / `talk.apiKey` shapes into the provider map. Top-level realtime selectors are retired under the retention policy above.
 
     Doctor also warns when `plugins.allow` is non-empty and tool policy uses wildcard or plugin-owned tool entries. `tools.allow: ["*"]` only matches tools from plugins that actually load; it does not bypass the exclusive plugin allowlist.
 
@@ -632,7 +655,6 @@ against the current SQLite owners before the import can rename profiles.
     | `tools.codeMode.runtime: "quickjs-wasi"` (global and per-agent)                                | `tools.codeMode.executor: "quickjs"` (an existing executor selection wins) |
     | `tools.codeMode.languages`, `agents.entries.*.tools.codeMode.languages`                         | removed (Code Mode executes JavaScript; activation and limits are preserved) |
     | legacy `talk.voiceId`/`talk.voiceAliases`/`talk.modelId`/`talk.outputFormat`/`talk.apiKey`        | `talk.provider` + `talk.providers.<provider>`                               |
-    | legacy top-level realtime Talk selectors (`talk.mode`/`talk.transport`/`talk.brain`/`talk.model`/`talk.voice`) | `talk.realtime`                                                              |
     | `messages.tts`                                                                                  | top-level `tts`                                                              |
     | `messages.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`)                             | `tts.providers.<provider>`                                                   |
     | `messages.tts.provider: "edge"` / `messages.tts.providers.edge`                                  | `tts.provider: "microsoft"` / `tts.providers.microsoft`                    |

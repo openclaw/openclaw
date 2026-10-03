@@ -81,10 +81,6 @@ function normalizeLogicalPath(value: string): string {
   return parts.join("/");
 }
 
-function canvasDocumentId(): string {
-  return `cv_${randomUUID().replaceAll("-", "")}`;
-}
-
 function normalizeCanvasDocumentId(value: string): string {
   const normalized = value.trim();
   if (
@@ -174,10 +170,6 @@ async function pruneCanvasDocumentsForScope(params: {
   );
 }
 
-function resolveCanvasDocumentDir(documentId: string, options?: { stateDir?: string }): string {
-  return path.join(resolveCanvasDocumentsDir(options?.stateDir), documentId);
-}
-
 function buildCanvasDocumentEntryUrl(documentId: string, entrypoint: string): string {
   const normalizedEntrypoint = normalizeLogicalPath(entrypoint);
   const encodedEntrypoint = normalizedEntrypoint
@@ -221,10 +213,7 @@ export function resolveCanvasHttpPathToLocalPath(
     const documentId = normalizeCanvasDocumentId(rawDocumentId);
     const normalizedEntrypoint = normalizeLogicalPath(entrySegments.join("/"));
     const documentsDir = resolveCanvasDocumentsDir(options?.stateDir);
-    const candidatePath = path.resolve(
-      resolveCanvasDocumentDir(documentId, options),
-      normalizedEntrypoint,
-    );
+    const candidatePath = path.resolve(documentsDir, documentId, normalizedEntrypoint);
     if (!candidatePath.startsWith(`${documentsDir}${path.sep}`)) {
       return null;
     }
@@ -321,8 +310,10 @@ export async function createCanvasDocument(
   },
 ): Promise<CanvasDocumentManifest> {
   const workspaceDir = options?.workspaceDir ?? process.cwd();
-  const id = input.id?.trim() ? normalizeCanvasDocumentId(input.id) : canvasDocumentId();
-  const rootDir = resolveCanvasDocumentDir(id, { stateDir: options?.stateDir });
+  const id = input.id?.trim()
+    ? normalizeCanvasDocumentId(input.id)
+    : `cv_${randomUUID().replaceAll("-", "")}`;
+  const rootDir = path.join(resolveCanvasDocumentsDir(options?.stateDir), id);
   await fs.rm(rootDir, { recursive: true, force: true }).catch(() => undefined);
   await fs.mkdir(rootDir, { recursive: true });
   const root = await fsRoot(rootDir);

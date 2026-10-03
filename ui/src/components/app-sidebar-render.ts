@@ -80,7 +80,7 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
     const agentId = normalizeAgentId(entry.id);
     return agentId !== cardAgentId && host.agentUnreadCount(agentId) > 0;
   });
-  const cardName = normalizeAgentLabel(cardAgent ?? { id: cardAgentId }, cardIdentity);
+  const cardName = normalizeAgentLabel(cardAgent, cardIdentity);
   const gateway = host.sessionDataContext?.gateway;
   const avatarAuthReady = Boolean(
     gateway &&
@@ -92,11 +92,9 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
     <openclaw-sidebar-agent-card
       .agentName=${cardName}
       .agentId=${cardAgentId}
-      .avatarUrl=${
-        cardAgent ? resolveAgentAvatarUrl(cardAgent, cardIdentity) : cardIdentity?.avatar
-      }
+      .avatarUrl=${resolveAgentAvatarUrl(cardAgent, cardIdentity)}
       .avatarAuthReady=${avatarAuthReady}
-      .avatarText=${resolveAgentTextAvatar(cardAgent ?? { identity: {} }, cardIdentity)}
+      .avatarText=${resolveAgentTextAvatar(cardAgent, cardIdentity)}
       .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
       .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
       .menuUnread=${menuUnread}

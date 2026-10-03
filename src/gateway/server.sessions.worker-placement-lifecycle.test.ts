@@ -866,7 +866,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
     const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
       reconcileCommitsManifest: false,
       reconcileCommitsManifestOnApply: true,
-      verifyFailureCall: 3,
+      verifyFailurePhase: "after-apply",
     });
     await harness.service.dispatch({ ...REQUEST, executionMode });
     const forceDestroyEnvironment = vi.spyOn(harness.service, "forceDestroyEnvironment");

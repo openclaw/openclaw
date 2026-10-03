@@ -264,6 +264,8 @@ managers or prevent concurrent manager acquisition.
 permission origins, display names, manual-action prefixes, and retry policy.
 `MeetingPlatformAdapter.createPageScripts` assembles status, transcript, audio
 capture, and leave scripts while the plugin supplies identity and control sources.
+Its `statusPrelude` and `statusCall` descriptors share the factory's `platform`
+metadata, including page globals and audio/manual-action prefixes.
 
 `createStatusPreludeSource` accepts either source strings or callbacks for
 `lifecycleSource` and `manualActionSource`. Callbacks receive shared fragments for

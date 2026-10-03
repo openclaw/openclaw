@@ -30,16 +30,12 @@ export type WorkerTaskChannel = {
   request: (
     value: unknown,
     transferList?: readonly Transferable[],
-  ) => Promise<{ input: unknown; consumed: () => void }>;
+  ) => Promise<WorkerChannelResponse>;
 };
 
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
 export function serveWorkerTasks<Output>(
-  handler: (
-    input: unknown,
-    channel: WorkerTaskChannel | undefined,
-    control: WorkerTaskControl,
-  ) => Output | Promise<Output>,
+  handler: Parameters<typeof serveOwnedWorkerTasks<Output>>[0],
   options: { transferList?: (value: Output) => Transferable[] } = {},
 ): void {
   serveOwnedWorkerTasks(handler, options);

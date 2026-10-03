@@ -115,6 +115,38 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(await fs.stat(manual.path)).toBeTruthy();
   });
 
+  it("preserves orphan registry state when caller authority is revoked after path inspection", async () => {
+    const created = await materializeDownstreamFixture("revoked-orphan");
+    await git(repo, "worktree", "remove", created.path);
+    const before = getRegistryWorktree(env, created.id);
+    const exists = worktreeGit.worktreePathExists;
+    const revoked = new Error("caller authority revoked after path inspection");
+    let current = true;
+    const inspect = vi
+      .spyOn(worktreeGit, "worktreePathExists")
+      .mockImplementation(async (target) => {
+        const present = await exists(target);
+        if (target === created.path) {
+          current = false;
+        }
+        return present;
+      });
+    try {
+      await expect(
+        service.gc({
+          commitGuard: () => {
+            if (!current) {
+              throw revoked;
+            }
+          },
+        }),
+      ).rejects.toBe(revoked);
+      expect(getRegistryWorktree(env, created.id)).toEqual(before);
+    } finally {
+      inspect.mockRestore();
+    }
+  });
+
   it("garbage collects ignored dependency trees under the Git output cap and restores edits", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "dependencies/\n");
     await git(repo, "add", ".gitignore");

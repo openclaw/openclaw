@@ -33,37 +33,10 @@ function findJsonRootSuffix(
   return null;
 }
 
-async function persistPrefixedConfigRecovery(params: {
-  context: ConfigIoContext;
-  originalRaw: string;
-  recoveredRaw: string;
-}): Promise<void> {
-  const { context } = params;
-  const observedAt = new Date().toISOString();
-  const clobberedPath = await persistBoundedClobberedConfigSnapshot({
-    deps: context.deps,
-    configPath: context.configPath,
-    raw: params.originalRaw,
-    observedAt,
-  });
-  // Recovery must publish by rename; a copy fallback can truncate the live config.
-  await replaceFileAtomic({
-    filePath: context.configPath,
-    content: params.recoveredRaw,
-    dirMode: 0o700,
-    mode: 0o600,
-    tempPrefix: path.basename(context.configPath),
-    fileSystem: context.deps.fs,
-  });
-  context.deps.logger.warn(
-    `Config auto-stripped non-JSON prefix: ${context.configPath}` +
-      (clobberedPath ? ` (original saved as ${clobberedPath})` : ""),
-  );
-}
-
 export async function recoverConfigFromJsonRootSuffixWithContext(
   context: ConfigIoContext,
   snapshot: ConfigFileSnapshot,
+  assertRecoveryCandidate?: (config: unknown) => void,
 ): Promise<boolean> {
   if (resolveIsConfigReadOnly(context.deps.env)) {
     return false;
@@ -75,6 +48,7 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
   if (!suffixRecovery) {
     return false;
   }
+  assertRecoveryCandidate?.(suffixRecovery.parsed);
   let resolved: unknown;
   try {
     resolved = resolveConfigIncludesForRead(
@@ -90,6 +64,7 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
     context.deps.env,
     context.deps.lowerPrecedenceEnv,
   );
+  assertRecoveryCandidate?.(resolution.resolvedConfigRaw);
   const validated = validateConfigObjectWithPlugins(resolution.resolvedConfigRaw, {
     ...context.pathResolution,
     sourceRaw: suffixRecovery.parsed,
@@ -97,10 +72,24 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
   if (!validated.ok) {
     return false;
   }
-  await persistPrefixedConfigRecovery({
-    context,
-    originalRaw: snapshot.raw,
-    recoveredRaw: suffixRecovery.raw,
+  const clobberedPath = await persistBoundedClobberedConfigSnapshot({
+    deps: context.deps,
+    configPath: context.configPath,
+    raw: snapshot.raw,
+    observedAt: new Date().toISOString(),
   });
+  // Recovery must publish by rename; a copy fallback can truncate the live config.
+  await replaceFileAtomic({
+    filePath: context.configPath,
+    content: suffixRecovery.raw,
+    dirMode: 0o700,
+    mode: 0o600,
+    tempPrefix: path.basename(context.configPath),
+    fileSystem: context.deps.fs,
+  });
+  context.deps.logger.warn(
+    `Config auto-stripped non-JSON prefix: ${context.configPath}` +
+      (clobberedPath ? ` (original saved as ${clobberedPath})` : ""),
+  );
   return true;
 }

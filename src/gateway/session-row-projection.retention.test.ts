@@ -44,7 +44,11 @@ it("collects superseded resident rows and their materializations after metadata 
       for (const opts of [{}, { agentId: "main" }, { configuredAgentsOnly: true }]) {
         for (const activeOnly of [false, true]) {
           selections.push(
-            new WeakRef(prepareSessionRowSelection(projection, { ...opts, activeOnly }).entries),
+            ...prepareSessionRowSelection(
+              projection,
+              { ...opts, activeOnly },
+              { ordered: true },
+            ).entries.map((pair) => new WeakRef(pair)),
           );
         }
       }

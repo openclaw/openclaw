@@ -241,12 +241,6 @@ export function* buildReleaseModelConfigCommands(providerMeta: ProviderConfig) {
   yield ["config", "set", "tools.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE];
 }
 
-export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
-export const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
-export const OMITTED_QA_EXTENSION_PREFIXES = [
-  "dist/extensions/qa-channel/",
-  "dist/extensions/qa-lab/",
-];
 export const CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS = 120_000;
 export const CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS = 10_000;
 export const CROSS_OS_DISCORD_FETCH_TIMEOUT_MS = parsePositiveIntegerEnv(
@@ -274,19 +268,6 @@ export function gatewayReadyDeadlineMs(platform = process.platform) {
   return platform === "win32"
     ? CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS
     : CROSS_OS_GATEWAY_READY_TIMEOUT_MS;
-}
-
-export function resolveNpmPackTarballFileName(value: unknown, label = "npm pack") {
-  const filename = typeof value === "string" ? value.trim() : "";
-  if (
-    !filename.endsWith(".tgz") ||
-    filename.includes("\0") ||
-    filename !== basename(filename) ||
-    filename !== pathWin32.basename(filename)
-  ) {
-    throw new Error(`${label} did not report a safe .tgz filename.`);
-  }
-  return filename;
 }
 
 export function resolvePackDestinationTarball(
