@@ -63,7 +63,8 @@ async function reachesShippedUpdaterTreeLimit(root: string): Promise<boolean> {
     const directory = await fs.opendir(directoryPath);
     try {
       for (let entry = await directory.read(); entry; entry = await directory.read()) {
-        if (++entries >= 50_000) {
+        // Shipped readers admit exactly 50,000 entries, root included, and refuse the next one.
+        if (++entries > 50_000) {
           return true;
         }
         if (entry.isDirectory() && !entry.isSymbolicLink()) {
@@ -147,7 +148,7 @@ async function inspectUpdateAdmission(
         refuse(
           "candidate-tree-size",
           "installed-updater-tree-limit",
-          "Candidate package has at least 50,000 entries, exceeding the installed updater's supported package size.",
+          "Candidate package has more than 50,000 entries, exceeding the installed updater's supported package size.",
           manualSpec
             ? `Run npm i -g ${quoteCliArg(manualSpec.raw)} manually because the installed updater cannot stage packages of this size.`
             : "Install the requested package manually because the installed updater cannot stage packages of this size.",

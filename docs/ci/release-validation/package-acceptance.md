@@ -44,7 +44,7 @@ and publication with directory identity, version, and launcher checks if a scan
 reaches those resource limits, warning that full package contents are unverified.
 This does not change the release budgets or the already-installed drivers.
 Candidate admission under a supervisor version of 2026.9.8 or earlier refuses
-trees with at least 50,000 entries and gives a manual `npm i -g openclaw@latest`
+trees with more than 50,000 entries and gives a manual `npm i -g openclaw@latest`
 command (preserving the requested version or tag when specified); it cannot
 bypass the old driver's walk.
 

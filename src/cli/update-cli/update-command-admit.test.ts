@@ -147,43 +147,43 @@ describe("candidate update admission", () => {
   it.each([
     {
       supervisor: "2026.9.8",
-      entries: 50_000,
+      entries: 50_001,
       refused: true,
       spec: "openclaw@2026.9.9",
       manualSpec: "openclaw@2026.9.9",
     },
     {
       supervisor: "2026.9.8",
-      entries: 50_000,
+      entries: 50_001,
       refused: true,
       spec: "openclaw@next",
       manualSpec: "openclaw@next",
     },
     {
       supervisor: "2026.9.8",
-      entries: 50_000,
+      entries: 50_001,
       refused: true,
       spec: "2026.9.9",
       manualSpec: "openclaw@2026.9.9",
     },
     {
       supervisor: "2026.9.8-beta.1",
-      entries: 50_000,
+      entries: 50_001,
       refused: true,
       spec: "openclaw",
       manualSpec: "openclaw@beta",
     },
     {
       supervisor: "2026.9.8",
-      entries: 50_000,
+      entries: 50_001,
       refused: true,
       spec: "openclaw@latest; echo unexpected",
       manualSpec: null,
     },
-    { supervisor: "2026.9.8", entries: 50_000, refused: true },
+    { supervisor: "2026.9.8", entries: 50_001, refused: true },
     { supervisor: "2026.9.8-beta.1", entries: 50_001, refused: true },
-    { supervisor: "2026.8.99", entries: 50_000, refused: true },
-    { supervisor: "2026.9.8", entries: 49_999, refused: false },
+    { supervisor: "2026.8.99", entries: 50_001, refused: true },
+    { supervisor: "2026.9.8", entries: 50_000, refused: false },
     { supervisor: "2026.9.9-beta.1", entries: 50_000, refused: false },
     { supervisor: "2026.9.10", entries: 50_000, refused: false },
     { supervisor: "unparseable", entries: 50_000, refused: false },
@@ -254,7 +254,7 @@ describe("candidate update admission", () => {
           : [],
       });
       const scansTree = ["2026.9.8", "2026.9.8-beta.1", "2026.8.99"].includes(supervisor);
-      expect(discovered).toBe(scansTree ? Math.min(entries, 50_000) - 1 : 0);
+      expect(discovered).toBe(scansTree ? Math.min(entries, 50_001) - 1 : 0);
       expect(stderr).toBe("");
       expect(snapshotFiles()).toEqual(before);
     },

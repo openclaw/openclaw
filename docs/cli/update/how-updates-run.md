@@ -184,7 +184,7 @@ their own scanning behavior.
 The published 2026.9.7 and 2026.9.8 updaters still use their own **50,000-entry /
 1 GiB** caps for candidates; the candidate cannot change that installed driver.
 For a supervisor version of 2026.9.8 or earlier, including prereleases, candidate
-admission refuses a tree with at least 50,000 entries and directs you to run
+admission refuses a tree with more than 50,000 entries and directs you to run
 `npm i -g openclaw@latest` manually (preserving the requested version or tag when
 specified). This counts
 the package root and every entry, including hidden lockfiles, without following
