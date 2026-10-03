@@ -10,7 +10,12 @@ import {
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type ExecutionDeadline =
-  | { kind: "bounded"; deadlineAtMs: number; compactionGraceUsed: boolean }
+  | {
+      kind: "bounded";
+      deadlineAtMs: number;
+      monotonicDeadlineAtMs: number;
+      compactionGraceUsed: boolean;
+    }
   | { kind: "paused"; remainingMs: number; compactionGraceUsed: boolean }
   | { kind: "unlimited" }
   | { kind: "closed" };
@@ -55,9 +60,13 @@ export function prepareEmbeddedAttemptTimeout(input: {
   runAbortSignal.addEventListener("abort", clearTimers, { once: true });
 
   const scheduleAbortTimer = (delayMs: number, compactionGraceUsed: boolean) => {
+    const boundedDelayMs = Math.max(1, delayMs);
     const armed = {
       kind: "bounded" as const,
-      deadlineAtMs: Date.now() + Math.max(1, delayMs),
+      // Queue ownership consumes the wall-clock deadline, while the attempt's
+      // remaining budget must survive clock corrections during approval.
+      deadlineAtMs: Date.now() + boundedDelayMs,
+      monotonicDeadlineAtMs: performance.now() + boundedDelayMs,
       compactionGraceUsed,
     };
     deadline = armed;
@@ -120,7 +129,7 @@ export function prepareEmbeddedAttemptTimeout(input: {
       // the lane and async-task waiter must not retain its old wall-clock deadline.
       deadline = {
         kind: "paused",
-        remainingMs: Math.max(1, deadline.deadlineAtMs - Date.now()),
+        remainingMs: Math.max(1, deadline.monotonicDeadlineAtMs - performance.now()),
         compactionGraceUsed: deadline.compactionGraceUsed,
       };
       clearTimeout(abortTimer);
