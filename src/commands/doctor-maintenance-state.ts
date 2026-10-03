@@ -48,12 +48,15 @@ export function createDoctorMaintenanceState(options: {
     warn: options.warn,
   });
   const closeResources = async () => {
-    if (resources && !resourcesParent) {
-      const { closeOpenClawAgentDatabasesAsync } =
-        await import("../state/openclaw-agent-db-lifecycle.js");
-      await resources.run(() => closeOpenClawAgentDatabasesAsync(resolveStateDir(selectedEnv)));
-    }
-    await resources?.close();
+    await resources?.close(
+      resourcesParent
+        ? undefined
+        : async () => {
+            const { closeOpenClawAgentDatabasesAsync } =
+              await import("../state/openclaw-agent-db-lifecycle.js");
+            await closeOpenClawAgentDatabasesAsync(resolveStateDir(selectedEnv));
+          },
+    );
     await inspections?.close();
     // Auth inspection readers are pooled separately from canonical agent handles.
     const { closeAuthProfileReadPool } =

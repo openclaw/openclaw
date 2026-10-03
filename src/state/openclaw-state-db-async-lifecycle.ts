@@ -177,7 +177,7 @@ export function createOpenClawDatabaseMaintenanceScope(
         release: () => resources.delete(resource),
       });
     },
-    close() {
+    close(beforeResources) {
       if (closing) {
         return closing;
       }
@@ -186,6 +186,7 @@ export function createOpenClawDatabaseMaintenanceScope(
       closing = completion.promise;
       void maintenanceResources.current
         .run({ scope, active: true }, async () => {
+          await beforeResources?.();
           while (pending.size || resources.size) {
             while (pending.size) {
               await Promise.allSettled(pending);
