@@ -629,7 +629,9 @@ export async function markAuthProfileFailure(params: {
       });
     };
     if (personal) {
-      return record(shouldProbeWham ? await personal.read() : undefined, personal.record);
+      return record(shouldProbeWham ? await personal.read() : undefined, (reduction) =>
+        personal.record(reduction),
+      );
     }
     return withAuthProfileUsage(store, profileId, agentDir, (usage) =>
       record(

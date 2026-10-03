@@ -112,8 +112,7 @@ export async function withAuthProfileUsage<T>(
   );
   let preparation: ReturnType<typeof reserveAuthProfileUsagePreparation> | undefined;
   let committed: AuthProfileUsageReceipt | undefined;
-  let failure: { error: unknown } | undefined;
-  try {
+  const executeUsage = async (): Promise<T> => {
     for (const databasePath of new Set([
       ...(mode ? [] : [legacyPath]),
       ...(localPath ? [localPath] : []),
@@ -139,12 +138,12 @@ export async function withAuthProfileUsage<T>(
         executions.set(databasePath, { ok: false, error });
       }
     }
-    preparation = reserveAuthProfileUsagePreparation([
-      context.admission.identity.canonicalPath,
-      ...[...readers.keys()].map(
-        (pathname) => readDatabasePathIdentitySync(pathname).canonicalPath,
-      ),
-    ]);
+    preparation = reserveAuthProfileUsagePreparation(
+      [
+        context.admission.identity,
+        ...[...readers.keys()].map((pathname) => readDatabasePathIdentitySync(pathname)),
+      ].flatMap((identity) => [identity.key, `path:${identity.canonicalPath}`]),
+    );
     await preparation.ready;
     const ownership = await resolveSharedAuthStoreOwnershipAsync(context);
     const sharedPath = resolveSharedAuthStorePath(env);
@@ -308,31 +307,36 @@ export async function withAuthProfileUsage<T>(
                 input: {},
               },
             );
-            let operationFailure: { error: unknown } | undefined;
+            let executionResult: Result<AuthProfileUsageReceipt, unknown>;
             try {
-              return await client.run(
-                async (scope) =>
-                  publish(await scope.execute({ type: "authProfiles.usage", input }), () =>
-                    scope.execute({ type: "authProfiles.inlineSnapshot", input: undefined }),
-                  ),
-                assertCurrent,
-              );
+              executionResult = {
+                ok: true,
+                value: await client.run(
+                  async (scope) =>
+                    publish(await scope.execute({ type: "authProfiles.usage", input }), () =>
+                      scope.execute({ type: "authProfiles.inlineSnapshot", input: undefined }),
+                    ),
+                  assertCurrent,
+                ),
+              };
             } catch (error) {
-              operationFailure = { error };
-              throw error;
-            } finally {
-              try {
-                await client.close();
-              } catch (error) {
-                throw operationFailure
-                  ? new AggregateError(
-                      [operationFailure.error, error],
-                      "Auth usage and client cleanup failed",
-                      { cause: operationFailure.error },
-                    )
-                  : error;
-              }
+              executionResult = { ok: false, error };
             }
+            try {
+              await client.close();
+            } catch (error) {
+              throw !executionResult.ok
+                ? new AggregateError(
+                    [executionResult.error, error],
+                    "Auth usage and client cleanup failed",
+                    { cause: executionResult.error },
+                  )
+                : error;
+            }
+            if (!executionResult.ok) {
+              throw executionResult.error;
+            }
+            return executionResult.value;
           }
         } catch (error) {
           const outcomeUnknown = hasSqliteWorkerOutcomeUnknown(error);
@@ -382,36 +386,42 @@ export async function withAuthProfileUsage<T>(
       preparation.release();
     }
     return await operation;
+  };
+  let outcome: Result<T, unknown>;
+  try {
+    outcome = { ok: true, value: await executeUsage() };
   } catch (error) {
-    failure = { error };
-    throw error;
-  } finally {
-    try {
-      const released = await Promise.allSettled([
-        ...[...readers.values()].map((reader) => reader.dispose()),
-        ...[...executions.values()].flatMap((execution) =>
-          execution.ok ? [execution.value.release()] : [],
-        ),
-      ]);
-      const failures = released.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (failures.length) {
-        if (committed) {
-          reportCommittedInlineAuthFailure(
-            "auth usage committed before owner cleanup failed",
-            failures,
-          );
-        } else {
-          throw new AggregateError(
-            [...(failure ? [failure.error] : []), ...failures],
-            "Auth usage read owner cleanup failed",
-            { cause: failure?.error ?? failures[0] },
-          );
-        }
-      }
-    } finally {
-      preparation?.release();
-    }
+    outcome = { ok: false, error };
   }
+  try {
+    const released = await Promise.allSettled([
+      ...[...readers.values()].map((reader) => reader.dispose()),
+      ...[...executions.values()].flatMap((execution) =>
+        execution.ok ? [execution.value.release()] : [],
+      ),
+    ]);
+    const failures = released.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) {
+      if (committed) {
+        reportCommittedInlineAuthFailure(
+          "auth usage committed before owner cleanup failed",
+          failures,
+        );
+      } else {
+        throw new AggregateError(
+          [...(!outcome.ok ? [outcome.error] : []), ...failures],
+          "Auth usage read owner cleanup failed",
+          { cause: (!outcome.ok ? outcome.error : undefined) ?? failures[0] },
+        );
+      }
+    }
+  } finally {
+    preparation?.release();
+  }
+  if (!outcome.ok) {
+    throw outcome.error;
+  }
+  return outcome.value;
 }

@@ -28,20 +28,25 @@ function usageWork(host: LegacyPluginSdkResourceHost): UsageWork {
 }
 
 /** Reserve overlapping physical stores before asynchronous reads can reorder ready writes. */
-export function reserveAuthProfileUsagePreparation(databasePaths: readonly string[]) {
-  const paths = [...new Set(databasePaths)];
-  const ready = Promise.all(paths.map((path) => state.preparations.get(path))).then(() => {});
+export function reserveAuthProfileUsagePreparation(ownerKeys: readonly string[]) {
+  const keys = [...new Set(ownerKeys)];
+  const ready = Promise.all(
+    keys.flatMap((key) => {
+      const pending = state.preparations.get(key);
+      return pending ? [pending] : [];
+    }),
+  ).then(() => {});
   const completion = createDeferredCore();
-  for (const path of paths) {
-    state.preparations.set(path, completion.promise);
+  for (const key of keys) {
+    state.preparations.set(key, completion.promise);
   }
   return {
     ready,
     release() {
       completion.resolve();
-      for (const path of paths) {
-        if (state.preparations.get(path) === completion.promise) {
-          state.preparations.delete(path);
+      for (const key of keys) {
+        if (state.preparations.get(key) === completion.promise) {
+          state.preparations.delete(key);
         }
       }
     },

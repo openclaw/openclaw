@@ -55,12 +55,11 @@ vi.mock("./usage-write.js", async () => ({
     .withAuthProfileUsage,
 }));
 vi.mock("./store-runtime.js", async () => {
-  const { storeMocks } = await import("./usage-fixture.test-support.js");
+  const { storeMocks: mocks } = await import("./usage-fixture.test-support.js");
   return {
-    loadAuthProfileStoreWithoutExternalProfiles:
-      storeMocks.loadAuthProfileStoreWithoutExternalProfiles,
-    updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
-    saveAuthProfileStore: storeMocks.saveAuthProfileStore,
+    loadAuthProfileStoreWithoutExternalProfiles: mocks.loadAuthProfileStoreWithoutExternalProfiles,
+    updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
+    saveAuthProfileStore: mocks.saveAuthProfileStore,
   };
 });
 

@@ -144,10 +144,10 @@ function interceptUsageCommand(intercept: (execute: () => Promise<unknown>) => P
           (scope: Parameters<typeof operation>[0]) =>
             operation({
               execute: new Proxy(scope.execute, {
-                apply(execute, receiver, args: Parameters<typeof scope.execute>) {
-                  return args[0].type === "authProfiles.usage"
-                    ? intercept(() => Reflect.apply(execute, receiver, args))
-                    : Reflect.apply(execute, receiver, args);
+                apply(execute, commandReceiver, commandArgs: Parameters<typeof scope.execute>) {
+                  return commandArgs[0].type === "authProfiles.usage"
+                    ? intercept(() => Reflect.apply(execute, commandReceiver, commandArgs))
+                    : Reflect.apply(execute, commandReceiver, commandArgs);
                 },
               }),
             }),
