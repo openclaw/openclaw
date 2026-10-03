@@ -22,6 +22,10 @@ import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  type OpenClawDatabaseMaintenanceScope,
+} from "../../state/openclaw-state-maintenance-context.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import {
@@ -60,6 +64,7 @@ type SessionEntryMaintenanceOwner = SessionEntryMaintenanceRequest & {
   assertCurrent: () => void;
   captureExecution: () => OpenClawAgentDatabaseExecution | undefined;
   execution?: OpenClawAgentDatabaseExecution;
+  maintenanceScope?: OpenClawDatabaseMaintenanceScope;
   active?: Promise<void>;
   release?: Promise<void>;
   retirement?: Promise<void>;
@@ -139,6 +144,7 @@ export function kickSessionEntryMaintenanceAfterWrite(
     ageChanges: new Map(),
     captureExecution,
     execution: captureExecution(),
+    maintenanceScope: getOpenClawDatabaseMaintenanceScope(),
     assertCurrent: () => {
       assertAdmitted();
       created.execution?.assertCurrent();
@@ -299,7 +305,19 @@ function scheduleMaintenanceAfterWriteQuiet(
 
 function startPendingMaintenance(databasePath: string, owner: SessionEntryMaintenanceOwner): void {
   // Publish the join before a pass can synchronously retire itself.
-  owner.active = Promise.resolve().then(() => runPendingMaintenance(databasePath, owner));
+  owner.active = Promise.resolve().then(() => {
+    if (!owner.maintenanceScope) {
+      return runPendingMaintenance(databasePath, owner);
+    }
+    try {
+      // Retain finite command custody without restoring the writer's other async context.
+      return owner.maintenanceScope.run(() => runPendingMaintenance(databasePath, owner));
+    } catch {
+      // A queued discretionary pass cannot enter a closing scope; retirement joins this promise.
+      retireMaintenanceOwner(databasePath, owner);
+      return undefined;
+    }
+  });
 }
 
 async function runPendingMaintenance(
