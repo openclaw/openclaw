@@ -57,9 +57,12 @@ export function readConfigMutationFileSync(
 ): string {
   // These explicit CLI file flags have historically followed user-provided
   // symlinks. Pin the opened descriptor, then bound the read without changing that contract.
+  // Nonblocking open lets the descriptor check reject FIFOs without waiting for a writer.
+  const openFlags =
+    process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
   let fd: number;
   try {
-    fd = fs.openSync(filePath, "r");
+    fd = fs.openSync(filePath, openFlags);
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
       throw new Error(`${sourceLabel} not found: ${filePath}. Check the path and try again.`, {

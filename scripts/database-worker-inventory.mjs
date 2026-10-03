@@ -21,6 +21,22 @@ const excluded =
   /(?:^|\/)(?:__tests__|__fixtures__|test|tests|test-utils|test-helpers|test-support|test-fixtures|test-harness|fixtures|e2e)(?:\/|$)|(?:^|[/.-])(?:test|spec|e2e|test-support|test-helpers|test-fixtures|test-harness|test-runtime)(?:[.-])/;
 const reviewed = new Map([
   [
+    "src/gateway/mention-inbox-store.ts",
+    {
+      priority: 3,
+      evidence:
+        "Worker-backed bundled callers; deprecated 2026.9.8 synchronous Mention Inbox SDK kernel until next SDK major",
+    },
+  ],
+  [
+    "src/gateway/mention-inbox.native.ts",
+    {
+      priority: 3,
+      evidence:
+        "Deprecated 2026.9.8 synchronous Mention Inbox SDK transaction; removal at next SDK major",
+    },
+  ],
+  [
     "src/state/user-profiles.ts",
     { priority: 1, evidence: "Profile creation; write-coordination cutover owned separately" },
   ],
@@ -155,6 +171,17 @@ const reviewed = new Map([
 
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
+  [
+    "src/infra/update-managed-service-handoff-database-recovery.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["recoverManagedUpdateLeaseJournal.read"],
+        evidence:
+          "Explicit update recover CLI -> recoverImmutableUpdate -> withImmutableUpdateOwner({ recover: true }) only; ordinary lease and Gateway readers never call this cold-journal admission",
+      },
+    ],
+  ],
   [
     "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
     [
@@ -366,7 +393,17 @@ const reviewedOperations = new Map([
           "isSessionStateUpstreamCurrentInDatabase",
         ],
         evidence:
-          "session-state-events.worker.ts:146,147 and session-upstream-links.worker.ts:18,25; shared event/prune and child-spawn seed sites stay T1",
+          "session-state-events.worker.ts and session-upstream-links.worker.ts; event/head SQL retains native adopted-event callers",
+      },
+      {
+        tier: "W",
+        operations: [
+          "upsertSeedCursor",
+          "pruneSessionStateEventsInDatabase",
+          "pruneSessionStateEventsInDatabase.stampPrunedWatermarks",
+        ],
+        evidence:
+          "Seed cursors run through sessionState.record/registerWatch; periodic and restart pruning dispatch sessionState.prune; adopted-event/native-binding producers remain native",
       },
       {
         tier: "W",

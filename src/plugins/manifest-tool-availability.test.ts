@@ -130,6 +130,7 @@ describe("manifestConfigSignalPasses", () => {
     [false, true],
     [["value"], true],
     [{ value: true }, true],
+    [{ source: "env", id: "OPAQUE_METADATA" }, true],
   ] as const)("treats required value %o as configured=%s", (apiKey, expected) => {
     expect(
       manifestConfigSignalPasses({
@@ -142,7 +143,7 @@ describe("manifestConfigSignalPasses", () => {
 
   it("resolves env secret refs only when their value is non-empty", () => {
     const config = xaiConfig({
-      webSearch: { apiKey: { source: "env", id: "XAI_API_KEY" } },
+      webSearch: { apiKey: { source: "env", provider: "default", id: "XAI_API_KEY" } },
     });
     expect(
       manifestConfigSignalPasses({

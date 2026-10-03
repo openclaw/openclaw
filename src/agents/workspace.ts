@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Minimatch } from "minimatch";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import type { ChatType } from "../channels/chat-type.js";
+import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import { isRootFileMissingFailure } from "../infra/boundary-file-read.js";
-import { FsSafeError, pathExists, root as fsSafeRoot } from "../infra/fs-safe.js";
+import { pathExists } from "../infra/fs-safe.js";
+import { retainMutationAuthority } from "../infra/mutation-authority.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -41,7 +42,6 @@ import {
   publishBootstrapFile,
   WorkspaceBootstrapSeedConflictError,
 } from "./workspace-bootstrap-publish.js";
-import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "./workspace-bootstrap-read.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import { createWorkspaceFileMutationGuard } from "./workspace-file-mutation-guard.js";
 import {
@@ -51,19 +51,19 @@ import {
 } from "./workspace-file-read.js";
 import { ensureGitRepo } from "./workspace-git.js";
 import {
-  assertNoUnmigratedWorkspaceState,
   LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
   LEGACY_WORKSPACE_STATE_DIRNAME,
 } from "./workspace-legacy-state.js";
+import { runWorkspacePreparation } from "./workspace-preparation.js";
 import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
 import { WorkspaceVanishedError } from "./workspace-state-identity.js";
+import { readCanonicalWorkspaceStateSnapshot } from "./workspace-state-read.js";
 import {
   clearExpiredWorkspaceStateForVanishedWorkspace,
   hasRecentWorkspaceSetupState,
   hasWorkspaceSetupStateMarker,
   recentWorkspaceAttestation,
   mergeWorkspaceSetupState,
-  readWorkspaceStateSnapshot,
   replaceWorkspaceAttestation,
   type WorkspaceAttestation,
   type WorkspaceStateSnapshot,
@@ -90,6 +90,7 @@ export {
   workspaceFilesShareSourceIdentity,
 } from "./workspace-file-read.js";
 export { WORKSPACE_VANISHED_ERROR_CODE } from "./workspace-state-identity.js";
+export { seedWorkspaceBootstrap } from "./workspace-bootstrap-seed.js";
 export {
   DEFAULT_AGENT_WORKSPACE_DIR,
   resolveDefaultAgentWorkspaceDir,
@@ -492,24 +493,6 @@ async function workspaceSetupStateHasSurvivalEvidence(params: {
   return GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES.every((fileName) => generatedHashes.has(fileName));
 }
 
-async function readCanonicalWorkspaceStateSnapshot(
-  dir: string,
-  options: OpenClawStateDatabaseOptions = {},
-  guard?: WorkspaceStateGuard,
-): Promise<WorkspaceStateSnapshot> {
-  const snapshot = await readWorkspaceStateSnapshot(dir, {
-    ...options,
-    assertCurrent: guard?.assertHost,
-    recoveryHoldPredicate: guard?.recoveryHoldPredicate,
-    beforeLegacyApply: guard?.beforeLegacyApply,
-  });
-  guard?.assertHost?.();
-  assertNoUnmigratedWorkspaceState({
-    workspaceDir: dir,
-  });
-  return snapshot;
-}
-
 export async function isWorkspaceSetupCompleted(
   dir: string,
   options: OpenClawStateDatabaseOptions = {},
@@ -530,137 +513,11 @@ export async function resolveWorkspaceBootstrapStatus(
   return (await pathExists(bootstrapPath)) ? "pending" : "complete";
 }
 
-export async function seedWorkspaceBootstrap(params: {
-  dir: string;
-  content: Buffer;
-  nowMs?: number;
-  stateOptions?: OpenClawStateDatabaseOptions;
-}): Promise<"seeded" | "already-seeded" | "consumed"> {
-  if (params.content.byteLength > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
-    throw new WorkspaceBootstrapSeedConflictError(
-      `BOOTSTRAP.md exceeds ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes.`,
-    );
-  }
-  let text: string;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(params.content);
-  } catch {
-    throw new WorkspaceBootstrapSeedConflictError("BOOTSTRAP.md must be valid UTF-8.");
-  }
-  if (text.trim().length === 0) {
-    throw new WorkspaceBootstrapSeedConflictError("BOOTSTRAP.md must not be empty.");
-  }
-
-  const dir = resolveUserPath(params.dir);
-  const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
-  const initialState = (await readCanonicalWorkspaceStateSnapshot(dir, params.stateOptions)).setup;
-  if (initialState.setupCompletedAt) {
-    return "consumed";
-  }
-  const bootstrapExists = await pathExists(bootstrapPath);
-  if (initialState.bootstrapSeededAt && !bootstrapExists) {
-    return "consumed";
-  }
-
-  await fs.mkdir(dir, { recursive: true });
-  const workspaceRoot = await fsSafeRoot(dir, {
-    hardlinks: "reject",
-    maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-    symlinks: "reject",
-  });
-  let created = false;
-  if (!bootstrapExists) {
-    try {
-      await workspaceRoot.write(DEFAULT_BOOTSTRAP_FILENAME, params.content, {
-        overwrite: false,
-      });
-      created = true;
-    } catch (error) {
-      const alreadyExists =
-        (error as NodeJS.ErrnoException).code === "EEXIST" ||
-        (error instanceof FsSafeError && error.code === "already-exists");
-      if (!alreadyExists) {
-        throw error;
-      }
-    }
-  }
-
-  if (!created) {
-    const statExistingBootstrap = () =>
-      fs.stat(bootstrapPath).catch((error: unknown) => {
-        throw new WorkspaceBootstrapSeedConflictError(
-          "Existing BOOTSTRAP.md could not be read safely.",
-          { cause: error },
-        );
-      });
-    await retryAsync(
-      async () => {
-        const statBefore = await statExistingBootstrap();
-        const existing = await readWorkspaceFileWithGuards({
-          filePath: bootstrapPath,
-          workspaceDir: dir,
-          useCache: false,
-        });
-        if (!existing.ok) {
-          throw new WorkspaceBootstrapSeedConflictError(
-            "Existing BOOTSTRAP.md could not be read safely.",
-          );
-        }
-        if (!Buffer.from(existing.content, "utf8").equals(params.content)) {
-          throw new WorkspaceBootstrapSeedConflictError(
-            "Existing BOOTSTRAP.md differs from the consented Claw bootstrap.",
-          );
-        }
-        await delay(20);
-        const statAfter = await statExistingBootstrap();
-        if (
-          statBefore.size !== statAfter.size ||
-          statBefore.mtimeMs !== statAfter.mtimeMs ||
-          statAfter.size !== params.content.byteLength
-        ) {
-          throw new WorkspaceBootstrapSeedConflictError(
-            "Existing BOOTSTRAP.md write has not stabilized.",
-          );
-        }
-        const stable = await readWorkspaceFileWithGuards({
-          filePath: bootstrapPath,
-          workspaceDir: dir,
-          useCache: false,
-        });
-        if (!stable.ok || !Buffer.from(stable.content, "utf8").equals(params.content)) {
-          throw new WorkspaceBootstrapSeedConflictError(
-            "Existing BOOTSTRAP.md differs from the consented Claw bootstrap.",
-          );
-        }
-      },
-      {
-        attempts: 5,
-        minDelayMs: 20,
-        maxDelayMs: 80,
-        shouldRetry: (error) => error instanceof WorkspaceBootstrapSeedConflictError,
-      },
-    );
-  }
-
-  if (!initialState.bootstrapSeededAt) {
-    const nowMs = params.nowMs ?? Date.now();
-    await mergeWorkspaceSetupState(
-      dir,
-      {
-        bootstrapSeededAt: new Date(nowMs).toISOString(),
-      },
-      nowMs,
-      params.stateOptions,
-    );
-  }
-  return created ? "seeded" : "already-seeded";
-}
-
 export async function isWorkspaceBootstrapPending(dir: string): Promise<boolean> {
   return (await resolveWorkspaceBootstrapStatus(dir)) === "pending";
 }
 
-export async function ensureAgentWorkspace(params?: {
+type EnsureAgentWorkspaceParams = {
   dir?: string;
   ensureBootstrapFiles?: boolean;
   /** Approved custom-agent instructions; never replaces an existing AGENTS.md. */
@@ -682,7 +539,9 @@ export async function ensureAgentWorkspace(params?: {
    * bootstrap files, workspace setup state, and `git init` are skipped (#92015).
    */
   provisioning?: "standard" | "runtime-managed-implicit";
-}): Promise<{
+};
+
+type EnsuredAgentWorkspace = {
   dir: string;
   agentsPath?: string;
   soulPath?: string;
@@ -691,9 +550,92 @@ export async function ensureAgentWorkspace(params?: {
   bootstrapPath?: string;
   bootstrapPending?: boolean;
   identityPathCreated?: boolean;
-}> {
+};
+
+function captureWorkspacePreparationGuard(guard?: WorkspaceStateGuard) {
+  return (
+    guard && {
+      ...guard,
+      recoveryHoldPredicate: structuredClone(guard.recoveryHoldPredicate),
+    }
+  );
+}
+
+export async function ensureAgentWorkspace(
+  params?: EnsureAgentWorkspaceParams,
+): Promise<EnsuredAgentWorkspace> {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
+  const captured = {
+    ...params,
+    dir,
+    templates: params?.templates && { ...params.templates },
+    skipOptionalBootstrapFiles: params?.skipOptionalBootstrapFiles && [
+      ...params.skipOptionalBootstrapFiles,
+    ],
+    guard: captureWorkspacePreparationGuard(params?.guard),
+  } satisfies EnsureAgentWorkspaceParams;
+  if (getAgentWorkspaceAccess(dir)) {
+    return ensureAgentWorkspaceOwned(captured);
+  }
+  return runWorkspacePreparation(dir, (assertFilesystem) => {
+    captured.guard?.assertHost?.();
+    return ensureAgentWorkspaceOwned({
+      ...captured,
+      guard: {
+        ...captured.guard,
+        assertHost: () => {
+          captured.guard?.assertHost?.();
+          assertFilesystem();
+        },
+      },
+    });
+  });
+}
+
+export async function ensureSandboxWorkspace(
+  workspaceDir: string,
+  seedFrom?: string,
+  skipBootstrap?: boolean,
+  skipOptionalBootstrapFiles?: OptionalBootstrapFileName[],
+  guard?: WorkspaceStateGuard,
+): Promise<void> {
+  const dir = resolveUserPath(workspaceDir);
+  const seed = seedFrom ? resolveUserPath(seedFrom) : undefined;
+  const skipOptional = skipOptionalBootstrapFiles && [...skipOptionalBootstrapFiles];
+  const capturedGuard = captureWorkspacePreparationGuard(guard);
+  const beforeMutation = createWorkspaceFileMutationGuard(capturedGuard);
+  const assertCallerCurrent = beforeMutation ? retainMutationAuthority(beforeMutation) : undefined;
+  await runWorkspacePreparation(dir, async (assertFilesystem) => {
+    const assertHost = () => {
+      capturedGuard?.assertHost?.();
+      assertFilesystem();
+    };
+    const assertCurrent = () => {
+      assertCallerCurrent?.();
+      assertFilesystem();
+    };
+    assertHost();
+    const { copyWorkspaceBootstrapFiles } = await import("./workspace-bootstrap-copy.js");
+    assertHost();
+    await copyWorkspaceBootstrapFiles(dir, seed, assertCurrent);
+    await ensureAgentWorkspaceOwned({
+      dir,
+      ensureBootstrapFiles: !skipBootstrap,
+      skipOptionalBootstrapFiles: skipOptional,
+      guard: {
+        ...capturedGuard,
+        assertHost,
+      },
+    });
+    assertCurrent();
+  });
+}
+
+async function ensureAgentWorkspaceOwned(
+  params: EnsureAgentWorkspaceParams & { dir: string },
+): Promise<EnsuredAgentWorkspace> {
+  const dir = params.dir;
   const guard = params?.guard;
   const assertHost = guard?.assertHost;
   const beforeFileMutation = createWorkspaceFileMutationGuard(guard);
@@ -732,6 +674,7 @@ export async function ensureAgentWorkspace(params?: {
     // bootstrap files, setup state, or a nested git repository (#92015).
     beforeFileMutation?.();
     await fs.mkdir(dir, { recursive: true });
+    assertHost?.();
     return { dir, bootstrapPending: false };
   }
   let initialState = await readCanonicalWorkspaceStateSnapshot(dir, undefined, guard);
@@ -753,6 +696,7 @@ export async function ensureAgentWorkspace(params?: {
 
   beforeFileMutation?.();
   await fs.mkdir(dir, { recursive: true });
+  assertHost?.();
   assertExpiryEvidence = captureWorkspaceStateFilesystemGuard(dir);
 
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);

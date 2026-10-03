@@ -3,7 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import type {
   PreparedAgentCredentialMode,
   PreparedAgentCredentialModes,
@@ -92,7 +92,7 @@ function convertAuthProfileCredentialToAgent(
     if (!key) {
       // A configured secret ref proves the credential exists, but this converter
       // must not resolve or leak the actual secret value.
-      return coerceSecretRef(cred.keyRef) !== null ? secretRefPlaceholder(options) : null;
+      return parseSecretRef(cred.keyRef) !== null ? secretRefPlaceholder(options) : null;
     }
     return { type: "api_key", key };
   }
@@ -106,7 +106,7 @@ function convertAuthProfileCredentialToAgent(
     }
     const token = normalizeOptionalString(cred.token) ?? "";
     if (!token) {
-      return coerceSecretRef(cred.tokenRef) !== null ? secretRefPlaceholder(options) : null;
+      return parseSecretRef(cred.tokenRef) !== null ? secretRefPlaceholder(options) : null;
     }
     return { type: "api_key", key: token };
   }

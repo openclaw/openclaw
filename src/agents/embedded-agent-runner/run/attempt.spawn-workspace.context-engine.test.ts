@@ -462,10 +462,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     ]);
 
     await runAttempt({
-      contextEngine: {
-        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
-      },
-
       attemptOverrides: {
         disableTools: false,
         sourceReplyDeliveryMode: "message_tool_only",
@@ -487,7 +483,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(options.includeToolSearchControls).toBe(!privateReply);
     const sessionOptions = mockParams(hoisted.createAgentSessionMock);
     const customTools = requireRecords(sessionOptions.customTools, "customTools");
-    expect(customTools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(customTools.map((tool) => tool.name)).toEqual(
+      privateReply ? ["message"] : ["tool_search", "tool_describe", "tool_call", "message"],
+    );
   });
 
   it("quarantines unsupported tool schemas before creating the model session", async () => {

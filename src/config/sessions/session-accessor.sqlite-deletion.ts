@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { getNativeSessionDeletionParticipant } from "../../agents/harness/native-session/deletion-participant.js";
 import {
   captureAgentHarnessSessionDeletions,
   captureAgentHarnessSessionContextResets,
@@ -64,6 +65,17 @@ type PreparedDeletion = {
   contextReset?: boolean;
 };
 const deletions = new AsyncLocalStorage<ReadonlyMap<string, PreparedDeletion>>();
+const workerParticipant = new AsyncLocalStorage<
+  (sessionKey: string, entry: SessionEntry) => void
+>();
+
+/** The executing owner supplies the typed precommit participant at the existing deletion edge. */
+export function withSqliteSessionDeletionWorkerParticipant<T>(
+  commit: (sessionKey: string, entry: SessionEntry) => void,
+  run: () => T,
+): T {
+  return workerParticipant.run(commit, run);
+}
 const transactionMutations = new AsyncLocalStorage<{
   rollback: AgentHarnessSessionDeletionMutation[];
   initializations: Set<SessionInitialization>;
@@ -78,6 +90,48 @@ export function hasPreparedNativeSessionDeletion(): boolean {
       (entry) => entry.mutations.length > 0 || entry.target.initialization !== undefined,
     )
   );
+}
+
+/** Opaque SDK mutations keep their native transaction; only owner-minted participants qualify. */
+export function captureNativeSessionWorkerDeletion(entries: readonly DeletionEntry[]) {
+  const captured = entries.map(({ sessionKey, entry }) => ({
+    sessionKey,
+    entry,
+    prepared: deletions.getStore()?.get(sessionKey),
+  }));
+  if (
+    !captured.some(({ prepared }) => prepared?.mutations.length || prepared?.target.initialization)
+  ) {
+    return undefined;
+  }
+  const participants = [];
+  for (const { sessionKey, entry, prepared } of captured) {
+    if (!prepared) {
+      return undefined;
+    }
+    for (const mutation of prepared.mutations) {
+      const participant = getNativeSessionDeletionParticipant(mutation);
+      if (!participant) {
+        return undefined;
+      }
+      participants.push({ sessionKey, entry, participant });
+    }
+  }
+  return {
+    participants,
+    assertCurrent() {
+      for (const { prepared } of captured) {
+        prepared?.assertIdle();
+      }
+    },
+    committed() {
+      for (const { prepared } of captured) {
+        if (prepared?.target.initialization) {
+          commitSessionInitializationRollback(prepared.target.initialization);
+        }
+      }
+    },
+  };
 }
 
 type PreparedSessionWrite<T> = {
@@ -450,6 +504,11 @@ async function withSqliteSessionMutations<T>(
 
 /** Called only at the synchronous SQL edge, after the operation revalidates its row snapshot. */
 export function commitSqliteSessionDeletion(sessionKey: string, entry: SessionEntry): void {
+  const workerCommit = workerParticipant.getStore();
+  if (workerCommit) {
+    workerCommit(sessionKey, entry);
+    return;
+  }
   const prepared = deletions.getStore()?.get(sessionKey);
   if (!prepared) {
     if (captureAgentHarnessSessionDeletions()) {

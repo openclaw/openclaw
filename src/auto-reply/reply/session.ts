@@ -1082,7 +1082,7 @@ async function initSessionStateAttemptLocked(
     sessionKey,
   });
   if (createdNewEntry) {
-    recordSessionCreated(cfg, { sessionKey, agentId, entry: sessionEntry });
+    await recordSessionCreated(cfg, { sessionKey, agentId, entry: sessionEntry });
   }
   await registerMainSessionGroupWatch({
     sessionKey,

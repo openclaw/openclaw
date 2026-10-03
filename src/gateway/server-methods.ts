@@ -55,7 +55,7 @@ import {
   runWithGatewayObservationScope,
   workAdmissionUnavailableError,
 } from "./server-request-lifecycle.js";
-import type { GatewayRpcDiagnostics } from "./server/ws-connection/request-diagnostics.js";
+import { GatewayRpcDiagnostics } from "./server/ws-connection/request-diagnostics.js";
 import type { GatewaySessionAccessAuthority } from "./session-access-authority.js";
 import { sessionLog } from "./session-log.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
@@ -467,9 +467,7 @@ export async function handleGatewayRequest(
         // Long polls and shutdown initiators must never remain preparation leases.
         entry?.release();
         profileBinding?.markInvoked();
-        return diagnostics
-          ? diagnostics.runHandler(() => preparedHandler(handlerOptions))
-          : preparedHandler(handlerOptions);
+        return GatewayRpcDiagnostics.runHandler(() => preparedHandler(handlerOptions), diagnostics);
       };
       if (req.method === "question.get" || req.method === "question.resolve") {
         // Draining admission consults the pending owner before handler entry.

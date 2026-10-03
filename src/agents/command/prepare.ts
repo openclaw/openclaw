@@ -72,6 +72,12 @@ export async function prepareAgentCommandExecution(
   runtime: RuntimeEnv,
   runtimeContext?: PreparedAgentCommandRuntimeContext,
 ) {
+  const {
+    abortSignal,
+    assertSourceCurrent,
+    operatorAuthority,
+    lifecycleGeneration: preparationLifecycleGeneration,
+  } = opts;
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
   if (!message.trim()) {
@@ -100,20 +106,15 @@ export async function prepareAgentCommandExecution(
     );
   }
 
-  const cfg = await resolveAgentRuntimeConfig(runtime, {
-    runtimeTargetsChannelSecrets: opts.deliver === true,
-    runtimeChannelSecretScope:
-      opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
-        ? { channel: recipientChannel, accountId: opts.accountId }
-        : undefined,
-  });
-  const normalizedSpawned = normalizeSpawnedRunMetadata({
-    spawnedBy: opts.spawnedBy,
-    groupId: opts.groupId,
-    groupChannel: opts.groupChannel,
-    groupSpace: opts.groupSpace,
-    workspaceDir: opts.workspaceDir,
-  });
+  const cfg = await (runtimeContext?.config ??
+    resolveAgentRuntimeConfig(runtime, {
+      runtimeTargetsChannelSecrets: opts.deliver === true,
+      runtimeChannelSecretScope:
+        opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
+          ? { channel: recipientChannel, accountId: opts.accountId }
+          : undefined,
+    }));
+  const normalizedSpawned = normalizeSpawnedRunMetadata(opts);
   const agentIdOverrideRaw = opts.agentId?.trim();
   const agentIdOverride = agentIdOverrideRaw ? normalizeAgentId(agentIdOverrideRaw) : undefined;
   if (agentIdOverride) {
@@ -250,13 +251,13 @@ export async function prepareAgentCommandExecution(
   const { getAcpSessionManager } = await loadAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
   const assertAcpPreparationCurrent = () => {
-    if (opts.abortSignal?.aborted) {
-      throw createAbortError("Operation aborted", { cause: opts.abortSignal.reason });
+    if (abortSignal?.aborted) {
+      throw createAbortError("Operation aborted", { cause: abortSignal.reason });
     }
-    opts.assertSourceCurrent?.();
-    opts.operatorAuthority?.assertCurrent();
-    if (opts.lifecycleGeneration !== undefined) {
-      assertAgentRunLifecycleGenerationCurrent(opts.lifecycleGeneration);
+    assertSourceCurrent?.();
+    operatorAuthority?.assertCurrent();
+    if (preparationLifecycleGeneration !== undefined) {
+      assertAgentRunLifecycleGenerationCurrent(preparationLifecycleGeneration);
     }
     assertAgentDatabaseAdmitted(sessionAgentId);
   };
@@ -308,31 +309,30 @@ export async function prepareAgentCommandExecution(
     sessionKey,
     sessionEntry: sessionEntryRaw,
   });
-  if (
-    sessionEntryRaw &&
+  const sessionStableReplyMode = resolveSessionStableReplyMode({
+    cfg,
+    ctx: { CommandAuthorized: false },
+    sessionEntry: sessionEntryRaw,
+    sessionAgentId,
+    sessionKey,
+  });
+  commandOpts = {
+    ...commandOpts,
+    // Seed the same reusable policy before the first row and on later completion turns.
+    cliSessionBindingFacts: commandOpts.cliSessionBindingFacts ?? {
+      sourceReplyDeliveryMode: sessionStableReplyMode,
+    },
+    ...(sessionEntryRaw &&
     isSyntheticSourceReplyTurn({
       inputProvenance: commandOpts.inputProvenance,
       isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
     })
-  ) {
-    const sessionStableReplyMode = resolveSessionStableReplyMode({
-      cfg,
-      ctx: { CommandAuthorized: false },
-      sessionEntry: sessionEntryRaw,
-      sessionAgentId,
-      sessionKey,
-    });
-    commandOpts = {
-      ...commandOpts,
-      // A direct Gateway wake has no inbound dispatcher to apply reply policy.
-      // Bind the effective run and its delivery to the same existing policy owner,
-      // without letting explicit turn overrides change reusable CLI bindings.
-      sourceReplyDeliveryMode: commandOpts.sourceReplyDeliveryMode ?? sessionStableReplyMode,
-      cliSessionBindingFacts: commandOpts.cliSessionBindingFacts ?? {
-        sourceReplyDeliveryMode: sessionStableReplyMode,
-      },
-    };
-  }
+      ? {
+          // Direct Gateway wakes have no inbound dispatcher to apply effective reply policy.
+          sourceReplyDeliveryMode: commandOpts.sourceReplyDeliveryMode ?? sessionStableReplyMode,
+        }
+      : {}),
+  };
   const thinkingLevelsHint = formatThinkingLevels(
     configuredModel.provider,
     configuredModel.model,
@@ -370,6 +370,7 @@ export async function prepareAgentCommandExecution(
       ensureBootstrapFiles: !agentCfg?.skipBootstrap,
       skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
       provisioning: workspaceProvisioning,
+      guard: { assertHost: assertAcpPreparationCurrent },
     });
     const runId = opts.runId?.trim() || sessionId;
     let promptMessage = message;

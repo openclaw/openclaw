@@ -18,6 +18,10 @@ const mocks = vi.hoisted(() => ({
   verify: vi.fn<typeof import("./update-immutable-generation.js").verifyImmutableGeneration>(),
   seal: vi.fn<typeof import("./update-immutable-generation.js").sealImmutableGeneration>(),
 }));
+vi.mock("./update-immutable-owner.js", () => ({
+  withImmutableUpdateOwner: async (_root: string, run: (assertCurrent: () => void) => unknown) =>
+    run(() => {}),
+}));
 vi.mock("./update-immutable-install-record.js", () => ({ readImmutableInstallRecord: mocks.read }));
 vi.mock("./package-update-activation-immutable.js", () => ({
   recordImmutablePreparedGeneration: mocks.record,

@@ -481,7 +481,7 @@ describe("native completion final-effect authority", () => {
         return stream;
       });
       const activeRunId = `active-${randomUUID()}`;
-      const prepared = prepareCatalogExecutor([], {
+      const prepared = prepareCatalogExecutor({
         activeSession: session,
         sessionKey: completion.sessionScope.sessionKey,
         attempt: {

@@ -4,7 +4,7 @@ import { createWorkerProjectPreparationIdentity } from "./preparation-identity.j
 import { PROJECT_KEY, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import { prepareWorkerProviderProject } from "./provider-project-preparation.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
 
 const sourceAdmission = vi.hoisted(() =>

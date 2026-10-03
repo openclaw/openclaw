@@ -653,7 +653,7 @@ async function mutateSessionAtMessage(
           assertCurrent: () => {},
         });
       } else {
-        recordSessionCreated(cfg, {
+        await recordSessionCreated(cfg, {
           sessionKey: result.key,
           agentId: current.target.agentId,
           entry: result.entry,

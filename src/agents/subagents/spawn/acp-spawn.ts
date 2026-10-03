@@ -558,13 +558,13 @@ export async function spawnAcpDirect(
       });
       // ACP bypasses the native adapter, so seed the same child lineage before dispatch.
       if (childCreationEntry) {
-        recordSessionCreated(cfg, {
+        await recordSessionCreated(cfg, {
           sessionKey,
           agentId: targetAgentId,
           entry: childCreationEntry,
         });
       }
-      recordSubagentSpawned({
+      await recordSubagentSpawned({
         childSessionKey: sessionKey,
         childRunId: childIdem,
         requesterSessionKey: requesterInternalKey,

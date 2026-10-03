@@ -140,6 +140,25 @@ core consumes them. New producers should construct `terminal`; consumers of
 the union must narrow the result before reading it. The current
 `EmbeddedRunAttemptResult` contract keeps `terminal` required.
 
+### Mention Inbox persistence
+
+The October 3, 2026 `mention-inbox-sync-persistence` record retains the
+synchronous `mentionInbox.list(client)`, `mentionInbox.dismiss(client, ids)`,
+`mentionInbox.recordCommittedInput(input)`, and `mentionInbox.invalidate(sessionKey)`
+contracts exposed through the Gateway Plugin SDK context. Their result shapes,
+exact-ID matching, and immediate completion remain supported until the next
+Plugin SDK major and explicit breaking-release approval. Recording persists
+synchronously; invalidation refreshes connected views before returning. Inside
+an enclosing transaction, notifications wait for that transaction to commit.
+
+Use `listAsync` and `dismissAsync` with their synchronous result-publication
+callbacks, and await `recordCommittedInputAsync` and `invalidateAsync`; see
+[awaited Mention Inbox operations](/plugins/sdk-migration/how-to-migrate#await-mention-inbox-operations).
+Core and bundled callers use these worker-backed methods. Legacy calls emit one
+`DEP_SESSION_PERSISTENCE` warning per plugin and method per process, with a
+once-per-method warning for unscoped calls. Schemas, retained data, and update
+behavior are unchanged.
+
 ### Awaited session persistence
 
 The October 1, 2026 records `session-manager-sync-persistence`,
@@ -156,6 +175,31 @@ types. Bundled code uses the awaited contracts. File-backed writes reuse the
 canonical worker writer; incognito retains its process-local owner until its
 separate cutover. Schemas, persisted bytes, and supported update paths are
 unchanged. Removal still requires explicit breaking-release approval.
+
+### Native session generation authority
+
+The production-private `agent-harness-session-runtime` subpath retains the
+contracts consumed by official harness packages released with OpenClaw 2026.9.8.
+`captureNativeSessionGenerationAuthority` still returns `state`,
+`previousSessionId`, `assertHostCurrent`, and `assertCurrent` synchronously.
+`resolveNativeSessionBinding` still returns `{ binding, assertCurrent }`, and
+`NativeSessionGenerationOperations` keeps its two-argument `adopt` and `reclaim`
+callbacks. Their supplied assertion continues to check durable session lineage
+after an awaited operation.
+
+Current harness code awaits `prepareNativeSessionGenerationAuthority`,
+`resolveNativeSessionBindingWithAuthority`, or
+`reclaimNativeSessionGenerationWithAuthority`. The resolver returns
+`{ binding, authority }`. `NativeSessionGenerationOperationsV2` requires each
+mutation callback to accept `(expectedPreviousSessionId, authority)` and carry
+that authority into binding storage. Use `authority.withCurrent` for synchronous
+native action admission; its ordinary `assertCurrent` checks lifecycle only.
+Durable lineage reads use the session worker.
+
+The old exports are deprecated without runtime warnings. They remain until the
+next Plugin SDK major, migration of supported published official harness readers,
+and explicit breaking-release approval. This preserves installed harnesses
+across host upgrades without extending the private subpath into a public SDK.
 
 ### Model-provider result compatibility
 

@@ -27,12 +27,74 @@ vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
 const { createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
-  it("retains a recreated archive while resuming an interrupted unlink", async () => {
-    const { store, archivePath } = await createVerifiedRecoveryStore();
+  it.each([
+    "intent",
+    "intent-sync",
+    "claim",
+    "unlink",
+    "unlink-later",
+    "receipt",
+    "recreated",
+    "shared-receipt",
+  ])("resumes retirement after a %s failure without overclaiming removed bytes", async (phase) => {
+    const { store, imported, archivePath } = await createVerifiedRecoveryStore();
+    const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+    const manifestDir = path.dirname(manifestPath);
+    const duplicate =
+      phase === "shared-receipt" ? createSessionSqliteMigrationRun(store.env, []) : undefined;
+    if (duplicate) {
+      const manifest = readMigrationManifest(manifestPath);
+      duplicate.manifest.targets = structuredClone(manifest.targets);
+      duplicate.manifest.completedAt = manifest.completedAt;
+      writeSessionSqliteMigrationManifest(duplicate);
+    }
+    const original = fs.readFileSync(archivePath);
+    let injected = false;
+    let claimUnlinks = 0;
+    const write = replaceFile.replaceFileAtomicSync;
     const unlink = fs.unlinkSync;
-    const spy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
+    const fsync = fs.fsyncSync;
+    const syncSpy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+      if (!injected && phase === "intent-sync" && isDirectoryDescriptor(fd, manifestDir)) {
+        injected = true;
+        throw new Error("injected intent-sync");
+      }
+      fsync(fd);
+    });
+    const writeSpy = vi
+      .spyOn(replaceFile, "replaceFileAtomicSync")
+      .mockImplementation((options) => {
+        const text = String(options.content);
+        const shouldFail =
+          phase === "intent"
+            ? text.includes('"pending-disposal"')
+            : (phase === "receipt" || (duplicate && options.filePath === manifestPath)) &&
+              text.includes('"disposed"');
+        if (!injected && shouldFail) {
+          injected = true;
+          if (duplicate) {
+            expect(
+              readMigrationManifest(duplicate.manifestPath).targets[0]?.plannedMoves.find(
+                (move) => move.archivePath === archivePath,
+              )?.artifact?.disposal.state,
+            ).toBe("disposed");
+          }
+          throw new Error(`injected ${phase}`);
+        }
+        return write(options);
+      });
+    const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
       if (String(file).includes(".cleanup-")) {
-        throw new Error("injected unlink");
+        claimUnlinks += 1;
+      }
+      if (
+        !injected &&
+        (((phase === "unlink" || phase === "recreated") && String(file).includes(".cleanup-")) ||
+          (phase === "unlink-later" && claimUnlinks === 2) ||
+          (phase === "claim" && String(file) === archivePath))
+      ) {
+        injected = true;
+        throw new Error(`injected ${phase}`);
       }
       return unlink(file);
     });
@@ -44,105 +106,54 @@ describe("runDoctorSessionSqlite", () => {
         confirm: async () => true,
       });
     try {
-      expect((await invoke()).status).toBe("blocked");
+      if (phase === "intent" || phase === "intent-sync") {
+        await expect(invoke()).rejects.toThrow(`injected ${phase}`);
+        expect(fs.readFileSync(archivePath)).toEqual(original);
+      } else {
+        const first = await invoke();
+        expect(first.status).toBe("blocked");
+        if (phase === "unlink-later") {
+          expect(first.totals.removedFiles).toBe(1);
+        }
+        if (phase === "receipt") {
+          expect(first.artifacts.find((item) => item.path === archivePath)?.removedBytes).toBe(
+            original.length,
+          );
+        }
+      }
     } finally {
-      spy.mockRestore();
+      writeSpy.mockRestore();
+      unlinkSpy.mockRestore();
+      syncSpy.mockRestore();
     }
-    fs.writeFileSync(archivePath, "replacement after interrupted cleanup");
+    expect(injected).toBe(true);
+    if (phase === "recreated") {
+      fs.writeFileSync(archivePath, "replacement after interrupted cleanup");
+    }
     const resumed = await invoke();
-    expect(resumed.status).toBe("blocked");
-    expect(fs.readFileSync(archivePath, "utf8")).toBe("replacement after interrupted cleanup");
-    expect(
-      resumed.artifacts.find((item) => item.path === archivePath)?.removedBytes,
-    ).toBeUndefined();
+    if (phase === "recreated") {
+      expect(resumed.status).toBe("blocked");
+      expect(fs.readFileSync(archivePath, "utf8")).toBe("replacement after interrupted cleanup");
+      expect(
+        resumed.artifacts.find((item) => item.path === archivePath)?.removedBytes,
+      ).toBeUndefined();
+      return;
+    }
+    expect(resumed.status).toBe("complete");
+    if (duplicate) {
+      for (const file of [manifestPath, duplicate.manifestPath]) {
+        expect(
+          readMigrationManifest(file).targets[0]!.plannedMoves.find(
+            (move) => move.archivePath === archivePath,
+          )?.artifact?.disposal.state,
+        ).toBe("disposed");
+      }
+    }
+    expect(fs.existsSync(archivePath)).toBe(false);
+    if (phase === "receipt") {
+      expect(resumed.totals.removedBytes).toBe(0);
+    }
   });
-
-  it.each(["intent", "intent-sync", "claim", "unlink", "unlink-later", "receipt"])(
-    "resumes retirement after a %s failure without overclaiming removed bytes",
-    async (phase) => {
-      const { store, imported, archivePath } = await createVerifiedRecoveryStore();
-      const manifestDir = path.dirname(
-        requireMigrationManifestPath(imported.migrationRun?.manifestPath),
-      );
-      const original = fs.readFileSync(archivePath);
-      let injected = false;
-      let claimUnlinks = 0;
-      const write = replaceFile.replaceFileAtomicSync;
-      const unlink = fs.unlinkSync;
-      const fsync = fs.fsyncSync;
-      const syncSpy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
-        if (!injected && phase === "intent-sync" && isDirectoryDescriptor(fd, manifestDir)) {
-          injected = true;
-          throw new Error("injected intent-sync");
-        }
-        fsync(fd);
-      });
-      const writeSpy = vi
-        .spyOn(replaceFile, "replaceFileAtomicSync")
-        .mockImplementation((options) => {
-          const text = String(options.content);
-          const shouldFail =
-            phase === "intent"
-              ? text.includes('"pending-disposal"')
-              : phase === "receipt" && text.includes('"disposed"');
-          if (!injected && shouldFail) {
-            injected = true;
-            throw new Error(`injected ${phase}`);
-          }
-          return write(options);
-        });
-      const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
-        if (String(file).includes(".cleanup-")) {
-          claimUnlinks += 1;
-        }
-        if (
-          !injected &&
-          ((phase === "unlink" && String(file).includes(".cleanup-")) ||
-            (phase === "unlink-later" && claimUnlinks === 2) ||
-            (phase === "claim" && String(file) === archivePath))
-        ) {
-          injected = true;
-          throw new Error(`injected ${phase}`);
-        }
-        return unlink(file);
-      });
-      const invoke = () =>
-        retireSessionSqliteRecovery({
-          env: store.env,
-          preview: inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
-          readConfig: async () => ({}),
-          confirm: async () => true,
-        });
-      try {
-        if (phase === "intent" || phase === "intent-sync") {
-          await expect(invoke()).rejects.toThrow(`injected ${phase}`);
-          expect(fs.readFileSync(archivePath)).toEqual(original);
-        } else {
-          const first = await invoke();
-          expect(first.status).toBe("blocked");
-          if (phase === "unlink-later") {
-            expect(first.totals.removedFiles).toBe(1);
-          }
-          if (phase === "receipt") {
-            expect(first.artifacts.find((item) => item.path === archivePath)?.removedBytes).toBe(
-              original.length,
-            );
-          }
-        }
-      } finally {
-        writeSpy.mockRestore();
-        unlinkSpy.mockRestore();
-        syncSpy.mockRestore();
-      }
-      expect(injected).toBe(true);
-      const resumed = await invoke();
-      expect(resumed.status).toBe("complete");
-      expect(fs.existsSync(archivePath)).toBe(false);
-      if (phase === "receipt") {
-        expect(resumed.totals.removedBytes).toBe(0);
-      }
-    },
-  );
 
   it.each([
     { platform: "win32", syncFailure: "unsupported", retires: true },
@@ -264,53 +275,5 @@ describe("runDoctorSessionSqlite", () => {
     expect(cleanup.status).toBe("complete");
     expect(cleanup.totals.removedFiles).toBe(0);
     expect(fs.readFileSync(store.transcriptPath)).toEqual(original);
-  });
-
-  it("resumes shared cross-manifest disposal after only one terminal receipt is durable", async () => {
-    const { store, imported, archivePath } = await createVerifiedRecoveryStore();
-    const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
-    const original = readMigrationManifest(manifestPath);
-    const duplicate = createSessionSqliteMigrationRun(store.env, original.targets);
-    duplicate.manifest.targets = structuredClone(original.targets);
-    duplicate.manifest.completedAt = original.completedAt;
-    writeSessionSqliteMigrationManifest(duplicate);
-    const write = replaceFile.replaceFileAtomicSync;
-    let injected = false;
-    const spy = vi.spyOn(replaceFile, "replaceFileAtomicSync").mockImplementation((options) => {
-      if (
-        !injected &&
-        options.filePath === manifestPath &&
-        String(options.content).includes('"disposed"')
-      ) {
-        injected = true;
-        const other = readMigrationManifest(duplicate.manifestPath);
-        expect(
-          other.targets[0]?.plannedMoves.find((move) => move.archivePath === archivePath)?.artifact
-            ?.disposal.state,
-        ).toBe("disposed");
-        throw new Error("injected shared receipt");
-      }
-      return write(options);
-    });
-    const invoke = () =>
-      retireSessionSqliteRecovery({
-        env: store.env,
-        preview: inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
-        readConfig: async () => ({}),
-        confirm: async () => true,
-      });
-    try {
-      expect((await invoke()).status).toBe("blocked");
-    } finally {
-      spy.mockRestore();
-    }
-    expect(injected).toBe(true);
-    expect((await invoke()).status).toBe("complete");
-    for (const file of [manifestPath, duplicate.manifestPath]) {
-      const receipt = readMigrationManifest(file).targets[0]!.plannedMoves.find(
-        (move) => move.archivePath === archivePath,
-      );
-      expect(receipt?.artifact?.disposal.state).toBe("disposed");
-    }
   });
 });

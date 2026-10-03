@@ -35,6 +35,7 @@ function decodeSessionEntryCurrentFacts(
   }
   return {
     sessionId: value.sessionId,
+    previousSessionId: value.previousSessionId,
     ...(value.archivedAt === undefined ? {} : { archivedAt: value.archivedAt }),
     ...(value.repositoryWorkspaceId === undefined
       ? {}

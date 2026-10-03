@@ -51,42 +51,37 @@ const provenance = {
   sourcePromptPrefix: `[cron:${jobId} Old report]`,
 };
 
-it("strips the recorded producer envelope after a job rename", () => {
-  const sourcePromptPrefix = `[cron:${jobId} Daily\nreport]]`;
-  const content = sourcePromptPrefix + " Check the queue.\n    Keep indentation.";
-  const message = { role: "user", provenance: { ...provenance, sourcePromptPrefix }, content };
-  expect(
-    projectChatDisplayMessages([message], { resolveCronJobName: () => "Renamed report" })[0],
-  ).toMatchObject({
-    content: "Check the queue.\n    Keep indentation.",
-    senderSession: { label: "Renamed report" },
-  });
-  expect(message.content).toBe(content);
-});
-
-it("preserves retry text without the recorded producer envelope", () => {
-  const content = "[cron:literal example] Continue from the last result.";
-  expect(
-    projectChatDisplayMessages([{ role: "user", provenance, content }], {
-      resolveCronJobName: () => "Daily report",
-    })[0],
-  ).toMatchObject({ content });
-});
-
-it("uses an automation fallback label and strips block envelopes without changing model input", () => {
-  const text = provenance.sourcePromptPrefix + " Check the queue.\n    Keep indentation.";
-  const message = { role: "user", provenance, content: [{ type: "text", text }] };
-  expect(
-    projectChatDisplayMessages([message], { resolveCronJobName: () => undefined }),
-  ).toMatchObject([
-    {
-      role: "assistant",
-      senderSession: { sessionKey, agentId: "main", label: "Automation" },
-      content: [{ type: "text", text: "Check the queue.\n    Keep indentation." }],
-    },
-  ]);
-  expect(message.content[0]?.text).toBe(text);
-  expect(message.role).toBe("user");
+it("projects only recorded cron envelopes and current labels without changing model input", () => {
+  const body = "Check the queue.\n    Keep indentation.";
+  const renamedPrefix = `[cron:${jobId} Daily\nreport]]`;
+  const retry = "[cron:literal example] Continue from the last result.";
+  for (const [prefix, content, label, expected] of [
+    [renamedPrefix, `${renamedPrefix} ${body}`, "Renamed report", body],
+    [provenance.sourcePromptPrefix, retry, "Daily report", retry],
+    [
+      provenance.sourcePromptPrefix,
+      [{ type: "text", text: `${provenance.sourcePromptPrefix} ${body}` }],
+      undefined,
+      [{ type: "text", text: body }],
+    ],
+  ] as const) {
+    const message = {
+      role: "user",
+      provenance: { ...provenance, sourcePromptPrefix: prefix },
+      content,
+    };
+    const original = structuredClone(message);
+    expect(
+      projectChatDisplayMessages([message], { resolveCronJobName: () => label }),
+    ).toMatchObject([
+      {
+        role: "assistant",
+        senderSession: { sessionKey, agentId: "main", label: label ?? "Automation" },
+        content: expected,
+      },
+    ]);
+    expect(message).toEqual(original);
+  }
 });
 
 it("refreshes only the sender label of an already projected automation", () => {

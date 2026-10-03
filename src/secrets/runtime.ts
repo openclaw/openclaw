@@ -22,7 +22,7 @@ import {
   type RuntimeConfigSnapshotRefreshParams,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
@@ -466,7 +466,7 @@ function patchResolvedSecretRefLeaves(params: {
   resolved: unknown;
   defaults: NonNullable<OpenClawConfig["secrets"]>["defaults"];
 }): ResolvedSecretRefPatch {
-  if (coerceSecretRef(params.source, params.defaults)) {
+  if (parseSecretRef(params.source, params.defaults)) {
     return isDeepStrictEqual(params.source, params.resolved)
       ? { changed: false, value: params.current }
       : { changed: true, value: params.resolved };

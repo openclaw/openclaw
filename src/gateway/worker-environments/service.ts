@@ -261,6 +261,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     now,
     signal: scope.signal,
     warn,
+    resolveHumanPresenceDemand: options.resolveHumanPresenceDemand,
+    presenceDemandStore: options.presenceDemandStore,
   });
   const schedulePreparedRefill = (environmentId?: string) =>
     void trackOperation(preparedPool.maintain(environmentId));
@@ -630,6 +632,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     getPreparedCandidates: (intent: WorkerProviderPreparedIntent) =>
       preparedPool.candidates(intent).map(environmentAccess.project),
     schedulePreparedRefill,
+    setHumanPresence: preparedPool.setHumanPresence,
     inventoryVersion: store.inventoryVersion,
     machineShapeVersion: providerLifecycle.machineShapeVersion,
     subscribeMachineShapeChanged: providerLifecycle.subscribeMachineShapeChanged,

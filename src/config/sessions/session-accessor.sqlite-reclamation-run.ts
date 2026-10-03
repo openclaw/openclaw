@@ -19,7 +19,10 @@ import type {
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { prepareSessionDeletionInDatabase } from "./session-accessor.sqlite-deletion-plan.js";
-import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
+import {
+  hasPreparedNativeSessionDeletion,
+  captureNativeSessionWorkerDeletion,
+} from "./session-accessor.sqlite-deletion.js";
 import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import { publishSessionEntryWorkerInvalidations } from "./session-accessor.sqlite-entry-cache-publication.js";
 import type {
@@ -116,6 +119,22 @@ export async function runSqliteSessionReclamation(params: {
 }): Promise<SqliteSessionReclamationResult> {
   if (params.diagnostics) {
     params.diagnostics.kind = params.plan.kind;
+  }
+  if (
+    params.plan.kind === "entry" &&
+    supportsOpenClawAgentDatabaseExecution(params.plan.databaseOptions)
+  ) {
+    const participants = captureNativeSessionWorkerDeletion(params.plan.preparedTargetSnapshot);
+    if (participants) {
+      const { deleteSessionWithNativeBindingsInWorker } =
+        await import("./session-native-binding.js");
+      return deleteSessionWithNativeBindingsInWorker(
+        params.plan,
+        participants,
+        () => params.assertCommitAllowed?.(),
+        params.onWorkerResult,
+      );
+    }
   }
   if (
     params.forceInProcess ||

@@ -215,7 +215,9 @@ describe("committed pending input release", () => {
     expect((await listSessionPendingInputs(scope())).total).toBe(2);
     const appended = await promote(aggregate);
     expect(appended).toMatchObject({ appended: true, messageId: aggregate.inputId });
-    expect(readSessionSubmittedInput(scope(), "collect-c:user")?.["__openclaw"]).toMatchObject({
+    expect(
+      (await readSessionSubmittedInput(scope(), "collect-c:user"))?.["__openclaw"],
+    ).toMatchObject({
       transport: {
         clients: [
           { id: "cli", mode: "cli", displayName: "CLI" },
@@ -239,8 +241,8 @@ describe("committed pending input release", () => {
     rotateAgentEventLifecycleGeneration();
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    expect(readSessionSubmittedInput(scope(), "collect-a:user")).toEqual(first.message);
-    expect(readSessionSubmittedInput(scope(), "collect-b:user")).toEqual(second.message);
+    expect(await readSessionSubmittedInput(scope(), "collect-a:user")).toEqual(first.message);
+    expect(await readSessionSubmittedInput(scope(), "collect-b:user")).toEqual(second.message);
     const duplicate = await stage("collect-a", {
       message: { ...firstMessage, timestamp: 200 },
     });
@@ -351,7 +353,7 @@ describe("committed pending input release", () => {
       expect(() => receipt.run(() => {})).toThrow("already been consumed");
     }
     expect(stored()).toEqual(before);
-    expect(readSessionSubmittedInput(scope(), "legacy-client:user")).toEqual(original);
+    expect(await readSessionSubmittedInput(scope(), "legacy-client:user")).toEqual(original);
   });
 
   const stagePrivate = async (text = "private child marker", assertCurrent = () => {}) => {
@@ -410,7 +412,7 @@ describe("committed pending input release", () => {
       if (state === "completed") {
         // Handled private input can leave only its hash/outcome, not a transcript.
         await first.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
-        expect(readSessionSubmittedInput(scope(), `${runId}:user`)).toBeUndefined();
+        expect(await readSessionSubmittedInput(scope(), `${runId}:user`)).toBeUndefined();
       }
       if (state.endsWith("transcript")) {
         promoteSync(first);

@@ -124,7 +124,6 @@ extensions/codex/src/app-server/attempt-startup.ts	1
 extensions/codex/src/app-server/auth-bridge.ts	1
 extensions/codex/src/app-server/client-runtime.ts	1
 extensions/codex/src/app-server/client.ts	2
-extensions/codex/src/app-server/compact.ts	1
 extensions/codex/src/app-server/computer-use-cache.ts	1
 extensions/codex/src/app-server/context-engine-projection.ts	1
 extensions/codex/src/app-server/dynamic-tool-build.ts	1
@@ -152,7 +151,7 @@ extensions/codex/src/app-server/sandbox-exec-server/json-rpc.ts	3
 extensions/codex/src/app-server/sandbox-exec-server/processes.ts	1
 extensions/codex/src/app-server/scheduled-app-authority.ts	5
 extensions/codex/src/app-server/shared-client.ts	2
-extensions/codex/src/app-server/side-question.ts	5
+extensions/codex/src/app-server/side-question.ts	2
 extensions/codex/src/app-server/startup-binding.ts	1
 extensions/codex/src/app-server/thread-lifecycle-run.ts	1
 extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
@@ -920,7 +919,6 @@ extensions/telegram/src/bot-handlers.callback-router.ts	1
 extensions/telegram/src/bot-handlers.inbound-authorization.ts	1
 extensions/telegram/src/bot-handlers.inbound-media.ts	2
 extensions/telegram/src/bot-handlers.inbound-pipeline.ts	2
-extensions/telegram/src/bot-handlers.message-context.ts	1
 extensions/telegram/src/bot-info-cache.ts	1
 extensions/telegram/src/bot-info.ts	1
 extensions/telegram/src/bot-message-context.body.ts	1
@@ -1267,7 +1265,7 @@ src/agents/auth-profiles/external-auth.ts	1
 src/agents/auth-profiles/oauth-refresh-failure.ts	2
 src/agents/auth-profiles/oauth-refresh-lock-errors.ts	1
 src/agents/auth-profiles/oauth.ts	2
-src/agents/auth-profiles/persisted.ts	4
+src/agents/auth-profiles/persisted.ts	2
 src/agents/auth-profiles/policy.ts	1
 src/agents/auth-profiles/portability.ts	1
 src/agents/auth-profiles/profiles.ts	1
@@ -1390,7 +1388,6 @@ src/agents/embedded-agent-runner/run/stream-wrapper.ts	1
 src/agents/embedded-agent-runner/run/terminal-preparation.ts	1
 src/agents/embedded-agent-runner/run/terminal-resolution.ts	1
 src/agents/embedded-agent-runner/run/tool-activity-heartbeat.ts	2
-src/agents/embedded-agent-runner/session-prompt-state.ts	2
 src/agents/embedded-agent-runner/stream-resolution.ts	2
 src/agents/embedded-agent-runner/thinking-replay-repair.ts	1
 src/agents/embedded-agent-runner/thinking.ts	19
@@ -1540,7 +1537,7 @@ src/agents/tool-images.ts	2
 src/agents/tool-policy-shared.ts	1
 src/agents/tool-result-error.ts	3
 src/agents/tool-schema-hints.ts	1
-src/agents/tool-search-catalog.ts	4
+src/agents/tool-search-catalog.ts	3
 src/agents/tool-search-directory.ts	1
 src/agents/tool-search-runtime.ts	4
 src/agents/tool-search-transcript.ts	1
@@ -1602,7 +1599,7 @@ src/agents/transcript-redact.ts	2
 src/agents/transport-message-transform.ts	2
 src/agents/utils/frontmatter.ts	2
 src/agents/workspace-legacy-state.ts	2
-src/agents/workspace.ts	5
+src/agents/workspace.ts	4
 src/agents/worktrees/run-lease.ts	1
 src/audit/execution-identity-admission.ts	3
 src/audit/execution-identity-context-build.ts	3
@@ -2660,7 +2657,6 @@ src/secrets/audit.ts	1
 src/secrets/channel-contract-api.ts	1
 src/secrets/configure.ts	2
 src/secrets/egress-proxy/stream-substitution.ts	2
-src/secrets/legacy-secretref-env-marker.ts	1
 src/secrets/plan.ts	2
 src/secrets/private-plan-file.ts	1
 src/secrets/resolve.ts	1

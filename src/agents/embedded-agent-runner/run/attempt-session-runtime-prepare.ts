@@ -7,7 +7,7 @@ import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
 import {
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   beginSessionSystemPrompt,
   prepareSessionSystemPrompt,
   retireSessionSystemPrompt,
@@ -112,7 +112,9 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   });
   const { isOpenAIResponsesApi, preparedUserTurnMessage, sessionManager, transcriptPolicy } =
     preparedSessionManager;
-  const sessionPromptState = getEmbeddedSessionPromptState(attempt.sessionId);
+  const promptStateLease = retainEmbeddedSessionPromptState(attempt.sessionId);
+  resources.promptStateLease = promptStateLease;
+  const sessionPromptState = promptStateLease.state;
   const usesSystemPromptSeries =
     !input.isRawModelRun && attempt.operation !== "settled-tool-finalization";
   const promptRouteKey = JSON.stringify([

@@ -10,8 +10,6 @@ import type {
 
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES = 3000;
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cache";
-// Versioned writes preserve projection provenance. Shipped unversioned rows
-// hydrate as markerless context only; they never imply transcript projection.
 export const TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION = 1;
 
 export type TelegramMessageThreadBinding = {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { bindAgentToolExecutionLocation } from "../agents/agent-tool-metadata.js";
+import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
@@ -360,6 +361,7 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
     signal: new AbortController().signal,
     prepare: async () => ({
       tools: [retainedTool],
+      presentation: createToolSurfacePresentationForTest(),
       policy: {
         workspaceOnly: true,
         readOnly: false,

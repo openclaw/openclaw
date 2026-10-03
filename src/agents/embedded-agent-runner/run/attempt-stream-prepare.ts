@@ -13,13 +13,11 @@ import {
 } from "../../../logging/diagnostic-run-activity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
-import {
-  projectNestedToolActivityForHooks,
-  type NestedToolActivity,
-} from "../../../sessions/nested-tool-activity.js";
+import { projectNestedToolActivityForHooks } from "../../../sessions/nested-tool-activity.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
+import { bindAgentHarnessHookMessages } from "../../harness/lifecycle-hook-messages.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
@@ -47,6 +45,10 @@ import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
 } from "./attempt-async-tasks.js";
+import {
+  readAttemptNestedToolActivity,
+  type AttemptNestedToolActivityState,
+} from "./attempt-nested-tool-activity.js";
 import {
   claimEmbeddedPendingUserInputAnswer,
   steerActiveSessionWithOptionalDeliveryWait,
@@ -99,7 +101,7 @@ type PrepareEmbeddedAttemptStreamInput = {
   runtimeChannel?: string;
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;
-  nestedToolActivities: NestedToolActivity[];
+  nestedToolActivityState: AttemptNestedToolActivityState;
   isReplaySafeTool: (tool: Parameters<ToolSearchCatalogToolExecutor>[0]["tool"]) => boolean;
   runAbortController: AbortController;
   abortRun: (isTimeout?: boolean, reason?: unknown) => void;
@@ -208,30 +210,43 @@ function prepareStream(
               action: "continue",
             };
             if (shouldRunBeforeAgentFinalize && !hookRevisionLimitReached) {
-              const hookMessages = projectNestedToolActivityForHooks(
-                activeSession.messages,
-                input.nestedToolActivities,
-              );
               const reportedModelRef = resolveReportedModelRef({
                 provider: attempt.provider,
                 model: attempt.modelId,
                 assistant: lastAssistant,
               });
               outcome = await runAgentHarnessBeforeAgentFinalizeHook({
-                event: {
-                  runId: attempt.runId,
-                  sessionId: attempt.sessionId,
-                  ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
-                  provider: reportedModelRef.provider,
-                  model: reportedModelRef.model,
-                  ...((attempt.cwd ?? attempt.workspaceDir)
-                    ? { cwd: attempt.cwd ?? attempt.workspaceDir }
-                    : {}),
-                  ...(attempt.sessionFile ? { transcriptPath: attempt.sessionFile } : {}),
-                  stopHookActive: false,
-                  lastAssistantMessage,
-                  messages: hookMessages,
-                },
+                event: bindAgentHarnessHookMessages(
+                  {
+                    runId: attempt.runId,
+                    sessionId: attempt.sessionId,
+                    ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
+                    provider: reportedModelRef.provider,
+                    model: reportedModelRef.model,
+                    ...((attempt.cwd ?? attempt.workspaceDir)
+                      ? { cwd: attempt.cwd ?? attempt.workspaceDir }
+                      : {}),
+                    ...(attempt.sessionFile ? { transcriptPath: attempt.sessionFile } : {}),
+                    stopHookActive: false,
+                    lastAssistantMessage,
+                    messages: activeSession.messages,
+                  },
+                  async () => {
+                    const activities = await readAttemptNestedToolActivity(
+                      activeSession.sessionManager,
+                      input.nestedToolActivityState,
+                    );
+                    if (
+                      input.runAbortController.signal.aborted ||
+                      input.getRunState().aborted ||
+                      admission.closed ||
+                      ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) !== queueHandle
+                    ) {
+                      throw new Error("Nested tool finalization is no longer current");
+                    }
+                    return projectNestedToolActivityForHooks(activeSession.messages, activities);
+                  },
+                ),
                 ctx: {
                   ...buildEmbeddedAgentHookContext(
                     attempt,
@@ -421,7 +436,7 @@ function prepareStream(
     isCurrent: () =>
       ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle && !input.getRunState().aborted,
     isReplaySafeTool: input.isReplaySafeTool,
-    nestedToolActivities: input.nestedToolActivities,
+    nestedToolActivityState: input.nestedToolActivityState,
   });
 
   let externalAbortAccepted = false;

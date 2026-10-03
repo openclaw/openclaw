@@ -11,10 +11,23 @@ type PendingInputIdentity = {
   idempotencyKey: string;
 };
 
-/** Extend this discriminant with a bounded source read for submitted-input comparison. */
-export type PendingInputRead = PendingInputIdentity & {
+export type PendingInputRead = PendingInputStageRead | PendingInputSourceRead;
+
+type PendingInputStageRead = PendingInputIdentity & {
   kind: "stage";
   trackCompletion: boolean;
+};
+
+export type PendingInputSourceRead = PendingInputIdentity & {
+  kind: "source";
+  pendingOnly: boolean;
+};
+
+export type PendingInputSourceSnapshot = {
+  kind: "source";
+  current: boolean;
+  pending?: SessionPendingInputRow;
+  committed?: PersistedUserTurnMessage;
 };
 
 export type PendingInputSnapshot = {

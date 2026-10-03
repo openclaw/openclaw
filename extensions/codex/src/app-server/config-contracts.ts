@@ -10,7 +10,6 @@ import type {
 } from "./protocol.js";
 
 export {
-  CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN,
   type CodexAppServerCommandSource,
   type CodexPluginDestructiveApprovalMode,
   type CodexPluginMarketplaceName,

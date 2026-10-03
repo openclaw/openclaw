@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { CORE_WORKER_LAUNCH_TOOL_NAMES } from "../agents/tool-catalog.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
@@ -9,7 +10,6 @@ import {
   resolveNodeWorkerLaunchToolNames,
 } from "../infra/node-runner-inventory.js";
 import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
-import { WORKER_TOOL_NAMES } from "../worker/tool-authority.js";
 import { startNodeHostConnection } from "./connection.js";
 import * as hostStats from "./host-stats.js";
 
@@ -42,7 +42,18 @@ it("negotiates optional worker capabilities per connection without widening olde
           capacity: { total: 2, available: 2 },
           bundlePrewarm: 1,
           ...(supported
-            ? { capturedExecPolicy: true, launchToolNames: [...WORKER_TOOL_NAMES], statusWait: 1 }
+            ? {
+                capturedExecPolicy: true,
+                launchToolNames: expect.arrayContaining([
+                  "read",
+                  "sessions_spawn",
+                  "sessions_send",
+                  "skill_workshop",
+                  "portal",
+                  "presence",
+                ]),
+                statusWait: 1,
+              }
             : {}),
         },
       });
@@ -90,12 +101,12 @@ it("keeps the published 2026.9.6 supervisor launch vocabulary when no names are 
 it.each([
   {
     declared: ["presence", "future_tool", "portal", "read"],
-    expected: ["read", "portal", "presence"],
+    expected: ["presence", "future_tool", "portal", "read"],
   },
-  { declared: ["future_tool"], expected: [] },
+  { declared: ["future_tool"], expected: ["future_tool"] },
   { declared: [], expected: [] },
 ])(
-  "normalizes declared launch names $declared without rejecting future tools",
+  "preserves declared launch names $declared including future placement tools",
   ({ declared, expected }) => {
     const declaration = parseNodeRunnerInventoryDeclaration({
       protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
@@ -664,7 +675,9 @@ it.each([
             capacity: { total: 1, available: 1 },
             bundlePrewarm: 1,
             ...(supported && platform === "linux" && !bun ? { workspaceQuiescence: 1 } : {}),
-            ...(supported ? { statusWait: 1, launchToolNames: [...WORKER_TOOL_NAMES] } : {}),
+            ...(supported
+              ? { statusWait: 1, launchToolNames: [...CORE_WORKER_LAUNCH_TOOL_NAMES] }
+              : {}),
           },
         });
         expect(parseNodeRunnerInventoryDeclaration(declaration)).toEqual(declaration);
