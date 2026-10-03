@@ -70,7 +70,9 @@ vi.mock("../infra/node-sqlite.js", () => ({
   requireNodeSqlite: edge.forbidden,
   openNodeSqliteDatabase: edge.forbidden,
 }));
-vi.mock("../infra/kysely-sync.js", () => ({
+// Schema owners create query caches at import time; keep factories real and SQL calls forbidden.
+vi.mock("../infra/kysely-sync.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/kysely-sync.js")>()),
   getNodeSqliteKysely: edge.forbidden,
   executeSqliteQuerySync: edge.forbidden,
   executeSqliteQueryTakeFirstSync: edge.forbidden,
