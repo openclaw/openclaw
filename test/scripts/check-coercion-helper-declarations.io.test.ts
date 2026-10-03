@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import type { API } from "typescript/unstable/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCoercionHelperDeclarationGuard } from "../../scripts/check-coercion-helper-declarations.mts";
 import { createDeferred } from "../helpers/promise.js";
@@ -15,8 +16,9 @@ vi.mock("typescript/unstable/sync", async (importOriginal) => {
     API: class extends actual.API {
       constructor(...args: ConstructorParameters<typeof actual.API>) {
         super(...args);
-        const createSourceFile = this.createSourceFile;
-        vi.spyOn(this, "createSourceFile").mockImplementation((fileName, content, options) => {
+        const api: API = this;
+        const createSourceFile = api.createSourceFile;
+        vi.spyOn(api, "createSourceFile").mockImplementation((fileName, content, options) => {
           if (fileName === "a-parse.ts") {
             throw parseError;
           }
