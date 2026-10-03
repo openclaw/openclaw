@@ -136,6 +136,9 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   An explicit `mode: "followup"` keeps separate activity tracking and leaves the
   child's original result or pending yield intact. Explicit plugin follow-ups
   naming a new requester continue to create their own delivery obligation.
+  A default-delivery follow-up admitted before the pause publishes receives
+  the paused row's requester, completion custody, and settlement obligation
+  when the pause publishes; requester-bound follow-ups keep their own delivery.
 - **Deterministic batches.** Frozen run IDs are sorted. Findings use creation
   time, completion time, and child session identity as tie-breakers. Superseded
   child rows are excluded. Batch identity includes requester identity, child

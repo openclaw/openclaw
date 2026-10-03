@@ -242,8 +242,13 @@ describe("monitorTelegramProvider", () => {
 
   it.each([
     { name: "same-bot token rotation", version: 3, botId: "111111", tokenFingerprint: "old" },
-    { name: "matching legacy identity", version: 2, botId: "111111", tokenFingerprint: null },
-    { name: "unknown legacy identity", version: 1, botId: null, tokenFingerprint: null },
+    {
+      name: "matching identity without token fingerprint",
+      version: 3,
+      botId: "111111",
+      tokenFingerprint: null,
+    },
+    { name: "unknown identity", version: 3, botId: null, tokenFingerprint: null },
   ])("keeps queue rows for $name", async (identity) => {
     await withStateDirEnv("telegram-same-bot-", async ({ stateDir }) => {
       const store = await vi.importActual<typeof OffsetStore>("./update-offset-store.js");

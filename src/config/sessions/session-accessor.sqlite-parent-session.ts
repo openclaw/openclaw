@@ -246,7 +246,7 @@ export async function forkSessionEntryFromParentTarget(
         return {
           status: "skipped",
           reason: "existing-entry",
-          parentEntry: structuredClone(parent.entry),
+          parentEntry: parent.entry,
           sessionEntry,
         };
       }
@@ -254,8 +254,8 @@ export async function forkSessionEntryFromParentTarget(
       assertModelSelectionUnlocked(parent.entry, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
       return {
         status: "prepared",
-        parentEntry: structuredClone(parent.entry),
-        base: structuredClone(base),
+        parentEntry: parent.entry,
+        base: existing ? base : structuredClone(base),
       };
     },
     "session.parent.fork-entry",
@@ -374,7 +374,7 @@ export async function forkSessionEntryFromParentTarget(
               status: "forked",
               decision,
               fork: fork.transcript,
-              parentEntry: structuredClone(freshParent),
+              parentEntry: freshParent,
               sessionEntry: structuredClone(next),
             },
             publish: prepareSessionIdentityPublication(
@@ -405,7 +405,7 @@ export async function forkSessionEntryFromParentTarget(
         return {
           status: "skipped",
           reason: "decision-skip",
-          parentEntry: structuredClone(parentEntry),
+          parentEntry,
           sessionEntry,
           decision,
         };

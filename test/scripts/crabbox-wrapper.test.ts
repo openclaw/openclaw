@@ -2567,16 +2567,19 @@ describe("scripts/crabbox-wrapper", () => {
     expect(foreign.stdout).toBe("");
     if (args[0] === "warmup") {
       const preload = path.join(home, "withdraw-receipt.cjs");
+      const withdrawalWitness = path.join(home, "receipt-withdrawal.json");
       writeFileSync(
         preload,
         `
 const fs = require("node:fs");
-const write = process.stderr.write;
-process.stderr.write = function (chunk, ...rest) {
-  if (String(chunk).includes('"event":"testbox-admission"')) {
-    setImmediate(() => fs.rmSync(${JSON.stringify(receiptPath)}));
+const error = console.error;
+console.error = function (...args) {
+  if (args.some((arg) => String(arg).includes('"event":"testbox-admission"'))) {
+    // Complete withdrawal before the wrapper can revalidate its admitted lease.
+    fs.rmSync(${JSON.stringify(receiptPath)});
+    fs.writeFileSync(${JSON.stringify(withdrawalWitness)}, JSON.stringify({ receiptExists: fs.existsSync(${JSON.stringify(receiptPath)}) }));
   }
-  return write.call(this, chunk, ...rest);
+  return error.apply(this, args);
 };
 `,
       );
@@ -2584,6 +2587,7 @@ process.stderr.write = function (chunk, ...rest) {
         ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "true"],
         { env, nodePreload: preload },
       );
+      expect(JSON.parse(readFileSync(withdrawalWitness, "utf8"))).toEqual({ receiptExists: false });
       expect(withdrawn.status).not.toBe(0);
       expect(withdrawn.stderr).toContain("no allocation receipt");
       expect(withdrawn.stdout).toBe("");

@@ -96,6 +96,21 @@ can read and write the database safely, leaving the new index intact and recreat
 their day index; reopening with the current build retires it again. Binary rollback
 requires no row conversion or schema-version change.
 
+Meeting caption retry lookups use a nonunique partial index on
+`meeting_transcript_utterances(session_id, session_started_at, utterance_id)`
+where `utterance_id IS NOT NULL`, without a schema-version bump. The transcript
+store owns the canonical caption rows; the index is derived and preserves
+same-ID revisions, exact-content retry matching, and append order. Read-only
+admission accepts a missing index; the shared-state canonical-index owner
+installs or repairs it on writable open, and the feature's first-use schema
+includes it. The schema fast path detects missing or drifted indexes before
+admitting the handle. Construction on existing databases scans the table and
+uses temporary disk for the repair owner's probe and final index. Subsequent
+writes maintain index entries only for non-null IDs. Stored content, retention,
+permissions, and transaction ownership are unchanged. Older same-version
+readers ignore the additional nonunique index, so binary rollback leaves both
+caption rows and the index intact.
+
 Removing the Tasks and TaskFlow runtime does not change the shared-state or agent
 schema. The existing tables, indexes, and optional execution-owner columns
 remain part of the released storage contract. Cron reads and writes its existing

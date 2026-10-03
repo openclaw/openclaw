@@ -402,10 +402,7 @@ async function ensureSandboxBrowserContainer(
   if (params.withWorkspace) {
     // Reserve the mount before allocation; a bridge/port failure must not hide
     // an already-running writer from reconciliation or lifecycle cleanup.
-    await updateBrowserRegistry({
-      ...registryEntry,
-      cdpPort: 0,
-    });
+    await updateBrowserRegistry({ ...registryEntry, cdpPort: 0 }, params.assertCurrent);
   }
 
   if (!hasContainer) {
@@ -566,11 +563,15 @@ async function ensureSandboxBrowserContainer(
     });
   }
 
-  await updateBrowserRegistry({
-    ...registryEntry,
-    cdpPort: mappedCdp,
-    noVncPort: mappedNoVnc ?? undefined,
-  });
+  await updateBrowserRegistry(
+    {
+      ...registryEntry,
+      cdpPort: mappedCdp,
+      noVncPort: mappedNoVnc ?? undefined,
+    },
+    params.assertCurrent,
+  );
+  params.assertCurrent?.();
 
   const noVncUrl =
     mappedNoVnc && noVncEnabled

@@ -115,31 +115,8 @@ function removeRetiredTelegramGroupHistoryContextConfig(params: {
   return { entry: updated, changed: true };
 }
 
-function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
-  groups: Record<string, unknown>;
-  entry: Record<string, unknown>;
-} | null {
-  const existingGroups = section.groups;
-  if (existingGroups !== undefined && !asObjectRecord(existingGroups)) {
-    return null;
-  }
-  const groups = asObjectRecord(existingGroups) ?? {};
-  const defaultKey = "*";
-  const existingEntry = groups[defaultKey];
-  if (existingEntry !== undefined && !asObjectRecord(existingEntry)) {
-    return null;
-  }
-  const entry = asObjectRecord(existingEntry) ?? {};
-  return { groups, entry };
-}
-
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...webhookListenerMigration.legacyConfigRules,
-  {
-    path: ["channels", "telegram", "groupMentionsOnly"],
-    message:
-      'channels.telegram.groupMentionsOnly was removed; use channels.telegram.groups."*".requireMention instead. Run "openclaw doctor --fix".',
-  },
   {
     path: ["channels", "telegram"],
     message:
@@ -204,32 +181,6 @@ export function normalizeCompatibilityConfig({
   });
   updated = retired.entry;
   changed = changed || retired.changed;
-
-  if (updated.groupMentionsOnly !== undefined) {
-    const defaultGroupEntry = resolveCompatibleDefaultGroupEntry(updated);
-    if (!defaultGroupEntry) {
-      changes.push(
-        "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
-      );
-    } else {
-      const { groups, entry } = defaultGroupEntry;
-      if (entry.requireMention === undefined) {
-        entry.requireMention = updated.groupMentionsOnly;
-        groups["*"] = entry;
-        updated = { ...updated, groups };
-        changes.push(
-          'Moved channels.telegram.groupMentionsOnly → channels.telegram.groups."*".requireMention.',
-        );
-      } else {
-        changes.push(
-          'Removed channels.telegram.groupMentionsOnly (channels.telegram.groups."*" already set).',
-        );
-      }
-      const { groupMentionsOnly: _ignored, ...rest } = updated;
-      updated = rest;
-      changed = true;
-    }
-  }
 
   const accounts = normalizeChannelAccounts({
     entry: updated,
