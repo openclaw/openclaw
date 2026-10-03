@@ -212,7 +212,6 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
   resolveAcpLifecycleEndFields: (...args: unknown[]) =>
     state.resolveAcpLifecycleEndFieldsMock(...args),
   persistSessionEntry: vi.fn(),
-  prependInternalEventContext: (body: string) => body,
   resolveCliTranscriptReplyText: (result: { payloads?: Array<{ text?: string }> }) =>
     result.payloads
       ?.map((payload) => payload.text?.trim())

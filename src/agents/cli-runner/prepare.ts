@@ -148,7 +148,7 @@ import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
-import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, detectNodeClaudePlacement } from "./prepare-claude.js";
+import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
 import * as mcp from "./prepare-mcp.js";
 import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
 import {
@@ -189,11 +189,6 @@ function unsupportedIsolatedCompletionError(backendId: string): Error & { code: 
   );
 }
 
-function resolveClaudeCliContextModelId(modelId: string): string {
-  const trimmed = modelId.trim();
-  const lower = trimmed.toLowerCase();
-  return CLAUDE_CLI_CONTEXT_MODEL_ALIASES[lower] ?? trimmed;
-}
 type RunCliAgentPrepareParams = RunCliAgentParams & {
   /** Ring-zero tool transport supplied only by the OpenClaw orchestrator. */
   systemAgentTool?: import("../tools/system-agent-tool.js").SystemAgentToolOptions;
@@ -296,7 +291,7 @@ async function prepareCliRunContextWithinReadFence(
         ...runConfig,
         agents: {
           ...runConfig.agents,
-          entries: { [sessionOwner]: { default: true } },
+          entries: { [sessionOwner]: {} },
         },
       } satisfies OpenClawConfig);
   const { started, startedMonotonicMs } = captureCliRunStartTime();
@@ -1753,6 +1748,7 @@ async function prepareCliRunContextWithinReadFence(
         isNewSession:
           !reusableCliSessionId?.trim() || reusableCliSession.mode === "reuse-with-drift",
         thinkLevel: params.thinkLevel,
+        runtimeContextFragments: params.runtimeContextFragments,
         context: [
           turnRuntimeFacts?.relocatable,
           promptBuildHookResult?.appendContext,
@@ -1785,9 +1781,8 @@ async function prepareCliRunContextWithinReadFence(
         promptForHooks = renderCurrentPrompt(promptForHooks, preferResumableText);
       }
     }
-    // Node placement keeps this: the history prompt is built from the
-    // gateway-side OpenClaw transcript, so a fresh remote CLI session still
-    // receives prior conversation context via stdin.
+    // Node placement keeps history from the Gateway transcript: fresh remote
+    // CLI sessions still receive prior conversation context via stdin.
     const shouldPrepareOpenClawHistoryPrompt =
       !skipsTurnPreparation && (!reusableCliSessionId || allowRawTranscriptReseed);
     let openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt

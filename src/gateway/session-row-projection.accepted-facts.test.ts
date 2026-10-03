@@ -136,7 +136,7 @@ async function withAcceptedSuffix(
     const projection = await createSessionRowProjection({
       cfg: {
         agents: {
-          list: [{ id: "main", default: true }],
+          entries: { main: {} },
           defaults: { utilityModel: "unit-test/small" },
         },
       },
@@ -355,7 +355,7 @@ it.each(["projection retirement", "ACP read failure"] as const)(
       replaceSessionEntrySync(scope, { sessionId: "late-facts", updatedAt: 1 });
       const releaseForeground = retainSessionListForegroundWork();
       const projection = await createSessionRowProjection({
-        cfg: { agents: { list: [{ id: "main", default: true }] } },
+        cfg: { agents: { entries: { main: {} } } },
         modelCatalog: [],
       });
       const captured = createDeferredCore();
@@ -416,7 +416,7 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
       async () => {
         const cfg = {
           agents: {
-            list: [{ id: "main", default: true }],
+            entries: { main: {} },
             defaults: { utilityModel: "unit-test/small" },
           },
         };

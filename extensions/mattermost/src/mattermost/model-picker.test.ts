@@ -191,12 +191,11 @@ describe("Mattermost model picker", () => {
         defaults: {
           model: "anthropic/claude-opus-4-5",
         },
-        list: [
-          {
-            id: "support",
+        entries: {
+          support: {
             model: "openai/gpt-5",
           },
-        ],
+        },
       },
     };
     const providerData = {

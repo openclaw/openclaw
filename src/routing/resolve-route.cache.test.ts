@@ -23,7 +23,7 @@ describe("resolved route cache keys", () => {
 
   test("does not reuse a cached route when peer and guild fields contain cache separators", () => {
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "whole-peer" }, { id: "guild-room" }] },
+      agents: { entries: { "whole-peer": {}, "guild-room": {} } },
       bindings: [
         {
           agentId: "whole-peer",
@@ -66,7 +66,7 @@ describe("resolved route cache keys", () => {
 
   test("does not reuse a cached route when role IDs contain cache separators", () => {
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "comma-role" }, { id: "suffix-role" }] },
+      agents: { entries: { "comma-role": {}, "suffix-role": {} } },
       bindings: [
         {
           agentId: "comma-role",
@@ -111,7 +111,7 @@ describe("resolved route cache keys", () => {
 
   test("does not reuse a cached route when guildId is omitted versus the literal hyphen string", () => {
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "hyphen-guild" }] },
+      agents: { entries: { main: {}, "hyphen-guild": {} } },
       bindings: [
         {
           agentId: "hyphen-guild",
@@ -130,6 +130,7 @@ describe("resolved route cache keys", () => {
         channel: "discord",
         accountId: "default",
         peer: { kind: "group", id: "room" },
+        defaultAgentId: "main",
       }),
     ).toMatchObject({ agentId: "main", matchedBy: "default" });
     expect(
@@ -146,13 +147,13 @@ describe("resolved route cache keys", () => {
   test("keeps peer presence, kind, and id distinct across cached route tiers", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "channel-wide" },
-          { id: "account-wide" },
-          { id: "any-direct" },
-          { id: "any-group" },
-          { id: "known-direct" },
-        ],
+        entries: {
+          "channel-wide": {},
+          "account-wide": {},
+          "any-direct": {},
+          "any-group": {},
+          "known-direct": {},
+        },
       },
       bindings: [
         {

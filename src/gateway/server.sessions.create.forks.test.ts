@@ -183,9 +183,10 @@ test.each([
   "sessions.create rejects invalid child intent: $message",
   async ({ params, message }) => {
     await createSessionStoreDir();
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "ops" }] };
+    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, ops: {} } };
+    testState.agentConfig = { sessionStore: { agentId: "main" } };
     await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent-task") } });
-    const created = await directSessionReq("sessions.create", params);
+    const created = await directSessionReq("sessions.create", { agentId: "main", ...params });
     expect(created).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST", message } });
   },
 );
@@ -545,7 +546,7 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
   const workDir = path.dirname(workStorePath);
   testState.sessionStorePath = storeTemplate;
   testState.sessionConfig = { scope: "per-sender" };
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  testState.agentsConfig = { entries: { main: {}, work: {} } };
   try {
     await fs.mkdir(workDir, { recursive: true });
     const parent = await createCompactedSessionFixture(workDir);
@@ -577,6 +578,7 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
         forkedFromParent?: boolean;
       };
     }>("sessions.create", {
+      agentId: "main",
       parentSessionKey: "agent:work:main",
       fork: true,
     });

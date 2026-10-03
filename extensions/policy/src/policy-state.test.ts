@@ -230,7 +230,7 @@ describe("scanPolicyToolPosture", () => {
     const evidence = scanPolicyToolPosture({
       tools: { exec: { mode: "auto" } },
       agents: {
-        list: [{ id: "reviewer", tools: { exec: { ask: "always" } } }],
+        entries: { reviewer: { tools: { exec: { ask: "always" } } } },
       },
     });
 
@@ -246,7 +246,7 @@ describe("scanPolicyToolPosture", () => {
           id: "reviewer-exec-ask",
           kind: "execAsk",
           value: "always",
-          source: "oc://openclaw.config/agents/list/#0/tools/exec/ask",
+          source: "oc://openclaw.config/agents/entries/reviewer/tools/exec/ask",
         }),
       ]),
     );

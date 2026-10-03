@@ -16,9 +16,14 @@ type RuntimeFactsParams = {
   sessionId?: string;
   agentId: string;
   cfg: OpenClawConfig;
+  /** Retained carriers need explicit empty snapshots to supersede older facts. */
+  includeEmptySnapshots?: boolean;
 };
 
-function buildApprovedExecutablesRuntimeContext(agentId: string): string {
+function buildApprovedExecutablesRuntimeContext(
+  agentId: string,
+  includeEmptySnapshots: boolean,
+): string | undefined {
   const header = "## Approved executables";
   try {
     const { allowlist } = resolveExecApprovalsFromFile({ file: loadExecApprovals(), agentId });
@@ -40,6 +45,9 @@ function buildApprovedExecutablesRuntimeContext(agentId: string): string {
       })
       .toSorted()
       .slice(0, 10);
+    if (!hints.length && !includeEmptySnapshots) {
+      return undefined;
+    }
     return [
       header,
       ...(hints.length
@@ -59,27 +67,33 @@ export async function buildRuntimeFactsContext(
   params: RuntimeFactsParams,
 ): Promise<RuntimeContextFragment[]> {
   const sections: string[] = [];
+  const includeEmptySnapshots = params.includeEmptySnapshots === true;
   if (process.platform === "win32" && params.capabilityToolNames.has("exec")) {
-    sections.push(buildApprovedExecutablesRuntimeContext(params.agentId));
+    const approved = buildApprovedExecutablesRuntimeContext(params.agentId, includeEmptySnapshots);
+    if (approved) {
+      sections.push(approved);
+    }
   }
   if (params.capabilityToolNames.has("process")) {
     const sessions = listActiveProcessSessionReferences({
       scopeKey: resolveProcessToolScopeKey(params),
     }).toSorted((a, b) => (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0));
-    sections.push(
-      [
-        "Active exec sessions:",
-        ...(sessions.length
-          ? sessions.map((session) => {
-              const pid = typeof session.pid === "number" ? ` pid=${session.pid}` : "";
-              const cwd = session.cwd
-                ? ` cwd=${truncateUtf16Safe(sanitizeForPromptLiteral(session.cwd), 256)}`
-                : "";
-              return `- ${session.sessionId} ${session.status}${pid}${cwd} :: ${sanitizeForPromptLiteral(session.name)}`;
-            })
-          : ["none"]),
-      ].join("\n"),
-    );
+    if (sessions.length || includeEmptySnapshots) {
+      sections.push(
+        [
+          "Active exec sessions:",
+          ...(sessions.length
+            ? sessions.map((session) => {
+                const pid = typeof session.pid === "number" ? ` pid=${session.pid}` : "";
+                const cwd = session.cwd
+                  ? ` cwd=${truncateUtf16Safe(sanitizeForPromptLiteral(session.cwd), 256)}`
+                  : "";
+                return `- ${session.sessionId} ${session.status}${pid}${cwd} :: ${sanitizeForPromptLiteral(session.name)}`;
+              })
+            : ["none"]),
+        ].join("\n"),
+      );
+    }
   }
   const canSpawn = params.capabilityToolNames.has("sessions_spawn");
   const subagentContext = await buildActiveSubagentRuntimeContext({
@@ -88,10 +102,10 @@ export async function buildRuntimeFactsContext(
     controllerAgentId: params.agentId,
     includeSpawnContext: canSpawn,
   });
-  if (subagentContext || canSpawn) {
+  if (subagentContext || (canSpawn && includeEmptySnapshots)) {
     sections.push(subagentContext ?? "## Active Subagents\nnone");
   }
-  const media = await buildMediaTaskRuntimeContext(params);
+  const media = await buildMediaTaskRuntimeContext({ ...params, includeEmptySnapshots });
   if (media) {
     sections.push(media);
   }

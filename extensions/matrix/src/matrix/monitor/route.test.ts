@@ -13,7 +13,7 @@ import { resolveMatrixInboundRoute } from "./route.js";
 const baseCfg = {
   session: { mainKey: "main" },
   agents: {
-    list: [{ id: "main" }, { id: "sender-agent" }, { id: "room-agent" }, { id: "acp-agent" }],
+    entries: { main: {}, "sender-agent": {}, "room-agent": {}, "acp-agent": {} },
   },
 } satisfies OpenClawConfig;
 

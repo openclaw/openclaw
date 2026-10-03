@@ -70,7 +70,7 @@ describe("scheduled backups", () => {
     gatewayRpc.call.mockReset();
     gatewayRpc.isImplicitLocalTarget.mockReset().mockResolvedValue(true);
     configMocks.getRuntimeConfig.mockReset().mockReturnValue({
-      agents: { list: [{ id: "main" }, { id: "ops-team" }] },
+      agents: { entries: { main: {}, "ops-team": {} } },
       storage: {
         locations: {
           archive: {

@@ -45,7 +45,7 @@ describe("private MCP search denial", () => {
         const cfg: OpenClawConfig = {
           agents: {
             defaults: { workspace: state.workspaceDir },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           plugins: { enabled: false },
           tools: { allow: ["web_search", "message"] },

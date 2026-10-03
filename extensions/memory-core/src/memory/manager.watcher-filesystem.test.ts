@@ -79,7 +79,7 @@ it("indexes real edits, deletion and root replacement, then joins every subscrip
     await fs.writeFile(note, "Amethyst sentinel.");
     const cfg: OpenClawConfig = {
       plugins: { enabled: false },
-      agents: { defaults: { workspace: state.workspaceDir }, list: [{ id: "main" }] },
+      agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
       memory: {
         search: {
           provider: "none",

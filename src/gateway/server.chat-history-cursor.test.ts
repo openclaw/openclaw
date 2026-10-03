@@ -432,8 +432,9 @@ describe("chat.history cursor catch-up", () => {
   test("returns an empty delta at the cached head with a fixed multi-agent store", async () => {
     testState.agentsConfig = {
       ownership: "explicit",
-      entries: { main: { default: true }, ops: {} },
+      entries: { main: {}, ops: {} },
     };
+    testState.agentConfig = { sessionStore: { agentId: "main" } };
     const { context } = await createCursorSession();
     const page = await callChat<History>(context, "chat.history", { sessionKey });
     expect(page.ok).toBe(true);

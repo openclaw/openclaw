@@ -397,10 +397,7 @@ describe("prepared model runtime owner selection", () => {
     const config = {
       agents: {
         defaults: { model: "custom/shared-model" },
-        list: [
-          { id: "agent-a", model: "custom/model-a" },
-          { id: "agent-b", model: "custom/model-b" },
-        ],
+        entries: { "agent-a": { model: "custom/model-a" }, "agent-b": { model: "custom/model-b" } },
       },
     };
 

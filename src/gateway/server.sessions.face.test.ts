@@ -256,7 +256,7 @@ test("sessions.list ignores a same-owner sentinel board in an unselected store",
     await boards.applyOps({ sessionKey: "unknown" }, [
       { kind: "tab_create", tabId: "main", title: "Selected-store dashboard" },
     ]);
-    testState.agentsConfig = { list: [{ id: "main", default: true }] };
+    testState.agentsConfig = { entries: { main: {} } };
     testState.sessionConfig = {
       store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
     };

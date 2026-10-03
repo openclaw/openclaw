@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { sleepWithAbort } from "@openclaw/retry";
+import { raceWithTimeout, sleepWithAbort } from "../../../packages/retry/src/index.js";
 import { tryListenOnPort } from "../../infra/ports-probe.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { runCommandBuffered } from "../../process/exec.js";
@@ -478,13 +478,8 @@ export function createManagedLinuxDesktop(
         },
       );
       const busExit = waitForRun(bus);
-      const busTimeout = setTimeout(
-        () =>
-          busReady.reject(new Error("managed Linux desktop D-Bus session did not become ready")),
-        readinessTimeoutMs,
-      );
-      try {
-        await Promise.race([
+      await raceWithTimeout(
+        Promise.race([
           busReady.promise,
           busExit.then((exit) => {
             throw new Error(describeExit("dbus-daemon", exit));
@@ -492,10 +487,12 @@ export function createManagedLinuxDesktop(
           vncExit.then((exit) => {
             throw new Error(describeExit("Xtigervnc", exit));
           }),
-        ]);
-      } finally {
-        clearTimeout(busTimeout);
-      }
+        ]),
+        readinessTimeoutMs,
+        () => {
+          throw new Error("managed Linux desktop D-Bus session did not become ready");
+        },
+      );
       const session = await spawnRun("startxfce4", ["startxfce4"], activeEpoch, env);
       const nextPair: ManagedPair = {
         current: true,

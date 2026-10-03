@@ -484,7 +484,7 @@ function applyConfigForOpenClawTarget(
     }
   }
   if (entry.id === "memory.search.remote.apiKey") {
-    setPathCreateStrict(config, ["agents", "list", 0, "id"], "sample-agent");
+    setPathCreateStrict(config, ["agents", "entries", "sample-agent"], {});
   }
   if (entry.id === "gateway.auth.password") {
     setPathCreateStrict(config, ["gateway", "auth", "mode"], "password");

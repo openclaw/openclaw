@@ -129,15 +129,14 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
       cfg: {
         tools: { allow: ["read"] },
         agents: {
-          list: [
-            {
-              id: "restricted",
+          entries: {
+            restricted: {
               workspace: "/tmp/restricted-workspace",
               tools: {
                 toolsBySender: { "username:blocked-user": { deny: ["read"] } },
               },
             },
-          ],
+          },
         },
       } as OpenClawConfig,
       identity: {
@@ -197,13 +196,12 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
         toolsBySender: { "*": { deny: ["read"] } },
       },
       agents: {
-        list: [
-          {
-            id: "trusted",
+        entries: {
+          trusted: {
             workspace: "/tmp/trusted-workspace",
             tools: { toolsBySender: { "id:trusted-user": {} } },
           },
-        ],
+        },
       },
     };
 
@@ -235,7 +233,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
         allow: ["read"],
         toolsBySender: { "id:attacker": { deny: ["read"] } },
       },
-      agents: { list: [{ id: "restricted", workspace: workspaceDir }] },
+      agents: { entries: { restricted: { workspace: workspaceDir } } },
     };
 
     const workspaceReadFile = vi.fn(async () => Buffer.from("private"));
@@ -367,7 +365,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     const access = resolveAgentScopedOutboundMediaAccess({
       cfg: {
-        agents: { list: [{ id: "main", workspace: workspaceDir }] },
+        agents: { entries: { main: { workspace: workspaceDir } } },
         tools: { fs: { workspaceOnly: true } },
       } as OpenClawConfig,
       agentId: "main",
@@ -396,7 +394,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     const source = path.join(aliasDir, "secret.txt");
     const access = resolveAgentScopedOutboundMediaAccess({
-      cfg: { agents: { list: [{ id: "main", workspace: workspaceDir }] } },
+      cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
       agentId: "main",
       workspaceDir,
       sessionWorkspaceDir,
@@ -421,7 +419,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     const access = resolveAgentScopedOutboundMediaAccess({
       cfg: {
-        agents: { list: [{ id: "main", workspace: workspaceDir }] },
+        agents: { entries: { main: { workspace: workspaceDir } } },
         tools: { fs: { workspaceOnly: true } },
       } as OpenClawConfig,
       agentId: "main",

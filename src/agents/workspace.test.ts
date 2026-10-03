@@ -19,10 +19,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { registerWorkspaceBootstrapTests } from "./workspace-bootstrap.test-utils.js";
-import {
-  LEGACY_WORKSPACE_ATTESTATION_HEADER,
-  LEGACY_WORKSPACE_STATE_DIRNAME,
-} from "./workspace-legacy-state.js";
+import { LEGACY_WORKSPACE_ATTESTATION_HEADER } from "./workspace-legacy-state.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
 import { registerWorkspacePreparationTests } from "./workspace-preparation.test-utils.js";
 import * as workspaceState from "./workspace-state-store.js";
@@ -124,21 +121,12 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
   });
 });
 
-const LEGACY_WORKSPACE_STATE_PATH_SEGMENTS = [
-  LEGACY_WORKSPACE_STATE_DIRNAME,
-  "workspace-state.json",
-] as const;
-
 async function readWorkspaceState(dir: string) {
   return (await readWorkspaceStateSnapshot(dir)).setup;
 }
 
 async function writeLegacyWorkspaceState(dir: string, state: unknown): Promise<void> {
-  await fs.mkdir(path.join(dir, LEGACY_WORKSPACE_STATE_PATH_SEGMENTS[0]), { recursive: true });
-  await fs.writeFile(
-    path.join(dir, ...LEGACY_WORKSPACE_STATE_PATH_SEGMENTS),
-    `${JSON.stringify(state)}\n`,
-  );
+  await fs.writeFile(path.join(dir, "openclaw-workspace-state.json"), `${JSON.stringify(state)}\n`);
 }
 
 async function expectBootstrapSeeded(dir: string) {
@@ -195,7 +183,7 @@ describe("ensureAgentWorkspace", () => {
 
     await expect(ensureWorkspace()).rejects.toThrow(/run openclaw doctor --fix/u);
     await expect(
-      fs.access(workspacePath(...LEGACY_WORKSPACE_STATE_PATH_SEGMENTS)),
+      fs.access(workspacePath("openclaw-workspace-state.json")),
     ).resolves.toBeUndefined();
     expect((await readWorkspaceStateSnapshot(tempDir)).setup).toEqual({
       version: 1,

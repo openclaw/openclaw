@@ -17,6 +17,82 @@ const suite = createChatFlowE2eSuite();
 const artifactRoot = ".artifacts/mock-session-owner/outbox-recovery";
 
 suite.define(() => {
+  it("retires a delivered recovery row when its exact submission loads in history", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const sessionKey = "agent:main:main";
+      const gateway = await installMockGateway(page, { sessionKey, historyMessages: [] });
+      await page.addInitScript(
+        ({ gatewayUrl, sessionKey: seededKey }) => {
+          const key = `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}:account:e2e-recovery-scope`;
+          sessionStorage.setItem(
+            key,
+            JSON.stringify({
+              version: 4,
+              gatewayOwner: gatewayUrl,
+              sessions: {},
+              recovery: {
+                delivered: {
+                  sourceVersion: 4,
+                  sourceScopeKey: `${seededKey}\u0000agent:main`,
+                  session: {
+                    updatedAt: 1790955600000,
+                    queue: [
+                      {
+                        id: "delivered-input",
+                        text: "Please check the deployment notes",
+                        createdAt: 1,
+                        sessionKey: seededKey,
+                        sessionId: `session:${seededKey}`,
+                        sendRunId: "delivered-attempt",
+                        sendAttempts: 1,
+                        sendState: "unconfirmed",
+                      },
+                    ],
+                  },
+                },
+              },
+            }),
+          );
+        },
+        { gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl), sessionKey },
+      );
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const row = page.locator(".chat-outbox-recovery-row");
+      await row.getByText("Please check the deployment notes", { exact: true }).waitFor();
+      await gateway.setHistoryMessages([
+        {
+          role: "user",
+          content: "Please check the deployment notes",
+          __openclaw: { id: "delivered-message", seq: 1, idempotencyKey: "delivered-attempt:user" },
+        },
+      ]);
+      await gateway.emitGatewayEvent("session.message", {
+        sessionKey,
+        messageId: "delivered-message",
+        messageSeq: 1,
+        hasActiveRun: false,
+        status: "done",
+      });
+      await page
+        .locator(".chat-group.user")
+        .getByText("Please check the deployment notes", { exact: true })
+        .waitFor();
+      await row.waitFor({ state: "detached" });
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      expect(
+        await page.evaluate(
+          (gatewayUrl) =>
+            JSON.parse(
+              sessionStorage.getItem(
+                `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}:account:e2e-recovery-scope`,
+              ) ?? '{"recovery":{}}',
+            ).recovery,
+          controlUiBundledGatewayUrl(suite.server.baseUrl),
+        ),
+      ).toEqual({});
+    });
+  });
+
   it.each(["retry", "discard", "exact authoritative history proof"] as const)(
     "parks an ACK-lost send for review until %s",
     async (action) => {
@@ -356,10 +432,9 @@ suite.define(() => {
     );
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const notice = page.locator(".chat-outbox-recovery");
-      expect(await notice.getAttribute("open")).not.toBeNull();
+      const notice = page.locator(".agent-chat__composer-shell .chat-outbox-recovery");
       await notice
-        .locator(".chat-outbox-recovery__content")
+        .locator(".chat-outbox-recovery-row")
         .getByText("Please check the deployment notes")
         .waitFor();
       await expectRequestCountStable(gateway, "chat.send", 0);
@@ -367,14 +442,15 @@ suite.define(() => {
         animations: "disabled",
         path: `${artifacts}/before-confirmation.png`,
       });
-      await notice.getByRole("button", { name: "Review in this chat" }).click();
+      await notice.getByRole("button", { name: "Restore", exact: true }).click();
       const dialog = page.locator("openclaw-modal-dialog");
       await dialog.getByText(/Add this saved copy to “Main/).waitFor();
+      await dialog.getByText(/Check the original chat before sending it again/).waitFor();
       await page.screenshot({
         animations: "disabled",
         path: `${artifacts}/destination-confirmation.png`,
       });
-      await dialog.getByRole("button", { name: "Review in this chat" }).click();
+      await dialog.getByRole("button", { name: "Restore", exact: true }).click();
       await page
         .locator(".chat-group.user")
         .getByText("Please check the deployment notes")
@@ -548,15 +624,14 @@ suite.define(() => {
       expect(seededDatabaseVersion).toBe(1);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const notice = page.locator(".chat-outbox-recovery");
-      expect(await notice.getAttribute("open")).not.toBeNull();
       await notice
-        .locator(".chat-outbox-recovery__content")
-        .getByText("Attachments: legacy-note.txt", { exact: true })
+        .locator(".chat-outbox-recovery-row")
+        .getByText("Review the attached deployment note", { exact: true })
         .waitFor();
-      await notice.getByRole("button", { name: "Review in this chat" }).click();
+      await notice.getByRole("button", { name: "Restore", exact: true }).click();
       await page
         .locator("openclaw-modal-dialog")
-        .getByRole("button", { name: "Review in this chat" })
+        .getByRole("button", { name: "Restore", exact: true })
         .click();
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await expect.poll(() => composer.inputValue()).toBe("Review the attached deployment note");
@@ -625,9 +700,8 @@ suite.define(() => {
         );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const notice = page.locator(".chat-outbox-recovery");
-        expect(await notice.getAttribute("open")).not.toBeNull();
         await notice
-          .locator(".chat-outbox-recovery__content")
+          .locator(".chat-outbox-recovery-row")
           .getByText("Could you summarize the latest test results?", { exact: true })
           .waitFor();
         await page.screenshot({ animations: "disabled", path: artifacts + "/notification.png" });
@@ -654,28 +728,14 @@ suite.define(() => {
         expect(await notice.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
           true,
         );
-        await notice.locator("summary").click();
-        await page.screenshot({
-          animations: "disabled",
-          path: artifacts + "/notification-collapsed.png",
-        });
-        await notice.locator("summary").click();
-        await notice
-          .locator(".chat-outbox-recovery__content")
-          .getByText("Draft · Not sent", { exact: true })
-          .waitFor();
-        expect(
-          await notice
-            .locator(".chat-outbox-recovery__content")
-            .getByText("Queued messages: 0", { exact: true })
-            .count(),
-        ).toBe(0);
-        await notice.getByRole("button", { name: "Delete saved copy", exact: true }).click();
+        await notice.getByText("Draft", { exact: true }).waitFor();
+        expect(await notice.getByText("Unsent", { exact: true }).count()).toBe(0);
+        await notice.getByRole("button", { name: "Delete", exact: true }).click();
         const dialog = page.locator("openclaw-modal-dialog");
         await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
         expect(await notice.locator(".chat-outbox-recovery-row").count()).toBe(1);
-        await notice.getByRole("button", { name: "Delete saved copy", exact: true }).click();
-        await dialog.getByRole("button", { name: "Delete saved copy", exact: true }).click();
+        await notice.getByRole("button", { name: "Delete", exact: true }).click();
+        await dialog.getByRole("button", { name: "Delete", exact: true }).click();
         await notice.waitFor({ state: "detached" });
         await page.reload();
         await page.locator(".agent-chat__composer-combobox textarea").waitFor();

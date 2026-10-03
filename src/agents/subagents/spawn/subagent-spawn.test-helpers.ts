@@ -150,12 +150,7 @@ export function createConfigOverride(overrides?: Record<string, unknown>) {
       defaults: {
         workspace: os.tmpdir(),
       },
-      list: [
-        {
-          id: "main",
-          workspace: "/tmp/workspace-main",
-        },
-      ],
+      entries: { main: { workspace: "/tmp/workspace-main" } },
     },
     ...overrides,
   });

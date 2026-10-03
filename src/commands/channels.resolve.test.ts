@@ -96,7 +96,7 @@ describe("channelsResolveCommand", () => {
 
   it("uses installed channel plugins for explicit target resolution without installing", async () => {
     mocks.loadConfig.mockReturnValue({
-      agents: { list: [{ id: "main" }, { id: "ops" }] },
+      agents: { entries: { main: {}, ops: {} } },
       channels: {},
     });
     const resolveTargets = vi.fn<ChannelResolverAdapter["resolveTargets"]>().mockResolvedValue([
@@ -149,7 +149,7 @@ describe("channelsResolveCommand", () => {
     "rejects an %s explicit agent before channel resolution",
     async (_label, agent, message) => {
       mocks.loadConfig.mockReturnValue({
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         channels: {},
       });
 

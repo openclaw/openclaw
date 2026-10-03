@@ -437,7 +437,7 @@ describe("gateway session lookups", () => {
       const storePath = state.statePath("shared.sqlite");
       const sharedConfig: OpenClawConfig = {
         agents: {
-          entries: { main: { default: true }, ops: {} },
+          entries: { main: {}, ops: {} },
           defaults: { sessionStore: { agentId: "ops" } },
         },
         session: { scope: "global", store: storePath },

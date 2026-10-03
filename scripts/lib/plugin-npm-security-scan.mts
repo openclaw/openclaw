@@ -355,56 +355,6 @@ const REVIEWED_EXACT_PACKED_FIXTURES = [
   },
 ] as const;
 
-const FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
-  ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
-  ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs", 1],
-  ["@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts", 1],
-  ["@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts", 1],
-  ["@openclaw/discord:dangerous-exec:src/voice/audio.ts", 1],
-  ["@openclaw/google-meet:dangerous-exec:src/node-host.ts", 3],
-  ["@openclaw/google-meet:dangerous-exec:src/realtime.ts", 2],
-  ["@openclaw/matrix:dangerous-exec:src/matrix/deps.ts", 1],
-  ["@openclaw/raft:dangerous-exec:src/gateway.ts", 1],
-  ["@openclaw/signal:dangerous-exec:src/daemon.ts", 1],
-  ["@openclaw/voice-call:dangerous-exec:src/tunnel.ts", 4],
-  ["@openclaw/voice-call:dangerous-exec:src/webhook/tailscale.ts", 1],
-]);
-
-const FROZEN_RELEASE_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<string, number>([
-  ["@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs", 1],
-  ["@openclaw/acpx:dangerous-exec:dist/service-<hash>.js", 1],
-  ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.test.ts", 1],
-  ["@openclaw/codex:dangerous-exec:dist/client-<hash>.js", 1],
-  ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.http.test.ts", 1],
-  ["@openclaw/google-meet:dangerous-exec:dist/index.js", 1],
-  ["@openclaw/google-meet:dangerous-exec:src/realtime.process.test.ts", 1],
-  ["@openclaw/openshell-sandbox:dangerous-exec:src/backend.e2e.test.ts", 1],
-  ["@openclaw/openshell-sandbox:dangerous-exec:src/openshell-core.test.ts", 2],
-  ["@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js", 1],
-  ["@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
-]);
-
-const FROZEN_EXTENDED_STABLE_2026_7_33_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
-  FROZEN_RELEASE_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
-);
-FROZEN_EXTENDED_STABLE_2026_7_33_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
-  "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.test.ts",
-  3,
-);
-
-const FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT = {
-  id: "extended-stable-2026.6.33",
-  findings: new Map<string, number>([
-    ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts", 1],
-    ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/processes.ts", 1],
-  ]),
-};
-
-const FROZEN_EXTENDED_STABLE_2026_7_33_LAYOUT = {
-  id: "extended-stable-2026.7.33",
-  findings: FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT.findings,
-};
-
 const FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT = {
   id: "extended-stable-2026.8.33",
   findings: new Map<string, number>([
@@ -492,23 +442,6 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
   ],
   ["release/2026.10.1", CURRENT_SECURITY_INVENTORY_POLICY],
   [
-    "extended-stable/2026.6.33",
-    {
-      layout: FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT,
-      optionalPackedFindingCounts: FROZEN_RELEASE_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
-      requiredSourceFindingCounts: FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
-    },
-  ],
-  [
-    "extended-stable/2026.7.33",
-    {
-      layout: FROZEN_EXTENDED_STABLE_2026_7_33_LAYOUT,
-      optionalPackedFindingCounts:
-        FROZEN_EXTENDED_STABLE_2026_7_33_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
-      requiredSourceFindingCounts: FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
-    },
-  ],
-  [
     "extended-stable/2026.8.33",
     {
       layout: FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT,
@@ -529,7 +462,6 @@ function selectPluginSecurityInventoryPolicy(
 
 const REVIEWED_LAYOUT_FINDING_COUNTS = new Map<string, number>([
   ...CURRENT_REVIEWED_RELEASE_LAYOUT.findings,
-  ...FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT.findings,
   ...FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT.findings,
 ]);
 

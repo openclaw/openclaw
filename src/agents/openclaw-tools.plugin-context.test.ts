@@ -83,10 +83,7 @@ describe("openclaw plugin tool context", () => {
     const config = {
       agents: {
         defaults: { workspace: path.join(process.cwd(), "tmp-default-workspace") },
-        list: [
-          { id: "main", default: true },
-          { id: "recall", workspace: recallWorkspace },
-        ],
+        entries: { main: {}, recall: { workspace: recallWorkspace } },
       },
     } as never;
     const result = resolveOpenClawPluginToolInputs({

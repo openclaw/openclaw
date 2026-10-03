@@ -45,7 +45,7 @@ async function withInventory(
     const viewer = ensureProfileForEmail("inventory-title-reader@example.test");
     const cfg: OpenClawConfig = {
       ...VALID_CONFIG,
-      agents: { entries: { main: { default: true }, other: {} } },
+      agents: { entries: { main: {}, other: {} } },
       gateway: {
         roles: {
           default: "reader",

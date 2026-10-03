@@ -54,9 +54,14 @@
 
 .chat-footer__context:not(
   :has(
-    > :not(.agent-chat__composer-notices, openclaw-plugin-contributions),
+    > :not(
+      .agent-chat__composer-notices,
+      openclaw-plugin-contributions,
+      openclaw-chat-outbox-recovery
+    ),
     > .agent-chat__composer-notices > *,
-    > openclaw-plugin-contributions > *
+    > openclaw-plugin-contributions > *,
+    > openclaw-chat-outbox-recovery > *
   )
 ) {
   display: none;

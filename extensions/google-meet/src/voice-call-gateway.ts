@@ -12,6 +12,7 @@ import {
   type MeetingVoiceCallSurface,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { GoogleMeetConfig } from "./config.js";
 
 const GOOGLE_MEET_VOICE_CALL_SURFACE: MeetingVoiceCallSurface = {
@@ -28,48 +29,44 @@ async function createConnectedGatewayClient(params: {
 }): Promise<MeetingVoiceCallGatewayClient> {
   let client: InstanceType<typeof GatewayClient> | undefined;
   const abortStart = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await new Promise<void>((resolve, reject) => {
-      timer = setTimeout(() => {
+    await raceWithTimeout(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          client = new GatewayClient({
+            url: params.config.gatewayUrl,
+            token: params.config.token,
+            requestTimeoutMs: params.config.requestTimeoutMs,
+            clientName: "cli",
+            clientDisplayName: params.surface.clientDisplayName,
+            scopes: ["operator.write"],
+            onHelloOk: () => resolve(),
+            onConnectError: (error) => {
+              abortStart.abort();
+              reject(error);
+            },
+          });
+          void startGatewayClientWhenEventLoopReady(client, {
+            timeoutMs: params.config.requestTimeoutMs,
+            signal: abortStart.signal,
+          })
+            .then((readiness) => {
+              if (!readiness.ready && !readiness.aborted) {
+                reject(new Error("gateway event loop readiness timeout"));
+              }
+            })
+            .catch((error: unknown) => {
+              reject(error instanceof Error ? error : new Error(String(error)));
+            });
+        }),
+      params.config.requestTimeoutMs,
+      () => {
         abortStart.abort();
-        reject(new Error("gateway connect timeout"));
-      }, params.config.requestTimeoutMs);
-      client = new GatewayClient({
-        url: params.config.gatewayUrl,
-        token: params.config.token,
-        requestTimeoutMs: params.config.requestTimeoutMs,
-        clientName: "cli",
-        clientDisplayName: params.surface.clientDisplayName,
-        scopes: ["operator.write"],
-        onHelloOk: () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        onConnectError: (error) => {
-          clearTimeout(timer);
-          abortStart.abort();
-          reject(error);
-        },
-      });
-      void startGatewayClientWhenEventLoopReady(client, {
-        timeoutMs: params.config.requestTimeoutMs,
-        signal: abortStart.signal,
-      })
-        .then((readiness) => {
-          if (!readiness.ready && !readiness.aborted) {
-            clearTimeout(timer);
-            reject(new Error("gateway event loop readiness timeout"));
-          }
-        })
-        .catch((error: unknown) => {
-          clearTimeout(timer);
-          reject(error instanceof Error ? error : new Error(String(error)));
-        });
-    });
+        throw new Error("gateway connect timeout");
+      },
+    );
     return client!;
   } catch (error) {
-    clearTimeout(timer);
     abortStart.abort();
     await client?.stopAndWait().catch(() => {});
     throw error;

@@ -106,7 +106,7 @@ export function registerSessionsSpawnInputTests({
     const tool = createTool({
       registerRun: vi.fn(),
       countActiveRuns: () => 0,
-      config: { agents: { list: [{ id: "main" }] }, tools: { swarm: true } },
+      config: { agents: { entries: { main: {} } }, tools: { swarm: true } },
       callGateway,
     });
     finalizeAgentToolAvailability([tool, createAgentsWaitTool({})]);

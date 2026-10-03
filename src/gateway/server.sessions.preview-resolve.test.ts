@@ -71,7 +71,7 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
   const { workStorePath } = await createSelectedGlobalSessionStore();
   testState.agentsConfig = {
     entries: {
-      main: { default: true, model: { primary: "openai/gpt-5.4" } },
+      main: { model: { primary: "openai/gpt-5.4" } },
       work: { model: { primary: "openai/gpt-5.5" } },
     },
   };

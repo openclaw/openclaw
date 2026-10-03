@@ -5,6 +5,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import type { AgentsConfig } from "../types.agents.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
@@ -140,8 +141,9 @@ export async function createSessionColdStorageFixture(
 }
 
 export function maintenanceConfig(storePath: string, enabled = true, afterDays = 30) {
+  const agents: AgentsConfig = { entries: { main: {} } };
   return {
-    agents: { list: [{ id: "main" }] },
+    agents,
     session: { store: storePath, maintenance: { coldStorage: { enabled, afterDays } } },
   };
 }

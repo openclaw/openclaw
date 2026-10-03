@@ -136,7 +136,7 @@ describe("local setup fleet owner persistence", () => {
           const repaired = await readConfigFileSnapshot();
           expect(repaired.valid, JSON.stringify(repaired.issues)).toBe(true);
           expect(repaired.sourceConfig.agents?.entries).toEqual(canonicalEntries);
-          expect(repaired.sourceConfig.agents?.list).toBeUndefined();
+          expect(repaired.sourceConfig.agents).not.toHaveProperty("list");
           expect(repaired.sourceConfig.agents?.ownership).toBe("explicit");
           expect(repaired.sourceConfig.agents?.defaults?.systemAgent).toEqual({ agentId: "beta" });
           expect(repaired.sourceConfig.bindings).toEqual(bindings);
@@ -246,7 +246,7 @@ describe("local setup fleet owner persistence", () => {
           } else {
             const persisted = JSON.parse(await fs.readFile(configPath, "utf8"));
             expect(persisted.agents.entries).toEqual(expectedEntries);
-            expect(persisted.agents.list).toBeUndefined();
+            expect(persisted.agents).not.toHaveProperty("list");
             expect(persisted.agents.ownership).toBe("explicit");
             expect(persisted.agents.defaults.systemAgent).toEqual({ agentId: "beta" });
           }

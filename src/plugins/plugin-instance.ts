@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
@@ -708,21 +709,12 @@ export class PluginInstance {
         moduleCleanups.push(cleanup);
         continue;
       }
-      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([
-          runCleanup(cleanup),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error(`Plugin ${this.pluginId} cleanup did not settle`)),
-              Math.max(0, deadline - Date.now()),
-            );
-          }),
-        ]);
+        await raceWithTimeout(runCleanup(cleanup), Math.max(0, deadline - Date.now()), () => {
+          throw new Error(`Plugin ${this.pluginId} cleanup did not settle`);
+        });
       } catch (error) {
         failures.push(error);
-      } finally {
-        clearTimeout(timer);
       }
     }
     await cleanupWork.drain();
