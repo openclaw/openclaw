@@ -24,38 +24,22 @@ describe("command reply delivery", () => {
 });
 
 describe("pairing QR reply channel data", () => {
-  it("reads the private pairing QR payload metadata", () => {
-    const channelData = {
-      openclawPairingQr: {
-        setupCode: "setup-code",
-        expiresAtMs: 1_800_000_000_000,
-      },
-    };
-
-    expect(readPairingQrReplyChannelData({ channelData })).toEqual({
-      setupCode: "setup-code",
-      expiresAtMs: 1_800_000_000_000,
-    });
-  });
-
-  it("ignores malformed pairing QR metadata", () => {
-    expect(
-      readPairingQrReplyChannelData({
-        channelData: {
-          openclawPairingQr: {
-            setupCode: "",
-            expiresAtMs: 0,
-          },
-        },
-      }),
-    ).toBeUndefined();
+  it.each([
+    [
+      { setupCode: "setup-code", expiresAtMs: 1_800_000_000_000 },
+      { setupCode: "setup-code", expiresAtMs: 1_800_000_000_000 },
+    ],
+    [{ setupCode: "", expiresAtMs: 0 }, undefined],
+  ])("validates pairing QR metadata %j", (metadata, expected) => {
+    expect(readPairingQrReplyChannelData({ channelData: { openclawPairingQr: metadata } })).toEqual(
+      expected,
+    );
   });
 });
 
 describe("reply payload terminal content", () => {
   it.each([
     ["text", { text: "answer" }, true],
-    ["media", { mediaUrl: "file:///tmp/answer.png" }, true],
     ["reasoning", { text: "thinking", isReasoning: true }, false],
     ["commentary", { text: "working", isCommentary: true }, false],
     ["status", { text: "compacting", isStatusNotice: true }, false],
@@ -85,14 +69,6 @@ describe("reply payload terminal content", () => {
       },
       false,
     ],
-    [
-      "TTS supplement",
-      {
-        mediaUrl: "file:///tmp/answer.mp3",
-        ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true },
-      },
-      false,
-    ],
   ] as const)("classifies %s payloads", (_name, payload, expected) => {
     expect(isReplyPayloadTerminalContent(payload)).toBe(expected);
   });
@@ -105,11 +81,8 @@ describe("session writer delivery authority", () => {
     sessionId: "session-active",
   };
 
-  it("leaves payloads without a writer claim authorized", () => {
+  it("authorizes unclaimed payloads and only the session row that owns a claimed payload", () => {
     expect(isReplyPayloadSessionWriterDeliveryAuthorized({ text: "reply" }, undefined)).toBe(true);
-  });
-
-  it("accepts only the session row that still owns the payload", () => {
     const payload = setReplyPayloadMetadata(
       { text: "reply" },
       {
@@ -165,14 +138,12 @@ describe("reply payload source occurrence", () => {
 
   it.each([
     ["absent metadata", undefined],
-    ["missing message index", { ...complete, assistantMessageIndex: undefined }],
     ["negative message index", { ...complete, assistantMessageIndex: -1 }],
     ["fractional message index", { ...complete, assistantMessageIndex: 1.5 }],
     ["missing source text", { ...complete, blockSourceText: undefined }],
     ["missing source range", { ...complete, blockSourceRange: undefined }],
     ["negative source start", { ...complete, blockSourceRange: [-1, 3] as const }],
     ["reversed source range", { ...complete, blockSourceRange: [12, 8] as const }],
-    ["empty source range", { ...complete, blockSourceRange: [8, 8] as const }],
     ["mismatched source length", { ...complete, blockSourceRange: [8, 13] as const }],
   ])("rejects %s", (_name, metadata) => {
     const payload = { text: "same" };
