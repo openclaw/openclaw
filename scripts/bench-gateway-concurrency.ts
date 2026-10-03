@@ -1073,10 +1073,10 @@ function buildConfig(
     pluginCount > 0 ? writePluginFixtures(root, { count: pluginCount }) : undefined;
   const agentList =
     agentIds.length > 1 || provider === "openai"
-      ? agentIds.map((id, index) => {
+      ? agentIds.map((id) => {
           const workspace = path.join(root, `workspace-${id}`);
           mkdirSync(workspace, { recursive: true });
-          return { id, default: index === 0, workspace };
+          return { id, workspace };
         })
       : undefined;
   return writeGatewayBenchConfig(root, config, { agentList, pluginFixtures });

@@ -750,9 +750,11 @@ server.listen(port, "127.0.0.1", () => {
         throw new Error("expected prepared runtime catalog stall case");
       }
       const configPath = testing.writeConfig(root, benchCase);
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
-        plugins?: { allow?: string[]; load?: { paths?: string[] } };
-      };
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
+      expect(config.agents?.defaults?.modelPolicy?.allow).toEqual([
+        "bench-catalog-stall/bench-model",
+      ]);
+      expect(validateConfigObject(config)).toMatchObject({ ok: true });
       const pluginId = config.plugins?.allow?.[0];
       expect(pluginId).toBe("bench-plugin-01");
       const pluginDir = path.join(root, "plugins", pluginId ?? "missing");
@@ -790,22 +792,36 @@ server.listen(port, "127.0.0.1", () => {
     expect(config.plugins?.allow).toEqual(["openai", "google", "minimax"]);
   });
 
-  it("builds prepared-runtime scale cases with shared and distinct workspaces", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-config-test-"));
-    try {
-      const benchCase = testing.parseOptions(["--case", "preparedRuntimeScaleMany"]).cases[0];
+  it.each([
+    { id: "preparedRuntimeScaleOne", agentCount: 1, sharedCount: 1, owner: "main" },
+    { id: "preparedRuntimeScaleMany", agentCount: 12, sharedCount: 11, owner: "agent-01" },
+  ])(
+    "builds valid $id config with its shared and distinct workspaces",
+    ({ id, agentCount, sharedCount, owner }) => {
+      const root = tempDirs.make("openclaw-bench-config-test-");
+      const benchCase = testing.parseOptions(["--case", id]).cases[0];
       if (!benchCase) {
         throw new Error("expected prepared runtime scale case");
       }
       const configPath = testing.writeConfig(root, benchCase);
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
-        agents?: { list?: Array<{ id: string; workspace: string }> };
-        plugins?: { allow?: string[] };
-      };
-      const agents = config.agents?.list ?? [];
-      expect(agents).toHaveLength(12);
-      expect(new Set(agents.slice(0, 11).map((agent) => agent.workspace)).size).toBe(1);
-      expect(agents[11]?.workspace).not.toBe(agents[0]?.workspace);
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
+      expect(validateConfigObject(config)).toMatchObject({ ok: true });
+      expect(config.agents?.ownership).toBe("explicit");
+      expect(config.agents?.defaults?.systemAgent?.agentId).toBe(owner);
+      expect(config.agents?.defaults?.modelPolicy?.allow).toEqual([
+        "bench-catalog-stall/bench-model",
+      ]);
+      expect(
+        config.agents?.defaults?.models?.["bench-catalog-stall/bench-model"]?.agentRuntime,
+      ).toEqual({
+        id: "openclaw",
+      });
+      const agents = Object.values(config.agents?.entries ?? {});
+      expect(agents).toHaveLength(agentCount);
+      expect(new Set(agents.slice(0, sharedCount).map((agent) => agent.workspace)).size).toBe(1);
+      if (agentCount > sharedCount) {
+        expect(agents[sharedCount]?.workspace).not.toBe(agents[0]?.workspace);
+      }
       const pluginId = config.plugins?.allow?.[0];
       const manifest = JSON.parse(
         fs.readFileSync(
@@ -822,10 +838,8 @@ server.listen(port, "127.0.0.1", () => {
           "utf8",
         ),
       ).toContain("preparedRuntimeStaticCatalogCallCount");
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it("keeps startup-lazy plugin fixtures opted out of startup activation", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-config-test-"));
