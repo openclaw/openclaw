@@ -3,6 +3,7 @@ import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import { z } from "zod";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   executeSqliteQuerySync,
@@ -15,7 +16,10 @@ import { UpdateFailureFactSchema } from "./update-run-schema.js";
 type RestartSentinelStats = z.infer<typeof restartSentinelStatsSchema>;
 export type RestartSentinelContinuation = z.infer<typeof restartSentinelContinuationSchema>;
 
-export type RestartSentinelPayload = Omit<z.input<typeof restartSentinelPayloadSchema>, "stats"> & {
+export type RestartSentinelPayload = SchemaContract<
+  Omit<z.input<typeof restartSentinelPayloadSchema>, "stats" | "continuation">
+> & {
+  continuation?: RestartSentinelContinuation | null;
   stats?: RestartSentinelStats | null;
 };
 

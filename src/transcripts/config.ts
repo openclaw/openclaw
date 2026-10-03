@@ -1,5 +1,6 @@
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 import type { z } from "zod";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { OpenClawSchemaShape } from "../config/zod-schema.root-shape.js";
 
 /**
@@ -17,7 +18,9 @@ export type ResolvedTranscriptsAutoStartConfig = TranscriptsAutoStartConfig & {
 };
 
 /** Raw transcripts config block. */
-export type TranscriptsConfig = NonNullable<z.input<typeof OpenClawSchemaShape.transcripts>>;
+export type TranscriptsConfig = SchemaContract<
+  NonNullable<z.input<typeof OpenClawSchemaShape.transcripts>>
+>;
 
 const DEFAULT_TRANSCRIPTS_MAX_UTTERANCES = 2_000;
 

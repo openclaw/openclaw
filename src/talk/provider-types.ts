@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { TalkClientCreateResult } from "../../packages/gateway-protocol/src/schema/channels.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RealtimeVoiceAudioOutputPort } from "./audio-output-port.js";
@@ -310,14 +311,15 @@ export type RealtimeVoiceBrowserAudioContract = Extract<
 >["audio"];
 
 /** Providers return transport details; the Gateway attaches client ownership fields. */
-export type RealtimeVoiceBrowserSession =
+export type RealtimeVoiceBrowserSession = SchemaContract<
   | (Omit<
       Extract<TalkClientCreateResult, { transport: "webrtc" }>,
       "voiceSessionId" | "clientControl"
     > & { offerResponseMaxBytes?: number })
   | Omit<Extract<TalkClientCreateResult, { transport: "provider-websocket" }>, "voiceSessionId">
   | Omit<Extract<TalkClientCreateResult, { transport: "gateway-relay" }>, "voiceSessionId">
-  | Omit<Extract<TalkClientCreateResult, { transport: "managed-room" }>, "voiceSessionId">;
+  | Omit<Extract<TalkClientCreateResult, { transport: "managed-room" }>, "voiceSessionId">
+>;
 
 export type RealtimeVoiceBridge = {
   /** Bind before connect: continuous PCM and interruption go to this call-bound worker sink,

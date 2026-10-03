@@ -1,3 +1,4 @@
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
 import {
   SESSION_EXPANDED_PARTICIPANT_LIMIT,
   type SessionParticipant,
@@ -11,7 +12,9 @@ import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/s
 import type { HookExternalContentSource } from "../../security/external-content.js";
 
 /** Persisted identity excludes display-only actor projections. */
-export type SessionActor = Pick<ProjectedSessionCreatedActor, "type" | "id" | "label">;
+export type SessionActor = SchemaContract<
+  Pick<ProjectedSessionCreatedActor, "type" | "id" | "label">
+>;
 
 /** Only trusted creation owners may stamp a Gateway profile namespace. */
 export type SessionCreatedActor = SessionActor &

@@ -1,6 +1,9 @@
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { ExecApprovalsSetParams } from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
 
-type ExecApprovalsAgent = NonNullable<ExecApprovalsSetParams["file"]["agents"]>[string];
+type ExecApprovalsAgent = SchemaContract<
+  NonNullable<ExecApprovalsSetParams["file"]["agents"]>[string]
+>;
 
 export type McpToolGrant = NonNullable<ExecApprovalsAgent["mcpTools"]>[number];
 

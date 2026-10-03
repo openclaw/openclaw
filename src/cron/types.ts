@@ -1,3 +1,4 @@
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type {
   CronDeliveryPreview as CronDeliveryPreviewWire,
   CronJob as CronJobWire,
@@ -301,7 +302,7 @@ export type CronJobState = Omit<
   deliverySuppressionReason?: NormalizeReplySkipReason;
 };
 
-type CronTrigger = NonNullable<CronJobWire["trigger"]>;
+type CronTrigger = SchemaContract<NonNullable<CronJobWire["trigger"]>>;
 
 /**
  * Closed failure taxonomy for trigger-script evaluation. Mirrors the code-mode

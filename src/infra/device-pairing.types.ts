@@ -3,6 +3,7 @@
 // device-bootstrap.ts) and the SQLite row mapper (device-pairing-store.ts);
 // keeping it import-free of both sides prevents module cycles.
 import type { Static } from "typebox";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { DevicePairRequestedEventSchema } from "../../packages/gateway-protocol/src/schema/devices.js";
 import type {
   DeviceBootstrapProfile,
@@ -11,7 +12,9 @@ import type {
 import type { NodeHostStats } from "../shared/node-host-stats.js";
 
 /** Pending device pairing request awaiting owner approval. */
-export type DevicePairingPendingRequest = Static<typeof DevicePairRequestedEventSchema>;
+export type DevicePairingPendingRequest = SchemaContract<
+  Static<typeof DevicePairRequestedEventSchema>
+>;
 
 // Internal pending record. refreshedAtMs is a TTL keepalive stamped on refresh so an
 // actively retrying device keeps one pending request (and requestId) alive instead of

@@ -7,13 +7,15 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { PresenceEntry } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { resolveMachineModelIdentifier } from "./machine-model.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 import { resolveDarwinProductVersion } from "./os-summary.js";
 
-export type SystemPresence = Omit<PresenceEntry, "tags" | "text"> & {
+export type SystemPresence = SchemaContract<Omit<PresenceEntry, "tags" | "text" | "user">> & {
+  user?: PresenceEntry["user"];
   text: string;
 };
 

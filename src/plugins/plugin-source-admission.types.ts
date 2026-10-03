@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 
 export const SourceAdmissionReceiptSchema = z.object({
   signature: z.string().min(1),
@@ -40,7 +41,9 @@ export const SourceAdmissionReceiptSchema = z.object({
   ),
 });
 
-export type PluginSourceAdmissionReceipt = z.infer<typeof SourceAdmissionReceiptSchema>;
+export type PluginSourceAdmissionReceipt = SchemaContract<
+  z.infer<typeof SourceAdmissionReceiptSchema>
+>;
 export type PluginNativeArtifactFact = PluginSourceAdmissionReceipt["nativeArtifacts"][string];
 export type PluginNativeNamespaceFact = PluginSourceAdmissionReceipt["nativeNamespaces"][string];
 

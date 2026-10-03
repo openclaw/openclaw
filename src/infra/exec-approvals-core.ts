@@ -1,5 +1,6 @@
 // Shared exec approval types and mode normalization.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { ApprovalScope } from "../../packages/gateway-protocol/src/schema/approvals.js";
 import type { ExecApprovalRequestParams } from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
@@ -165,9 +166,8 @@ export type SystemRunApprovalBinding = Pick<
 
 export type SystemRunApprovalFileOperand = NonNullable<SystemRunApprovalPlan["mutableFileOperand"]>;
 
-export type SystemRunApprovalPlan = Omit<
-  NonNullable<ExecApprovalRequestParams["systemRunPlan"]>,
-  "policySnapshot"
+export type SystemRunApprovalPlan = SchemaContract<
+  Omit<NonNullable<ExecApprovalRequestParams["systemRunPlan"]>, "policySnapshot">
 > & {
   policySnapshot?: ExecApprovalPolicySnapshot;
 };

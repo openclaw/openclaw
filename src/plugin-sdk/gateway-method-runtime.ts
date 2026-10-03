@@ -1,3 +1,4 @@
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import { dispatchGatewayMethodInProcessRaw } from "../gateway/server-plugins.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 
@@ -5,8 +6,8 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 export type GatewayMethodDispatchError = NonNullable<GatewayMethodDispatchResponse["error"]>;
 
 /** Response envelope returned to plugins after dispatching a Gateway method. */
-export type GatewayMethodDispatchResponse = Awaited<
-  ReturnType<typeof dispatchGatewayMethodInProcessRaw>
+export type GatewayMethodDispatchResponse = SchemaContract<
+  Awaited<ReturnType<typeof dispatchGatewayMethodInProcessRaw>>
 >;
 
 /** Dispatch controls for plugin-initiated Gateway method calls. */

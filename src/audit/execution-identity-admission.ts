@@ -146,7 +146,23 @@ const ExecutionIdentityAdmissionTokenSchema = closedObject({
 export type ExecutionIdentityAdmissionEnvelope = Static<
   typeof ExecutionIdentityAdmissionEnvelopeSchema
 >;
-export type ExecutionIdentityAdmissionFacts = Static<typeof ExecutionIdentityAdmissionFactsSchema>;
+export type ExecutionIdentityAdmissionFacts = Omit<
+  ExecutionIdentityAdmissionEnvelope,
+  | "envelopeVersion"
+  | "contextId"
+  | "executionId"
+  | "createdAt"
+  | "runtimeInstanceId"
+  | "ingress"
+  | "applicableGrants"
+  | "assurance"
+> & {
+  ingress: Omit<ExecutionIdentityAdmissionEnvelope["ingress"], "state"> & {
+    state?: ExecutionIdentityAdmissionEnvelope["ingress"]["state"];
+  };
+  applicableGrants?: ExecutionIdentityAdmissionEnvelope["applicableGrants"];
+  assurance?: ExecutionIdentityAdmissionEnvelope["assurance"];
+};
 export type ExecutionIdentityAdmissionToken = Static<typeof ExecutionIdentityAdmissionTokenSchema>;
 export type ExecutionIdentityAdmissionWork =
   | { kind: "capture"; envelope: ExecutionIdentityAdmissionEnvelope }

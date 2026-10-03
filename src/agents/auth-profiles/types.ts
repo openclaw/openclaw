@@ -4,6 +4,7 @@
  * results consumed by providers, sessions, doctor, and plugin-facing seams.
  */
 import type { z } from "zod";
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import type {
@@ -27,16 +28,17 @@ export type OAuthCredentials = OAuthCredentialMetadata & {
 };
 
 /** API-key credential with optional secret reference indirection. */
-export type ApiKeyCredential = Omit<
-  Extract<InlineAuthProfileCredential, { type: "api_key" }>,
-  "key"
+export type ApiKeyCredential = SchemaContract<
+  Omit<Extract<InlineAuthProfileCredential, { type: "api_key" }>, "key">
 > & {
   key?: string;
   keyRef?: SecretRef;
 };
 
 /** Static token credential that OpenClaw does not refresh. */
-type TokenCredential = Omit<Extract<InlineAuthProfileCredential, { type: "token" }>, "token"> & {
+type TokenCredential = SchemaContract<
+  Omit<Extract<InlineAuthProfileCredential, { type: "token" }>, "token">
+> & {
   token?: string;
   tokenRef?: SecretRef;
 };
@@ -46,9 +48,12 @@ type TokenCredential = Omit<Extract<InlineAuthProfileCredential, { type: "token"
  * OAuth refresh tokens are not portable by default. Provider-owned flows may
  * set copyToAgents only when copying refresh material across agents is known safe.
  */
-export type OAuthCredential = Extract<InlineAuthProfileCredential, { type: "oauth" }> & {
-  oauthRef?: LegacyOAuthRef;
-};
+export type OAuthCredential = OAuthCredentialMetadata &
+  SchemaContract<
+    Omit<Extract<InlineAuthProfileCredential, { type: "oauth" }>, keyof OAuthCredentialMetadata>
+  > & {
+    oauthRef?: LegacyOAuthRef;
+  };
 
 export type SavedSetupCredential = {
   apiKeyHeader?: true;

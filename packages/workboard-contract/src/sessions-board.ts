@@ -1,3 +1,4 @@
+import type { SchemaContract } from "../../gateway-protocol/src/schema-contract.js";
 import type { SessionPerson } from "../../gateway-protocol/src/schema/session-participant.js";
 import type { SessionsListParams } from "../../gateway-protocol/src/schema/sessions-list.js";
 import type { WorkboardBoardMetadata } from "./index.js";
@@ -25,9 +26,13 @@ const COLUMN_COLORS = new Set([
 ]);
 
 export type WorkboardSessionsObserverHealth = (typeof OBSERVER_HEALTH)[number];
-export type WorkboardSessionsColumnMatch = ReturnType<typeof normalizeMatch>;
-export type WorkboardSessionsColumn = ReturnType<typeof normalizeColumn>;
-export type WorkboardSessionsBoardSpec = ReturnType<typeof normalizeWorkboardSessionsBoardSpec>;
+export type WorkboardSessionsColumnMatch = SchemaContract<ReturnType<typeof normalizeMatch>>;
+export type WorkboardSessionsColumn = SchemaContract<ReturnType<typeof normalizeColumn>>;
+export type WorkboardSessionsBoardSpec = {
+  columns: WorkboardSessionsColumn[];
+  scope?: SchemaContract<ReturnType<typeof normalizeScope>>;
+  agentSessionKey?: string;
+};
 export type WorkboardSessionsBoard = WorkboardBoardMetadata & {
   kind: "sessions";
   sessions: WorkboardSessionsBoardSpec;
@@ -247,7 +252,7 @@ function normalizeScope(value: unknown) {
 const SPEC_KEYS = ["columns", "scope", "agentSessionKey"];
 
 /** Shared validation for durable specifications, agent tools, and the board editor. */
-export function normalizeWorkboardSessionsBoardSpec(value: unknown) {
+export function normalizeWorkboardSessionsBoardSpec(value: unknown): WorkboardSessionsBoardSpec {
   const input = record(value, "sessions board specification", [...SPEC_KEYS, "instructions"]);
   if (!Array.isArray(input.columns) || input.columns.length < 2 || input.columns.length > 12) {
     throw new Error("sessions board columns must contain 2..12 columns.");

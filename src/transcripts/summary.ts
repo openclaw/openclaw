@@ -2,6 +2,7 @@ import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { TranscriptsGetResult } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
@@ -9,7 +10,9 @@ import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provide
 
 type TranscriptSummaryWire = NonNullable<TranscriptsGetResult["summary"]>;
 
-export type TranscriptsSummary = Omit<TranscriptSummaryWire, "markdown" | "source"> & {
+export type TranscriptsSummary = SchemaContract<
+  Omit<TranscriptSummaryWire, "markdown" | "source">
+> & {
   sessionId: string;
   title: string;
   source: NonNullable<TranscriptSummaryWire["source"]>;

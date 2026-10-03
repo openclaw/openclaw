@@ -4,6 +4,7 @@ import type {
   GatewayClientMode,
   GatewayClientName,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
 import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type { ReplyDeliveryContext, ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -100,9 +101,8 @@ export type ChannelMessageToolDiscovery = {
   mediaSourceParams?: ChannelMessageToolMediaSourceParams | null;
 };
 
-export type ChannelStatusIssue = Omit<
-  NonNullable<ChannelsStatusResult["statusIssues"]>[number],
-  "channel"
+export type ChannelStatusIssue = SchemaContract<
+  Omit<NonNullable<ChannelsStatusResult["statusIssues"]>[number], "channel">
 > & {
   channel: ChannelId;
 };
@@ -144,9 +144,11 @@ export type ChannelMeta = {
 };
 
 /** Snapshot row returned by channel status and lifecycle surfaces. */
-export type ChannelAccountSnapshot = Omit<
-  ChannelsStatusResult["channelAccounts"][string][number],
-  "healthState" | "credentialSource" | "audienceType" | "audience" | "webhookPath" | "webhookUrl"
+export type ChannelAccountSnapshot = SchemaContract<
+  Omit<
+    ChannelsStatusResult["channelAccounts"][string][number],
+    "healthState" | "credentialSource" | "audienceType" | "audience" | "webhookPath" | "webhookUrl"
+  >
 > & {
   statusState?: string;
   restartPending?: boolean;

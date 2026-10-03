@@ -1,6 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import type { SchemaContract } from "../schema-contract.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -144,7 +145,7 @@ export type WebPushSubscribeParams = Static<typeof WebPushSubscribeParamsSchema>
 /** Browser PushSubscription endpoint removal request. */
 export type WebPushUnsubscribeParams = Static<typeof WebPushUnsubscribeParamsSchema>;
 /** Optional title/body overrides for a Web Push test notification. */
-export type WebPushTestParams = Static<typeof WebPushTestParamsSchema>;
+export type WebPushTestParams = SchemaContract<Static<typeof WebPushTestParamsSchema>>;
 export type WebPushNotificationCategory = Static<typeof WebPushNotificationCategorySchema>;
 export type WebPushDetailLevel = Static<typeof WebPushDetailLevelSchema>;
 export type WebPushNotificationPreferences = Static<typeof WebPushNotificationPreferencesSchema>;

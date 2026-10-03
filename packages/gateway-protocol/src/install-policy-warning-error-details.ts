@@ -2,15 +2,21 @@ import {
   asProtocolRecord,
   normalizeOptionalProtocolString,
 } from "./protocol-value-normalization.js";
+import type { SchemaContract } from "./schema-contract.js";
 
 export const INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED =
   "install_policy_warning_acknowledgement_required" as const;
 
-type InstallPolicyWarningErrorFinding = NonNullable<ReturnType<typeof readFinding>>;
+type InstallPolicyWarningErrorFinding = SchemaContract<NonNullable<ReturnType<typeof readFinding>>>;
 
-export type InstallPolicyWarningErrorDetails = NonNullable<
-  ReturnType<typeof readInstallPolicyWarningErrorDetails>
->;
+export type InstallPolicyWarningErrorDetails = {
+  installPolicyCode: typeof INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED;
+  targetName: string;
+  targetType: "skill" | "plugin";
+  requestMode: "install" | "update";
+  reason: string;
+  findings?: InstallPolicyWarningErrorFinding[];
+};
 
 function readFinding(value: unknown) {
   const record = asProtocolRecord(value);
@@ -48,7 +54,9 @@ function readFinding(value: unknown) {
   };
 }
 
-export function readInstallPolicyWarningErrorDetails(value: unknown) {
+export function readInstallPolicyWarningErrorDetails(
+  value: unknown,
+): InstallPolicyWarningErrorDetails | undefined {
   const record = asProtocolRecord(value);
   if (!record) {
     return undefined;

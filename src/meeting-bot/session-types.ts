@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { MeetingAudioBackend } from "./audio-backend.js";
 import type { MeetingOutputLoopbackHealth } from "./output-loopback-verifier.js";
 
@@ -41,7 +42,9 @@ export type MeetingResolvedJoin<TTransport extends string, TMode extends string>
 };
 
 /** Descriptive facts for one retained observation, never participation authority. */
-export type MeetingObservationProvenance = z.infer<typeof meetingObservationProvenanceSchema>;
+export type MeetingObservationProvenance = SchemaContract<
+  z.infer<typeof meetingObservationProvenanceSchema>
+>;
 
 export type MeetingTranscriptLine = {
   at?: string;
@@ -50,7 +53,7 @@ export type MeetingTranscriptLine = {
   /** Independent of the optional, mutable action-source identity below. */
   provenance?: MeetingObservationProvenance;
   /** Optional identity assigned by the provider's canonical caption observer. */
-  source?: z.infer<typeof meetingCaptionSourceSchema>;
+  source?: SchemaContract<z.infer<typeof meetingCaptionSourceSchema>>;
 };
 
 export type MeetingTranscriptSnapshot = {

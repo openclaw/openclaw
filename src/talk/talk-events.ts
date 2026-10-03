@@ -1,3 +1,4 @@
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { TalkEvent as ProtocolTalkEvent } from "../../packages/gateway-protocol/src/schema/channels.js";
 
 /**
@@ -42,12 +43,11 @@ export type TalkTransport = ProtocolTalkEvent["transport"];
 
 export type TalkBrain = ProtocolTalkEvent["brain"];
 
-export type TalkEventContext = Pick<
-  ProtocolTalkEvent,
-  "sessionId" | "mode" | "transport" | "brain" | "provider"
+export type TalkEventContext = SchemaContract<
+  Pick<ProtocolTalkEvent, "sessionId" | "mode" | "transport" | "brain" | "provider">
 >;
 
-export type TalkEvent<TPayload = unknown> = Omit<ProtocolTalkEvent, "payload"> & {
+export type TalkEvent<TPayload = unknown> = SchemaContract<Omit<ProtocolTalkEvent, "payload">> & {
   payload: TPayload;
 };
 

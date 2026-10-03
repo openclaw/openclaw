@@ -1,3 +1,4 @@
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
 import type { SessionBranch } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import type {
@@ -731,7 +732,7 @@ export type SessionMessageCutMutationParams = {
   repositoryWorkspaceId?: string;
 };
 
-export type SessionBranchSummary = SessionBranch;
+export type SessionBranchSummary = SchemaContract<SessionBranch>;
 
 export type SessionBranchListResult =
   | { status: "ok"; branches: SessionBranchSummary[] }

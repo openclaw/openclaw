@@ -1,5 +1,6 @@
 /** Wire metadata for OpenAI MCP Plugin Extensions; never a tool grant. */
 import { z } from "zod";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 
 const text = z.string().trim().min(1).max(2_048);
 export const mcpAppIconSchema = z.object({
@@ -79,8 +80,8 @@ export const mcpAppSettingsSchema = z.object({
     .optional(),
 });
 
-export type McpAppIcon = z.infer<typeof mcpAppIconSchema>;
-type McpAppEntrypoint = z.infer<typeof mcpAppEntrypointSchema>;
+export type McpAppIcon = SchemaContract<z.infer<typeof mcpAppIconSchema>>;
+type McpAppEntrypoint = SchemaContract<z.infer<typeof mcpAppEntrypointSchema>>;
 export type McpAppToolExtensions = {
   entrypoints?: McpAppEntrypoint[];
   mentionSearch?: true;
@@ -88,7 +89,7 @@ export type McpAppToolExtensions = {
   preferredModelDisplayMode?: "inline" | "fullscreen";
 };
 export type McpAppSettingsCapability = z.infer<typeof mcpAppSettingsCapabilitySchema>;
-export type McpAppSettings = z.infer<typeof mcpAppSettingsSchema>;
+export type McpAppSettings = SchemaContract<z.infer<typeof mcpAppSettingsSchema>>;
 export type McpAppDiscoveredEntrypoint = {
   toolName: string;
   title: string;

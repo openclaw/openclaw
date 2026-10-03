@@ -58,10 +58,24 @@ export function resolveCameraClipTarget(params: {
     : { requestFacing: params.facing, artifactFacing: params.facing };
 }
 
-type CameraClipPayload = ReturnType<typeof parseCameraClipPayload>;
+type CameraSnapPayload = {
+  format: string;
+  base64?: string;
+  url?: string;
+  width: number;
+  height: number;
+};
+
+type CameraClipPayload = Pick<CameraSnapPayload, "format" | "base64" | "url"> & {
+  durationMs: number;
+  hasAudio: boolean;
+};
 
 /** Validate a complete still-image payload before any capture can be published. */
-export function parseCameraSnapPayload(value: unknown, opts: { expectedHost?: string } = {}) {
+export function parseCameraSnapPayload(
+  value: unknown,
+  opts: { expectedHost?: string } = {},
+): CameraSnapPayload {
   const obj = asRecord(value);
   const format = readStringValue(obj.format);
   const base64 = readStringValue(obj.base64);
@@ -80,7 +94,7 @@ export function parseCameraSnapPayload(value: unknown, opts: { expectedHost?: st
   return { format, ...(base64 ? { base64 } : {}), ...(url ? { url } : {}), width, height };
 }
 
-export function parseCameraClipPayload(value: unknown) {
+export function parseCameraClipPayload(value: unknown): CameraClipPayload {
   const obj = asRecord(value);
   const format = readStringValue(obj.format);
   const base64 = readStringValue(obj.base64);

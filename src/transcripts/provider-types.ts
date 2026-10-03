@@ -1,4 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type {
   TranscriptSessionSummary,
   TranscriptUtterance as TranscriptUtteranceWire,
@@ -9,7 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 export type TranscriptSourceKind = NonNullable<TranscriptSessionSummary["source"]["kind"]>;
 
 /** Provider-specific locator for a live, recorded, or imported transcript source. */
-export type TranscriptSourceLocator = TranscriptSessionSummary["source"] & {
+export type TranscriptSourceLocator = SchemaContract<TranscriptSessionSummary["source"]> & {
   [key: string]: string | undefined;
 };
 
@@ -20,9 +21,8 @@ export type TranscriptParticipant = {
 };
 
 /** One captured or imported transcript utterance. */
-export type TranscriptUtterance = Omit<
-  TranscriptUtteranceWire,
-  "sequence" | "speakerId" | "speakerLabel"
+export type TranscriptUtterance = SchemaContract<
+  Omit<TranscriptUtteranceWire, "sequence" | "speakerId" | "speakerLabel">
 > & {
   sessionId?: string;
   speaker?: TranscriptParticipant;
@@ -30,9 +30,8 @@ export type TranscriptUtterance = Omit<
 };
 
 /** Durable transcript session metadata. */
-export type TranscriptSessionDescriptor = Pick<
-  TranscriptSessionSummary,
-  "sessionId" | "title" | "startedAt" | "stoppedAt"
+export type TranscriptSessionDescriptor = SchemaContract<
+  Pick<TranscriptSessionSummary, "sessionId" | "title" | "startedAt" | "stoppedAt">
 > & {
   source: TranscriptSourceLocator;
   metadata?: Record<string, unknown>;

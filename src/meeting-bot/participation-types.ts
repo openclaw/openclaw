@@ -26,7 +26,7 @@ export type MeetingParticipationSource = NonNullable<MeetingTranscriptLine["sour
   kind: "chat" | "caption";
   text: string;
   /** Observation that supplied this source; does not refresh its age, order, or authority. */
-  provenance?: MeetingTranscriptLine["provenance"];
+  provenance?: NonNullable<MeetingTranscriptLine["provenance"]>;
 };
 export type MeetingParticipationContext = {
   sessionId: string;

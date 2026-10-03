@@ -107,7 +107,22 @@ const CLEAR_ENV_ALLOWLIST = new Set([
   "OTEL_TRACES_EXPORTER",
 ]);
 
-export type ClaudeCliNodeRunParams = Awaited<ReturnType<typeof decodeClaudeCliNodeRunParams>>;
+export type ClaudeCliNodeRunParams = {
+  /** Opt-in to the negotiated invocation-owned resource and Workshop duplex. */
+  skillRuntime?: true;
+  argv: string[];
+  stdin?: string;
+  cwd?: string;
+  env?: Record<string, string>;
+  clearEnv?: string[];
+  systemPrompt?: string;
+  agentId?: string;
+  sessionKey?: string;
+  approvalDecision?: "allow-once" | "allow-always";
+  systemRunPlan?: SystemRunApprovalPlan;
+  idleTimeoutMs: number;
+  timeoutMs: number;
+};
 
 export type ClaudeCliNodeRunResult = {
   exitCode: number;
@@ -191,7 +206,9 @@ export function requestsClaudeNodeSkillRuntime(raw?: string | null): boolean {
 }
 
 /** Resource bytes use the negotiated duplex, never argv or node filesystem paths. */
-export async function decodeClaudeCliNodeRunParams(raw?: string | null) {
+export async function decodeClaudeCliNodeRunParams(
+  raw?: string | null,
+): Promise<ClaudeCliNodeRunParams> {
   if (Buffer.byteLength(raw ?? "", "utf8") > MAX_REQUEST_BYTES) {
     throw new Error("INVALID_REQUEST: Claude CLI request is too large");
   }
@@ -280,7 +297,6 @@ export async function decodeClaudeCliNodeRunParams(raw?: string | null) {
   }
   return {
     argv,
-    // Opt-in to the negotiated invocation-owned resource and Workshop duplex.
     ...(value.skillRuntime === true ? { skillRuntime: true as const } : {}),
     ...(stdin !== undefined ? { stdin } : {}),
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),

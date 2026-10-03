@@ -1,5 +1,6 @@
 // Versioned metadata-only activity audit query payloads.
 import { type Static, type TObject, type TProperties, type TSchema, Type } from "typebox";
+import type { SchemaContract } from "../schema-contract.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -465,7 +466,7 @@ type AuditActivityAgentRunV1Terminal =
   | { action: "agent.run.finished"; status: "timed_out"; errorCode: "run_timed_out" }
   | { action: "agent.run.finished"; status: "blocked"; errorCode: "run_blocked" };
 export type AuditActivityAgentRunV1 = AuditActivityRecordBaseV1 &
-  Static<TObject<typeof agentRunProperties>> &
+  SchemaContract<Static<TObject<typeof agentRunProperties>>> &
   AuditActivityAgentRunV1Terminal;
 
 type AuditActivityToolActionV1Terminal =
@@ -481,7 +482,7 @@ type AuditActivityToolActionV1Terminal =
       errorCode: "tool_outcome_unknown";
     };
 export type AuditActivityToolActionV1 = AuditActivityRecordBaseV1 &
-  Static<TObject<typeof toolActionProperties>> &
+  SchemaContract<Static<TObject<typeof toolActionProperties>>> &
   AuditActivityToolActionV1Terminal;
 
 type AuditActivityMessageRecordBaseV1 = AuditActivityRecordBaseV1 & {
@@ -511,7 +512,7 @@ type AuditActivityInboundMessageV1Terminal =
       reasonCode?: Static<typeof inboundFailureReasonSchema>;
     };
 export type AuditActivityInboundMessageV1 = AuditActivityMessageRecordBaseV1 &
-  Static<TObject<typeof inboundMessageProperties>> & {
+  SchemaContract<Static<TObject<typeof inboundMessageProperties>>> & {
     deliveryKind?: never;
     failureStage?: never;
   } & AuditActivityInboundMessageV1Terminal;
@@ -550,7 +551,7 @@ type AuditActivityOutboundMessageV1Terminal =
       deliveryKind?: never;
     };
 export type AuditActivityOutboundMessageV1 = AuditActivityMessageRecordBaseV1 &
-  Static<TObject<typeof outboundMessageProperties>> &
+  SchemaContract<Static<TObject<typeof outboundMessageProperties>>> &
   AuditActivityOutboundMessageV1Terminal;
 
 export type AuditActivityEventV1 =
