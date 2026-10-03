@@ -9,11 +9,11 @@ import {
   publishImmutablePointer,
   reconcileImmutablePointer,
 } from "./package-update-activation-immutable-pointer.js";
+import { readImmutableInstallRecordForRecovery } from "./package-update-activation-immutable-recovery.js";
 import {
   createImmutableInstallRecord,
   immutableInstallReadOperations,
   recordImmutablePreparedGeneration,
-  readImmutableInstallRecordForRecovery,
   updateImmutableInstallRecord,
 } from "./package-update-activation-immutable.js";
 import {

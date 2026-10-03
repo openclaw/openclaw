@@ -156,7 +156,7 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
-    "src/infra/update-managed-service-handoff-database.ts",
+    "src/infra/update-managed-service-handoff-database-recovery.ts",
     [
       {
         tier: "T3",

@@ -6,10 +6,10 @@ import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-jo
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import * as rollback from "./sqlite-rollback-recovery.js";
+import { recoverManagedUpdateLeaseJournal } from "./update-managed-service-handoff-database-recovery.js";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,
   createManagedHandoffLeaseDatabase,
-  recoverManagedUpdateLeaseJournal,
   type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";

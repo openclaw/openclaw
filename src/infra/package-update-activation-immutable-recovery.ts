@@ -10,7 +10,10 @@ import {
   ImmutableRecoveryRuntimeReferenceSchema,
   type ImmutableRecoveryRuntimeReference,
 } from "./package-update-activation-immutable-recovery-schema.js";
-import { assertImmutableInstallRecordCurrent } from "./package-update-activation-immutable.js";
+import {
+  assertImmutableInstallRecordCurrent,
+  captureImmutableControl,
+} from "./package-update-activation-immutable.js";
 import {
   packageActivationRuntimeIdentity,
   resolvePackageActivationAnchor,
@@ -18,6 +21,7 @@ import {
   resolvePackageActivationHelper,
 } from "./package-update-activation-paths.js";
 import { isPathInside } from "./path-guards.js";
+import { prepareSqliteRollbackRecovery } from "./sqlite-rollback-recovery.js";
 import {
   sealImmutableGeneration,
   verifyImmutableGeneration,
@@ -27,6 +31,22 @@ import type {
   ImmutableInstallRecord,
 } from "./update-immutable-install-schema.js";
 import { directoryIdentity } from "./update-immutable-layout.js";
+
+/** Cold CLI recovery stays outside the control record's read-worker dependency graph. */
+export function readImmutableInstallRecordForRecovery(root: string) {
+  const { control, journal, assertIdentity, assertFileSafe, validate, read } =
+    captureImmutableControl(root);
+  return prepareSqliteRollbackRecovery({
+    path: journal,
+    scratchRoot: control,
+    assertIdentity,
+    assertFileSafe,
+    read(db) {
+      validate(db);
+      return read(db);
+    },
+  });
+}
 
 function controlRoot(root: string): string {
   return resolvePackageActivationControl(resolvePackageActivationAnchor(root));

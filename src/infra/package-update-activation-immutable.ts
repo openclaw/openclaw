@@ -18,7 +18,6 @@ import {
   type ExistingSqliteTransaction,
 } from "./sqlite-existing-database.js";
 import type { SqliteReadOnlyOperationContext } from "./sqlite-readonly-operation-types.js";
-import { prepareSqliteRollbackRecovery } from "./sqlite-rollback-recovery.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
   ImmutableInstallDescriptorSchema,
@@ -135,7 +134,7 @@ function readRecord(db: DatabaseSync, root: string, rootIdentity: string): Immut
   return record;
 }
 
-function captureImmutableControl(root: string) {
+export function captureImmutableControl(root: string) {
   const anchor = resolvePackageActivationAnchor(root);
   assertPackageActivationLayout(anchor);
   const control = resolvePackageActivationControl(anchor);
@@ -164,24 +163,16 @@ function captureImmutableControl(root: string) {
     }
   };
   const read = (db: DatabaseSync) => readRecord(db, root, rootIdentity);
-  return { control, journal, assertIdentity, validate, read };
-}
-
-/** CLI recovery prepares a committed snapshot before the native executor admits rollback. */
-export function readImmutableInstallRecordForRecovery(root: string) {
-  const { control, journal, assertIdentity, validate, read } = captureImmutableControl(root);
-  return prepareSqliteRollbackRecovery({
-    path: journal,
-    scratchRoot: control,
+  return {
+    control,
+    journal,
     assertIdentity,
-    assertFileSafe(file) {
+    assertFileSafe: (file: string) => {
       rootOwnedIdentity(file, false);
     },
-    read(db) {
-      validate(db);
-      return read(db);
-    },
-  });
+    validate,
+    read,
+  };
 }
 
 function withImmutableControl<T>(

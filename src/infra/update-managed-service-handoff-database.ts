@@ -1,7 +1,6 @@
 import fs, { type BigIntStats, type Stats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
-import { isDeepStrictEqual } from "node:util";
 import { sql } from "kysely";
 import { z } from "zod";
 import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
@@ -30,8 +29,6 @@ import {
 import { databaseFileIdentityKey } from "./sqlite-worker-identity.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
-import { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
-import { parseManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
 import { quarantineManagedHandoffStore } from "./update-managed-service-handoff-store-repair.js";
 import { createPrivateWindowsFile } from "./windows-private-directory.js";
 
@@ -105,7 +102,7 @@ function initializeLeaseSchema(db: HandoffDatabase): void {
 
 export type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 
-function assertPath(stat: BigIntStats, kind: "directory" | "file") {
+export function assertManagedHandoffPath(stat: BigIntStats, kind: "directory" | "file") {
   if (
     stat.isSymbolicLink() ||
     !(kind === "directory" ? stat.isDirectory() : stat.isFile()) ||
@@ -124,13 +121,13 @@ function assertPath(stat: BigIntStats, kind: "directory" | "file") {
  * invariant instead of refusing, which would otherwise lock the product out of its
  * own state for every install root until an operator deleted the file by hand.
  *
- * Excess bits here are defense in depth rather than a live exposure: assertPath
+ * Excess bits here are defense in depth rather than a live exposure: assertManagedHandoffPath
  * enforces a 0700 owned directory on every read and every write, and a single
  * link, so no other user could traverse to this inode or hold a descriptor on it
  * whatever the file's own mode said. Write bits are still refused rather than
  * repaired, because chmod cannot revoke a descriptor and integrity is the one
  * thing the directory guarantee would not restore. Ownership, type and link count
- * are likewise not ours to repair; all of those still refuse in assertPath.
+ * are likewise not ours to repair; all of those still refuse in assertManagedHandoffPath.
  */
 function repairPrivateFileMode(databasePath: string, stat: BigIntStats): BigIntStats {
   if (
@@ -148,12 +145,12 @@ function repairPrivateFileMode(databasePath: string, stat: BigIntStats): BigIntS
   return fs.lstatSync(databasePath, { bigint: true });
 }
 
-function assertSamePath(
+export function assertSameManagedHandoffPath(
   stat: BigIntStats,
   expected: BigIntStats,
   kind: "directory" | "file",
 ): void {
-  assertPath(stat, kind);
+  assertManagedHandoffPath(stat, kind);
   if (
     (process.platform === "win32" &&
       [stat.dev, stat.ino, expected.dev, expected.ino].includes(0n)) ||
@@ -203,8 +200,8 @@ function createMissingDatabaseFile(
         ? repairPrivateFileMode(databasePath, fs.lstatSync(databasePath, { bigint: true }))
         : fs.fstatSync(descriptor, { bigint: true });
     const currentIdentity = fs.lstatSync(databasePath, { bigint: true });
-    assertSamePath(currentIdentity, identity, "file");
-    assertSamePath(
+    assertSameManagedHandoffPath(currentIdentity, identity, "file");
+    assertSameManagedHandoffPath(
       fs.lstatSync(parentReceipt.path, { bigint: true }),
       parentReceipt.identity,
       "directory",
@@ -244,8 +241,8 @@ export function captureManagedUpdateLeaseDatabaseIdentity(
   const canonical = fs.realpathSync(databasePath);
   const file = fs.lstatSync(canonical, { bigint: true });
   const parent = fs.lstatSync(path.dirname(canonical), { bigint: true });
-  assertPath(file, "file");
-  assertPath(parent, "directory");
+  assertManagedHandoffPath(file, "file");
+  assertManagedHandoffPath(parent, "directory");
   // Accepted <=9.6 one-hop tradeoff: Number serialization can hide an inode collision.
   // Admit its shipped spelling once, then pin bigint identities for every later check.
   const matches = (stat: BigIntStats, expected: string) =>
@@ -270,171 +267,6 @@ export function assertManagedUpdateLeaseDatabaseIdentity(
   binding: ManagedUpdateLeaseDatabaseIdentity,
 ): void {
   captureManagedUpdateLeaseDatabaseIdentity(binding.databasePath, binding);
-}
-
-/** Explicit cold repair of one installation's executor journal; normal readers never replay it. */
-export async function recoverManagedUpdateLeaseJournal(params: {
-  existingIdentity: ManagedUpdateLeaseDatabaseIdentity;
-  installKey: string;
-  serviceManagerEnv: NodeJS.ProcessEnv;
-}): Promise<void> {
-  const { existingIdentity, installKey } = params;
-  if (path.resolve(installKey) !== installKey || installKey.includes("/.openclaw-update-child-")) {
-    throw new Error("Managed update journal recovery requires its original installation key.");
-  }
-  assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
-  const [{ acquireFileLock }, { prepareSqliteRollbackRecovery }] = await Promise.all([
-    import("./file-lock.js"),
-    import("./sqlite-rollback-recovery.js"),
-  ]);
-  assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
-  const lock = await acquireFileLock(existingIdentity.databasePath, {
-    retries: { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 },
-    stale: 30_000,
-    staleRecovery: "remove-if-definitely-stale",
-  });
-  let active = true;
-  try {
-    const lockIdentity = fs.lstatSync(lock.lockPath, { bigint: true });
-    assertPath(lockIdentity, "file");
-    const lockBytes = fs.readFileSync(lock.lockPath);
-    const assertBootstrap = () => {
-      if (!active) {
-        throw new Error("Managed update journal bootstrap authority has closed.");
-      }
-      assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
-      assertSamePath(fs.lstatSync(lock.lockPath, { bigint: true }), lockIdentity, "file");
-      if (!fs.readFileSync(lock.lockPath).equals(lockBytes)) {
-        throw new Error("Managed update journal bootstrap lock changed.");
-      }
-    };
-    assertBootstrap();
-    const { processState } = createManagedHandoffProcessIdentityReader({
-      env: params.serviceManagerEnv,
-    });
-    const assertDeadOwner = (rows: LeaseTable[]) => {
-      if (!rows.length) {
-        return;
-      }
-      const row = rows[0]!;
-      const payload = parseManagedHandoffLeasePayload(row.payload_json);
-      if (
-        rows.length !== 1 ||
-        row.install_root !== installKey ||
-        !text.safeParse(row.owner).success ||
-        !Number.isSafeInteger(row.updated_at) ||
-        row.updated_at < 0 ||
-        row.recovery_json !== null ||
-        !payload ||
-        payload.version !== 2 ||
-        payload.mutationOriginal ||
-        payload.action.kind !== "update" ||
-        payload.action.mutationProtocol !== "original-cancellation-v1" ||
-        payload.action.custody !== undefined ||
-        !isDeepStrictEqual(payload.helper, payload.executor)
-      ) {
-        throw new Error(
-          "Managed update journal recovery refuses foreign or retained executor custody.",
-        );
-      }
-      if (processState(payload.helper) !== "dead" || processState(payload.executor) !== "dead") {
-        throw new Error(
-          "Managed update journal recovery requires a definitely dead original executor.",
-        );
-      }
-    };
-    const read = (db: HandoffDatabase): LeaseTable[] => {
-      // Recovery admission accepts exactly the current dedicated lease schema,
-      // never a future writer, trigger, mirror table or unknown retained payload.
-      const objects = db // sqlite-allow-raw -- Explicit cold-recovery schema admission before any source journal replay.
-        .prepare(
-          "SELECT type, name FROM sqlite_schema WHERE name <> 'sqlite_autoindex_managed_update_handoffs_1'",
-        )
-        .all();
-      const table = db // sqlite-allow-raw -- Native STRICT-table facts belong to one recovery admission.
-        .prepare("PRAGMA table_list('managed_update_handoffs')")
-        .all()
-        .find((entry) => entry.schema === "main");
-      const columns = db // sqlite-allow-raw -- Validate the exact lease schema; recovery performs no migration.
-        .prepare("PRAGMA table_info('managed_update_handoffs')")
-        .all();
-      const expectedColumns = [
-        ["install_root", "TEXT", 1, 1],
-        ["owner", "TEXT", 1, 0],
-        ["payload_json", "TEXT", 1, 0],
-        ["updated_at", "INTEGER", 1, 0],
-        ["recovery_json", "TEXT", 0, 0],
-      ];
-      if (
-        objects.length !== 1 ||
-        objects[0]?.type !== "table" ||
-        objects[0]?.name !== "managed_update_handoffs" ||
-        table?.type !== "table" ||
-        table.strict !== 1 ||
-        table.wr !== 0 ||
-        table.ncol !== 5 ||
-        columns.length !== expectedColumns.length ||
-        columns.some((column, index) => {
-          const expected = expectedColumns[index]!;
-          return (
-            column.name !== expected[0] ||
-            column.type !== expected[1] ||
-            column.notnull !== expected[2] ||
-            column.pk !== expected[3] ||
-            column.dflt_value !== null
-          );
-        })
-      ) {
-        throw new Error("Managed update journal recovery refuses an unknown lease schema.");
-      }
-      const sizes = executeSqliteQuerySync(
-        db,
-        leaseQueries(db)
-          .selectFrom("managed_update_handoffs")
-          .select((eb) => [
-            eb.fn<number>("length", [eb.cast("payload_json", "blob")]).as("payloadBytes"),
-            eb.fn<number>("length", [eb.cast("owner", "blob")]).as("ownerBytes"),
-            eb.fn<number>("length", [eb.cast("install_root", "blob")]).as("keyBytes"),
-            eb.fn<number | null>("length", [eb.cast("recovery_json", "blob")]).as("recoveryBytes"),
-          ])
-          .limit(2),
-      ).rows;
-      if (
-        sizes.length > 1 ||
-        sizes.some(
-          (size) =>
-            size.payloadBytes > 16_384 ||
-            size.ownerBytes > 4096 ||
-            size.keyBytes > 4096 ||
-            size.recoveryBytes !== null,
-        )
-      ) {
-        throw new Error(
-          "Managed update journal recovery refuses foreign or retained executor custody.",
-        );
-      }
-      const rows = executeSqliteQuerySync(
-        db,
-        leaseQueries(db).selectFrom("managed_update_handoffs").selectAll().limit(2),
-      ).rows;
-      assertDeadOwner(rows);
-      return rows;
-    };
-    const recovery = await prepareSqliteRollbackRecovery({
-      path: existingIdentity.databasePath,
-      scratchRoot: path.dirname(existingIdentity.databasePath),
-      assertIdentity: assertBootstrap,
-      assertFileSafe: (_file, stat) => assertPath(stat, "file"),
-      read,
-    });
-    recovery.admit(() => {
-      assertBootstrap();
-      assertDeadOwner(recovery.record);
-    });
-  } finally {
-    active = false;
-    await lock.release();
-  }
 }
 
 /** Existing managed-update lease storage; extraction does not change its schema. */
@@ -550,7 +382,7 @@ export function createManagedHandoffLeaseDatabase(
     }
     recoverDirectoryMode(dir);
     const directoryIdentity = fs.lstatSync(dir, { bigint: true });
-    assertPath(directoryIdentity, "directory");
+    assertManagedHandoffPath(directoryIdentity, "directory");
     // syncDirectorySync verifies ordinary realpath spelling. Windows native
     // realpath can expand an 8.3 alias differently without changing the directory.
     recoverUnadoptableStore(databasePath, {
@@ -569,14 +401,22 @@ export function createManagedHandoffLeaseDatabase(
       databasePath,
       fs.lstatSync(databasePath, { bigint: true }),
     );
-    assertPath(databaseIdentity, "file");
+    assertManagedHandoffPath(databaseIdentity, "file");
     const db = openNodeSqliteDatabase(
       write ? resolveExistingSqliteFileUri(databasePath) : databasePath,
       { readOnly: !write },
     );
     try {
-      assertSamePath(fs.lstatSync(dir, { bigint: true }), directoryIdentity, "directory");
-      assertSamePath(fs.lstatSync(databasePath, { bigint: true }), databaseIdentity, "file");
+      assertSameManagedHandoffPath(
+        fs.lstatSync(dir, { bigint: true }),
+        directoryIdentity,
+        "directory",
+      );
+      assertSameManagedHandoffPath(
+        fs.lstatSync(databasePath, { bigint: true }),
+        databaseIdentity,
+        "file",
+      );
       setSqliteBusyTimeout(db, 5000);
       if (write) {
         initializeLeaseSchema(db);

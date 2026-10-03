@@ -51,7 +51,8 @@ const mocks = vi.hoisted(() => ({
   verifyRecovery: vi.fn(),
   operationLock: vi.fn(),
 }));
-vi.mock("./package-update-activation-immutable-recovery.js", () => ({
+vi.mock("./package-update-activation-immutable-recovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./package-update-activation-immutable-recovery.js")>()),
   prepareImmutableRecoveryRuntime: mocks.prepareRecovery,
   verifyImmutableRecoveryRuntime: mocks.verifyRecovery,
   resolveImmutableRecoveryCommand: (reference: { helperPath: string }) =>

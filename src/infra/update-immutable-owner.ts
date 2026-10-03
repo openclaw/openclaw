@@ -47,7 +47,7 @@ export async function withImmutableUpdateOwner<T>(
   }
   if (options?.recover && pinned) {
     const { recoverManagedUpdateLeaseJournal } =
-      await import("./update-managed-service-handoff-database.js");
+      await import("./update-managed-service-handoff-database-recovery.js");
     await recoverManagedUpdateLeaseJournal({
       existingIdentity: pinned,
       installKey: root,
