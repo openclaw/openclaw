@@ -1237,6 +1237,50 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it.each([true, false])(
+    "retries the same input after a typed session admission conflict only: %s",
+    async (typed) => {
+      await withTestDir({ prefix: "openclaw-gateway-admission-retry-" }, async (root) => {
+        useTestStateDir(root);
+        primeMainAgentRun();
+        const conflict = new Error(
+          "Session changed while starting work. Retry. | SESSION_WORK_START_CHANGED",
+        );
+        if (typed) {
+          Object.assign(conflict, { code: "SESSION_WORK_START_CHANGED" });
+        }
+        mocks.agentCommand.mockRejectedValueOnce(conflict);
+        const context = makeContext();
+        const runId = `session-admission-retry-${typed}`;
+        const request = {
+          message: "continue the interrupted request",
+          sessionKey: "agent:main:main",
+          idempotencyKey: runId,
+        };
+        const before = mocks.agentCommand.mock.calls.length;
+        const first = await invokeAgent(request, { context, reqId: runId });
+        expect(first).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ runId, status: "accepted" }),
+          undefined,
+          expect.anything(),
+        );
+        await waitForAssertion(() => {
+          expect(context.dedupe.get(`agent:${runId}`)?.ok).toBe(false);
+          expect(context.chatAbortControllers.has(runId)).toBe(false);
+        });
+        await invokeAgent(request, { context, reqId: `${runId}-retry` });
+        await waitForAssertion(() => {
+          expect(mocks.agentCommand).toHaveBeenCalledTimes(before + (typed ? 2 : 1));
+          expect(context.dedupe.get(`agent:${runId}`)?.ok).toBe(typed);
+        });
+        await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+          status: typed ? "ok" : "error",
+        });
+      });
+    },
+  );
+
   it("preserves aborted async gateway agent runs as cancelled", async () => {
     await withTestDir({ prefix: "openclaw-gateway-agent-task-aborted-" }, async (root) => {
       useTestStateDir(root);

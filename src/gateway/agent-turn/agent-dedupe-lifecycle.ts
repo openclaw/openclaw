@@ -18,6 +18,7 @@ import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import {
   isAcceptedAgentDedupePayload,
   isPreRegistrationAbortedAgentDedupeEntryForSession,
+  isRetryableSessionStartDedupeEntry,
   readGatewayDedupeEntry,
   setAbortedAgentDedupeEntries,
   setGatewayDedupeEntries,
@@ -76,7 +77,14 @@ export function createAgentDedupeLifecycle(params: {
       keys: params.agentDedupeKeys,
       // Durable private input decides replay after the prior controller ends.
       // Its new reservation must retire stale sticky terminal projections.
-      ...(params.privateCompletion && !params.context.chatAbortControllers.has(params.runId)
+      ...(!params.context.chatAbortControllers.has(params.runId) &&
+      (params.privateCompletion ||
+        isRetryableSessionStartDedupeEntry(
+          readGatewayDedupeEntry({
+            dedupe: params.context.dedupe,
+            keys: params.agentDedupeKeys,
+          }),
+        ))
         ? { startNewAttempt: true as const }
         : {}),
       entry: {

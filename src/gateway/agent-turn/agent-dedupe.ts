@@ -1,6 +1,11 @@
+import {
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { SESSION_WORK_START_CHANGED_ERROR_CODE } from "../../config/sessions/work-start-error.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import type { AgentTurnIo } from "./types.js";
@@ -28,6 +33,22 @@ export function readGatewayDedupeEntry(params: {
     }
   }
   return undefined;
+}
+
+export function isRetryableSessionStartDedupeEntry(
+  entry: ReturnType<typeof readGatewayDedupeEntry>,
+): boolean {
+  // This typed admission rejection precedes execution. Replaying it forever
+  // prevents the same durable input from entering the recovered session.
+  // Ordinary execution failures and text that merely resembles the code remain
+  // terminal: they may already have performed externally visible work.
+  return Boolean(
+    entry &&
+    !entry.ok &&
+    collectNestedErrorCandidates(entry.error).some(
+      (error) => extractErrorCode(error) === SESSION_WORK_START_CHANGED_ERROR_CODE,
+    ),
+  );
 }
 
 export function isAcceptedAgentDedupePayload(payload: unknown): payload is {
@@ -160,6 +181,12 @@ export function replayAgentTurnIfCached(params: {
     keys: agentDedupeKeys,
   });
   if (!cached) {
+    return false;
+  }
+  if (
+    !params.context.chatAbortControllers.has(runId) &&
+    isRetryableSessionStartDedupeEntry(cached)
+  ) {
     return false;
   }
   if (params.acceptedOnly && !(cached.ok && isAcceptedAgentDedupePayload(cached.payload))) {
