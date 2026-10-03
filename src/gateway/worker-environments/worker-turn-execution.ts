@@ -12,7 +12,6 @@ import {
   overlayConfiguredModelCatalog,
 } from "../../agents/model-catalog.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
-import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
@@ -59,7 +58,11 @@ import {
   windowInitialMessages,
 } from "./worker-turn-payload.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
-import { gateWorkerTurnInput, persistWorkerTurnUserMessage } from "./worker-turn-user-message.js";
+import {
+  gateWorkerTurnInput,
+  persistWorkerTurnUserMessage,
+  readWorkerTurnInputContext,
+} from "./worker-turn-user-message.js";
 import {
   type executeRemoteExecTurn,
   reconcileWorkspaceAfterTurn,
@@ -143,18 +146,19 @@ export async function executeWorkerTurn(
     await recorder.waitForRuntimePersistence();
     assertContextCurrent();
   }
+  const inputContext = {
+    turn,
+    transcriptTarget,
+    identity: placement,
+    modelRef,
+    startedAt,
+    assertCurrent: assertContextCurrent,
+    onBlocked: () => {
+      blocked = true;
+    },
+  };
   const blockedResult = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
-    gateWorkerTurnInput({
-      turn,
-      transcriptTarget,
-      identity: placement,
-      modelRef,
-      startedAt,
-      assertCurrent: assertContextCurrent,
-      onBlocked: () => {
-        blocked = true;
-      },
-    }),
+    gateWorkerTurnInput(inputContext),
   );
   if (blockedResult) {
     await releaseClaimIfOwned(params.placements, params.turnClaim);
@@ -170,37 +174,9 @@ export async function executeWorkerTurn(
     }
     assertContextCurrent();
   }
-  const receipt = recorder?.getAdmissionReceipt();
-  const admission = receipt ? { ...receipt } : undefined;
-  if (recorder && !admission) {
-    throw new Error("Cloud worker turn has no readable canonical user admission");
-  }
-  const userMessageAlreadyPersisted =
-    admission !== undefined || turn.suppressNextUserMessagePersistence === true;
-  // Validate context after reentrant phase callbacks have finished.
-  turn.onExecutionPhase?.({
-    phase: "model_resolution",
-    backend: "cloud-worker",
-    provider: modelRef.provider,
-    model: modelRef.model,
-  });
-  const manager = userMessageAlreadyPersisted
-    ? await SessionManager.openModelContextAsync(transcriptTarget, {
-        admission,
-        signal: turn.abortSignal,
-      })
-    : await SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal);
-  assertContextCurrent();
-  const contextMessages = convertToLlm(manager.buildSessionContext().messages);
-  const leaf = manager.getLeafEntry();
-  const history =
-    !admission &&
-    userMessageAlreadyPersisted &&
-    leaf?.type === "message" &&
-    leaf.message.role === "user"
-      ? contextMessages.slice(0, -1)
-      : contextMessages;
-  let baseLeafId = admission?.entryId ?? manager.getLeafId();
+  const context = await readWorkerTurnInputContext(inputContext);
+  const { manager, history, userMessageAlreadyPersisted } = context;
+  let baseLeafId = context.baseLeafId;
 
   assertContextCurrent();
   const credential = await waitForTurnOperation({

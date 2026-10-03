@@ -14,8 +14,6 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type HookRunner = NonNullable<ReturnType<typeof getGlobalHookRunner>>;
 type BeforeAgentRunHookRunner = Pick<HookRunner, "hasHooks" | "runBeforeAgentRun">;
 type HookContext = Parameters<HookRunner["runBeforeAgentRun"]>[1];
-type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
-type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 type BeforeAgentRunSession = {
   messages: AgentMessage[];
@@ -37,9 +35,9 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
   hookMessages: AgentMessage[];
   hookRunner: BeforeAgentRunHookRunner | null;
   modelPrompt: string;
-  sessionManager: AttemptSessionManager;
+  sessionManager: ReturnType<typeof guardSessionManager>;
   systemPrompt: string;
-  withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
+  withOwnedTranscriptWrite: <T>(operation: () => Promise<T> | T) => Promise<T>;
 }): Promise<BeforeAgentRunBlockOutcome | undefined> {
   const block = await runBeforeAgentRunGate(
     input.hookRunner,

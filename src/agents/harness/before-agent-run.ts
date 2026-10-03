@@ -11,7 +11,6 @@ type HookRunner = Pick<
 >;
 type AgentRunBlock = { blockedBy: string; message: string };
 
-/** Every host runs the same fail-closed input gate; transcript custody stays with its caller. */
 export async function runBeforeAgentRunGate(
   runner: HookRunner | null | undefined,
   event: PluginHookBeforeAgentRunEvent,

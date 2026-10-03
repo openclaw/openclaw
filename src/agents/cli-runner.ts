@@ -1,6 +1,3 @@
-/**
- * Top-level CLI-backed agent runner orchestration.
- */
 import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import { prepareCronRootSessionGeneration } from "../config/sessions/session-delivery-generation.js";
@@ -86,12 +83,10 @@ import { resolveReplyExpectation } from "./reply-completion.js";
 const log = createSubsystemLogger("agents/cli-runner");
 const defaultCliRunnerDeps = { ...cliRunnerDeps };
 
-/** Overrides top-level CLI runner dependencies for tests. */
 export function setCliRunnerTestDeps(overrides: Partial<typeof cliRunnerDeps>): void {
   Object.assign(cliRunnerDeps, overrides);
 }
 
-/** Restores default top-level CLI runner dependencies after tests. */
 export function restoreCliRunnerTestDeps(): void {
   Object.assign(cliRunnerDeps, defaultCliRunnerDeps);
 }
@@ -125,7 +120,6 @@ export async function isCliBindingFlushed(
   return false;
 }
 
-/** Prepares and runs one CLI-backed agent turn. */
 export function runCliAgent(paramsInput: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
   const lifecycleGeneration =
     paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
@@ -226,7 +220,6 @@ async function runCliAgentInternal(
   }
 }
 
-/** Runs an already-prepared CLI agent context through hooks and execution. */
 export async function runPreparedCliAgent(
   context: PreparedCliRunContext,
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
