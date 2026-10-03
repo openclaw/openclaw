@@ -125,6 +125,11 @@ policy. Supply `assertCurrent` when native session or transport ownership can be
 revoked independently of the host attempt. The host retains this additional check
 through the final media write and publication. Keep the reader alive until preparation finishes.
 
+Raw file paths in these replies belong to the remote workspace. Paths outside
+that workspace fail with a labeled remote-file notice, even if a Gateway-local
+file exists at the same path. HTTP references and securely validated Gateway
+managed media, including `media://` attachments, remain available.
+
 For artifacts whose bytes the provider has already admitted, use `kind: "artifact"`
 with `buffer`, `fileName`, `assertCurrent`, and an optional `signal`. The host
 stages those exact bytes under the captured channel/account byte limit and returns

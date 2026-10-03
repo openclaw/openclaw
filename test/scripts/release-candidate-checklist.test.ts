@@ -44,7 +44,7 @@ import {
 } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import {
   buildReleaseCandidateState,
-  buildPublishCommand,
+  buildPrepareCommand,
   buildTelegramArtifactInputs,
   assertReleaseCandidateTag,
   candidateCumulativeShippedPullRequests,
@@ -378,7 +378,7 @@ describe("release candidate checklist", () => {
       );
       const updateState = vi.fn((_path: string, state: unknown) => state);
       const generatedChecks = vi.fn(() => ({ status: "skipped" }));
-      const publishCommand = vi.fn(buildPublishCommand);
+      const publishCommand = vi.fn(buildPrepareCommand);
       const waitedRuns: string[] = [];
       const toolingSha = "b".repeat(40);
       const runReleaseToolingGh = vi.fn();
@@ -592,7 +592,7 @@ describe("release candidate checklist", () => {
             }
             return { all: [] };
           },
-          buildPublishCommand: publishCommand,
+          buildPrepareCommand: publishCommand,
           runReleasePublishPreflight: preflight,
           formatReleasePublishPreflight,
           formatJsonValue: String,
@@ -1062,10 +1062,10 @@ describe("release candidate checklist", () => {
     const options = parseArgs(["--tag", tag]);
     const producer = { status: "passed", headSha: "a".repeat(40), workflowRef: "main" };
     for (const source of [undefined, producer]) {
-      expect(() => buildPublishCommand(options, source)).toThrow(
+      expect(() => buildPrepareCommand(options, source)).toThrow(
         "--publish-workflow-ref release-publish/<sha12>-<epoch>",
       );
-      expect(buildPublishCommand({ ...options, publishWorkflowRef }, source)).toContain(
+      expect(buildPrepareCommand({ ...options, publishWorkflowRef }, source)).toContain(
         `'--ref' '${publishWorkflowRef}'`,
       );
     }
@@ -1776,7 +1776,7 @@ describe("release candidate checklist", () => {
         api(),
       );
       expect(validated).toEqual({ status: "passed", headSha, workflowRef: protectedRef });
-      expect(buildPublishCommand(parseArgs(["--tag", "v2026.7.1-beta.3"]), validated)).toContain(
+      expect(buildPrepareCommand(parseArgs(["--tag", "v2026.7.1-beta.3"]), validated)).toContain(
         `'--ref' '${protectedRef}'`,
       );
     });
@@ -2101,7 +2101,7 @@ describe("release candidate checklist", () => {
       npmTelegramRunId: "333",
       windowsNodeInstallerDigests,
     };
-    const command = buildPublishCommand(options, undefined, "prepare");
+    const command = buildPrepareCommand(options);
     // A shell-local gh captures real argument decoding without dispatching anything.
     const args = execFileSync("bash", ["-c", `gh() { printf '%s\\0' "$@"; }\n${command}`], {
       encoding: "utf8",
@@ -2138,16 +2138,13 @@ describe("release candidate checklist", () => {
       wait_for_clawhub: "true",
     });
     expect(preparedInputs).not.toHaveProperty("finalize_release_before_docker");
-    for (const mode of ["prepare", "publish"] as const) {
-      const generated = buildPublishCommand(options, undefined, mode);
-      const workflow = parse(
-        readFileSync(`.github/workflows/openclaw-release-${mode}.yml`, "utf8"),
-      ) as { on: { workflow_dispatch: { inputs: Record<string, unknown> } } };
-      for (const match of generated.matchAll(/'-f' '([^=']+)=/gu)) {
-        expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(
-          expectDefined(match[1], "release command input"),
-        );
-      }
+    const workflow = parse(
+      readFileSync(".github/workflows/openclaw-release-prepare.yml", "utf8"),
+    ) as { on: { workflow_dispatch: { inputs: Record<string, unknown> } } };
+    for (const match of command.matchAll(/'-f' '([^=']+)=/gu)) {
+      expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(
+        expectDefined(match[1], "release command input"),
+      );
     }
   });
 

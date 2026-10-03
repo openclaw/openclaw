@@ -390,7 +390,7 @@ async function runInstallationCase(params: {
             const ref = JSON.parse(await fs.readFile(configPath!, "utf8")).gateway.auth.token;
             expect(ref).toMatchObject({ source: "store" });
             expect(writerContext?.cfgForPersistence.gateway?.auth?.token).toEqual(ref);
-            const stored = readSecretStoreValue({ scope: { kind: "team" }, name: ref.id });
+            const stored = await readSecretStoreValue({ scope: { kind: "team" }, name: ref.id });
             expect(stored.ok && stored.value === "maintenance-fixture-token").toBe(true);
           }
           if (params.revoked) {

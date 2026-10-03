@@ -130,7 +130,7 @@ it("resolves protection once before capping aged candidates", async () => {
   const provider = vi.fn(() => [key(2)]);
   const unregister = registerSessionMaintenancePreserveKeysProvider(provider);
   try {
-    await runExclusiveSessionLifecycleMutation({
+    await runExclusiveSessionLifecycleMutation("archive", {
       scope: storePath,
       identities: [key(1)],
       run: async () => {
@@ -252,7 +252,7 @@ it.each(["session-key", "session-id"] as const)(
       );
     const identity = identityKind === "session-key" ? target.sessionKey : target.sessionId;
 
-    await runExclusiveSessionLifecycleMutation({
+    await runExclusiveSessionLifecycleMutation("archive", {
       scope: storePath,
       identities: [identity],
       run: async () => {

@@ -220,6 +220,13 @@ export function createReplyMediaSourcePreparer(params: {
         contentType: mimeTypeFromFilePath(managedMediaPath),
       };
     }
+    if (
+      params.workspaceMediaRoot &&
+      !resolveAbsoluteWorkspaceMedia(media) &&
+      !(await resolveInboundMediaReference(media))
+    ) {
+      throw new Error("Attachment path is outside the remote workspace.");
+    }
     const cached = persistedMediaBySource.get(media);
     if (cached) {
       return await cached;
@@ -386,10 +393,14 @@ export function createReplyMediaSourcePreparer(params: {
       try {
         prepared.push({ source, outcome: await normalizeMediaSource(source) });
       } catch (error) {
-        prepared.push({
-          source,
-          outcome: { failure: createReplyMediaFailure(source, index, error) },
-        });
+        const failure = createReplyMediaFailure(source, index, error);
+        if (params.workspaceMediaRoot && isLikelyLocalMediaSource(source)) {
+          failure.label = truncateUtf16Safe(
+            `Remote file: ${failure.label}`,
+            MAX_FAILURE_LABEL_LENGTH,
+          );
+        }
+        prepared.push({ source, outcome: { failure } });
         logVerbose(`dropping blocked reply media ${source}: ${String(error)}`);
       }
     }

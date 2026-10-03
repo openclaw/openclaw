@@ -328,7 +328,7 @@ export async function mutateSubagentRunForKill(
       error: "Subagent session changed while the kill was pending; retry.",
     };
   };
-  return await runExclusiveSessionLifecycleMutation({
+  return await runExclusiveSessionLifecycleMutation("subagent-kill", {
     scope: resolved.storePath,
     identities: [childSessionKey, sessionId],
     prepare: async () => {

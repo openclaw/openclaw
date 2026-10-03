@@ -373,7 +373,7 @@ describe("dispatch Stop before provider allocation", () => {
       } finally {
         release.resolve();
         await Promise.allSettled([moving, stopping]);
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("placement-move", {
           scope: sessionTarget.storePath,
           identities: [REQUEST.sessionKey, REQUEST.sessionId],
           run: async () => {},
@@ -637,7 +637,7 @@ describe("dispatch Stop before provider allocation", () => {
       };
       // A task kill acquires this mutation outside the admitted operation's ALS,
       // then drains admissions while its own lifecycle mutation remains active.
-      const mutation = runExclusiveSessionLifecycleMutation({
+      const mutation = runExclusiveSessionLifecycleMutation("subagent-kill", {
         ...identity,
         prepare: async () => {
           mutationEntered.resolve();
@@ -663,7 +663,7 @@ describe("dispatch Stop before provider allocation", () => {
         releaseMutation.resolve();
         await Promise.allSettled([operation, mutation]);
         // Flush the canceled contender: it must never execute after its predecessor releases.
-        await runExclusiveSessionLifecycleMutation({ ...identity, run: async () => {} });
+        await runExclusiveSessionLifecycleMutation("patch", { ...identity, run: async () => {} });
       }
       expect(events).toEqual(["admission-released", "mutation-finished"]);
     },

@@ -176,7 +176,8 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
     clone: false,
     exactRead: true,
   });
-  return await runExclusiveSessionLifecycleMutation({
+  const operation = params.action === "activation" ? "placement-activate" : "placement-recover";
+  return await runExclusiveSessionLifecycleMutation(operation, {
     scope: target.storePath,
     identities: [params.sessionKey, target.canonicalKey, ...target.storeKeys, params.sessionId],
     signal: params.signal,

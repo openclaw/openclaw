@@ -32,13 +32,14 @@ import { requireCurrentWorkerTurnEnvironment, StaleWorkerBuildError } from "./ad
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import {
-  bindWorkerTurnToolSurface,
+  bindWorkerTurnCapabilities,
   getWorkerTurnToolSurface,
 } from "./placement-turn-claim-events.js";
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
 import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { createWorkerReplyMedia } from "./worker-reply-media.js";
 import { waitForTurnOperation } from "./worker-turn-admission.js";
 import {
   WorkerTurnExecutionError,
@@ -418,7 +419,17 @@ export async function executeWorkerTurn(
         };
       },
     });
-    bindWorkerTurnToolSurface(params.placements, params.turnClaim, toolRuntime);
+    const prepareReplyMedia = createWorkerReplyMedia({
+      turn,
+      remoteWorkspaceDir: placement.remoteWorkspaceDir,
+      tunnel,
+      assertCurrent: assertActive,
+      signal,
+    });
+    bindWorkerTurnCapabilities(params.placements, params.turnClaim, {
+      toolSurface: toolRuntime,
+      prepareReplyMedia,
+    });
     const media = await prepareWorkerTurnMedia({
       turn,
       history,
@@ -640,6 +651,7 @@ export async function executeWorkerTurn(
     if (workerFailure && finishing?.replayInvalid) {
       recordModelFallbackStop(workerFailure);
     }
+    const reply = workerFailure ? { text } : await prepareReplyMedia({ text });
     const workspaceConflict = await reconcileWorkspaceAfterTurn({
       ...params,
       transcriptTarget,
@@ -651,13 +663,15 @@ export async function executeWorkerTurn(
       throw reconciliationError;
     });
     if (workspaceConflict) {
+      const delta = `${reply.text ? "\n\n" : ""}${workspaceConflict.summary}`;
+      reply.text = `${reply.text ?? ""}${delta}`;
       await Promise.resolve()
         .then(() =>
           turn.onAgentEvent?.({
             stream: "assistant",
             data: {
-              text: text ? `${text}\n\n${workspaceConflict.summary}` : workspaceConflict.summary,
-              delta: `${text ? "\n\n" : ""}${workspaceConflict.summary}`,
+              text: reply.text,
+              delta,
             },
           }),
         )
@@ -673,8 +687,7 @@ export async function executeWorkerTurn(
       durationMs: Date.now() - startedAt,
       sessionId: placement.sessionId,
       sessionFile: turn.sessionFile,
-      text,
-      workspaceConflictSummary: workspaceConflict?.summary,
+      reply,
     });
   } finally {
     await toolRuntime?.close();

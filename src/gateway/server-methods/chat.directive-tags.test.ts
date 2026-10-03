@@ -4235,7 +4235,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const storePath = mockState.storePath;
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("patch", {
       scope: storePath,
       identities: ["main", mockState.sessionId],
       run: async () => {

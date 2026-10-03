@@ -30,14 +30,11 @@ function webhookCompletionKey(env: NodeJS.ProcessEnv): string {
 
 /** No config bytes changed, so this completion does not depend on config rollback. */
 export function recordUnwrittenWebhookCompletion(
-  snapshot: Pick<ConfigFileSnapshot, "exists" | "sourceConfig">,
+  snapshot: Pick<ConfigFileSnapshot, "sourceConfig">,
   mutation: ChannelDoctorConfigMutation,
   env: NodeJS.ProcessEnv,
 ): boolean {
   const readOnly = resolveIsConfigReadOnly(env);
-  if (snapshot.exists && !readOnly) {
-    return false;
-  }
   const markerOnly = cloneConfigWithResolutionFacts(snapshot.sourceConfig);
   markerOnly.meta ??= {};
   markerOnly.meta.migrations ??= {};

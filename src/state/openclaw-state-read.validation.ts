@@ -50,6 +50,12 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         Number.isSafeInteger(input.command.input.limit) &&
         (input.command.input.beforeSequence === undefined ||
           Number.isSafeInteger(input.command.input.beforeSequence))) ||
+      (input.command.type === "secrets.execEnvironment" &&
+        isRecord(input.command.input) &&
+        isStringArray(input.command.input.excludeNames)) ||
+      (input.command.type === "secrets.value" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.name === "string") ||
       (input.command.type === "secrets.metadata" &&
         isRecord(input.command.input) &&
         isRecord(input.command.input.scope) &&

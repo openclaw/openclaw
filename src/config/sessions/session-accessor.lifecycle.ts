@@ -8,7 +8,7 @@ import {
   shouldSkipPluginHostCleanupStore,
   type PluginHostSessionCleanupStoreParams,
 } from "./plugin-host-cleanup.js";
-import { listSessionEntriesCore, patchSessionEntryCore } from "./session-accessor.entry.js";
+import { patchSessionEntryCore } from "./session-accessor.entry.js";
 import {
   applySessionEntryCanonicalReplacements,
   type SessionEntryCanonicalReplacement,
@@ -21,6 +21,7 @@ import type {
   SessionPatchProjectionOperation,
   SessionPatchProjectionResult,
 } from "./session-accessor.types.js";
+import { readSessionEntrySummariesInWorker } from "./session-entry-read-runtime.js";
 import {
   resolveProjectionExistingEntry,
   SessionLabelOwnerIndex,
@@ -166,20 +167,15 @@ export async function cleanupPluginHostSessionStore(
   }
   const now = Date.now();
   let cleared = 0;
-  // Select metadata without yielding; saved prompts are reserved from plugin slots.
-  // Check only selected writes; the patch rereads full entries and rechecks authority at commit.
-  for (const { entry, sessionKey } of listSessionEntriesCore({
+  for (const { entry, sessionKey } of await readSessionEntrySummariesInWorker({
     agentId: params.agentId,
     storePath: params.storePath,
-    projection: "list",
+    cleanupSession: params.sessionKey,
   })) {
     if (isLockedHarnessSessionOwnedByPlugin(entry, params.preserveLockedHarnessIds)) {
       continue;
     }
-    if (
-      !matchesPluginHostCleanupSession(sessionKey, entry, params.sessionKey) ||
-      !hasPluginHostCleanupTarget(entry, params)
-    ) {
+    if (!hasPluginHostCleanupTarget(entry, params)) {
       continue;
     }
     if (params.shouldCleanup && !params.shouldCleanup()) {
@@ -191,7 +187,10 @@ export async function cleanupPluginHostSessionStore(
         if (isLockedHarnessSessionOwnedByPlugin(currentEntry, params.preserveLockedHarnessIds)) {
           return null;
         }
-        if (!hasPluginHostCleanupTarget(currentEntry, params)) {
+        if (
+          !matchesPluginHostCleanupSession(sessionKey, currentEntry, params.sessionKey) ||
+          !hasPluginHostCleanupTarget(currentEntry, params)
+        ) {
           return null;
         }
         clearPluginHostCleanupTarget(currentEntry, params);
