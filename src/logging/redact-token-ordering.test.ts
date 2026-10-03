@@ -1,6 +1,6 @@
 // Redaction ordering tests cover generic credential patterns around whole-token redaction.
 import { describe, expect, it } from "vitest";
-import { redactSensitiveText } from "./redact.js";
+import { redactSensitiveText, redactToolPayloadTextWithConfig } from "./redact.js";
 
 function fakeJwtCredentialShapedSegment(): string {
   return fakeRepeatedToken(["A", "b", "9", "C"]);
@@ -71,6 +71,25 @@ describe("redactSensitiveText token ordering", () => {
     const token = "fc-0123456789abcdef";
     for (const prefix of ["", " ", "/", "="]) {
       expect(redactSensitiveText(`${prefix}${token}`, { mode: "tools" })).not.toContain(token);
+    }
+  });
+
+  it("preserves Atlassian account IDs without exposing Telegram bot tokens", () => {
+    const accountIds = [
+      "123456:0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
+      "712020:0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9",
+    ];
+    for (const accountId of accountIds) {
+      const payload = `{"accountId":"${accountId}"}`;
+      expect(redactSensitiveText(payload, { mode: "tools" })).toBe(payload);
+      expect(redactToolPayloadTextWithConfig(payload, undefined)).toBe(payload);
+    }
+
+    for (const token of [
+      "110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw",
+      "bot110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw",
+    ]) {
+      expect(redactSensitiveText(`token ${token}`, { mode: "tools" })).not.toContain(token);
     }
   });
 
