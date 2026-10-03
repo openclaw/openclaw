@@ -8,6 +8,8 @@ import type {
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
   if (
     command.type === "secrets.metadata" ||
+    command.type === "secrets.execEnvironment" ||
+    command.type === "secrets.value" ||
     command.type === "sessionState.versions" ||
     command.type === "sessionState.events" ||
     command.type === "operatorApprovals.history" ||
@@ -206,6 +208,8 @@ function stringBytes(values: readonly (string | undefined)[]): number {
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (
+    command.type === "secrets.execEnvironment" ||
+    command.type === "secrets.value" ||
     command.type === "sessionState.versions" ||
     command.type === "sessionState.events" ||
     command.type === "workers.placementProjection" ||

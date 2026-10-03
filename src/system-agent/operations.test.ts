@@ -496,7 +496,7 @@ describe("system agent operations", () => {
         path: operation.path,
         cliOptions: { refProvider: "default", refSource: "store", refId: name },
       });
-      expect(readStored(name ?? "")).toMatchObject({ ok: true, value: operation.secret });
+      expect(await readStored(name ?? "")).toMatchObject({ ok: true, value: operation.secret });
       expect(lines.join("\n")).not.toContain(operation.secret);
       expect(JSON.stringify(readLastAuditEntry())).not.toContain(operation.secret);
     });

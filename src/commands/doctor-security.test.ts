@@ -488,7 +488,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
         }),
       );
       expect(lastMessage()).toContain("unavailable until replaced");
-      expect(readSecretStoreValue(entry)).toEqual({ ok: true, value: REDACTED_SENTINEL });
+      expect(await readSecretStoreValue(entry)).toEqual({ ok: true, value: REDACTED_SENTINEL });
     });
   });
 

@@ -1446,10 +1446,14 @@ existing reader. Store-bound questions retain authority through persistence and
 publish only an acknowledged safe answer. Reset hides their public entries
 immediately while accepted work settles privately. Runtime refresh follows the
 commit; failed refresh never invites replay of a saved answer. The released
-synchronous question SDK methods retain their contracts. Runtime value and exec
-environment reads, hidden GitHub operations, and the CLI allowed-host setter
-remain with their existing owners. Schemas, retention, stored bytes, and update
-behavior are unchanged.
+synchronous question SDK methods retain their contracts. Exact values and coherent
+exec-environment snapshots use bounded commands in that same read worker. The host
+captures the physical store before yielding, registers returned secrets with its
+redaction owner, and seals exec sentinels with its process-local key. Each exec
+call rechecks its existing source authority after awaiting the run's shared
+snapshot; generic SecretRef callers retain their current activation guards.
+Hidden GitHub operations and the CLI allowed-host setter remain with their existing
+owners. Schemas, retention, stored bytes, and update behavior are unchanged.
 
 Placement change reporting reads its before/after snapshots in the shared-state
 read worker using the placement store's row codec. It transfers only session
