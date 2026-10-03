@@ -51,3 +51,35 @@ export const CLEANUP_REMOTE_WORKSPACE_STAGE = [
   REMOVE_OWNED_STAGE,
   "remove_owned_stage(sys.argv[1])",
 ].join("\n");
+
+// Atomically replace a live remote directory with a staged upload. The
+// destination tree is rotated aside before the staged tree takes its place,
+// so a failed transfer leaves the previous complete tree in place instead of
+// a half-written one. Staging and backup must share the destination's parent.
+export const REPLACE_REMOTE_SKILLS_WORKSPACE = [
+  "import errno, os, shutil, stat, sys",
+  REMOVE_OWNED_STAGE,
+  "staging, destination, backup = sys.argv[1:]",
+  "staging_base = os.path.basename(staging)",
+  "destination_base = os.path.basename(destination)",
+  "backup_base = os.path.basename(backup)",
+  "parent = os.path.dirname(destination)",
+  "if os.path.dirname(staging) != parent or os.path.dirname(backup) != parent:",
+  "    raise ValueError('skills staging and backup must share the destination parent')",
+  "parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)",
+  "try:",
+  "    try:",
+  "        os.rename(staging_base, destination_base, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
+  "    except OSError as error:",
+  "        if error.errno not in (errno.EEXIST, errno.ENOTEMPTY):",
+  "            raise",
+  "        os.rename(destination_base, backup_base, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
+  "        try:",
+  "            os.rename(staging_base, destination_base, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
+  "        except BaseException:",
+  "            os.rename(backup_base, destination_base, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
+  "            raise",
+  "    remove_owned_stage(os.path.join(parent, backup_base))",
+  "finally:",
+  "    os.close(parent_fd)",
+].join("\n");

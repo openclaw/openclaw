@@ -61,9 +61,13 @@ async function createCommandCancellationFixture() {
 }
 
 describe("remote shell command cancellation", () => {
-  it.each(["clear", "upload"] as const)(
+  it.each([
+    { phase: "stage", runCommands: 1, uploads: 0 },
+    { phase: "upload", runCommands: 2, uploads: 1 },
+    { phase: "publish", runCommands: 3, uploads: 1 },
+  ] as const)(
     "cancels the skills %s and joins it and session disposal before rejecting",
-    async (phase) => {
+    async ({ phase, runCommands, uploads }) => {
       const { backend, session } = await createCommandCancellationFixture();
       const controller = new AbortController();
       const entered = createDeferred();
@@ -84,13 +88,29 @@ describe("remote shell command cancellation", () => {
         await release.promise;
         signal?.throwIfAborted();
       };
-      if (phase === "clear") {
+      const okResult = () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      });
+      if (phase === "stage") {
         session.runCommand.mockImplementationOnce(async ({ signal }) => {
           await hold(signal);
-          return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 };
+          return okResult();
         });
-      } else {
+      } else if (phase === "upload") {
         session.uploadDirectory.mockImplementationOnce(({ signal }) => hold(signal));
+      } else {
+        let calls = 0;
+        const passthrough = session.runCommand.getMockImplementation();
+        session.runCommand.mockImplementation(async (params) => {
+          calls += 1;
+          if (calls === 2) {
+            await hold(params.signal);
+            return okResult();
+          }
+          return passthrough!(params);
+        });
       }
       session.dispose.mockImplementationOnce(async () => {
         disposing.resolve();
@@ -121,8 +141,8 @@ describe("remote shell command cancellation", () => {
         expect(completed).toBe(false);
         releaseDisposal.resolve();
         expect(await result).toEqual(expect.objectContaining({ message: "interrupt deadline" }));
-        expect(session.runCommand).toHaveBeenCalledOnce();
-        expect(session.uploadDirectory).toHaveBeenCalledTimes(phase === "upload" ? 1 : 0);
+        expect(session.runCommand).toHaveBeenCalledTimes(runCommands);
+        expect(session.uploadDirectory).toHaveBeenCalledTimes(uploads);
         expect(session.dispose).toHaveBeenCalledOnce();
       } finally {
         release.resolve();
@@ -162,6 +182,54 @@ describe("remote shell command cancellation", () => {
       release.resolve();
       await result;
     }
+  });
+});
+
+describe("remote skills workspace refresh", () => {
+  function remoteCommands(session: {
+    runCommand: { mock: { calls: Array<Array<{ remoteCommand?: unknown }>> } };
+  }): string[] {
+    return session.runCommand.mock.calls.map((call) => String(call[0]?.remoteCommand ?? ""));
+  }
+
+  it("publishes skills through a staging directory and rotates the live tree", async () => {
+    const { backend, session } = await createCommandCancellationFixture();
+    await backend.runShellCommand({ script: "touch sentinel" });
+
+    const uploadCall = session.uploadDirectory.mock.calls[0]?.[0];
+    expect(uploadCall).toBeDefined();
+    const stagingDir = String(uploadCall!.remoteDir);
+    expect(stagingDir).toMatch(/sandbox-skills\.stage-/);
+    const destinationDir = stagingDir.replace(/\.stage-.*$/, "");
+    expect(destinationDir).toMatch(/sandbox-skills$/);
+
+    const commands = remoteCommands(session);
+    // The live destination is never cleared in place nor used as the direct upload target.
+    expect(commands.join("\n")).not.toContain("openclaw-sandbox-clear");
+    expect(String(uploadCall!.remoteDir)).not.toBe(destinationDir);
+    // The staged tree is rotated over the live destination atomically.
+    const publish = commands.find((command) => command.includes("python3"));
+    expect(publish).toBeDefined();
+    expect(publish).toContain(stagingDir);
+    expect(publish).toContain(destinationDir);
+  });
+
+  it("keeps the live skills tree when the upload fails", async () => {
+    const { backend, session } = await createCommandCancellationFixture();
+    session.uploadDirectory.mockRejectedValueOnce(new Error("ssh link dropped"));
+
+    await expect(backend.runShellCommand({ script: "touch sentinel" })).rejects.toThrow(
+      "ssh link dropped",
+    );
+
+    const commands = remoteCommands(session);
+    // No publish attempted; the staging litter is cleaned up instead.
+    expect(commands.some((command) => command.includes("staging, destination, backup"))).toBe(
+      false,
+    );
+    expect(commands.some((command) => command.includes("remove_owned_stage(sys.argv[1])"))).toBe(
+      true,
+    );
   });
 });
 
