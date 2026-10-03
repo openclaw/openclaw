@@ -108,7 +108,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
-    const sessionCreation = prepareSkillLibrarySessionCreation(
+    const sessionCreation = await prepareSkillLibrarySessionCreation(
       client,
       context.getRuntimeConfig,
       resolveOperatorSessionCreation(client, { allowTrustedHint: true }),

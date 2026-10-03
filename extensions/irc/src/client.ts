@@ -46,11 +46,7 @@ function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): 
 
 type IrcPrivmsgEvent = {
   senderNick: string;
-  senderUser?: string;
-  senderHost?: string;
   connectedNick: string;
-  target: string;
-  text: string;
   rawLine: string;
 };
 
@@ -371,11 +367,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
           void Promise.resolve(
             options.onPrivmsg({
               senderNick,
-              senderUser: prefix.user ? prefix.user.trim() : undefined,
-              senderHost: prefix.host ? prefix.host.trim() : undefined,
               connectedNick: currentNick,
-              target,
-              text,
               rawLine,
             }),
           ).catch((error: unknown) => {

@@ -42,6 +42,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   >;
   hasCronCreatorAuthority: boolean;
   suppressReplies?: boolean;
+  releaseSourceWorkAdmission: () => void;
   retainWorkAdmission: () => () => void;
   armOperatorRunCancellation?: () => void;
   retireOperatorRunCancellation?: () => void;
@@ -148,6 +149,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
         onAborted: (reason) => {
           params.sessionBinding.abortDiagnosticReason = reason;
           recordQueuedTerminal("aborted");
+          params.releaseSourceWorkAdmission();
           releaseWorkAdmission?.();
           releaseWorkAdmission = undefined;
         },

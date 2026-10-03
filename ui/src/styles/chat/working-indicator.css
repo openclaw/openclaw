@@ -74,6 +74,19 @@
   color: var(--muted);
 }
 
+.chat-working-indicator__child {
+  overflow: hidden;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-decoration: underline;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-working-indicator--continuation {
   gap: 6px;
   min-height: 0;

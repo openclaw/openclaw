@@ -298,10 +298,12 @@ export async function prepareChatSendAttachments(params: {
               stagingEntry.skillsSnapshot?.librarySelections)
             : request.systemInputProvenance
               ? undefined
-              : prepareSkillLibrarySessionCreation(
-                  client,
-                  context.getRuntimeConfig ?? cfg,
-                  resolveOperatorSessionCreation(client),
+              : (
+                  await prepareSkillLibrarySessionCreation(
+                    client,
+                    context.getRuntimeConfig ?? cfg,
+                    resolveOperatorSessionCreation(client),
+                  )
                 ).skillLibrarySelections;
           mediaPathOffloads = await prestageMediaPathOffloads({
             offloadedRefs,

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { createIdentityFromStatus } from "@openclaw/acp-core/runtime/session-identity";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   createAdmittedRunOperatorAuthority,
   prepareSystemAgentRunAdmission,
@@ -100,12 +100,11 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
         requestId: "policy-locator",
       });
       turnResult = Promise.allSettled([turn]);
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         ensureEntered.promise,
-        turnResult.then(() => {
-          throw new Error("Policy turn settled before backend ensure.");
-        }),
-      ]);
+        turnResult,
+        "Policy turn settled before backend ensure.",
+      );
       const cancellation = f.manager.cancelSession({
         ...f.target,
         expectedRunId: "policy-locator",
@@ -118,19 +117,17 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
         },
       });
       cancelResult = Promise.allSettled([cancellation]);
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         stopAdmitted.promise,
-        cancelResult.then(() => {
-          throw new Error("Stop settled before accepting late-handle cleanup.");
-        }),
-      ]);
+        cancelResult,
+        "Stop settled before accepting late-handle cleanup.",
+      );
       releaseEnsure.resolve();
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         publicationReadEntered.promise,
-        turnResult.then(() => {
-          throw new Error("Policy failure did not reach terminal publication validation.");
-        }),
-      ]);
+        turnResult,
+        "Policy failure did not reach terminal publication validation.",
+      );
       expect(f.runTurn).not.toHaveBeenCalled();
       const successorIdentity = createIdentityFromStatus({
         status: { agentSessionId: "successor-agent" },
@@ -207,12 +204,11 @@ it.each(["durable", "incognito"] as const)(
         });
         const result = Promise.allSettled([cancellation]);
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             entered.promise,
-            result.then(() => {
-              throw new Error("Cold cancellation settled before runtime ensure.");
-            }),
-          ]);
+            result,
+            "Cold cancellation settled before runtime ensure.",
+          );
           await upsertAcpSessionMeta({
             ...f.target,
             skipMaintenance: true,
@@ -254,134 +250,14 @@ it.each(["durable", "incognito"] as const)(
   },
 );
 
-it.each(["durable", "incognito"] as const)(
-  "joins %s late ensure after Stop without publishing its normalization over a replacement",
-  async (sourceKind) => {
-    await withAcpCancellationFixture(
-      async (f) => {
-        const path = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: f.state.env });
-        const memory = getOpenIncognitoAgentDatabase("main", path);
-        if (sourceKind === "incognito") {
-          expect(memory).toBeDefined();
-          expect(memory?.db.location()).toBeFalsy();
-          expect(fs.existsSync(path)).toBe(false);
-        }
-        const entered = createDeferred();
-        const release = createDeferred();
-        const admitted = createDeferred();
-        f.ensureSession.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return {
-            sessionKey: f.target.sessionKey,
-            backend: "cancellation-proof",
-            runtimeSessionName: "normalized-runtime",
-          };
-        });
-        const prepare = DEFAULT_DEPS.prepareSessionControlRead;
-        let controlPrepared = false;
-        const reader = vi
-          .spyOn(DEFAULT_DEPS, "prepareSessionControlRead")
-          .mockImplementationOnce(async (params) => {
-            const read = await prepare(params);
-            controlPrepared = true;
-            return read;
-          });
-        const close = vi.spyOn(f.runtime, "close");
-        const context = createTestAdmittedRunContext("late-cold-locator");
-        let turnSettled = false;
-        let cancelSettled = false;
-        const turn = f.manager.runTurn({
-          ...f.target,
-          admittedRunContext: context,
-          provenance: "system",
-          mode: "prompt",
-          text: "late cold locator",
-          requestId: "late-cold-locator",
-        });
-        const turnResult = Promise.allSettled([turn]).then((result) => {
-          turnSettled = true;
-          return result;
-        });
-        let cancelResult: Promise<PromiseSettledResult<void>[]> | undefined;
-        try {
-          await Promise.race([
-            entered.promise,
-            turnResult.then(() => {
-              throw new Error("Turn settled before its held runtime ensure.");
-            }),
-          ]);
-          const cancellation = f.manager.cancelSession({
-            ...f.target,
-            expectedRunId: "late-cold-locator",
-            expectedInstanceId: context.operationalRunInstance.instanceId,
-            expectedOwnerKey: "agent:main:main",
-            assertActive: () => {
-              if (controlPrepared) {
-                admitted.resolve();
-              }
-            },
-          });
-          cancelResult = Promise.allSettled([cancellation]).then((result) => {
-            cancelSettled = true;
-            return result;
-          });
-          await Promise.race([
-            admitted.promise,
-            cancelResult.then(() => {
-              throw new Error("Stop settled before late-ensure cancellation admission.");
-            }),
-          ]);
-          await upsertAcpSessionMeta({
-            ...f.target,
-            skipMaintenance: true,
-            mutate: (current) => {
-              if (!current) {
-                throw new Error("Late ensure fixture lost its global ACP metadata.");
-              }
-              return { ...current, runtimeSessionName: "successor-runtime", state: "running" };
-            },
-          });
-          expect(turnSettled).toBe(false);
-          expect(cancelSettled).toBe(false);
-          release.resolve();
-          await Promise.all([turnResult, cancelResult]);
-          expect(turnSettled).toBe(true);
-          expect(cancelSettled).toBe(true);
-          expect(readAcpSessionEntry(f.target)?.acp).toMatchObject({
-            backend: "cancellation-proof",
-            runtimeSessionName: "successor-runtime",
-            state: "running",
-          });
-          expect(readDurableAcpSignals(f, "late-cold-locator")).toEqual([]);
-          expect(f.ensureSession).toHaveBeenCalledOnce();
-          expect(f.runTurn).not.toHaveBeenCalled();
-          expect(f.cancel).not.toHaveBeenCalled();
-          expect(close).not.toHaveBeenCalled();
-          if (sourceKind === "incognito") {
-            expect(getOpenIncognitoAgentDatabase("main", path)).toBe(memory);
-            expect(fs.existsSync(path)).toBe(false);
-          }
-        } finally {
-          release.resolve();
-          await Promise.allSettled([turnResult, cancelResult]);
-          reader.mockRestore();
-          close.mockRestore();
-        }
-      },
-      {
-        sessionKey:
-          sourceKind === "incognito"
-            ? "agent:main:dashboard:incognito-late-cold-locator"
-            : "agent:main:acp:late-cold-locator",
-      },
-    );
-  },
-);
-
-it.each(["durable", "incognito"] as const)(
-  "refuses a %s normalization write prepared before owner-qualified Stop admission",
-  async (sourceKind) => {
+it.each([
+  ["durable", "ensure"],
+  ["incognito", "ensure"],
+  ["durable", "metadata-write"],
+  ["incognito", "metadata-write"],
+] as const)(
+  "joins %s cancelled setup at %s without publishing normalization over a replacement",
+  async (sourceKind, boundary) => {
     await withAcpCancellationFixture(
       async (f) => {
         const path = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: f.state.env });
@@ -394,29 +270,39 @@ it.each(["durable", "incognito"] as const)(
         const reached = createDeferred();
         const release = createDeferred();
         const admitted = createDeferred();
-        f.ensureSession.mockImplementationOnce(async () => ({
-          sessionKey: f.target.sessionKey,
-          backend: "cancellation-proof",
-          runtimeSessionName: "normalized-runtime",
-        }));
+        f.ensureSession.mockImplementationOnce(async () => {
+          if (boundary === "ensure") {
+            reached.resolve();
+            await release.promise;
+          }
+          return {
+            sessionKey: f.target.sessionKey,
+            backend: "cancellation-proof",
+            runtimeSessionName: "normalized-runtime",
+          };
+        });
         const upsert = DEFAULT_DEPS.upsertSessionMeta;
         const patchEntry = sessionAccessor.patchSessionEntryWithKey;
         const writer =
-          sourceKind === "durable"
-            ? vi.spyOn(DEFAULT_DEPS, "upsertSessionMeta").mockImplementationOnce(async (params) => {
-                reached.resolve();
-                await release.promise;
-                return upsert(params);
-              })
-            : vi
-                .spyOn(sessionAccessor, "patchSessionEntryWithKey")
-                .mockImplementationOnce(async (...args) => {
-                  // Complete the actual memory-entry mutation before holding global publication.
-                  const result = await patchEntry(...args);
-                  reached.resolve();
-                  await release.promise;
-                  return result;
-                });
+          boundary === "ensure"
+            ? undefined
+            : sourceKind === "durable"
+              ? vi
+                  .spyOn(DEFAULT_DEPS, "upsertSessionMeta")
+                  .mockImplementationOnce(async (params) => {
+                    reached.resolve();
+                    await release.promise;
+                    return upsert(params);
+                  })
+              : vi
+                  .spyOn(sessionAccessor, "patchSessionEntryWithKey")
+                  .mockImplementationOnce(async (...args) => {
+                    // Complete the actual memory-entry mutation before holding global publication.
+                    const result = await patchEntry(...args);
+                    reached.resolve();
+                    await release.promise;
+                    return result;
+                  });
         const prepare = DEFAULT_DEPS.prepareSessionControlRead;
         let controlPrepared = false;
         const reader = vi
@@ -444,12 +330,11 @@ it.each(["durable", "incognito"] as const)(
         });
         let cancelResult: Promise<PromiseSettledResult<void>[]> | undefined;
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             reached.promise,
-            turnResult.then(() => {
-              throw new Error("Normalization settled before its write gate.");
-            }),
-          ]);
+            turnResult,
+            "Normalization settled before its write gate.",
+          );
           expect(readAcpSessionEntry(f.target)?.acp?.runtimeSessionName).toBe("retained-runtime");
           expect(f.runTurn).not.toHaveBeenCalled();
           const cancellation = f.manager.cancelSession({
@@ -467,12 +352,11 @@ it.each(["durable", "incognito"] as const)(
             cancelSettled = true;
             return result;
           });
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             admitted.promise,
-            cancelResult.then(() => {
-              throw new Error("Stop settled before delayed-write cancellation admission.");
-            }),
-          ]);
+            cancelResult,
+            "Stop settled before delayed-write cancellation admission.",
+          );
           await upsertAcpSessionMeta({
             ...f.target,
             skipMaintenance: true,
@@ -507,7 +391,7 @@ it.each(["durable", "incognito"] as const)(
           release.resolve();
           await Promise.allSettled([turnResult, cancelResult]);
           reader.mockRestore();
-          writer.mockRestore();
+          writer?.mockRestore();
           close.mockRestore();
         }
       },

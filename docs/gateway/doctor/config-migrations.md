@@ -369,7 +369,7 @@ configured path cannot be served by the Gateway. Disabled accounts, Telegram pol
 Feishu WebSocket transport receive no pin. Explicit objects and `false` settings
 remain authoritative.
 
-Startup and update-time Doctor use the same migration owner. Doctor validates
+Explicit and update-time Doctor use the same migration owner. Doctor validates
 and backs up the config through the normal write flow. Pins and the
 `meta.migrations.webhookListeners` completion marker are saved together, including
 when channel settings come from `$include` files. Fresh installations record
@@ -387,13 +387,14 @@ the installer's backed-up config publication before its new runtime starts.
 Update a retained older standalone plugin before removing its pin; older plugin
 versions can still open their historical default port.
 
-For a read-only external config source, startup records completion in canonical
-SQLite machine state only when the completion marker is the sole required change.
-If endpoints or other channel settings need repair, update that external source
-and its completion marker as directed by the startup error. Startup refuses to
-drop an unmigrated endpoint. A fresh read-only installation needs no pins.
-When no config file exists yet, startup can record the same marker-only completion
-without creating a config file that would interfere with `gateway --dev` setup.
+Startup leaves config bytes unchanged. When the completion marker is the sole
+required change, startup records it in canonical SQLite machine state, including
+when no config file exists yet. If endpoints or other channel settings need
+repair, startup refuses with `openclaw doctor --fix` guidance. For a read-only
+external config source, update that source and its completion marker as directed
+by the startup error. Startup refuses to drop an unmigrated endpoint. A fresh
+installation needs no pins or a new config file that would interfere with
+`gateway --dev` setup.
 
 The existing explicit-key migrations remain supported: `webhookPort` and
 `webhookHost` become `legacyWebhook: { port, host? }`; Teams `webhook.port` becomes

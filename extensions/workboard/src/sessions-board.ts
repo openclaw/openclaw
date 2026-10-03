@@ -26,7 +26,11 @@ type SessionsBoardServiceParams = {
 };
 type CallerAuthority = { assertCurrent: () => void };
 type Operations = {
-  read: (boardId: string, view?: WorkboardSessionsBoardView) => Promise<WorkboardSessionsBoardRead>;
+  read: (
+    boardId: string,
+    view?: WorkboardSessionsBoardView,
+    caller?: CallerAuthority,
+  ) => Promise<WorkboardSessionsBoardRead>;
   update: (
     boardId: string,
     patch: unknown,
@@ -42,9 +46,7 @@ type Operations = {
 export type WorkboardSessionsBoardService = OpenClawPluginService &
   Operations & { stop: () => Promise<void> };
 type Owner = Operations & { cancel: () => void; stop: () => Promise<void> };
-type CachedFacts = { sessionId: string; facts: WorkboardSessionFacts; readAt: number };
-const FACTS_MAX_AGE_MS = 10 * 60_000;
-const FACTS_PR_RETRY_MS = 60_000;
+type CachedFacts = { sessionId: string; facts?: WorkboardSessionFacts; dirty: boolean };
 const FACTS_BATCH_SIZE = 40;
 
 function activeState() {
@@ -153,6 +155,8 @@ function createOwner(
   isCurrent: () => boolean,
 ): Owner {
   const cache = new Map<string, CachedFacts>();
+  const refreshes = new Map<string, Promise<void>>();
+  const reads = new Map<string, Promise<WorkboardSessionsBoardRead>>();
   const now = params.now ?? Date.now;
   let stopped = false;
   let hasRead = false;
@@ -172,9 +176,9 @@ function createOwner(
     if (stopped || !hasRead) {
       return;
     }
-    // Retain last-known facts for failed reads, but invalidate both freshness and in-flight reads.
+    // Replacing the cell also rejects a result started before this publication.
     if (previous) {
-      cache.set(sessionKey, { ...previous, readAt: -Infinity });
+      cache.set(sessionKey, { ...previous, dirty: true });
     }
     if (timer) {
       return;
@@ -190,58 +194,80 @@ function createOwner(
   const read = async (
     id: string,
     view?: WorkboardSessionsBoardView,
+    caller?: CallerAuthority,
   ): Promise<WorkboardSessionsBoardRead> => {
-    assertCurrent();
+    const assertReadCurrent = interactiveAuthority(caller);
+    assertReadCurrent();
     const board = await params.store.getSessionsBoard(id);
     hasRead = true;
     const { sessions: roster, people } = await listSessions(params.gateway, board, view);
-    assertCurrent();
-    const missing = [...roster.values()].filter((row) => {
-      const cached = cache.get(row.key);
-      return (
-        row.key !== board.sessions.agentSessionKey &&
-        (!cached ||
-          cached.sessionId !== row.sessionId ||
-          now() - cached.readAt >=
-            (cached.facts.pullRequestsUnavailable ? FACTS_PR_RETRY_MS : FACTS_MAX_AGE_MS))
-      );
-    });
+    assertReadCurrent();
     const unavailable = new Set<string>();
     const reasons = new Set<string>();
     // Results belong to this caller's roster; omitted facts are not permission to reuse old data.
     const omitted = new Set<string>();
-    for (let offset = 0; offset < missing.length; offset += FACTS_BATCH_SIZE) {
-      const batch = missing.slice(offset, offset + FACTS_BATCH_SIZE);
-      const before = new Map(batch.map((row) => [row.key, cache.get(row.key)]));
-      try {
-        const result = await params.gateway.readSessionFacts({
-          sessionKeys: batch.map((row) => row.key),
-        });
-        assertCurrent();
-        const returned = new Map(result.sessions.map((facts) => [facts.key, facts]));
+    while (refreshes.has(id)) {
+      // A departing caller must not retire another reader's live authority.
+      await refreshes.get(id)?.catch(() => {});
+      assertReadCurrent();
+    }
+    const missing = [...roster.values()].filter((row) => {
+      const cached = cache.get(row.key);
+      return (
+        row.key !== board.sessions.agentSessionKey &&
+        (!cached || cached.sessionId !== row.sessionId || cached.dirty)
+      );
+    });
+    const refresh = async () => {
+      for (let offset = 0; offset < missing.length; offset += FACTS_BATCH_SIZE) {
+        const batch = missing.slice(offset, offset + FACTS_BATCH_SIZE);
         for (const row of batch) {
-          const facts = returned.get(row.key);
-          if (!facts || facts.sessionId !== row.sessionId) {
-            omitted.add(row.key);
-            if (cache.get(row.key) === before.get(row.key)) {
-              cache.delete(row.key);
-            }
-          } else if (cache.get(row.key) === before.get(row.key)) {
-            cache.set(row.key, { sessionId: facts.sessionId, facts, readAt: now() });
+          if (cache.get(row.key)?.sessionId !== row.sessionId) {
+            cache.set(row.key, { sessionId: row.sessionId, dirty: true });
           }
         }
-      } catch (error) {
-        assertCurrent();
-        for (const row of batch) {
-          unavailable.add(row.key);
+        const before = new Map(batch.map((row) => [row.key, cache.get(row.key)]));
+        try {
+          const result = await params.gateway.readSessionFacts({
+            sessionKeys: batch.map((row) => row.key),
+          });
+          assertReadCurrent();
+          const returned = new Map(result.sessions.map((facts) => [facts.key, facts]));
+          for (const row of batch) {
+            const facts = returned.get(row.key);
+            if (!facts || facts.sessionId !== row.sessionId) {
+              omitted.add(row.key);
+              if (cache.get(row.key) === before.get(row.key)) {
+                cache.delete(row.key);
+              }
+            } else if (cache.get(row.key) === before.get(row.key)) {
+              cache.set(row.key, { sessionId: facts.sessionId, facts, dirty: false });
+            }
+          }
+        } catch (error) {
+          assertReadCurrent();
+          for (const row of batch) {
+            unavailable.add(row.key);
+          }
+          reasons.add(redactToolPayloadText(String(error)).replace(/\s+/g, " ").slice(0, 300));
         }
-        reasons.add(redactToolPayloadText(String(error)).replace(/\s+/g, " ").slice(0, 300));
+      }
+    };
+    if (missing.length) {
+      const computation = refresh();
+      refreshes.set(id, computation);
+      try {
+        await computation;
+      } finally {
+        if (refreshes.get(id) === computation) {
+          refreshes.delete(id);
+        }
       }
     }
     const placements = new Map(
       (await params.store.listSessionPlacements(id)).map((entry) => [entry.sessionKey, entry]),
     );
-    assertCurrent();
+    assertReadCurrent();
     const fallback = sessionsBoardFallback(board);
     const sessions: WorkboardSessionsBoardRead["sessions"] = [];
     for (const row of roster.values()) {
@@ -267,7 +293,7 @@ function createOwner(
         source: pinned ? "operator" : "state",
         reason: pinned
           ? pin.reason
-          : !known
+          : !known || (!match && facts.pullRequestsUnavailable)
             ? "facts-unavailable"
             : match
               ? "Matched column rules"
@@ -287,7 +313,7 @@ function createOwner(
     }
     if (sessions.some((session) => session.pullRequestsUnavailable)) {
       warnings.push(
-        "Some pull-request information is unavailable. Reread after one minute to retry.",
+        "Some pull-request information is unavailable. The board updates when background facts are ready.",
       );
     }
     return {
@@ -308,7 +334,24 @@ function createOwner(
     cache.clear();
   };
   return {
-    read,
+    read(id, view, caller) {
+      // A caller's roster and people facets cannot be shared with a different viewer.
+      if (caller) {
+        return read(id, view, caller);
+      }
+      const key = JSON.stringify([id, view]);
+      const pending = reads.get(key);
+      if (pending) {
+        return pending;
+      }
+      const computation = read(id, view).finally(() => {
+        if (reads.get(key) === computation) {
+          reads.delete(key);
+        }
+      });
+      reads.set(key, computation);
+      return computation;
+    },
     cancel,
     async stop() {
       cancel();
@@ -359,7 +402,7 @@ function createOwner(
       ) {
         throw new Error("Sessions board changed. Refresh and retry the move.");
       }
-      return await read(id);
+      return await read(id, undefined, caller);
     },
   };
 }
@@ -407,7 +450,7 @@ export function createWorkboardSessionsBoardService(
       }
       await owner.stop();
     },
-    read: (id, view) => current().read(id, view),
+    read: (id, view, caller) => current().read(id, view, caller),
     update: (id, patch, caller) => current().update(id, patch, caller),
     move: (id, key, column, caller) => current().move(id, key, column, caller),
   };

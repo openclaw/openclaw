@@ -1431,6 +1431,7 @@ src/shared/store-writer-queue.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
 src/skills/discovery/filter.ts
+src/skills/library/errors.ts
 src/skills/lifecycle/upload-store-error.ts
 src/state/agent-creation-claim.ts
 src/state/agent-database-admission.ts

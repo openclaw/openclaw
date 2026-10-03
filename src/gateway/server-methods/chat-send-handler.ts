@@ -258,7 +258,7 @@ async function handleChatSendWithOptions(
       replyContextFieldsPromise,
     } = userTurn;
     bindPreparedMediaRecorder(userTurnRecorder);
-    const preparedUserTurn = prepareChatSendUserTurn({
+    const preparedUserTurn = await prepareChatSendUserTurn({
       request: normalizedRequest.value,
       session: preparedSession.value,
       admission: admitted.value,
@@ -528,7 +528,7 @@ async function handleChatSendWithOptions(
     messageInjectionAttempt = preAckInjection.attempt;
     // The admitted turn owns authoring after creating a session; the request's
     // absent-target authorization expires when that session is materialized.
-    const skillLibraryAuthoring = prepareGatewaySkillAuthoring(
+    const skillLibraryAuthoring = await prepareGatewaySkillAuthoring(
       {
         client,
         context,

@@ -594,6 +594,18 @@ another registered path observes the executor's single maintenance claim. Alias
 registrations retain cleanup locators without creating independent maintenance
 owners, so a nested scope cannot close an executor retained by its parent.
 
+Personal skill-library catalog, revision disclosure, and fresh selection reads use
+the shared-state read worker. The host captures the physical store, profile and
+role authority before yielding; prepared defaults and activation check the
+library writer's committed revision before session admission commits. Native
+library writes publish that revision before observers and preserve it on rollback.
+Copied durable session pins retain their existing revision access. The released
+synchronous skill-command and harness tool-surface SDKs retain their native
+metadata reader; Gateway status, embedded skill preparation, and sandbox
+synchronization use prepared reads. Import, upload, mutation, and
+authoring mutation guards remain for the next cutover. Schemas, quotas, retention,
+publication security checks, and update behavior are unchanged.
+
 ## Carry facts, publish after commit
 
 Message-tool-only completion records use the canonical per-agent writer. The
