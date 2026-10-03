@@ -36,6 +36,50 @@ import {
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 
 describe("Doctor stored auth alias migration", () => {
+  it.each(["import", "repair sequence"])(
+    "refuses config-selected retired sidecars before direct %s mutates auth",
+    async (entrypoint) => {
+      await withOpenClawTestState(
+        { label: "auth-retired-sidecar", layout: "home", env: { OPENCLAW_OAUTH_DIR: undefined } },
+        async (fixture) => {
+          const oauthDir = fixture.statePath("custom-credentials");
+          const sidecar = path.join(oauthDir, "auth-profiles", `${"b".repeat(32)}.json`);
+          const sourcePath = fixture.statePath("agents/main/agent/auth-profiles.json");
+          await fixture.writeJson("agents/main/agent/auth-profiles.json", {
+            version: 1,
+            profiles: {
+              "example:default": { mode: "api_key", provider: "example", apiKey: "synthetic-key" },
+            },
+          });
+          fs.mkdirSync(path.dirname(sidecar), { recursive: true });
+          fs.writeFileSync(sidecar, "unparsed historical bytes");
+          const sourceBytes = fs.readFileSync(sourcePath);
+          const cfg = {
+            plugins: { enabled: false },
+            env: { vars: { OPENCLAW_OAUTH_DIR: oauthDir } },
+          };
+          const pending =
+            entrypoint === "import"
+              ? maybeMigrateAuthProfileJsonStoresToSqlite({
+                  cfg,
+                  env: fixture.env,
+                  prompter: { confirmAutoFix: async () => true },
+                })
+              : runDoctorRepairSequence({
+                  state: { cfg, candidate: cfg, pendingChanges: false, fixHints: [] },
+                  env: fixture.env,
+                  doctorFixCommand: "openclaw doctor --fix",
+                });
+          await expect(pending).rejects.toThrow("Upgrade through OpenClaw 2026.9.7");
+          expect(fs.readFileSync(sourcePath)).toEqual(sourceBytes);
+          expect(fs.readFileSync(sidecar, "utf8")).toBe("unparsed historical bytes");
+          expect(fs.readdirSync(path.dirname(sourcePath))).toEqual(["auth-profiles.json"]);
+          expect(fixture.env.OPENCLAW_OAUTH_DIR).toBeUndefined();
+        },
+      );
+    },
+  );
+
   it("keeps canonical JSON import projection and archives the exact original fields", async () => {
     await withOpenClawTestState(
       { label: "auth-json-projection", layout: "home" },

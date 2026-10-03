@@ -9,12 +9,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  getOAuthApiKey,
-  getOAuthProviders,
-  type OAuthCredentials,
-  type OAuthProviderId,
-} from "../../llm/oauth.js";
+import { getOAuthApiKey, getOAuthProviders, type OAuthCredentials } from "../../llm/oauth.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
@@ -61,9 +56,6 @@ import {
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 
 const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
-
-const resolveOAuthProvider = (provider: string): OAuthProviderId | null =>
-  OAUTH_PROVIDER_IDS.has(provider) ? provider : null;
 
 /** Bearer-token auth modes that are interchangeable (oauth tokens and raw tokens). */
 const BEARER_AUTH_MODES = new Set(["oauth", "token"]);
@@ -183,11 +175,10 @@ async function refreshOAuthCredential(
     throw new OAuthProviderConfiguredUnavailableError(credential.provider);
   }
 
-  const oauthProvider = resolveOAuthProvider(credential.provider);
-  if (!oauthProvider) {
+  if (!OAUTH_PROVIDER_IDS.has(credential.provider)) {
     return null;
   }
-  const result = await getOAuthApiKey(oauthProvider, {
+  const result = await getOAuthApiKey(credential.provider, {
     [credential.provider]: credential,
   });
   return result?.newCredentials ?? null;
@@ -207,7 +198,7 @@ async function canRefreshOAuthCredential(
   if (pluginCapability.status === "configured-unavailable") {
     throw new OAuthProviderConfiguredUnavailableError(credential.provider);
   }
-  return resolveOAuthProvider(credential.provider) !== null;
+  return OAUTH_PROVIDER_IDS.has(credential.provider);
 }
 
 /** Refresh one OAuth credential and merge provider-returned token fields. */
@@ -269,7 +260,7 @@ async function tryResolveOAuthProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<ResolveApiKeyForProfileResult | null> {
   const { cfg, store, profileId } = params;
-  if (isRetiredOAuthProfileId(profileId)) {
+  if (profileId === CLAUDE_CLI_PROFILE_ID) {
     return null;
   }
   const cred = store.profiles[profileId];
@@ -294,10 +285,6 @@ async function tryResolveOAuthProfile(
   const resolved = await resolveOAuthProfileAccess(params, cred);
   params.signal?.throwIfAborted();
   return resolved;
-}
-
-function isRetiredOAuthProfileId(profileId: string): boolean {
-  return profileId === CLAUDE_CLI_PROFILE_ID;
 }
 
 function authProfileSecretRefKey(
@@ -403,7 +390,7 @@ export async function resolveApiKeyForProfile(
   }
   // Claude owns this native login slot. Legacy persisted copies must never
   // resolve, refresh, or leave OpenClaw as bearer tokens.
-  if (isRetiredOAuthProfileId(profileId)) {
+  if (profileId === CLAUDE_CLI_PROFILE_ID) {
     return null;
   }
   const configForRefResolution = cfg ?? getRuntimeConfig();

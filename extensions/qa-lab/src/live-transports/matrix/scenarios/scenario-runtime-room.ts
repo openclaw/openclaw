@@ -328,7 +328,7 @@ export async function runReactionThreadedScenario(context: MatrixQaScenarioConte
   return {
     artifacts: {
       driverEventId: thread.driverEventId,
-      ...buildMatrixQaReactionArtifacts({ reaction }),
+      ...buildMatrixQaReactionArtifacts(reaction),
       reply: thread.reply,
       rootEventId: thread.rootEventId,
       token: thread.token,
@@ -340,11 +340,7 @@ export async function runReactionThreadedScenario(context: MatrixQaScenarioConte
         extraLines: [`thread reply event: ${thread.reply.eventId}`],
         replyLabel: "thread reply",
       }),
-      ...buildMatrixQaReactionDetailLines({
-        reactionEmoji: reaction.reactionEmoji,
-        reactionEventId: reaction.reactionEventId,
-        reactionTargetEventId: reaction.reactionTargetEventId,
-      }),
+      ...buildMatrixQaReactionDetailLines(buildMatrixQaReactionArtifacts(reaction)),
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }

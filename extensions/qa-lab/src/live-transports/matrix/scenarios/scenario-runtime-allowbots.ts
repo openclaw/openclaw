@@ -1,4 +1,4 @@
-import { MATRIX_QA_BOT_DM_ROOM_KEY, resolveMatrixQaScenarioRoomId } from "./scenario-contract.js";
+import { MATRIX_QA_BOT_DM_ROOM_KEY } from "./scenario-contract.js";
 import {
   buildExactMarkerPrompt,
   buildMatrixQaToken,
@@ -31,7 +31,6 @@ async function runObserverBotReplyScenario(params: {
 
 async function runObserverBotNoReplyScenario(params: {
   context: MatrixQaScenarioContext;
-  roomKey?: string;
   tokenPrefix: string;
   withMention?: boolean;
 }) {
@@ -44,7 +43,7 @@ async function runObserverBotNoReplyScenario(params: {
       ? buildMentionPrompt(params.context.sutUserId, token)
       : buildExactMarkerPrompt(token),
     ...(withMention ? { mentionUserIds: [params.context.sutUserId] } : {}),
-    roomId: resolveMatrixQaScenarioRoomId(params.context, params.roomKey),
+    roomId: params.context.roomId,
     sutUserId: params.context.sutUserId,
     timeoutMs: resolveMatrixQaNoReplyWindowMs(params.context.timeoutMs),
     token,

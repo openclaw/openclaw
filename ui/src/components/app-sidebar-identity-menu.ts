@@ -6,14 +6,12 @@ import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
-import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
 import { requestDebugOverlayToggle } from "../pages/debug/debug-overlay-contract.ts";
 import {
   closeMenuAfterOwnDropdownHide,
   COMMAND_VALUE_PREFIX,
   consumeSidebarMenuSelection,
-  LINK_VALUE_PREFIX,
   moveSidebarMenuFocus,
   renderSidebarHelpMenu,
 } from "./app-sidebar-agent-menu.ts";
@@ -150,10 +148,6 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
           if (id !== capability?.snapshot?.currentId) {
             capability?.select(id);
           }
-          return;
-        }
-        if (value.startsWith(LINK_VALUE_PREFIX)) {
-          openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
           return;
         }
         switch (value) {

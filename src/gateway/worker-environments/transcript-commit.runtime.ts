@@ -1,10 +1,7 @@
-import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
-import type { WorkerTranscriptCommitParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import {
-  loadSessionEntry,
   publishTranscriptUpdate,
   withTranscriptWriteTransaction,
 } from "../../config/sessions/session-accessor.js";
@@ -16,15 +13,14 @@ import {
 import { redactTranscriptMessageForStorage } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { restoreSessionColdTranscript } from "../../config/sessions/session-cold-storage.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
-import { withSessionHistoryWorkerDatabase } from "../../config/sessions/session-transcript-worker-runtime.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   withOwnedSessionTranscriptWriterFence,
 } from "../../config/sessions/transcript-write-context.js";
-import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sha256Base64Url, sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -35,7 +31,6 @@ import {
   attachSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../../sessions/transcript-events.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -62,29 +57,6 @@ import type { WorkerTranscriptOperations } from "./transcript-commit.worker.js";
 const log = createSubsystemLogger("gateway/worker-transcript");
 const moduleUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.workerTranscriptCommit);
 
-function requestHash(request: WorkerTranscriptCommitParams): string {
-  return createHash("sha256")
-    .update(
-      stableStringify({
-        baseLeafId: request.baseLeafId,
-        messages: request.messages,
-      }),
-    )
-    .digest("hex");
-}
-
-function messageIdempotencyKey(params: {
-  sessionId: string;
-  runEpoch: number;
-  seq: number;
-  index: number;
-}): string {
-  const digest = createHash("sha256")
-    .update([params.sessionId, params.runEpoch, params.seq, params.index].join("\0"))
-    .digest("base64url");
-  return `worker-commit-${digest}`;
-}
-
 async function applyWorkerTranscriptCommit(params: {
   assertCurrent: () => undefined;
   config: OpenClawConfig;
@@ -93,9 +65,7 @@ async function applyWorkerTranscriptCommit(params: {
   recoverPersistedBatch: boolean;
   requestedBaseLeafId: string | null;
   runId: string | null;
-  sessionId: string;
   target: BoundAgentRunSessionTarget;
-  lifecycleRevision: string | undefined;
 }): Promise<ApplyTranscriptCommitResult> {
   const target = withOwnedSessionTranscriptWriterFence({
     ...captureSessionTranscriptTargetBinding(params.target),
@@ -108,6 +78,7 @@ async function applyWorkerTranscriptCommit(params: {
     params.assertCurrent();
     assertOwned();
   };
+  assertCurrent();
   const redactedMessages = params.messages.map((message) =>
     attachSessionTranscriptRunId(redactTranscriptMessage(message, params.config), params.runId),
   );
@@ -115,7 +86,7 @@ async function applyWorkerTranscriptCommit(params: {
   const input: TranscriptCommitInput = {
     scope,
     messages: params.messages,
-    lifecycleRevision: params.lifecycleRevision,
+    lifecycleRevision: target.expectedLifecycleRevision,
     requestedBaseLeafId: params.requestedBaseLeafId,
     recoverPersistedBatch: params.recoverPersistedBatch,
     cwd: process.cwd(),
@@ -158,7 +129,7 @@ async function applyWorkerTranscriptCommit(params: {
       startSessionTranscriptIndexReconcile({ ...options, preferredSessionId: target.sessionId });
     }
   } else {
-    await restoreSessionColdTranscript(target);
+    await restoreSessionColdTranscript(target, assertCurrent);
     assertCurrent();
     const execution = captureOpenClawAgentDatabaseExecution(options);
     let worker:
@@ -253,7 +224,7 @@ async function applyWorkerTranscriptCommit(params: {
     }
     const runId = resolveTerminalAssistantTranscriptRunId(message.message, params.runId);
     await publishTranscriptUpdate(params.target, {
-      lifecycleRevision: params.lifecycleRevision,
+      lifecycleRevision: applied.lifecycleRevision,
       message: message.message,
       messageId: message.messageId,
       messageSeq: message.messageSeq,
@@ -274,8 +245,12 @@ export async function commitWorkerTranscript(
     sessionId,
     runEpoch: params.request.runEpoch,
     seq: params.request.seq,
-    requestHash: requestHash(params.request),
+    requestHash: sha256Hex(
+      stableStringify({ baseLeafId: params.request.baseLeafId, messages: params.request.messages }),
+    ),
   };
+  const complete = (outcome: WorkerTranscriptCommitOutcome) =>
+    store.complete({ ...input, outcome }, params.assertCurrent);
   const config = options.getConfig();
   const target = withOwnedSessionTranscriptWriterFence({
     ...captureSessionTranscriptTargetBinding(params.sessionTarget),
@@ -285,12 +260,9 @@ export async function commitWorkerTranscript(
   // Ingress validated the closed schema; clone every admitted field before transcript redaction.
   const messages = params.request.messages.map((message, index) => ({
     ...structuredClone(message),
-    idempotencyKey: messageIdempotencyKey({
-      sessionId,
-      runEpoch: params.request.runEpoch,
-      seq: params.request.seq,
-      index,
-    }),
+    idempotencyKey: `worker-commit-${sha256Base64Url(
+      [sessionId, params.request.runEpoch, params.request.seq, index].join("\0"),
+    )}`,
   }));
   const requestedBaseLeafId = params.request.baseLeafId;
   params.assertCurrent();
@@ -304,43 +276,6 @@ export async function commitWorkerTranscript(
     return { ok: false, reason: "invalid-batch" };
   }
 
-  let entry: InternalSessionEntry | undefined;
-  try {
-    params.assertCurrent();
-    const databaseOptions = toDatabaseOptions(resolveSqliteTranscriptScope(target));
-    const entryResult = isIncognitoSessionKey(target.sessionKey)
-      ? { ok: true as const, value: loadSessionEntry(target) }
-      : await withSessionHistoryWorkerDatabase(databaseOptions, (owner) =>
-          owner.readEntryResult({
-            scope: {
-              ...target,
-              storePath: resolveOpenClawAgentSqlitePath(databaseOptions),
-              env: databaseOptions.env,
-              databaseAgentId: databaseOptions.agentId,
-            },
-          }),
-        );
-    params.assertCurrent();
-    if (!entryResult.ok) {
-      throw entryResult.error;
-    }
-    entry = entryResult.value;
-  } catch (error) {
-    // No transcript command has been dispatched while the initial entry read is pending.
-    if (started.kind === "claimed") {
-      await store.discardUncommitted(input);
-    }
-    throw error;
-  }
-  if (!entry || entry.sessionId !== sessionId) {
-    return await store.complete(
-      {
-        ...input,
-        outcome: { ok: false, reason: "session-not-attached" },
-      },
-      params.assertCurrent,
-    );
-  }
   let authorityFailure: { error: unknown } | undefined;
   let applied: ApplyTranscriptCommitResult;
   try {
@@ -359,9 +294,7 @@ export async function commitWorkerTranscript(
       recoverPersistedBatch: started.kind === "recover",
       requestedBaseLeafId,
       runId: params.identity.runId,
-      sessionId,
       target,
-      lifecycleRevision: target.expectedLifecycleRevision ?? entry.lifecycleRevision,
     });
   } catch (error) {
     // A callback refusal has rolled back the agent transaction. Free only
@@ -372,27 +305,12 @@ export async function commitWorkerTranscript(
     throw error;
   }
   if (!applied.ok) {
-    return await store.complete(
-      { ...input, outcome: { ok: false, reason: applied.reason } },
-      params.assertCurrent,
-    );
+    return await complete({ ok: false, reason: applied.reason });
   }
   const entryIds = applied.messages.map((message) => message.messageId);
   const newLeafId = entryIds.at(-1);
   if (entryIds.length !== messages.length || !newLeafId) {
-    return await store.complete(
-      {
-        ...input,
-        outcome: { ok: false, reason: "invalid-batch" },
-      },
-      params.assertCurrent,
-    );
+    return await complete({ ok: false, reason: "invalid-batch" });
   }
-  return await store.complete(
-    {
-      ...input,
-      outcome: { ok: true, result: { entryIds, newLeafId } },
-    },
-    params.assertCurrent,
-  );
+  return await complete({ ok: true, result: { entryIds, newLeafId } });
 }

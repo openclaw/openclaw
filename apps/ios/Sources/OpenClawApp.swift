@@ -111,7 +111,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 await model.handleExecApprovalResolvedRemotePush(push)
             }
             self.deliverPending(&self.pendingOpenURLs) { url in
-                await self.handleOpenURL(url, model: model)
+                await model.handleDeepLink(url: url)
             }
         }
     }
@@ -173,20 +173,9 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             return true
         }
         Task { @MainActor in
-            await self.handleOpenURL(url, model: model)
+            await model.handleDeepLink(url: url)
         }
         return true
-    }
-
-    func handleOpenURL(_ url: URL, model: NodeAppModel) async {
-        guard let route = DeepLinkParser.parse(url) else { return }
-
-        switch route {
-        case .agent, .dashboard, .gatewayAdd:
-            await model.handleDeepLink(url: url)
-        case let .gateway(link):
-            model.stageGatewaySetupLink(link)
-        }
     }
 
     private func registerForRemoteNotificationsIfEnrollmentReady(_ application: UIApplication) async {
@@ -711,7 +700,7 @@ struct OpenClawApp: App {
                 .onOpenURL { url in
                     // SwiftUI owns normal scene delivery; the delegate also queues URLs
                     // that arrive before the scene has installed its model.
-                    Task { await self.appDelegate.handleOpenURL(url, model: self.appModel) }
+                    Task { await self.appModel.handleDeepLink(url: url) }
                 }
                 .onChange(of: self.scenePhase) { _, newValue in
                     self.appModel.setScenePhase(newValue)

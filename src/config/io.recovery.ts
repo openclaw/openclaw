@@ -33,20 +33,16 @@ function findJsonRootSuffix(
   return null;
 }
 
-export async function recoverConfigFromJsonRootSuffixWithContext(
+export function inspectConfigJsonRootSuffixWithContext(
   context: ConfigIoContext,
-  snapshot: ConfigFileSnapshot,
-): Promise<boolean> {
-  if (resolveIsConfigReadOnly(context.deps.env)) {
-    return false;
-  }
-  if (!snapshot.exists || snapshot.valid || typeof snapshot.raw !== "string") {
-    return false;
-  }
-  const suffixRecovery = findJsonRootSuffix(snapshot.raw, context.deps.json5);
+  raw: string,
+  assertRecoveryCandidate?: (config: unknown) => void,
+) {
+  const suffixRecovery = findJsonRootSuffix(raw, context.deps.json5);
   if (!suffixRecovery) {
-    return false;
+    return null;
   }
+  assertRecoveryCandidate?.(suffixRecovery.parsed);
   let resolved: unknown;
   try {
     resolved = resolveConfigIncludesForRead(
@@ -55,14 +51,37 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
       context.deps,
     );
   } catch {
-    return false;
+    return null;
   }
   const resolution = resolveConfigForRead(
     resolved,
     context.deps.env,
     context.deps.lowerPrecedenceEnv,
   );
-  const validated = validateConfigObjectWithPlugins(resolution.resolvedConfigRaw, {
+  assertRecoveryCandidate?.(resolution.resolvedConfigRaw);
+  return { ...suffixRecovery, resolvedConfigRaw: resolution.resolvedConfigRaw };
+}
+
+export async function recoverConfigFromJsonRootSuffixWithContext(
+  context: ConfigIoContext,
+  snapshot: ConfigFileSnapshot,
+  assertRecoveryCandidate?: (config: unknown) => void,
+): Promise<boolean> {
+  if (resolveIsConfigReadOnly(context.deps.env)) {
+    return false;
+  }
+  if (!snapshot.exists || snapshot.valid || typeof snapshot.raw !== "string") {
+    return false;
+  }
+  const suffixRecovery = inspectConfigJsonRootSuffixWithContext(
+    context,
+    snapshot.raw,
+    assertRecoveryCandidate,
+  );
+  if (!suffixRecovery) {
+    return false;
+  }
+  const validated = validateConfigObjectWithPlugins(suffixRecovery.resolvedConfigRaw, {
     ...context.pathResolution,
     sourceRaw: suffixRecovery.parsed,
   });

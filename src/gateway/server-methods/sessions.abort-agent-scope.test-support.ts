@@ -35,6 +35,7 @@ export function createContext(
   return {
     chatAbortControllers: new Map(options.activeRuns ?? []),
     getRuntimeConfig: () => cfg,
+    logGateway: { info: () => {}, warn: () => {} },
     ...options.extra,
   } as unknown as GatewayRequestContext;
 }

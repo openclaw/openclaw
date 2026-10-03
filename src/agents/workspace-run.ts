@@ -126,3 +126,36 @@ export function resolveRunWorkspaceDir(params: {
     agentIdSource,
   };
 }
+
+/** Rooted execution borrows plugin facts only from its agent's canonical bootstrap workspace. */
+export function resolveRootedRunRuntimeWorkspace(params: {
+  workspaceDir: string;
+  bootstrapWorkspaceDir?: string;
+  sessionKey?: string;
+  agentId?: string;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  requireWorkspaceOnly?: boolean;
+  sessionRoot?: string;
+}): ResolveRunWorkspaceResult | undefined {
+  if (
+    !params.bootstrapWorkspaceDir?.trim() ||
+    !params.config ||
+    !hasAgentRosterProperty(params.config)
+  ) {
+    return undefined;
+  }
+  const bootstrap = resolveRunWorkspaceDir({
+    ...params,
+    workspaceDir: params.bootstrapWorkspaceDir,
+  });
+  if (!bootstrap.isCanonicalWorkspace || bootstrap.usedFallback) {
+    return undefined;
+  }
+  // Cron also supplies bootstrapWorkspaceDir without an execution root. Those runs still rebind
+  // their workspace on reload; an explicit confinement root remains pinned even at the same path.
+  return params.workspaceDir !== bootstrap.workspaceDir ||
+    (params.requireWorkspaceOnly === true && params.sessionRoot !== undefined)
+    ? bootstrap
+    : undefined;
+}

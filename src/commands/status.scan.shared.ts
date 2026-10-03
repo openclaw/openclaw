@@ -65,6 +65,8 @@ export type GatewayProbeSnapshot = {
   gatewayProbeAuthWarning?: string;
   gatewayProbe: Awaited<ReturnType<typeof probeGatewayFn>> | null;
   gatewayReachable: boolean;
+  /** Fresh local readiness, separate from a successful connection or a remote target. */
+  localGatewayHealthy?: boolean;
   gatewaySelf: ReturnType<typeof pickGatewaySelfPresence>;
   gatewayCallOverrides?: {
     url: string;
@@ -321,6 +323,11 @@ export async function resolveGatewayProbeSnapshot(params: {
     gatewayProbeAuthWarning,
     gatewayProbe,
     gatewayReachable,
+    localGatewayHealthy:
+      readiness?.healthy === true &&
+      !readiness.activatedPluginErrors?.length &&
+      !readiness.channelProbeErrors?.length &&
+      gatewayProbe?.ok === true,
     gatewaySelf,
     ...(remoteUrlMissing
       ? {

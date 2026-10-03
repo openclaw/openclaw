@@ -16,6 +16,7 @@ import {
 } from "../../../plugins/doctor-contract-registry.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { isRecord } from "./legacy-config-record-shared.js";
+import { HISTORICAL_WEBHOOK_CHANNELS } from "./legacy-webhook-pins.js";
 
 const log = createSubsystemLogger("plugins/doctor-contracts");
 
@@ -89,7 +90,7 @@ function resolveBundledChannelCompatibilityNormalizer(
 /** Apply bundled and plugin channel compatibility migrations to a legacy config object. */
 export function applyChannelDoctorCompatibilityMigrations(
   cfg: Record<string, unknown>,
-  options?: { pluginContracts?: boolean },
+  options?: { pluginContracts?: boolean; historicalWebhookListeners?: boolean },
 ): {
   next: Record<string, unknown>;
   changes: string[];
@@ -130,12 +131,16 @@ export function applyChannelDoctorCompatibilityMigrations(
       : [
           ...new Set([...unresolvedChannelIds, ...collectDoctorConfigRepairPluginIds(cfg)]),
         ].toSorted();
-  const plugins: ReturnType<typeof applyPluginDoctorCompatibilityMigrations> = pluginIds.length
-    ? applyPluginDoctorCompatibilityMigrations(bundled.config, {
-        config,
-        pluginIds,
-      })
-    : { config: bundled.config, changes: [] };
+  const plugins: ReturnType<typeof applyPluginDoctorCompatibilityMigrations> =
+    pluginIds.length || options?.historicalWebhookListeners
+      ? applyPluginDoctorCompatibilityMigrations(bundled.config, {
+          config,
+          pluginIds: options?.historicalWebhookListeners
+            ? [...new Set([...pluginIds, ...HISTORICAL_WEBHOOK_CHANNELS])]
+            : pluginIds,
+          historicalWebhookListeners: options?.historicalWebhookListeners,
+        })
+      : { config: bundled.config, changes: [] };
   // Bundled and installed contract views can report the same warning-only condition.
   const warnings = [...new Set([...(bundled.warnings ?? []), ...(plugins.warnings ?? [])])];
   return {

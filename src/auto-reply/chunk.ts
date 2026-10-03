@@ -217,37 +217,25 @@ export function chunkByParagraph(
   const chunks: string[] = [];
   let currentChunk = "";
 
-  const pushParagraph = (paragraph: string, separatorBefore?: string) => {
-    if (!currentChunk) {
-      if (paragraph.length <= limit) {
-        currentChunk = paragraph;
-        return;
-      }
-      if (!splitLongParagraphs) {
-        chunks.push(paragraph);
-        return;
-      }
-      chunks.push(...chunkText(paragraph, limit));
-      return;
-    }
-
-    const candidate = `${currentChunk}${separatorBefore ?? "\n\n"}${paragraph}`;
-    if (candidate.length <= limit) {
-      currentChunk = candidate;
-      return;
-    }
-
-    chunks.push(currentChunk);
-    currentChunk = "";
-    pushParagraph(paragraph);
-  };
-
   for (const [index, part] of parts.entries()) {
     const paragraph = trimEndWhitespaceGraphemes(part);
     if (!paragraph) {
       continue;
     }
-    pushParagraph(paragraph, separators[index - 1]);
+    if (currentChunk) {
+      const candidate = `${currentChunk}${separators[index - 1] ?? "\n\n"}${paragraph}`;
+      if (candidate.length <= limit) {
+        currentChunk = candidate;
+        continue;
+      }
+      chunks.push(currentChunk);
+      currentChunk = "";
+    }
+    if (paragraph.length <= limit) {
+      currentChunk = paragraph;
+    } else {
+      chunks.push(...(splitLongParagraphs ? chunkText(paragraph, limit) : [paragraph]));
+    }
   }
 
   if (currentChunk) {

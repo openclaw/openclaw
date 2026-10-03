@@ -26,7 +26,7 @@ import {
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { renderHighlightedCommand } from "./chat-command-highlight.ts";
 import { renderDiffBlock } from "./chat-diff-render.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
 function handleRawDetailsToggle(event: Event) {
   // SAFETY: This handler is attached only to the raw-details button below.
@@ -107,10 +107,12 @@ function formatKeyValue(value: unknown): string {
   if (typeof value === "string") {
     return truncateUtf16Safe(value, KV_MAX_VALUE_CHARS);
   }
-  if (value === null || value === undefined) {
-    return String(value);
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+  if (
+    value == null ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
     return String(value);
   }
   try {
@@ -216,20 +218,12 @@ function renderToolWorkspaceFilePath(
 
 /** Neutral end-state line every expanded tool surface closes with. */
 export function renderToolOutcome(outcome: ToolCardOutcome, exitCode?: number) {
+  const key =
+    outcome === "succeeded" ? "completed" : outcome === "unknown" ? "outcomeUnknown" : outcome;
   const label =
-    outcome === "skipped"
-      ? t("chat.toolCards.skipped")
-      : outcome === "failed"
-        ? exitCode === undefined
-          ? t("chat.toolCards.failed")
-          : t("chat.toolCards.exitCode", { code: String(exitCode) })
-        : outcome === "running"
-          ? t("chat.toolCards.running")
-          : outcome === "succeeded"
-            ? t("chat.toolCards.completed")
-            : outcome === "blocked"
-              ? t("chat.toolCards.blocked")
-              : t("chat.toolCards.outcomeUnknown");
+    outcome === "failed" && exitCode !== undefined
+      ? t("chat.toolCards.exitCode", { code: String(exitCode) })
+      : t(`chat.toolCards.${key}`);
   return html`<div class="chat-tool-card__outcome">${label}</div>`;
 }
 
@@ -347,13 +341,13 @@ export function renderExpandedToolCardContent(
   const outputIsLong =
     Math.max(outputText?.length ?? 0, originalCard.outputText?.length ?? 0) >
     TOOL_OUTPUT_PREVIEW_CHARS;
-  const card =
-    outputIsLong && onOpenSidebar && !unavailable
-      ? {
-          ...displayCard,
-          outputText: truncateUtf16Safe(outputText ?? "", TOOL_OUTPUT_PREVIEW_CHARS),
-        }
-      : { ...displayCard, outputText };
+  const card = {
+    ...displayCard,
+    outputText:
+      outputIsLong && onOpenSidebar && !unavailable
+        ? truncateUtf16Safe(outputText ?? "", TOOL_OUTPUT_PREVIEW_CHARS)
+        : outputText,
+  };
   const outputFooter = html`
     ${
       outputText !== originalCard.outputText &&

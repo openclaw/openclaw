@@ -353,9 +353,7 @@ class SubagentRunManager extends SubagentLaunchManager {
               entry.cleanupHandled = true;
               entry.cleanupCompletedAt = existingKillReconciliation
                 ? (entry.cleanupCompletedAt ?? endedAt)
-                : wasKilledLifecycle
-                  ? endedAt
-                  : now;
+                : now;
               entry.suppressAnnounceReason = "killed";
               entry.pauseReason = undefined;
               entry.killIntent = undefined;

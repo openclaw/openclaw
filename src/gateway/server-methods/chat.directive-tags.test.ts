@@ -1,9 +1,7 @@
-// Chat directive tag tests cover reply directive metadata, transcript mirrors,
-// current-message reply routing, and dispatched payload ordering.
 import fs from "node:fs";
 import path from "node:path";
 import { asOptionalRecord, expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
@@ -79,9 +77,11 @@ import {
 import { handleChatSend } from "./chat-send-handler.js";
 import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import {
+  ChatDirectiveDedupe,
   createChatDirectiveReplyBackend,
   createChatDirectiveSuiteResources,
   createChatDirectiveUserMessageReader,
+  expectManagedAudioBlock,
   createUnconfirmedTranscriptDelivery,
   expectClaimOnlyTranscriptMedia,
   readChatDirectiveConfig,
@@ -129,7 +129,7 @@ const mockState = vi.hoisted(() => {
     triggerAgentRunStart: false,
     replyDispatchRun: undefined as ReplyDispatchRun | undefined,
     triggerUserMessagePersisted: false,
-    runtimeUserMessagePersistencePending: null as Promise<void> | null,
+    runtimeUserMessagePersistenceError: null as Error | null,
     onAfterAgentRunStart: null as (() => void) | null,
     agentRunId: "run-agent-1",
     sessionEntry: {} as Record<string, unknown>,
@@ -209,6 +209,7 @@ let suiteFixtureRoot = "";
 let suiteDatabasePath = "";
 let suiteFixtureEnv: NodeJS.ProcessEnv = {};
 let suiteFixtureSeq = 0;
+let testSignal: AbortSignal;
 
 function readTranscriptJsonLines(transcriptPath: string): Array<Record<string, unknown>> {
   const sqliteEvents = loadTranscriptEventsSync(transcriptScope()).filter(
@@ -331,10 +332,12 @@ dispatchInboundMessageMock.mockImplementation(
         timestamp: Date.now(),
       });
     }
-    if (mockState.runtimeUserMessagePersistencePending) {
-      params.replyOptions?.userTurnTranscriptRecorder?.markRuntimePersistencePending(
-        mockState.runtimeUserMessagePersistencePending,
+    if (mockState.runtimeUserMessagePersistenceError) {
+      const runtimeRecorder = expectDefined(recorder, "runtime persistence fixture");
+      runtimeRecorder.markRuntimePersistencePending(
+        Promise.reject(mockState.runtimeUserMessagePersistenceError),
       );
+      await runtimeRecorder.waitForRuntimePersistence();
     }
     if (mockState.dispatchErrorAfterAgentRunStart) {
       throw mockState.dispatchErrorAfterAgentRunStart;
@@ -794,7 +797,7 @@ function createChatContext() {
     chatRunState: createChatRunState(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
-    dedupe: new Map(),
+    dedupe: new ChatDirectiveDedupe(testSignal),
     loadGatewayModelCatalog: async () =>
       mockState.modelCatalog ?? [
         // Keep the default model image-capable here; otherwise attachment tests
@@ -1057,22 +1060,6 @@ function setAgentRunReplies(replies: TestReply[]) {
   mockState.dispatchedReplies = replies;
 }
 
-function expectManagedAudioBlock(
-  block: Record<string, unknown> | undefined,
-  fileName: string,
-  isVoiceNote?: boolean,
-) {
-  expect(block).toEqual(
-    expect.objectContaining({
-      type: "audio",
-      artifactId: expect.stringMatching(/^artifact_managed_media_/u),
-      fileName,
-      mimeType: "audio/mpeg",
-      ...(isVoiceNote === undefined ? {} : { isVoiceNote }),
-    }),
-  );
-}
-
 async function runNonStreamingChatSend(params: {
   context: ChatContext;
   respond: RespondFn;
@@ -1126,12 +1113,7 @@ async function runNonStreamingChatSend(params: {
     return undefined;
   }
   if (waitFor === "dedupe") {
-    await waitForAssertion(() => {
-      // Admission retains request identity before a terminal response exists.
-      expect(
-        readChatSendDedupeResponse(params.context.dedupe, params.idempotencyKey),
-      ).toBeDefined();
-    });
+    await params.context.dedupe.waitForResponse(params.idempotencyKey);
     return undefined;
   }
 
@@ -1170,6 +1152,10 @@ async function expectImageOnlyFinal(params: {
   expect(content.some((block) => block.type === "attachment_error")).toBe(false);
   expect(JSON.stringify(content)).not.toContain(mediaUrl);
 }
+
+beforeEach(({ signal }) => {
+  testSignal = signal;
+});
 
 beforeAll(() => {
   suiteResources = createChatDirectiveSuiteResources();
@@ -3683,7 +3669,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       });
       // Admission already owns a dedupe entry; observe the first terminal write, not key presence.
       await waitForAssertion(() => {
-        expect(["ok", "error"]).toContain(context.dedupe.get(`chat:${runId}`)?.payload?.status);
+        expect(["ok", "error"]).toContain(
+          asOptionalRecord(context.dedupe.get(`chat:${runId}`)?.payload)?.status,
+        );
       });
       const dedupe = context.dedupe.get(`chat:${runId}`);
       expect(dedupe?.ok).toBe(!failed);
@@ -5476,9 +5464,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "openclaw-chat-send-user-transcript-success-runtime-persist-failed-",
     );
     mockState.triggerAgentRunStart = true;
-    mockState.runtimeUserMessagePersistencePending = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error("runtime prompt mirror failed")), 0);
-    });
+    mockState.runtimeUserMessagePersistenceError = new Error("runtime prompt mirror failed");
     mockState.finalPayload = { text: "agent still answered" };
     const { context, send } = createChatRequestFixture();
 

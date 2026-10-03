@@ -21,7 +21,7 @@ import {
   resolveSessionDiffSidebarContent,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
-import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
+import type { SidebarContent, SidebarSelection } from "./chat-sidebar-content-types.ts";
 
 describe("session workspace state", () => {
   it("keeps filter changes in the current session and resets them for a new session", () => {

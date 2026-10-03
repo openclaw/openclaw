@@ -1,5 +1,6 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { ConfigSnapshotReadMeasure, ConfigSnapshotReadOptions } from "../config/io.js";
+import type { ConfigReplaceResult } from "../config/mutate.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
@@ -26,7 +27,10 @@ export type StartupConfigPreflightOptions = {
   observe?: boolean;
   measure?: ConfigSnapshotReadMeasure;
   validateStartupConfig?: (snapshot: ConfigFileSnapshot) => void | Promise<void>;
-  beforeStatePreparation?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+  beforeStatePreparation?: (
+    snapshot?: ConfigFileSnapshot,
+    committedWrite?: ConfigReplaceResult,
+  ) => Promise<boolean>;
 };
 
 export type StartupConfigPreflightResult = {
@@ -65,10 +69,17 @@ async function prepareStartupConfig(
       observe: options.gateway ? false : options.observe,
       measure,
     });
-  const beforeStatePreparation = async (snapshot?: ConfigFileSnapshot) => {
-    if (options.beforeStatePreparation && !(await options.beforeStatePreparation(snapshot))) {
+  const beforeStatePreparation = async (
+    snapshot?: ConfigFileSnapshot,
+    committedWrite?: ConfigReplaceResult,
+  ) => {
+    if (
+      options.beforeStatePreparation &&
+      !(await options.beforeStatePreparation(snapshot, committedWrite))
+    ) {
       throwStartupMigrationGuardRejected();
     }
+    return true;
   };
   if (!options.gateway) {
     const read = await readSnapshot();
@@ -79,12 +90,12 @@ async function prepareStartupConfig(
     return result(read);
   }
 
-  const readAdmitted = () =>
+  const readAdmitted = (committedWrite?: ConfigReplaceResult) =>
     readAdmittedConfigSnapshot({
       env,
       readSnapshot,
       validateConfig: options.validateStartupConfig,
-      beforeStatePreparation: options.beforeStatePreparation,
+      beforeStatePreparation: (snapshot) => beforeStatePreparation(snapshot, committedWrite),
     });
   let read = await readAdmitted();
   env = cloneEnvWithPlatformSemantics(process.env);
@@ -104,7 +115,7 @@ async function prepareStartupConfig(
   };
   const assertLeaseCurrent = () => {
     assertHeartbeatCurrent();
-    lease?.heartbeat();
+    lease?.assertOwned();
   };
   try {
     if (read.recovery || needsRefreshedPluginIndexPersistence(read)) {
@@ -144,6 +155,45 @@ async function prepareStartupConfig(
           assertCurrent: assertHeartbeatCurrent,
         });
         read = persisted.snapshotRead;
+      }
+    }
+    const { HISTORICAL_WEBHOOK_CHANNELS, recordUnwrittenWebhookCompletion } =
+      await import("./doctor/shared/legacy-webhook-pins.js");
+    const webhookCompletion = read.snapshot.sourceConfig.meta?.migrations?.webhookListeners;
+    if (
+      webhookCompletion !== true &&
+      !HISTORICAL_WEBHOOK_CHANNELS.every((id) => Object.hasOwn(webhookCompletion ?? {}, id))
+    ) {
+      const { applyPluginDoctorCompatibilityMigrations } =
+        await import("../plugins/doctor-contract-registry.js");
+      const migrate = (config: OpenClawConfig) => {
+        const migration = applyPluginDoctorCompatibilityMigrations(config, {
+          config,
+          env,
+          pluginIds: HISTORICAL_WEBHOOK_CHANNELS,
+          historicalWebhookListeners: true,
+          startup: true,
+        });
+        if (migration.warnings?.length) {
+          throw new Error(migration.warnings.join("\n"));
+        }
+        return migration;
+      };
+      const migration = migrate(read.snapshot.sourceConfig);
+      if (migration.changes.length) {
+        await beforeStatePreparation(read.snapshot);
+        assertPreflightConfigUnchanged(read.snapshot, (await readSnapshot()).snapshot);
+        if (!recordUnwrittenWebhookCompletion(read.snapshot, migration, env)) {
+          const { transformConfigFile } = await import("../config/mutate.js");
+          const committedWrite = await transformConfigFile({
+            base: "source",
+            baseHash: read.snapshot.hash ?? undefined,
+            writeOptions: { auditOrigin: "doctor", assertCurrent: assertLeaseCurrent },
+            afterWrite: { mode: "none", reason: "startup config migration" },
+            transform: (config) => ({ nextConfig: migrate(config).config }),
+          });
+          read = await readAdmitted(committedWrite);
+        }
       }
     }
     const verification = await refreshStartupPluginQuarantine({

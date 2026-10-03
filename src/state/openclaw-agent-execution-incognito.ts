@@ -41,6 +41,8 @@ import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-c
 
 type Store = SqliteWorkerStore<AgentDatabaseIncognitoOperations>;
 export type IncognitoAgentDatabaseExecution = {
+  readonly agentId: string;
+  readonly path: string;
   readonly identity: AgentDatabaseIncognitoIdentity;
   readonly sessions: ReturnType<ReturnType<typeof createIncognitoSessionFacts>["bind"]>;
   assertCurrent(): void;
@@ -278,12 +280,17 @@ function createIncognitoAgentExecutionOwner(
         operation,
         operationSignal,
         createAdmission,
+        cleanup = false,
       ) => {
         if (granting) {
           throw new Error("Incognito authority callbacks cannot call their actor");
         }
         currentAuthority.assertCurrent();
-        assertBorrowed();
+        if (cleanup) {
+          assertCurrent();
+        } else {
+          assertBorrowed();
+        }
         const assertOperation = () => {
           currentAuthority.assertCurrent();
           assertCurrent();
@@ -317,8 +324,12 @@ function createIncognitoAgentExecutionOwner(
         return track(track(work), borrowedWork);
       };
       return {
+        agentId: options.agentId,
+        path: options.path,
         identity,
-        sessions: sessionFacts.bind(run, assertBorrowed),
+        sessions: sessionFacts.bind(run, assertBorrowed, (work) =>
+          track(track(work), borrowedWork),
+        ),
         assertCurrent: assertBorrowed,
         run: (currentAuthority, operation, operationSignal) =>
           run(currentAuthority, operation, operationSignal),

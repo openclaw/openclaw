@@ -75,26 +75,14 @@ export function isSafeOAuthPostClaimSettlement(
   );
 }
 
-function isSafeOAuthIdentityTransition(
-  existing: OAuthCredential | undefined,
-  incoming: OAuthCredential,
-  allowMissingCredential: boolean,
-): boolean {
-  if (!existing || existing.type !== "oauth") {
-    return allowMissingCredential;
-  }
-  if (existing.provider !== incoming.provider) {
-    return false;
-  }
-  return isSafeToCopyOAuthIdentity(existing, incoming);
-}
-
 /** Returns true when bootstrap may adopt an external OAuth identity. */
 export function isSafeToAdoptBootstrapOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
 ): boolean {
-  return isSafeOAuthIdentityTransition(existing, incoming, true);
+  return (
+    !existing || existing.type !== "oauth" || isSafeOAuthOwnerRefreshResult(existing, incoming)
+  );
 }
 
 /** Returns true when agent-local state may adopt a main-store OAuth identity. */
@@ -102,7 +90,7 @@ export function isSafeToAdoptMainStoreOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
 ): boolean {
-  return isSafeOAuthIdentityTransition(existing, incoming, false);
+  return existing?.type === "oauth" && isSafeOAuthOwnerRefreshResult(existing, incoming);
 }
 
 /** Returns true when an external CLI credential should bootstrap stored OAuth. */

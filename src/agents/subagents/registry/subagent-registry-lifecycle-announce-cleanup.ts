@@ -259,7 +259,7 @@ export const startSubagentAnnounceCleanupFlow = (
         await Promise.resolve();
         assertPersistenceCurrent();
         if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-          await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+          await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
           return;
         }
         if (
@@ -343,7 +343,7 @@ export const startSubagentAnnounceCleanupFlow = (
         }
         assertPersistenceCurrent();
         if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-          await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+          await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
           return;
         }
         await finalizeSubagentCleanup(
@@ -380,7 +380,7 @@ export const startSubagentAnnounceCleanupFlow = (
   const finalizeAnnounceCleanup = async (announceOutcome: SubagentAnnounceFlowOutcome) => {
     assertPersistenceCurrent();
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-      await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+      await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
       return;
     }
     assertCurrent();
@@ -392,7 +392,7 @@ export const startSubagentAnnounceCleanupFlow = (
         : undefined;
     assertPersistenceCurrent();
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-      await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+      await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
       return;
     }
     // Requester-settle can commit delivery while the mirror lookup is pending.

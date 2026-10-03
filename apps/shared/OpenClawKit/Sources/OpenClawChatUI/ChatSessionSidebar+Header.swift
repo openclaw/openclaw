@@ -190,7 +190,6 @@ extension ChatSessionSidebar {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 12)
-        .background(.bar)
     }
 }
 

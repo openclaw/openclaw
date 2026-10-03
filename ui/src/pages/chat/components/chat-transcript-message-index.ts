@@ -18,7 +18,7 @@ import {
 import { isInterSessionGroup } from "../chat-turn-boundary.ts";
 import { readLiveTerminalRevision } from "../terminal-message-identity.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
-import type { StreamGroupPart } from "./chat-message.ts";
+import type { StreamGroupPart } from "./chat-message-stream.ts";
 import { projectChatPositions, type ChatPositionIndex } from "./chat-position-projection.ts";
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";

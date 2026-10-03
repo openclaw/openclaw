@@ -338,6 +338,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     agentHarnessId,
     modelSelectionLocked: params.modelSelectionLocked,
     workspaceDir: params.workspaceDir,
+    bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,
     cwd: params.cwd ?? undefined,
     permissionMode: params.permissionMode,
     sessionRoot: params.sessionRoot,

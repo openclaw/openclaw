@@ -9,6 +9,7 @@ import * as entryReader from "../../config/sessions/session-entry-read-runtime.j
 import * as transcript from "../../config/sessions/transcript.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as sessionDelivery from "../../infra/session-delivery-queue-storage.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -37,7 +38,14 @@ afterEach(() => {
 });
 
 describe("undelivered generated media", () => {
-  it.each(["current", "replaced", "rotated", "deleted", "retired-during-append"] as const)(
+  it.each([
+    "current",
+    "replaced",
+    "rotated",
+    "deleted",
+    "retired-during-append",
+    "retired-at-commit",
+  ] as const)(
     "retains references only in the original live requester: %s",
     async (requesterState) => {
       await withOpenClawTestState({ prefix: "media-completion-retention-" }, async (state) => {
@@ -62,6 +70,29 @@ describe("undelivered generated media", () => {
           });
         const append = transcript.appendAssistantMessageToSessionTranscript;
         const appendSpy = vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript");
+        let retaining = false;
+        let revokedAtCommit = false;
+        if (requesterState === "retired-at-commit") {
+          appendSpy.mockImplementationOnce(async (params) => {
+            retaining = true;
+            try {
+              return await append(params);
+            } finally {
+              retaining = false;
+            }
+          });
+          const create = admission.createSqliteWorkerOperationAdmission;
+          vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+            (callback, attachment) =>
+              create((request, grant) => {
+                if (retaining && request.stage === "commit") {
+                  revokedAtCommit = true;
+                  rotateAgentEventLifecycleGeneration();
+                }
+                callback(request, grant);
+              }, attachment),
+          );
+        }
         if (requesterState === "retired-during-append") {
           appendSpy.mockImplementationOnce(async (params) => {
             await Promise.resolve();
@@ -123,12 +154,19 @@ describe("undelivered generated media", () => {
         expect(scheduled).toHaveLength(1);
         await scheduled[0]!();
         expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey, "main")).toBe(false);
-        if (requesterState === "current" || requesterState === "retired-during-append") {
+        if (
+          requesterState === "current" ||
+          requesterState === "retired-during-append" ||
+          requesterState === "retired-at-commit"
+        ) {
           expect(enqueue).toHaveBeenCalledOnce();
         } else {
           expect(enqueue).not.toHaveBeenCalled();
         }
         expect(appendSpy).toHaveBeenCalledOnce();
+        if (requesterState === "retired-at-commit") {
+          expect(revokedAtCommit).toBe(true);
+        }
         if (requesterState === "current") {
           // Re-observing one completion cannot duplicate its retained notice.
           await scheduled[0]!();

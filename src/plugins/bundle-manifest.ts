@@ -158,7 +158,7 @@ function resolveCursorAgentDirs(raw: Record<string, unknown>, rootDir: string): 
   return resolveBundleComponentPaths(raw.subagents ?? raw.agents, rootDir, [".cursor/agents"]);
 }
 
-function resolveBundleComponentPaths(
+export function resolveBundleComponentPaths(
   value: unknown,
   rootDir: string,
   defaults: string[],

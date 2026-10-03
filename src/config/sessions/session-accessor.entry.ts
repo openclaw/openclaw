@@ -235,52 +235,35 @@ function resolveSessionEntryStoreTarget(
     mainKey: scope.cfg.session?.mainKey,
     requestedKey,
   });
-  if (isIncognitoSessionKey(canonicalKey)) {
-    const incognitoAgentId = resolveAgentIdFromSessionKey(canonicalKey);
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({
-      agentId: incognitoAgentId,
-      env: scope.env,
-    });
-    const selectedMatch = findCanonicalSessionEntryMatch(
-      { agentId: incognitoAgentId, ...(scope.env ? { env: scope.env } : {}), storePath },
-      canonicalKey,
-      scanTargets,
-      { readOnly: false },
-    );
-    return {
-      agentId: incognitoAgentId,
-      canonicalKey,
-      entry: selectedMatch?.entry,
-      requestedKey,
-      storeKey: selectedMatch?.sessionKey ?? canonicalKey,
-      storePath,
-      readSource: selectedMatch?.readSource,
-    };
-  }
-  const candidates = resolveLogicalSessionStoreCandidates({
-    agentId,
-    cfg: scope.cfg,
-    env: scope.env,
-  });
+  const incognito = isIncognitoSessionKey(canonicalKey);
+  const targetAgentId = incognito ? resolveAgentIdFromSessionKey(canonicalKey) : agentId;
+  const candidates = incognito
+    ? [
+        {
+          agentId: targetAgentId,
+          storePath: resolveIncognitoOpenClawAgentSqlitePath({
+            agentId: targetAgentId,
+            env: scope.env,
+          }),
+        },
+      ]
+    : resolveLogicalSessionStoreCandidates({ agentId, cfg: scope.cfg, env: scope.env });
   const fallback = candidates[0] ?? {
     agentId,
     storePath: resolveSessionStorePathCore(scope.cfg.session?.store, { agentId, env: scope.env }),
   };
   let selectedStorePath = fallback.storePath;
-  let selectedMatch = findCanonicalSessionEntryMatch(
-    { agentId, ...(scope.env ? { env: scope.env } : {}), storePath: fallback.storePath },
-    canonicalKey,
-    scanTargets,
-  );
-  for (let index = 1; index < candidates.length; index += 1) {
-    const candidate = candidates[index];
-    if (!candidate) {
-      continue;
-    }
+  let selectedMatch: ReturnType<typeof findCanonicalSessionEntryMatch>;
+  for (const candidate of [fallback, ...candidates.slice(1)]) {
     const match = findCanonicalSessionEntryMatch(
-      { agentId, ...(scope.env ? { env: scope.env } : {}), storePath: candidate.storePath },
+      {
+        agentId: targetAgentId,
+        ...(scope.env ? { env: scope.env } : {}),
+        storePath: candidate.storePath,
+      },
       canonicalKey,
       scanTargets,
+      { readOnly: !incognito },
     );
     if (match && selectedMatch) {
       throw canonicalSessionKeyMigrationRequiredError(
@@ -293,7 +276,7 @@ function resolveSessionEntryStoreTarget(
     }
   }
   return {
-    agentId,
+    agentId: targetAgentId,
     canonicalKey,
     entry: selectedMatch?.entry,
     requestedKey,

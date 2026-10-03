@@ -40,7 +40,10 @@ export type GitReadOperations = {
       | undefined
     >;
   };
-  "checkout.revision": { input: { root: string; includeIndex: boolean }; output: string | null };
+  "checkout.revision": {
+    input: { root: string; includeIndex: boolean; branch?: string; defaultBranch?: string };
+    output: string | null;
+  };
   "checkout.context": { input: { root: string }; output: GitCheckoutContext | null };
   "checkout.diff": { input: GitCheckoutDiffInput; output: Omit<SessionsDiffResult, "sessionKey"> };
   "repository.branches": {

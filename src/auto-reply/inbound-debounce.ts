@@ -254,24 +254,6 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     return next;
   };
 
-  const runKeyTaskNow = (key: string, task: () => Promise<void>) => {
-    const { promise: settled, resolve: resolveSettled } = createDeferredCore();
-    keyChains.set(key, settled);
-    const cleanup = () => {
-      resolveSettled();
-      untrackKeyTask(key, settled);
-    };
-    let next: Promise<void>;
-    try {
-      next = task();
-    } catch (err) {
-      cleanup();
-      throw err;
-    }
-    next.then(cleanup, cleanup);
-    return next;
-  };
-
   const enqueueReservedKeyTask = (key: string, task: () => Promise<void>) => {
     const { promise: ready, resolve: releaseReady } = createDeferredCore();
     return {
@@ -358,9 +340,9 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
           // Reserve the keyed immediate slot before forcing the pending buffer
           // to flush so fire-and-forget callers cannot be overtaken.
           const generation = resolveKeyGeneration(key);
-          const reservedTask = enqueueReservedKeyTask(key, async () => {
-            await runQueuedFlush(key, generation, [item]);
-          });
+          const reservedTask = enqueueReservedKeyTask(key, () =>
+            runQueuedFlush(key, generation, [item]),
+          );
           try {
             await flushKey(key);
           } finally {
@@ -371,15 +353,18 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
         }
         if (keyChains.has(key)) {
           const generation = resolveKeyGeneration(key);
-          await enqueueKeyTask(key, async () => {
-            await runQueuedFlush(key, generation, [item]);
-          });
+          await enqueueKeyTask(key, () => runQueuedFlush(key, generation, [item]));
           return;
         }
         if (params.serializeImmediate) {
-          await runKeyTaskNow(key, async () => {
+          const { promise: settled, resolve: resolveSettled } = createDeferredCore();
+          keyChains.set(key, settled);
+          try {
             await runFlush([item]);
-          });
+          } finally {
+            resolveSettled();
+            untrackKeyTask(key, settled);
+          }
           return;
         }
       }
@@ -404,9 +389,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       // When the debounce map is saturated, fall back to immediate keyed work
       // instead of buffering, but still preserve same-key ordering.
       const generation = resolveKeyGeneration(key);
-      await enqueueKeyTask(key, async () => {
-        await runQueuedFlush(key, generation, [item]);
-      });
+      await enqueueKeyTask(key, () => runQueuedFlush(key, generation, [item]));
       return;
     }
     const generation = resolveKeyGeneration(key);

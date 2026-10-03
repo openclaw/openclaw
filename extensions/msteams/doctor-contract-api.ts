@@ -18,7 +18,7 @@ import {
 } from "./src/delegated-state.js";
 import type { MSTeamsDelegatedTokens } from "./src/oauth.shared.js";
 
-export { legacyConfigRules, normalizeCompatibilityConfig } from "./config-doctor-api.js";
+export * from "./config-doctor-api.js";
 
 const MSTEAMS_PLUGIN_ID = "Microsoft Teams";
 

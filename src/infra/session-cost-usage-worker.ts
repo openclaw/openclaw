@@ -163,15 +163,20 @@ export async function executeUsageCostWorker(
       return result;
     },
   };
-  const inventory = (sessionsDir?: string) =>
-    listUsageCountedTranscriptStats(location.agentId, {
-      ...access,
-      storePath: location.storePath,
-      sessionsDir,
-    });
+  const inventory = async (sessionsDir?: string) =>
+    input.transcriptFiles
+      ? (await resolveUsageCostTranscriptFiles(input.transcriptFiles, access)).filter(
+          (file) => file !== undefined,
+        )
+      : listUsageCountedTranscriptStats(location.agentId, {
+          ...access,
+          storePath: location.storePath,
+          sessionsDir,
+        });
   if (operation.kind === "inventory") {
-    const files = operation.sessionFiles
-      ? (await resolveUsageCostTranscriptSources(operation.sessionFiles, access)).filter(
+    const selected = operation.sessionFiles ?? input.transcriptFiles;
+    let files = selected
+      ? (await resolveUsageCostTranscriptSources(selected, access)).filter(
           (file) => file !== undefined,
         )
       : await listUsageCountedTranscriptSources(location.agentId, {
@@ -179,6 +184,14 @@ export async function executeUsageCostWorker(
           storePath: location.storePath,
           minMtimeMs: operation.minMtimeMs,
         });
+    if (
+      input.transcriptFiles &&
+      operation.sessionFiles === undefined &&
+      operation.minMtimeMs !== undefined
+    ) {
+      const minMtimeMs = operation.minMtimeMs;
+      files = files.filter((file) => !(file.mtimeMs < minMtimeMs));
+    }
     return {
       kind: "inventory",
       files: files.map(({ kind, sourcePath, sessionId, mtimeMs }) => ({

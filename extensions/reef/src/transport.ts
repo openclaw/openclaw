@@ -2,6 +2,7 @@ import { toStringifiedError as asError } from "openclaw/plugin-sdk/error-runtime
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { sha256Hex, signDeviceRequest, utf8 } from "../protocol/index.js";
@@ -415,22 +416,6 @@ export function createReefWebSocket(
   });
 }
 
-function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
-    if (signal?.aborted) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(done, ms);
-    function done(): void {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", done);
-      resolve();
-    }
-    signal?.addEventListener("abort", done, { once: true });
-  });
-}
-
 export class ReefInboxConnection {
   private cursor: number;
   // Entry dispatch remains serial across socket replacements. A closed socket
@@ -479,7 +464,7 @@ export class ReefInboxConnection {
         });
       } catch (error) {
         this.options.onError?.(asError(error));
-        await abortableSleep(delay, signal);
+        await sleepWithAbort(delay, signal).catch(() => {});
         delay = Math.min(delay * 2, 30_000);
       }
     }

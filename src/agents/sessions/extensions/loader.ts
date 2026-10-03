@@ -475,35 +475,6 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
   };
 }
 
-async function loadExtension(
-  extensionPath: string,
-  cwd: string,
-  eventBus: EventBus,
-  runtime: ExtensionRuntime,
-  context: ExtensionLoadContext,
-): Promise<{ extension: Extension | null; error: string | null }> {
-  const resolvedPath = resolvePath(extensionPath, cwd);
-
-  try {
-    const factory = await loadExtensionModule(resolvedPath, context);
-    if (!factory) {
-      return {
-        extension: null,
-        error: `Extension does not export a valid factory function: ${extensionPath}`,
-      };
-    }
-
-    const extension = createExtension(extensionPath, resolvedPath);
-    const api = createExtensionAPI(extension, runtime, cwd, eventBus);
-    await factory(api);
-
-    return { extension, error: null };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { extension: null, error: `Failed to load extension: ${message}` };
-  }
-}
-
 export async function loadExtensionFromFactory(
   factory: ExtensionFactory,
   cwd: string,
@@ -531,21 +502,23 @@ export async function loadExtensionsCached(
   const context: ExtensionLoadContext = { cacheScope };
 
   for (const extPath of paths) {
-    const { extension, error } = await loadExtension(
-      extPath,
-      resolvedCwd,
-      resolvedEventBus,
-      runtime,
-      context,
-    );
-
-    if (error) {
-      errors.push({ path: extPath, error });
-      continue;
-    }
-
-    if (extension) {
+    const resolvedPath = resolvePath(extPath, resolvedCwd);
+    try {
+      const factory = await loadExtensionModule(resolvedPath, context);
+      if (!factory) {
+        errors.push({
+          path: extPath,
+          error: `Extension does not export a valid factory function: ${extPath}`,
+        });
+        continue;
+      }
+      const extension = createExtension(extPath, resolvedPath);
+      const api = createExtensionAPI(extension, runtime, resolvedCwd, resolvedEventBus);
+      await factory(api);
       extensions.push(extension);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push({ path: extPath, error: `Failed to load extension: ${message}` });
     }
   }
 

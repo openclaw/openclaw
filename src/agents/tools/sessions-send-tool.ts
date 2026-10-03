@@ -690,14 +690,12 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               notifyRequesterOnWaitFailure:
                 notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
             });
-          if (timeoutSeconds === 0) {
-            await startReplyFlow(true);
-            return accepted();
-          }
-
-          const result = completion
-            ? await completion.take(timeoutMs)
-            : await waitForAgentRunReply({ runId, timeoutMs, callGateway: gatewayCall });
+          const result =
+            timeoutSeconds === 0
+              ? undefined
+              : completion
+                ? await completion.take(timeoutMs)
+                : await waitForAgentRunReply({ runId, timeoutMs, callGateway: gatewayCall });
           if (!result) {
             await startReplyFlow(true);
             return accepted();

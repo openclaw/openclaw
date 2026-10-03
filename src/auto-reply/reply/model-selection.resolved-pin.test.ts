@@ -126,7 +126,6 @@ type SelectionCase = {
   locked?: boolean;
   configuredProvider?: boolean;
   heartbeat?: boolean;
-  oneTurn?: boolean;
   operatorRestricted?: boolean;
   operatorRejected?: boolean;
 };
@@ -135,7 +134,6 @@ test.each<SelectionCase>([
   { name: "resolved alias-like model", pin: "middle", expected: "middle" },
   { name: "legacy raw model normalized once", pin: "latest", expected: "middle", raw: true },
   { name: "explicit heartbeat override", pin: "middle", expected: "heartbeat", heartbeat: true },
-  { name: "one-turn override", pin: "middle", expected: "once", oneTurn: true },
   { name: "role-denied stored pin", pin: "middle", expected: "default", operatorRestricted: true },
   {
     name: "role-denied inherited pin",
@@ -149,14 +147,6 @@ test.each<SelectionCase>([
     pin: "middle",
     expected: "middle",
     locked: true,
-    operatorRestricted: true,
-    operatorRejected: true,
-  },
-  {
-    name: "role-denied one-turn override",
-    pin: "middle",
-    expected: "once",
-    oneTurn: true,
     operatorRestricted: true,
     operatorRejected: true,
   },
@@ -277,15 +267,8 @@ test.each<SelectionCase>([
           defaultProvider: "custom",
           defaultModel: "default",
           provider: fixture.inherited ? provider : "custom",
-          model: fixture.oneTurn
-            ? "once"
-            : fixture.heartbeat
-              ? "heartbeat"
-              : fixture.inherited
-                ? fixture.pin
-                : "default",
+          model: fixture.heartbeat ? "heartbeat" : fixture.inherited ? fixture.pin : "default",
           hasModelDirective: false,
-          hasOneTurnModelOverride: fixture.oneTurn,
           isHeartbeat: fixture.heartbeat,
           hasResolvedHeartbeatModelOverride: fixture.heartbeat,
           preparedModelCatalog,

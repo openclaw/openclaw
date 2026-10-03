@@ -7,27 +7,11 @@ import { isLocalBaseUrl } from "../../agents/model-catalog-route.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 
-type ModelsListEntry = Pick<
-  ModelChoice,
-  | "alias"
-  | "contextTokens"
-  | "local"
-  | "contextWindow"
-  | "contextWindowDefault"
-  | "contextWindows"
-  | "id"
-  | "input"
-  | "name"
-  | "provider"
-  | "reasoning"
-  | "tags"
-> & { available?: boolean; supportsTools?: boolean };
-
 /** Keeps concrete route, auth, cost, and provider parameters out of public model rows. */
 export function buildPublicModelProjection(
   entry: ModelCatalogEntry,
   options: { includeDetails?: boolean } = {},
-): ModelsListEntry {
+): ModelChoice {
   const contextWindow = resolvePositiveSafeInteger(entry.contextWindow);
   const contextTokens = options.includeDetails
     ? resolvePositiveSafeInteger(entry.contextTokens)

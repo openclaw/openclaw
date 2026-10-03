@@ -53,7 +53,6 @@ packages/memory-host-sdk/src/host/embedding-vector.ts
 packages/memory-host-sdk/src/host/error-utils.ts
 packages/memory-host-sdk/src/host/memory-schema-base.ts
 packages/memory-host-sdk/src/host/memory-schema-fts.ts
-packages/memory-host-sdk/src/host/memory-schema-migration.ts
 packages/memory-host-sdk/src/host/memory-schema-provenance.ts
 packages/memory-host-sdk/src/host/memory-schema-recall.ts
 packages/memory-host-sdk/src/host/memory-schema-storage-migration.ts
@@ -388,6 +387,7 @@ src/commands/doctor/shared/legacy-tool-name-migration.ts
 src/commands/doctor/shared/legacy-tool-policy-scopes.ts
 src/commands/doctor/shared/legacy-tools-by-sender.ts
 src/commands/doctor/shared/legacy-web-tools-migrate.ts
+src/commands/doctor/shared/legacy-webhook-pins.ts
 src/compat/legacy-names.ts
 src/config/agent-dirs.ts
 src/config/agent-limits.ts
@@ -521,6 +521,7 @@ src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
 src/config/sessions/auth-profile-override-provenance.ts
 src/config/sessions/conversation-link.ts
+src/config/sessions/goals-operations.types.ts
 src/config/sessions/migration-required.ts
 src/config/sessions/model-override-provenance.ts
 src/config/sessions/paths.ts
@@ -538,12 +539,15 @@ src/config/sessions/session-entry-snapshots.ts
 src/config/sessions/session-entry-state-format.ts
 src/config/sessions/session-history-worker-errors.ts
 src/config/sessions/session-incognito-actor.ts
+src/config/sessions/session-incognito-compute-contract.ts
+src/config/sessions/session-incognito-compute.ts
 src/config/sessions/session-incognito-lifecycle-contract.ts
 src/config/sessions/session-incognito-lifecycle.ts
 src/config/sessions/cli-session-binding.ts
 src/config/sessions/session-incognito-side-data-contract.ts
 src/config/sessions/session-incognito-transcript-contract.ts
 src/config/sessions/session-model-context-projection.ts
+src/config/sessions/session-pending-input-custody-error.ts
 src/config/sessions/session-sqlite-target-paths.ts
 src/config/sessions/session-sqlite-target.ts
 src/config/sessions/session-store-config.ts
@@ -665,6 +669,7 @@ src/gateway/worker-environments/workspace-manifest-computation.runtime.ts
 src/gateway/worker-environments/workspace-manifest-overlay.ts
 src/gateway/worker-environments/workspace-manifest-worker.ts
 src/gateway/worker-environments/workspace-manifest.ts
+src/gateway/worker-environments/workspace-path-ancestors.ts
 src/gateway/worker-environments/workspace-path-exclusions.ts
 src/gateway/worker-environments/workspace-reconcile-apply.ts
 src/gateway/worker-environments/workspace-reconcile-core.ts
@@ -736,6 +741,7 @@ src/infra/dotenv-global-core.ts
 src/infra/dotenv-global.ts
 src/infra/dotenv.ts
 src/infra/ed25519-signature.ts
+src/infra/env-log.runtime.ts
 src/infra/env.ts
 src/infra/errno.ts
 src/infra/error-graph-internal.ts
@@ -1195,6 +1201,7 @@ src/plugins/plugin-cache-artifacts.ts
 src/plugins/plugin-cache-files.ts
 src/plugins/plugin-cache-sdk.ts
 src/plugins/plugin-cache.ts
+src/plugins/plugin-catalog-source.ts
 src/plugins/plugin-config-trust.ts
 src/plugins/plugin-control-plane-context.ts
 src/plugins/plugin-generation-artifact.ts
@@ -1571,7 +1578,6 @@ src/state/openclaw-state-lease.ts
 src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
 src/state/openclaw-state-ownership-worker.ts
-src/state/openclaw-state-read-error.ts
 src/state/openclaw-state-read-operation.ts
 src/state/openclaw-state-read-request.ts
 src/state/openclaw-state-read-scope.ts

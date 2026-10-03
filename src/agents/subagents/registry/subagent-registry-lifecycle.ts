@@ -185,8 +185,7 @@ export class SubagentLifecycleController {
   };
 
   newerGenerationOwnsSession(entry: SubagentRunRecord): boolean {
-    const published = getCurrentSubagentRunOwner(this.options.runs, entry);
-    const current = published && isSameSubagentRunOwner(published, entry) ? published : entry;
+    const current = getCurrentSubagentRunOwner(this.options.runs, entry) ?? entry;
     if (current.killReconciliation?.supersededAt !== undefined) {
       return true;
     }
@@ -409,7 +408,6 @@ export class SubagentLifecycleController {
     const current = getCurrentSubagentRunOwner(this.options.runs, entry);
     return (
       current !== undefined &&
-      isSameSubagentRunOwner(current, entry) &&
       current.pauseReason !== "sessions_yield" &&
       this.terminalGenerations.get(getSubagentRunRuntimeKey(entry)) === generation &&
       isDeepStrictEqual(
@@ -525,15 +523,19 @@ export class SubagentLifecycleController {
         lastError: getDeliveryLastError(entry) ?? null,
       };
     }
-    Object.assign(delivery, { status: "discarded", queueId: undefined, nextAttemptAt: undefined });
-    delivery.payload = undefined;
-    Object.assign(delivery, { createdAt: undefined, lastAttemptAt: undefined });
     Object.assign(delivery, {
+      status: "discarded",
+      queueId: undefined,
+      nextAttemptAt: undefined,
+      payload: undefined,
+      createdAt: undefined,
+      lastAttemptAt: undefined,
       attemptCount: undefined,
       lastError: undefined,
       announcedAt: undefined,
+      suspendedAt: undefined,
+      suspendedReason: undefined,
     });
-    Object.assign(delivery, { suspendedAt: undefined, suspendedReason: undefined });
     Object.assign(entry, { wakeOnDescendantSettle: undefined, cleanupHandled: true });
     const completion = ensureCompletionState(entry);
     Object.assign(completion, { fallbackResultText: undefined, fallbackCapturedAt: undefined });

@@ -633,9 +633,7 @@ function planTerminalCompletion(
       suppressSessionEffects: suppressSessionEffects ? true : undefined,
     };
   }
-  if (entry.endedReason !== completionReason) {
-    entry.endedReason = completionReason;
-  }
+  entry.endedReason = completionReason;
   if (completionReason === SUBAGENT_ENDED_REASON_KILLED && entry.terminalOwner !== undefined) {
     entry.terminalOwner = undefined;
   }
@@ -645,13 +643,8 @@ function planTerminalCompletion(
 
   if (completeParams.completionSnapshot) {
     const completion = ensureCompletionState(entry);
-    if (
-      completion.resultText !== completeParams.completionSnapshot.resultText ||
-      completion.capturedAt !== completeParams.completionSnapshot.capturedAt
-    ) {
-      completion.resultText = completeParams.completionSnapshot.resultText;
-      completion.capturedAt = completeParams.completionSnapshot.capturedAt;
-    }
+    completion.resultText = completeParams.completionSnapshot.resultText;
+    completion.capturedAt = completeParams.completionSnapshot.capturedAt;
   }
 
   if (terminalReply) {

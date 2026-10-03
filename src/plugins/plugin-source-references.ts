@@ -173,22 +173,17 @@ export function inspectPluginTypeScriptExecutionFacts(
         {
           pre(file: { path: NodePath<BabelProgram> }) {
             file.path.traverse({
-              ImportDeclaration(declaration) {
-                const specifier = staticString(declaration.get("source").node);
+              "ImportDeclaration|ExportNamedDeclaration|ExportAllDeclaration"(
+                declaration: NodePath<
+                  ImportDeclaration | ExportNamedDeclaration | ExportAllDeclaration
+                >,
+              ) {
+                const specifier = staticString(declaration.node.source);
                 if (specifier !== undefined) {
-                  recordStaticImport(specifier, declaration.node?.specifiers?.length === 0);
-                }
-              },
-              ExportNamedDeclaration(declaration) {
-                const specifier = staticString(declaration.get("source").node);
-                if (specifier !== undefined) {
-                  recordStaticImport(specifier, false);
-                }
-              },
-              ExportAllDeclaration(declaration) {
-                const specifier = staticString(declaration.get("source").node);
-                if (specifier !== undefined) {
-                  recordStaticImport(specifier, false);
+                  recordStaticImport(
+                    specifier,
+                    declaration.isImportDeclaration() && declaration.node.specifiers.length === 0,
+                  );
                 }
               },
               ImportExpression(expression) {
@@ -509,16 +504,14 @@ export function visitPluginSourceReferences(
               },
               // Jiti runs these after TypeScript erasure and before lowering module declarations.
               visitor: {
-                ImportDeclaration(declaration: NodePath<ImportDeclaration>) {
-                  authoredStaticImports.add(declaration.node.source.value);
-                },
-                ExportNamedDeclaration(declaration: NodePath<ExportNamedDeclaration>) {
+                "ImportDeclaration|ExportNamedDeclaration|ExportAllDeclaration"(
+                  declaration: NodePath<
+                    ImportDeclaration | ExportNamedDeclaration | ExportAllDeclaration
+                  >,
+                ) {
                   if (declaration.node.source) {
                     authoredStaticImports.add(declaration.node.source.value);
                   }
-                },
-                ExportAllDeclaration(declaration: NodePath<ExportAllDeclaration>) {
-                  authoredStaticImports.add(declaration.node.source.value);
                 },
               },
             },

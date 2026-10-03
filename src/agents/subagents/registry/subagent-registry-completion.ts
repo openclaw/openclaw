@@ -5,7 +5,6 @@ import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   SUBAGENT_KILL_TASK_ERROR,
   type SubagentKillTargetState,
-  type SubagentTerminalState,
 } from "./subagent-control.types.js";
 import {
   SUBAGENT_ENDED_OUTCOME_ERROR,
@@ -40,51 +39,30 @@ export function resolveSubagentKillTargetState(
         }
       : undefined;
   }
-  const terminal = resolveFinalizedSubagentTaskState(entry);
-  if (terminal) {
-    return { state: "terminal", task: terminal };
-  }
-  return typeof entry.execution.endedAt === "number" &&
-    entry.pauseReason !== "sessions_yield" &&
-    (entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
-      entry.suppressAnnounceReason === "steer-restart")
-    ? { state: "finalizing" }
-    : undefined;
-}
-
-/** Returns terminal execution facts only after completion capture has settled. */
-function resolveFinalizedSubagentTaskState(
-  entry: SubagentRunRecord,
-): SubagentTerminalState | undefined {
   const endedAt = entry.execution.endedAt;
   const outcome = entry.execution.outcome;
   const completion = entry.completion;
-  if (
-    typeof endedAt !== "number" ||
-    !outcome ||
-    entry.pauseReason === "sessions_yield" ||
-    (completion?.resultText === undefined && typeof completion?.capturedAt !== "number")
-  ) {
+  if (typeof endedAt !== "number" || entry.pauseReason === "sessions_yield") {
     return undefined;
   }
-  const status =
-    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-    entry.suppressAnnounceReason !== "steer-restart"
-      ? "cancelled"
-      : outcome.status === "ok"
-        ? "succeeded"
-        : outcome.status === "timeout"
-          ? "timed_out"
-          : "failed";
+  if (
+    !outcome ||
+    (completion?.resultText === undefined && typeof completion?.capturedAt !== "number")
+  ) {
+    return { state: "finalizing" };
+  }
   return {
-    status,
-    endedAt,
-    error:
-      status === "cancelled"
-        ? SUBAGENT_KILL_TASK_ERROR
-        : outcome.status === "error"
-          ? outcome.error
-          : undefined,
+    state: "terminal",
+    task: {
+      status:
+        outcome.status === "ok"
+          ? "succeeded"
+          : outcome.status === "timeout"
+            ? "timed_out"
+            : "failed",
+      endedAt,
+      error: outcome.status === "error" ? outcome.error : undefined,
+    },
   };
 }
 

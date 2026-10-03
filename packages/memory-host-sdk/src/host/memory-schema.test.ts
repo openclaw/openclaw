@@ -89,57 +89,24 @@ describe("memory index schema", () => {
     }
   });
 
-  it("migrates shipped generic tables into canonical memory tables", () => {
+  it("backfills missing provenance and maintains canonical FTS without insert-time provenance", () => {
     const db = new DatabaseSync(":memory:");
     try {
+      ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
       db.exec(`
-        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE files (
-          path TEXT PRIMARY KEY,
-          source TEXT NOT NULL DEFAULT 'memory',
-          hash TEXT NOT NULL,
-          mtime INTEGER NOT NULL,
-          size INTEGER NOT NULL
-        );
-        CREATE TABLE chunks (
-          id TEXT PRIMARY KEY,
-          path TEXT NOT NULL,
-          source TEXT NOT NULL DEFAULT 'memory',
-          start_line INTEGER NOT NULL,
-          end_line INTEGER NOT NULL,
-          hash TEXT NOT NULL,
-          model TEXT NOT NULL,
-          text TEXT NOT NULL,
-          embedding TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
-        );
-        CREATE TABLE embedding_cache (
-          provider TEXT NOT NULL,
-          model TEXT NOT NULL,
-          provider_key TEXT NOT NULL,
-          hash TEXT NOT NULL,
-          embedding TEXT NOT NULL,
-          dims INTEGER,
-          updated_at INTEGER NOT NULL,
-          PRIMARY KEY (provider, model, provider_key, hash)
-        );
-        CREATE VIRTUAL TABLE chunks_fts USING fts5(
-          text, id UNINDEXED, path UNINDEXED, source UNINDEXED, model UNINDEXED,
-          start_line UNINDEXED, end_line UNINDEXED
-        );
-        INSERT INTO meta VALUES ('memory_index_meta_v1', '{"vectorDims":3}');
-        INSERT INTO files VALUES ('MEMORY.md', 'memory', 'file-hash', 10.75, 20);
-        INSERT INTO chunks VALUES (
-          'chunk-1', 'MEMORY.md', 'memory', 1, 2, 'chunk-hash', 'embed-model',
-          'remember this', '[1,0,0]', 30
-        );
-        INSERT INTO embedding_cache VALUES (
-          'openai', 'embed-model', 'key', 'chunk-hash', '[1,0,0]', 3, 40
-        );
-        INSERT INTO chunks_fts VALUES (
-          'remember this', 'chunk-1', 'MEMORY.md', 'memory', 'embed-model', 1, 2
-        );
+        INSERT INTO memory_index_meta VALUES ('memory_index_meta_v1', '{"vectorDims":3}');
+        INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+        VALUES ('MEMORY.md', 'memory', 'file-hash', 10.75, 20);
       `);
+      db.prepare(`
+        INSERT INTO memory_index_chunks (
+          id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+        ) VALUES ('chunk-1', 'MEMORY.md', 'memory', 1, 2, 'chunk-hash', 'embed-model',
+          'remember this', ?, 30);
+      `).run(encodeMemoryEmbedding([1, 0, 0]));
+      db.prepare(`INSERT INTO memory_embedding_cache VALUES (
+        'openai', 'embed-model', 'key', 'chunk-hash', ?, 3, 40
+      );`).run(encodeMemoryEmbedding([1, 0, 0]));
 
       const result = ensureMemoryIndexSchema({
         db,
@@ -234,13 +201,6 @@ describe("memory index schema", () => {
           )
           .all(),
       ).toEqual([]);
-      expect(
-        db
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('meta', 'files', 'chunks', 'embedding_cache', 'chunks_fts')",
-          )
-          .all(),
-      ).toEqual([]);
     } finally {
       db.close();
     }
@@ -327,9 +287,17 @@ describe("memory index schema", () => {
     }
   });
 
-  it("stores source records with the same path in separate sources", () => {
+  it("stores separate sources alongside unrelated generic tables", () => {
     const db = new DatabaseSync(":memory:");
     try {
+      db.exec(`
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE files (name TEXT PRIMARY KEY);
+        CREATE TABLE chunks (content TEXT);
+        INSERT INTO meta VALUES ('application', 'unrelated');
+        INSERT INTO files VALUES ('original');
+        INSERT INTO chunks VALUES ('preserved');
+      `);
       ensureMemoryIndexSchema({
         db,
         cacheEnabled: false,
@@ -349,6 +317,11 @@ describe("memory index schema", () => {
         { path: "shared.md", source: "memory", hash: "memory-hash" },
         { path: "shared.md", source: "sessions", hash: "session-hash" },
       ]);
+      expect(db.prepare("SELECT * FROM meta").all()).toEqual([
+        { key: "application", value: "unrelated" },
+      ]);
+      expect(db.prepare("SELECT * FROM files").all()).toEqual([{ name: "original" }]);
+      expect(db.prepare("SELECT * FROM chunks").all()).toEqual([{ content: "preserved" }]);
     } finally {
       db.close();
     }

@@ -84,10 +84,11 @@ export function findRetiredConfigUpgradeRequirement(
       checkQueueMode(mode, `messages.queue.byChannel.${channel}`);
     }
   }
+  checkKeys(config.talk, "talk", ["mode", "transport", "brain", "model", "voice"]);
   const channels = isRecord(config.channels) ? config.channels : {};
   checkKeys(config.gateway, "gateway", ["webchat"]);
   checkKeys(channels, "channels", ["webchat"]);
-  checkKeys(channels.telegram, "channels.telegram", ["requireMention"]);
+  checkKeys(channels.telegram, "channels.telegram", ["requireMention", "groupMentionsOnly"]);
   const beforeDiscord = retired.length;
   visitChannelEntries(config, "discord", (scope, configPath) => {
     const voice = isRecord(scope.voice) ? scope.voice : {};
@@ -127,6 +128,9 @@ export function findRetiredConfigUpgradeRequirement(
         checkKeys(direct, `${configPath}.direct.${chatId}`, ["threadReplies"]);
       }
     }
+  });
+  visitChannelEntries(config, "nextcloud-talk", (scope, configPath) => {
+    checkKeys(scope, configPath, ["allowPrivateNetwork"]);
   });
   visitChannelEntries(config, "matrix", (scope, configPath) => {
     checkKeys(scope, configPath, ["allowPrivateNetwork"]);

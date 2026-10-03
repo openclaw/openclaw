@@ -90,7 +90,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   const startup = createWorkerPlacementDispatchStartup({
     ...options,
     failure,
-    reportTransition: reportPlacementTransition,
   });
 
   // Background recovery observes previously requested cleanup; explicit Stop and

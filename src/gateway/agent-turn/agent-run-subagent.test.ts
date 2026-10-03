@@ -13,6 +13,7 @@ import type { AgentTurnPrincipal } from "./types.js";
 const mocks = vi.hoisted(() => ({
   registerSubagentRun: vi.fn(),
   adoptPausedSubagentRunForFollowUp: vi.fn(),
+  adoptPausedSubagentRunIntoSuccessor: vi.fn(),
   getLatestLiveSubagentRunByChildSessionKey: vi.fn(),
   prepareParentSubagentResume: vi.fn(),
 }));
@@ -22,6 +23,7 @@ vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
 vi.mock("../../agents/subagents/registry/subagent-registry.js", () => ({
   registerSubagentRun: mocks.registerSubagentRun,
   adoptPausedSubagentRunForFollowUp: mocks.adoptPausedSubagentRunForFollowUp,
+  adoptPausedSubagentRunIntoSuccessor: mocks.adoptPausedSubagentRunIntoSuccessor,
 }));
 vi.mock("../../config/sessions.js", () => ({
   resolveAgentIdFromSessionKey: () => "main",
@@ -81,6 +83,7 @@ describe("Gateway native subagent admission", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.adoptPausedSubagentRunForFollowUp.mockResolvedValue(false);
+    mocks.adoptPausedSubagentRunIntoSuccessor.mockResolvedValue(false);
   });
 
   it("registers plugin work with its execution owner before accepting it", async () => {

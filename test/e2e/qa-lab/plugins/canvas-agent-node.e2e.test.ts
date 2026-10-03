@@ -229,7 +229,6 @@ describe("Canvas agent tool over a paired macOS node", () => {
             });
           },
         });
-        await approveCanvasNodeCommands(operatorClient, nodeId);
         await waitForCanvasNode(operatorClient, nodeId);
 
         const toolRegistration = registry.registry.tools.find(
@@ -312,21 +311,6 @@ describe("Canvas agent tool over a paired macOS node", () => {
     },
   );
 });
-
-async function approveCanvasNodeCommands(operator: GatewayClient, nodeId: string): Promise<void> {
-  await vi.waitFor(
-    async () => {
-      const result = await operator.request<{
-        pending?: Array<{ requestId?: string; nodeId?: string; commands?: string[] }>;
-      }>("node.pair.list", {});
-      const pending = result.pending?.find((entry) => entry.nodeId === nodeId);
-      expect(pending?.commands).toEqual([...CANVAS_NODE_COMMANDS]);
-      expect(pending?.requestId).toEqual(expect.any(String));
-      await operator.request("node.pair.approve", { requestId: pending?.requestId });
-    },
-    { timeout: 15_000, interval: 100 },
-  );
-}
 
 async function waitForCanvasNode(operator: GatewayClient, nodeId: string): Promise<void> {
   await vi.waitFor(

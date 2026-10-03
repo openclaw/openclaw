@@ -3,9 +3,11 @@ import { Buffer } from "node:buffer";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { WorkerCredentialRecord } from "./credential.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerEnvironmentAttachmentRecord } from "./session-attachment.js";
+import { isTerminalWorkerEnvironmentState } from "./state.js";
 import {
   digestWorkerEnvironmentAttachmentAuthority,
   digestWorkerEnvironmentAuthority,
@@ -39,13 +41,13 @@ function applyNativeOverlay(
   row: WorkerEnvironmentRecord,
   overlay: NativeOverlay,
 ): WorkerEnvironmentRecord {
-  return {
+  return freezeJsonSnapshot({
     ...row,
     ...(overlay.nodeDeviceId ? { nodeDeviceId: overlay.nodeDeviceId.value } : {}),
     ...(overlay.updatedAtMs ? { updatedAtMs: overlay.updatedAtMs.value } : {}),
     ...(overlay.preparation ? { preparation: overlay.preparation.value } : {}),
     ...(overlay.lastActivatedAtMs ? { lastActivatedAtMs: overlay.lastActivatedAtMs.value } : {}),
-  };
+  });
 }
 
 function assertEnvironmentShape(record: WorkerEnvironmentRecord): void {
@@ -214,12 +216,7 @@ function createWorkerEnvironmentProjection() {
     },
     pendingReconciliations() {
       assertActive();
-      return [...reconciliations].map(([token, recovery]) => ({
-        token,
-        ids: recovery.ids,
-        error: recovery.error,
-        revocationId: recovery.revocationId,
-      }));
+      return [...reconciliations].map(([token, recovery]) => Object.assign({ token }, recovery));
     },
     hasPendingReconciliation: () => reconciliations.size !== 0,
     release(token: object) {
@@ -246,6 +243,7 @@ function createWorkerEnvironmentProjection() {
     },
     install(facts: WorkerEnvironmentFacts, revision: number, notify = true) {
       assertActive();
+      // Worker replies already own their rows; freeze each published revision for shared reads.
       const changed = new Set(facts.ids.filter((id) => revision >= (revisions.get(id) ?? -1)));
       const retainedSessions = new Set(
         facts.attachments
@@ -257,10 +255,10 @@ function createWorkerEnvironmentProjection() {
         credentials.delete(id);
         attachmentAuthorities.delete(id);
         revisions.set(id, revision);
-        for (const [session, attachment] of attachments) {
-          if (attachment.environmentId === id && !retainedSessions.has(session)) {
-            attachments.delete(session);
-          }
+      }
+      for (const [session, attachment] of attachments) {
+        if (changed.has(attachment.environmentId) && !retainedSessions.has(session)) {
+          attachments.delete(session);
         }
       }
       for (const row of facts.environments) {
@@ -276,7 +274,10 @@ function createWorkerEnvironmentProjection() {
               nativeOverlays.delete(row.environmentId);
             }
           }
-          environments.set(row.environmentId, overlay ? applyNativeOverlay(row, overlay) : row);
+          environments.set(
+            row.environmentId,
+            overlay ? applyNativeOverlay(row, overlay) : freezeJsonSnapshot(row),
+          );
         }
       }
       for (const id of changed) {
@@ -286,12 +287,12 @@ function createWorkerEnvironmentProjection() {
       }
       for (const row of facts.credentials) {
         if (changed.has(row.environmentId)) {
-          credentials.set(row.environmentId, row);
+          credentials.set(row.environmentId, Object.freeze(row));
         }
       }
       for (const row of facts.attachments) {
         if (changed.has(row.environmentId)) {
-          attachments.set(row.sessionId, row);
+          attachments.set(row.sessionId, Object.freeze(row));
           attachmentAuthorities.set(
             row.environmentId,
             digestWorkerEnvironmentAttachmentAuthority(row),
@@ -312,7 +313,7 @@ function createWorkerEnvironmentProjection() {
       if (revision <= (revisions.get(id) ?? -1)) {
         return;
       }
-      const captured = structuredClone(patch);
+      const captured = freezeJsonSnapshot(structuredClone(patch));
       const previous = nativeOverlays.get(id);
       const overlay: NativeOverlay = {
         nodeDeviceId: nativeField(previous?.nodeDeviceId, captured.nodeDeviceId, revision),
@@ -335,7 +336,7 @@ function createWorkerEnvironmentProjection() {
     },
     preparedRecords() {
       assertActive();
-      return structuredClone([...environments.values()].filter((row) => row.preparation !== null));
+      return [...environments.values()].filter((row) => row.preparation !== null);
     },
     hasNodeEnrollmentOwner(nodeId: string) {
       assertActive();
@@ -343,7 +344,7 @@ function createWorkerEnvironmentProjection() {
         if (
           row.nodeDeviceId === nodeId &&
           row.nodeSetupId !== null &&
-          !["destroyed", "failed", "orphaned"].includes(row.state)
+          !isTerminalWorkerEnvironmentState(row.state)
         ) {
           assertReadable(row.environmentId, "environment");
           return true;
@@ -382,7 +383,7 @@ function createWorkerEnvironmentProjection() {
       if (record) {
         assertEnvironmentShape(record);
       }
-      return structuredClone(record);
+      return record;
     },
     transferOwner(id: string) {
       assertReadable(id, "transfer");
@@ -394,7 +395,7 @@ function createWorkerEnvironmentProjection() {
       return {
         environment: {
           ownerEpoch: row.ownerEpoch,
-          attachedSessionIds: [...row.attachedSessionIds],
+          attachedSessionIds: row.attachedSessionIds,
           destroyRequestedAtMs: row.destroyRequestedAtMs,
           state: row.state,
         },
@@ -409,31 +410,35 @@ function createWorkerEnvironmentProjection() {
     },
     credential(id: string) {
       assertReadable(id, "credential");
-      return structuredClone(credentials.get(id));
+      return credentials.get(id);
     },
     credentialByHash(hash: string) {
       assertActive();
-      const row = [...credentials.values()].find((entry) => entry.credentialHash === hash);
-      if (row) {
-        assertReadable(row.environmentId, "credential");
+      for (const row of credentials.values()) {
+        if (row.credentialHash === hash) {
+          assertReadable(row.environmentId, "credential");
+          return row;
+        }
       }
-      return structuredClone(row);
+      return undefined;
     },
     list(reconcile = false) {
       assertActive();
-      sorted ??= [...environments.values()].toSorted(compare);
+      sorted ??= freezeJsonSnapshot([...environments.values()].toSorted(compare));
       if (!reconcile) {
         sorted.forEach(assertEnvironmentShape);
-        return structuredClone(sorted);
+        return sorted;
       }
-      reconcilable ??= sorted
-        .filter((row) => !["destroyed", "failed", "orphaned"].includes(row.state))
-        .toSorted(
-          (a, b) =>
-            Buffer.compare(Buffer.from(a.providerId), Buffer.from(b.providerId)) || compare(a, b),
-        );
+      reconcilable ??= freezeJsonSnapshot(
+        sorted
+          .filter((row) => !isTerminalWorkerEnvironmentState(row.state))
+          .toSorted(
+            (a, b) =>
+              Buffer.compare(Buffer.from(a.providerId), Buffer.from(b.providerId)) || compare(a, b),
+          ),
+      );
       reconcilable.forEach(assertEnvironmentShape);
-      return structuredClone(reconcilable);
+      return reconcilable;
     },
     hasSessionAttachment(environmentId: string) {
       assertReadable(environmentId, "attachment");
@@ -450,11 +455,11 @@ function createWorkerEnvironmentProjection() {
       if (row) {
         assertReadable(row.environmentId, "attachment");
       }
-      return structuredClone(row);
+      return row;
     },
     attachments() {
       assertActive();
-      return structuredClone([...attachments.values()]);
+      return [...attachments.values()];
     },
     close,
   };

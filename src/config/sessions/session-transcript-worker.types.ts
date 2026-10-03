@@ -78,6 +78,12 @@ import type {
   SessionEntryCurrentSource,
 } from "./session-entry-current.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import type {
+  SessionEntryReadWorkerInput,
+  SessionEntryReadWorkerResult,
+  SessionRuntimeTargetWorkerInput,
+  SessionRuntimeTargetWorkerResult,
+} from "./session-entry-read.types.js";
 import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
 import type {
   SessionHistoryWorkerRequest,
@@ -285,13 +291,6 @@ type SessionUsageCacheWorkerInput = {
   env: NodeJS.ProcessEnv;
 };
 
-type SessionEntryReadWorkerInput = {
-  kind: "session-entry-read";
-  database: { agentId: string; path: string };
-  scope: SessionEntryReadScope & { databaseAgentId: string };
-  continuation?: CanonicalSessionReaderContinuation;
-};
-
 export type SessionEntryCurrentWorkerInput = Omit<SessionEntryReadWorkerInput, "kind"> & {
   kind: "session-entry-current";
   source?: SessionEntryCurrentSource;
@@ -310,17 +309,6 @@ export type SessionDiagnosticTextWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
-
-type SessionEntryReadWorkerResult = {
-  kind: "session-entry-read";
-  source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
-} & (
-  | { entry: import("./types.js").SessionEntry | undefined; readError?: never }
-  | {
-      entry: undefined;
-      readError: import("./session-transcript-worker-error.types.js").SessionTranscriptWorkerReadError;
-    }
-);
 
 type SessionEntryListWorkerInput = {
   kind: "session-entry-list";
@@ -487,6 +475,7 @@ export type SessionHistoryWorkerInput =
   | ConversationDeliveryWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
+  | SessionRuntimeTargetWorkerInput
   | SessionEntryCurrentWorkerInput
   | SessionDiagnosticTextWorkerInput
   | SessionStoreSummaryWorkerInput
@@ -581,6 +570,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     >;
   };
   "session-entry-read": SessionEntryReadWorkerResult;
+  "session-runtime-target": SessionRuntimeTargetWorkerResult;
   "session-entry-current": SessionEntryCurrentWorkerResult;
   "session-diagnostic-text": {
     kind: "session-diagnostic-text";
@@ -659,6 +649,10 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
     PublishedSessionTranscriptArchive[]
   >;
   readColdMetadata: SessionHistoryReader<SessionColdMetadataWorkerInput>;
+  readRuntimeTarget: SessionHistoryReader<
+    SessionRuntimeTargetWorkerInput,
+    SessionTranscriptWorkerValues["session-runtime-target"]["target"]
+  >;
   readColdStorageInventory: SessionHistoryReader<SessionColdStorageInventoryWorkerInput>;
   searchTranscripts: (
     params: SessionTranscriptSearchWorkerInput["params"],

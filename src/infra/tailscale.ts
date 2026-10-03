@@ -41,10 +41,7 @@ const SUDO_NONINTERACTIVE_AUTH_ERROR =
   /^sudo: (?:a password is required|no password was provided|a terminal is required|no tty present|no askpass program specified)/im;
 
 function tailnetHostnameFromStatus(parsed: Record<string, unknown>): string {
-  const self =
-    typeof parsed.Self === "object" && parsed.Self !== null
-      ? (parsed.Self as Record<string, unknown>)
-      : undefined;
+  const self = readRecord(parsed.Self);
   const dns = typeof self?.DNSName === "string" ? self.DNSName : undefined;
   const ips = Array.isArray(self?.TailscaleIPs)
     ? ((parsed.Self as { TailscaleIPs?: string[] }).TailscaleIPs ?? [])
@@ -141,16 +138,10 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
 
 let cachedTailscaleBinary: string | null = null;
 
-function getTestTailscaleBinaryOverride(env: NodeJS.ProcessEnv = process.env): string | null {
-  if (!isVitestRuntimeEnv(env)) {
-    return null;
-  }
-  const forcedBinary = env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
-  return forcedBinary || null;
-}
-
 async function getTailscaleBinary(): Promise<string> {
-  const forcedBinary = getTestTailscaleBinaryOverride();
+  const forcedBinary = isVitestRuntimeEnv()
+    ? process.env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim()
+    : undefined;
   if (forcedBinary) {
     cachedTailscaleBinary = forcedBinary;
     return forcedBinary;
@@ -586,22 +577,12 @@ function funnelStatusBackendsForPort(status: Record<string, unknown>): Set<strin
   if (enabledHosts.size === 0) {
     return backends;
   }
-  const web = (status as { Web?: Record<string, unknown> }).Web;
-  if (!web || typeof web !== "object") {
-    return backends;
-  }
-  for (const [host, handlers] of Object.entries(web)) {
+  for (const [host, handlers] of Object.entries(readRecord(status.Web) ?? {})) {
     if (!enabledHosts.has(host)) {
       continue;
     }
-    if (!handlers || typeof handlers !== "object") {
-      continue;
-    }
-    const handlerEntries = (handlers as { Handlers?: Record<string, unknown> }).Handlers;
-    if (!handlerEntries || typeof handlerEntries !== "object") {
-      continue;
-    }
-    for (const handler of Object.values(handlerEntries)) {
+    const handlerEntries = readRecord(readRecord(handlers)?.Handlers);
+    for (const handler of Object.values(handlerEntries ?? {})) {
       const proxy = (handler as { Proxy?: unknown })?.Proxy;
       if (typeof proxy === "string" && proxy.length > 0) {
         backends.add(proxy);

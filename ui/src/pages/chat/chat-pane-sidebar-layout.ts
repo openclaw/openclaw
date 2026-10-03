@@ -11,12 +11,12 @@ import { t } from "../../i18n/index.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import type { SidebarFullMessageLoader } from "./components/chat-sidebar-content-types.ts";
 import type {
   SidebarPanelDefinition,
   SidebarPanelTemplates,
   SidebarRegionCallbacks,
 } from "./components/chat-sidebar-region-types.ts";
-import type { SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
 import type { LinkFaviconFetcher } from "./link-favicon-cache.ts";
 import {
   activatePanel,

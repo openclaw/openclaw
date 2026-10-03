@@ -24,13 +24,8 @@ import { logWarn } from "../logger.js";
 import { extractImageContentFromSource, type InputImageSource } from "../media/input-files.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import {
-  mergeAssistantText,
-  mergePendingAssistantText,
+  createAssistantTextStream,
   resolveAssistantResultText,
-  resolveAssistantTextCompletion,
-  resolveAssistantTextInput,
-  resolveAssistantTextStreamDelta,
-  type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
@@ -797,9 +792,7 @@ export async function handleOpenAiHttpRequest(
 
   setSseHeaders(res);
 
-  let assistantText: AssistantTextSnapshot = { text: "" };
-  let streamedAssistantText = assistantText;
-  let pendingAssistantText: AssistantTextSnapshot | undefined;
+  const textStream = createAssistantTextStream(Boolean(toolChoice.constraint));
   let finalResultText: string | undefined;
   let finalFinishReason: "stop" | "length" = "stop";
   let finalToolCalls: ReturnType<typeof readOpenAiHttpRunTerminal>["pendingToolCalls"];
@@ -832,21 +825,18 @@ export async function handleOpenAiHttpRequest(
         finishStreamWithError(terminalStreamError);
         return;
       }
-      const text = resolveAssistantTextCompletion({
-        assistantText,
-        pending: pendingAssistantText,
-        resultText: finalResultText,
-        streamedText: streamedAssistantText.text,
-        fallbackText: finalToolCalls ? "" : "No response from OpenClaw.",
-      });
-      if (!text.startsWith(streamedAssistantText.text)) {
+      const text = textStream.complete(
+        finalResultText,
+        finalToolCalls ? "" : "No response from OpenClaw.",
+      );
+      if (!text.startsWith(textStream.streamedText)) {
         finishStreamWithError({
           message: "Assistant output cannot be represented as an append-only response stream.",
           type: "api_error",
         });
         return;
       }
-      const content = text.slice(streamedAssistantText.text.length);
+      const content = text.slice(textStream.streamedText.length);
       if (content) {
         writeChatCompletionChoice(res, streamIdentity, { content });
       }
@@ -878,37 +868,14 @@ export async function handleOpenAiHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      const input = resolveAssistantTextInput(evt.data);
-      if (!input) {
-        return;
-      }
-      // Once a provisional replacement begins, even its terminal text echo
-      // stays held until the run result selects the authoritative output.
-      if (input.replaceable || pendingAssistantText) {
-        pendingAssistantText = mergePendingAssistantText(
-          pendingAssistantText ?? assistantText,
-          input,
-        );
-        return;
-      }
-
-      const previous = assistantText;
-      const merged = mergeAssistantText(previous, input, "append-only");
-      assistantText = merged;
-      // Hold prose until the run proves the requested client-tool call exists.
-      if (toolChoice.constraint) {
-        return;
-      }
-      // SSE cannot retract bytes already delivered, even for an item correction.
-      const content = resolveAssistantTextStreamDelta(previous, merged, streamedAssistantText);
-      if (content === undefined) {
+      const { delta: content, replacement } = textStream.update(evt.data);
+      if (replacement === "unrepresentable") {
         terminalStreamError ??= {
           message: "Assistant output cannot be represented as an append-only response stream.",
           type: "api_error",
         };
         return;
       }
-      streamedAssistantText = assistantText;
       if (!content) {
         return;
       }

@@ -32,14 +32,14 @@ function resolveActiveHoursFormatter(
   }
 }
 
-function parseActiveHoursTime(opts: { allow24: boolean }, raw?: string): number | null {
+function parseActiveHoursTime(allow24: boolean, raw?: string): number | null {
   if (!raw || !ACTIVE_HOURS_TIME_PATTERN.test(raw)) {
     return null;
   }
   const [hourStr, minuteStr] = raw.split(":");
   const hour = Number(hourStr);
   const minute = Number(minuteStr);
-  return hour === 24 && !opts.allow24 ? null : hour * 60 + minute;
+  return hour === 24 && !allow24 ? null : hour * 60 + minute;
 }
 
 function resolveMinutesInTimeZone(nowMs: number, formatter: Intl.DateTimeFormat): number | null {
@@ -73,8 +73,8 @@ export function isWithinActiveHours(
     return true;
   }
 
-  const startMin = parseActiveHoursTime({ allow24: false }, active.start);
-  const endMin = parseActiveHoursTime({ allow24: true }, active.end);
+  const startMin = parseActiveHoursTime(false, active.start);
+  const endMin = parseActiveHoursTime(true, active.end);
   if (startMin === null || endMin === null) {
     return true;
   }

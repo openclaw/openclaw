@@ -231,12 +231,6 @@ export function createCliEventHandlers(params: {
       );
     }
   };
-  // Display-only native events never enter host-tool correlation or delivery accounting.
-  const emitCliToolUseStart = (event: CliToolUseStartDelta) => emitToolUseStart(event, true);
-  const emitCliToolResult = (event: CliToolResultDelta) => emitToolResult(event, true);
-  const emitCliDisplayToolUseStart = (event: CliToolUseStartDelta) =>
-    emitToolUseStart(event, false);
-  const emitCliDisplayToolResult = (event: CliToolResultDelta) => emitToolResult(event, false);
   const emitParsedToolUseStart = (event: CliToolUseStartDelta) => {
     const startedAt = Date.now();
     activeParsedTools.set(event.toolCallId, {
@@ -265,7 +259,7 @@ export function createCliEventHandlers(params: {
           })
         : diagnosticEvent,
     );
-    emitCliToolUseStart(event);
+    emitToolUseStart(event, true);
   };
   const emitParsedToolTerminal = (event: {
     toolCallId: string;
@@ -348,7 +342,7 @@ export function createCliEventHandlers(params: {
   };
   const emitParsedToolResult = (event: CliToolResultDelta) => {
     emitParsedToolTerminal(event);
-    emitCliToolResult(event);
+    emitToolResult(event, true);
   };
   const emitCliCompaction = (event: CliCompactionDelta) => {
     observedCliActivity = true;
@@ -444,10 +438,11 @@ export function createCliEventHandlers(params: {
 
   return {
     emitLiveEvents,
-    emitCliToolUseStart,
-    emitCliToolResult,
-    emitCliDisplayToolUseStart,
-    emitCliDisplayToolResult,
+    emitCliToolUseStart: (event: CliToolUseStartDelta) => emitToolUseStart(event, true),
+    emitCliToolResult: (event: CliToolResultDelta) => emitToolResult(event, true),
+    // Display-only native events never enter host-tool correlation or delivery accounting.
+    emitCliDisplayToolUseStart: (event: CliToolUseStartDelta) => emitToolUseStart(event, false),
+    emitCliDisplayToolResult: (event: CliToolResultDelta) => emitToolResult(event, false),
     emitParsedToolUseStart,
     emitParsedToolResult,
     emitCliCompaction,

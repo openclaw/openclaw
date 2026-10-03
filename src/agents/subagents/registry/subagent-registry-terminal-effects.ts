@@ -9,10 +9,7 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
-import type {
-  SubagentLifecycleCommonContext,
-  SubagentLifecycleCompletionContext,
-} from "./subagent-registry-lifecycle-context.js";
+import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
 import {
   buildSafeLifecycleErrorMeta,
   maskLifecycleIdentifier,
@@ -24,29 +21,6 @@ import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-re
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
-
-async function retireRunModeBundleMcpRuntime(
-  context: SubagentLifecycleCommonContext,
-  cleanupParams: { runId: string; entry: SubagentRunRecord; reason: string },
-): Promise<void> {
-  const params = context.options;
-  if (cleanupParams.entry.spawnMode === "session") {
-    return;
-  }
-  await retireSessionMcpRuntimeForSessionKey({
-    sessionKey: cleanupParams.entry.childSessionKey,
-    reason: cleanupParams.reason,
-    preserveActiveLeases: true,
-    onError: (error, sessionId) => {
-      params.warn("failed to retire subagent bundle MCP runtime", {
-        error: buildSafeLifecycleErrorMeta(error),
-        sessionId,
-        runId: maskLifecycleIdentifier(cleanupParams.runId, "run"),
-        childSessionKey: maskLifecycleIdentifier(cleanupParams.entry.childSessionKey, "session"),
-      });
-    },
-  });
-}
 
 export async function completeTerminalEffects(
   context: SubagentLifecycleCompletionContext,
@@ -374,11 +348,22 @@ export async function completeTerminalEffects(
       return;
     }
     try {
-      await retireRunModeBundleMcpRuntime(context, {
-        runId: entry.runId,
-        entry,
-        reason: "subagent-run-complete",
-      });
+      if (entry.spawnMode !== "session") {
+        const cleanupEntry = entry;
+        await retireSessionMcpRuntimeForSessionKey({
+          sessionKey: cleanupEntry.childSessionKey,
+          reason: "subagent-run-complete",
+          preserveActiveLeases: true,
+          onError: (error, sessionId) => {
+            params.warn("failed to retire subagent bundle MCP runtime", {
+              error: buildSafeLifecycleErrorMeta(error),
+              sessionId,
+              runId: maskLifecycleIdentifier(cleanupEntry.runId, "run"),
+              childSessionKey: maskLifecycleIdentifier(cleanupEntry.childSessionKey, "session"),
+            });
+          },
+        });
+      }
     } catch (error) {
       params.warn("failed to retire subagent bundle MCP runtime after completion", {
         error: buildSafeLifecycleErrorMeta(error),

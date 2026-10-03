@@ -9,6 +9,7 @@ import { cleanupRetainedPluginInstallGenerations } from "../../../gateway/server
 import * as temporaryState from "../../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../../infra/update-run-ledger.js";
 import { commitPluginInstallRecordsWithConfig } from "../../../plugins/install-record-commit.js";
+import * as pluginInstaller from "../../../plugins/install.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   readPersistedInstalledPluginIndexInstallRecords,
@@ -282,6 +283,11 @@ describe("post-core plugin persistence cancellation", () => {
       vi.spyOn(pluginUpdates, "updateNpmInstalledPlugins").mockImplementationOnce(
         async (params) => {
           // The real attempt owner catches installer exceptions. No package child is launched here.
+          vi.spyOn(pluginInstaller, "installPluginFromNpmSpec").mockImplementationOnce(async () => {
+            await Promise.resolve();
+            await params.beforePersistentEffect?.();
+            return { ok: false, error: "fixture installer did not publish" };
+          });
           const attempt = await runPluginUpdateAttempt({
             pluginId: "peerplugin",
             record,
@@ -290,11 +296,7 @@ describe("post-core plugin persistence cancellation", () => {
             effectiveSpec: record.spec,
             trustedSourceLinkedOfficialInstall: false,
             logger: {},
-            installNpmSpecForUpdate: async () => {
-              await Promise.resolve();
-              await params.beforePersistentEffect?.();
-              return { ok: false, error: "fixture installer did not publish" };
-            },
+            onNpmInstall: () => {},
           });
           if (attempt.kind !== "exception") {
             throw new Error("fixture expected normalized refusal");

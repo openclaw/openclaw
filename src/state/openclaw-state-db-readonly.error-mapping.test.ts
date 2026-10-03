@@ -15,7 +15,7 @@ import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.j
 import { observeAsyncFixture } from "./openclaw-state-db-readonly.test-support.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import type {
-  OpenClawStateReadPhase,
+  OpenClawStateReadReceipt,
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
 } from "./openclaw-state-read.types.js";
@@ -82,7 +82,10 @@ function source() {
 }
 function mapper() {
   const mapped = new Error("mapped read failure");
-  return { mapped, mapError: vi.fn((_error: unknown, _phase: OpenClawStateReadPhase) => mapped) };
+  return {
+    mapped,
+    mapError: vi.fn((_error: unknown, _phase: OpenClawStateReadReceipt["phase"]) => mapped),
+  };
 }
 
 it.each([false, true])(

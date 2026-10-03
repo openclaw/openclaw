@@ -15,20 +15,17 @@ export type ExecApprovalUnavailableDecision = "allow-always";
 
 const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
 
-function normalizeExecHost(value?: string | null): ExecHost | null {
+export function normalizeExecTarget(value?: string | null): ExecTarget | null {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
+  if (
+    normalized === "auto" ||
+    normalized === "sandbox" ||
+    normalized === "gateway" ||
+    normalized === "node"
+  ) {
     return normalized;
   }
   return null;
-}
-
-export function normalizeExecTarget(value?: string | null): ExecTarget | null {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "auto") {
-    return normalized;
-  }
-  return normalizeExecHost(normalized);
 }
 
 export function requireValidExecTarget(value?: unknown): ExecTarget | null {

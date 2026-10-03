@@ -1,8 +1,8 @@
 import { Blob as NodeBlob, File as NodeFile } from "node:buffer";
 import { IDBFactory } from "fake-indexeddb";
 import { beforeEach, onTestFinished, vi } from "vitest";
+import * as payloads from "../../lib/blob-data-url.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import * as payloads from "./durable-composer-persistence.ts";
 
 export function useChatSendBrowserFixture(): void {
   beforeEach(() => {

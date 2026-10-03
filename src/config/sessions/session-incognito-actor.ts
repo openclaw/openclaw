@@ -12,6 +12,11 @@ import type {
   AgentDatabaseIncognitoIdentity,
   AgentDatabaseIncognitoOperations,
 } from "../../state/openclaw-agent-execution-contract.js";
+import {
+  isIncognitoComputeWrite,
+  type IncognitoComputeTarget,
+} from "./session-incognito-compute-contract.js";
+import { withIncognitoCompute, type IncognitoComputeScope } from "./session-incognito-compute.js";
 import type {
   IncognitoSessionAuthority,
   IncognitoSessionCreate,
@@ -47,6 +52,7 @@ export type IncognitoSessionRunner = <T>(
   operation: (scope: Scope) => Promise<T>,
   signal?: AbortSignal,
   admission?: SqliteWorkerAdmissionFactory,
+  cleanup?: boolean,
 ) => Promise<T>;
 
 export type IncognitoSessionClaim = {
@@ -152,7 +158,11 @@ export function createIncognitoSessionFacts(
       unavailable.clear();
       topologyRevision += 1;
     },
-    bind(run: IncognitoSessionRunner, assertBorrowed: () => void) {
+    bind(
+      run: IncognitoSessionRunner,
+      assertBorrowed: () => void,
+      retain: <T>(work: Promise<T>) => Promise<T>,
+    ) {
       const perform = <Key extends keyof IncognitoSessionOperations, Result>(
         authority: IncognitoSessionAuthority,
         command: { type: Key; input: IncognitoSessionOperations[Key]["input"] },
@@ -160,6 +170,7 @@ export function createIncognitoSessionFacts(
         receive: (value: IncognitoSessionOperations[Key]["output"]) => Result,
         signal?: AbortSignal,
         companion?: LifecycleSettlement,
+        cleanup = false,
       ) => {
         // Capture caller-owned input before queue waits.
         const captured = structuredClone(command);
@@ -172,6 +183,12 @@ export function createIncognitoSessionFacts(
           | undefined;
         let postimage: IncognitoSessionFacts[] | undefined;
         let commitGranted = false;
+        function unknownOutcome(message: string): never {
+          for (const key of targets) {
+            unavailable.add(key);
+          }
+          throw new SqliteWorkerError(message, "outcome-unknown");
+        }
         return run(
           authority,
           async (scope) => {
@@ -207,36 +224,18 @@ export function createIncognitoSessionFacts(
                 try {
                   if (receipt !== undefined) {
                     if (!postimage || !isDeepStrictEqual(receipt, postimage)) {
-                      for (const key of targets) {
-                        unavailable.add(key);
-                      }
-                      throw new SqliteWorkerError(
-                        "Incognito commit receipt differs from its grant",
-                        "outcome-unknown",
-                      );
+                      unknownOutcome("Incognito commit receipt differs from its grant");
                     }
                     // Revocation cannot undo COMMIT. Publish while FIFO custody is still held.
                     postimage.forEach(install);
                   } else if (changing && (commitGranted || outcome.ok)) {
-                    for (const key of targets) {
-                      unavailable.add(key);
-                    }
-                    throw new SqliteWorkerError(
-                      "Incognito mutation has no confirmed commit receipt",
-                      "outcome-unknown",
-                    );
+                    unknownOutcome("Incognito mutation has no confirmed commit receipt");
                   }
                   if (
                     settlement.kind !== "not-entered" &&
                     native.admission.settlement?.kind !== "completed"
                   ) {
-                    for (const key of targets) {
-                      unavailable.add(key);
-                    }
-                    throw new SqliteWorkerError(
-                      "Incognito session native settlement is unknown",
-                      "outcome-unknown",
-                    );
+                    unknownOutcome("Incognito session native settlement is unknown");
                   }
                 } finally {
                   companion?.settle(companionOutcome);
@@ -358,9 +357,47 @@ export function createIncognitoSessionFacts(
             native = { retained, admission };
             return { nativeLocations: [], admission };
           },
+          cleanup,
         );
       };
       return {
+        withCompute: <T>(
+          authority: IncognitoSessionAuthority,
+          target: IncognitoComputeTarget,
+          operation: (scope: IncognitoComputeScope) => Promise<T>,
+          signal?: AbortSignal,
+        ): Promise<T> => {
+          const held = claim(target.sessionKey, assertBorrowed);
+          return retain(
+            withIncognitoCompute({
+              target,
+              assertCurrent() {
+                authority.assertCurrent();
+                held.assertCurrent();
+              },
+              disclose: () => held.authorize(authority, "commit"),
+              operation,
+              execute: (command) =>
+                perform(
+                  authority,
+                  command,
+                  isIncognitoComputeWrite(command.type),
+                  (result) => result.value,
+                  signal,
+                ),
+              cleanup: (command) =>
+                perform(
+                  { assertCurrent: assertActorCurrent },
+                  command,
+                  isIncognitoComputeWrite(command.type),
+                  (result) => result.value,
+                  undefined,
+                  undefined,
+                  true,
+                ),
+            }),
+          );
+        },
         read: (
           authority: IncognitoSessionAuthority,
           input: IncognitoSessionRead,

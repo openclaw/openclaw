@@ -230,14 +230,16 @@ async function handleChatSendWithOptions(
       sessionMutationCommitGuard?.();
     };
     assertInputAdmissionCurrent();
-    const assertGoalCurrent = createChatSendGoalCommitGuard({
-      admission: admitted.value,
-      session: preparedSession.value,
-      client,
-      context,
-      sessionMutationAuthorization,
-      sessionMutationCommitGuard,
-    });
+    const goalCommitGuard = normalizedRequest.value.goalOperation
+      ? createChatSendGoalCommitGuard({
+          admission: admitted.value,
+          session: preparedSession.value,
+          client,
+          context,
+          sessionMutationAuthorization,
+          sessionMutationCommitGuard,
+        })
+      : undefined;
     const userTurn = createGatewayChatUserTurnController({
       admission: admitted.value,
       client,
@@ -248,7 +250,7 @@ async function handleChatSendWithOptions(
       warn: (message) => context.logGateway.warn(message),
       mentionInbox: context.mentionInbox,
       assertOriginalInputCommit: assertInputAdmissionCurrent,
-      assertGoalCurrent,
+      goalCommitGuard,
     });
     const {
       persist: persistGatewayUserTurnTranscript,
@@ -380,7 +382,7 @@ async function handleChatSendWithOptions(
             operation: goalOperation,
           });
           assertInputAdmissionCurrent();
-          assertGoalCurrent();
+          goalCommitGuard?.assertCurrent();
         }
         if (goalResult && (!persistedUserTurn || mutation?.replayed)) {
           admitted.value.cleanupAdmittedRun();

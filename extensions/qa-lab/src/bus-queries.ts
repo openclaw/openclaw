@@ -1,5 +1,3 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parseQaTarget } from "./qa-bus-protocol.js";
 import type {
   QaBusAttachment,
   QaBusConversation,
@@ -13,7 +11,9 @@ import type {
   QaBusStateSnapshot,
   QaBusThread,
   QaBusToolCall,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/qa-channel-protocol";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parseQaTarget } from "./qa-bus-protocol.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
 

@@ -112,9 +112,7 @@ export interface CreateAgentSessionOptions {
 
 type CreateAgentSessionInternalOptions = Pick<
   AgentSessionConfig,
-  | "cleanupProviderSessionResourcesOnDispose"
-  | "contextOverflowRecoveryOwner"
-  | "resolveCompactionThinkingLevel"
+  "contextOverflowRecoveryOwner" | "resolveCompactionThinkingLevel"
 > & { beforeToolBatch?: InternalBeforeToolBatchHook };
 
 /** Result from createAgentSession */
@@ -534,19 +532,16 @@ async function createAgentSessionImpl(
     }
     return withSessionManagerWrite(sessionManager, async () => {
       assertInitialSessionCurrent();
-      if (hasExistingSession) {
-        await appendInitialThinking();
+      if (!hasExistingSession && model) {
+        await appendInitialMetadata(
+          { type: "model_change", provider: model.provider, modelId: model.id },
+          () => sessionManager.appendModelChange(model.provider, model.id),
+        );
         assertInitialSessionCurrent();
-      } else {
-        // Persist initial settings before exposing the new session to callers.
-        if (model) {
-          await appendInitialMetadata(
-            { type: "model_change", provider: model.provider, modelId: model.id },
-            () => sessionManager.appendModelChange(model.provider, model.id),
-          );
-          assertInitialSessionCurrent();
-        }
-        await appendInitialThinking();
+      }
+      await appendInitialThinking();
+      if (hasExistingSession) {
+        assertInitialSessionCurrent();
       }
     });
   };

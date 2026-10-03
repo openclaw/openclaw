@@ -259,17 +259,13 @@ function mergeModelCatalogEntries(params: {
   primary: readonly ModelCatalogEntry[];
   secondary: readonly ModelCatalogEntry[];
 }): ModelCatalogEntry[] {
-  const merged = [...params.primary];
-  const seen = new Set(merged.map(modelCatalogEntryKey));
-  for (const entry of params.secondary) {
-    const key = modelCatalogEntryKey(entry);
-    if (seen.has(key)) {
-      continue;
-    }
-    merged.push(entry);
-    seen.add(key);
-  }
-  return merged;
+  const seen = new Set(params.primary.map(modelCatalogEntryKey));
+  return [
+    ...params.primary,
+    ...dedupeModelCatalogEntries(params.secondary).filter(
+      (entry) => !seen.has(modelCatalogEntryKey(entry)),
+    ),
+  ];
 }
 
 /** One scope ranks exact IDs ahead of folded matches; ambiguity remains a match. */
@@ -1251,21 +1247,18 @@ export function resolveHooksGmailModel(
     return null;
   }
 
-  const aliasIndex = buildModelAliasIndex({
+  const selection = {
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
     manifestPlugins: params.manifestPlugins,
-  });
-
-  const resolved = resolveModelRefFromString({
-    cfg: params.cfg,
-    raw: hooksModel,
-    defaultProvider: params.defaultProvider,
-    aliasIndex,
-    manifestPlugins: params.manifestPlugins,
-  });
-
-  return resolved?.ref ?? null;
+  };
+  return (
+    resolveModelRefFromString({
+      ...selection,
+      raw: hooksModel,
+      aliasIndex: buildModelAliasIndex(selection),
+    })?.ref ?? null
+  );
 }
 
 const DEFAULT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.defaults.modelPolicy.allow";

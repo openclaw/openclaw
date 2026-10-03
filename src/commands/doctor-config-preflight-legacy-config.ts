@@ -8,6 +8,7 @@ import {
   recoverConfigFromJsonRootSuffix,
   type ConfigSnapshotReadMeasure,
 } from "../config/io.js";
+import { coerceConfig } from "../config/io.read-helpers.js";
 import { resolveCanonicalConfigPath, resolveIsConfigReadOnly } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store/paths.js";
@@ -17,6 +18,7 @@ import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-fil
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveHomeDir } from "../utils.js";
 import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js";
+import { listLegacyOAuthSidecarPaths } from "./doctor-auth-legacy-paths.js";
 import { shouldSkipPluginValidationForDoctorConfigPreflight } from "./doctor-config-preflight-plugin-index.js";
 import {
   canPlanAutomaticConfigRepair,
@@ -81,12 +83,17 @@ export async function prepareDoctorConfigRecovery(params: {
   let snapshotRead = params.snapshotRead;
   let snapshot = snapshotRead.snapshot;
   // Refuse before backup recovery or unknown-key cleanup can discard authored settings.
-  const retired = findRetiredConfigUpgradeRequirement(
-    snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
-  );
-  if (retired) {
-    throw new Error(`${retired.message} ${retired.nextAction}`);
-  }
+  const assertSupportedConfig = (config: unknown) => {
+    const retired = findRetiredConfigUpgradeRequirement(config);
+    if (retired) {
+      throw new Error(`${retired.message} ${retired.nextAction}`);
+    }
+    assertNoRetiredStateFiles(
+      "OAuth credential sidecars",
+      listLegacyOAuthSidecarPaths(process.env, coerceConfig(config)),
+    );
+  };
+  assertSupportedConfig(snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig);
   assertNoRetiredStateFiles(
     "Cron state",
     await listRetiredCronStateFiles(
@@ -116,7 +123,10 @@ export async function prepareDoctorConfigRecovery(params: {
         ? params.planRepair(snapshot)
         : null;
     let configRepaired = false;
-    if (!activeConfigRepair && (await recoverConfigFromJsonRootSuffix(snapshot))) {
+    if (
+      !activeConfigRepair &&
+      (await recoverConfigFromJsonRootSuffix(snapshot, assertSupportedConfig))
+    ) {
       note("Removed non-JSON prefix from openclaw.json.", "Config");
       configRepaired = true;
     } else if (
