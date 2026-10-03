@@ -60,6 +60,83 @@ describe("msteams doctor state migration", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
+  it.each([
+    {
+      name: "conversations",
+      file: "msteams-conversations.json",
+      source: { version: 1, conversations: { old: { conversation: { id: "old" } } } },
+    },
+    {
+      name: "polls",
+      file: "msteams-polls.json",
+      source: {
+        version: 1,
+        polls: {
+          old: {
+            id: "old",
+            question: "Lunch?",
+            options: ["Pizza", "Sushi"],
+            maxSelections: 1,
+            createdAt: "2026-05-01T00:00:00.000Z",
+            votes: {},
+          },
+        },
+      },
+    },
+    {
+      name: "sso-tokens",
+      file: "msteams-sso-tokens.json",
+      source: {
+        version: 1,
+        tokens: {
+          old: {
+            connectionName: "connection",
+            userId: "user",
+            token: "synthetic-token",
+            updatedAt: "2026-05-01T00:00:00.000Z",
+          },
+        },
+      },
+    },
+    {
+      name: "feedback-learnings",
+      file: `sessions/${Buffer.from("agent:main:msteams:synthetic").toString("base64url")}.learnings.json`,
+      source: ["Use concise replies"],
+    },
+  ])(
+    "preserves retired $name files and requires the bridge release",
+    async ({ name, file, source }) => {
+      const migration = migrationById(`msteams-${name}-json-to-plugin-state`);
+      const params = {
+        config: { session: { store: path.join(stateDir, "sessions") } },
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        context: createDoctorContext(env),
+      };
+      expect(await migration.collectBackupResources?.(params)).toEqual([]);
+      await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+      const filePath = path.join(stateDir, file);
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      const original = JSON.stringify(source);
+      await fs.writeFile(filePath, original);
+
+      await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
+        preview: [expect.stringContaining("2026.9.5")],
+      });
+      await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+        changes: [],
+        warnings: [expect.stringContaining("2026.9.5")],
+      });
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(original);
+      await expect(
+        fs.access(path.join(stateDir, "state", "openclaw.sqlite")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
   it.each(["empty", "collision", "blocked", "relative-symlink"])(
     "imports delegated OAuth tokens before archiving (archive=%s)",
     async (archive) => {
