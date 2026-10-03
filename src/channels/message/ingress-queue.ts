@@ -442,6 +442,9 @@ export function createChannelIngressQueue<
         ...mutation(value, failOptions.failedAt ?? now()),
         reason: failOptions.reason,
         message: failOptions.message,
+        ...(failOptions.generation
+          ? { generation: { updatedAt: failOptions.generation.updatedAt } }
+          : {}),
       }),
     async resubmit(id, resubmitOptions) {
       const result = await execute("channelIngress.resubmit", {

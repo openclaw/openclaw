@@ -113,6 +113,22 @@ semantics, unchanged by this budget.
 Optional settings include custom append delays, a `drain` option block for
 advanced drain ordering/concurrency/retry policy, an external `abortSignal`, a
 clock, pump error reporting, a stopped-error factory, and admission policy.
+`drain.resolvePendingDisposition(record, context)` is an opt-in channel policy
+evaluated before a stored pending row can be claimed. Return `null` or
+`undefined` to keep the row claimable, `{ kind: "fail", reason, message }` to
+settle a row that can never become work, or `{ kind: "defer" }` to hold the row
+when the channel cannot classify it yet, such as while a transport snapshot is
+still hydrating. The hook receives unvalidated stored payload bytes, so
+unreadable rows must stay claimable for the canonical claim-time codec. A
+deferred row, and a row whose fail lost its compare-and-set to a real claimant,
+both fence their lane for the rest of that drain pass: no later row on that lane
+is dispositioned, claimed, or started ahead of its head. The drain commits a
+fail only against the exact row generation the policy inspected (`updatedAt`,
+which every queue transition moves strictly forward even under a frozen clock),
+so a row that was claimed, failed and resubmitted while the policy ran keeps
+its fresh generation. A row failed here never reaches the channel's inbound
+handler, so whatever that handler would have done with a skipped message, such
+as recording it as pending conversation history, does not happen.
 The returned monitor exposes `admit`, `ensureQueueAvailable`, `start`, `pause`,
 `stop`, `waitForIdle`, `isRunning`, and `isStopped`. Use the idempotent
 `ensureQueueAvailable()` check when plugin-owned migration or preparation must

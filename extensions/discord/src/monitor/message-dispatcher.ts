@@ -59,6 +59,8 @@ type DiscordMessageDispatcher = (
 
 type DiscordMessageDispatcherWithLifecycle = DiscordMessageDispatcher & {
   deactivate: () => Promise<void>;
+  /** The one live policy reader for this account, shared with durable ingress. */
+  readPolicy: DiscordLivePolicyReader;
 };
 
 export function createDiscordMessageDispatcher(
@@ -279,6 +281,8 @@ export function createDiscordMessageDispatcher(
     const result = dispatchMessage(data, client, options);
     return options?.turnAdoptionLifecycle ? result : result.then(() => undefined);
   };
+
+  handler.readPolicy = readPolicy;
 
   handler.deactivate = async () => {
     dispatcherShutdown.abort(new Error("discord-message-handler-deactivated"));
