@@ -35,28 +35,31 @@ afterEach(async () => {
 });
 
 it.skipIf(process.platform === "win32").each(["preparation", "publication"] as const)(
-  "activates after candidate entry exhaustion at %s while retaining identity, version, and launcher checks",
+  "activates after candidate byte exhaustion at %s while retaining identity, version, and launcher checks",
   (phase) =>
     fixtures.lifetime.run(async () => {
       const f = await createPackageSwapFixture(root);
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+      const payload = "a-oversized.bin";
+      await fsp.writeFile(path.join(f.params.stage.packageRoot, payload), "");
       const anchor = resolvePackageActivationAnchor(f.packageRoot);
       const oversized =
         phase === "preparation" ? f.params.stage.packageRoot : path.join(anchor, "candidate");
-      const [child] = await fsp.readdir(f.params.stage.packageRoot, { withFileTypes: true });
-      const opendir = fsp.opendir.bind(fsp);
-      let discovered = 0;
-      vi.spyOn(fsp, "opendir").mockImplementation(async (...args) => {
-        const directory = await opendir(...args);
-        if (String(args[0]) === oversized && discovered === 0) {
-          // Overflow the real reader's inventory without creating files or hashing payloads.
-          const reader: { read(): Promise<typeof child | null> } = directory;
-          vi.spyOn(reader, "read").mockImplementation(async () => {
-            discovered++;
-            return child!;
-          });
+      const lstat = fsp.lstat.bind(fsp);
+      let oversizedObserved = false;
+      vi.spyOn(fsp, "lstat").mockImplementation(async (...args) => {
+        const stat = await lstat(...args);
+        if (
+          !oversizedObserved &&
+          String(args[0]) === path.join(oversized, payload) &&
+          args[1]?.bigint &&
+          stat.isFile()
+        ) {
+          // The first regular file exceeds the byte budget before any candidate hashing.
+          stat.size = 8n * 1024n * 1024n * 1024n + 1n;
+          oversizedObserved = true;
         }
-        return directory;
+        return stat;
       });
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(f.packageRoot);
@@ -69,7 +72,7 @@ it.skipIf(process.platform === "win32").each(["preparation", "publication"] as c
           },
         });
         expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
-        expect(discovered).toBeGreaterThanOrEqual(50_000);
+        expect(oversizedObserved).toBe(true);
         expect(result.step.advisory?.message).toContain("full package contents are unverified");
         expect(updateRunStepsFromResultStep(result.step)).toContainEqual(
           expect.objectContaining({ step: "warning:package-swap", status: "completed" }),
