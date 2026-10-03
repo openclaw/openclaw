@@ -24,12 +24,13 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { StopReason } from "../../llm/types.js";
+import type { StopReason, Usage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
+import { resolveCliTranscriptUsage, type CliTranscriptUsage } from "../cli-transcript-usage.js";
 import {
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
@@ -130,11 +131,33 @@ export async function persistApprovedCliUserTurnTranscript(
   return persisted !== undefined || recorder.hasPersisted() || recorder.isBlocked();
 }
 
+/**
+ * Only a backend that reports its turn total separately from the latest call gets a context
+ * marker. Other backends keep unmarked counters, which context readers do not treat as fresh.
+ */
+function buildCliAssistantTranscriptUsage(
+  lastCallUsage: CliTranscriptUsage | undefined,
+  turnUsage: CliTranscriptUsage | undefined,
+): Usage {
+  const usage = turnUsage ? resolveCliTranscriptUsage(lastCallUsage, turnUsage) : lastCallUsage;
+  const counters = buildUsageWithNoCost({
+    input: usage?.input,
+    output: usage?.output,
+    cacheRead: usage?.cacheRead,
+    cacheWrite: usage?.cacheWrite,
+    totalTokens: usage?.total,
+  });
+  return usage?.contextUsage ? { ...counters, contextUsage: usage.contextUsage } : counters;
+}
+
 export async function persistCliAssistantTranscript(params: {
   runParams: RunCliAgentParams;
   text: string;
   modelId: string;
-  usage?: CliUsage;
+  /** Latest model-call usage. */
+  usage?: CliTranscriptUsage;
+  /** Terminal whole-turn usage, when the backend reports it separately from the latest call. */
+  turnUsage?: CliTranscriptUsage;
   stopReason: StopReason;
   yielded?: true;
 }): Promise<{
@@ -196,13 +219,7 @@ export async function persistCliAssistantTranscript(params: {
           },
           content: [{ type: "text", text: params.text }],
           stopReason: params.stopReason,
-          usage: buildUsageWithNoCost({
-            input: params.usage?.input,
-            output: params.usage?.output,
-            cacheRead: params.usage?.cacheRead,
-            cacheWrite: params.usage?.cacheWrite,
-            totalTokens: params.usage?.total,
-          }),
+          usage: buildCliAssistantTranscriptUsage(params.usage, params.turnUsage),
         }),
         // A paused turn owns visible progress, not a final answer. Keep the
         // existing keyed-segment contract without hiding narration or media.

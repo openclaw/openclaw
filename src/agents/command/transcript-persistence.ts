@@ -20,6 +20,7 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agent-run-terminal-outcome.js";
+import { resolveCliTranscriptUsage } from "../cli-transcript-usage.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
@@ -73,35 +74,6 @@ type PersistTextTurnTranscriptResult =
   | { kind: "session-rebound"; sessionEntry: undefined };
 
 const ACP_TRANSCRIPT_USAGE = buildUsageWithNoCost({});
-const CLI_TRANSCRIPT_UNAVAILABLE_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  total: 0,
-  contextUsage: { state: "unavailable" },
-} as const;
-
-function resolveCliTranscriptUsage(usage: TranscriptUsage | undefined): TranscriptUsage {
-  if (!usage) {
-    return CLI_TRANSCRIPT_UNAVAILABLE_USAGE;
-  }
-  if (usage.contextUsage) {
-    return usage;
-  }
-  const promptTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-  return {
-    ...usage,
-    contextUsage:
-      promptTokens > 0
-        ? {
-            state: "available",
-            promptTokens,
-            totalTokens: promptTokens + (usage.output ?? 0),
-          }
-        : { state: "unavailable" },
-  };
-}
 function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistant"]["usage"]) {
   if (!usage) {
     return ACP_TRANSCRIPT_USAGE;
@@ -311,7 +283,10 @@ export async function persistCliTurnTranscript(
       stopReason: "stop",
       // The marker is terminal for fallback scans: without it, readers could
       // skip this turn and revive an older cumulative usage record as fresh.
-      usage: resolveCliTranscriptUsage(result.meta.agentMeta?.lastCallUsage),
+      usage: resolveCliTranscriptUsage(
+        result.meta.agentMeta?.lastCallUsage,
+        result.meta.agentMeta?.diagnosticUsage,
+      ),
     },
   });
 }
