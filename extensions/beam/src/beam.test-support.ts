@@ -10,7 +10,7 @@ import { vi } from "vitest";
 import { createBeamMirrorRunner } from "./mirror.js";
 
 export const beamTestNow = Date.parse("2026-07-27T12:00:00.000Z");
-export const beamTestLogger = { warn: () => {}, info: () => {} };
+export const beamTestLogger = { warn: () => {}, info: () => {}, error: () => {} };
 export type BeamTestSession = {
   threadId: string;
   name?: string;

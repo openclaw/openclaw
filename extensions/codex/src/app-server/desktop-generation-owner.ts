@@ -70,7 +70,7 @@ export function createCodexDesktopGenerationOwner(params: {
         candidate.epoch === generation.epoch &&
         candidate.fingerprint === generation.fingerprint,
       ),
-    join: async () => {
+    waitForIdle: async () => {
       await refresh?.catch(() => {});
     },
   };

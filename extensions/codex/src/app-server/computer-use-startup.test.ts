@@ -189,7 +189,7 @@ describe.each(["service", "cache"])("createIsolatedCodexAppServerClient %s refre
         expect(await fs.readdir(path.dirname(cachePath))).toEqual(["1.0.857"]);
       } finally {
         lifetime.abort();
-        await owner.join();
+        await owner.waitForIdle();
         await harness.client.closeAndWait();
       }
     },

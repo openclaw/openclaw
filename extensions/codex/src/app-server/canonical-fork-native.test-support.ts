@@ -462,7 +462,7 @@ export async function createCanonicalForkNativeFixture(
         mock.mockRestore();
       }
       desktopLifetime.abort();
-      await desktopGeneration?.join();
+      await desktopGeneration?.waitForIdle();
     },
   };
 }

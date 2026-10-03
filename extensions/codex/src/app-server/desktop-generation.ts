@@ -105,7 +105,7 @@ export function createCodexDesktopGenerationService(
       current.rearmDelayMs = undefined;
       current.rearmPending = false;
       closeWatchers(current);
-      await Promise.all([scheduler?.stop(), owner?.join()]);
+      await Promise.all([scheduler?.stop(), owner?.waitForIdle()]);
     },
   };
 }
@@ -213,7 +213,7 @@ function scheduleRearm(current: DesktopGenerationState, owner: GenerationOwner):
   current.context?.scheduler.schedule({
     id: "watcher-rearm",
     delayMs,
-    run: () => {
+    run: async () => {
       current.rearmPending = false;
       if (current.owner !== owner || current.context?.scheduler.signal.aborted) {
         return;
@@ -223,7 +223,7 @@ function scheduleRearm(current: DesktopGenerationState, owner: GenerationOwner):
       if (!armWatchers(current) || wasUnhealthy) {
         owner.markDirty();
       }
-      return refreshGeneration(current, owner, owner.wait());
+      await refreshGeneration(current, owner, owner.wait());
     },
   });
 }

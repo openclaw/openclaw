@@ -872,7 +872,7 @@ describe("createBeamMirrorService", () => {
     });
 
     try {
-      service.start(context);
+      await service.start(context);
       await vi.advanceTimersByTimeAsync(0);
       await listingStarted.promise;
 
