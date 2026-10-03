@@ -90,9 +90,9 @@ describe("Git ref mutation ownership", () => {
     };
     let held = false;
     vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-      const args = argv.slice(3);
+      const args = argv.slice(argv.indexOf("-C") + 2);
       if (args[0] === "update-ref" || (args[0] === "branch" && args[1] === "-D")) {
-        mutations.push({ cwd: argv[2]!, args });
+        mutations.push({ cwd: argv[argv.indexOf("-C") + 1]!, args });
         if (!held && args[0] === "update-ref" && args[2] === snapshotRef) {
           held = true;
           started.resolve();
@@ -139,7 +139,7 @@ describe("Git ref mutation ownership", () => {
     await expect(requireGit(root, ["update-ref", "-d", queuedRef])).rejects.toThrow(
       `git update-ref -d ${queuedRef} failed (terminated):\n.git`,
     );
-    expect(commandSpy.mock.calls.map(([argv]) => argv.slice(3))).toEqual([
+    expect(commandSpy.mock.calls.map(([argv]) => argv.slice(argv.indexOf("-C") + 2))).toEqual([
       ["rev-parse", "--git-common-dir"],
     ]);
     expect(await requireGit(root, ["show-ref", "--verify", queuedRef])).toContain(queuedRef);
@@ -156,7 +156,8 @@ describe("Git ref mutation ownership", () => {
       let discoveries = 0;
       vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
         const result = await run(argv, options);
-        if (argv[3] === "rev-parse" && argv[4] === "--git-common-dir") {
+        const commandIndex = argv.indexOf("-C") + 2;
+        if (argv[commandIndex] === "rev-parse" && argv[commandIndex + 1] === "--git-common-dir") {
           discoveries += 1;
           return { ...result, stdout: `${msysCommonDir}\n` };
         }
