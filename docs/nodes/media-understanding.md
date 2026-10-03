@@ -139,6 +139,7 @@ See [Tools and custom providers](/gateway/config-tools) for profiles, env vars, 
 ## Rules and behavior
 
 - Media exceeding `maxBytes` skips that model and tries the next one.
+- `openclaw config validate` and `openclaw doctor` warn when a CLI model entry has no `command`, or has a command but no `args`. A CLI entry receives the attachment only through its own `args`, so an entry with none is never given the file. The warnings are advisory: the config stays valid.
 - Audio files under 1024 bytes are treated as empty/corrupt and skipped before transcription; the agent gets a deterministic placeholder transcript instead.
 - If the active primary image model already supports vision natively, OpenClaw skips the `[Image]` summary block and passes the original image into the model directly. MiniMax is an exception: `minimax`, `minimax-cn`, `minimax-portal`, and `minimax-portal-cn` always route image understanding through the plugin-owned `MiniMax-VL-01` media provider, even if legacy MiniMax M2.x chat metadata claims image input (only `MiniMax-M3` and later are treated as natively vision-capable).
 - If a Gateway/WebChat primary model is text-only, image attachments are preserved as offloaded `media://inbound/*` refs so image/PDF tools or a configured image model can still inspect them instead of losing the attachment.
