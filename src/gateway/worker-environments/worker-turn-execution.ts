@@ -28,8 +28,6 @@ import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/age
 import { logInfo } from "../../logger.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
-import { createWorkerBrowserToolDefinition } from "../../worker/browser-runtime.js";
-import { createWorkerComputerTool } from "../../worker/computer-runtime.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { createWorkerPlacementTools } from "../../worker/worker-placement-tools.js";
@@ -225,12 +223,13 @@ export async function executeWorkerTurn(
     agentRuntime: "openclaw",
     level: turn.thinkLevel,
   });
-  const { browser, computer, preparedComputer } = await prepareWorkerDesktopLaunchPlan({
+  const desktop = await prepareWorkerDesktopLaunchPlan({
     desktop: environment.desktop,
     protocolFeatures: bootstrapReceipt.protocolFeatures,
     prepareComputer: () => params.environments.prepareComputer?.(params.turnClaim),
     turn,
   });
+  const { browser, computer, preparedComputer } = desktop;
   const {
     capabilityProfile,
     policy: toolPolicy,
@@ -315,9 +314,6 @@ export async function executeWorkerTurn(
       assertCurrent: assertToolSurfaceCurrent,
       signal,
       prepare: async (identity) => {
-        const placementOnly = async (): Promise<never> => {
-          throw new Error("This tool executes at the placement");
-        };
         const placementTools = createWorkerPlacementTools({
           policy: toolPolicy,
           cwd: placement.remoteWorkspaceDir,
@@ -329,22 +325,7 @@ export async function executeWorkerTurn(
           sessionId: turn.sessionId,
           runId: turn.runId,
         });
-        if (browser) {
-          placementTools.push({
-            ...createWorkerBrowserToolDefinition(browser),
-            execute: placementOnly,
-          });
-        }
-        if (computer) {
-          placementTools.push(
-            createWorkerComputerTool({
-              descriptor: computer,
-              requestComputer: placementOnly,
-              runId: turn.runId,
-              registerRunCleanup: () => undefined,
-            }),
-          );
-        }
+        placementTools.push(...desktop.tools);
         const availablePlacementTools = new Set(placementTools.map((tool) => tool.name));
         const tools = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
           params.environments.createGatewayTools?.({
@@ -391,9 +372,8 @@ export async function executeWorkerTurn(
                       : undefined;
                 if (reason) {
                   logInfo(`Worker tool ${tool.name} withheld: ${reason}.`);
-                  return false;
                 }
-                return true;
+                return !reason;
               });
             },
           }),
