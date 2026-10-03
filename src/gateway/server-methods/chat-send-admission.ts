@@ -57,6 +57,7 @@ import {
 import { bindChatSendPreparedSession } from "./chat-send-session-binding.js";
 import { captureAdmittedChatSendSessionSettings } from "./chat-send-session-settings.js";
 import { prepareChatSendSessionEntry, type PreparedChatSendSession } from "./chat-send-session.js";
+import { waitForChatSessionTimeoutPersistence } from "./chat-send-timeout-persistence.js";
 import {
   admitChatSendUploads,
   assertChatSendExclusiveAdmission,
@@ -388,6 +389,7 @@ export async function admitChatSend(
 
   let retainedRequestConflict: ReturnType<typeof resolveChatSendRequestConflict>;
   try {
+    await waitForChatSessionTimeoutPersistence({ context, session });
     gatewayWorkAdmission = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [sessionKey, backingSessionId],
@@ -415,6 +417,9 @@ export async function admitChatSend(
         }
       },
     });
+    // A preceding run can time out while admission waits for the session writer.
+    // Wait outside that writer so its terminal transcript write can complete.
+    await waitForChatSessionTimeoutPersistence({ context, session });
     params.assertCurrent?.();
     retainedRequestConflict = resolveChatSendRequestConflict(params, retryComparison);
   } catch (err) {

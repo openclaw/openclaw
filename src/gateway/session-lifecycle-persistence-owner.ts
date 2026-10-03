@@ -82,6 +82,7 @@ export function createSessionLifecyclePersistenceOwner(scheduler: GatewaySchedul
     const persist = () =>
       persistGatewaySessionLifecycleEvent({
         sessionKey: params.sessionKey,
+        timeoutPartialText: params.timeoutPartialText,
         ...(params.agentId ? { agentId: params.agentId } : {}),
         event: {
           ...params.event,

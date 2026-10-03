@@ -1,5 +1,9 @@
-import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { expect, it, vi, type MockInstance } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -7,7 +11,7 @@ import {
 } from "../../agents/tools/gateway-caller-context.js";
 import * as dispatch from "../../auto-reply/dispatch.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -19,6 +23,7 @@ import {
 } from "../../config/sessions/session-sharing-store.native.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import * as sessionAdmission from "../../sessions/session-lifecycle-admission.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
@@ -40,6 +45,9 @@ const admissionScenarios = [
   "terminal",
   "rotated",
   "queued",
+  "foreign-agent-global-timeout",
+  "timeout-during-work-admission",
+  "timeout-during-work-admission-fails",
   "narrow-first-send",
   "dashboard",
   "dashboard-writer",
@@ -49,9 +57,9 @@ const admissionScenarios = [
   "dashboard-internal",
 ] as const;
 
-it.each(admissionScenarios)(
+it.for(admissionScenarios)(
   "keeps prepared-session binding with its exact admission: %s",
-  async (scenario) => {
+  async (scenario, { signal }) => {
     const dashboard = scenario.startsWith("dashboard");
     const directDashboard = dashboard && scenario !== "dashboard-internal";
     const dashboardReadAllowed = directDashboard && scenario !== "dashboard-unattested";
@@ -66,7 +74,22 @@ it.each(admissionScenarios)(
             : scenario;
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const runId = "retained-preparation";
-      const sessionKey = scenario === "dashboard" ? "agent:main:main" : "agent:main:binding";
+      const timeoutDuringAdmission = closure.startsWith("timeout-during-work-admission");
+      const timeoutPersistenceFails = closure === "timeout-during-work-admission-fails";
+      const foreignGlobalTimeout = closure === "foreign-agent-global-timeout";
+      if (foreignGlobalTimeout) {
+        const cfg = getRuntimeConfig();
+        setRuntimeConfigSnapshot({
+          ...cfg,
+          session: { ...cfg.session, scope: "global" },
+          agents: { ...cfg.agents, entries: { main: { default: true }, work: {} } },
+        });
+      }
+      const sessionKey = foreignGlobalTimeout
+        ? "global"
+        : scenario === "dashboard"
+          ? "agent:main:main"
+          : "agent:main:binding";
       const scope = { agentId: "main", sessionKey };
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:unrelated" },
@@ -160,6 +183,48 @@ it.each(admissionScenarios)(
         getSessionEventSubscriberConnIds: () => new Set<string>(),
         logGateway: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
       } as unknown as GatewayRequestContext;
+      const foreignTerminal = createDeferred();
+      void foreignTerminal.promise.catch(() => {});
+      if (foreignGlobalTimeout) {
+        // With global scope these distinct agents share a literal key, not a
+        // transcript owner. Work's unfinished timeout must not gate Main's send.
+        context.chatAbortControllers.set("foreign-global-timeout", {
+          agentId: "work",
+          sessionKey: "global",
+          sessionId: "work-global-session",
+          controller: new AbortController(),
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now(),
+          abortStopReason: "timeout",
+          projectSessionTerminalPersistence: foreignTerminal.promise,
+        });
+      }
+      const workAdmissionReached = createDeferred();
+      let releaseAdmission: MockInstance<() => void> | undefined;
+      const originalBegin = sessionAdmission.beginSessionWorkAdmission;
+      const observeAdmission = vi
+        .spyOn(sessionAdmission, "beginSessionWorkAdmission")
+        .mockImplementation(async (...args) => {
+          const admission = await originalBegin(...args);
+          if (timeoutDuringAdmission) {
+            releaseAdmission = vi.spyOn(admission, "release");
+            // The first timeout check has passed. Real admission's awaited
+            // work finishes while the prior run's terminal report is pending.
+            context.chatAbortControllers.set("prior-timeout", {
+              agentId: "main",
+              sessionKey,
+              sessionId: "prior-session",
+              controller: new AbortController(),
+              startedAtMs: Date.now(),
+              expiresAtMs: Date.now(),
+              abortStopReason: "timeout",
+              projectSessionTerminalPersistence: foreignTerminal.promise,
+            });
+            workAdmissionReached.resolve();
+          }
+          return admission;
+        });
+      let handling: Promise<void> | undefined;
       let owned: Parameters<typeof chatDispatch.startChatDispatch>[0] | undefined;
       let reply: ReturnType<typeof createReplyOperation> | undefined;
       let successor: ReturnType<typeof registerChatAbortController> | undefined;
@@ -171,6 +236,7 @@ it.each(admissionScenarios)(
           sessionKey: scenario === "dashboard" ? "main" : sessionKey,
           message: "Keep this user turn in its session",
           idempotencyKey: runId,
+          ...(foreignGlobalTimeout ? { agentId: "main" } : {}),
         };
         const authorization = resolveSessionMutationAuthorization({
           client,
@@ -191,13 +257,50 @@ it.each(admissionScenarios)(
           isWebchatConnect: () => false,
         };
         if (scenario === "narrow-first-send") {
-          await handleGatewayRequest({
+          handling = handleGatewayRequest({
             ...request,
             extraHandlers: { "chat.send": handleChatSend },
           });
         } else {
-          await sendChat(request);
+          handling = sendChat(request);
         }
+        void handling.catch(() => {});
+        if (foreignGlobalTimeout) {
+          // Keep the foreign promise held until actual admission finishes. A wrong
+          // agent match cannot finish handling and fails at the owning test deadline.
+          await withinTest(handling, signal);
+          expect(holdDispatch).toHaveBeenCalledOnce();
+        }
+        if (timeoutDuringAdmission) {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              workAdmissionReached.promise,
+              handling,
+              "send did not reach work admission",
+            ),
+            signal,
+          );
+          if (timeoutPersistenceFails) {
+            // The timeout appeared after the first check. Its failure must
+            // reach this send through the second check, before dispatch starts.
+            foreignTerminal.reject(new Error("timeout report commit failed"));
+            await handling;
+            expect.soft(holdDispatch).not.toHaveBeenCalled();
+            expect.soft(respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "INVALID_REQUEST",
+                message: "Error: timeout report commit failed",
+              }),
+            );
+            expect.soft(releaseAdmission).toHaveBeenCalledOnce();
+            expect.soft(context.chatAbortControllers.has(runId)).toBe(false);
+            return;
+          }
+          foreignTerminal.resolve();
+        }
+        await handling;
         expect(respond).toHaveBeenCalledWith(
           true,
           dashboard
@@ -210,6 +313,19 @@ it.each(admissionScenarios)(
         const dashboardRead = options.replyOptions?.dashboardReadAdmission;
         expect(Boolean(dashboardRead)).toBe(dashboardReadAllowed);
         owned = observeDispatch.mock.calls.at(-1)?.[0];
+        if (foreignGlobalTimeout) {
+          expect(owned?.session.sessionKey).toBe("global");
+          expect(owned?.session.selectedAgent.agentId).toBe("main");
+          expect(
+            context.chatAbortControllers.get("foreign-global-timeout")
+              ?.projectSessionTerminalPersistence,
+          ).toBe(foreignTerminal.promise);
+          return;
+        }
+        if (timeoutDuringAdmission) {
+          expect(holdDispatch).toHaveBeenCalledOnce();
+          return;
+        }
         const prepared = options.replyOptions?.onSessionPrepared;
         const runStarted = options.replyOptions?.onAgentRunStart;
         if (!owned || !prepared || !runStarted || !owned.skillLibraryAuthoring) {
@@ -339,6 +455,11 @@ it.each(admissionScenarios)(
           ).toEqual([]);
         }
       } finally {
+        foreignTerminal.resolve();
+        await handling;
+        owned ??= observeDispatch.mock.calls.at(-1)?.[0];
+        context.chatAbortControllers.delete("foreign-global-timeout");
+        context.chatAbortControllers.delete("prior-timeout");
         namespaceRun.close();
         options?.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
         reply?.complete();
@@ -349,6 +470,8 @@ it.each(admissionScenarios)(
           owned.admission.cleanupAdmittedRun();
           clearAgentRunContext(runId, owned.admission.lifecycleGeneration);
         }
+        observeAdmission.mockRestore();
+        releaseAdmission?.mockRestore();
         holdDispatch.mockRestore();
         observeDispatch.mockRestore();
         clone.mockRestore();
