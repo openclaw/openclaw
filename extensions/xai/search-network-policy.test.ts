@@ -164,7 +164,11 @@ describe.each(["webSearch", "xSearch"] as const)("xAI %s network policy", (kind)
       url: "http://litellm:4000/v1/responses",
       addresses: [privateAddress],
     });
-    expect(JSON.parse(String(requests[0]?.init?.body)).tools).toEqual([
+    const requestBody = requests[0]?.init?.body;
+    if (typeof requestBody !== "string") {
+      throw new Error("Expected a JSON string request body");
+    }
+    expect(JSON.parse(requestBody).tools).toEqual([
       { type: kind === "webSearch" ? "web_search" : "x_search" },
     ]);
     expect(lookup).toHaveBeenCalledOnce();
