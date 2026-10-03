@@ -156,6 +156,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/infra/update-managed-service-handoff-database.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["recoverManagedUpdateLeaseJournal.read"],
+        evidence:
+          "Explicit update recover CLI -> recoverImmutableUpdate -> withImmutableUpdateOwner({ recover: true }) only; ordinary lease and Gateway readers never call this cold-journal admission",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
     [
       {

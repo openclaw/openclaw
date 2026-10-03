@@ -4,7 +4,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
 import type { SystemdServiceIdentity } from "./service-types.js";
-import { restartSystemdService, startSystemdService } from "./systemd-lifecycle.js";
+import {
+  restartSystemdService,
+  startSystemdService,
+  stopSystemdService,
+} from "./systemd-lifecycle.js";
 import { captureSystemdServiceIdentity } from "./systemd-service-identity.js";
 
 const native = vi.hoisted(() => ({
@@ -85,7 +89,7 @@ beforeEach(() => {
     if (args[0] === "get-property") {
       return method === "Id" ? [current.unitName, current.unitPath] : [current.serviceUser];
     }
-    if (["ResetFailedUnit", "StartUnit", "RestartUnit"].includes(method)) {
+    if (["ResetFailedUnit", "StartUnit", "StopUnit", "RestartUnit"].includes(method)) {
       expect(args[1]).toBe(original.managerOwner);
       effects.push(method);
       if (method === "ResetFailedUnit") {
@@ -248,5 +252,70 @@ it("refuses to capture authority for another service account", async () => {
   await expect(
     captureSystemdServiceIdentity({ env: {}, target: original, managerUid: 0 }),
   ).rejects.toBeInstanceOf(ServiceOwnershipRefusalError);
+  expect(effects).toEqual([]);
+});
+
+it("root can retain the explicitly adopted non-root account through pinned stop and start", async () => {
+  current.serviceUser = "openclaw-fixture";
+  const identity = await captureSystemdServiceIdentity({
+    env: {},
+    target: original,
+    managerUid: 0,
+    rootServiceAccount: "openclaw-fixture",
+  });
+  await stopSystemdService({ stdout: new PassThrough(), systemdIdentity: identity });
+  await startSystemdService({ stdout: new PassThrough(), systemdIdentity: identity });
+  expect(effects).toEqual(["StopUnit", "ResetFailedUnit", "StartUnit"]);
+  expect(native.systemctl).not.toHaveBeenCalled();
+});
+
+it.each(["other-account", "root"])("an adopted account never admits %s", async (replacement) => {
+  current.serviceUser = "openclaw-fixture";
+  const identity = await captureSystemdServiceIdentity({
+    env: {},
+    target: original,
+    managerUid: 0,
+    rootServiceAccount: "openclaw-fixture",
+  });
+  current.serviceUser = replacement;
+  await expect(
+    stopSystemdService({ stdout: new PassThrough(), systemdIdentity: identity }),
+  ).rejects.toMatchObject({ reason: "systemd-account-refused" });
+  expect(effects).toEqual([]);
+});
+
+it("refuses an explicit adopted account to a non-root inspector", async () => {
+  vi.spyOn(process, "geteuid").mockReturnValue(1000);
+  current.serviceUser = "openclaw-fixture";
+  await expect(
+    captureSystemdServiceIdentity({
+      env: {},
+      target: original,
+      rootServiceAccount: "openclaw-fixture",
+    }),
+  ).rejects.toMatchObject({ reason: "systemd-account-refused" });
+  expect(effects).toEqual([]);
+});
+
+it("checks effect-specific process facts after native inspection without requiring them after stop", async () => {
+  let serving = true;
+  const assertCurrent = () => {};
+  native.query.mockImplementationOnce(async () => {
+    // An asynchronous pre-effect revalidation may lose the observed process.
+    serving = false;
+    return [[current.busId]];
+  });
+  await expect(
+    stopSystemdService({
+      stdout: new PassThrough(),
+      systemdIdentity: original,
+      assertCurrent,
+      beforeEffect: () => {
+        if (!serving) {
+          throw new Error("process replaced");
+        }
+      },
+    }),
+  ).rejects.toThrow("process replaced");
   expect(effects).toEqual([]);
 });

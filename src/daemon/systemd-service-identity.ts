@@ -47,6 +47,7 @@ async function inspectIdentity(
   bus: SystemdServiceIdentity["bus"],
   deadline: number,
   expected?: SystemdServiceIdentity,
+  rootServiceAccount?: string,
 ): Promise<SystemdServiceIdentity> {
   const call = async (method: string, args: string[], signature: string) => {
     const reply = await broker.query(
@@ -131,7 +132,19 @@ async function inspectIdentity(
   if (typeof serviceUser !== "string") {
     throw unavailable();
   }
-  if (target.scope === "system") {
+  const adoptedAccount = rootServiceAccount ?? expected?.rootServiceAccount;
+  if (adoptedAccount !== undefined) {
+    if (
+      target.scope !== "system" ||
+      process.geteuid?.() !== 0 ||
+      !adoptedAccount ||
+      adoptedAccount === "root" ||
+      adoptedAccount === "0" ||
+      serviceUser !== adoptedAccount
+    ) {
+      throw new ServiceOwnershipRefusalError("systemd-account-refused");
+    }
+  } else if (target.scope === "system") {
     assertSystemdServiceAccount(serviceUser);
     // The account assertion normalizes root/name/UID aliases against this process.
     if (expected) {
@@ -143,13 +156,23 @@ async function inspectIdentity(
   if (managerOwner !== (await call("GetNameOwner", ["s", MANAGER], "s"))) {
     throw new ServiceOwnershipRefusalError("systemd-manager-changed");
   }
-  return { ...target, bus, busId, managerOwner, managerUid, serviceUser };
+  return {
+    ...target,
+    bus,
+    busId,
+    managerOwner,
+    managerUid,
+    serviceUser,
+    ...(adoptedAccount !== undefined ? { rootServiceAccount: adoptedAccount } : {}),
+  };
 }
 
 export async function captureSystemdServiceIdentity(params: {
   env: GatewayServiceEnv;
   target: SystemdServiceReadTarget;
   managerUid?: number;
+  /** Only an explicitly adopted root-owned installation may select another account. */
+  rootServiceAccount?: string;
   timeoutMs?: number;
 }): Promise<SystemdServiceIdentity> {
   const deadline = performance.now() + (params.timeoutMs ?? SYSTEMD_DEFAULT_STOP_TIMEOUT_MS);
@@ -171,7 +194,14 @@ export async function captureSystemdServiceIdentity(params: {
         };
   const broker = await openBroker(bus, deadline);
   try {
-    const identity = await inspectIdentity(broker, params.target, bus, deadline);
+    const identity = await inspectIdentity(
+      broker,
+      params.target,
+      bus,
+      deadline,
+      undefined,
+      params.rootServiceAccount,
+    );
     if (params.managerUid !== undefined && identity.managerUid !== params.managerUid) {
       throw new ServiceOwnershipRefusalError("systemd-manager-changed");
     }
@@ -183,8 +213,10 @@ export async function captureSystemdServiceIdentity(params: {
 
 export async function activateSystemdServiceIdentity(params: {
   identity: SystemdServiceIdentity;
-  action: "start" | "restart";
+  action: "start" | "stop" | "restart";
   assertCurrent?: () => void;
+  beforeMutation?: () => Promise<void>;
+  beforeEffect?: () => void;
   warn: (message: string) => void;
 }): Promise<void> {
   let authorityFailure: { error: unknown } | undefined;
@@ -202,13 +234,17 @@ export async function activateSystemdServiceIdentity(params: {
   const deadline = performance.now() + SYSTEMD_DEFAULT_STOP_TIMEOUT_MS;
   const broker = await openBroker(identity.bus, deadline);
   try {
-    for (const method of [
-      "ResetFailedUnit",
-      params.action === "start" ? "StartUnit" : "RestartUnit",
-    ]) {
+    const methods =
+      params.action === "stop"
+        ? ["StopUnit"]
+        : ["ResetFailedUnit", params.action === "start" ? "StartUnit" : "RestartUnit"];
+    for (const method of methods) {
+      await params.beforeMutation?.();
+      assertCurrent();
       await inspectIdentity(broker, identity, identity.bus, deadline, identity);
       assertCurrent();
       const reset = method === "ResetFailedUnit";
+      params.beforeEffect?.();
       try {
         await broker.query(
           [

@@ -42,8 +42,8 @@ async function runSystemdServiceAction(
     reportMutation(`systemctl-${action}`);
     params.stdout.write(`${formatLine(`${label} systemd service`, unitName)}\n`);
   };
-  if (params.systemdIdentity && action !== "stop") {
-    if (params.systemdIdentity.scope === "user") {
+  if (params.systemdIdentity) {
+    if (params.systemdIdentity.scope === "user" && action !== "stop") {
       const scopedEnv = { ...env, OPENCLAW_SYSTEMD_UNIT: params.systemdIdentity.unitName };
       await assertNoSystemGatewayOwnershipForActivation(scopedEnv);
     }
@@ -56,6 +56,8 @@ async function runSystemdServiceAction(
       identity: params.systemdIdentity,
       action,
       assertCurrent: params.assertCurrent,
+      beforeMutation: params.beforeMutation,
+      beforeEffect: params.beforeEffect,
       warn:
         params.warn ??
         ((message) => {

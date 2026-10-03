@@ -18,6 +18,7 @@ import {
   type ExistingSqliteTransaction,
 } from "./sqlite-existing-database.js";
 import type { SqliteReadOnlyOperationContext } from "./sqlite-readonly-operation-types.js";
+import { prepareSqliteRollbackRecovery } from "./sqlite-rollback-recovery.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
   ImmutableInstallDescriptorSchema,
@@ -28,12 +29,13 @@ import {
   type ImmutablePreparedGeneration,
 } from "./update-immutable-install-schema.js";
 
-const MAX_RECORD_BYTES = 64 * 1024;
+const MAX_RECORD_BYTES = 1024 * 1024;
 type ImmutableRow = {
   slot: number;
   revision: number;
   descriptor_json: string;
   prepared_json: string;
+  activation_json?: string;
 };
 const queries = (db: DatabaseSync) =>
   getNodeSqliteKysely<{ immutable_installation: ImmutableRow }>(db);
@@ -54,7 +56,13 @@ function rootOwnedIdentity(file: string, directory: boolean): string {
 
 function validateRecord(record: ImmutableInstallRecord): ImmutableInstallRecord {
   const parsed = ImmutableInstallRecordSchema.parse(record);
-  for (const generation of [parsed.descriptor.current, parsed.prepared]) {
+  for (const generation of [
+    parsed.descriptor.current,
+    parsed.prepared,
+    parsed.activation?.previous,
+    parsed.activation?.operation?.previous,
+    parsed.activation?.operation?.candidate,
+  ]) {
     if (
       generation &&
       generation.path !== path.join(parsed.descriptor.root, "releases", generation.sha)
@@ -63,7 +71,27 @@ function validateRecord(record: ImmutableInstallRecord): ImmutableInstallRecord 
     }
   }
   if (Buffer.byteLength(JSON.stringify(parsed)) > MAX_RECORD_BYTES) {
-    throw new Error("Immutable installation record exceeds 64 KiB.");
+    throw new Error("Immutable installation record exceeds 1 MiB.");
+  }
+  if (
+    parsed.activation?.operation &&
+    (!parsed.descriptor.activationEnabled ||
+      parsed.activation.operation.authority.installKey !== parsed.descriptor.root)
+  ) {
+    throw new Error("Immutable activation does not match its enabled installation owner.");
+  }
+  const recovery = parsed.activation?.operation?.recovery;
+  if (recovery) {
+    const control = resolvePackageActivationControl(
+      resolvePackageActivationAnchor(parsed.descriptor.root),
+    );
+    if (
+      recovery.root !== parsed.descriptor.root ||
+      recovery.path !== path.join(control, `recovery-${recovery.sha}`) ||
+      recovery.helperPath !== path.join(control, "recovery.mjs")
+    ) {
+      throw new Error("Immutable recovery artifact is outside its installation control.");
+    }
   }
   return parsed;
 }
@@ -90,10 +118,16 @@ function readRecord(db: DatabaseSync, root: string, rootIdentity: string): Immut
   if (rows.length !== 1 || !row || row.slot !== 1) {
     throw new Error("Immutable installation control must contain one bounded record.");
   }
+  if (row.activation_json && Buffer.byteLength(row.activation_json) > MAX_RECORD_BYTES) {
+    throw new Error("Immutable activation record exceeds 1 MiB.");
+  }
   const record = validateRecord({
     revision: row.revision,
     descriptor: JSON.parse(row.descriptor_json),
     prepared: JSON.parse(row.prepared_json),
+    ...(row.activation_json && row.activation_json !== "null"
+      ? { activation: JSON.parse(row.activation_json) }
+      : {}),
   });
   if (record.descriptor.root !== root || record.descriptor.rootIdentity !== rootIdentity) {
     throw new Error("Immutable installation control does not match the installation.");
@@ -101,15 +135,7 @@ function readRecord(db: DatabaseSync, root: string, rootIdentity: string): Immut
   return record;
 }
 
-function withImmutableControl<T>(
-  root: string,
-  write: boolean,
-  operation: (
-    db: DatabaseSync,
-    transact: ExistingSqliteTransaction,
-    read: () => ImmutableInstallRecord,
-  ) => T,
-): T {
+function captureImmutableControl(root: string) {
   const anchor = resolvePackageActivationAnchor(root);
   assertPackageActivationLayout(anchor);
   const control = resolvePackageActivationControl(anchor);
@@ -127,28 +153,54 @@ function withImmutableControl<T>(
       throw new Error("Immutable installation control identity changed.");
     }
   };
+  const validate = (db: DatabaseSync) => {
+    const packageTable = db // sqlite-allow-raw -- Admission rejects legacy package journals without migrating them.
+      .prepare(
+        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'package_activation'",
+      )
+      .get();
+    if (packageTable) {
+      throw new Error("An existing package activation journal remains with its recovery owner.");
+    }
+  };
+  const read = (db: DatabaseSync) => readRecord(db, root, rootIdentity);
+  return { control, journal, assertIdentity, validate, read };
+}
+
+/** CLI recovery prepares a committed snapshot before the native executor admits rollback. */
+export function readImmutableInstallRecordForRecovery(root: string) {
+  const { control, journal, assertIdentity, validate, read } = captureImmutableControl(root);
+  return prepareSqliteRollbackRecovery({
+    path: journal,
+    scratchRoot: control,
+    assertIdentity,
+    assertFileSafe(file) {
+      rootOwnedIdentity(file, false);
+    },
+    read(db) {
+      validate(db);
+      return read(db);
+    },
+  });
+}
+
+function withImmutableControl<T>(
+  root: string,
+  write: boolean,
+  operation: (
+    db: DatabaseSync,
+    transact: ExistingSqliteTransaction,
+    read: () => ImmutableInstallRecord,
+  ) => T,
+): T {
+  const { journal, assertIdentity, validate, read } = captureImmutableControl(root);
   return withExistingSqliteRollbackDatabase(
     journal,
     {
       write,
       busyTimeoutMs: 0,
       assertIdentity,
-      validate(db) {
-        const packageTable = db // sqlite-allow-raw -- Admission rejects legacy package journals without migrating them.
-          .prepare(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'package_activation'",
-          )
-          .get();
-        if (packageTable) {
-          throw new Error(
-            "An existing package activation journal remains with its recovery owner.",
-          );
-        }
-        executeSqliteQuerySync(
-          db,
-          queries(db).selectFrom("immutable_installation").selectAll().limit(0),
-        );
-      },
+      validate,
     },
     (db, transact) => {
       if (write) {
@@ -166,7 +218,7 @@ function withImmutableControl<T>(
             }
           },
         });
-      return operation(db, fencedTransaction, () => readRecord(db, root, rootIdentity));
+      return operation(db, fencedTransaction, () => read(db));
     },
   );
 }
@@ -238,6 +290,9 @@ export function createImmutableInstallRecord(
                 .addColumn("revision", "integer", (column) => column.notNull())
                 .addColumn("descriptor_json", "text", (column) => column.notNull())
                 .addColumn("prepared_json", "text", (column) => column.notNull())
+                .addColumn("activation_json", "text", (column) =>
+                  column.notNull().defaultTo("null"),
+                )
                 .modifyEnd(sql`STRICT`),
             );
             executeSqliteQuerySync(
@@ -282,24 +337,51 @@ export function createImmutableInstallRecord(
   }
 }
 
-/** Recording preparation never grants pointer publication or service authority. */
-export function recordImmutablePreparedGeneration(
+/** Revalidate the durable revision immediately before a synchronous filesystem effect. */
+export function assertImmutableInstallRecordCurrent(
   expected: ImmutableInstallRecord,
-  prepared: ImmutablePreparedGeneration,
   assertCurrent: () => void,
-): ImmutableInstallRecord {
-  const next = validateRecord({
-    ...expected,
-    revision: expected.revision + 1,
-    prepared: ImmutablePreparedGenerationSchema.parse(prepared),
+): void {
+  assertCurrent();
+  withImmutableControl(expected.descriptor.root, false, (_db, _transact, read) => {
+    if (!isDeepStrictEqual(read(), expected)) {
+      throw new Error("Immutable activation record is no longer current.");
+    }
   });
   assertCurrent();
-  return withImmutableControl(expected.descriptor.root, true, (db, transact, read) =>
-    transact(
+}
+
+/** One control owner publishes adoption, preparation, pointer effects, and recovery. */
+export function updateImmutableInstallRecord(
+  expected: ImmutableInstallRecord,
+  changes: Pick<ImmutableInstallRecord, "descriptor" | "prepared" | "activation">,
+  assertCurrent: () => void,
+): ImmutableInstallRecord {
+  const next = validateRecord({ ...changes, revision: expected.revision + 1 });
+  if (
+    next.descriptor.root !== expected.descriptor.root ||
+    next.descriptor.rootIdentity !== expected.descriptor.rootIdentity
+  ) {
+    throw new Error("Immutable update cannot transfer installation ownership.");
+  }
+  assertCurrent();
+  return withImmutableControl(expected.descriptor.root, true, (db, transact, read) => {
+    // Slice-1 journals have no activation column. Admission migrates only under
+    // the same live owner and CAS that records explicit activation consent.
+    const columns = db.prepare("PRAGMA table_info(immutable_installation)").all(); // sqlite-allow-raw -- CLI control-journal schema migration.
+    return transact(
       () => {
         assertCurrent();
         if (!isDeepStrictEqual(read(), expected)) {
           throw new Error("Immutable preparation record is no longer current.");
+        }
+        if (!columns.some((column) => column.name === "activation_json")) {
+          executeSqliteQuerySync(
+            db,
+            queries(db)
+              .schema.alterTable("immutable_installation")
+              .addColumn("activation_json", "text", (column) => column.notNull().defaultTo("null")),
+          );
         }
         executeSqliteQuerySync(
           db,
@@ -307,7 +389,9 @@ export function recordImmutablePreparedGeneration(
             .updateTable("immutable_installation")
             .set({
               revision: next.revision,
+              descriptor_json: JSON.stringify(next.descriptor),
               prepared_json: JSON.stringify(next.prepared),
+              activation_json: JSON.stringify(next.activation ?? null),
             })
             .where("slot", "=", 1)
             .where("revision", "=", expected.revision),
@@ -320,7 +404,26 @@ export function recordImmutablePreparedGeneration(
           commit();
         },
       },
-    ),
+    );
+  });
+}
+
+/** Recording preparation never grants pointer publication or service authority. */
+export function recordImmutablePreparedGeneration(
+  expected: ImmutableInstallRecord,
+  prepared: ImmutablePreparedGeneration,
+  assertCurrent: () => void,
+): ImmutableInstallRecord {
+  if (expected.activation?.operation) {
+    throw new Error("Immutable activation recovery is pending; run openclaw update recover.");
+  }
+  return updateImmutableInstallRecord(
+    expected,
+    {
+      ...expected,
+      prepared: ImmutablePreparedGenerationSchema.parse(prepared),
+    },
+    assertCurrent,
   );
 }
 

@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import type { GatewaySuspendPrepareResult } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  GatewaySuspendHandoffResult,
+  GatewaySuspendPrepareResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { readSystemdGatewayStopTimeout } from "../../daemon/systemd-maintenance.js";
@@ -25,17 +28,22 @@ export async function withGatewayMaintenanceDrain<T>(
   params: {
     state: GatewayServiceState;
     timeoutMs?: number;
+    drainPolicy?: "interrupt-after-drain";
     assertCurrent: () => void;
     warn: (message: string) => void;
   },
   stop: () => Promise<T>,
 ): Promise<T> {
   const deadline = performance.now() + (params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS);
+  const explicitDrain = params.drainPolicy === "interrupt-after-drain";
   const requestId = randomUUID();
   let suspensionId: string | undefined;
   let stopped = false;
   let legacyStalePid: number | undefined;
   const finish = async () => {
+    if (explicitDrain) {
+      assertDrainLease();
+    }
     if (legacyStalePid !== undefined) {
       if (!(await ownsLegacyListener(legacyStalePid))) {
         throw new Error("Legacy Gateway listener changed during maintenance drain");
@@ -67,6 +75,29 @@ export async function withGatewayMaintenanceDrain<T>(
   let residentBudget: GatewayShutdownStatus | undefined;
   let lastObservation: GatewaySuspendPrepareResult | undefined;
   let observationFailure: { error: unknown } | undefined;
+  let processTarget: { pid: number; processInstanceId: string } | undefined;
+  const assertDrainLease = () => {
+    assertResidentCurrent();
+    if (
+      observationFailure ||
+      !lastObservation ||
+      lastObservation.status === "busy" ||
+      lastObservation.suspensionId !== suspensionId ||
+      lastObservation.expiresAtMs <= Date.now() ||
+      lastObservation.writeCustody === undefined
+    ) {
+      throw new GatewayServiceStopUnsafeError(
+        "Gateway maintenance stop refused: a current suspension lease with verified write custody is required. The Gateway was not stopped; retry the update after lifecycle inspection is available.",
+      );
+    }
+    const held = lastObservation.writeCustody.filter(({ count }) => count > 0);
+    if (held.length) {
+      throw new GatewayServiceStopUnsafeError(
+        `Gateway maintenance stop refused: data at risk in owner phase ${held.map(({ phase, count }) => `${phase} (${count})`).join(", ")}. The Gateway was not stopped.`,
+      );
+    }
+    return lastObservation;
+  };
   const remaining = () => Math.max(1, deadline - performance.now());
   const connection = await (async () => {
     const { config, auth } = await resolveGatewayRestartProbeContext(params.state.env);
@@ -169,7 +200,7 @@ export async function withGatewayMaintenanceDrain<T>(
     legacyStalePid = legacy.pid;
     return true;
   };
-  if (await staleResident()) {
+  if (!explicitDrain && (await staleResident())) {
     params.warn(
       "WARNING: The running Gateway's installation was replaced before this stop; it refuses connections, so lifecycle drain is skipped and it is stopped directly.",
     );
@@ -181,12 +212,27 @@ export async function withGatewayMaintenanceDrain<T>(
     );
   }
   if (
+    !explicitDrain &&
     (managerTimeout ?? 0) >= GATEWAY_SERVICE_STOP_TIMEOUT_MS &&
     (residentBudget?.timeoutMs ?? 0) >= GATEWAY_SHUTDOWN_TIMEOUT_MS
   ) {
     return await finish();
   }
   try {
+    if (explicitDrain) {
+      const identity = await call<{ pid: number; processInstanceId: string }>("system.info", {});
+      if (
+        identity.pid !== params.state.runtime?.pid ||
+        typeof identity.processInstanceId !== "string" ||
+        !identity.processInstanceId.trim()
+      ) {
+        throw new GatewayServiceStopUnsafeError(
+          "Gateway maintenance stop refused: the resident process identity could not be verified.",
+        );
+      }
+      processTarget = { pid: identity.pid, processInstanceId: identity.processInstanceId };
+      verifiedResident = true;
+    }
     while (true) {
       try {
         if (!verifiedResident) {
@@ -216,13 +262,31 @@ export async function withGatewayMaintenanceDrain<T>(
       if (!observationFailure && lastObservation?.status === "ready") {
         return await finish();
       }
-      if (await staleResident()) {
+      if (!explicitDrain && (await staleResident())) {
         params.warn(
           "WARNING: The running Gateway's installation was replaced during this stop; it refuses connections, so lifecycle drain is skipped and it is stopped directly.",
         );
         return await finish();
       }
       if (performance.now() >= deadline) {
+        if (explicitDrain) {
+          assertDrainLease();
+          const handoff = await call<GatewaySuspendHandoffResult>("gateway.suspend.handoff", {
+            suspensionId,
+            target: processTarget,
+          });
+          const lease = assertDrainLease();
+          if (
+            handoff.status !== "armed" ||
+            handoff.suspensionId !== suspensionId ||
+            handoff.expiresAtMs !== lease.expiresAtMs ||
+            handoff.expiresAtMs <= Date.now()
+          ) {
+            throw new GatewayServiceStopUnsafeError(
+              "Gateway maintenance stop refused: interruption handoff was not armed for the current suspension lease.",
+            );
+          }
+        }
         const custody = observationFailure ? undefined : lastObservation?.writeCustody;
         const held = custody?.filter(({ count }) => count > 0);
         if (held?.length) {
