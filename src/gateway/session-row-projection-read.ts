@@ -151,7 +151,7 @@ export async function withSessionRowDatabaseFacts(
             if (prepared) {
               facts.set(identity(row), {
                 ...prepared,
-                acpMeta: prepared.entry?.acp ?? null,
+                acpMeta: null,
                 repositoryWorkspace: null,
               });
             }
@@ -159,9 +159,7 @@ export async function withSessionRowDatabaseFacts(
         }
         const acpRows = rows.flatMap((row) => {
           const prepared = facts.get(identity(row));
-          return prepared?.entry && !prepared.entry.acp
-            ? [{ row, prepared, entry: prepared.entry }]
-            : [];
+          return prepared?.entry ? [{ row, prepared, entry: prepared.entry }] : [];
         });
         const acpMetadata = await readAcpSessionMetaForEntries({
           env,

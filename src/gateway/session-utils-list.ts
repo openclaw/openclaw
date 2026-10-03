@@ -22,7 +22,7 @@ import { gatewayClientSessionCreator } from "./server-methods/gateway-client-ide
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./server-methods/session-model-selection-policy.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
-import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
+import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js";
 import {
   filterSessionEntries,
@@ -132,20 +132,22 @@ function buildSessionsListResult(
     modelCatalog instanceof Map ? modelCatalog.get(defaultsAgentId) : undefined;
   const defaultsCatalog =
     modelCatalog instanceof Map ? preparedDefaultsCatalog?.entries : modelCatalog;
-  const metadataSnapshot = readPreparedGatewayModelCatalogMetadata(preparedDefaultsCatalog);
+  const metadataSnapshot = readPreparedGatewayModelMetadata(cfg, preparedDefaultsCatalog);
   const defaults = getSessionDefaults(cfg, defaultsCatalog, {
     ...(opts.agentId ? { agentId: opts.agentId } : {}),
     allowPluginNormalization: false,
-    providerPolicySource: preparedDefaultsCatalog?.pluginRegistry,
+    providerPolicySource: preparedDefaultsCatalog?.pluginRegistry ?? "active",
     metadataSnapshot,
   });
   const policy =
     client === undefined
       ? undefined
-      : prepareOperatorModelPresentation({ cfg, policyConfig, client, metadataSnapshot })?.forAgent(
-          defaultsAgentId,
-          defaultsCatalog,
-        );
+      : prepareOperatorModelPresentation({
+          cfg,
+          policyConfig,
+          client,
+          metadataSnapshot,
+        })?.forAgent(defaultsAgentId, defaultsCatalog);
   return {
     ts: list.now,
     path: list.storePath,

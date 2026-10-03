@@ -4,6 +4,7 @@ import {
   errorShape,
   validateChatHistoryParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { findModelCatalogEntry } from "../../agents/model-catalog.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
@@ -321,6 +322,12 @@ export async function handleChatHistoryRequest({
       agentId: sessionAgentId,
       storePath,
     };
+    const [unsavedAcpMeta] = entry
+      ? []
+      : await readAcpSessionMetaForEntries({
+          cfg,
+          entries: [{ agentId: sessionAgentId, sessionKey: canonicalKey, entry: undefined }],
+        });
     const publishDelta = await withReadySessionRows(rowProjection, queries, (read) => {
       const currentSharing = readCurrentSharing(read);
       if (!currentSharing) {
@@ -335,6 +342,7 @@ export async function handleChatHistoryRequest({
             : buildGatewaySessionRow({
                 ...selectedSession,
                 key: canonicalKey,
+                preparedAcpMeta: unsavedAcpMeta ?? null,
                 modelCatalog: sessionModelCatalog,
                 rowContext: rowProjection.state.rowContext,
               })),

@@ -177,9 +177,9 @@ it.each([
   ["before-touch", "session-id"],
   ["before-touch", "lifecycle-revision"],
   ["before-touch", "control-owner"],
-  ["after-cleanup", "session-id"],
-  ["after-cleanup", "lifecycle-revision"],
-  ["after-cleanup", "control-owner"],
+  ["after-touch", "session-id"],
+  ["after-touch", "lifecycle-revision"],
+  ["after-touch", "control-owner"],
 ] as const)(
   "fences a %s concurrent %s change at the original ACP lifecycle",
   async (boundary, replacement) => {
@@ -220,7 +220,7 @@ it.each([
               await release.promise;
             }
             const result = await original(input);
-            if (!paused && boundary === "after-cleanup" && input.mutation.kind === "clear-legacy") {
+            if (!paused && boundary === "after-touch" && input.mutation.kind === "touch") {
               paused = true;
               reached.resolve();
               await release.promise;

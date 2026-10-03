@@ -4,6 +4,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   resolvePluginSetupCliBackend,
   resolvePluginSetupRegistry,
@@ -147,6 +148,7 @@ export function resolveCliRuntimeCanonicalProvider(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   includeSetupRegistry?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
 }): string | undefined {
   const runtime = normalizeProviderId(params.runtime ?? "");
   if (!runtime) {
@@ -158,13 +160,14 @@ export function resolveCliRuntimeCanonicalProvider(params: {
   if (runtimeBinding) {
     return runtimeBinding.provider;
   }
-  if (params.includeSetupRegistry !== true) {
+  if (params.includeSetupRegistry !== true || params.metadataSnapshot === null) {
     return undefined;
   }
   const setupBackend = cliBackendsDeps.resolvePluginSetupCliBackend({
     backend: runtime,
     config: params.config,
     env: params.env,
+    metadataSnapshot: params.metadataSnapshot,
   });
   return setupBackend ? resolveCliBackendModelProvider(setupBackend.backend) : undefined;
 }

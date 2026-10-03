@@ -497,6 +497,28 @@ Voice Call-only settings remain valid configuration. Doctor detects this pending
 inheritance repair independently of schema errors; ordinary config reads never
 copy the settings into Talk.
 
+## ACP session metadata
+
+Doctor moves historical raw, agent-prefixed, and ownerless ACP metadata keys to
+canonical keys bound to the owning session. It also imports ACP metadata embedded
+in SQLite session entries. Before rewriting a source database, Doctor saves a
+verified private SQLite backup and reports its path. Rekeying preserves every
+metadata column except the key. Embedded imports keep the canonical ACP fields,
+including identity and runtime-options JSON, lifecycle binding, and last activity;
+the entry's update timestamp becomes the metadata update timestamp. Unknown
+embedded fields remain in the source backup. Embedded JSON follows the session
+decoder's last-value semantics for duplicate properties. Ambiguous ownership and conflicting
+payloads remain intact with a warning naming the affected session.
+
+Runtime reads and writes use canonical metadata only. Startup refuses unmigrated
+ACP state with offline repair instructions before handing session stores to
+runtime. Run `openclaw doctor --fix` after restoring older state; the update-time
+Doctor pass runs the same repair.
+Embedded metadata imports record durable receipts before removing the source
+field, so retrying interrupted cleanup cannot reopen a session after its canonical
+metadata was cleared. Legacy `sessions.json` imports retain their existing backups
+and source receipts.
+
 ## ACP agents' model precedence
 
 For an agent with `runtime.type: "acp"`, `agents.entries.*.model` (string form) or

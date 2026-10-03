@@ -243,12 +243,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return command.entries.reduce(
       (total, input) =>
         total +
-        stringBytes([
-          ...input.keys,
-          input.legacyKey,
-          input.entry?.lifecycleRevision,
-          input.entry?.sessionId,
-        ]) +
+        stringBytes([...input.keys, input.entry?.lifecycleRevision, input.entry?.sessionId]) +
         (input.entry?.sessionStartedAt === undefined ? 0 : 8),
       bytes,
     );

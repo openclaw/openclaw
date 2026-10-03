@@ -5,8 +5,8 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import * as acpReads from "../acp/runtime/session-meta-readonly.js";
-import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
@@ -108,7 +108,7 @@ async function withAcceptedSuffix(
       replaceSessionEntrySync({ agentId: "main", sessionKey }, entries[index]!);
     }
     if (options.acpMeta) {
-      writeAcpSessionMetaForMigration({
+      seedCanonicalAcpSessionMeta({
         sessionKey: keys[1]!,
         lifecycleRevision: "accepted-lifecycle",
         meta: options.acpMeta,
@@ -310,7 +310,7 @@ it.each(["present", "absent", "ACP publication", "lifecycle reset"] as const)(
         if (change === "ACP publication") {
           expected = { ...initial, backend: "current-acp-backend", lastActivityAt: 2 };
           // Only the shared ACP row changes; agent entry and lifecycle stay fixed.
-          writeAcpSessionMetaForMigration({
+          seedCanonicalAcpSessionMeta({
             sessionKey: query.key,
             lifecycleRevision: entry.lifecycleRevision,
             meta: expected,
