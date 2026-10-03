@@ -3,9 +3,9 @@
  */
 import { coerceSecretRef, isLegacySecretRefWithoutProvider } from "../config/types.secrets.js";
 import {
-  resolveConfiguredSecretInputString as resolveConfiguredString,
-  resolveConfiguredSecretInputWithFallback as resolveConfiguredWithFallback,
-  resolveRequiredConfiguredSecretRefInputString as resolveRequiredConfiguredRef,
+  resolveCanonicalConfiguredSecretInputString,
+  resolveCanonicalConfiguredSecretInputWithFallback,
+  resolveCanonicalRequiredConfiguredSecretRefInputString,
 } from "../gateway/resolve-configured-secret-input-string.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 
@@ -21,7 +21,9 @@ export {
   type SecretInputStringResolutionMode,
 } from "../config/types.secrets.js";
 
-function configuredSdkInput(params: Parameters<typeof resolveConfiguredString>[0]): unknown {
+function configuredSdkInput(
+  params: Parameters<typeof resolveCanonicalConfiguredSecretInputString>[0],
+): unknown {
   return isLegacySecretRefWithoutProvider(params.value)
     ? coerceSecretRef(params.value, params.config.secrets?.defaults)
     : params.value;
@@ -29,21 +31,30 @@ function configuredSdkInput(params: Parameters<typeof resolveConfiguredString>[0
 
 /** Keep the shipped unknown-valued SDK input contract outside canonical config readers. */
 export function resolveConfiguredSecretInputString(
-  params: Parameters<typeof resolveConfiguredString>[0],
-): ReturnType<typeof resolveConfiguredString> {
-  return resolveConfiguredString({ ...params, value: configuredSdkInput(params) });
+  params: Parameters<typeof resolveCanonicalConfiguredSecretInputString>[0],
+): ReturnType<typeof resolveCanonicalConfiguredSecretInputString> {
+  return resolveCanonicalConfiguredSecretInputString({
+    ...params,
+    value: configuredSdkInput(params),
+  });
 }
 
 export function resolveConfiguredSecretInputWithFallback(
-  params: Parameters<typeof resolveConfiguredWithFallback>[0],
-): ReturnType<typeof resolveConfiguredWithFallback> {
-  return resolveConfiguredWithFallback({ ...params, value: configuredSdkInput(params) });
+  params: Parameters<typeof resolveCanonicalConfiguredSecretInputWithFallback>[0],
+): ReturnType<typeof resolveCanonicalConfiguredSecretInputWithFallback> {
+  return resolveCanonicalConfiguredSecretInputWithFallback({
+    ...params,
+    value: configuredSdkInput(params),
+  });
 }
 
 export function resolveRequiredConfiguredSecretRefInputString(
-  params: Parameters<typeof resolveRequiredConfiguredRef>[0],
-): ReturnType<typeof resolveRequiredConfiguredRef> {
-  return resolveRequiredConfiguredRef({ ...params, value: configuredSdkInput(params) });
+  params: Parameters<typeof resolveCanonicalRequiredConfiguredSecretRefInputString>[0],
+): ReturnType<typeof resolveCanonicalRequiredConfiguredSecretRefInputString> {
+  return resolveCanonicalRequiredConfiguredSecretRefInputString({
+    ...params,
+    value: configuredSdkInput(params),
+  });
 }
 
 /** Reject use of a manifest-owned plugin capability whose startup secret is unavailable. */
