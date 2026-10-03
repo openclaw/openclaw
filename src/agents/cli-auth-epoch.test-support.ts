@@ -39,7 +39,7 @@ export function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): v
 }
 
 export function resetCliAuthEpochTestDeps(): void {
-  for (const restore of restoreReaders.splice(0).reverse()) {
+  for (const restore of restoreReaders.splice(0).toReversed()) {
     restore();
   }
 }

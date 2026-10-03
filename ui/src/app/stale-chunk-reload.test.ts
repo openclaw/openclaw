@@ -728,8 +728,12 @@ describe("installMissingStylesheetRecovery", () => {
   it("shows a reload banner when automatic recovery is unavailable", async () => {
     stubDocumentNavigation();
     const translate = vi.spyOn(i18n, "t").mockImplementation((key) => {
-      if (key === "lazyView.stylesFailed") return "Localized stylesheet failure";
-      if (key === "common.reload") return "Localized reload";
+      if (key === "lazyView.stylesFailed") {
+        return "Localized stylesheet failure";
+      }
+      if (key === "common.reload") {
+        return "Localized reload";
+      }
       return key;
     });
     setReadyState("complete");

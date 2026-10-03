@@ -14,20 +14,22 @@ export function setRemoteModelCatalogOverlaySourcesForTest(sources?: {
     restore();
   }
   if (sources?.bundledGeneratedAt) {
-    restoreMocks.push(
-      vi
-        .spyOn(bundledCatalog, "bundledCatalogGeneratedAt")
-        .mockImplementation(sources.bundledGeneratedAt).mockRestore,
-    );
+    const spy = vi
+      .spyOn(bundledCatalog, "bundledCatalogGeneratedAt")
+      .mockImplementation(sources.bundledGeneratedAt);
+    restoreMocks.push(() => spy.mockRestore());
   }
   const readStoredCatalog = sources?.readStoredCatalog;
   if (readStoredCatalog) {
+    const read = vi
+      .spyOn(remoteStore, "readRemoteModelCatalog")
+      .mockImplementation(readStoredCatalog);
+    const readAsync = vi
+      .spyOn(remoteStore, "readRemoteModelCatalogAsync")
+      .mockImplementation(async () => readStoredCatalog());
     restoreMocks.push(
-      vi.spyOn(remoteStore, "readRemoteModelCatalog").mockImplementation(readStoredCatalog)
-        .mockRestore,
-      vi
-        .spyOn(remoteStore, "readRemoteModelCatalogAsync")
-        .mockImplementation(async () => readStoredCatalog()).mockRestore,
+      () => read.mockRestore(),
+      () => readAsync.mockRestore(),
     );
   }
 }

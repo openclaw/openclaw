@@ -21,25 +21,22 @@ export const testing = {
   setDepsForTest(deps: Partial<CliBackendsDeps>): void {
     resetDepsForTest();
     if (deps.resolvePluginSetupCliBackend) {
-      restoreMocks.push(
-        vi
-          .spyOn(setupRegistry, "resolvePluginSetupCliBackend")
-          .mockImplementation(deps.resolvePluginSetupCliBackend).mockRestore,
-      );
+      const spy = vi
+        .spyOn(setupRegistry, "resolvePluginSetupCliBackend")
+        .mockImplementation(deps.resolvePluginSetupCliBackend);
+      restoreMocks.push(() => spy.mockRestore());
     }
     if (deps.resolvePluginSetupRegistry) {
-      restoreMocks.push(
-        vi
-          .spyOn(setupRegistry, "resolvePluginSetupRegistry")
-          .mockImplementation(deps.resolvePluginSetupRegistry).mockRestore,
-      );
+      const spy = vi
+        .spyOn(setupRegistry, "resolvePluginSetupRegistry")
+        .mockImplementation(deps.resolvePluginSetupRegistry);
+      restoreMocks.push(() => spy.mockRestore());
     }
     if (deps.resolveRuntimeCliBackends) {
-      restoreMocks.push(
-        vi
-          .spyOn(runtimeBackends, "resolveRuntimeCliBackends")
-          .mockImplementation(deps.resolveRuntimeCliBackends).mockRestore,
-      );
+      const spy = vi
+        .spyOn(runtimeBackends, "resolveRuntimeCliBackends")
+        .mockImplementation(deps.resolveRuntimeCliBackends);
+      restoreMocks.push(() => spy.mockRestore());
     }
   },
 };
