@@ -14,7 +14,6 @@ import { ensurePortAvailable, type SsrFPolicy } from "openclaw/plugin-sdk/securi
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { CONFIG_DIR, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { createBoundedUtf8Tail } from "./bounded-utf8-tail.js";
 import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
 import { assertManagedProxyAllowsCdpUrl } from "./cdp-proxy-bypass.js";
 import {
@@ -43,6 +42,8 @@ import {
 import { normalizeCdpWsUrl } from "./cdp.js";
 import {
   type ChromeCdpDiagnostic,
+  chromeLaunchHints,
+  createChromeLaunchStderrDiagnostics,
   diagnoseChromeCdp,
   formatChromeCdpDiagnostic,
   type ChromeVersion,
@@ -83,11 +84,8 @@ const CHROME_SINGLETON_LOCK_PATHS = [
   "SingletonSocket",
   "SingletonCookie",
 ] as const;
-const CHROME_SINGLETON_IN_USE_PATTERN = /profile appears to be in use by another chromium process/i;
-const CHROME_MISSING_DISPLAY_PATTERN = /missing x server|\$DISPLAY/i;
 const CHROME_GRACEFUL_CLOSE_COMMAND_TIMEOUT_MS = 500;
 const CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES = 64 * 1024;
-const CHROME_STDERR_MARKER_SCAN_TAIL_CHARS = 256;
 const CHROME_HTTP_DISCOVERY_FAILURE_CODES = new Set([
   "ssrf_blocked",
   "http_unreachable",
@@ -104,49 +102,6 @@ function diagnosticShowsChromeHttpDiscovery(diagnostic: ChromeCdpDiagnostic | nu
     return true;
   }
   return !CHROME_HTTP_DISCOVERY_FAILURE_CODES.has(diagnostic.code);
-}
-
-type ChromeLaunchStderrSignals = {
-  singletonInUse: boolean;
-  missingDisplay: boolean;
-};
-
-function createChromeLaunchStderrDiagnostics(maxBytes: number) {
-  const tail = createBoundedUtf8Tail(maxBytes);
-  const signals: ChromeLaunchStderrSignals = {
-    singletonInUse: false,
-    missingDisplay: false,
-  };
-  let markerScanTail = "";
-
-  const updateSignals = (chunkText: string) => {
-    const scanText = `${markerScanTail}${chunkText}`;
-    signals.singletonInUse ||= CHROME_SINGLETON_IN_USE_PATTERN.test(scanText);
-    signals.missingDisplay ||= CHROME_MISSING_DISPLAY_PATTERN.test(scanText);
-    markerScanTail = scanText.slice(-CHROME_STDERR_MARKER_SCAN_TAIL_CHARS);
-  };
-
-  return {
-    append(chunk: Buffer | string) {
-      tail.append(chunk);
-      const chunkText = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
-      if (chunkText.length > 0) {
-        updateSignals(chunkText);
-      }
-    },
-    toString() {
-      return tail.text();
-    },
-    signals(): ChromeLaunchStderrSignals {
-      return { ...signals };
-    },
-    clear() {
-      tail.clear();
-      signals.singletonInUse = false;
-      signals.missingDisplay = false;
-      markerScanTail = "";
-    },
-  };
 }
 
 type ChromeSingletonLock =
@@ -660,41 +615,6 @@ async function ensureManagedChromePortAvailable(
   await ensureProbeHostsAvailable();
 }
 
-function chromeLaunchHints(params: {
-  stderrOutput: string;
-  stderrSignals?: ChromeLaunchStderrSignals;
-  resolved: ResolvedBrowserConfig;
-  profile: ResolvedBrowserProfile;
-  launchOptions?: ManagedBrowserHeadlessOptions;
-}): string {
-  const hints: string[] = [];
-  if (process.platform === "linux" && !params.resolved.noSandbox) {
-    hints.push("If running in a container or as root, try setting browser.noSandbox: true.");
-  }
-  const headlessMode = resolveManagedBrowserHeadlessMode(
-    params.resolved,
-    params.profile,
-    params.launchOptions,
-  );
-  const missingDisplay =
-    params.stderrSignals?.missingDisplay ??
-    CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput);
-  if (missingDisplay && !headlessMode.headless) {
-    hints.push(
-      "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
-    );
-  }
-  const singletonInUse =
-    params.stderrSignals?.singletonInUse ??
-    CHROME_SINGLETON_IN_USE_PATTERN.test(params.stderrOutput);
-  if (singletonInUse) {
-    hints.push(
-      `The Chromium profile "${params.profile.name}" is locked. Stop the existing browser or remove stale Singleton* lock files under ~/.openclaw/browser/${params.profile.name}/user-data.`,
-    );
-  }
-  return hints.length > 0 ? `\nHint: ${hints.join("\nHint: ")}` : "";
-}
-
 export type RunningChrome = {
   pid: number;
   exe: BrowserExecutable;
@@ -1188,6 +1108,9 @@ export async function launchOpenClawChrome(
       const spawned = await spawnOnce(onStderr);
       proc = spawned.proc;
       releaseSpawnAbort = spawned.releaseAbort;
+      const hasExited = () => spawned.proc.exitCode != null || spawned.proc.signalCode != null;
+      const exitDiagnostic = () =>
+        `Chrome process exited before CDP became ready (code ${spawned.proc.exitCode}, signal ${spawned.proc.signalCode}).`;
       const readyDeadline =
         Date.now() + (resolved.localLaunchTimeoutMs ?? CHROME_LAUNCH_READY_WINDOW_MS);
       let launchHttpReachable = false;
@@ -1195,14 +1118,21 @@ export async function launchOpenClawChrome(
       // waitForCdpReadyAfterLaunch() budget; launch only owns process discovery.
       while (Date.now() < readyDeadline) {
         signal?.throwIfAborted();
-        if (
-          await isChromeReachable(
-            profile.cdpUrl,
-            MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
-            undefined,
-            signal,
-          )
-        ) {
+        if (hasExited()) {
+          break;
+        }
+        const reachable = await isChromeReachable(
+          profile.cdpUrl,
+          MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
+          undefined,
+          signal,
+        );
+        // Discovery may finish after the exact child exits. A response from
+        // that endpoint must not turn a dead launch into a running handle.
+        if (hasExited()) {
+          break;
+        }
+        if (reachable) {
           launchHttpReachable = true;
           break;
         }
@@ -1213,19 +1143,40 @@ export async function launchOpenClawChrome(
         signal?.throwIfAborted();
         let finalDiagnostic: ChromeCdpDiagnostic | null = null;
         let diagnosticErrorText: string | null = null;
-        try {
-          finalDiagnostic = await diagnoseChromeCdp(
-            profile.cdpUrl,
-            MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
-            CHROME_WS_READY_TIMEOUT_MS,
-            undefined,
-            signal,
-          );
-        } catch (err) {
-          diagnosticErrorText = `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`;
+        if (!hasExited()) {
+          try {
+            finalDiagnostic = await diagnoseChromeCdp(
+              profile.cdpUrl,
+              MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
+              CHROME_WS_READY_TIMEOUT_MS,
+              undefined,
+              signal,
+            );
+          } catch (err) {
+            diagnosticErrorText = `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`;
+          }
         }
         signal?.throwIfAborted();
-        if (diagnosticShowsChromeHttpDiscovery(finalDiagnostic)) {
+        if (hasExited()) {
+          // Exit can precede the last stderr delivery. Drain for at most one
+          // existing poll interval; inherited pipes must not hold failure open.
+          if (proc.stderr && !proc.stderr.destroyed && !proc.stderr.readableEnded) {
+            const drain = new AbortController();
+            const timer = setTimeout(() => drain.abort(), CHROME_LAUNCH_READY_POLL_MS);
+            try {
+              await once(proc.stderr, "close", {
+                signal: signal ? AbortSignal.any([signal, drain.signal]) : drain.signal,
+              });
+            } catch {
+              signal?.throwIfAborted();
+            } finally {
+              clearTimeout(timer);
+            }
+          }
+          signal?.throwIfAborted();
+          finalDiagnostic = null;
+          diagnosticErrorText = exitDiagnostic();
+        } else if (diagnosticShowsChromeHttpDiscovery(finalDiagnostic)) {
           launchHttpReachable = true;
         }
         const diagnosticText = finalDiagnostic

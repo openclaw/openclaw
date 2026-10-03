@@ -2,6 +2,7 @@ import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createBoundedUtf8Tail } from "./bounded-utf8-tail.js";
 import { CHROME_REACHABILITY_TIMEOUT_MS, CHROME_WS_READY_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { CdpSocketError } from "./cdp-websocket.js";
 import {
@@ -17,6 +18,12 @@ import {
   type CdpEndpointPin,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
+import {
+  resolveManagedBrowserHeadlessMode,
+  type ManagedBrowserHeadlessOptions,
+  type ResolvedBrowserConfig,
+  type ResolvedBrowserProfile,
+} from "./config.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
@@ -388,4 +395,86 @@ export async function diagnoseChromeCdp(
     }
   }
   return diagnostic;
+}
+
+const CHROME_SINGLETON_IN_USE_PATTERN = /profile appears to be in use by another chromium process/i;
+const CHROME_MISSING_DISPLAY_PATTERN = /missing x server|\$DISPLAY/i;
+const CHROME_STDERR_MARKER_SCAN_TAIL_CHARS = 256;
+
+type ChromeLaunchStderrSignals = {
+  singletonInUse: boolean;
+  missingDisplay: boolean;
+};
+
+export function createChromeLaunchStderrDiagnostics(maxBytes: number) {
+  const tail = createBoundedUtf8Tail(maxBytes);
+  const signals: ChromeLaunchStderrSignals = {
+    singletonInUse: false,
+    missingDisplay: false,
+  };
+  let markerScanTail = "";
+
+  const updateSignals = (chunkText: string) => {
+    const scanText = `${markerScanTail}${chunkText}`;
+    signals.singletonInUse ||= CHROME_SINGLETON_IN_USE_PATTERN.test(scanText);
+    signals.missingDisplay ||= CHROME_MISSING_DISPLAY_PATTERN.test(scanText);
+    markerScanTail = scanText.slice(-CHROME_STDERR_MARKER_SCAN_TAIL_CHARS);
+  };
+
+  return {
+    append(chunk: Buffer | string) {
+      tail.append(chunk);
+      const chunkText = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
+      if (chunkText.length > 0) {
+        updateSignals(chunkText);
+      }
+    },
+    toString() {
+      return tail.text();
+    },
+    signals(): ChromeLaunchStderrSignals {
+      return { ...signals };
+    },
+    clear() {
+      tail.clear();
+      signals.singletonInUse = false;
+      signals.missingDisplay = false;
+      markerScanTail = "";
+    },
+  };
+}
+
+export function chromeLaunchHints(params: {
+  stderrOutput: string;
+  stderrSignals?: ChromeLaunchStderrSignals;
+  resolved: ResolvedBrowserConfig;
+  profile: ResolvedBrowserProfile;
+  launchOptions?: ManagedBrowserHeadlessOptions;
+}): string {
+  const hints: string[] = [];
+  if (process.platform === "linux" && !params.resolved.noSandbox) {
+    hints.push("If running in a container or as root, try setting browser.noSandbox: true.");
+  }
+  const headlessMode = resolveManagedBrowserHeadlessMode(
+    params.resolved,
+    params.profile,
+    params.launchOptions,
+  );
+  const missingDisplay =
+    params.stderrSignals?.missingDisplay ??
+    CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput);
+  if (missingDisplay && !headlessMode.headless) {
+    hints.push(
+      "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
+    );
+  }
+  const singletonInUse =
+    params.stderrSignals?.singletonInUse ??
+    CHROME_SINGLETON_IN_USE_PATTERN.test(params.stderrOutput);
+  if (singletonInUse) {
+    hints.push(
+      `The Chromium profile "${params.profile.name}" is locked. Stop the existing browser or remove stale Singleton* lock files under ~/.openclaw/browser/${params.profile.name}/user-data.`,
+    );
+  }
+  return hints.length > 0 ? `\nHint: ${hints.join("\nHint: ")}` : "";
 }
