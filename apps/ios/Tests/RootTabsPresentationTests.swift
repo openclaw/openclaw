@@ -25,6 +25,7 @@ struct RootTabsPresentationTests {
             .files: .files, .desktop: .desktop, .terminal: .terminal, .docs: .docs,
             .settings: .settings, .gateway: .gateway,
             .activity: .dashboard("/activity"), .workboard: .dashboard("/workboard"),
+            .systems: .dashboard("/systems"),
             .skillWorkshop: .dashboard("/skills/workshop"), .instances: .dashboard("/settings/devices"),
             .dreaming: .dashboard("/settings/memory/dreams"), .usage: .dashboard("/usage"),
             .cron: .dashboard("/automations"),
@@ -347,6 +348,7 @@ struct RootTabsPresentationTests {
             .cron,
             .sessions,
             .activity,
+            .systems,
             .skillWorkshop,
             .agents,
             .instances,
@@ -360,6 +362,7 @@ struct RootTabsPresentationTests {
             "chat",
             "overview",
             "activity",
+            "systems",
             "agents",
             "workboard",
             "skillWorkshop",
@@ -898,6 +901,7 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `pinned pages storage round trips and preserves pin order`() {
+        #expect(RootTabs.defaultPinnedSidebarPages == [.overview, .systems, .usage, .cron])
         #expect(RootTabs.pinnedSidebarPages(from: "") == RootTabs.defaultPinnedSidebarPages)
         #expect(RootTabs.pinnedSidebarPages(from: "none").isEmpty)
         #expect(RootTabs.pinnedSidebarPagesStorage([]) == "none")
