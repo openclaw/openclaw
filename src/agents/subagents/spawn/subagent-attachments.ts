@@ -70,7 +70,8 @@ type MaterializeSubagentAttachmentsResult =
       retainOnSessionKeep: boolean;
       systemPromptSuffix: string;
     }
-  | { status: "forbidden" | "error"; error: string };
+  | { status: "forbidden"; error: string }
+  | { status: "error"; error: string };
 
 type PreparedSubagentAttachment = {
   name: string;
@@ -236,7 +237,8 @@ export function resolveAcpSessionsSpawnImageAttachments(params: {
   attachments?: SubagentInlineAttachment[];
 }):
   | { status: "ok"; attachments: AcpInlineImageAttachment[] }
-  | { status: "forbidden" | "error"; error: string }
+  | { status: "forbidden"; error: string }
+  | { status: "error"; error: string }
   | null {
   const request = resolveSubagentAttachmentRequest(params);
   if (!request) {

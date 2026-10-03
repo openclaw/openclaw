@@ -50,14 +50,14 @@ function readCodeModeWaitCall(
   }
   const supportedTypes = new Set(["text", "thinking", "toolCall", "toolUse", "tool_use"]);
   if (
-    content.some((block) => {
-      const record = asOptionalObjectRecord(block);
-      return (
-        !record ||
-        !supportedTypes.has(String(record.type)) ||
-        (record.type === "text" && Boolean(normalizeOptionalString(record.text)))
-      );
-    })
+    content.some(
+      (block) =>
+        !block ||
+        typeof block !== "object" ||
+        !supportedTypes.has(String((block as { type?: unknown }).type)) ||
+        ((block as { type?: unknown }).type === "text" &&
+          Boolean(normalizeOptionalString((block as { text?: unknown }).text))),
+    )
   ) {
     return undefined;
   }
@@ -102,16 +102,18 @@ function isPendingAssistantToolCall(message: unknown): boolean {
   }
   let hasToolCall = false;
   for (const block of content) {
-    const record = asOptionalObjectRecord(block);
-    if (!record) {
+    if (!block || typeof block !== "object") {
       return false;
     }
-    const type = normalizeOptionalString(record.type);
+    const type = normalizeOptionalString((block as { type?: unknown }).type);
     if (type === "toolCall" || type === "toolUse" || type === "tool_use") {
       hasToolCall = true;
       continue;
     }
-    if (type === "thinking" || (type === "text" && !normalizeOptionalString(record.text))) {
+    if (type === "thinking") {
+      continue;
+    }
+    if (type === "text" && !normalizeOptionalString((block as { text?: unknown }).text)) {
       continue;
     }
     return false;
@@ -136,15 +138,14 @@ function classifyDanglingToolCalls(content: unknown): DanglingToolCallClassifica
   let allReplaySafe = true;
   let hasToolCall = false;
   for (const block of content) {
-    const record = asOptionalObjectRecord(block);
-    if (!record) {
+    if (!block || typeof block !== "object") {
       return undefined;
     }
-    const type = normalizeOptionalString(record.type);
+    const type = normalizeOptionalString((block as { type?: unknown }).type);
     if (type !== "toolCall" && type !== "toolUse" && type !== "tool_use") {
       continue;
     }
-    const name = normalizeOptionalString(record.name);
+    const name = normalizeOptionalString((block as { name?: unknown }).name);
     if (name === CODE_MODE_EXEC_TOOL_NAME || name === CODE_MODE_WAIT_TOOL_NAME) {
       return { kind: "code-mode" };
     }
@@ -174,8 +175,10 @@ function readCodeModeCheckpoint(
   if (!Array.isArray(content)) {
     return undefined;
   }
-  const textBlock = content.find((block) => asOptionalObjectRecord(block)?.type === "text");
-  const text = normalizeOptionalString(asOptionalObjectRecord(textBlock)?.text);
+  const textBlock = content.find(
+    (block) => block && typeof block === "object" && (block as { type?: unknown }).type === "text",
+  ) as { text?: unknown } | undefined;
+  const text = normalizeOptionalString(textBlock?.text);
   if (!text) {
     return undefined;
   }
@@ -282,8 +285,11 @@ function isRestartAbortedWaitFailure(message: unknown): boolean {
   const content = record.content;
   const contentText = Array.isArray(content)
     ? content
-        .filter((block) => asOptionalObjectRecord(block)?.type === "text")
-        .map((block) => normalizeOptionalString(asOptionalObjectRecord(block)?.text) ?? "")
+        .filter(
+          (block) =>
+            block && typeof block === "object" && (block as { type?: unknown }).type === "text",
+        )
+        .map((block) => normalizeOptionalString((block as { text?: unknown }).text) ?? "")
         .join("\n")
     : "";
   const errorText = normalizeOptionalString(details.error) ?? normalizeOptionalString(contentText);
@@ -428,9 +434,10 @@ export function resolveMainSessionResumePolicy(
   if (pendingToolCallTail?.kind === "resumable") {
     return { action: "resume", forceRestartSafeTools: pendingToolCallTail.forceRestartSafeTools };
   }
-  const danglingControlCalls = classifyDanglingToolCalls(
-    asOptionalObjectRecord(lastMeaningful)?.content,
-  );
+  const danglingControlCalls =
+    lastMeaningful && typeof lastMeaningful === "object"
+      ? classifyDanglingToolCalls((lastMeaningful as { content?: unknown }).content)
+      : undefined;
   if (danglingControlCalls?.kind === "code-mode") {
     // Without an exact replay-safe checkpoint, Code Mode controls stay unavailable.
     // The model can inspect the transcript under the ordinary restart-safe restriction.
