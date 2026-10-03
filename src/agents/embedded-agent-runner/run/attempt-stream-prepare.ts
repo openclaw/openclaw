@@ -86,6 +86,7 @@ type PrepareEmbeddedAttemptStreamInput = {
     | "clientToolCallSlots"
     | "hasDeliveredSourceReply"
     | "markSourceReplyDelivered"
+    | "sameChannelThreadRequired"
     | "builtinToolNames"
     | "coreBuiltinToolNames"
     | "replaySafeToolNames"
@@ -411,6 +412,7 @@ function prepareStream(
     currentMessagingTarget: attempt.currentMessagingTarget,
     currentAccountId: attempt.agentAccountId,
     currentThreadId: attempt.currentThreadTs,
+    sameChannelThreadRequired: agentSession.sameChannelThreadRequired,
     currentMessageId: attempt.currentMessageId,
     replyToMode: attempt.replyToMode,
     hasRepliedRef: attempt.hasRepliedRef,

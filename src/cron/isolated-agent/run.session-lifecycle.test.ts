@@ -803,6 +803,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             clientToolCallSlots: [],
             hasDeliveredSourceReply: () => false,
             markSourceReplyDelivered: vi.fn(),
+            sameChannelThreadRequired: false,
             builtinToolNames: new Set(),
             coreBuiltinToolNames: new Set(),
             replaySafeToolNames: new Set(),

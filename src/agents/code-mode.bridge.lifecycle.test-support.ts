@@ -63,6 +63,7 @@ export function createSubscribedCodeModeHarness(params: {
       clientToolCallSlots: [],
       hasDeliveredSourceReply: () => false,
       markSourceReplyDelivered: () => undefined,
+      sameChannelThreadRequired: false,
       builtinToolNames: new Set(),
       coreBuiltinToolNames: new Set(),
       replaySafeToolNames: new Set(),
