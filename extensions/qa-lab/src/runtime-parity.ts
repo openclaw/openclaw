@@ -198,10 +198,6 @@ type RuntimeParityObservedToolCall = RuntimeParityToolCall & {
   hasResult?: boolean;
 };
 
-type RuntimeParityPendingToolCall = RuntimeParityObservedToolCall & {
-  resolved: boolean;
-};
-
 type RuntimeParityCaptureSources = {
   sessions: Array<{
     transcriptBytes: string;
@@ -276,18 +272,6 @@ function readAssistantUsage(message: Record<string, unknown>): RuntimeParityUsag
     delete usage.cacheWrite;
   }
   return usage;
-}
-
-function addUsage(target: RuntimeParityUsage, next: RuntimeParityUsage) {
-  target.inputTokens += next.inputTokens;
-  target.outputTokens += next.outputTokens;
-  target.totalTokens += next.totalTokens;
-  if (next.cacheRead !== undefined) {
-    target.cacheRead = (target.cacheRead ?? 0) + next.cacheRead;
-  }
-  if (next.cacheWrite !== undefined) {
-    target.cacheWrite = (target.cacheWrite ?? 0) + next.cacheWrite;
-  }
 }
 
 function extractAssistantText(message: Record<string, unknown>) {
@@ -430,7 +414,7 @@ function classifyToolResultError(params: {
 }
 
 function createToolCallCapture() {
-  const ordered: RuntimeParityPendingToolCall[] = [];
+  const ordered: RuntimeParityObservedToolCall[] = [];
   return {
     ordered,
     call(tool: string, args: unknown, callId?: string) {
@@ -442,7 +426,6 @@ function createToolCallCapture() {
           callId,
           hasArguments: true,
           hasResult: false,
-          resolved: false,
         }) - 1
       );
     },
@@ -456,14 +439,13 @@ function createToolCallCapture() {
       },
     ) {
       const pending = index === undefined ? undefined : ordered[index];
-      const resolved: RuntimeParityPendingToolCall = {
+      const resolved: RuntimeParityObservedToolCall = {
         tool: result.tool ?? pending?.tool ?? "unknown",
         argsHash: pending?.argsHash ?? parity.stableHash(null),
         resultHash: parity.stableHash(result.value),
         callId: result.callId,
         hasArguments: pending?.hasArguments === true,
         hasResult: true,
-        resolved: true,
         ...(result.errorClass ? { errorClass: result.errorClass } : {}),
       };
       if (index === undefined || !pending) {
@@ -473,8 +455,9 @@ function createToolCallCapture() {
       }
     },
     finish(): RuntimeParityObservedToolCall[] {
-      return ordered.map(({ resolved, ...toolCall }) => {
-        if (!resolved) {
+      return ordered.map((pending) => {
+        const toolCall = { ...pending };
+        if (!toolCall.hasResult) {
           toolCall.errorClass ??= TOOL_RESULT_MISSING_ERROR_CLASS;
         }
         return toolCall;
@@ -634,7 +617,7 @@ function resolveTrajectoryToolCallOrder(
       return undefined;
     }
     const toolMatch = ordered.findIndex(
-      (pending) => !pending.resolved && (!tool || pending.tool === tool),
+      (pending) => !pending.hasResult && (!tool || pending.tool === tool),
     );
     if (toolMatch >= 0) {
       return toolMatch;
@@ -877,7 +860,15 @@ function aggregateUsage(records: RuntimeParityTranscriptRecord[]): RuntimeParity
       continue;
     }
     const usage = readAssistantUsage(record.message);
-    addUsage(totals, usage);
+    totals.inputTokens += usage.inputTokens;
+    totals.outputTokens += usage.outputTokens;
+    totals.totalTokens += usage.totalTokens;
+    if (usage.cacheRead !== undefined) {
+      totals.cacheRead = (totals.cacheRead ?? 0) + usage.cacheRead;
+    }
+    if (usage.cacheWrite !== undefined) {
+      totals.cacheWrite = (totals.cacheWrite ?? 0) + usage.cacheWrite;
+    }
   }
   return totals;
 }
@@ -1118,10 +1109,6 @@ function isRuntimeParityRootSession(entry: SessionEntry) {
   return true;
 }
 
-function runtimeParitySessionEnv(stateDir: string): NodeJS.ProcessEnv {
-  return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-}
-
 async function readRuntimeParitySessionEntries(params: {
   gateway: QaGatewayLike;
   agentId: string;
@@ -1157,8 +1144,7 @@ async function loadRuntimeParityCaptureSources(params: {
   agentId: string;
   preferredSessionKeys?: readonly string[];
 }): Promise<RuntimeParityCaptureSources> {
-  const stateDir = `${params.gateway.tempRoot}/state`;
-  const env = runtimeParitySessionEnv(stateDir);
+  const env = { ...process.env, OPENCLAW_STATE_DIR: `${params.gateway.tempRoot}/state` };
   const storePath = resolveStorePath(undefined, { agentId: params.agentId, env });
   const sessionEntries = await readRuntimeParitySessionEntries({
     gateway: params.gateway,

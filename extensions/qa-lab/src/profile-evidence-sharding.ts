@@ -121,15 +121,14 @@ function selectQaProfileScenarioCategory(
   return categoryIds[0] ?? `uncategorized.${scenario.execution.kind}`;
 }
 
-function listQaProfileScenarioLiveChannels(scenario: QaSeedScenarioWithSource) {
-  return (scenario.execution.channels ?? []).filter((candidate) => candidate !== "qa-channel");
-}
-
 function listExclusiveQaProfileChannels(
   scenario: QaSeedScenarioWithSource,
   factories: readonly QaTransportAdapterFactory[] | undefined,
 ) {
-  return listQaProfileScenarioLiveChannels(scenario).filter((channelId) => {
+  return (scenario.execution.channels ?? []).filter((channelId) => {
+    if (channelId === "qa-channel") {
+      return false;
+    }
     const factory = factories?.find((candidate) =>
       candidate.matches({ channelId, driver: "live" }),
     );
@@ -228,13 +227,11 @@ function buildQaProfileEvidenceShardPlan(
       categoryIdsByScenarioRef.set(scenarioRef, categoryIds);
     }
   }
+  for (const categoryIds of categoryIdsByScenarioRef.values()) {
+    categoryIds.sort();
+  }
   const scenarioGroups = buildQaProfileScenarioGroups({
-    categoriesByScenarioRef: new Map(
-      [...categoryIdsByScenarioRef].map(([scenarioRef, categoryIds]) => [
-        scenarioRef,
-        categoryIds.toSorted(),
-      ]),
-    ),
+    categoriesByScenarioRef: categoryIdsByScenarioRef,
     factories: liveAdapterFactories,
     scenarios: executionSelection.selectedScenarios,
   });
@@ -250,13 +247,11 @@ function buildQaProfileEvidenceShardPlan(
   );
   const groupsByDescendingCost = scenarioGroups
     .map((group) => ({
-      categoryIds: group.categoryIds,
+      ...group,
       estimatedCost: group.scenarios.reduce(
         (cost, scenario) => cost + estimateQaProfileScenarioCost(scenario),
         0,
       ),
-      key: group.key,
-      scenarios: group.scenarios,
     }))
     .toSorted(
       (left, right) =>

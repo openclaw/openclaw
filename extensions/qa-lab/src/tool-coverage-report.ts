@@ -1,4 +1,3 @@
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   isRecord,
   normalizeOptionalString as readString,
@@ -136,18 +135,6 @@ function readScenarioRuntimeToolName(scenario: QaSeedScenarioWithSource): string
   return readString(toolCoverage?.actualTool) ?? readString(config?.toolName);
 }
 
-function summaryByScenarioId(
-  summary: QaParitySuiteSummary | undefined,
-): Map<string, RuntimeParityResult> {
-  const byScenarioId = new Map<string, RuntimeParityResult>();
-  for (const scenario of summary?.scenarios ?? []) {
-    if (scenario.runtimeParity) {
-      byScenarioId.set(scenario.runtimeParity.scenarioId, scenario.runtimeParity);
-    }
-  }
-  return byScenarioId;
-}
-
 function mergeScenarioResults(
   scenarios: readonly QaSeedScenarioWithSource[],
   results: ReadonlyMap<string, RuntimeParityResult>,
@@ -180,11 +167,7 @@ function buildRow(params: {
   const result = mergeScenarioResults(params.group.scenarios, params.results);
   const tracking = params.group.scenarios.map(readScenarioTracking).find(Boolean);
   const metadata = params.group.scenarios.map(readScenarioRuntimeToolCoverageMetadata);
-  const fallbackMetadata = expectDefined(
-    metadata[0],
-    `QA tool fixture group ${params.group.tool} scenario`,
-  );
-  const rowMetadata = metadata.find((entry) => entry.required) ?? fallbackMetadata;
+  const rowMetadata = metadata.find((entry) => entry.required) ?? metadata[0]!;
   const runtimeToolName = params.group.scenarios.map(readScenarioRuntimeToolName).find(Boolean);
   const openclawCalls = summarizeRuntimeToolCalls(result, "openclaw", runtimeToolName);
   const codexCalls = summarizeRuntimeToolCalls(result, "codex", runtimeToolName);
@@ -243,7 +226,11 @@ export function buildQaToolCoverageReport(params: {
   runtimePair?: [RuntimeId, RuntimeId];
   generatedAt?: string;
 }): QaToolCoverageReport {
-  const results = summaryByScenarioId(params.summary);
+  const results = new Map(
+    (params.summary?.scenarios ?? []).flatMap(({ runtimeParity }) =>
+      runtimeParity ? [[runtimeParity.scenarioId, runtimeParity] as const] : [],
+    ),
+  );
   const rows = groupToolFixtures(params.scenarios).map((group) =>
     buildRow({
       group,

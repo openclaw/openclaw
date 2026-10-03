@@ -1,3 +1,4 @@
+import type { AuthProfileCredential } from "openclaw/plugin-sdk/agent-runtime";
 import { readQaAuthProfiles, writeQaAuthProfiles } from "./providers/shared/auth-store.js";
 
 export const QA_CODEX_OAUTH_PROFILE_ID = "openai:qa-oauth";
@@ -6,24 +7,7 @@ export const QA_AUTH_PROFILE_STORE_VERSION = 1;
 
 export type QaAuthProfileShape = "oauth-only" | "apikey-only" | "mixed";
 
-export type QaApiKeyAuthProfile = {
-  type: "api_key";
-  provider: "openai";
-  key: string;
-  displayName: string;
-};
-
-export type QaOAuthAuthProfile = {
-  type: "oauth";
-  provider: "openai";
-  access: string;
-  refresh: string;
-  expires: number;
-  email: string;
-  displayName: string;
-};
-
-export type QaAuthProfile = QaApiKeyAuthProfile | QaOAuthAuthProfile;
+type QaAuthProfile = Extract<AuthProfileCredential, { type: "api_key" | "oauth" }>;
 
 export type QaAuthProfileSnapshot = {
   version: number;
@@ -42,90 +26,33 @@ export type QaCodexAuthProfileSelection =
       remediation: string;
     };
 
-const QA_FIXED_OAUTH_EXPIRY_MS = Date.UTC(2036, 0, 1);
-
-function buildCodexOAuthProfile(): QaOAuthAuthProfile {
-  return {
-    type: "oauth",
-    provider: "openai",
-    access: "qa-codex-oauth-access-placeholder",
-    refresh: "qa-codex-oauth-refresh-placeholder",
-    expires: QA_FIXED_OAUTH_EXPIRY_MS,
-    email: "qa-codex@example.test",
-    displayName: "QA Codex OAuth profile",
-  };
-}
-
-function buildOpenAiApiKeyProfile(): QaApiKeyAuthProfile {
-  return {
-    type: "api_key",
-    provider: "openai",
-    key: "qa-openai-not-a-real-key",
-    displayName: "QA OpenAI API-key profile",
-  };
-}
-
-function buildProfileMap(shape: QaAuthProfileShape): Record<string, QaAuthProfile> {
-  switch (shape) {
-    case "oauth-only":
-      return {
-        [QA_CODEX_OAUTH_PROFILE_ID]: buildCodexOAuthProfile(),
-      };
-    case "apikey-only":
-      return {
-        [QA_OPENAI_API_KEY_PROFILE_ID]: buildOpenAiApiKeyProfile(),
-      };
-    case "mixed":
-      return {
-        [QA_CODEX_OAUTH_PROFILE_ID]: buildCodexOAuthProfile(),
-        [QA_OPENAI_API_KEY_PROFILE_ID]: buildOpenAiApiKeyProfile(),
-      };
-  }
-  const exhaustive: never = shape;
-  return exhaustive;
-}
-
-function isQaAuthProfile(value: unknown): value is QaAuthProfile {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const record = value as Record<string, unknown>;
-  return (
-    (record.type === "oauth" && record.provider === "openai") ||
-    (record.type === "api_key" && record.provider === "openai")
-  );
-}
-
-function normalizeAuthProfileSnapshot(value: unknown): QaAuthProfileSnapshot {
-  if (!value || typeof value !== "object") {
-    return { version: QA_AUTH_PROFILE_STORE_VERSION, profiles: {} };
-  }
-  const record = value as Record<string, unknown>;
-  const profilesRecord =
-    record.profiles && typeof record.profiles === "object"
-      ? (record.profiles as Record<string, unknown>)
-      : {};
-  const profiles = Object.fromEntries(
-    Object.entries(profilesRecord)
-      .filter((entry): entry is [string, QaAuthProfile] => isQaAuthProfile(entry[1]))
-      .toSorted(([left], [right]) => left.localeCompare(right)),
-  );
-  return {
-    version:
-      typeof record.version === "number" && Number.isFinite(record.version)
-        ? record.version
-        : QA_AUTH_PROFILE_STORE_VERSION,
-    profiles,
-  };
-}
-
 export async function seedAuthProfiles(
   shape: QaAuthProfileShape,
   params: { agentId: string; stateDir: string },
 ): Promise<QaAuthProfileSnapshot> {
+  const profiles: Record<string, QaAuthProfile> = {};
+  if (shape !== "apikey-only") {
+    profiles[QA_CODEX_OAUTH_PROFILE_ID] = {
+      type: "oauth",
+      provider: "openai",
+      access: "qa-codex-oauth-access-placeholder",
+      refresh: "qa-codex-oauth-refresh-placeholder",
+      expires: Date.UTC(2036, 0, 1),
+      email: "qa-codex@example.test",
+      displayName: "QA Codex OAuth profile",
+    };
+  }
+  if (shape !== "oauth-only") {
+    profiles[QA_OPENAI_API_KEY_PROFILE_ID] = {
+      type: "api_key",
+      provider: "openai",
+      key: "qa-openai-not-a-real-key",
+      displayName: "QA OpenAI API-key profile",
+    };
+  }
   const snapshot = {
     version: QA_AUTH_PROFILE_STORE_VERSION,
-    profiles: buildProfileMap(shape),
+    profiles,
   };
   await writeQaAuthProfiles({
     ...params,
@@ -136,7 +63,19 @@ export async function seedAuthProfiles(
 }
 
 export async function snapshotAuthProfiles(agentDir: string): Promise<QaAuthProfileSnapshot> {
-  return normalizeAuthProfileSnapshot(readQaAuthProfiles(agentDir));
+  const store = readQaAuthProfiles(agentDir);
+  return {
+    version: store.version,
+    profiles: Object.fromEntries(
+      Object.entries(store.profiles)
+        .filter(
+          (entry): entry is [string, QaAuthProfile] =>
+            entry[1].provider === "openai" &&
+            (entry[1].type === "oauth" || entry[1].type === "api_key"),
+        )
+        .toSorted(([left], [right]) => left.localeCompare(right)),
+    ),
+  };
 }
 
 export function resolveCodexAuthProfile(

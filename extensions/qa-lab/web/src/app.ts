@@ -308,9 +308,10 @@ export async function createQaLabApp(root: HTMLDivElement) {
       if (state.selectedCaptureSessionIds.length === 0) {
         state.selectedCaptureSessionIds = sessions.sessions[0]?.id ? [sessions.sessions[0].id] : [];
       }
-      const startupStatusResult = await Promise.allSettled([startupStatusPromise]);
-      state.captureStartupStatus =
-        startupStatusResult[0]?.status === "fulfilled" ? startupStatusResult[0].value.status : null;
+      state.captureStartupStatus = await startupStatusPromise.then(
+        (payload) => payload.status,
+        () => null,
+      );
       if (state.selectedCaptureSessionIds.length > 0) {
         const eventsPromises = state.selectedCaptureSessionIds.map((sessionId) =>
           getJson<CaptureEventsEnvelope>(
@@ -690,13 +691,13 @@ export async function createQaLabApp(root: HTMLDivElement) {
     });
   }
 
-  function scrollChatToBottom(force?: boolean) {
+  function scrollChatToBottom() {
     const el = root.querySelector<HTMLElement>("#chat-messages");
     if (!el) {
       return;
     }
     const newCount = state.snapshot?.messages.length ?? 0;
-    if (force || (chatScrollLocked && newCount !== previousMessageCount)) {
+    if (chatScrollLocked && newCount !== previousMessageCount) {
       el.scrollTop = el.scrollHeight;
     }
     previousMessageCount = newCount;
