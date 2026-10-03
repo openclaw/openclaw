@@ -29,6 +29,7 @@ import { bashOutputSpillEntrypoints } from "../../src/agents/sessions/bash-outpu
 import { managedWorktreeGcEntrypoint } from "../../src/agents/worktrees/service-gc-runtime.test-support.ts";
 import { clawProjectBuildEntrypoint } from "../../src/claws/project-runtime.test-support.ts";
 import {
+  adminStateOwnerFixtureEntrypoint,
   cliMessageExitEntrypoints,
   cliRecoveryEntrypoints,
   gatewayDirectStopEntrypoints,
@@ -199,6 +200,7 @@ export const preservedModuleBuildSources = [
   "src/worker/embedded-agent.runtime.ts",
   "src/worker/inference-stream.runtime.ts",
   "src/cli/mcp-cli.ts",
+  "src/cli/exec-approvals-local.ts",
   "src/agents/agent-bundle-mcp-materialize.ts",
   "src/plugins/tool-metadata.ts",
   "src/plugins/tools.ts",
@@ -339,6 +341,7 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(gatewayDirectStopEntrypoints),
     stateDirGatewayFixtureEntrypoint,
     localStateOwnerFixtureEntrypoint,
+    adminStateOwnerFixtureEntrypoint,
     ...Object.values(doctorConfigRuntimeEntrypoints),
     ...Object.values(cronOwnerHardeningEntrypoints),
     ...(nativeSchtasksIntegrationEnabled

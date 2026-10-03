@@ -9,8 +9,9 @@
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import "../test-utils/prepare-compiled-subprocesses.js";
 import { createBaseToolHandlerState } from "./agent-tool-handler-state.test-helpers.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { prepareToolResult } from "./embedded-agent-tool-results.js";
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -181,6 +182,7 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
         isError: params.isError,
         result: params.result,
       } as never,
+      prepareToolResult(params.result),
     );
   }
 

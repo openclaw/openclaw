@@ -36,9 +36,9 @@ published later, including an extended-stable release, still counts. Retain a
 transform whenever a release in that window can still write its input format.
 A supported release that preserves a legacy
 format when rewriting existing data also counts as a writer. A format last
-written before the cutoff may be retired only with a clear refusal naming an
-intermediate release to upgrade through before retrying. Retirement must never
-silently discard persisted data.
+written before the cutoff may be retired together with its Doctor checks.
+When Doctor refuses a retired input, it names an intermediate release to upgrade
+through before retrying. Retirement must leave persisted source data untouched.
 
 Legacy normalization belongs to Doctor and migration owners, with the existing
 backup and verification flow. Runtime readers consume canonical state.
@@ -79,6 +79,20 @@ repairing their tables. Shipped schema-1
 memory/auth/cache databases remain supported; see [agent schema
 history](/reference/database-schemas/agent-schema-history) for the supported
 layouts and recovery route.
+
+Telegram's pre-July bot-info, sticker, thread-binding, update-offset, message,
+sent-message, and topic-name JSON sidecars are no longer inspected or archived.
+Their last file writers shipped in May 2026. To recover state held only in those
+files, use a pre-update backup with OpenClaw `2026.9.5` Doctor before updating.
+See [legacy state migration](/cli/doctor/state-migrations).
+
+Telegram SQLite update-offset versions 1 and 2 remain supported because published
+July-era Doctor imports can still write them. Doctor normalizes those rows to
+version 3 after saving a verified SQLite backup. The cursor, row timestamps,
+expiry, and unrelated fields are preserved. Missing bot identity and token
+fingerprints remain null; account startup retains responsibility for token
+rotation and any required ingress purge. Updates run this repair before account
+startup. After a manual package replacement, run `openclaw doctor --fix` first.
 
 Old `openclaw.extension.json` npm declaration stubs are ignored by discovery and
 Doctor. They are not plugin manifests, and their files remain unchanged. Reinstall
@@ -159,6 +173,7 @@ Doctor also refuses these retired config inputs:
   `talk.model`, and `talk.voice`.
 - `channels.telegram.requireMention`, `channels.feishu.accounts.<id>.botName`,
   and the retired `channels.webchat` section.
+- `channels.telegram.groupMentionsOnly`; use `channels.telegram.groups["*"].requireMention`.
 - `session.threadBindings.ttlHours` and Discord/LINE/Matrix/Telegram `threadBindings.ttlHours`,
   including per-account settings.
 - Telegram `dm`, `direct.*.threadReplies`, native draft preview settings, and scalar
@@ -254,6 +269,19 @@ guidance for a legacy row without replacing it. The update-time Doctor pass
 runs the same migration. Repeating Doctor leaves the normalized row and its IDs
 unchanged. Published SDK and operator input normalization remain available at
 the input boundary.
+
+## Claw provenance schema
+
+Claw update plans and resume previews require the current provenance columns.
+Older SQLite databases that lack bootstrap or extension provenance columns now
+stop with `openclaw doctor --fix` guidance. Read-only planning leaves those
+databases unchanged instead of projecting absent columns as empty values.
+
+Doctor and the update-time Doctor pass use the existing shared-state schema
+repair. Doctor preserves a verified pre-migration database snapshot even when
+the numeric schema version is already current, then adds the missing nullable
+columns. Install records, package references, timestamps, and consent-bound v1
+resume plans retain their values. Repeating the repair is idempotent.
 
 ## Channel account routing during an update
 
@@ -354,7 +382,7 @@ configured path cannot be served by the Gateway. Disabled accounts, Telegram pol
 Feishu WebSocket transport receive no pin. Explicit objects and `false` settings
 remain authoritative.
 
-Startup and update-time Doctor use the same migration owner. Doctor validates
+Explicit and update-time Doctor use the same migration owner. Doctor validates
 and backs up the config through the normal write flow. Pins and the
 `meta.migrations.webhookListeners` completion marker are saved together, including
 when channel settings come from `$include` files. Fresh installations record
@@ -372,13 +400,14 @@ the installer's backed-up config publication before its new runtime starts.
 Update a retained older standalone plugin before removing its pin; older plugin
 versions can still open their historical default port.
 
-For a read-only external config source, startup records completion in canonical
-SQLite machine state only when the completion marker is the sole required change.
-If endpoints or other channel settings need repair, update that external source
-and its completion marker as directed by the startup error. Startup refuses to
-drop an unmigrated endpoint. A fresh read-only installation needs no pins.
-When no config file exists yet, startup can record the same marker-only completion
-without creating a config file that would interfere with `gateway --dev` setup.
+Startup leaves config bytes unchanged. When the completion marker is the sole
+required change, startup records it in canonical SQLite machine state, including
+when no config file exists yet. If endpoints or other channel settings need
+repair, startup refuses with `openclaw doctor --fix` guidance. For a read-only
+external config source, update that source and its completion marker as directed
+by the startup error. Startup refuses to drop an unmigrated endpoint. A fresh
+installation needs no pins or a new config file that would interfere with
+`gateway --dev` setup.
 
 The existing explicit-key migrations remain supported: `webhookPort` and
 `webhookHost` become `legacyWebhook: { port, host? }`; Teams `webhook.port` becomes

@@ -488,14 +488,8 @@ export async function uninstallScheduledTask({
 
   const scriptPath = resolveTaskScriptPath(env);
   const parsedScriptPath = path.parse(scriptPath);
-  const launcherPaths = uniqueStrings([
-    resolveTaskLauncherScriptPath(env, scriptPath),
-    path.join(parsedScriptPath.dir, `${parsedScriptPath.name}.vbs`),
-  ]);
-  for (const launcherPath of launcherPaths) {
-    if (launcherPath === scriptPath) {
-      continue;
-    }
+  const launcherPath = path.join(parsedScriptPath.dir, `${parsedScriptPath.name}.vbs`);
+  if (launcherPath !== scriptPath) {
     try {
       await fs.unlink(launcherPath);
       stdout.write(`${formatLine("Removed task launcher", launcherPath)}\n`);
@@ -508,7 +502,7 @@ export async function uninstallScheduledTask({
   for (const backupPath of uniqueStrings([
     `${scriptPath}.bak`,
     `${scriptPath}.task.xml.bak`,
-    ...launcherPaths.map((launcherPath) => `${launcherPath}.bak`),
+    `${launcherPath}.bak`,
   ])) {
     await fs.unlink(backupPath).catch((error: unknown) => {
       if (!hasErrnoCode(error, "ENOENT")) {

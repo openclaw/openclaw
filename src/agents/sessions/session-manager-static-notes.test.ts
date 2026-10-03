@@ -21,6 +21,7 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
 import type { Message } from "../../llm/types.js";
+import { applyLoggingConfig, resetLogger } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import { SessionManager as SdkSessionManager } from "../../plugin-sdk/agent-sessions.js";
@@ -701,73 +702,85 @@ describe("appendSessionTranscriptNote", () => {
     });
   });
 
-  it("rolls back a static note when registered redaction changes before commit", async () => {
-    await withOpenClawTestState({ label: "static-note-redaction" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "redaction",
-        sessionKey: "agent:main:static-redaction",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(target, {
-        sessionId: target.sessionId,
-        updatedAt: 1,
-        lifecycleRevision: "redaction-generation",
-      });
-      SessionManager.open(target).appendMessage(makeUserMessage("Retained prefix", 1));
-      await waitForSessionTranscriptProjection(target);
-      const before = await loadTranscriptEvents(target);
-      const marker = "synthetic-static-note-registry-value";
-      const note = {
-        role: "custom" as const,
-        customType: "openclaw.system-note",
-        content: `Visible ${marker} end`,
-        display: true,
-        timestamp: 2,
-      };
-      resetSecretRedactionRegistryForTest();
-      let changed = 0;
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit" && changed === 0) {
-              changed++;
-              registerSecretValueForRedaction(marker);
-            }
-            admit(request, grant);
-          }, attachment),
-        );
-      try {
-        const rejected = await appendSessionTranscriptNote(target, note).then(
-          () => {
-            throw new Error("Expected changed redaction to refuse the commit");
-          },
-          (error: unknown) => error,
-        );
-        expect(changed).toBe(1);
-        expect(rejected).toMatchObject({
-          message: "Transcript message redaction changed before persistence",
+  it.each(["registry", "pattern"] as const)(
+    "rolls back a static note when %s redaction changes before commit",
+    async (policy) => {
+      await withOpenClawTestState({ label: "static-note-redaction" }, async (state) => {
+        const target = {
+          agentId: "main",
+          sessionId: "redaction",
+          sessionKey: "agent:main:static-redaction",
+          storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+        };
+        await upsertSessionEntryCore(target, {
+          sessionId: target.sessionId,
+          updatedAt: 1,
+          lifecycleRevision: "redaction-generation",
         });
-        expect(isRecordedModelFallbackStop(rejected)).toBe(false);
-        expect(await loadTranscriptEvents(target)).toEqual(before);
-        spy.mockRestore();
-        const result = await appendSessionTranscriptNote(target, note);
-        const after = await loadTranscriptEvents(target);
-        expect(after.slice(0, before.length)).toEqual(before);
-        expect(after).toHaveLength(before.length + 1);
-        const stored = SessionManager.open(target).getEntry(result.messageId);
-        expect(stored).toMatchObject({
-          type: "message",
-          message: { content: expect.stringContaining("Visible") },
-        });
-        expect(JSON.stringify(stored)).not.toContain(marker);
-        expect(stored).toHaveProperty("message", result.message);
-      } finally {
-        spy.mockRestore();
+        SessionManager.open(target).appendMessage(makeUserMessage("Retained prefix", 1));
+        await waitForSessionTranscriptProjection(target);
+        const before = await loadTranscriptEvents(target);
+        const marker = "synthetic-static-note-registry-value";
+        const note = {
+          role: "custom" as const,
+          customType: "openclaw.system-note",
+          content: `Visible ${marker} end`,
+          display: true,
+          timestamp: 2,
+        };
         resetSecretRedactionRegistryForTest();
-      }
-    });
-  });
+        const patterns: string[] = [];
+        if (policy === "pattern") {
+          applyLoggingConfig({ redactPatterns: patterns });
+        }
+        let changed = 0;
+        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+        const spy = vi
+          .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+          .mockImplementation((admit, attachment) =>
+            createAdmission((request, grant) => {
+              if (request.stage === "commit" && changed === 0) {
+                changed++;
+                if (policy === "registry") {
+                  registerSecretValueForRedaction(marker);
+                } else {
+                  patterns.push(marker);
+                }
+              }
+              admit(request, grant);
+            }, attachment),
+          );
+        try {
+          const rejected = await appendSessionTranscriptNote(target, note).then(
+            () => {
+              throw new Error("Expected changed redaction to refuse the commit");
+            },
+            (error: unknown) => error,
+          );
+          expect(changed).toBe(1);
+          expect(rejected).toMatchObject({
+            message: "Transcript message redaction changed before persistence",
+          });
+          expect(isRecordedModelFallbackStop(rejected)).toBe(false);
+          expect(await loadTranscriptEvents(target)).toEqual(before);
+          spy.mockRestore();
+          const result = await appendSessionTranscriptNote(target, note);
+          const after = await loadTranscriptEvents(target);
+          expect(after.slice(0, before.length)).toEqual(before);
+          expect(after).toHaveLength(before.length + 1);
+          const stored = SessionManager.open(target).getEntry(result.messageId);
+          expect(stored).toMatchObject({
+            type: "message",
+            message: { content: expect.stringContaining("Visible") },
+          });
+          expect(JSON.stringify(stored)).not.toContain(marker);
+          expect(stored).toHaveProperty("message", result.message);
+        } finally {
+          spy.mockRestore();
+          resetSecretRedactionRegistryForTest();
+          resetLogger();
+        }
+      });
+    },
+  );
 });

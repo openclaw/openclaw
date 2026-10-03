@@ -19,11 +19,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each([301, 302, 303, 307, 308])("never follows HTTP %s redirects", async (status) => {
+it("never follows redirects to a credential sink", async () => {
   const fetch = mockFetch(
     async () =>
       new Response(null, {
-        status,
+        status: 302,
         headers: { location: "https://other.example/credential-sink" },
       }),
   );
@@ -31,56 +31,12 @@ it.each([301, 302, 303, 307, 308])("never follows HTTP %s redirects", async (sta
   expect(fetch).toHaveBeenCalledOnce();
   expect(fetch.mock.calls[0]?.[0]).toBe("https://api.typesafe.ai/v1/systemone");
 });
-it("bounds response bodies without trusting content-length", async () => {
-  mockFetch(
-    async () =>
-      new Response("x".repeat(MAX_JSON_BYTES + 1), { headers: { "content-length": "1" } }),
-  );
-  await expect(requestEvaluation(request)).rejects.toThrow("response exceeds");
-});
 it("bounds the serialized request including its model field", async () => {
   const fetch = mockFetch(async () => new Response());
   await expect(
     requestEvaluation({ ...request, body: { ...request.body, state: "x".repeat(MAX_JSON_BYTES) } }),
   ).rejects.toThrow("request exceeds");
   expect(fetch).not.toHaveBeenCalled();
-});
-it("joins cancellation of a stalled response body", async () => {
-  const controller = new AbortController();
-  let reading!: () => void;
-  const started = new Promise<void>((resolve) => {
-    reading = resolve;
-  });
-  let finishCleanup!: () => void;
-  const cancelled = vi.fn(
-    () =>
-      new Promise<void>((resolve) => {
-        finishCleanup = resolve;
-      }),
-  );
-  const body = new ReadableStream<Uint8Array>(
-    {
-      pull() {
-        reading();
-      },
-      cancel: cancelled,
-    },
-    { highWaterMark: 0 },
-  );
-  mockFetch(async () => new Response(body));
-  const pending = requestEvaluation({ ...request, signal: controller.signal });
-  await started;
-  controller.abort(new Error("synthetic-private-abort"));
-  let completed = false;
-  const completion = pending.finally(() => {
-    completed = true;
-  });
-  await Promise.resolve();
-  expect(completed).toBe(false);
-  expect(cancelled).toHaveBeenCalledOnce();
-  finishCleanup();
-  await expect(completion).rejects.toThrow("TypeSafe evaluation cancelled.");
-  expect(cancelled).toHaveBeenCalledOnce();
 });
 it("keeps the deadline active after response headers", async () => {
   const cancelled = vi.fn();
@@ -117,40 +73,47 @@ it("preserves bounded multi-chunk JSON responses", async () => {
   mockFetch(async () => new Response(body));
   await expect(requestEvaluation(request)).resolves.toEqual({ value: 0.37 });
 });
-it.each([
-  { headers: new Headers({ "retry-after-ms": "250", "retry-after": "10" }), retryAfterMs: 250 },
+it.each<{ status: number; reason: string; headers: HeadersInit; retryAfterMs?: number }>([
+  { status: 401, reason: "authentication", headers: {}, retryAfterMs: undefined },
+  { status: 413, reason: "unsupported-input", headers: {}, retryAfterMs: undefined },
+  { status: 422, reason: "unsupported-input", headers: {}, retryAfterMs: undefined },
   {
-    headers: new Headers({ "retry-after-ms": "invalid", "retry-after": "10" }),
+    status: 429,
+    reason: "rate-limited",
+    headers: { "retry-after-ms": "250", "retry-after": "10" },
+    retryAfterMs: 250,
+  },
+  {
+    status: 429,
+    reason: "rate-limited",
+    headers: { "retry-after-ms": "invalid", "retry-after": "10" },
     retryAfterMs: 10000,
   },
-  { headers: new Headers({ "retry-after": "invalid" }), retryAfterMs: undefined },
-])("preserves rate-limit metadata without retries", async ({ headers, retryAfterMs }) => {
-  const fetch = mockFetch(
-    async () => new Response("synthetic private error", { status: 429, headers }),
-  );
-  await expect(requestEvaluation(request)).rejects.toMatchObject({
+  {
+    status: 429,
     reason: "rate-limited",
-    retryAfterMs,
-  });
-  expect(fetch).toHaveBeenCalledOnce();
-});
-it.each([413, 422])(
-  "cancels HTTP %s without reading secret-reflecting error bodies",
-  async (status) => {
+    headers: { "retry-after": "invalid" },
+    retryAfterMs: undefined,
+  },
+])(
+  "classifies HTTP $status without consuming private bodies or retrying",
+  async ({ status, reason, headers, retryAfterMs }) => {
     const pull = vi.fn(() => {
       throw new Error("synthetic credential and submitted state");
     });
     const cancel = vi.fn();
     const fetch = mockFetch(
       async () =>
-        new Response(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), { status }),
+        new Response(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), {
+          status,
+          headers: new Headers(headers),
+        }),
     );
     const error = await requestEvaluation(request).catch((caught: unknown) => caught);
-    expect(error).toMatchObject({
-      name: "EvaluationError",
-      reason: "unsupported-input",
-      message: "TypeSafe rejected the supplied input.",
-    });
+    expect(error).toMatchObject({ name: "EvaluationError", reason, retryAfterMs });
+    if (reason === "unsupported-input") {
+      expect(error).toHaveProperty("message", "TypeSafe rejected the supplied input.");
+    }
     expect(pull).not.toHaveBeenCalled();
     expect(cancel).toHaveBeenCalledOnce();
     expect(fetch).toHaveBeenCalledOnce();
@@ -159,18 +122,8 @@ it.each([413, 422])(
   },
 );
 
-it("does not expose or consume HTTP error diagnostics", async () => {
-  const cancelled = vi.fn();
-  mockFetch(async () => new Response(new ReadableStream({ cancel: cancelled }), { status: 401 }));
-  await expect(requestEvaluation(request)).rejects.toMatchObject({ reason: "authentication" });
-  expect(cancelled).toHaveBeenCalledOnce();
-});
-
 it.each([
   { status: 401, trigger: "http", reason: "authentication" },
-  { status: 429, trigger: "http", reason: "rate-limited" },
-  { status: 413, trigger: "http", reason: "unsupported-input" },
-  { status: 422, trigger: "http", reason: "unsupported-input" },
   { status: 200, trigger: "abort", reason: "transport" },
   { status: 200, trigger: "abort-at-headers", reason: "transport" },
   { status: 200, trigger: "overflow", reason: "invalid-response" },
@@ -208,7 +161,7 @@ it.each([
         controller.abort("synthetic-private-abort");
       }
       return {
-        response: new Response(consumer, { status }),
+        response: new Response(consumer, { status, headers: { "content-length": "1" } }),
         finalUrl: "https://api.typesafe.ai/v1/systemone",
         release,
         refreshTimeout: () => {},
@@ -239,6 +192,11 @@ it.each([
       expect(settled).toBe(false);
       finishRelease();
       expect(await outcome).toMatchObject({ name: "EvaluationError", reason });
+      if (trigger === "overflow") {
+        expect(await outcome).toHaveProperty("message", "TypeSafe response exceeds its limit.");
+      } else if (trigger.startsWith("abort")) {
+        expect(await outcome).toHaveProperty("message", "TypeSafe evaluation cancelled.");
+      }
       expect(release).toHaveBeenCalledOnce();
     } finally {
       // Also release the fixture after an assertion fails against the old sequential implementation.

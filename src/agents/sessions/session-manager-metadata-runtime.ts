@@ -51,7 +51,7 @@ export async function withSessionMetadataWorker<T>(
         }
         if (
           "event" in command.input &&
-          command.input.event.type === "message" &&
+          typeof command.input.event !== "string" &&
           command.input.message
         ) {
           command.input.message = {

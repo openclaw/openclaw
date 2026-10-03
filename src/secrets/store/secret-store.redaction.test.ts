@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveSecretsAuditExitCode, runSecretsAudit } from "../audit.js";
@@ -21,9 +21,9 @@ const scope = { kind: "team" } as const;
 const name = "OPENCLAW_GATEWAY_TOKEN";
 const ref = { source: "store", provider: "default", id: name } as const;
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(() => closeOpenClawStateDatabaseAsync());
 
-function fixture() {
+async function fixture() {
   const stateDir = tempDirs.make("openclaw-store-redaction-");
   const env = {
     OPENCLAW_STATE_DIR: stateDir,
@@ -38,11 +38,11 @@ function fixture() {
     updatedBy: "test",
     database,
   };
-  writeSecretStoreEntry(entry);
+  await writeSecretStoreEntry(entry);
   return { env, database, entry };
 }
 
-function corruptStoredValue(database: ReturnType<typeof fixture>["database"]): void {
+function corruptStoredValue(database: Awaited<ReturnType<typeof fixture>>["database"]): void {
   openOpenClawStateDatabase(database)
     .db.prepare("UPDATE secret_store_entries SET value = ? WHERE name = ?")
     .run("__OPENCLAW_REDACTED__", name);
@@ -61,47 +61,47 @@ describe("secret store redaction integrity", () => {
     "[REDACTED_PRIVATE_KEY]",
     "[REDACTED CREDENTIAL]",
     " __OPENCLAW_REDACTED__\n",
-  ])("refuses display marker %s without overwriting the credential", (value) => {
-    const { entry, database } = fixture();
-    const before = listSecretStoreEntries({ scope, database });
-    expect(() => writeSecretStoreEntry({ ...entry, value, updatedBy: "cli" })).toThrow(
+  ])("refuses display marker %s without overwriting the credential", async (value) => {
+    const { entry, database } = await fixture();
+    const before = await listSecretStoreEntries({ scope, database });
+    await expect(writeSecretStoreEntry({ ...entry, value, updatedBy: "cli" })).rejects.toThrow(
       expect.objectContaining({
         code: "SECRET_STORE_VALUE_REDACTED",
         message: expect.stringContaining(name),
       }),
     );
-    expect(readSecretStoreValue({ scope, name, database })).toEqual({
+    expect(await readSecretStoreValue({ scope, name, database })).toEqual({
       ok: true,
       value: entry.value,
     });
-    expect(listSecretStoreEntries({ scope, database })).toEqual(before);
+    expect(await listSecretStoreEntries({ scope, database })).toEqual(before);
   });
 
-  it("preserves a concurrent replacement and compensates only its own repair", () => {
-    const { entry, database } = fixture();
+  it("preserves a concurrent replacement and compensates only its own repair", async () => {
+    const { entry, database } = await fixture();
     corruptStoredValue(database);
-    const repair = writeSecretStoreEntryWithRollback({
+    const repair = await writeSecretStoreEntryWithRollback({
       ...entry,
       value: "synthetic-repaired-token",
       expectedValue: "__OPENCLAW_REDACTED__",
     });
-    expect(repair.rollback()).toBe(true);
-    expect(readSecretStoreValue({ scope, name, database })).toEqual({
+    expect(await repair.rollback()).toBe(true);
+    expect(await readSecretStoreValue({ scope, name, database })).toEqual({
       ok: true,
       value: "__OPENCLAW_REDACTED__",
     });
-    writeSecretStoreEntry({ ...entry, value: "synthetic-concurrent-token" });
-    expect(() =>
+    await writeSecretStoreEntry({ ...entry, value: "synthetic-concurrent-token" });
+    await expect(
       writeSecretStoreEntryWithRollback({ ...entry, expectedValue: "__OPENCLAW_REDACTED__" }),
-    ).toThrow(expect.objectContaining({ code: "SECRET_STORE_VALUE_CHANGED" }));
-    expect(readSecretStoreValue({ scope, name, database })).toEqual({
+    ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_VALUE_CHANGED" }));
+    expect(await readSecretStoreValue({ scope, name, database })).toEqual({
       ok: true,
       value: "synthetic-concurrent-token",
     });
   });
 
   it("rejects a pre-existing corrupted row with its exact reference and repair command", async () => {
-    const { database, env } = fixture();
+    const { database, env } = await fixture();
     corruptStoredValue(database);
     await expect(resolveSecretRefString(ref, { config: {}, env })).rejects.toMatchObject({
       code: "SECRET_REF_REDACTED_VALUE",
@@ -112,17 +112,24 @@ describe("secret store redaction integrity", () => {
     });
   });
 
-  it("quarantines a corrupted row from exec and egress without hiding healthy siblings", () => {
-    const { database, entry } = fixture();
+  it("quarantines a corrupted row from exec and egress without hiding healthy siblings", async () => {
+    const { database, entry } = await fixture();
     corruptStoredValue(database);
-    writeSecretStoreEntry({ ...entry, name: "SERVICE_MODE", value: "synthetic-mode", kind: "env" });
-    expect(readSecretStoreExecEnvironment({ includeSecretSentinels: true, database })).toEqual({
+    await writeSecretStoreEntry({
+      ...entry,
+      name: "SERVICE_MODE",
+      value: "synthetic-mode",
+      kind: "env",
+    });
+    expect(
+      await readSecretStoreExecEnvironment({ includeSecretSentinels: true, database }),
+    ).toEqual({
       env: { SERVICE_MODE: "synthetic-mode" },
     });
   });
 
   it("reports a resolvable redaction marker as an audit error", async () => {
-    const { database, env } = fixture();
+    const { database, env } = await fixture();
     corruptStoredValue(database);
     await fs.writeFile(
       env.OPENCLAW_CONFIG_PATH,

@@ -100,14 +100,14 @@ describe("worker session placement activation", () => {
     environmentId = `environment-${identity.sessionId}`,
   ) {
     let placement = await store.startDispatch({ ...identity, executionMode });
-    placement = store.transition({
+    placement = await store.transition({
       sessionId: identity.sessionId,
       from: "requested",
       to: "provisioning",
       expectedGeneration: placement.generation,
       patch: { environmentId },
     });
-    placement = store.transition({
+    placement = await store.transition({
       sessionId: identity.sessionId,
       from: "provisioning",
       to: "syncing",
@@ -126,8 +126,11 @@ describe("worker session placement activation", () => {
     });
   }
 
-  function activate(placement: Awaited<ReturnType<typeof advanceToStarting>>, ownerEpoch: number) {
-    const active = store.transition({
+  async function activate(
+    placement: Awaited<ReturnType<typeof advanceToStarting>>,
+    ownerEpoch: number,
+  ) {
+    const active = await store.transition({
       sessionId: placement.sessionId,
       from: "starting",
       to: "active",
@@ -199,7 +202,9 @@ describe("worker session placement activation", () => {
       const before = environmentRow();
       nowMs = 2_000;
 
-      expect(() => activate(starting, ownerEpoch + (mismatch === "epoch" ? 1 : 0))).toThrow();
+      await expect(
+        activate(starting, ownerEpoch + (mismatch === "epoch" ? 1 : 0)),
+      ).rejects.toThrow();
       expect(store.get(SESSION.sessionId)).toEqual(starting);
       expect(environmentRow()).toEqual(before);
     },
@@ -209,7 +214,7 @@ describe("worker session placement activation", () => {
     const environment = await createAttachedEnvironment();
     const starting = await advanceToStarting();
     nowMs = 5_000;
-    const failed = store.fail({
+    const failed = await store.fail({
       sessionId: SESSION.sessionId,
       expectedGeneration: starting.generation,
       recoveryError: "workspace startup failed",
@@ -227,7 +232,7 @@ describe("worker session placement activation", () => {
     const starting = await advanceToStarting();
     expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBeNull();
     nowMs = 5_000;
-    const active = activate(starting, environment.ownerEpoch);
+    const active = await activate(starting, environment.ownerEpoch);
     expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBe(5_000);
     nowMs = 6_000;
     const owner = {
@@ -255,17 +260,17 @@ describe("worker session placement activation", () => {
       expectedGeneration: active.generation,
     });
     expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBe(5_000);
-    const draining = store.startDrain({
+    const draining = await store.startDrain({
       sessionId: SESSION.sessionId,
       ...owner,
       expectedGeneration: active.generation,
     });
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: SESSION.sessionId,
       ...owner,
       expectedGeneration: draining.generation,
     });
-    const failed = store.fail({
+    const failed = await store.fail({
       sessionId: SESSION.sessionId,
       expectedGeneration: reconciling.generation,
       recoveryError: "workspace recovery failed",
@@ -289,12 +294,12 @@ describe("worker session placement activation", () => {
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
       };
-      const draining = store.startDrain({ ...owner, expectedGeneration: active.generation });
-      const reconciling = store.startReconcile({
+      const draining = await store.startDrain({ ...owner, expectedGeneration: active.generation });
+      const reconciling = await store.startReconcile({
         ...owner,
         expectedGeneration: draining.generation,
       });
-      store.transition({
+      await store.transition({
         sessionId: SESSION.sessionId,
         from: "reconciling",
         to: "local",
@@ -307,7 +312,7 @@ describe("worker session placement activation", () => {
       });
       nowMs = activationTime;
       const attached = await attachEnvironment(active.environmentId, SESSION.sessionId, "idle");
-      active = activate(await advanceToStarting(), attached.ownerEpoch);
+      active = await activate(await advanceToStarting(), attached.ownerEpoch);
       expect(environments.get(active.environmentId)?.lastActivatedAtMs).toBe(
         Math.max(5_000, activationTime),
       );

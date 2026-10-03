@@ -75,7 +75,6 @@ type CronStreamOutputParams = {
   getGeneration: () => number;
   getState: () => CronStreamOwnerState;
   isDesiredRunning: () => boolean;
-  isRetired: () => boolean;
   logger: CronStreamLogger;
 };
 
@@ -489,7 +488,7 @@ export class CronStreamOutput {
     if (generation !== this.params.getGeneration()) {
       return;
     }
-    if (!this.params.isDesiredRunning() || this.params.isRetired()) {
+    if (!this.params.isDesiredRunning()) {
       void this.params.recordLoss("not-running");
       return;
     }

@@ -8,18 +8,17 @@ import {
 } from "./utf16-slice.js";
 
 describe("avoidTrailingHighSurrogateBreak", () => {
-  it("keeps ordinary and terminal boundaries unchanged", () => {
-    expect(avoidTrailingHighSurrogateBreak("hello", 0, 3)).toBe(3);
-    expect(avoidTrailingHighSurrogateBreak("hello", 0, 5)).toBe(5);
-  });
-
-  it("moves a split before a surrogate pair when room remains", () => {
-    expect(avoidTrailingHighSurrogateBreak("a🤖b", 0, 2)).toBe(1);
-  });
-
-  it("includes the full pair when a one-unit chunk starts with it", () => {
-    expect(avoidTrailingHighSurrogateBreak("🤖b", 0, 1)).toBe(2);
-    expect(avoidTrailingHighSurrogateBreak("a🤖b", 1, 2)).toBe(3);
+  it("keeps ordinary boundaries and complete surrogate pairs", () => {
+    const cases: [string, number, number, number][] = [
+      ["hello", 0, 3, 3],
+      ["hello", 0, 5, 5],
+      ["a🤖b", 0, 2, 1],
+      ["🤖b", 0, 1, 2],
+      ["a🤖b", 1, 2, 3],
+    ];
+    for (const [text, start, end, expected] of cases) {
+      expect(avoidTrailingHighSurrogateBreak(text, start, end)).toBe(expected);
+    }
   });
 });
 
@@ -52,40 +51,19 @@ describe("truncateUtf16Safe", () => {
 });
 
 describe("truncateWithMarker", () => {
-  it.each<[string, Parameters<typeof truncateWithMarker>, string]>([
-    [
-      "keeps the boundary unchanged",
-      ["hello", 5, { marker: "...", reserve: 3, trimEnd: false }],
-      "hello",
-    ],
-    [
-      "reserves marker width",
-      ["hello world", 8, { marker: "...", reserve: 3, trimEnd: false }],
-      "hello...",
-    ],
-    [
-      "supports markers outside the limit",
-      ["hello world", 5, { marker: "...", reserve: 0, trimEnd: false }],
-      "hello...",
-    ],
-    [
-      "trims only the prefix",
-      ["hello   world", 9, { marker: "...", reserve: 3, trimEnd: true }],
-      "hello...",
-    ],
-    [
-      "keeps surrogate pairs whole",
-      ["ab🚀tail", 4, { marker: "…", reserve: 1, trimEnd: false }],
-      "ab…",
-    ],
-    [
-      "keeps the marker at zero limits",
-      ["hello", 0, { marker: "…", reserve: 1, trimEnd: false }],
-      "…",
-    ],
-  ])("%s", (_name, args, expected) => {
-    expect(truncateWithMarker(...args)).toBe(expected);
-  });
+  it.each<[string, number, string, number, boolean, string]>([
+    ["hello", 5, "...", 3, false, "hello"],
+    ["hello world", 8, "...", 3, false, "hello..."],
+    ["hello world", 5, "...", 0, false, "hello..."],
+    ["hello   world", 9, "...", 3, true, "hello..."],
+    ["ab🚀tail", 4, "…", 1, false, "ab…"],
+    ["hello", 0, "…", 1, false, "…"],
+  ])(
+    "truncates %j at %i with marker %j (reserve=%i, trimEnd=%s)",
+    (text, max, marker, reserve, trimEnd, expected) => {
+      expect(truncateWithMarker(text, max, { marker, reserve, trimEnd })).toBe(expected);
+    },
+  );
 });
 
 describe("findGraphemeChunkEnd", () => {
@@ -108,33 +86,23 @@ describe("findGraphemeChunkEnd", () => {
     expect(findGraphemeChunkEnd(text, 0, cluster.length + 1)).toBe(cluster.length + 1);
   });
 
-  it.each([true, false])(
-    "uses the full budget when a preference cannot advance (partial=%s)",
-    (partial) => {
-      const text = "a👨‍👩‍👧‍👦bc";
-      expect(findGraphemeChunkEnd(text, 1, 13, 3, partial)).toBe(13);
-    },
-  );
-
-  it("does not let a malformed preference bypass a whole-grapheme cut", () => {
-    expect(findGraphemeChunkEnd("a👨‍👩‍👧‍👦", 0, 3, Number.NaN)).toBe(1);
-  });
-
-  it.each([
-    { text: "👨‍👩‍👧‍👦", start: 0, maxEnd: 5, expected: 5 },
-    { text: "a👨‍👩‍👧‍👦b", start: 1, maxEnd: 5, expected: 4 },
-    { text: "a🤖b", start: 1, maxEnd: 2, expected: 3 },
-  ])(
-    "splits oversized clusters only when partial cuts are allowed: $text",
-    ({ text, start, maxEnd, expected }) => {
-      expect(findGraphemeChunkEnd(text, start, maxEnd)).toBe(expected);
-      expect(findGraphemeChunkEnd(text, start, maxEnd, maxEnd, false)).toBe(start);
-    },
-  );
-
-  it("does not advance without a budget or beyond the source", () => {
-    expect(findGraphemeChunkEnd("🤖", 0, 0)).toBe(0);
-    expect(findGraphemeChunkEnd("abc", 1, 1)).toBe(1);
-    expect(findGraphemeChunkEnd("abc", 0, 5)).toBe(3);
+  it("respects hard budgets, unusable preferences, and partial-cut policy", () => {
+    const cases: [Parameters<typeof findGraphemeChunkEnd>, number][] = [
+      [["a👨‍👩‍👧‍👦bc", 1, 13, 3, true], 13],
+      [["a👨‍👩‍👧‍👦bc", 1, 13, 3, false], 13],
+      [["a👨‍👩‍👧‍👦", 0, 3, Number.NaN], 1],
+      [["👨‍👩‍👧‍👦", 0, 5], 5],
+      [["👨‍👩‍👧‍👦", 0, 5, 5, false], 0],
+      [["a👨‍👩‍👧‍👦b", 1, 5], 4],
+      [["a👨‍👩‍👧‍👦b", 1, 5, 5, false], 1],
+      [["a🤖b", 1, 2], 3],
+      [["a🤖b", 1, 2, 2, false], 1],
+      [["🤖", 0, 0], 0],
+      [["abc", 1, 1], 1],
+      [["abc", 0, 5], 3],
+    ];
+    for (const [args, expected] of cases) {
+      expect(findGraphemeChunkEnd(...args)).toBe(expected);
+    }
   });
 });

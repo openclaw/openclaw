@@ -86,7 +86,11 @@ describe("subagent registry known-run reads", () => {
       let unrelatedVisits = 0;
       const restore: Array<() => void> = [];
       for (const entry of unrelated) {
-        const persisted = (snapshot as Map<string, SubagentRunReadRecord>).get(entry.runId)!;
+        const persistedRows = snapshot as Map<string, SubagentRunReadRecord>;
+        const persistedSource = persistedRows.get(entry.runId)!;
+        const persisted = { ...persistedSource };
+        persistedRows.set(entry.runId, persisted);
+        restore.push(() => persistedRows.set(entry.runId, persistedSource));
         for (const row of [entry, persisted]) {
           const runId = row.runId;
           Object.defineProperty(row, "runId", {

@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveExecutablePath } from "./executable-path.js";
+import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackageActivationRecord } from "./package-update-activation-schema.js";
-import type { PackageActivationRuntime } from "./package-update-swap-contract.js";
 
 const PACKAGE_ACTIVATION_PREFIX = ".openclaw.package-activation-";
 

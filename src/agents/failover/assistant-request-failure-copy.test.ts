@@ -5,13 +5,32 @@ import { isNonProviderRuntimeCoordinationError } from "../failover-error.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import {
   renderAssistantRequestFailureCopy,
+  renderRecordedAssistantFailureCopy,
   renderRuntimeCoordinationFailureCopy,
 } from "./assistant-request-failure-copy.js";
+import { isAuthErrorMessage } from "./message-patterns.js";
 
 describe("renderAssistantRequestFailureCopy", () => {
   const target = { provider: "openai", model: "test-model" };
   const runFailure =
     "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
+
+  it.each(["", " | INVALID_REQUEST"])(
+    "preserves approval-expiry guidance in assistant history with suffix %j",
+    (suffix) => {
+      const message =
+        "Codex node execution approval expired before a decision. Retry the action and approve the new request.";
+      const errorMessage = message + suffix;
+      const assistant = makeAssistantMessageFixture({
+        ...target,
+        errorMessage,
+        errorCode: "INVALID_REQUEST",
+      });
+      expect(formatUserFacingAssistantErrorText(assistant)).toBe(`⚠️ ${message}`);
+      expect(renderRecordedAssistantFailureCopy(assistant)).toBe(`⚠️ ${message}`);
+      expect(isAuthErrorMessage(errorMessage)).toBe(false);
+    },
+  );
 
   it.each([
     [

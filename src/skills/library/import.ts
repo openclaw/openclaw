@@ -19,13 +19,13 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { installSkillFromClawHub } from "../lifecycle/clawhub.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import {
   prepareSkillLibraryBundle,
   readSkillLibraryTree,
   SKILL_LIBRARY_MAX_PATH_COMPONENTS,
   SKILL_LIBRARY_MAX_TREE_ENTRIES,
 } from "./bundle.js";
-import { SkillLibraryError } from "./errors.js";
 import { saveSkillLibrary, skillLibraryReceipt } from "./service.js";
 import {
   ensureSkillLibrarySchema,

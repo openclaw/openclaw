@@ -41,11 +41,12 @@ function syncOpenClawDependencyRange(
   if (!current || current === "workspace:*" || !OPENCLAW_VERSION_RANGE_RE.test(current)) {
     return false;
   }
-  const next = `>=${targetVersion}`;
-  if (current === next) {
+  const currentVersion = parseSemver(current.slice(2));
+  const nextVersion = parseSemver(targetVersion);
+  if (!currentVersion || !nextVersion || compareOpenClawSemver(nextVersion, currentVersion) <= 0) {
     return false;
   }
-  deps.openclaw = next;
+  deps.openclaw = `>=${targetVersion}`;
   return true;
 }
 

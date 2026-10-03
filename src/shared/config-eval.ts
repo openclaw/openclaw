@@ -4,52 +4,31 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { getOrCreatePromise } from "./lazy-promise.js";
 import type { RequirementsMetadata } from "./requirements.js";
 
-/** Normalizes primitive config values into the truthiness rules used by requirements checks. */
-function isTruthy(value: unknown): boolean {
-  if (typeof value === "string") {
-    return value.trim().length > 0;
-  }
-  return value !== undefined && value !== null && value !== false && value !== 0;
-}
-
-/** Resolves dotted config paths, tolerating extra dots and missing branches. */
-function resolveConfigPath(config: unknown, pathStr: string): unknown {
-  const parts = pathStr.split(".").filter(Boolean);
-  let current: unknown = config;
-  for (const part of parts) {
-    if (typeof current !== "object" || current === null) {
-      return undefined;
-    }
-    if (isBlockedObjectKey(part)) {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current;
-}
-
-function hasBlockedConfigPathSegment(pathStr: string): boolean {
-  return pathStr
-    .split(".")
-    .filter(Boolean)
-    .some((part) => isBlockedObjectKey(part));
-}
-
 /** Checks a config path with fallback defaults only when the path is unresolved. */
 export function isConfigPathTruthyWithDefaults(
   config: unknown,
   pathStr: string,
   defaults: Record<string, boolean>,
 ): boolean {
-  const value = resolveConfigPath(config, pathStr);
+  const parts = pathStr.split(".").filter(Boolean);
+  let value: unknown = config;
+  for (const part of parts) {
+    if (typeof value !== "object" || value === null || isBlockedObjectKey(part)) {
+      value = undefined;
+      break;
+    }
+    value = (value as Record<string, unknown>)[part];
+  }
   if (
     value === undefined &&
-    !hasBlockedConfigPathSegment(pathStr) &&
+    !parts.some((part) => isBlockedObjectKey(part)) &&
     Object.hasOwn(defaults, pathStr)
   ) {
     return defaults[pathStr] ?? false;
   }
-  return isTruthy(value);
+  return typeof value === "string"
+    ? value.trim().length > 0
+    : value !== undefined && value !== null && value !== false && value !== 0;
 }
 
 /** Enforces OS compatibility before allowing `always` to bypass runtime requirements. */

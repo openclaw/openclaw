@@ -122,16 +122,16 @@ contracts above; a modifying hook is not an observation hook.
 
 **Agent turn**
 
-| Hook                            | Kind    | Purpose                                                                                                     |
-| ------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------- |
-| `before_model_resolve`          | Modify  | Override provider or model before session messages load                                                     |
-| `agent_turn_prepare`            | Modify  | Inspect drained plugin turn injections and add context before prompt hooks                                  |
-| `before_prompt_build`           | Modify  | Add prompt context, narrow the current turn's submitted tools, or perform authorized post-policy enrichment |
-| `before_agent_run`              | Gate    | Inspect the final prompt and session messages before model submission; can block the run                    |
-| `before_agent_reply`            | Claim   | Short-circuit the model turn with a synthetic reply or silence                                              |
-| `before_agent_finalize`         | Modify  | Inspect the natural final answer and request one more model pass                                            |
-| `agent_end`                     | Observe | Observe final messages, success state, and run duration                                                     |
-| `heartbeat_prompt_contribution` | Modify  | Add heartbeat-only context for background monitor and lifecycle plugins                                     |
+| Hook                            | Kind    | Purpose                                                                                                                         |
+| ------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `before_model_resolve`          | Modify  | Override provider or model before session messages load                                                                         |
+| `agent_turn_prepare`            | Modify  | Inspect drained plugin turn injections and add context before prompt hooks                                                      |
+| `before_prompt_build`           | Modify  | Add prompt context, narrow the current turn's submitted tools, or perform authorized post-policy enrichment                     |
+| `before_agent_run`              | Gate    | Inspect prompt and session messages before model submission; node turns gate Gateway input before worker-local context assembly |
+| `before_agent_reply`            | Claim   | Short-circuit the model turn with a synthetic reply or silence                                                                  |
+| `before_agent_finalize`         | Modify  | Inspect the natural final answer and request one more model pass                                                                |
+| `agent_end`                     | Observe | Observe final messages, success state, and run duration                                                                         |
+| `heartbeat_prompt_contribution` | Modify  | Add heartbeat-only context for background monitor and lifecycle plugins                                                         |
 
 **Conversation observation**
 

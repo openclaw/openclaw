@@ -22,6 +22,12 @@ import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/work
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
 import {
+  readClawInstallRecordFromDatabase,
+  readClawInstallRecordsInDatabase,
+  readClawOrphanWorkspaceInDatabase,
+  readClawPackageRefsInDatabase,
+} from "../claws/provenance-read.kernel.js";
+import {
   isCronStateReadCommand,
   readCronStateCommandInDatabase,
 } from "../cron/store/read-command.js";
@@ -215,6 +221,22 @@ serveOwnedWorkerTasks(
         const result = withOpenClawStateReadOnlyLocation(
           ({ db }): OpenClawStateReadResult => {
             sourceAdmitted = true;
+            if (command.type === "claws.packageOwnership") {
+              const install =
+                command.agentId === undefined
+                  ? undefined
+                  : readClawInstallRecordFromDatabase(db, command.agentId);
+              return {
+                type: command.type,
+                install,
+                installs: command.includeInstalls ? readClawInstallRecordsInDatabase(db) : [],
+                packageRefs: readClawPackageRefsInDatabase(db, { agentId: command.agentId }),
+                orphanWorkspace:
+                  command.agentId !== undefined && !install
+                    ? readClawOrphanWorkspaceInDatabase(db, command.agentId)
+                    : undefined,
+              };
+            }
             if (command.type === "doctor.gatewayOwnerLease.read") {
               return { type: command.type, lease: readGatewayOwnerLeaseFromDatabase(db) };
             }

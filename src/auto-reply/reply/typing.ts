@@ -2,7 +2,6 @@
 import {
   finiteSecondsToTimerSafeMilliseconds,
   MAX_TIMER_TIMEOUT_MS,
-  resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createTypingKeepaliveLoop } from "../../channels/typing-lifecycle.js";
@@ -22,15 +21,6 @@ export function resolveTypingIntervalMs(seconds: number | undefined): number {
   return Math.min(intervalMs, MAX_TYPING_INTERVAL_MS);
 }
 
-function resolveTypingTtlMs(requestedTtlMs: number | undefined, intervalMs: number): number {
-  const requested = resolveTimerTimeoutMs(requestedTtlMs, DEFAULT_TYPING_TTL_MS, 0);
-  if (requested === 0) {
-    return 0;
-  }
-  // Leave one full cadence for a keepalive call to settle before safety cleanup.
-  return Math.max(requested, intervalMs * 2);
-}
-
 /** Controller for channel typing indicator lifecycle during a reply run. */
 export type TypingController = {
   onReplyStart: () => Promise<void>;
@@ -48,7 +38,6 @@ export function createTypingController(params: {
   onReplyStart?: () => Promise<void> | void;
   onCleanup?: () => void;
   typingIntervalSeconds?: number;
-  typingTtlMs?: number;
   keepalive?: boolean;
   silentToken?: string;
   log?: (message: string) => void;
@@ -80,7 +69,8 @@ export function createTypingController(params: {
   let sealed = false;
   let typingTtlTimer: NodeJS.Timeout | undefined;
   const typingIntervalMs = resolveTypingIntervalMs(params.typingIntervalSeconds);
-  const typingTtlMs = resolveTypingTtlMs(params.typingTtlMs, typingIntervalMs);
+  // Leave one full cadence for a keepalive call to settle before safety cleanup.
+  const typingTtlMs = Math.max(DEFAULT_TYPING_TTL_MS, typingIntervalMs * 2);
 
   const formatTypingTtl = (ms: number) => {
     if (ms % 60_000 === 0) {
@@ -111,7 +101,7 @@ export function createTypingController(params: {
   };
 
   const refreshTypingTtl = () => {
-    if (sealed || typingIntervalMs <= 0 || typingTtlMs <= 0) {
+    if (sealed || typingIntervalMs <= 0) {
       return;
     }
     if (typingTtlTimer) {

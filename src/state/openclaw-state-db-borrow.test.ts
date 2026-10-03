@@ -44,6 +44,7 @@ function fixture(inTransaction = false) {
   const assertOpen = vi.fn();
   const retirementResources = createOpenClawStateDatabaseAsyncLifecycle();
   const retainFailed = vi.fn();
+  const touch = vi.fn();
   const retainer = createStateDatabaseRetainer(
     { borrowers, cachedDatabases: new Map([[database.path, database]]) },
     {
@@ -54,7 +55,7 @@ function fixture(inTransaction = false) {
       ownRetirement(_database, close) {
         return retirementResources.register({ close });
       },
-      touch() {},
+      touch,
     },
   );
   const scope = createOpenClawDatabaseMaintenanceScope();
@@ -68,14 +69,23 @@ function fixture(inTransaction = false) {
     assertOpen,
     retirementResources,
     retainFailed,
+    touch,
   };
 }
 
 it.each(["complete", "failed stop", "changed owner"] as const)(
   "retains async retirement when a synchronous read pin is released last (%s)",
   async (outcome) => {
-    const { database, borrowers, retainer, retire, scope, retirementResources, retainFailed } =
-      fixture();
+    const {
+      database,
+      borrowers,
+      retainer,
+      retire,
+      scope,
+      retirementResources,
+      retainFailed,
+      touch,
+    } = fixture();
     const released = createDeferredCore();
     const stop = vi.spyOn(database.walMaintenance, "stop").mockReturnValue(released.promise);
     const writer = retainer.retain(database);
@@ -101,6 +111,7 @@ it.each(["complete", "failed stop", "changed owner"] as const)(
         "active native borrowers",
       );
       expect(() => retainer.retain(database)).toThrow("native owner is retiring");
+      touch.mockClear();
       if (outcome === "changed owner") {
         current = false;
       }
@@ -109,6 +120,7 @@ it.each(["complete", "failed stop", "changed owner"] as const)(
         const failure = new Error("WAL retirement failed");
         released.reject(failure);
         await expect(closing).rejects.toThrow("WAL retirement failed");
+        expect(touch).not.toHaveBeenCalled();
         expect(retainFailed).toHaveBeenCalled();
         expect(database.db.isOpen).toBe(true);
         expect(owner.cleanupComplete).toBe(false);
@@ -127,6 +139,7 @@ it.each(["complete", "failed stop", "changed owner"] as const)(
       if (outcome === "changed owner") {
         expect(owner.cleanupComplete).toBe(false);
         expect(owner.retiring).toBe(false);
+        expect(touch).toHaveBeenCalledExactlyOnceWith(database);
       }
     } finally {
       current = true;

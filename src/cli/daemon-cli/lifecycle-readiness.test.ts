@@ -14,10 +14,11 @@ const waitForGatewayHealthyRestart = vi.hoisted(() => vi.fn());
 const waitForGatewayHttpReadiness = vi.hoisted(() => vi.fn());
 const renderRestartDiagnostics = vi.hoisted(() => vi.fn(() => ["runtime diagnostics"]));
 const readServiceConfig = vi.hoisted(() => vi.fn());
+const readCliConfig = vi.hoisted(() => vi.fn(async () => ({})));
 
 vi.mock("../../commands/gateway-startup-timing.js", () => ({ resolveGatewayStartupTiming }));
 vi.mock("../../config/config.js", () => ({
-  readBestEffortConfig: vi.fn(async () => ({})),
+  readBestEffortConfig: readCliConfig,
   resolveGatewayPort: vi.fn(() => 18_789),
 }));
 vi.mock("../../config/io.js", () => ({
@@ -77,6 +78,7 @@ describe("Gateway service readiness", () => {
     service.restart.mockReset();
     terminateStaleGatewayPids.mockReset();
     readServiceConfig.mockReset().mockResolvedValue({});
+    readCliConfig.mockReset().mockResolvedValue({});
     resolveGatewayStartupTiming.mockClear();
     waitForGatewayHealthyRestart.mockReset().mockResolvedValue({ healthy: true });
     waitForGatewayHttpReadiness.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
@@ -87,6 +89,28 @@ describe("Gateway service readiness", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
+
+  it.each([false, true])(
+    "checks the activated service port when definition preservation is %s",
+    async (preserveDefinition) => {
+      readCliConfig.mockResolvedValue({ gateway: { port: 19001 } });
+      runServiceRestart.mockImplementation(async (params: RestartParams) => {
+        await params.postRestartCheck?.({
+          ...createDaemonActionContext({ action: "restart", json: true }),
+          json: true,
+          activationAccepted: true,
+          preserveDefinition,
+        });
+        return true;
+      });
+
+      await runDaemonRestart({ json: true });
+
+      expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+        expect.objectContaining({ port: preserveDefinition ? 18789 : 19001 }),
+      );
+    },
+  );
 
   it.each([
     { outcome: "still-starting", runtime: "running", code: 2 },

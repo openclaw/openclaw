@@ -79,7 +79,7 @@ vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
 
 vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../cli/daemon-cli/restart-health.js")>()),
-  waitForGatewayHealthyRestart: vi.fn(async () => ({ healthy: true })),
+  waitForGatewayHealthyRestart: vi.fn(async () => ({ outcome: "ready", healthy: true })),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

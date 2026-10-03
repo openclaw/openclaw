@@ -26,10 +26,8 @@ import {
 } from "./sdk/client-support.js";
 import { MatrixClientVerification } from "./sdk/client-verification.js";
 import type { MatrixCryptoBootstrapResult } from "./sdk/crypto-bootstrap.js";
-import { ConsoleLogger, LogService } from "./sdk/logger.js";
 import type { MatrixCryptoBootstrapApi } from "./sdk/types.js";
 
-export { ConsoleLogger, LogService };
 export type {
   MatrixDeviceVerificationStatus,
   MatrixOwnDeviceDeleteResult,

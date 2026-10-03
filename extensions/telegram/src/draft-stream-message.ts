@@ -17,6 +17,8 @@ export type TelegramDraftPreview = {
   text: string;
   /** A complete progress update can send before a token stream reaches its debounce threshold. */
   complete?: true;
+  /** Suppress link cards for this frame without changing the answer policy. */
+  linkPreview?: false;
   parseMode?: "HTML";
   richMessage?: TelegramInputRichMessage;
   markdownSource?: {
@@ -45,6 +47,24 @@ export function fallbackSnapshot(plainText: string): TelegramDraftMessageSnapsho
     text: plainText,
     sourceText: escapeTelegramHtml(plainText),
     sourceTextMode: "html",
+  };
+}
+
+// Preserve the existing grammY call shape when no preview options apply.
+export function createTelegramDraftMessageEditor(
+  api: Bot["api"],
+  chatId: Parameters<Bot["api"]["editMessageText"]>[0],
+  linkPreviewParams: NonNullable<Parameters<Bot["api"]["editMessageText"]>[3]>,
+) {
+  return async (
+    messageId: number,
+    text: string,
+    other?: NonNullable<Parameters<Bot["api"]["editMessageText"]>[3]>,
+  ) => {
+    const merged = other ? { ...other, ...linkPreviewParams } : linkPreviewParams;
+    return Object.keys(merged).length > 0
+      ? await api.editMessageText(chatId, messageId, text, merged)
+      : await api.editMessageText(chatId, messageId, text);
   };
 }
 

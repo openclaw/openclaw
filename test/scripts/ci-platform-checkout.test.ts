@@ -59,7 +59,11 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
           "/scripts/lib/merge-head-diff-base.mjs",
           "/scripts/ci-additional-checks.sh",
         ]
-      : ["/scripts/lib/swift-toolchain.sh", "/scripts/lib/ci-ios-smoke-plan.mjs"]),
+      : [
+          "/scripts/lib/swift-toolchain.sh",
+          "/scripts/lib/ci-ios-smoke-plan.mjs",
+          "/scripts/ci-xcodebuild.py",
+        ]),
   ];
 }
 
@@ -410,6 +414,7 @@ it.concurrent.for([
     };
     const platformScripts = {
       "scripts/lib/swift-toolchain.sh": "workflow Swift toolchain helper\n",
+      "scripts/ci-xcodebuild.py": "workflow Xcode diagnostics helper\n",
     };
     const preflightScripts = {
       "scripts/ci-build-manifest.mjs": readFileSync("scripts/ci-build-manifest.mjs", "utf8"),

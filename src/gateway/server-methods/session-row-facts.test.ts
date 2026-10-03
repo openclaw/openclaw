@@ -88,7 +88,7 @@ it("prepares current placement facts off the host thread and retries failed refr
     try {
       await projection.ensureMaterialized();
       expect(await refresh()).toMatchObject({ state: "requested" });
-      placements.fail({ sessionId: identity.sessionId, recoveryError: "Current failure" });
+      await placements.fail({ sessionId: identity.sessionId, recoveryError: "Current failure" });
       expect(await refresh()).toMatchObject({ state: "failed" });
       const refused = vi
         .spyOn(placements, "readProjection")
@@ -115,7 +115,7 @@ it("prepares current placement facts off the host thread and retries failed refr
         sessionChanges.emit({ agentId: identity.agentId, sessionKey: identity.sessionKey });
         const refreshed = projection.ensureMaterialized();
         await captured.promise;
-        placements.fail({
+        await placements.fail({
           sessionId: identity.sessionId,
           recoveryError: "Changed during preparation",
         });
@@ -168,7 +168,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       },
       { to: "active", patch: { activeOwnerEpoch: 7 } },
     ] as const) {
-      placement = placements.transition({
+      placement = await placements.transition({
         sessionId: identity.sessionId,
         from: placement.state,
         expectedGeneration: placement.generation,
@@ -320,13 +320,13 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         placement: { state: "draining" },
         placementMove: { target: { kind: "gateway" } },
       });
-      const reconciling = placements.startReconcile({
+      const reconciling = await placements.startReconcile({
         sessionId: identity.sessionId,
         environmentId: "row-environment",
         ownerEpoch: 7,
         expectedGeneration: move.placement.generation,
       });
-      placements.fail({
+      await placements.fail({
         sessionId: identity.sessionId,
         expectedGeneration: reconciling.generation,
         recoveryError: "Worker stopped",

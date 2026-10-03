@@ -588,7 +588,7 @@ export function createSubagentRegistrySweeper(params: {
                 const updated = await mutateCleanup(
                   runs,
                   current,
-                  (row) => Boolean(isCollectorArchiveReady(row, now)),
+                  (row) => isCollectorArchiveReady(row, now),
                   (draft) => {
                     draft.execution.suppressSessionEffects = true;
                     return draft;
@@ -631,7 +631,7 @@ export function createSubagentRegistrySweeper(params: {
                 !(await mutateCleanup(
                   runs,
                   current,
-                  (row) => Boolean(isCollectorArchiveReady(row, now)),
+                  (row) => isCollectorArchiveReady(row, now),
                   (draft) => {
                     draft.contextEngineCleanupCompletedAt = Date.now();
                     return draft;

@@ -204,7 +204,6 @@ describe("typing controller", () => {
     const typing = createTypingController({
       onReplyStart,
       typingIntervalSeconds: 1,
-      typingTtlMs: 30_000,
       keepalive,
     });
     return { typing, onReplyStart };

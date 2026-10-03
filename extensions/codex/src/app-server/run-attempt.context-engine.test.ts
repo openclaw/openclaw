@@ -16,6 +16,7 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   assistantMessage,
@@ -868,7 +869,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("persists the admitted user prompt before an async item buffered during turn startup", async () => {
     const workspaceDir = path.join(tempDir, "workspace-early-async");
     const params = await createSqliteParams(workspaceDir, "early-async-order");
-    params.onBlockReply = vi.fn();
+    const delivered = Promise.withResolvers<void>();
+    params.onBlockReply = vi.fn(() => delivered.resolve());
     params.sandboxSessionKey = "agent:main:policy";
     params.contextEngine = createContextEngine();
     const beforeMessageWrite = vi.fn();
@@ -906,7 +908,12 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    await awaitGateBeforeSettlement(
+      delivered.promise,
+      run,
+      "Codex attempt completed before delivering its buffered async item",
+    );
+    expect(params.onBlockReply).toHaveBeenCalledOnce();
     expect(recorder.markSentToProvider).not.toHaveBeenCalled();
     expect(recorder.markRuntimePersisted).toHaveBeenCalledOnce();
     expect(beforeMessageWrite).toHaveBeenCalledWith(

@@ -123,9 +123,13 @@ describe("active prompt steering context", () => {
     },
   );
 
-  it.each([false, true])(
-    "replays a carrierless keyless prompt only with an unambiguous canonical timestamp (ambiguous=%s)",
-    async (ambiguous) => {
+  it.each([
+    { replay: "rehydrated", ambiguous: false },
+    { replay: "rehydrated", ambiguous: true },
+    { replay: "retained", ambiguous: true },
+  ])(
+    "selects a carrierless keyless prompt from $replay history (same-time steering=$ambiguous)",
+    async ({ replay, ambiguous }) => {
       const original = originalUser();
       const manager = SessionManager.inMemory();
       const session = createSession();
@@ -136,13 +140,23 @@ describe("active prompt steering context", () => {
         manager.appendMessage(steeringUser());
       }
       manager.appendCompaction("Earlier context was summarized.", persisted.entryId, 100);
-      const canonical = manager.buildSessionContext().messages;
+      const restored =
+        replay === "rehydrated"
+          ? SessionManager.fromEntries(manager.getPersistedEntries())
+          : manager;
+      const canonical = restored.buildSessionContext().messages;
+      expect(canonical.includes(original)).toBe(replay === "retained");
       const projected = await session.agent.transformContext(canonical);
       cleanup();
-      if (ambiguous) {
+      if (replay === "rehydrated" && ambiguous) {
         expect(projected).toEqual(canonical);
       } else {
-        expect(projected.at(-1)).toMatchObject({ content: "before\n\noriginal" });
+        expect(projected.at(ambiguous ? -2 : -1)).toMatchObject({
+          content: "before\n\noriginal",
+        });
+        if (ambiguous) {
+          expect(projected.at(-1)).toBe(canonical.at(-1));
+        }
       }
     },
   );

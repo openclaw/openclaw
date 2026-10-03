@@ -92,4 +92,21 @@ describe("OPENCLAW_LOG_LEVEL", () => {
       message: expect.stringContaining('Ignoring invalid OPENCLAW_LOG_LEVEL="nope"'),
     });
   });
+
+  it.each(["compact", "json"] as const)(
+    "redacts invalid env values in %s warnings",
+    (consoleStyle) => {
+      const secret = "ghp_abcdefghijklmnopqrstuvwxyz123456"; // pragma: allowlist secret
+      setLoggerOverride({ level: "silent", consoleStyle, file: testLogPath });
+      process.env.OPENCLAW_LOG_LEVEL = secret;
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      getResolvedLoggerSettings();
+
+      expect(stderrSpy).toHaveBeenCalledOnce();
+      const warning = String(stderrSpy.mock.calls[0]?.[0]);
+      expect(warning).toContain("Ignoring invalid OPENCLAW_LOG_LEVEL=");
+      expect(warning).not.toContain(secret);
+    },
+  );
 });

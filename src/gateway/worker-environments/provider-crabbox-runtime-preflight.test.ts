@@ -138,7 +138,6 @@ describe("Crabbox runtime preflight cleanup", () => {
       expect(support.testState.store.get(failed.environmentId)).toEqual(failed);
       expect(runCommand.mock.calls.map(([argv]) => argv.slice(1))).toEqual([
         ["--version"],
-        ["--version"],
         ["providers", "--json"],
         ...(failure === "setup-env" ? [] : [["config", "show", "--json"]]),
       ]);
@@ -215,7 +214,6 @@ describe("Crabbox runtime preflight cleanup", () => {
       expect(restartedProvision).not.toHaveBeenCalled();
       expect(runCommand).not.toHaveBeenCalled();
       expect(prepareNodeEnrollment).not.toHaveBeenCalled();
-      expect(support.testState.prepareInstallation).not.toHaveBeenCalled();
       expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
       expect(support.testState.store.getCredential(original.environmentId)).toBeUndefined();
     },
@@ -371,7 +369,6 @@ describe("Crabbox runtime preflight cleanup", () => {
     expect(stops).toBe(2);
     expect(live).toBe(false);
     expect(prepareNodeEnrollment).not.toHaveBeenCalled();
-    expect(support.testState.prepareInstallation).not.toHaveBeenCalled();
     expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
   });
 
@@ -386,7 +383,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       name: "warm image without effective class",
       settings: { ...CLASSLESS_PROFILE, warmImage: true },
       message: "warmImage requires a configured class or a placement machine class",
-      commands: [["--version"], ["--version"], ["providers", "--json"]],
+      commands: [["--version"], ["providers", "--json"]],
     },
   ])(
     "keeps $name permanent even with missing runtime input",

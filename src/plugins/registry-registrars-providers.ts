@@ -3,7 +3,7 @@ import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/ha
 import type { StorageProvider } from "../storage/types.js";
 import { getCoreEmbeddingProvider } from "./core-embedding-providers.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
-import { getPluginInstance } from "./plugin-instance-scope.js";
+import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
 import { invalidateProviderRegistryIndex } from "./provider-registry-index.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { canClaimReservedCommandOwnership } from "./registry-registrars-operations.js";
@@ -235,7 +235,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       }
       const factory = params.factory?.(provider);
       if (factory) {
-        getPluginInstance(record)?.admitFactory(factory);
+        (getPluginValueInstance(factory) ?? getPluginInstance(record))?.admitFactory(factory);
       }
       params.registrations.push(
         createIdentityRegistration(record, {
