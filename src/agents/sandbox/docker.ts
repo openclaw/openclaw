@@ -26,12 +26,11 @@ import {
   withSandboxContainerLifecycle,
   type ContainerSourceLease,
 } from "./container-lifecycle.js";
-import { handleHotSandboxConfigMismatch } from "./current-config.js";
-import { throwAfterPartialSandboxCleanup } from "./docker-partial-cleanup.js";
 import {
-  isSandboxHostFilesystemRoot,
-  resolveSandboxHostPathViaExistingAncestor,
-} from "./host-paths.js";
+  assertChangedSandboxConfigAllowed,
+  handleHotSandboxConfigMismatch,
+} from "./current-config.js";
+import { throwAfterPartialSandboxCleanup } from "./docker-partial-cleanup.js";
 import {
   prepareSandboxMountPlan,
   sandboxMountPlanMatchesContainer,
@@ -58,7 +57,10 @@ import {
 } from "./sanitize-env-vars.js";
 import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
-import { validateSandboxSecurity } from "./validate-sandbox-security.js";
+import {
+  type SandboxCreateSecurityParams,
+  validateSandboxCreateSecurity,
+} from "./validate-sandbox-security.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
 export {
@@ -194,61 +196,17 @@ function formatUlimitValue(
   return limits.length ? `${name}=${limits.join(":")}` : null;
 }
 
-/**
- * Widens the bind source allowlist with configured shared roots. An absent caller allowlist
- * means the gate is off, so it must stay off: adding roots there would silently start gating.
- */
-function resolveAllowedBindSourceRoots(
-  cfg: Pick<SandboxDockerConfig, "allowedBindSources">,
-  bindSourceRoots: string[] | undefined,
-): string[] | undefined {
-  if (!bindSourceRoots) {
-    return undefined;
-  }
-  const configured = cfg.allowedBindSources ?? [];
-  for (const root of configured) {
-    const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(root);
-    const directRoot = isSandboxHostFilesystemRoot(root);
-    if (directRoot || isSandboxHostFilesystemRoot(canonicalRoot)) {
-      const reason = directRoot
-        ? "names a filesystem root"
-        : `resolves to filesystem root "${canonicalRoot}"`;
-      throw new Error(
-        `Sandbox security: allowedBindSources entry "${root}" ${reason}. ` +
-          "Filesystem roots cannot be allowlisted; choose a narrower shared directory.",
-      );
-    }
-  }
-  return configured.length ? [...bindSourceRoots, ...configured] : bindSourceRoots;
-}
-
-export function buildSandboxCreateArgs(params: {
-  name: string;
-  cfg: SandboxDockerConfig;
-  scopeKey: string;
-  createdAtMs?: number;
-  labels?: Record<string, string>;
-  configHash?: string;
-  includeBinds?: boolean;
-  bindSourceRoots?: string[];
-  allowSourcesOutsideAllowedRoots?: boolean;
-  allowReservedContainerTargets?: boolean;
-  allowContainerNamespaceJoin?: boolean;
-}) {
-  // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
-  validateSandboxSecurity({
-    ...params.cfg,
-    allowedSourceRoots: resolveAllowedBindSourceRoots(params.cfg, params.bindSourceRoots),
-    allowSourcesOutsideAllowedRoots:
-      params.allowSourcesOutsideAllowedRoots ??
-      params.cfg.dangerouslyAllowExternalBindSources === true,
-    allowReservedContainerTargets:
-      params.allowReservedContainerTargets ??
-      params.cfg.dangerouslyAllowReservedContainerTargets === true,
-    dangerouslyAllowContainerNamespaceJoin:
-      params.allowContainerNamespaceJoin ??
-      params.cfg.dangerouslyAllowContainerNamespaceJoin === true,
-  });
+export function buildSandboxCreateArgs(
+  params: SandboxCreateSecurityParams & {
+    name: string;
+    scopeKey: string;
+    createdAtMs?: number;
+    labels?: Record<string, string>;
+    configHash?: string;
+    includeBinds?: boolean;
+  },
+) {
+  validateSandboxCreateSecurity(params);
 
   const createdAtMs = params.createdAtMs ?? Date.now();
   const args = ["create", "--name", params.name];
@@ -358,6 +316,7 @@ async function createSandboxContainer(params: {
   workspaceDir: string;
   workspaceAccess: SandboxWorkspaceAccess;
   agentWorkspaceDir: string;
+  bindSourceRoots: string[];
   scopeKey: string;
   configHash?: string;
   mountPlan: SandboxMountPlan;
@@ -388,7 +347,7 @@ async function createSandboxContainer(params: {
     scopeKey,
     configHash: params.configHash,
     includeBinds: false,
-    bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
+    bindSourceRoots: params.bindSourceRoots,
   });
   if (podmanPolicy) {
     args.push(...podmanPolicy.extraCreateArgs);
@@ -542,6 +501,8 @@ async function ensureSandboxContainerLifecycle(
           dockerTmpfsSource: params.cfg.dockerTmpfsSource,
         })
       : genericConfigHash;
+  // Creation and changed-config reuse judge binds against the same roots.
+  const bindSourceRoots = [params.workspaceDir, params.agentWorkspaceDir];
   const now = Date.now();
   const needsSetupReservation =
     Boolean(params.cfg.docker.setupCommand?.trim()) ||
@@ -578,6 +539,13 @@ async function ensureSandboxContainerLifecycle(
     }
     hashMismatch = !currentHash || currentHash !== expectedHash;
     if (hashMismatch) {
+      assertChangedSandboxConfigAllowed({
+        containerName,
+        cfg: params.cfg.docker,
+        bindSourceRoots,
+        scope: params.cfg.scope,
+        sessionKey: params.scopeKey,
+      });
       const lastUsedAtMs = registryEntry?.lastUsedAtMs;
       const isHot =
         running &&
@@ -644,6 +612,7 @@ async function ensureSandboxContainerLifecycle(
         workspaceDir: params.workspaceDir,
         workspaceAccess: params.cfg.workspaceAccess,
         agentWorkspaceDir: params.agentWorkspaceDir,
+        bindSourceRoots,
         scopeKey: params.scopeKey,
         configHash: expectedHash,
         mountPlan,

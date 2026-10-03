@@ -263,6 +263,111 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(registryMocks.updateRegistry).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { revoked: "allowedBindSources", hot: true, requireCurrentConfig: false },
+    { revoked: "allowedBindSources", hot: false, requireCurrentConfig: false },
+    { revoked: "allowedBindSources", hot: true, requireCurrentConfig: true },
+    { revoked: "dangerouslyAllowExternalBindSources", hot: true, requireCurrentConfig: false },
+    { revoked: "dangerouslyAllowExternalBindSources", hot: false, requireCurrentConfig: false },
+  ] as const)(
+    "preserves the container and refuses it when $revoked is revoked (hot=$hot, requireCurrentConfig=$requireCurrentConfig)",
+    async ({ revoked, hot, requireCurrentConfig }) => {
+      const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
+      const sharedDir = tempDirs.make("openclaw-docker-shared-");
+      const cfg = createSandboxConfig([], [`${sharedDir}:/team:rw`], "rw", {});
+      const grantedDocker =
+        revoked === "allowedBindSources"
+          ? { ...cfg.docker, allowedBindSources: [sharedDir] }
+          : { ...cfg.docker, dangerouslyAllowExternalBindSources: true };
+      const grantedHash = await computeTestSandboxHash({
+        docker: grantedDocker,
+        dockerEnvPolicyEpoch: harness.resolveDockerEnvPolicyEpoch(cfg.docker.env),
+        workspaceAccess: cfg.workspaceAccess,
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+        createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+      });
+      spawnState.mounts = JSON.stringify([
+        { Type: "bind", Source: workspaceDir, Destination: "/workspace", RW: true },
+        { Type: "bind", Source: sharedDir, Destination: "/team", RW: true },
+      ]);
+      spawnState.labelHash = grantedHash;
+      registryMocks.readRegistryEntry.mockResolvedValue({
+        containerName: "oc-test-shared",
+        sessionKey: "shared",
+        createdAtMs: 1,
+        lastUsedAtMs: hot ? Date.now() : 0,
+        image: cfg.docker.image,
+        configHash: grantedHash,
+      });
+
+      const error = await harness
+        .ensureSandboxContainer({
+          scopeKey: "shared",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          cfg,
+          ...(requireCurrentConfig ? { requireCurrentConfig } : {}),
+        })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toMatchObject({
+        message: expect.stringMatching(
+          /^Sandbox config changed for oc-test-shared; the existing container was preserved .* is outside allowed roots .* recreate: openclaw sandbox recreate --all$/,
+        ),
+      });
+      expect(
+        spawnState.calls.some((call) => ["rm", "create", "start"].includes(call.args[0] ?? "")),
+      ).toBe(false);
+      expect(registryMocks.updateRegistry).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reuses a hot container while its named root is still allowed", async () => {
+    const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
+    const sharedDir = tempDirs.make("openclaw-docker-shared-");
+    const cfg = createSandboxConfig(["1.1.1.1"], [`${sharedDir}:/team:rw`], "rw", {});
+    cfg.docker.allowedBindSources = [sharedDir];
+    const staleHash = await computeTestSandboxHash({
+      docker: { ...cfg.docker, dns: ["8.8.8.8"] },
+      dockerEnvPolicyEpoch: harness.resolveDockerEnvPolicyEpoch(cfg.docker.env),
+      workspaceAccess: cfg.workspaceAccess,
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+    });
+    spawnState.mounts = JSON.stringify([
+      { Type: "bind", Source: workspaceDir, Destination: "/workspace", RW: true },
+      { Type: "bind", Source: sharedDir, Destination: "/team", RW: true },
+    ]);
+    spawnState.labelHash = staleHash;
+    registryMocks.readRegistryEntry.mockResolvedValue({
+      containerName: "oc-test-shared",
+      sessionKey: "shared",
+      createdAtMs: 1,
+      lastUsedAtMs: Date.now(),
+      image: cfg.docker.image,
+      configHash: staleHash,
+    });
+
+    await harness.ensureSandboxContainer({
+      scopeKey: "shared",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg,
+    });
+
+    expect(spawnState.calls.some((call) => ["rm", "create"].includes(call.args[0] ?? ""))).toBe(
+      false,
+    );
+    expect(runtimeMocks.log).toHaveBeenCalledWith(
+      expect.stringContaining("Recreate to apply: openclaw sandbox recreate --all"),
+    );
+  });
+
   it("recreates shared container when previously filtered explicit env becomes allowed", async () => {
     const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const cfg = createSandboxConfig(["1.1.1.1"], undefined, "rw", {

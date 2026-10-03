@@ -257,6 +257,50 @@ describe("ensureSandboxBrowser create args", () => {
     expect(registryMocks.updateBrowserRegistry.mock.calls.at(-1)?.[0]?.configHash).toBe(oldHash);
   });
 
+  it.each([true, false])(
+    "preserves the browser container and refuses it when its named root is revoked (hot=%s)",
+    async (hot) => {
+      const sharedDir = harness.tempDirs.make("openclaw-browser-shared-");
+      const cfg = buildConfig(false);
+      cfg.docker.binds = [`${sharedDir}:/team:rw`];
+      const grantedHash = await computeTestBrowserHash({
+        cfg: { ...cfg, docker: { ...cfg.docker, allowedBindSources: [sharedDir] } },
+        createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+      });
+      dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
+      dockerMocks.readDockerContainerEnvVar.mockResolvedValue("existing-cdp-token");
+      dockerMocks.readDockerContainerLabel.mockResolvedValue(grantedHash);
+      registryMocks.readBrowserRegistry.mockResolvedValue({
+        entries: [
+          {
+            containerName: "openclaw-sbx-browser-session-test-0661d10a",
+            sessionKey: "session:test",
+            createdAtMs: 1,
+            lastUsedAtMs: hot ? Date.now() : 0,
+            image: cfg.browser.image,
+            configHash: grantedHash,
+            cdpPort: 49100,
+          },
+        ],
+      });
+
+      await expect(
+        ensureTestSandboxBrowser({
+          scopeKey: "session:test",
+          workspaceDir: harness.testWorkspaceDir,
+          agentWorkspaceDir: harness.testWorkspaceDir,
+          cfg,
+        }),
+      ).rejects.toThrow(
+        /^Sandbox config changed for openclaw-sbx-browser-session-test-0661d10a; the existing container was preserved .* is outside allowed roots .* recreate: openclaw sandbox recreate --browser --session session:test$/,
+      );
+      expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "rm")).toBeUndefined();
+      expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create")).toBeUndefined();
+      expect(bridgeMocks.stopBrowserBridgeServer).not.toHaveBeenCalled();
+      expect(registryMocks.updateBrowserRegistry).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not inject noVNC password env when noVNC is disabled", async () => {
     const result = await ensureTestSandboxBrowser({
       scopeKey: "session:test",

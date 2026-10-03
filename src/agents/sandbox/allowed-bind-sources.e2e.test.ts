@@ -217,4 +217,40 @@ describe("sandbox allowed bind sources", () => {
     expect(statePath.startsWith(stateDir)).toBe(true);
     await expect(fs.stat(statePath)).resolves.toBeDefined();
   }, 300_000);
+
+  it("refuses a hot container once its root is revoked, keeps it, and reuses it when the root returns", async (ctx) => {
+    if (!dockerAvailable) {
+      ctx.skip(`docker daemon or ${IMAGE} unavailable`);
+      return;
+    }
+    // Agent-scoped runtimes carry an `agent:<id>` scope key; the refusal's recreate hint names it.
+    const params = {
+      scopeKey: `agent:${members.one.id}`,
+      workspaceDir: members.one.workspaceDir,
+      agentWorkspaceDir: members.one.agentWorkspaceDir,
+    };
+    const granted = await ensureSandboxContainer({ ...params, cfg: buildSandboxConfig() });
+    if (!containerNames.includes(granted.containerName)) {
+      containerNames.push(granted.containerName);
+    }
+    const revoked = buildSandboxConfig();
+    revoked.docker.allowedBindSources = [];
+
+    await expect(ensureSandboxContainer({ ...params, cfg: revoked })).rejects.toThrow(
+      /^Sandbox config changed for .+; the existing container was preserved .* is outside allowed roots/,
+    );
+    const kept = await execFileAsync("docker", [
+      "inspect",
+      "-f",
+      "{{.Id}} {{.State.Running}}",
+      granted.containerName,
+    ]);
+    expect(kept.stdout.trim()).toBe(`${granted.containerId} true`);
+    const retained = await containerShell(granted.containerName, `cat ${SHARED_MOUNT}/SHARED.md`);
+    expect(retained.stdout).toContain("shared notes");
+
+    await expect(ensureSandboxContainer({ ...params, cfg: buildSandboxConfig() })).resolves.toEqual(
+      granted,
+    );
+  }, 300_000);
 });

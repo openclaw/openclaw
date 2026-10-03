@@ -19,6 +19,7 @@ import {
   resolveSandboxHostPathViaExistingAncestor,
 } from "./host-paths.js";
 import { getBlockedNetworkModeReason } from "./network-mode.js";
+import type { SandboxDockerConfig } from "./types.js";
 
 // Targeted denylist: host paths that should never be exposed inside sandbox containers.
 const BLOCKED_HOST_PATHS = [
@@ -389,6 +390,7 @@ function validateApparmorProfile(profile: string | undefined): void {
   }
 }
 
+/** @internal Test entry point; production callers go through validateSandboxCreateSecurity. */
 export function validateSandboxSecurity(
   cfg: {
     binds?: string[];
@@ -404,4 +406,57 @@ export function validateSandboxSecurity(
   });
   validateSeccompProfile(cfg.seccompProfile);
   validateApparmorProfile(cfg.apparmorProfile);
+}
+
+/**
+ * Widens the bind source allowlist with configured shared roots. An absent caller allowlist
+ * means the gate is off, so it must stay off: adding roots there would silently start gating.
+ */
+function resolveAllowedBindSourceRoots(
+  cfg: Pick<SandboxDockerConfig, "allowedBindSources">,
+  bindSourceRoots: string[] | undefined,
+): string[] | undefined {
+  if (!bindSourceRoots) {
+    return undefined;
+  }
+  const configured = cfg.allowedBindSources ?? [];
+  for (const root of configured) {
+    const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(root);
+    const directRoot = isSandboxHostFilesystemRoot(root);
+    if (directRoot || isSandboxHostFilesystemRoot(canonicalRoot)) {
+      const reason = directRoot
+        ? "names a filesystem root"
+        : `resolves to filesystem root "${canonicalRoot}"`;
+      throw new Error(
+        `Sandbox security: allowedBindSources entry "${root}" ${reason}. ` +
+          "Filesystem roots cannot be allowlisted; choose a narrower shared directory.",
+      );
+    }
+  }
+  return configured.length ? [...bindSourceRoots, ...configured] : bindSourceRoots;
+}
+
+export type SandboxCreateSecurityParams = {
+  cfg: SandboxDockerConfig;
+  bindSourceRoots?: string[];
+  allowSourcesOutsideAllowedRoots?: boolean;
+  allowReservedContainerTargets?: boolean;
+  allowContainerNamespaceJoin?: boolean;
+};
+
+// Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
+export function validateSandboxCreateSecurity(params: SandboxCreateSecurityParams) {
+  validateSandboxSecurity({
+    ...params.cfg,
+    allowedSourceRoots: resolveAllowedBindSourceRoots(params.cfg, params.bindSourceRoots),
+    allowSourcesOutsideAllowedRoots:
+      params.allowSourcesOutsideAllowedRoots ??
+      params.cfg.dangerouslyAllowExternalBindSources === true,
+    allowReservedContainerTargets:
+      params.allowReservedContainerTargets ??
+      params.cfg.dangerouslyAllowReservedContainerTargets === true,
+    dangerouslyAllowContainerNamespaceJoin:
+      params.allowContainerNamespaceJoin ??
+      params.cfg.dangerouslyAllowContainerNamespaceJoin === true,
+  });
 }

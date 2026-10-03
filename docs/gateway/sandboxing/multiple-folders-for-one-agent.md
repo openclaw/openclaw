@@ -98,6 +98,8 @@ Use it when several agents need one shared directory while each keeps a private 
 
 Each container mounts only its own workspace plus `/team`, so one agent's workspace is absent from another agent's mount namespace.
 
+Removing a root from `allowedBindSources`, or turning off `dangerouslyAllowExternalBindSources`, while the bind stays configured stops OpenClaw from using an existing agent or browser container that still holds that mount. The next turn fails with a message naming the container, and the container and its data are kept. Restore the root, or remove the bind and recreate the sandbox.
+
 `dangerouslyAllowExternalBindSources` remains a break-glass override that skips the source-root check for **every** bind on that agent. Prefer `allowedBindSources`. Either way, prefer the smallest folder, use `ro` unless writes are required, and recreate the sandbox after changing mounts:
 
 ```bash
