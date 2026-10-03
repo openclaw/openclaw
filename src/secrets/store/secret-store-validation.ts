@@ -12,7 +12,7 @@ import {
 export type SecretStoreScope = { kind: "team" };
 export type SecretStoreKind = "secret" | "env";
 
-export function normalizeScope(_scope: SecretStoreScope): { scopeKind: "team"; scopeId: "" } {
+export function normalizeScope(): { scopeKind: "team"; scopeId: "" } {
   return { scopeKind: "team", scopeId: "" };
 }
 

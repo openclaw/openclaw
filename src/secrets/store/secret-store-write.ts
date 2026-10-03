@@ -74,7 +74,7 @@ function writeSecretStoreEntriesInternal(
       assertSecretStoreWriteShape(entry.value, entry.kind, entry.name, entry.allowedHosts);
     }
   }
-  const { scopeKind, scopeId } = normalizeScope(params.scope);
+  const { scopeKind, scopeId } = normalizeScope();
   const now = Date.now();
   return runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
@@ -226,7 +226,7 @@ function rollbackSecretStoreEntryWrite(params: {
   database?: OpenClawStateDatabaseOptions;
 }): boolean {
   assertSecretStoreMutationName(params.name);
-  const { scopeKind, scopeId } = normalizeScope(params.scope);
+  const { scopeKind, scopeId } = normalizeScope();
   const now = Date.now();
   try {
     return runOpenClawStateWriteTransaction(
