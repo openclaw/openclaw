@@ -89,6 +89,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/reply-turn-admission.worker.test.ts",
   "src/auto-reply/reply/dispatch-from-config.ordinary-hook-route-change.test.ts",
   "src/auto-reply/reply/dispatch-from-config.plugin-claim-route-change.test.ts",
+  "src/auto-reply/reply/agent-runner-utils.catalog-identity.test.ts",
   "test/line-question-gateway.test.ts",
   "src/commands/channels/dead-letters.test.ts",
   "src/commands/doctor-channel-ingress.test.ts",
