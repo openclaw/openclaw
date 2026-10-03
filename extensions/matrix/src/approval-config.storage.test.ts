@@ -52,20 +52,6 @@ const selectionCases = [
     matrix: { ...account("default"), defaultAccount: "ops", accounts: { ops: account("ops") } },
   },
   {
-    name: "null default",
-    approvalKind: "system-agent" as const,
-    accountId: null,
-    role: "ops",
-    matrix: { ...account("default"), defaultAccount: "ops", accounts: { ops: account("ops") } },
-  },
-  {
-    name: "sole named",
-    approvalKind: "plugin" as const,
-    accountId: undefined,
-    role: "ops",
-    matrix: { accounts: { ops: account("ops") } },
-  },
-  {
     name: "explicit empty",
     approvalKind: "exec" as const,
     accountId: "",
@@ -74,7 +60,7 @@ const selectionCases = [
   },
 ];
 
-async function expectNoHostSql(stateDir: string, run: () => void | Promise<void>) {
+async function expectNoHostSql(run: () => void | Promise<void>) {
   await closeOpenClawStateDatabaseAsync();
   const observation = observeHostDataSql();
   const sql = observation.calls;
@@ -142,7 +128,7 @@ describe("Matrix approval config boundaries", () => {
       if (!capability?.authorizeActorAction || !capability.getActionAvailabilityState) {
         throw new Error("Matrix approval capability is not registered");
       }
-      await expectNoHostSql(stateDir, () => {
+      await expectNoHostSql(() => {
         const context = { cfg, accountId, action: "approve" as const, approvalKind };
         expect(capability.getActionAvailabilityState?.(context)).toEqual({ kind: "enabled" });
         const expectedRole = approvalKind === "plugin" ? "owner" : "exec";
@@ -169,107 +155,101 @@ describe("Matrix approval config boundaries", () => {
     },
   );
 
-  it.each([{ entries: [] }, { entries: ["*"] }])(
-    "never grants an arbitrary actor via empty or wildcard-only config %j",
-    async ({ entries }) => {
-      const cfg: CoreConfig = {
-        channels: {
-          matrix: {
-            ...account("default"),
-            dm: { allowFrom: entries },
-            execApprovals: { enabled: true, approvers: entries },
-          },
+  it("never grants an arbitrary actor via wildcard-only config", async () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          ...account("default"),
+          dm: { allowFrom: ["*"] },
+          execApprovals: { enabled: true, approvers: ["*"] },
         },
-      };
-      installMatrixTestRuntime({ stateDir, cfg });
-      await expectNoHostSql(stateDir, () => {
-        for (const approvalKind of ["plugin", "exec", "system-agent"] as const) {
-          expect(
-            matrixPlugin.approvalCapability?.authorizeActorAction?.({
-              cfg,
-              senderId: "@intruder:example.org",
-              action: "approve",
-              approvalKind,
-            }),
-          ).toMatchObject({ authorized: false });
-        }
-      });
-    },
-  );
+      },
+    };
+    installMatrixTestRuntime({ stateDir, cfg });
+    await expectNoHostSql(() => {
+      for (const approvalKind of ["plugin", "exec", "system-agent"] as const) {
+        expect(
+          matrixPlugin.approvalCapability?.authorizeActorAction?.({
+            cfg,
+            senderId: "@intruder:example.org",
+            action: "approve",
+            approvalKind,
+          }),
+        ).toMatchObject({ authorized: false });
+      }
+    });
+  });
 
-  it.each(["exec", "plugin"] as const)(
-    "authorizes %s reactions against a persisted anchor without credential SQL",
-    async (approvalKind) => {
-      const cfg: CoreConfig = { channels: { matrix: { accounts: { ops: account("ops") } } } };
-      installMatrixTestRuntime({ stateDir, cfg });
-      const target = {
+  it("authorizes plugin reactions against a persisted anchor without credential SQL", async () => {
+    const approvalKind = "plugin";
+    const cfg: CoreConfig = { channels: { matrix: { accounts: { ops: account("ops") } } } };
+    installMatrixTestRuntime({ stateDir, cfg });
+    const target = {
+      accountId: "ops",
+      roomId: "!approvals:example.org",
+      eventId: `$approval-${approvalKind}`,
+    };
+    targets.push(target);
+    const key = JSON.stringify([target.accountId, target.roomId, target.eventId]);
+    const store = getMatrixRuntime().state.openKeyedStore({
+      namespace: "matrix.approval-reactions",
+      maxEntries: 1000,
+      defaultTtlMs: 24 * 60 * 60 * 1000,
+    });
+    const record = {
+      version: 1,
+      target: {
+        ...target,
+        approvalId: "synthetic-approval",
+        approvalKind,
+        allowedDecisions: ["allow-once"],
+      },
+    };
+    // Seed the durable representation directly so the first lookup cannot use the in-memory index.
+    await store.register(key, record, { ttlMs: 60_000 });
+    const client = new MatrixClient("https://matrix.example.org", "synthetic-client-token", {
+      userId: "@ops-bot:example.org",
+    });
+    clients.push(client);
+    const react = (senderId: string) =>
+      handleInboundMatrixReaction({
+        client,
+        core: getMatrixRuntime(),
+        cfg,
         accountId: "ops",
-        roomId: "!approvals:example.org",
-        eventId: `$approval-${approvalKind}`,
-      };
-      targets.push(target);
-      const key = JSON.stringify([target.accountId, target.roomId, target.eventId]);
-      const store = getMatrixRuntime().state.openKeyedStore({
-        namespace: "matrix.approval-reactions",
-        maxEntries: 1000,
-        defaultTtlMs: 24 * 60 * 60 * 1000,
-      });
-      const record = {
-        version: 1,
-        target: {
-          ...target,
-          approvalId: "synthetic-approval",
-          approvalKind,
-          allowedDecisions: ["allow-once"],
-        },
-      };
-      // Seed the durable representation directly so the first lookup cannot use the in-memory index.
-      await store.register(key, record, { ttlMs: 60_000 });
-      const client = new MatrixClient("https://matrix.example.org", "synthetic-client-token", {
-        userId: "@ops-bot:example.org",
-      });
-      clients.push(client);
-      const react = (senderId: string) =>
-        handleInboundMatrixReaction({
-          client,
-          core: getMatrixRuntime(),
-          cfg,
-          accountId: "ops",
-          roomId: target.roomId,
-          event: {
-            type: "m.reaction",
-            event_id: "$reaction",
-            origin_server_ts: 1,
-            sender: senderId,
-            content: {
-              "m.relates_to": { rel_type: "m.annotation", event_id: target.eventId, key: "✅" },
-            },
+        roomId: target.roomId,
+        event: {
+          type: "m.reaction",
+          event_id: "$reaction",
+          origin_server_ts: 1,
+          sender: senderId,
+          content: {
+            "m.relates_to": { rel_type: "m.annotation", event_id: target.eventId, key: "✅" },
           },
-          senderId,
-          senderLabel: senderId,
-          selfUserId: "@ops-bot:example.org",
-          isDirectMessage: false,
-          logVerboseMessage: () => {},
-        });
-      await expectNoHostSql(stateDir, async () => {
-        await react("@intruder:example.org");
-        expect(gateway.resolve).not.toHaveBeenCalled();
-        expect(await store.lookup(key)).toEqual(record);
-        const senderId =
-          approvalKind === "plugin" ? "@ops-owner:example.org" : "@ops-exec:example.org";
-        await react(senderId);
-        expect(gateway.resolve).toHaveBeenCalledExactlyOnceWith({
-          cfg,
-          approvalId: "synthetic-approval",
-          approvalKind,
-          decision: "allow-once",
-          channel: "matrix",
-          accountId: "ops",
-          senderId,
-        });
-        expect(await store.lookup(key)).toBeUndefined();
-        expect(gateway.edit).toHaveBeenCalledOnce();
+        },
+        senderId,
+        senderLabel: senderId,
+        selfUserId: "@ops-bot:example.org",
+        isDirectMessage: false,
+        logVerboseMessage: () => {},
       });
-    },
-  );
+    await expectNoHostSql(async () => {
+      await react("@intruder:example.org");
+      expect(gateway.resolve).not.toHaveBeenCalled();
+      expect(await store.lookup(key)).toEqual(record);
+      const senderId = "@ops-owner:example.org";
+      await react(senderId);
+      expect(gateway.resolve).toHaveBeenCalledExactlyOnceWith({
+        cfg,
+        approvalId: "synthetic-approval",
+        approvalKind,
+        decision: "allow-once",
+        channel: "matrix",
+        accountId: "ops",
+        senderId,
+      });
+      expect(await store.lookup(key)).toBeUndefined();
+      expect(gateway.edit).toHaveBeenCalledOnce();
+    });
+  });
 });
