@@ -349,11 +349,17 @@ it("serves committed inventory and performs guarded mutations without host SQLit
     expect(store.list().map((row) => row.environmentId)).toEqual(["worker-a"]);
     expect(store.listForReconcile()).toEqual(store.list());
     const record = store.get("worker-a")!;
+    expect(store.get("worker-a")).toBe(record);
+    expect(store.list()[0]).toBe(record);
+    expect(store.list()).toBe(store.list());
+    expect(store.listForReconcile()[0]).toBe(record);
     const settings = record.profileSnapshot.settings;
     if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
       throw new Error("Expected fixture settings");
     }
-    settings.region = "caller mutation";
+    expect(() => {
+      settings.region = "caller mutation";
+    }).toThrow(TypeError);
     expect(store.get("worker-a")!.profileSnapshot.settings).toEqual({ region: "fixture" });
     expect(queries).not.toHaveBeenCalled();
     expect(firstRows).not.toHaveBeenCalled();
@@ -367,6 +373,9 @@ it("serves committed inventory and performs guarded mutations without host SQLit
     });
     expect(changed.state).toBe("provisioning");
     expect(store.get("worker-a")).toEqual(changed);
+    expect(store.get("worker-a")).not.toBe(record);
+    expect(store.list()[0]).toBe(store.get("worker-a"));
+    expect(record.state).toBe("requested");
     await expect(
       store.transition({ environmentId: "worker-a", from: "requested", to: "provisioning" }),
     ).rejects.toThrow("state conflict");
