@@ -31,13 +31,14 @@ export function resolveClawToolProfileSnapshot(
     return undefined;
   }
   const profileAllow = expandToolGroups(profile.allow);
+  const deny = expandToolGroups([...(profile.deny ?? []), ...(tools.deny ?? [])]);
   const explicitAllow = tools.allow
     ? profileAllow.includes("*")
       ? expandToolGroups(tools.allow)
       : Array.from(
           new Set([
             ...profileAllow.filter((tool) =>
-              isToolAllowedByPolicyName(tool, { allow: tools.allow }),
+              isToolAllowedByPolicyName(tool, { allow: tools.allow, deny }),
             ),
             ...(profileAllow.includes("bundle-mcp")
               ? tools.allow.filter(isConcreteBundleMcpToolName)
@@ -48,7 +49,7 @@ export function resolveClawToolProfileSnapshot(
   return {
     allow:
       explicitAllow ?? expandToolGroups([...(profile.allow ?? []), ...(tools.alsoAllow ?? [])]),
-    deny: expandToolGroups([...(profile.deny ?? []), ...(tools.deny ?? [])]),
+    deny,
   };
 }
 

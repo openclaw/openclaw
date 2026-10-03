@@ -9,7 +9,7 @@
   "type": "module",
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.74.0",
-    "@openclaw/fs-safe": "0.21.3",
+    "@openclaw/fs-safe": "0.23.0",
     "mdast-util-from-markdown": "2.0.3",
     "mdast-util-gfm-table": "2.0.0",
     "micromark-extension-gfm-table": "2.1.2",
@@ -21,7 +21,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.7"
+    "openclaw": ">=2026.9.9"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -68,7 +68,7 @@
       "minHostVersion": ">=2026.5.29"
     },
     "compat": {
-      "pluginApi": ">=2026.9.7"
+      "pluginApi": ">=2026.9.9"
     },
     "build": {
       "bundledDist": false,

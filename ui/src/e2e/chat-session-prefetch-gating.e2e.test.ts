@@ -91,14 +91,25 @@ suite.define(() => {
         messageSeq: 5,
       });
       await expect.poll(() => historyRequestCount(gateway, MAIN_SESSION_KEY)).toBe(1);
+      // The foreground read retries after its 30-second deadline. Keep that
+      // replacement in flight too, instead of letting its ordinary fixture ACK finish loading.
+      await gateway.deferNext("chat.history", { sessionKey: MAIN_SESSION_KEY });
 
       // Fire every prefetch timer, including the cooldown retry, while the
       // presented transcript is still in flight.
       await pauseVirtualClock(page);
       await page.clock.runFor(35_000);
       expect(await historyRequestCount(gateway, WARM_SESSION_KEY)).toBe(1);
+      expect(await historyRequestCount(gateway, MAIN_SESSION_KEY)).toBe(2);
+      await gateway.resolveDeferred("chat.history", {
+        ...transcript("Retired foreground response", 6),
+        sessionId: mainSession.sessionId,
+      });
+      await page.clock.runFor(1);
+      expect(await page.getByText("Retired foreground response", { exact: true }).count()).toBe(0);
+      expect(await historyRequestCount(gateway, WARM_SESSION_KEY)).toBe(1);
 
-      // Once the presented transcript commits, warming resumes on its own.
+      // Only the current foreground response commits; warming then resumes on its own.
       await gateway.resolveDeferred("chat.history", {
         ...transcript("Main transcript reloaded", 6),
         sessionId: mainSession.sessionId,

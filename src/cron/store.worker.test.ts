@@ -6,7 +6,10 @@ import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-muta
 import { createCronRegressionState } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -15,10 +18,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { createCronMutationCompletion } from "./mutation-completion.js";
 import { CronService } from "./service.js";
-import { update as updateCronJob } from "./service/ops-mutations.js";
 import * as runtimeMutation from "./service/runtime-mutation.js";
-import { ensureLoaded, persist } from "./service/store.js";
-import { stopTimer } from "./service/timer.js";
 import * as sessionReaper from "./session-reaper.js";
 import {
   CronJobsStoreChangedError,
@@ -29,6 +29,7 @@ import {
   saveCronJobsStoreChanges,
   saveCronJobsStoreWithRevision,
 } from "./store.js";
+import { prepareCronJobNameResolver } from "./store/job-name.js";
 import { restoreCronLoadError, serializeCronLoadError } from "./store/load-error.js";
 import type { CronStoreWorkerOperations } from "./store/load-worker.types.js";
 import { serializeCronSaveError } from "./store/save-error.js";
@@ -294,7 +295,16 @@ it.each([true, false])(
         job.state = {};
       }
       store.jobs[0]!.declarationKey = "agent:main:callback-save";
+      store.jobs.push({ ...store.jobs[0]!, id: "broken", name: "Broken metadata" });
       await saveCronJobsStore(storePath, store);
+      runOpenClawStateWriteTransaction(({ db }) => {
+        db.prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?").run(
+          "{",
+          storePath,
+          "broken",
+        );
+      });
+      const resolveName = await prepareCronJobNameResolver(["broken"], storePath);
       const service = new CronService({
         scheduler: createTestGatewayScheduler(),
         nowMs: () => Date.now(),
@@ -395,6 +405,7 @@ it.each([true, false])(
             return undefined;
           });
           await step.invoke(callback);
+          expect(resolveName("broken")).toBe(cronEnabled ? undefined : "Broken metadata");
           if (step.singleUse) {
             expect(callback, step.name).toHaveBeenCalledTimes(1);
           } else {
@@ -556,66 +567,6 @@ it.each(["add", "update", "remove", "authority invalidation", "runtime update"] 
   },
 );
 
-it("preserves a peer definition committed before a state-only save and later guarded edit", async () => {
-  await withOpenClawTestState({ label: "cron-state-only-peer-write" }, async (fixture) => {
-    const storePath = fixture.statePath("cron", "jobs.json");
-    const original = cronWorkerFixture();
-    for (const job of original.jobs) {
-      job.enabled = false;
-      job.state = {};
-      job.agentId = "alpha";
-    }
-    await saveCronJobsStore(storePath, original);
-    const state = createCronRegressionState({
-      storePath,
-      cronEnabled: true,
-      runIsolatedAgentJob: async () => ({ status: "skipped" }),
-    });
-    try {
-      await ensureLoaded(state);
-      const peer = structuredClone(original);
-      peer.jobs.push({
-        ...structuredClone(expectDefined(peer.jobs[1], "peer template")),
-        id: "peer",
-        name: "peer added",
-        agentId: "beta",
-      });
-      await saveCronJobsStoreChanges(storePath, original, peer);
-      expect(await persist(state, { stateOnly: true })).toBe(true);
-      const beforeEdit = await loadCronJobsStoreWithConfigJobs(storePath);
-      expect(beforeEdit.store.jobs.find((job) => job.id === "peer")).toMatchObject({
-        name: "peer added",
-        agentId: "beta",
-      });
-      const result = await updateCronJob(
-        state,
-        "first",
-        { name: "guarded edit" },
-        {
-          commitGuard: () =>
-            expect(state.store?.jobs.find((job) => job.id === "first")?.name).toBe("first"),
-        },
-      ).then(
-        () => ({ committed: true as const }),
-        (error: unknown) => ({ committed: false as const, error }),
-      );
-      if (!result.committed) {
-        expect(result.error).toBeInstanceOf(CronJobsStoreChangedError);
-      }
-      const persisted = (await loadCronJobsStoreWithConfigJobs(storePath)).store.jobs;
-      expect(persisted.find((job) => job.id === "peer")).toMatchObject({
-        name: "peer added",
-        agentId: "beta",
-      });
-      expect(persisted.find((job) => job.id === "first")?.name).toBe(
-        result.committed ? "guarded edit" : "first",
-      );
-    } finally {
-      stopTimer(state);
-    }
-  });
-});
-
 it.each(["rename", "disable", "remove", "add"] as const)(
   "reconciles a committed %s when its worker reply is lost without replay",
   async (mutation) => {
@@ -626,6 +577,7 @@ it.each(["rename", "disable", "remove", "add"] as const)(
         job.state.nextRunAtMs = Date.now() + 60_000;
       }
       await saveCronJobsStore(storePath, store);
+      const resolveName = await prepareCronJobNameResolver(["first", "added"], storePath);
       const onEvent = vi.fn();
       const state = createCronRegressionState({
         storePath,
@@ -681,6 +633,9 @@ it.each(["rename", "disable", "remove", "add"] as const)(
         expect(dropped.wasDropped()).toBe(true);
         expect(dropped.attempts).toEqual(["cron.mutateJobs"]);
         expect(completion.isCommitted()).toBe(true);
+        expect(resolveName(mutation === "add" ? "added" : "first")).toBe(
+          mutation === "remove" ? undefined : mutation === "add" ? "accepted add" : "accepted edit",
+        );
         if (mutation === "remove") {
           expect.soft(service.getJob("first")).toBeUndefined();
           expect.soft(marker.jobRemoved).toBe(true);
@@ -795,6 +750,7 @@ describe("worker save result publication", () => {
             ok: true,
             committed,
             value: undefined,
+            names: new Map(),
             jobsFingerprint: "synthetic-fingerprint",
             runtimeFingerprint: "synthetic-runtime-fingerprint",
           }
@@ -851,6 +807,7 @@ describe("worker save result publication", () => {
         ok: true,
         committed: true,
         value: undefined,
+        names: new Map(),
         jobsFingerprint: "synthetic-fingerprint",
         runtimeFingerprint: "synthetic-runtime-fingerprint",
       });
@@ -892,6 +849,7 @@ describe("worker save result publication", () => {
         ok: true,
         committed: true,
         value: undefined,
+        names: new Map(),
         jobsFingerprint: "synthetic-fingerprint",
         runtimeFingerprint: "synthetic-runtime-fingerprint",
       });

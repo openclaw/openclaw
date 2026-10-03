@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
+  SpeechDirectiveTokenParseResult,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
@@ -110,11 +111,9 @@ function readGoogleTtsOverrides(
   };
 }
 
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: SpeechProviderOverrides;
-  warnings?: string[];
-} {
+function parseDirectiveToken(
+  ctx: SpeechDirectiveTokenParseContext,
+): SpeechDirectiveTokenParseResult {
   switch (ctx.key) {
     case "voicename":
     case "voice_name":

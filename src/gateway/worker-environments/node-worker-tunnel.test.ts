@@ -780,15 +780,15 @@ describe("node worker tunnel manager", () => {
       const uncached = fileCount - retained;
       expect(retained).toBeGreaterThan(0);
       expect(reports[0]).toMatchObject({
-        remoteManifestCalls: 2,
-        remoteContentHashCount: fileCount + uncached,
+        remoteManifestCalls: 1,
+        remoteContentHashCount: fileCount,
       });
       expect(reports[1]).toMatchObject({
-        remoteManifestCalls: 2,
-        remoteContentHashCount: 2 * uncached,
-        remoteMemoHitCount: 2 * retained,
+        remoteManifestCalls: 1,
+        remoteContentHashCount: uncached,
+        remoteMemoHitCount: retained,
       });
-      expect(memoInputs).toHaveLength(4);
+      expect(memoInputs).toHaveLength(2);
       expect(memoInputs[0]).toEqual([]);
       expect(memoInputs.slice(1).every((entries) => entries.length === retained)).toBe(true);
       expect(memoInputs.flat().every(([identity]) => identity.startsWith("worker:"))).toBe(true);

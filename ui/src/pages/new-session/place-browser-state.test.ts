@@ -283,6 +283,23 @@ describe("PlaceBrowserState", () => {
     },
   );
 
+  it.each(["relative", "C:packages"])(
+    "keeps a relative draft on Enter despite a highlighted folder: %j",
+    async (draft) => {
+      const { browser, listDirectory } = fixture();
+      await browser.navigate(workspace.path);
+      browser.setDraft(draft);
+      expect(browser.highlightedEntry()).toEqual(workspace.entries[0]);
+      expect(browser.usablePath()).toBeNull();
+
+      await browser.activate();
+      await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+      expect(listDirectory).toHaveBeenCalledTimes(1);
+      expect(browser.draft).toBe(draft);
+      expect(browser.listing).toBe(workspace);
+    },
+  );
+
   it.each(["pending", "in-flight"])("reset retires %s directory work", async (phase) => {
     const { browser, listDirectory, onListing } = fixture();
     await browser.navigate(workspace.path);

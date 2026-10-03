@@ -540,10 +540,12 @@ describe("workspace completion persistence", () => {
       const pending = ensureAgentWorkspace({
         dir,
         ensureBootstrapFiles: true,
-        beforePersistentApply: () => {
-          if (!current) {
-            throw new Error("workspace owner retired");
-          }
+        guard: {
+          assertHost: () => {
+            if (!current) {
+              throw new Error("workspace owner retired");
+            }
+          },
         },
       });
       void pending.then(

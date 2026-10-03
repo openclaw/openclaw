@@ -38,7 +38,7 @@ import {
 } from "./get-reply-run-helpers.js";
 import {
   REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
-  resolvePreparedReplyQueueState,
+  waitForPreparedReplyQueue,
 } from "./get-reply-run-queue.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
@@ -157,6 +157,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         ? [routeSystemEventSessionKey, sessionKey]
         : [sessionKey];
     for (const systemEventSessionKey of systemEventSessionKeys) {
+      if (systemEventSessionKey === undefined) {
+        continue;
+      }
       const isCurrentSession = systemEventSessionKey === sessionKey;
       const eventsBlock = await drainFormattedSystemEvents({
         cfg,
@@ -167,6 +170,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         // A heartbeat may consume only its prepared generic selection, never
         // dedicated reminders or arrivals that were not part of this turn.
         events: context.isHeartbeat ? (eventContext?.events ?? []) : undefined,
+        deferredEventIds: context.isHeartbeat ? eventContext?.deferredEventIds : undefined,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
@@ -213,8 +217,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           sessionId,
           isFirstTurnInSession,
           workspaceDir: context.skillsWorkspaceDir,
-          executionWorkspaceDir:
-            sessionEntry?.worktree?.canonicalWorkspaceDir ?? context.workspaceDir,
+          executionWorkspaceDir: context.workspaceDir,
           cfg,
           execOverrides: params.execOverrides,
           skillFilter: opts?.skillFilter,
@@ -358,7 +361,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     ? null
     : await traceRunPhase("reply.load_embedded_agent_runtime", () => loadEmbeddedAgentRuntime());
   const resolveActiveEmbeddedSessionId = (sessionFile = preparedSessionState.sessionFile) =>
-    embeddedAgentRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ??
+    (sessionKey !== undefined
+      ? embeddedAgentRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey)
+      : undefined) ??
     embeddedAgentRuntime?.resolveActiveEmbeddedRunSessionIdBySessionFile?.(sessionFile);
   const queueKey = sessionKey ?? sessionIdFinal;
   const sessionLaneKey = embeddedAgentRuntime
@@ -437,7 +442,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       clearAutoFallbackPrimaryProbeSelection(authSessionEntry);
     }
     const authSessionStore =
-      shouldUseEphemeralSession && authSessionEntry
+      shouldUseEphemeralSession && authSessionEntry && authSessionKey !== undefined
         ? { [authSessionKey]: authSessionEntry }
         : sessionStore;
     const selection = await resolveSessionAuthSelection({
@@ -579,8 +584,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     resetTriggered: effectiveResetTriggered,
   });
   if (isActive && activeRunQueueAction === "run-now") {
-    const queueState = await resolvePreparedReplyQueueState({
-      activeRunQueueAction,
+    const queueReply = await waitForPreparedReplyQueue({
       activeSessionId: activeSessionId ?? resolveActiveQueueSessionId(),
       queueMode: activeRunQueueMode,
       interruptActiveRun: async () => {
@@ -617,9 +621,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       },
       resolveBusyState: resolveQueueBusyState,
     });
-    if (queueState.kind === "reply") {
+    if (queueReply) {
       typing.cleanup();
-      return { kind: "reply", reply: queueState.reply } as const;
+      return { kind: "reply", reply: queueReply } as const;
     }
   }
   if (activeRunQueueAction !== "drop") {

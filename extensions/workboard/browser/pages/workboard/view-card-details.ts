@@ -470,46 +470,25 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                                 ${t("workboard.detailExecutionOptions")}
                               </summary>
                               <div class="workboard-detail__engine-groups">
-                                ${
-                                  props.canModelOverride !== false
-                                    ? html`
-                                        <div class="workboard-detail__engine-group">
-                                          <span>${t("workboard.detailRunAutomatically")}</span>
-                                          <div class="workboard-detail__actions">
-                                            ${renderStartExecutionButton(
+                                ${(["autonomous", "manual"] as const).map((mode) =>
+                                  mode === "autonomous" && props.canModelOverride === false
+                                    ? nothing
+                                    : html`<div class="workboard-detail__engine-group">
+                                        <span
+                                          >${t(mode === "autonomous" ? "workboard.detailRunAutomatically" : "workboard.detailOpenManually")}</span
+                                        >
+                                        <div class="workboard-detail__actions">
+                                          ${(["codex", "claude"] as const).map((engine) =>
+                                            renderStartExecutionButton(
                                               actionProps,
                                               card,
-                                              "codex",
-                                              "autonomous",
-                                            )}
-                                            ${renderStartExecutionButton(
-                                              actionProps,
-                                              card,
-                                              "claude",
-                                              "autonomous",
-                                            )}
-                                          </div>
+                                              engine,
+                                              mode,
+                                            ),
+                                          )}
                                         </div>
-                                      `
-                                    : nothing
-                                }
-                                <div class="workboard-detail__engine-group">
-                                  <span>${t("workboard.detailOpenManually")}</span>
-                                  <div class="workboard-detail__actions">
-                                    ${renderStartExecutionButton(
-                                      actionProps,
-                                      card,
-                                      "codex",
-                                      "manual",
-                                    )}
-                                    ${renderStartExecutionButton(
-                                      actionProps,
-                                      card,
-                                      "claude",
-                                      "manual",
-                                    )}
-                                  </div>
-                                </div>
+                                      </div>`,
+                                )}
                               </div>
                             </details>
                           `

@@ -1,15 +1,23 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
+import {
+  getMcpAppModelContext,
+  removeMcpAppModelContextItem,
+  subscribeMcpAppModelContext,
+  updateMcpAppModelContext,
+} from "../../agents/mcp-app-model-context.js";
 import { buildMcpAppSandboxPath } from "../../agents/mcp-app-sandbox.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logWarn } from "../../logger.js";
+import { createLazyRuntimeMethod } from "../../shared/lazy-runtime.js";
 import {
   executeMcpAppOperation,
+  resolveMcpAppRequesterId,
   McpAppViewExpiredError,
   type McpAppOperation,
   requireMcpAppInteraction,
@@ -19,7 +27,32 @@ import {
 import { createMcpAppStandaloneTicket } from "../mcp-app-standalone.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import { retainSessionScopedRead } from "./session-scoped-read.js";
+import type {
+  GatewayRequestHandler,
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+} from "./types.js";
+
+const fileRuntime = () => import("../mcp-app-host-files.js");
+const readMcpAppHostFile = createLazyRuntimeMethod(
+  fileRuntime,
+  (runtime) => runtime.readMcpAppHostFile,
+);
+const writeMcpAppHostFile = createLazyRuntimeMethod(
+  fileRuntime,
+  (runtime) => runtime.writeMcpAppHostFile,
+);
+const subscribeMcpAppHostFile = createLazyRuntimeMethod(
+  fileRuntime,
+  (runtime) => runtime.subscribeMcpAppHostFile,
+);
+const canOpenMcpAppFiles = createLazyRuntimeMethod(
+  fileRuntime,
+  (runtime) => runtime.canOpenMcpAppFiles,
+);
+const openMcpAppFile = createLazyRuntimeMethod(fileRuntime, (runtime) => runtime.openMcpAppFile);
 
 function requireString(params: Record<string, unknown>, key: string): string {
   const value = params[key];
@@ -27,6 +60,18 @@ function requireString(params: Record<string, unknown>, key: string): string {
     throw new Error(`${key} is required`);
   }
   return value.trim();
+}
+
+function optionalRecord(params: Record<string, unknown>, key: string) {
+  const value = params[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  const record = asOptionalRecord(value);
+  if (!record) {
+    throw new Error(`${key} must be an object`);
+  }
+  return record;
 }
 
 function optionalCursor(params: Record<string, unknown>): { cursor?: string } | undefined {
@@ -51,19 +96,65 @@ function resolveMcpAppSessionOwner(params: Record<string, unknown>, cfg: OpenCla
   return owner.agentId;
 }
 
+function resolveRequestedMcpAppView({ params, context, client }: GatewayRequestHandlerOptions) {
+  return resolveMcpAppActiveView({
+    sessionKey: requireString(params, "sessionKey"),
+    agentId: resolveMcpAppSessionOwner(params, context.getRuntimeConfig()),
+    viewId: requireString(params, "viewId"),
+    requesterId: resolveMcpAppRequesterId(client),
+    cfg: context.getRuntimeConfig(),
+    restore: false,
+  });
+}
+
 function operationHandler(
   buildOperation: (params: Record<string, unknown>) => McpAppOperation,
 ): GatewayRequestHandler {
-  return async ({ respond, params, context }) => {
+  return async (options) => {
+    const { respond, params, context, client } = options;
     await handle(respond, async () => {
+      const requestAuthority = readGatewayRequestMutationAuthority(options);
       const operation = buildOperation(params);
       const cfg = context.getRuntimeConfig();
+      const requesterId = resolveMcpAppRequesterId(client);
       const active = await resolveMcpAppActiveView({
         sessionKey: requireString(params, "sessionKey"),
         agentId: resolveMcpAppSessionOwner(params, cfg),
         viewId: requireString(params, "viewId"),
+        requesterId,
+        cfg: context.getRuntimeConfig(),
+        restore: false,
       });
-      return await executeMcpAppOperation(active, operation);
+      const read = retainSessionScopedRead(
+        options,
+        requireString(params, "sessionKey"),
+        active.view.agentId,
+      );
+      try {
+        const result =
+          operation.method === "resources/read" &&
+          operation.params.uri.startsWith("openclaw-file://")
+            ? await readMcpAppHostFile(options, active.view, operation.params)
+            : await executeMcpAppOperation(active, operation, {
+                options,
+                assertCurrent: () => {
+                  requestAuthority.assertCurrent();
+                  read?.assertCurrent();
+                  options.sessionMutationAuthorization?.assertCurrent();
+                  if (
+                    resolveMcpAppRequesterId(client) !== requesterId ||
+                    (active.view.requesterId !== undefined &&
+                      active.view.requesterId !== requesterId)
+                  ) {
+                    throw new McpAppViewExpiredError();
+                  }
+                },
+              });
+        read?.assertCurrent();
+        return result;
+      } finally {
+        read?.release();
+      }
     });
   };
 }
@@ -91,87 +182,214 @@ async function handle(
   }
 }
 
-export const mcpAppHandlers: GatewayRequestHandlers = {
-  "mcp.app.view": async ({ respond, params, context, client }) => {
+const modelContextSubscriptions = new WeakMap<object, Map<string, () => void>>();
+
+function hostFileHandler(
+  operation: (
+    options: GatewayRequestHandlerOptions,
+    view: import("../../agents/mcp-ui-resource.js").McpAppViewLease,
+  ) => Promise<unknown>,
+): GatewayRequestHandler {
+  return async (options) => {
+    const { respond } = options;
     await handle(respond, async () => {
-      const active = await resolveMcpAppActiveView({
-        sessionKey: requireString(params, "sessionKey"),
-        agentId: resolveMcpAppSessionOwner(params, context.getRuntimeConfig()),
-        viewId: requireString(params, "viewId"),
-        cfg: context.getRuntimeConfig(),
-      });
-      return await withMcpAppActiveView(active, "read", async () => {
-        const { view } = active;
-        let interactive = false;
-        try {
-          await requireMcpAppInteraction(view);
-          interactive = true;
-        } catch {
-          // Stale board leases remain renderable but lose every interactive capability.
-        }
-        const updateModelContextSupported =
-          interactive && active.runtime.mcpAppModelContextRevoked !== true;
-        const sandboxPort =
-          context.getMcpAppSandboxPort?.() ?? (await context.ensureSandboxHostPort?.());
-        if (sandboxPort === undefined) {
-          throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
-        }
-        const configuredOrigin = context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
-        let standalone: ReturnType<typeof createMcpAppStandaloneTicket> = undefined;
-        try {
-          standalone = createMcpAppStandaloneTicket({
-            sessionKey: requireString(params, "sessionKey"),
-            view,
-            toolOperationsAuthorized: authorizeOperatorScopesForMethod(
-              "mcp.app.callTool",
-              client?.connect?.scopes ?? [],
-            ).allowed,
-          });
-        } catch (error) {
-          // Standalone links are additive; issuance must never break the
-          // existing authenticated Control UI view payload.
-          logWarn(`mcp-app: standalone ticket unavailable: ${formatErrorMessage(error)}`);
-        }
-        return {
-          sandboxUrl: buildMcpAppSandboxPath(view.csp),
-          sandboxPort,
-          ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
-          html: view.html,
-          ...(view.csp ? { csp: view.csp } : {}),
-          toolInput: view.toolInput,
-          toolResult: view.toolResult,
-          ...(standalone
-            ? {
-                standaloneUrl: standalone.url,
-                standaloneExpiresAtMs: standalone.expiresAtMs,
-              }
-            : {}),
-          // Reconstruction marks views read-only; fresh runs may legitimately grant zero App tools.
-          messageSupported: interactive,
-          updateModelContextSupported,
-        };
-      });
+      const active = await resolveRequestedMcpAppView(options);
+      return withMcpAppActiveView(active, "read", () => operation(options, active.view));
+    });
+  };
+}
+
+export const mcpAppHandlers: GatewayRequestHandlers = {
+  "mcp.app.formResource": async (options) => {
+    await handle(options.respond, async () => {
+      const { executeMcpAppFormResource } = await import("../mcp-app-form-resources.js");
+      return executeMcpAppFormResource(options);
     });
   },
-  "mcp.app.updateModelContext": async ({ respond, params, context }) => {
+  "mcp.app.view": async (options) => {
+    const { respond, params, context, client } = options;
     await handle(respond, async () => {
-      const active = await resolveMcpAppActiveView({
-        sessionKey: requireString(params, "sessionKey"),
-        agentId: resolveMcpAppSessionOwner(params, context.getRuntimeConfig()),
-        viewId: requireString(params, "viewId"),
-      });
+      const sessionKey = requireString(params, "sessionKey");
+      const agentId = resolveMcpAppSessionOwner(params, context.getRuntimeConfig());
+      const requesterId = resolveMcpAppRequesterId(client);
+      const read = retainSessionScopedRead(options, sessionKey, agentId);
+      try {
+        const active = await resolveMcpAppActiveView({
+          sessionKey: requireString(params, "sessionKey"),
+          agentId: resolveMcpAppSessionOwner(params, context.getRuntimeConfig()),
+          viewId: requireString(params, "viewId"),
+          requesterId: resolveMcpAppRequesterId(client),
+          cfg: context.getRuntimeConfig(),
+        });
+        read?.assertCurrent();
+        const payload = await withMcpAppActiveView(active, "read", async () => {
+          const { view } = active;
+          if (client?.connId) {
+            const byConnection =
+              modelContextSubscriptions.get(view) ?? new Map<string, () => void>();
+            const previous = byConnection.get(client.connId);
+            previous?.();
+            if (previous) {
+              view.disposeCallbacks?.delete(previous);
+            }
+            if (byConnection.size >= 32 && !byConnection.has(client.connId)) {
+              throw new Error("MCP App connection limit reached");
+            }
+            const connId = client.connId;
+            const unsubscribe = subscribeMcpAppModelContext(view, () => {
+              context.broadcastToConnIds(
+                "mcp.app.hostContextChanged",
+                { viewId: view.viewId },
+                new Set([connId]),
+              );
+            });
+            const stop = () => {
+              unsubscribe();
+              client.connectionSignal?.removeEventListener("abort", stop);
+              if (byConnection.get(connId) === stop) {
+                byConnection.delete(connId);
+              }
+              view.disposeCallbacks?.delete(stop);
+            };
+            client.connectionSignal?.addEventListener("abort", stop, { once: true });
+            byConnection.set(connId, stop);
+            modelContextSubscriptions.set(view, byConnection);
+            view.disposeCallbacks ??= new Set();
+            view.disposeCallbacks.add(stop);
+            if (client.connectionSignal?.aborted) {
+              stop();
+            }
+          }
+          let interactive = false;
+          try {
+            await requireMcpAppInteraction(view);
+            interactive = true;
+          } catch {
+            // Stale board leases remain renderable but lose every interactive capability.
+          }
+          const openFilesSupported =
+            interactive && Boolean(active.runtime.sessionKey) && (await canOpenMcpAppFiles(view));
+          const updateModelContextSupported =
+            interactive &&
+            Boolean(active.runtime.sessionKey) &&
+            active.runtime.mcpAppModelContextRevoked !== true;
+          const sandboxPort =
+            context.getMcpAppSandboxPort?.() ?? (await context.ensureSandboxHostPort?.());
+          if (sandboxPort === undefined) {
+            throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
+          }
+          const configuredOrigin = context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
+          let standalone: ReturnType<typeof createMcpAppStandaloneTicket> = undefined;
+          try {
+            standalone = createMcpAppStandaloneTicket({
+              sessionKey: requireString(params, "sessionKey"),
+              view,
+              toolOperationsAuthorized: authorizeOperatorScopesForMethod(
+                "mcp.app.callTool",
+                client?.connect?.scopes ?? [],
+              ).allowed,
+            });
+          } catch (error) {
+            // Standalone links are additive; issuance must never break the
+            // existing authenticated Control UI view payload.
+            logWarn(`mcp-app: standalone ticket unavailable: ${formatErrorMessage(error)}`);
+          }
+          read?.assertCurrent();
+          if (requesterId !== resolveMcpAppRequesterId(client)) {
+            throw new McpAppViewExpiredError();
+          }
+          return {
+            sandboxUrl: buildMcpAppSandboxPath(view.csp),
+            sandboxPort,
+            ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
+            html: view.html,
+            ...(view.csp ? { csp: view.csp } : {}),
+            toolInput: view.toolInput,
+            toolResult: view.toolResult,
+            hostContext: {
+              "openai/modelContext": getMcpAppModelContext(active.runtime, view),
+              ...(view.deepLink ? { "openai/deepLink": view.deepLink } : {}),
+            },
+            ...(view.displayModes ? { displayModes: view.displayModes } : {}),
+            ...(view.displayMode ? { displayMode: view.displayMode } : {}),
+            richModelContextSupported:
+              updateModelContextSupported && view.richModelContextSupported !== false,
+            fileResourcesSupported: interactive && Boolean(view.hostFile),
+            openFilesSupported,
+            ...(standalone
+              ? {
+                  standaloneUrl: standalone.url,
+                  standaloneExpiresAtMs: standalone.expiresAtMs,
+                }
+              : {}),
+            // Reconstruction marks views read-only; fresh runs may legitimately grant zero App tools.
+            messageSupported: interactive,
+            updateModelContextSupported,
+          };
+        });
+        read?.assertCurrent();
+        if (requesterId !== resolveMcpAppRequesterId(client)) {
+          throw new McpAppViewExpiredError();
+        }
+        return payload;
+      } finally {
+        read?.release();
+      }
+    });
+  },
+  "mcp.app.updateModelContext": async (options) => {
+    const { respond, params } = options;
+    await handle(respond, async () => {
+      const active = await resolveRequestedMcpAppView(options);
       return await withMcpAppActiveView(active, "read", async () => {
         await requireMcpAppInteraction(active.view);
-        updateMcpAppModelContext(active.runtime, active.view, params);
-        return {};
+        return updateMcpAppModelContext(active.runtime, active.view, params);
       });
     });
   },
+  "mcp.app.modelContext": async (options) => {
+    const { respond } = options;
+    await handle(respond, async () => {
+      const active = await resolveRequestedMcpAppView(options);
+      await requireMcpAppInteraction(active.view);
+      return { state: getMcpAppModelContext(active.runtime, active.view) };
+    });
+  },
+  "mcp.app.removeModelContext": async (options) => {
+    const { respond, params } = options;
+    await handle(respond, async () => {
+      const active = await resolveRequestedMcpAppView(options);
+      await requireMcpAppInteraction(active.view);
+      if (params.index !== undefined && typeof params.index !== "number") {
+        throw new Error("index must be a number");
+      }
+      return {
+        state: removeMcpAppModelContextItem(
+          active.runtime,
+          active.view,
+          requireString(params, "updateId"),
+          params.index,
+        ),
+      };
+    });
+  },
+  "mcp.app.writeResource": hostFileHandler((options, view) =>
+    writeMcpAppHostFile(options, view, options.params),
+  ),
+  "mcp.app.subscribeResource": hostFileHandler((options, view) =>
+    subscribeMcpAppHostFile(options, view, requireString(options.params, "uri"), true),
+  ),
+  "mcp.app.unsubscribeResource": hostFileHandler((options, view) =>
+    subscribeMcpAppHostFile(options, view, requireString(options.params, "uri"), false),
+  ),
+  "mcp.app.openFile": hostFileHandler((options, view) =>
+    openMcpAppFile(options, view, requireString(options.params, "path")),
+  ),
   "mcp.app.callTool": operationHandler((params) => ({
     method: "tools/call",
     params: {
       name: requireString(params, "toolName"),
-      arguments: (params.arguments ?? {}) as Record<string, unknown>,
+      arguments: optionalRecord(params, "arguments") ?? {},
     },
   })),
   "mcp.app.listTools": operationHandler((params) => ({
@@ -188,6 +406,9 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
   })),
   "mcp.app.readResource": operationHandler((params) => ({
     method: "resources/read",
-    params: { uri: requireString(params, "uri") },
+    params: {
+      uri: requireString(params, "uri"),
+      _meta: optionalRecord(params, "_meta"),
+    },
   })),
 };

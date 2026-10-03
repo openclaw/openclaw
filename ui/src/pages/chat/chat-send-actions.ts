@@ -8,7 +8,7 @@ import {
   reorderChatQueueItems,
 } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { hasUiSessionDefaults } from "../../lib/sessions/session-key.ts";
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import {
   isExpiredIncognitoSession,
@@ -217,7 +217,10 @@ export async function retryQueuedChatMessage(
   }
   if (!located.durable) {
     const wasVolatile = chatOutboxOwner(host).hasVolatile(host, item.id);
-    const admission = { scope: located.scope, awaitingDefaults: !hasUiSessionDefaults(host) };
+    const admission = {
+      ...captureChatOutboxAdmission(host, located.scope.sessionKey, located.scope.agentId),
+      scope: located.scope,
+    };
     if (!admitQueuedMessageForSession(host, admission, item)) {
       if (
         wasVolatile &&

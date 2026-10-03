@@ -1,4 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import {
   clearPluginHostCleanupTarget,
   hasPluginHostCleanupTarget,
@@ -8,9 +9,10 @@ import {
   type PluginHostSessionCleanupStoreParams,
 } from "./plugin-host-cleanup.js";
 import { listSessionEntriesCore, patchSessionEntryCore } from "./session-accessor.entry.js";
-import { applySessionEntryBatchProjection } from "./session-accessor.sqlite-batch-projection.js";
-import "./session-accessor.sqlite-lifecycle.js";
-import "./session-accessor.sqlite-projection.js";
+import {
+  applySessionEntryCanonicalReplacements,
+  type SessionEntryCanonicalReplacement,
+} from "./session-accessor.sqlite-replacement-projection.js";
 import type {
   SessionPatchProjectionSnapshot,
   SessionPatchProjectionTarget,
@@ -23,9 +25,8 @@ import {
   resolveProjectionExistingEntry,
   SessionLabelOwnerIndex,
 } from "./session-entry-selection.js";
-import type { InternalSessionEntry as SessionEntry } from "./types.js";
+export { cleanupSessionLifecycleArtifactsCore } from "./session-accessor.sqlite-artifact-cleanup.js";
 export {
-  cleanupSessionLifecycleArtifactsCore,
   deleteSessionEntryLifecycle,
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
@@ -46,19 +47,20 @@ export async function applySessionPatchProjections<
   sessionKeys?: readonly string[];
   storePath: string;
 }): Promise<SessionPatchProjectionResult<TFailure>[]> {
-  return await applySessionEntryBatchProjection({
+  return await applySessionEntryCanonicalReplacements({
     agentId: params.agentId,
     sessionKeys: params.sessionKeys,
     storePath: params.storePath,
     skipMaintenance: true,
-    update: async (workingStore) => {
+    update: async (entries) => {
+      const workingStore = Object.fromEntries(
+        entries.flatMap(({ entry, sessionKey }) =>
+          isInternalSessionEffectsKey(sessionKey) ? [] : [[sessionKey, entry] as const],
+        ),
+      );
       const snapshot = { store: workingStore };
       const labelOwners = new SessionLabelOwnerIndex(workingStore);
-      const mutations: Array<{
-        entry: SessionEntry;
-        previousSessionKeys?: readonly string[];
-        sessionKey: string;
-      }> = [];
+      const replacements: SessionEntryCanonicalReplacement[] = [];
       const results: SessionPatchProjectionResult<TFailure>[] = [];
       for (const operation of params.operations) {
         try {
@@ -85,9 +87,9 @@ export async function applySessionPatchProjections<
           const previousSessionKeys = candidateKeys.filter(
             (sessionKey) => sessionKey !== target.primaryKey && workingStore[sessionKey],
           );
-          mutations.push({
+          replacements.push({
             entry: projected.entry,
-            ...(previousSessionKeys.length > 0 ? { previousSessionKeys } : {}),
+            previousSessionKeys,
             sessionKey: target.primaryKey,
           });
           const cloned = labelOwners.replaceEntry(
@@ -103,7 +105,7 @@ export async function applySessionPatchProjections<
           results.push(operation.onError(error));
         }
       }
-      return { mutations, result: results };
+      return { replacements, result: results };
     },
   });
 }

@@ -6,10 +6,11 @@
 import crypto from "node:crypto";
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../packages/gateway-client/src/timeouts.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
+import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
@@ -386,7 +387,6 @@ vi.mock("./bash-tools.exec-host-shared.js", () => ({
   createAndRegisterDefaultExecApprovalRequest: createAndRegisterDefaultExecApprovalRequestMock,
   createExecApprovalRequestRoute: createExecApprovalRequestRouteMock,
   shouldResolveExecApprovalUnavailableInline: shouldResolveExecApprovalUnavailableInlineMock,
-  buildExecApprovalFollowupTarget: vi.fn((value) => value),
   resolveApprovalDecisionOrUndefined: resolveApprovalDecisionOrUndefinedMock,
   resolveExecApprovalDecisionState: resolveExecApprovalDecisionStateMock,
   resolveExecApprovalWaitOutcome: resolveExecApprovalWaitOutcomeMock,
@@ -439,8 +439,6 @@ vi.mock("./tools/nodes-utils.js", () => ({
 vi.mock("../logger.js", () => ({
   logInfo: vi.fn(),
 }));
-
-let executeNodeHostCommand: typeof import("./bash-tools.exec-host-node.js").executeNodeHostCommand;
 
 function createNodeHostRequest(
   overrides: Partial<ExecuteNodeHostCommandParams> = {},
@@ -728,10 +726,6 @@ function createHostPolicy(
 }
 
 describe("executeNodeHostCommand", () => {
-  beforeAll(async () => {
-    ({ executeNodeHostCommand } = await import("./bash-tools.exec-host-node.js"));
-  });
-
   beforeEach(() => {
     callGatewayToolMock.mockReset();
     callGatewayToolMock.mockImplementation(

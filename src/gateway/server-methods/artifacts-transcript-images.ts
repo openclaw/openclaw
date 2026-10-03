@@ -1,20 +1,16 @@
 import type { ArtifactsGetParams } from "../../../packages/gateway-protocol/src/index.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SessionRowProjection } from "../session-row-projection.js";
 import { readSessionArtifacts } from "../session-transcript-readers.js";
 import type { ArtifactLookup } from "./artifacts-content.js";
 import { prepareArtifactSessionRead } from "./artifacts-session-read.js";
-import type { GatewayClient } from "./types.js";
+import type { ArtifactSessionAccess } from "./artifacts-session-resolution.js";
 
 /** Recover only the referenced persisted bitmap; transcript bytes remain in their existing owner. */
 export async function findTranscriptImageArtifact(
   params: ArtifactsGetParams,
-  getRuntimeConfig: () => OpenClawConfig | undefined,
+  access: ArtifactSessionAccess,
   includeData: boolean,
-  client: GatewayClient | null,
-  projection?: SessionRowProjection,
 ): Promise<ArtifactLookup> {
-  const selected = await prepareArtifactSessionRead(params, getRuntimeConfig, client, projection);
+  const selected = await prepareArtifactSessionRead(params, access);
   if (!selected?.scope) {
     return { sessionKey: selected?.sessionKey };
   }
@@ -27,5 +23,9 @@ export async function findTranscriptImageArtifact(
     messageRole: params.messageRole,
   });
   selected.assertCurrent();
-  return { sessionKey: selected.sessionKey, assertCurrent: selected.assertCurrent, artifact };
+  return {
+    sessionKey: selected.sessionKey,
+    assertCurrent: selected.assertCurrent,
+    artifact,
+  };
 }

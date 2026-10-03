@@ -2,50 +2,34 @@
 import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  registerDiscordComponentEntries,
+  resolveDiscordComponentEntryWithPersistence,
+  resolveDiscordModalEntryWithPersistence,
+} from "./components-registry.js";
 import { clearDiscordComponentEntriesForTest } from "./components-registry.test-support.js";
-import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
+import {
+  buildDiscordComponentCustomId,
+  buildDiscordComponentMessage,
+  buildDiscordComponentMessageFlags,
+  buildDiscordModalCustomId,
+  parseDiscordComponentCustomId,
+  parseDiscordComponentCustomIdForInteraction,
+  parseDiscordModalCustomId,
+  parseDiscordModalCustomIdForInteraction,
+  readDiscordComponentSpec,
+  coerceDiscordComponentParam,
+  type DiscordComponentEntry,
+  type DiscordModalEntry,
+} from "./components.js";
+import { setDiscordRuntime } from "./runtime.js";
 
-let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
-let resolveDiscordComponentEntryWithPersistence: typeof import("./components-registry.js").resolveDiscordComponentEntryWithPersistence;
-let resolveDiscordModalEntryWithPersistence: typeof import("./components-registry.js").resolveDiscordModalEntryWithPersistence;
-let buildDiscordComponentCustomId: typeof import("./components.js").buildDiscordComponentCustomId;
-let buildDiscordComponentMessage: typeof import("./components.js").buildDiscordComponentMessage;
-let buildDiscordComponentMessageFlags: typeof import("./components.js").buildDiscordComponentMessageFlags;
-let buildDiscordModalCustomId: typeof import("./components.js").buildDiscordModalCustomId;
-let parseDiscordComponentCustomId: typeof import("./components.js").parseDiscordComponentCustomId;
-let parseDiscordComponentCustomIdForInteraction: typeof import("./components.js").parseDiscordComponentCustomIdForInteraction;
-let parseDiscordModalCustomId: typeof import("./components.js").parseDiscordModalCustomId;
-let parseDiscordModalCustomIdForInteraction: typeof import("./components.js").parseDiscordModalCustomIdForInteraction;
-let readDiscordComponentSpec: typeof import("./components.js").readDiscordComponentSpec;
-let coerceDiscordComponentParam: typeof import("./components.js").coerceDiscordComponentParam;
-let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 type DiscordRuntime = Parameters<typeof import("./runtime.js").setDiscordRuntime>[0];
 
 const { clearRuntime: clearDiscordRuntime } = createPluginRuntimeStore<DiscordRuntime>({
   pluginId: "discord",
   errorMessage: "Discord runtime not initialized",
-});
-
-beforeAll(async () => {
-  ({
-    registerDiscordComponentEntries,
-    resolveDiscordComponentEntryWithPersistence,
-    resolveDiscordModalEntryWithPersistence,
-  } = await import("./components-registry.js"));
-  ({
-    buildDiscordComponentCustomId,
-    buildDiscordComponentMessage,
-    buildDiscordComponentMessageFlags,
-    buildDiscordModalCustomId,
-    parseDiscordComponentCustomId,
-    parseDiscordComponentCustomIdForInteraction,
-    parseDiscordModalCustomId,
-    parseDiscordModalCustomIdForInteraction,
-    readDiscordComponentSpec,
-    coerceDiscordComponentParam,
-  } = await import("./components.js"));
-  ({ setDiscordRuntime } = await import("./runtime.js"));
 });
 
 describe("discord components", () => {

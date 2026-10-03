@@ -7,13 +7,12 @@ import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { makeEmptyPluginMetadataOwners } from "../../plugins/current-plugin-metadata.test-support.js";
 import type { ClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import type {
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
 } from "../../plugins/hook-types.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import type {
   PluginHookAgentContext,
@@ -24,13 +23,19 @@ import type {
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { createNativeModelOwnedRuntimeModel } from "../defaults.js";
 import { extractObservedOverflowTokenCount } from "../embedded-agent-helpers/context-overflow-observation.js";
 import type { FailoverReason } from "../failover/signal.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { AgentHarnessAttemptParams } from "../harness/types.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
+import { preparedModelRuntimeConfigsMatch } from "../prepared-model-runtime.owner.js";
+import type {
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimeLeaseOptions,
+} from "../prepared-model-runtime.types.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
-import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import { makeAttemptResult, makeMockRuntimePlan } from "./run.overflow-compaction.fixture.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -79,38 +84,7 @@ type MockResolvedModel = {
   reasoning?: boolean;
 };
 
-const emptyPluginIndex: PluginMetadataSnapshot["index"] = {
-  version: 1,
-  hostContractVersion: "test",
-  compatRegistryVersion: "test",
-  migrationVersion: 1,
-  policyHash: "",
-  generatedAtMs: 1,
-  installRecords: {},
-  plugins: [],
-  diagnostics: [],
-};
-const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
-  policyHash: "",
-  index: emptyPluginIndex,
-  registryIndex: emptyPluginIndex,
-  registryDiagnostics: [],
-  manifestRegistry: { plugins: [], diagnostics: [] },
-  plugins: [],
-  diagnostics: [],
-  byPluginId: new Map(),
-  normalizePluginId: (pluginId: string) => pluginId,
-  declaredProviderOwners: new Map(),
-  owners: makeEmptyPluginMetadataOwners(),
-  metrics: {
-    registrySnapshotMs: 0,
-    manifestRegistryMs: 0,
-    ownerMapsMs: 0,
-    totalMs: 0,
-    indexPluginCount: 0,
-    manifestPluginCount: 0,
-  },
-};
+const emptyPluginMetadataSnapshot = createPluginMetadataSnapshotFixture();
 
 type MockAgentDiscoveryStores = {
   authStorage: {
@@ -164,44 +138,37 @@ const mockedContextEngine = {
   })),
 };
 
-type MockRuntimePlan = Pick<AgentRuntimePlan, "auth"> & {
-  observability: Pick<AgentRuntimePlan["observability"], "harnessId">;
-};
-
-function makeMockRuntimePlan(): MockRuntimePlan {
-  return {
-    auth: {
-      authProfileProviderForAuth: "openai",
-      providerForAuth: "openai",
-    },
-    observability: {
-      harnessId: "codex",
-    },
-  };
-}
-
 export const mockedCompactDirect = mockedContextEngine.compact;
 const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
 const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
 const buildMockAgentRuntimePlan = () => makeMockRuntimePlan() as AgentRuntimePlan;
 export const mockedBuildAgentRuntimePlan = vi.fn<() => AgentRuntimePlan>(buildMockAgentRuntimePlan);
 export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
-  async (input: Record<string, unknown>) => {
-    const pluginRegistry = getActivePluginRegistry();
+  async (input: PreparedModelRuntimeInput, options?: PreparedModelRuntimeLeaseOptions) => {
+    const admitted = options?.pluginGeneration;
+    const pluginRegistry = admitted ? admitted.pluginRegistry : getActivePluginRegistry();
+    const metadataSnapshot = admitted
+      ? admitted.pluginMetadataSnapshot
+      : { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir };
+    const snapshot = {
+      agentId: input.agentId,
+      agentDir: input.agentDir,
+      config: input.config,
+      workspaceDir: input.workspaceDir,
+      pluginRegistry: pluginRegistry
+        ? { ...pluginRegistry, agentHarnesses: [...pluginRegistry.agentHarnesses] }
+        : undefined,
+      metadataSnapshot,
+      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+    };
     return {
-      snapshot: {
-        agentId: input.agentId,
-        agentDir: input.agentDir,
-        config: input.config,
-        workspaceDir: input.workspaceDir,
-        pluginRegistry: pluginRegistry
-          ? {
-              ...pluginRegistry,
-              agentHarnesses: [...pluginRegistry.agentHarnesses],
-            }
-          : undefined,
-        metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
-        createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+      snapshot,
+      pluginGeneration: admitted ?? {
+        remoteCatalog: null,
+        pluginMetadataSnapshot: metadataSnapshot,
+        pluginRegistry: snapshot.pluginRegistry,
+        configuredCatalogEntries: [],
+        inlineProviderModels: [],
       },
       [Symbol.asyncDispose]: vi.fn(async () => {}),
     };
@@ -959,6 +926,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("../prepared-model-runtime.js", () => ({
+    preparedModelRuntimeConfigsMatch,
     // Standalone runner fixtures have no configured Gateway publication.
     loadPublishedGatewayReplyDispatchRuntime: vi.fn(async () => undefined),
     activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
@@ -988,6 +956,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   });
 
   vi.doMock("../defaults.js", () => ({
+    createNativeModelOwnedRuntimeModel,
     DEFAULT_CONTEXT_TOKENS: 200000,
     DEFAULT_MODEL: "test-model",
     DEFAULT_PROVIDER: "anthropic",

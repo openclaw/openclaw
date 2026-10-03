@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { retainSessionListForegroundWork } from "../../gateway/session-projection-work.js";
+import { observeSessionRowBackfill } from "../../gateway/session-row-backfill.test-support.js";
 import {
   createSessionRowProjection,
   type SessionRowProjection,
@@ -221,18 +222,21 @@ it("projects shared rows under their logical owner while retaining the physical 
       },
     );
 
+    const releaseBackfill = retainSessionListForegroundWork();
     await withResidentRows(cfg, async (projection) => {
-      await vi.waitFor(() =>
-        expect(
-          projection.snapshot(
-            { key: "global", agentId: "ops", storePath },
-            { includeDerivedTitles: true, includeLastMessage: true },
-          ).row,
-        ).toMatchObject({
-          derivedTitle: "Shared physical global title",
-          lastMessagePreview: "Shared physical global preview",
-        }),
-      );
+      const query = { key: "global", agentId: "ops", storePath };
+      expect(
+        projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
+      ).toBeUndefined();
+      const backfilled = observeSessionRowBackfill(["global"], projection);
+      releaseBackfill();
+      await backfilled;
+      expect(
+        projection.snapshot(query, { includeDerivedTitles: true, includeLastMessage: true }).row,
+      ).toMatchObject({
+        derivedTitle: "Shared physical global title",
+        lastMessagePreview: "Shared physical global preview",
+      });
       for (const configuredAgentsOnly of [false, true]) {
         const combined = loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly });
         expect(combined.durableTargets).toEqual([{ agentId: "main", storePath }]);
@@ -299,7 +303,7 @@ it("projects shared rows under their logical owner while retaining the physical 
         const combined = loadCombinedSessionStoreForGatewayCore(cfg, { agentId });
         expect(Object.keys(combined.store).toSorted()).toEqual([...keys].toSorted());
       }
-    });
+    }).finally(releaseBackfill);
   });
 });
 

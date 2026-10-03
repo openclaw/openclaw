@@ -1,10 +1,10 @@
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import {
+  createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   getGroupThreadDeliverySession,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
@@ -301,12 +301,10 @@ export async function deliverReplies(params: {
       if (acceptedResults.length === 0) {
         throw error;
       }
-      const receipt = createMessageReceiptFromOutboundResults({ results: acceptedResults });
-      throw createChannelPartialDeliveryError(error, {
-        messageIds: receipt.platformMessageIds,
-        receipt,
-        visibleReplySent: true,
-      });
+      throw createChannelPartialDeliveryError(
+        error,
+        createAcceptedChannelDeliveryResult({ results: acceptedResults }),
+      );
     }
     if (delivered) {
       const hookContent = hookParts.join("\n\n") || textRaw || spokenText || "";

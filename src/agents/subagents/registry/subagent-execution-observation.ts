@@ -2,10 +2,7 @@ import { isAgentRunWaitingForCapacity } from "../../../infra/agent-run-capacity-
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  compareSubagentRunGeneration,
-  recordLatestSubagentRun,
-} from "./subagent-run-generation.js";
+import { isSameSubagentRun, recordLatestSubagentRun } from "./subagent-run-generation.js";
 import {
   hasSubagentRunEnded,
   isSubagentRunLive,
@@ -81,15 +78,9 @@ export function observeSubagentExecution(
   if (entry.execution.status === "interrupted") {
     return { state: "unknown" };
   }
-  // Snapshots must match the current registration before using live or queued ownership.
+  // Data-only snapshots may observe matching current execution, but carry no callback custody.
   const current = subagentRuns.get(entry.runId);
-  if (
-    !current ||
-    current.childSessionKey !== entry.childSessionKey ||
-    current.requesterSessionKey !== entry.requesterSessionKey ||
-    (current.taskRunId ?? current.runId) !== (entry.taskRunId ?? entry.runId) ||
-    compareSubagentRunGeneration(current, entry) !== 0
-  ) {
+  if (!current || !isSameSubagentRun(current, entry)) {
     return { state: "unknown" };
   }
   if (isSubagentRunLive(current)) {

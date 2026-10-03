@@ -88,55 +88,34 @@ export function normalizeEnvVarKey(
 
 export function normalizeHostOverrideEnvVarKey(rawKey: string): string | null {
   const key = normalizeEnvVarKey(rawKey);
-  if (!key) {
-    return null;
-  }
-  if (PORTABLE_ENV_VAR_KEY.test(key) || WINDOWS_COMPAT_OVERRIDE_ENV_VAR_KEY.test(key)) {
-    return key;
-  }
-  return null;
+  return key && WINDOWS_COMPAT_OVERRIDE_ENV_VAR_KEY.test(key) ? key : null;
 }
 
 export function isDangerousHostEnvVarName(rawKey: string): boolean {
-  const key = normalizeEnvVarKey(rawKey);
-  if (!key) {
-    return false;
-  }
-  const upper = key.toUpperCase();
-  if (HOST_DANGEROUS_ENV_KEYS.has(upper)) {
-    return true;
-  }
-  return HOST_ENV_SECURITY_POLICY.blockedPrefixes.some((prefix) => upper.startsWith(prefix));
+  const upper = normalizeEnvVarKey(rawKey)?.toUpperCase();
+  return (
+    upper !== undefined &&
+    (HOST_DANGEROUS_ENV_KEYS.has(upper) ||
+      HOST_ENV_SECURITY_POLICY.blockedPrefixes.some((prefix) => upper.startsWith(prefix)))
+  );
 }
 
 export function isDangerousHostInheritedEnvVarName(rawKey: string): boolean {
-  const key = normalizeEnvVarKey(rawKey);
-  if (!key) {
-    return false;
-  }
-  const upper = key.toUpperCase();
-  if (HOST_DANGEROUS_INHERITED_ENV_KEYS.has(upper)) {
-    return true;
-  }
-  return HOST_ENV_SECURITY_POLICY.blockedInheritedPrefixes.some((prefix) =>
-    upper.startsWith(prefix),
+  const upper = normalizeEnvVarKey(rawKey)?.toUpperCase();
+  return (
+    upper !== undefined &&
+    (HOST_DANGEROUS_INHERITED_ENV_KEYS.has(upper) ||
+      HOST_ENV_SECURITY_POLICY.blockedInheritedPrefixes.some((prefix) => upper.startsWith(prefix)))
   );
 }
 
 export function isDangerousHostEnvOverrideVarName(rawKey: string): boolean {
-  const key = normalizeEnvVarKey(rawKey);
-  if (!key) {
-    return false;
-  }
-  const upper = key.toUpperCase();
-  if (HOST_DANGEROUS_OVERRIDE_ENV_KEYS.has(upper)) {
-    return true;
-  }
-  if (CARGO_TARGET_EXECUTABLE_OVERRIDE_ENV_KEY.test(upper)) {
-    return true;
-  }
-  return HOST_ENV_SECURITY_POLICY.blockedOverridePrefixes.some((prefix) =>
-    upper.startsWith(prefix),
+  const upper = normalizeEnvVarKey(rawKey)?.toUpperCase();
+  return (
+    upper !== undefined &&
+    (HOST_DANGEROUS_OVERRIDE_ENV_KEYS.has(upper) ||
+      CARGO_TARGET_EXECUTABLE_OVERRIDE_ENV_KEY.test(upper) ||
+      HOST_ENV_SECURITY_POLICY.blockedOverridePrefixes.some((prefix) => upper.startsWith(prefix)))
   );
 }
 
@@ -160,24 +139,20 @@ function listNormalizedEnvEntries(
 
 function isPermissiveGitProtocolFromUserValue(value: string): boolean {
   const normalized = value.trim().toLowerCase();
-  if (normalized === "true" || normalized === "yes" || normalized === "on") {
-    return true;
-  }
-  if (/^[+-]?\d+$/.test(normalized) && !/^[+-]?0+$/.test(normalized)) {
-    return true;
-  }
-  return false;
+  return (
+    normalized === "true" ||
+    normalized === "yes" ||
+    normalized === "on" ||
+    (/^[+-]?\d+$/.test(normalized) && !/^[+-]?0+$/.test(normalized))
+  );
 }
 
 function sanitizeInheritedGitAllowProtocolValue(value: string): string {
-  const normalized = value.trim();
-  if (!normalized) {
-    return "";
-  }
-  const safeProtocols = normalized
+  return value
+    .trim()
     .split(":")
-    .filter((protocol) => GIT_DEFAULT_ALWAYS_ALLOWED_PROTOCOLS.has(protocol));
-  return safeProtocols.join(":");
+    .filter((protocol) => GIT_DEFAULT_ALWAYS_ALLOWED_PROTOCOLS.has(protocol))
+    .join(":");
 }
 
 function sanitizeHostInheritedEnvEntry(key: string, value: string): [string, string] | null {

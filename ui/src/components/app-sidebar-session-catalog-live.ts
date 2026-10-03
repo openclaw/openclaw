@@ -8,7 +8,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.t
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isAwaitingGatewayFailure } from "../lib/gateway-availability.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createSessionEventRefreshCoordinator } from "../lib/sessions/event-refresh-coordinator.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -28,9 +28,8 @@ export function sessionCatalogListClient(
 ): GatewayBrowserClient | null {
   if (
     !connected ||
-    snapshot?.phase !== "connected" ||
-    !snapshot.client ||
-    isGatewayMethodAdvertised(snapshot, "sessions.catalog.list") !== true
+    !snapshot?.client ||
+    !canCallGatewayMethod(snapshot, "sessions.catalog.list", "operator.read")
   ) {
     return null;
   }

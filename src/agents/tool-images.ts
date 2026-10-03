@@ -18,6 +18,7 @@ import {
   resizeToJpeg,
   type ImageMetadata,
 } from "../media/media-services.js";
+import { isTextContentBlock } from "./content-blocks.js";
 import {
   DEFAULT_IMAGE_MAX_BYTES,
   DEFAULT_IMAGE_MAX_DIMENSION_PX,
@@ -55,14 +56,6 @@ function isImageBlock(block: unknown): block is ImageContentBlock {
     return false;
   }
   return typeof block.data === "string" && typeof block.mimeType === "string";
-}
-
-function isTextBlock(block: unknown): block is TextContentBlock {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const rec = block as Record<string, unknown>;
-  return rec.type === "text" && typeof rec.text === "string";
 }
 
 function inferMimeTypeFromBase64(base64: string): string | undefined {
@@ -395,7 +388,7 @@ export async function sanitizeToolResultImages(
   opts: ImageSanitizationLimits = {},
 ): Promise<AgentToolResult<unknown>> {
   const content = Array.isArray(result.content) ? result.content : [];
-  if (!content.some((block) => isImageTypeBlock(block) || isTextBlock(block))) {
+  if (!content.some((block) => isImageTypeBlock(block) || isTextContentBlock(block))) {
     return result;
   }
 

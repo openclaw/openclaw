@@ -14,12 +14,12 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { withinTest } from "../helpers/promise.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs";
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const SWEEP_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/sweep.sh";
-// The shim waits for an explicit log-ready marker; this only bounds a broken fixture process.
-const FIXTURE_READY_WAIT_ATTEMPTS = process.env.CI ? 2_000 : 1_000;
 const REQUIRED_FULL_DIAGNOSTIC_CANARIES = [
   "agent tool result middleware must be a function",
   "trusted tool policy registration requires id, description, and evaluate()",
@@ -284,6 +284,38 @@ function runSweepShell(script: string, env: NodeJS.ProcessEnv = {}) {
     encoding: "utf8",
     env: { ...process.env, ...toBashEnv(env) },
   });
+}
+
+async function runSweepShellUntilSettled(
+  script: string,
+  env: NodeJS.ProcessEnv,
+  signal: AbortSignal,
+) {
+  let stdout = "";
+  let stderr = "";
+  const command = runManagedCommand({
+    bin: BASH_BIN,
+    args: ["-c", toBashScript(script)],
+    cwd: process.cwd(),
+    env: { ...process.env, ...toBashEnv(env) },
+    stdio: ["ignore", "pipe", "pipe"],
+    requireProcessTreeExit: process.platform !== "win32",
+    signal,
+    onReady(child) {
+      child.stdout!.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      child.stderr!.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+    },
+  });
+  try {
+    return { status: await withinTest(command, signal), stdout, stderr };
+  } finally {
+    // The managed owner joins the shell tree after cancellation before temp files are removed.
+    await command.catch(() => {});
+  }
 }
 
 function toBashScript(script: string) {
@@ -1008,7 +1040,7 @@ export KITCHEN_SINK_SPEC=npm:@openclaw/kitchen-sink@0.0.0
 source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
 run_expect_failure "install/failure" bash -c 'printf "%s\\n" "npm ERR! No matching version @openclaw/kitchen-sink@0.0.0"; exit 1'
 test -f "$SCRATCH_ROOT/kitchen-sink-expected-failure-install_failure.log"
-scan_logs_for_unexpected_errors
+node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs scan-logs
 `,
         {
           HOME_DIR: home,
@@ -1156,7 +1188,10 @@ exit "$status"
     }
   });
 
-  it("bounds ClawHub fixture server logs on startup timeout", () => {
+  it("bounds ClawHub fixture server logs on startup timeout", async ({
+    signal,
+    onTestFinished,
+  }) => {
     const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-clawhub-log-"));
     const fakeBin = path.join(parent, "bin");
     const scratchRoot = path.join(parent, "scratch");
@@ -1164,6 +1199,14 @@ exit "$status"
     const nodeShim = path.join(fakeBin, "node");
     const sleepShim = path.join(fakeBin, "sleep");
     const fixtureReadyPath = path.join(parent, "fixture-log-ready");
+    let command: ReturnType<typeof runSweepShellUntilSettled> | undefined;
+    let cleanup: Promise<void> | undefined;
+    const close = () =>
+      (cleanup ??= (async () => {
+        await command?.catch(() => {});
+        rmSync(parent, { force: true, recursive: true });
+      })());
+    onTestFinished(close);
     try {
       mkdirSync(fakeBin, { recursive: true });
       mkdirSync(fixtureDir, { recursive: true });
@@ -1174,8 +1217,8 @@ exit "$status"
           "printf 'DO_NOT_DUMP_CLAWHUB_PREFIX\\n'",
           "head -c 2048 /dev/zero | tr '\\0' x",
           "printf '\\nFIXTURE_TAIL_MARKER\\n'",
-          ': >"$FIXTURE_READY_PATH"',
-          "/bin/sleep 30",
+          'printf "ready\\n" >&3',
+          "exec /bin/sleep 30",
           "",
         ].join("\n"),
       );
@@ -1184,19 +1227,20 @@ exit "$status"
         sleepShim,
         [
           "#!/usr/bin/env bash",
-          'for _ in $(seq 1 "$FIXTURE_READY_WAIT_ATTEMPTS"); do',
-          '  [[ -f "$FIXTURE_READY_PATH" ]] && exit 0',
-          "  /bin/sleep 0.01",
-          "done",
-          "exit 1",
+          "read -r ready <&3",
+          '[[ "$ready" == ready ]] || exit 1',
+          "# Startup and cleanup share this shim, so keep readiness available for every call.",
+          'printf "%s\\n" "$ready" >&3',
           "",
         ].join("\n"),
       );
       chmodSync(sleepShim, 0o755);
 
-      const result = runSweepShell(
+      command = runSweepShellUntilSettled(
         `
 set -euo pipefail
+mkfifo "$FIXTURE_READY_PATH"
+exec 3<>"$FIXTURE_READY_PATH"
 export PATH="$FAKE_BIN:$PATH"
 export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
 export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
@@ -1214,17 +1258,18 @@ exit "$status"
           FAKE_BIN: fakeBin,
           FIXTURE_DIR: fixtureDir,
           FIXTURE_READY_PATH: fixtureReadyPath,
-          FIXTURE_READY_WAIT_ATTEMPTS: String(FIXTURE_READY_WAIT_ATTEMPTS),
           SCRATCH_ROOT: scratchRoot,
         },
+        signal,
       );
+      const result = await command;
 
       expect(result.status).not.toBe(0);
       expect(result.stdout).toContain("truncated: showing last 64");
       expect(result.stdout).toContain("FIXTURE_TAIL_MARKER");
       expect(result.stdout).not.toContain("DO_NOT_DUMP_CLAWHUB_PREFIX");
     } finally {
-      rmSync(parent, { force: true, recursive: true });
+      await close();
     }
   });
 });

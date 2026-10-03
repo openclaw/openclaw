@@ -64,7 +64,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
   const sessionManager =
     overrides.sessionManager ??
     ({
-      appendLeafControl: vi.fn(),
+      appendLeafControlAsync: vi.fn(async () => undefined),
       buildSessionContext: () => ({ messages: repairedMessages }),
       getEntry: vi.fn(),
     } as never);

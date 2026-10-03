@@ -63,7 +63,7 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
   afterEach(resetMSTeamsMonitorMocks);
 
   it.each([
-    [undefined, { port: 3978 }],
+    [undefined, undefined],
     [
       { port: 44978, host: "127.0.0.1" },
       { port: 44978, host: "127.0.0.1" },
@@ -81,15 +81,24 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
         abortSignal: abort.signal,
         ...createStores(),
       });
-      await routeState.ready.promise;
-      expect(routeState.routes[0]?.legacyListener).toEqual(
-        endpoint && {
-          ...endpoint,
-          timeouts: { headers: 15000, request: 30000, socket: 30000 },
-        },
-      );
-      abort.abort();
-      await task;
+      try {
+        await routeState.ready.promise;
+        expect(routeState.routes[0]?.legacyListener).toEqual(
+          endpoint && {
+            ...endpoint,
+            timeouts: { headers: 15000, request: 30000, socket: 30000 },
+          },
+        );
+        const response = await fetch(resolveServerUrl(gateway, "/api/messages"), {
+          method: "POST",
+          headers: { authorization: "Bearer valid-token" },
+        });
+        expect(response.status).toBe(200);
+        await response.text();
+      } finally {
+        abort.abort();
+        await task;
+      }
       expect(routeState.unregister).toHaveBeenCalledOnce();
     },
   );

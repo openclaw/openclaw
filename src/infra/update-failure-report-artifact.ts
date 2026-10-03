@@ -23,9 +23,34 @@ import {
   renderUpdateRunReport,
   type UpdateRunReport,
 } from "./update-run-report.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 const DOCTOR_LINT_REPORT_SECTION = "\n## Complete Doctor lint findings (";
+const NATIVE_FAILURE_REPORT_SECTION = "\n## Native process diagnostics\n";
+
+function nativeFailureDiagnostics(steps: UpdateRunRecord["steps"]): string {
+  const diagnostics = steps.flatMap((step) =>
+    step.status === "failed" && step.termination === "signal" && step.stderrTail
+      ? [
+          `Check: ${step.step}; termination: signal; signal: ${step.signal ?? "unknown"}\n\n${step.stderrTail
+            .split("\n")
+            .map((line) => `    ${line}`)
+            .join("\n")}`,
+        ]
+      : [],
+  );
+  return diagnostics.length ? `${NATIVE_FAILURE_REPORT_SECTION}\n${diagnostics.join("\n\n")}` : "";
+}
+
+async function readSavedUpdateReport(filePath: string): Promise<string | undefined> {
+  return fs.readFile(filePath, "utf8").catch((error: unknown) => {
+    if (hasErrorCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  });
+}
 
 async function withUpdateReportWrite<T>(outputPath: string, write: () => Promise<T>): Promise<T> {
   await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
@@ -53,12 +78,7 @@ export async function refreshUpdateRunReportArtifact(
   const id = z.uuid().parse(run.runId);
   const outputPath = path.join(stateDir, "update-reports", `${id}.md`);
   await withUpdateReportWrite(outputPath, async () => {
-    const previous = await fs.readFile(outputPath, "utf8").catch((error: unknown) => {
-      if (hasErrorCode(error, "ENOENT")) {
-        return "";
-      }
-      throw error;
-    });
+    const previous = (await readSavedUpdateReport(outputPath)) ?? "";
     // A child can commit the terminal ledger before its report is published.
     // Repair missing/pending projections, but retain terminal or user-authored bytes.
     if (previous && !isUpdateRunReportInProgress(previous)) {
@@ -68,11 +88,14 @@ export async function refreshUpdateRunReportArtifact(
     // Preserve the artifact writer's appendix while refreshing only its summary.
     const appendixStart = previous.indexOf(DOCTOR_LINT_REPORT_SECTION);
     const appendix = appendixStart < 0 ? "" : `\n${previous.slice(appendixStart)}`;
+    const native = appendix.includes(NATIVE_FAILURE_REPORT_SECTION)
+      ? ""
+      : nativeFailureDiagnostics(run.steps);
     const report = renderUpdateRunReport(run, { mode: run.target.kind });
     await writeTextAtomic(
       outputPath,
       redactSupportString(
-        `${report.markdown}${appendix}`,
+        `${report.markdown}${appendix}${native}`,
         { env, stateDir },
         { maxLength: Number.MAX_SAFE_INTEGER },
       ),
@@ -149,12 +172,7 @@ export async function writeUpdateRunReportArtifact(params: {
     const run = params.readRun?.();
     const report = typeof params.report === "function" ? params.report(run) : params.report;
     if (params.readRun && !run) {
-      const previous = await fs.readFile(outputPath, "utf8").catch((error: unknown) => {
-        if (hasErrorCode(error, "ENOENT")) {
-          return "";
-        }
-        throw error;
-      });
+      const previous = await readSavedUpdateReport(outputPath);
       // An old reader can lose schema admission after the helper settles.
       // Its fallback result cannot replace already-published terminal details.
       if (previous && !isUpdateRunReportInProgress(previous)) {
@@ -174,10 +192,14 @@ export async function writeUpdateRunReportArtifact(params: {
           )
         : undefined;
     const findings = params.result.steps.flatMap((step) => step.doctorLintFindings ?? []);
+    const native = nativeFailureDiagnostics(
+      run?.steps ?? params.result.steps.flatMap(updateRunStepsFromResultStep),
+    );
     const body = [
       report.markdown,
       `${DOCTOR_LINT_REPORT_SECTION}${findings.length})\n`,
       ...findings.map((finding) => `- ${formatUpdateDoctorLintFinding(finding, env)}`),
+      ...(native ? [native] : []),
       failurePath ? `\nBounded diagnostic JSON: ${path.relative(directory, failurePath)}` : "",
     ].join("\n");
     await writeTextAtomic(
@@ -334,14 +356,7 @@ export async function savePreparedUpdateFailureReport(
     if (!hasErrorCode(error, "EEXIST")) {
       throw error;
     }
-    const existing = await fs
-      .readFile(stagedReportPath(prepared), "utf8")
-      .catch((readError: unknown) => {
-        if (hasErrorCode(readError, "ENOENT")) {
-          return undefined;
-        }
-        throw readError;
-      });
+    const existing = await readSavedUpdateReport(stagedReportPath(prepared));
     if (existing !== undefined && existing !== prepared.body) {
       throw new Error("The saved update report does not match the reviewed preview.", {
         cause: error,

@@ -12,7 +12,6 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  cleanupAttemptTranscriptJournalFixtures,
   createFixture,
   createJournalSession,
   emitReplayGroup,
@@ -20,10 +19,9 @@ import {
   transcriptMessages,
 } from "./attempt-transcript-journal.test-helpers.js";
 
-afterEach(async () => {
+afterEach(() => {
   resetGlobalHookRunner();
   vi.restoreAllMocks();
-  await cleanupAttemptTranscriptJournalFixtures();
 });
 
 function emitAssistant(

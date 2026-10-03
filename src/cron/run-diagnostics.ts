@@ -5,8 +5,10 @@ import {
   CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
   isEmbeddedRunTerminalToolFailure,
 } from "../agents/embedded-agent-runner/terminal-tool-failure.js";
+import { isExecLikeToolName } from "../agents/tool-error-summary.js";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import { normalizeToolPolicyName as normalizePolicyToolName } from "../agents/tool-policy.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import {
   formatUnknownError,
@@ -190,7 +192,10 @@ function createCronRunDiagnosticsFromToolPayload(
   if (!record) {
     return undefined;
   }
-  const toolName = normalizeOptionalString(record.toolName) ?? normalizeOptionalString(record.name);
+  const toolName =
+    normalizeOptionalString(record.toolName) ??
+    normalizeOptionalString(record.name) ??
+    normalizeOptionalString(getReplyPayloadMetadata(record)?.toolErrorWarning?.toolName);
   const detailsDiagnostics = createCronRunDiagnosticsFromExecDetails(record.details, {
     nowMs: opts?.nowMs,
     toolName,
@@ -241,10 +246,36 @@ export function createCronRunDiagnosticsFromAgentResult(
   }
   const failureSignal =
     meta.failureSignal && typeof meta.failureSignal === "object"
-      ? (meta.failureSignal as { message?: unknown })
+      ? (meta.failureSignal as { message?: unknown; toolName?: unknown })
       : undefined;
   if (typeof failureSignal?.message === "string") {
     diagnostics.push(createCronRunDiagnosticsFromError("tool", failureSignal.message, opts));
+  }
+  const unresolvedError = asOptionalObjectRecord(
+    asOptionalObjectRecord(meta.toolSummary)?.unresolvedError,
+  );
+  const toolName = normalizeOptionalString(unresolvedError?.toolName)?.toLowerCase();
+  if (
+    toolName &&
+    isExecLikeToolName(toolName) &&
+    normalizeOptionalString(failureSignal?.toolName)?.toLowerCase() !== toolName &&
+    !diagnostics.some((value) =>
+      value?.entries.some(
+        (entry) =>
+          (entry.source === "exec" || entry.source === "tool") &&
+          entry.toolName?.toLowerCase() === toolName,
+      ),
+    )
+  ) {
+    // The unresolved trace only carries the tool name. Never persist raw tool
+    // errors or arguments here; they may include commands or credentials.
+    diagnostics.push(
+      createCronRunDiagnosticsFromError("exec", `${toolName} tool failed`, {
+        severity: opts?.finalStatus === "ok" ? "warn" : "error",
+        nowMs: opts?.nowMs,
+        toolName,
+      }),
+    );
   }
   return mergeCronRunDiagnostics(...diagnostics);
 }

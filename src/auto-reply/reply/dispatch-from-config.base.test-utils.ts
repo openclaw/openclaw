@@ -744,7 +744,7 @@ describe("dispatchReplyFromConfig", () => {
           | undefined
       )?.replyOperation;
       expect(operation?.acceptedSteeredInboundAudio).toBe(false);
-      operation?.markAcceptedSteeredInboundAudio();
+      operation?.markSteeredInputAccepted({ inboundAudio: true });
       return { text: "reply to steered audio" } satisfies ReplyPayload;
     });
 

@@ -6,10 +6,11 @@ import { resolveAgentConfig } from "../agent-scope-config.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
 import { DEFAULT_TOOL_ALLOW, DEFAULT_TOOL_DENY } from "./constants.js";
-import type {
-  SandboxToolPolicy,
-  SandboxToolPolicyResolved,
-  SandboxToolPolicySource,
+import {
+  SANDBOX_DEFAULT_TOOL_ALLOW,
+  type SandboxToolPolicy,
+  type SandboxToolPolicyResolved,
+  type SandboxToolPolicySource,
 } from "./types.js";
 
 function pickConfiguredList(
@@ -196,6 +197,7 @@ export function resolveSandboxToolPolicyForAgent(
 
   return {
     ...expanded,
+    ...(allowConfig.values === undefined ? { [SANDBOX_DEFAULT_TOOL_ALLOW]: expanded.allow } : {}),
     sources: {
       allow: pickAllowSource({
         allow: allowConfig.source,

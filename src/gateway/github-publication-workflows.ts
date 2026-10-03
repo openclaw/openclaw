@@ -48,6 +48,32 @@ export async function prepareGitHubPublicationWorkflowGuard(
   return assertWorkflowChangesAllowed;
 }
 
+type WorkflowTree = ReadonlyMap<string, string>;
+
+/** Only an unchanged published definition or an unambiguous target-only update is exempt. */
+export async function hasUnapprovedGitHubPublicationWorkflowChanges(params: {
+  before: WorkflowTree;
+  accepted: WorkflowTree;
+  readUpstream: () => Promise<{ ancestor: WorkflowTree; target: WorkflowTree } | undefined>;
+}): Promise<boolean> {
+  const changed = [...new Set([...params.before.keys(), ...params.accepted.keys()])].filter(
+    (file) => params.before.get(file) !== params.accepted.get(file),
+  );
+  if (!changed.length) {
+    return false;
+  }
+  const upstream = await params.readUpstream();
+  // Absence is a value too: additions, deletions, renames and mode changes all
+  // follow the same rule. Never overwrite a branch-owned change just because
+  // the accepted definition matches main (including a revert to the old base).
+  return changed.some(
+    (file) =>
+      !upstream ||
+      params.before.get(file) !== upstream.ancestor.get(file) ||
+      params.accepted.get(file) !== upstream.target.get(file),
+  );
+}
+
 type TreeEntry = { path: string; mode: string; sha: string };
 
 function unavailableWorkflowTree() {
@@ -64,6 +90,9 @@ export async function hasRepositoryGitHubPublicationWorkflowChanges(params: {
   sourceRepository: string;
   comparisonRepository: string;
   comparisonTree: string;
+  readUpstream: () => Promise<
+    { repository: string; ancestorTree: string; targetTree: string } | undefined
+  >;
   readTree: (repository: string, sha: string) => Promise<unknown>;
 }): Promise<boolean> {
   const trees = new Map<string, Promise<TreeEntry[]>>();
@@ -145,8 +174,19 @@ export async function hasRepositoryGitHubPublicationWorkflowChanges(params: {
       accepted.set(entry.path, entry.mode + ":" + entry.sha);
     }
   }
-  return (
-    before.size !== accepted.size ||
-    [...before].some(([file, object]) => accepted.get(file) !== object)
-  );
+  return await hasUnapprovedGitHubPublicationWorkflowChanges({
+    before,
+    accepted,
+    readUpstream: async () => {
+      const upstream = await params.readUpstream();
+      if (!upstream) {
+        return undefined;
+      }
+      const [ancestor, target] = await Promise.all([
+        workflows(upstream.repository, upstream.ancestorTree),
+        workflows(upstream.repository, upstream.targetTree),
+      ]);
+      return { ancestor, target };
+    },
+  });
 }

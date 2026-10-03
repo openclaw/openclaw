@@ -26,6 +26,7 @@ import {
   renderPluginCapabilitySection,
   renderPluginDeclaredCapabilities,
   renderPluginMetadata,
+  renderPluginMcpServers,
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.ts";
@@ -517,7 +518,7 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
         })),
         icons.wrench,
       )}
-      ${renderPluginCapabilitySection(t("pluginsPage.detailMcpServers"), names(components?.mcpServers ?? catalog?.detail.mcpServers), icons.plug)}`,
+      ${renderPluginMcpServers(components?.mcpServers ?? catalog?.detail.mcpServers ?? [], catalog?.detail.mcpServerDetails)}`,
       readme:
         props.inspection?.overview?.readme || catalog?.detail.readme
           ? renderPluginReadme(props.inspection?.overview?.readme ?? catalog?.detail.readme)

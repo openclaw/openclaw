@@ -90,7 +90,7 @@ async function runAccountFooterProof(
     await page.clock.runFor(300);
     await page.mouse.move(0, 0);
     await page.clock.runFor(300);
-    expect(await buildTooltip.getAttribute("open")).toBeNull();
+    expect(await buildTooltip.count()).toBe(0);
     await buildLink.hover();
     await page.clock.runFor(600);
     await expect.poll(() => buildTooltip.getAttribute("open")).not.toBeNull();
@@ -306,7 +306,7 @@ suite.define(() => {
         name: "Control UI build details",
         exact: true,
       });
-      const tooltip = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip wa-tooltip");
+      const tooltip = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip");
       await tooltip.evaluate((element) => {
         document.documentElement.dataset.buildTooltipOpenedByClick = "false";
         element.addEventListener(

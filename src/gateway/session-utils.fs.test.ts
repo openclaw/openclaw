@@ -224,7 +224,7 @@ describe("archive selection", () => {
     });
   });
 
-  test("chooses the newest reset archive across candidate roots", async () => {
+  test("ignores retired global reset archives when reading the selected store", async () => {
     const id = "cross-root";
     archive(id, [{ message: { role: "assistant", content: "older store archive" } }], {
       timestamp: "2026-02-16T22-26-33.000Z",
@@ -235,7 +235,7 @@ describe("archive selection", () => {
       dir: legacy,
     });
     await withEnvAsync({ OPENCLAW_HOME: tmpDir }, async () => {
-      expect(contents(await full(id))).toEqual(["newer legacy archive"]);
+      expect(contents(await full(id))).toEqual(["older store archive"]);
     });
   });
 

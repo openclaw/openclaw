@@ -4,11 +4,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import {
-  resolveAbortCutoffFromContext,
-  shouldPersistAbortCutoff,
-  type AbortCutoff,
-} from "./abort-cutoff.js";
+import { resolveAbortCutoffFromContext, shouldPersistAbortCutoff } from "./abort-cutoff.js";
 import { abortSessionRunTargetWithOutcome, stopSubagentsForRequester } from "./abort-operation.js";
 import { setAbortMemory } from "./abort-primitives.js";
 import { isAbortTrigger } from "./abort-trigger-text.js";
@@ -53,23 +49,30 @@ function resolveAbortTarget(params: Parameters<CommandHandler>[0]): AbortTarget 
   };
 }
 
-async function applyAbortTarget(params: {
-  isCurrent?: () => boolean;
-  clearQueues?: boolean;
-  abortTarget: AbortTarget;
-  sessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  abortKey?: string;
-  abortCutoff?: AbortCutoff;
-}) {
-  const { abortTarget } = params;
+async function applyAbortTarget(
+  params: Parameters<CommandHandler>[0],
+  abortTarget: AbortTarget,
+  clearQueues = false,
+) {
+  const {
+    sessionStore,
+    storePath,
+    command: { abortKey },
+  } = params;
+  const isCurrent = params.opts?.isCommandTargetCurrent;
+  const abortCutoff = shouldPersistAbortCutoff({
+    commandSessionKey: params.sessionKey,
+    targetSessionKey: abortTarget.key,
+  })
+    ? resolveAbortCutoffFromContext(params.ctx)
+    : undefined;
   const assertCurrent = () => {
-    if (params.isCurrent?.() === false) {
+    if (isCurrent?.() === false) {
       throw new Error("The selected session changed before it could be stopped.");
     }
   };
   assertCurrent();
-  if (params.clearQueues && abortTarget.key) {
+  if (clearQueues && abortTarget.key) {
     const cleared = clearSessionLifecycleQueues({
       keys: [abortTarget.key, abortTarget.sessionId],
       agentId: abortTarget.agentId,
@@ -94,36 +97,17 @@ async function applyAbortTarget(params: {
 
   await abortOutcome.retirement;
   const persisted = await persistAbortTargetEntry({
-    isCurrent: params.isCurrent,
+    isCurrent,
     entry: abortTarget.entry,
     key: abortTarget.key,
-    sessionStore: params.sessionStore,
-    storePath: params.storePath,
-    abortCutoff: params.abortCutoff,
+    sessionStore,
+    storePath,
+    abortCutoff,
   });
-  if (!persisted && params.abortKey && params.isCurrent?.() !== false) {
-    setAbortMemory(params.abortKey, true);
+  if (!persisted && abortKey && isCurrent?.() !== false) {
+    setAbortMemory(abortKey, true);
   }
   return abortOutcome;
-}
-
-function buildAbortTargetApplyParams(
-  params: Parameters<CommandHandler>[0],
-  abortTarget: AbortTarget,
-) {
-  return {
-    isCurrent: params.opts?.isCommandTargetCurrent,
-    abortTarget,
-    sessionStore: params.sessionStore,
-    storePath: params.storePath,
-    abortKey: params.command.abortKey,
-    abortCutoff: shouldPersistAbortCutoff({
-      commandSessionKey: params.sessionKey,
-      targetSessionKey: abortTarget.key,
-    })
-      ? resolveAbortCutoffFromContext(params.ctx)
-      : undefined,
-  };
 }
 
 export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
@@ -138,10 +122,7 @@ export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
       requesterSessionKey: abortTarget.key ?? params.sessionKey,
       requesterAgentId: params.agentId,
       beforeKill: async () => {
-        abortOutcome = await applyAbortTarget({
-          ...buildAbortTargetApplyParams(params, abortTarget),
-          clearQueues: true,
-        });
+        abortOutcome = await applyAbortTarget(params, abortTarget, true);
 
         const hookEvent = createInternalHookEvent(
           "command",
@@ -172,7 +153,7 @@ export const handleAbortTrigger: CommandHandler = defineAuthorizedTextCommand(
   },
   async (params) => {
     const abortTarget = resolveAbortTarget(params);
-    const abortOutcome = await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
+    const abortOutcome = await applyAbortTarget(params, abortTarget);
     const rejectionReason =
       abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
     return commandReply(formatAbortReplyText(undefined, rejectionReason));

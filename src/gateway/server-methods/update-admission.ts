@@ -125,6 +125,9 @@ export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: n
   const { root, status } = await currentUpdateCheckLifecycle().run((signal) =>
     resolveStartupInstallStatus(false, signal),
   );
+  if (status.error?.timeoutMs) {
+    throw new Error(status.error.message);
+  }
   recordUpdateRunPhase(runId, "requested", {
     target: {
       ...(status.installKind === "git" || status.installKind === "package"

@@ -1,8 +1,9 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+  buildRuntimeProbeEnv,
+  resolveBunRuntimeInfo,
   resolveNodeRuntimeInfo,
-  resolvePinnedDaemonRuntimePath,
 } from "../../daemon/runtime-paths.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 
@@ -68,9 +69,18 @@ vi.mock("../../../node-sqlite.mjs", async (original) => ({
     json: true,
   }),
 }));
-vi.mock("../../daemon/runtime-paths.js", () => ({
+vi.mock("../../daemon/runtime-paths.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/runtime-paths.js")>()),
+  resolveBunRuntimeInfo: vi.fn(),
   resolveNodeRuntimeInfo: vi.fn(),
-  resolvePinnedDaemonRuntimePath: vi.fn(async (value) => value),
+}));
+vi.mock("../../infra/package-update-activation-paths.js", async (original) => ({
+  ...(await original<typeof import("../../infra/package-update-activation-paths.js")>()),
+  capturePackageActivationRuntime: vi.fn((kind, executable) => ({
+    kind,
+    path: executable,
+    identity: `fixture:${executable}`,
+  })),
 }));
 vi.mock("./update-command-node-runtime-resolution.js", () => ({
   resolveTargetNodeRuntime: async () => undefined,
@@ -82,6 +92,15 @@ beforeEach(() => {
   state.manager = "npm";
   state.sqliteText = true;
   vi.mocked(resolveNodeRuntimeInfo).mockReset();
+  vi.mocked(resolveBunRuntimeInfo)
+    .mockReset()
+    .mockResolvedValue({
+      status: "supported",
+      version: "1.4.3",
+      sqliteVersion: "3.53.4",
+      nodeSharedSqlite: false,
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+    });
 });
 afterEach(() => vi.unstubAllGlobals());
 const rootB = path.resolve(".n1-fixture/B/node_modules/openclaw");
@@ -220,7 +239,13 @@ it.each([
     });
     expect(result).toMatchObject(
       admitted
-        ? { ok: true, value: { nodeRunner: bun } }
+        ? {
+            ok: true,
+            value: {
+              nodeRunner: bun,
+              activationRuntime: { kind: "bun", path: bun, identity: `fixture:${bun}` },
+            },
+          }
         : {
             ok: false,
             error: expect.stringContaining(
@@ -229,7 +254,11 @@ it.each([
             failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
           },
     );
-    expect(resolvePinnedDaemonRuntimePath).toHaveBeenCalledWith(bun, "bun", process.env);
+    expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(
+      bun,
+      undefined,
+      buildRuntimeProbeEnv(process.env),
+    );
     expect(resolveNodeRuntimeInfo).not.toHaveBeenCalled();
   },
 );

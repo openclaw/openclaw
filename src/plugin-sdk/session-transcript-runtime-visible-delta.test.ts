@@ -1,7 +1,5 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   appendTranscriptEvent,
   upsertSessionEntryCore,
@@ -12,22 +10,21 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   appendSessionTranscriptMessageByIdentity,
   readSessionTranscriptVisibleMessageDelta,
 } from "./session-transcript-runtime.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-visible-transcript-");
 
 describe("session transcript visible cursor SDK", () => {
   let tempDir: string;
   let storePath: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-visible-transcript-"));
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(() => {
-    fs.rmSync(tempDir, { force: true, recursive: true });
   });
 
   it("pages appends and resets when the active branch changes", async () => {

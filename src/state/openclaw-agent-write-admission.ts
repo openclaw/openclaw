@@ -1,3 +1,4 @@
+import type { SqliteWorkerEphemeralTarget } from "../infra/sqlite-worker-contract.js";
 import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
@@ -61,11 +62,28 @@ export function runOpenClawAgentWriteAdmission<T>(
 
 /** Reserve a native write permit without admitting inherited foreground callbacks. */
 export function runOpenClawAgentWorkerWrite<T>(
-  options: OpenClawAgentDatabaseOptions,
+  options:
+    | OpenClawAgentDatabaseOptions
+    | { target: Readonly<SqliteWorkerEphemeralTarget>; assertCurrent(): void },
   run: () => Promise<T>,
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
 ): Promise<T> {
+  if ("target" in options) {
+    const { handle, incarnation } = options.target;
+    return runQueuedStoreWrite({
+      queues: admission.queues,
+      storePath: `ephemeral:${handle}:${incarnation}`,
+      label: "incognito agent database write admission",
+      reentrant: false,
+      fn: async () => {
+        options.assertCurrent();
+        return run();
+      },
+      timing,
+      signal,
+    });
+  }
   return runOpenClawAgentWriteAdmission(
     options,
     async ({ canonicalPath: storePath }) => {

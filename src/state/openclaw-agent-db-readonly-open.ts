@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { isDeletedAgentDatabasePath } from "../infra/agent-database-readers.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
@@ -17,10 +18,12 @@ import {
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-read.js";
+import { assertAgentDatabaseTerminalOpenAllowed } from "./openclaw-agent-db-terminal.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
+import { readOpenClawDatabaseQuarantineFailure } from "./openclaw-quarantine-store.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
 export type OpenClawAgentReadOnlyDatabase = {
@@ -93,8 +96,19 @@ export function openOpenClawAgentDatabaseReadOnly(
   if (isIncognitoOpenClawAgentSqlitePath(pathname, { agentId, env: options.env })) {
     return { found: false, reason: "database-missing" };
   }
-  if (!fs.existsSync(pathname)) {
+  if (isDeletedAgentDatabasePath(pathname) || !fs.existsSync(pathname)) {
     return { found: false, reason: "database-missing" };
+  }
+  // Verified-corrupt generations stay quarantined for reads as well as writes:
+  // the process terminal latch and the persisted generation-aware quarantine
+  // row must both clear before any fresh read-only physical open proceeds.
+  assertAgentDatabaseTerminalOpenAllowed(pathname);
+  const persistedQuarantine = readOpenClawDatabaseQuarantineFailure("agent", pathname, {
+    env: options.env,
+  });
+  if (persistedQuarantine) {
+    recordOpenClawAgentDatabaseReadOpenFailure(persistedQuarantine);
+    throw persistedQuarantine;
   }
   // Lock policy belongs to the open: node:sqlite has no busy handler until one
   // is set, so a later PRAGMA leaves every earlier statement unprotected.

@@ -342,15 +342,12 @@ export function buildQaAgenticParityComparison(params: {
     });
 
   const failures: string[] = [];
-  const requiredScenarioStatuses = QA_AGENTIC_PARITY_SCENARIO_TITLES.map((name) => {
-    const candidate = candidateByName.get(name);
-    const baseline = baselineByName.get(name);
-    return {
-      name,
-      candidateStatus: requiredCoverageStatus(candidate),
-      baselineStatus: requiredCoverageStatus(baseline),
-    };
-  });
+  const comparisonByName = new Map(
+    scenarioComparisons.map((scenario) => [scenario.name, scenario]),
+  );
+  const requiredScenarioStatuses = QA_AGENTIC_PARITY_SCENARIO_TITLES.map((name) =>
+    comparisonByName.get(name)!,
+  );
   const hasCoverageGap = (scenario: QaAgenticParityScenarioComparison) =>
     [scenario.candidateStatus, scenario.baselineStatus].some(
       (status) => status === "missing" || status === "skip",

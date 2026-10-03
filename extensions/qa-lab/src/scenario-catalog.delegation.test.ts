@@ -9,6 +9,7 @@ import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
+  waitForPluginCacheRetirement,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -37,6 +38,12 @@ describe("system-agent delegation scenario tool policy", () => {
       gatewayToken: "qa-test-token",
       workspaceDir,
     });
+    // Core delegate policy does not need the Gateway's memory tools or QA restart probes.
+    baseline.plugins = {
+      allow: ["qa-channel"],
+      slots: { memory: "none" },
+      entries: { "qa-channel": { enabled: true } },
+    };
     const scenario = readQaScenarioById("system-agent-delegation-generation");
     // Match the suite owner's merge of validated catalog patches into the typed QA config.
     config = applyQaMergePatch(baseline, scenario.gatewayConfigPatch ?? {}) as OpenClawConfig;
@@ -44,6 +51,8 @@ describe("system-agent delegation scenario tool policy", () => {
 
   afterEach(async () => {
     resetPluginRuntimeStateForTest();
+    const { failures } = await waitForPluginCacheRetirement(true);
+    expect(failures).toEqual([]);
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 

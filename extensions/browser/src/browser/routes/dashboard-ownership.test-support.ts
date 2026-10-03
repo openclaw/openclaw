@@ -35,10 +35,8 @@ export function createDashboardRouteContext(
     resolvedOverrides: { evaluateEnabled: options.evaluateEnabled ?? false, ssrfPolicy: undefined },
   });
   return {
-    ...profileCtx,
     state: () => state,
     forProfile: () => profileCtx,
     listProfiles: unused,
-    mapTabError: () => null,
   };
 }

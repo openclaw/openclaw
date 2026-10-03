@@ -39,8 +39,7 @@ export function normalizeGoogleTtsModel(model: unknown): string {
 }
 
 export function isGoogleInteractionsTtsModel(model: string): boolean {
-  // SAFETY: widening a readonly literal tuple to readonly string[] so includes() accepts any model id.
-  return (GOOGLE_TTS_INTERACTIONS_MODELS as readonly string[]).includes(model);
+  return GOOGLE_TTS_INTERACTIONS_MODELS.some((candidate) => candidate === model);
 }
 
 export function assertSupportedGoogleTtsModel(model: string): void {

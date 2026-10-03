@@ -13,7 +13,8 @@ import {
   type SerializedDurableMessagePayloadOutcome,
 } from "../../channels/message/runtime.js";
 import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channels/message/types.js";
-import type { ChannelPlugin, ChannelPollResult } from "../../channels/plugins/types.public.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelPollResult } from "../../channels/plugins/types.public.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
@@ -33,10 +34,8 @@ import {
   type OutboundDeliveryQueuePolicy,
   type OutboundSendDeps,
 } from "./deliver.js";
-import type {
-  ConversationDeliveryTarget,
-  DurableDeliveryCompletion,
-} from "./delivery-completion.js";
+import type { ConversationDeliveryTarget } from "./delivery-completion.js";
+import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 import {
   resolveOutboundMessageGatewayOptions,
   type OutboundMessageGatewayOptionsInput,

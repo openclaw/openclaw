@@ -492,7 +492,7 @@ describe("PR failure monitor", () => {
     expect(await f.monitor()).toBe("failure-cancelled");
     expect(f.events).toEqual(["cause 3", "POST /actions/runs/100/cancel"]);
   });
-  it("leaves partial reruns to native fail-fast without waiting for cached jobs", async () => {
+  it("skips partial reruns without cancelling or waiting for cached jobs", async () => {
     const f = fixture({ jobs: [job(3)] });
     expect(await f.monitor(100, 2)).toBe("retry");
     expect(f.fetchMock).not.toHaveBeenCalled();

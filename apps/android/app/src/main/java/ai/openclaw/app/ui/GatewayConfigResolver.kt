@@ -6,10 +6,8 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.node.parseJsonParamsObject
 import ai.openclaw.app.nonBlankString
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonObject
 import java.net.URI
 import java.util.Base64
 import java.util.Locale
@@ -84,8 +82,6 @@ internal data class GatewayScannedSetupCodeResult(
   val setupCode: String? = null,
   val error: GatewayEndpointValidationError? = null,
 )
-
-private val gatewaySetupJson = Json { ignoreUnknownKeys = true }
 
 private fun remoteGatewaySecurityRuleText(): NativeText =
   nativeText(
@@ -288,7 +284,7 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
 
   return try {
     val decoded = String(Base64.getDecoder().decode(padded), Charsets.UTF_8)
-    val obj = parseJsonObject(decoded) ?: return null
+    val obj = parseJsonParamsObject(decoded) ?: return null
     val url = obj.nonBlankString("url").orEmpty()
     if (url.isEmpty()) return null
     val bootstrapToken = obj.nonBlankString("bootstrapToken")
@@ -521,12 +517,10 @@ private fun gatewayManualTransportPresentation(
       },
   )
 
-private fun parseJsonObject(input: String): JsonObject? = runCatching { gatewaySetupJson.parseToJsonElement(input).jsonObject }.getOrNull()
-
 private fun resolveSetupCodeCandidate(rawInput: String): String? {
   val trimmed = rawInput.trim()
   if (trimmed.isEmpty()) return null
-  val qrSetupCode = parseJsonObject(trimmed).nonBlankString("setupCode")
+  val qrSetupCode = parseJsonParamsObject(trimmed).nonBlankString("setupCode")
   return qrSetupCode ?: trimmed
 }
 

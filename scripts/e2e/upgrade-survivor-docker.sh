@@ -249,11 +249,16 @@ if [ "$SCENARIO" = "abandoned-update" ] && {
   exit 1
 fi
 
-if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ]; then
+if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "cron-owner-doctor" ]; then
+  worker_baseline_supported=0
+  if [ "$BASELINE_SPEC" = "openclaw@2026.9.4" ] ||
+    { [ "$SCENARIO" = "cron-owner-doctor" ] && [ "$BASELINE_SPEC" = "openclaw@2026.9.7" ]; }; then
+    worker_baseline_supported=1
+  fi
   if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ] ||
-    [ "$BASELINE_SPEC" != "openclaw@2026.9.4" ] ||
+    [ "$worker_baseline_supported" != "1" ] ||
     [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
-    echo "$SCENARIO requires published openclaw@2026.9.4, manual restart, isolated state, and no live provider" >&2
+    echo "$SCENARIO requires its audited published baseline, manual restart, isolated state, and no live provider" >&2
     exit 1
   fi
 fi
@@ -318,7 +323,8 @@ prepare_limit_summary() {
 DOCKER_RUN_USER_ARGS=()
 UPGRADE_ENTRYPOINT=()
 if [ "$UPDATE_RESTART_MODE" = auto-auth ]; then
-  DOCKER_RUN_USER_ARGS+=(--user root --cgroupns private --cap-add SYS_ADMIN --security-opt apparmor=unconfined)
+  # MAC_OVERRIDE permits replacing unconfined; the entrypoint drops every capability.
+  DOCKER_RUN_USER_ARGS+=(--user root --cgroupns private --cap-add SYS_ADMIN --cap-add MAC_OVERRIDE --security-opt apparmor=unconfined)
   UPGRADE_ENTRYPOINT=(bash /tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/cgroup-entrypoint.sh)
 fi
 PROBE_ENV_ARGS=(
@@ -370,7 +376,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   fi
 
   mkdir -p "$ARTIFACT_DIR"
-  if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ]; then
+  if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "cron-owner-doctor" ]; then
     ARTIFACT_DIR="$(mktemp -d "$ARTIFACT_DIR/worker-run.XXXXXX")"
     echo "Worker survivor artifacts: $ARTIFACT_DIR"
   fi
@@ -407,7 +413,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     CANDIDATE_SPEC="$(normalize_npm_candidate "$CANDIDATE_RAW")"
   fi
 
-  if { [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "dreaming-cron-doctor" ]; } && [ "$CANDIDATE_KIND" != "tarball" ]; then
+  if { [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "cron-owner-doctor" ] || [ "$SCENARIO" = "dreaming-cron-doctor" ]; } && [ "$CANDIDATE_KIND" != "tarball" ]; then
     echo "$SCENARIO requires a frozen candidate tarball" >&2
     exit 1
   fi
@@ -460,7 +466,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     )
   fi
 
-  if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ]; then
+  if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "cron-owner-doctor" ]; then
     WORKER_RUNTIME_HOST_ROOT="$(mktemp -d "$ARTIFACT_DIR/worker-runtime.XXXXXX")"
     chmod a+rwx "$WORKER_RUNTIME_HOST_ROOT"
     UPGRADE_SCENARIO_ARGS+=(

@@ -464,21 +464,19 @@ preview, and reply pipeline options.
 
 ### Migrating from channel-message
 
-`openclaw/plugin-sdk/channel-message` is a deprecated compatibility entrypoint.
-It retains its published outbound exports and three dispatch aliases. New outbound
-helpers are exported only from `openclaw/plugin-sdk/channel-outbound`.
+`openclaw/plugin-sdk/channel-message` has been removed. Import its former
+outbound exports from `openclaw/plugin-sdk/channel-outbound`.
 Migrate those aliases to `openclaw/plugin-sdk/channel-inbound`:
 
-| Deprecated alias                   | Replacement                         |
+| Removed alias                      | Replacement                         |
 | ---------------------------------- | ----------------------------------- |
 | `hasFinalChannelTurnDispatch`      | `hasFinalInboundReplyDispatch`      |
 | `hasVisibleChannelTurnDispatch`    | `hasVisibleInboundReplyDispatch`    |
 | `resolveChannelTurnDispatchCounts` | `resolveInboundReplyDispatchCounts` |
 
-Follow the dated removal-eligibility window in [Migration](/plugins/sdk-migration).
-This subpath is not tied to the next Plugin SDK major, and eligibility does not
-itself remove an export. External imports do not emit a runtime warning; update
-plugin imports rather than waiting for one.
+The SDK owner approved early retirement on September 30, 2026. See the
+[removal timeline](/plugins/sdk-migration/removal-timeline) and update plugin
+imports before upgrading to a host containing this removal.
 
 ## Related
 

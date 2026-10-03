@@ -1,4 +1,4 @@
-import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 /** Conversation shape supported by the synthetic QA channel bus. */
 export type QaBusConversationKind = "direct" | "channel" | "group";

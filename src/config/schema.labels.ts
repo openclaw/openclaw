@@ -3,6 +3,7 @@ import { GATEWAY_FIELD_LABELS } from "./schema.gateway-labels.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
 import { APPROVAL_FIELD_LABELS } from "./schema.labels.approvals.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
+import { GITHUB_TOOL_FIELD_LABELS } from "./schema.labels.github.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
@@ -10,6 +11,7 @@ import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 import { CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
 import { DESKTOP_FIELD_LABELS } from "./zod-schema.desktop.js";
 import { NODE_HOST_FIELD_LABELS } from "./zod-schema.node-host.js";
+import { STORAGE_FIELD_LABELS } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_LABELS } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
@@ -107,16 +109,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.contextLimits": "Agent Context Limits",
   "agents.entries.*.contextLimits.memoryGetMaxChars": "Agent memory_get Max Chars",
   "agents.entries.*.contextLimits.postCompactionMaxChars": "Agent Post-compaction Max Chars",
-  "agents.entries.*.models": "Agent Model Overrides",
-  "agents.entries.*.modelPolicy": "Agent Model Policy",
-  "agents.entries.*.modelPolicy.allow": "Allowed Agent Models",
-  "agents.entries.*.models.*.agentRuntime": "Agent Model Runtime",
-  "agents.entries.*.models.*.agentRuntime.id": "Agent Model Runtime ID",
-  "agents.entries.*.models.*.codeMode": "Code Mode",
-  "agents.entries.*.agentRuntime": "Legacy Agent Runtime",
-  "agents.entries.*.agentRuntime.id": "Legacy Agent Runtime ID",
   cloudWorkers: "Cloud Workers",
   ...CLOUD_WORKER_FIELD_LABELS,
+  ...STORAGE_FIELD_LABELS,
   ...DESKTOP_FIELD_LABELS,
   ...GATEWAY_FIELD_LABELS,
   tools: "Tools",
@@ -124,16 +119,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.deny": "Tool Denylist",
   "tools.web": "Web Tools",
   "tools.exec": "Exec Tool",
-  "tools.github": "GitHub CLI Identity and Git Author",
-  "tools.github.profileId": "GitHub Profile Version",
-  "tools.github.kind": "GitHub Credential Kind",
-  "tools.github.gitAuthor.name": "Git Author Name",
-  "tools.github.gitAuthor.email": "Git Author Email",
-  "agents.entries.*.tools.github": "Agent GitHub CLI Identity Override",
-  "agents.entries.*.tools.github.profileId": "Agent GitHub Profile Version",
-  "agents.entries.*.tools.github.kind": "Agent GitHub Credential Kind",
-  "agents.entries.*.tools.github.gitAuthor.name": "Agent Git Author Name",
-  "agents.entries.*.tools.github.gitAuthor.email": "Agent Git Author Email",
+  ...GITHUB_TOOL_FIELD_LABELS,
   "tools.media.image.enabled": "Enable Image Understanding",
   "tools.media.image.preferredModel": "Preferred Image Understanding Model",
   "tools.media.image.maxBytes": "Image Understanding Max Bytes",

@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createEmptyPluginMetadataSnapshot } from "../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   SET_RUNTIME_API_KEY_FIELD,

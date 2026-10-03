@@ -1,4 +1,5 @@
 import type { TemplateResult } from "lit";
+import type { ChatMessageGetResult } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
@@ -7,13 +8,6 @@ import type {
   SessionDiffLoader,
   SessionDiffOwner,
 } from "./session-diff-panel.ts";
-
-type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
-type DetailFullMessageResult = {
-  ok?: boolean;
-  message?: unknown;
-  unavailableReason?: DetailUnavailableReason;
-};
 
 type SidebarFullMessageRequest = {
   sessionKey: string;
@@ -24,12 +18,13 @@ type SidebarFullMessageRequest = {
 
 export type SidebarFullMessageLoader = (
   request: SidebarFullMessageRequest,
-) => Promise<DetailFullMessageResult | null | undefined>;
+) => Promise<Partial<ChatMessageGetResult> | null | undefined>;
 
 type MarkdownSidebarContent = {
   kind: "markdown";
   content: string;
   rawText?: string | null;
+  fileLinkSessionKey?: string;
 };
 
 type CanvasSidebarContent = {
@@ -120,11 +115,14 @@ type FileSidebarEdit = {
 
 export type FileSidebarNavigation = { line: number };
 
+export type SessionFileSource = { sessionKey: string; agentId?: string; path: string };
+
 export type FileSidebarContent = {
   kind: "file";
   path: string;
   name: string;
   content: string;
+  sessionFileSource?: SessionFileSource;
   /** Stable per-session identity used to retain an unsaved in-memory draft. */
   draftKey?: string;
   /** Captured display context; the draft key is opaque and never a UI label. */
@@ -146,7 +144,15 @@ export type ToolOutputSidebarContent = {
   agentId?: string;
 };
 
+type McpAppSidebarContent = {
+  kind: "mcp-app";
+  title: string;
+  launch: import("../../../components/mcp-app-launch.ts").McpAppOpenDetail;
+  rawText?: null;
+};
+
 export type SidebarContent =
+  | McpAppSidebarContent
   | ToolOutputSidebarContent
   | MarkdownSidebarContent
   | CanvasSidebarContent

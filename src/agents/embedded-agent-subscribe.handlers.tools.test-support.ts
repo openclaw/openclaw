@@ -1,10 +1,8 @@
 import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 import { vi } from "vitest";
 import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.js";
-import type {
-  ToolCallSummary,
-  ToolHandlerContext,
-} from "./embedded-agent-subscribe.handlers.types.js";
+import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 
 export type ToolExecutionEndEvent = Omit<
   Extract<AgentEvent, { type: "tool_execution_end" }>,
@@ -46,33 +44,7 @@ export function createTestContext() {
       info: vi.fn(),
       warn,
     },
-    state: {
-      toolMetaById: new Map<string, ToolCallSummary>(),
-      toolMetas: [],
-      acceptedSessionSpawns: [],
-      toolSummaryById: new Set<string>(),
-      liveEditDiffStateById: new Map(),
-      itemActiveIds: new Set<string>(),
-      itemStartedCount: 0,
-      itemCompletedCount: 0,
-      pendingToolMediaUrls: [],
-      pendingToolMediaTrustByUrl: new Map(),
-      toolAutoDeliveryMediaUrls: new Set(),
-      pendingToolAudioAsVoice: false,
-      deterministicApprovalPromptPending: false,
-      replayState: { replayInvalid: false, hadPotentialSideEffects: false },
-      messagingToolSentTexts: [],
-      messagingToolSentTextsNormalized: [],
-      currentSourceMessagingToolSentTextsNormalized: [],
-      messagingToolSentMediaUrls: [],
-      messagingToolSourceReplyPayloads: [],
-      messageToolOnlySourceReplyDelivered: false,
-      messagingToolSentTargets: [],
-      successfulCronAdds: 0,
-      deterministicApprovalPromptSent: false,
-      toolExecutionSinceLastBlockReply: false,
-      assistantMessageIndex: 0,
-    },
+    state: createEmbeddedAgentSubscribeState({}),
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
     emitToolSummary: vi.fn(),

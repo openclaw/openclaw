@@ -10,7 +10,10 @@ import { configureMessageActionDecisionSink } from "../../audit/message-action-d
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
-import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
+import type {
+  ChannelMessageActionName,
+  ChannelPlugin,
+} from "../../channels/plugins/types.public.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
@@ -432,11 +435,7 @@ function registerMessagingPlugin(id: string, messaging: NonNullable<ChannelPlugi
   registerPlugins(createChannelPlugin({ id, messaging }));
 }
 
-async function executeSend(params: {
-  action: Record<string, unknown>;
-  toolOptions?: Partial<Parameters<typeof createMessageTool>[0]>;
-  toolCallId?: string;
-}) {
+async function executeSend(params: Parameters<typeof executeSendWithResult>[0]) {
   return (await executeSendWithResult(params)).call;
 }
 
@@ -646,6 +645,7 @@ describe("message tool gateway timeout", () => {
       const delivery = readEmbeddedMessageDeliveryFact(
         (result.details as { messageDelivery?: unknown }).messageDelivery,
       );
+      expect(delivery?.sourceReplyDelivered).toBe(mode === "final" ? true : undefined);
       if (mode === "final") {
         const visible = [marker];
         const gateway = vi.fn();
@@ -662,15 +662,12 @@ describe("message tool gateway timeout", () => {
           requesterSessionKey: sessionKey,
           requesterChannel: "telegram",
           displayKey: sessionKey,
-          message: "Reply to the source",
-          announceTimeoutMs: 10_000,
-          maxPingPongTurns: 0,
-          roundOneReply: marker,
-          sourceReplyDelivered: delivery?.sourceReplyDelivered,
+          runId: "source-reply",
+          replyTimeoutMs: 10_000,
+          reply: { status: "ok", replyText: marker, sourceReplyDelivered: true },
         });
         expect(visible).toEqual([marker]);
       }
-      expect(delivery?.sourceReplyDelivered).toBe(mode === "final" ? true : undefined);
     },
   );
 

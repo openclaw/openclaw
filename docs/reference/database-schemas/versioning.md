@@ -127,6 +127,18 @@ Their writers ensure them idempotently on first use; reads do not install them.
 Older readers ignore the columns. NULL remains unknown, so Gateway notification
 delivery does not assign historical records to a current parent by key alone.
 
+Subagent runs record the known owning agent for raw child keys such as `global`
+in the optional `childAgentId` field inside `subagent_runs.payload_json`.
+Agent-qualified child keys do not record this field. This is a payload-only
+addition: no DDL, new column, or schema-version bump is required. The session
+store is derived from the agent and current configuration, just as it is for
+agent-qualified keys. Legacy rows without that binding continue to resolve their
+agent through the current configuration, without migration or backfill.
+Cancellation clears queues only for the resolved agent. Downgraded writers retain
+the field in `payload_json` because
+`normalizeSubagentRunState` mutates the parsed record in place rather than
+rebuilding it from known fields.
+
 Cron standing-grant definition generations use three bare nullable projections on
 `cron_jobs`: `grant_definition_revision`, `grant_definition_generation`, and
 `grant_definition_updated_at`. The canonical job remains `job_json`. Current

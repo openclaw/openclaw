@@ -1,7 +1,10 @@
+import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+import type { CommandProcessCustody } from "./command-process-custody.types.js";
 import { CommandProcessCleanupError, hasCommandProcessCleanupError } from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
 import { spawnCommand, withCommandProcessScope } from "./exec-spawn.js";
@@ -19,7 +22,10 @@ vi.mock("./windows-command.js", () => ({
     usesWindowsExitCodeShim: false,
   }),
 }));
-vi.mock("../shared/pid-alive.js", () => ({ getFileLockProcessStartTime: () => 1 }));
+vi.mock("../shared/pid-alive.js", () => ({
+  getFileLockProcessStartTime: () => 1,
+  getProcessInstanceStartTime: () => 1,
+}));
 vi.mock("./kill-tree.js", () => ({ killProcessTree: vi.fn() }));
 vi.mock("./exec-termination.js", () => ({
   createCommandTerminationController: () => ({ terminate: () => false, settle: transport.settle }),
@@ -27,8 +33,11 @@ vi.mock("./exec-termination.js", () => ({
 
 const scopes: Promise<unknown>[] = [];
 const fixtures: Array<() => void> = [];
-function ownScope<T>(run: (stop: () => void) => Promise<T>): Promise<T> {
-  const scope = withCommandProcessScope(run);
+function ownScope<T>(
+  run: (stop: () => void) => Promise<T>,
+  custody?: CommandProcessCustody,
+): Promise<T> {
+  const scope = withCommandProcessScope(run, undefined, custody);
   scopes.push(scope);
   void scope.catch(() => {});
   return scope;
@@ -117,6 +126,79 @@ afterEach(async () => {
 });
 
 describe("command scope physical settlement", () => {
+  it("inherits custody and withholds settlement until native close", async () => {
+    const fixture = commandFixture();
+    const reservation = { spawned: vi.fn(), settled: vi.fn() };
+    const reserve = vi.fn(() => reservation);
+    const spawn = transport.spawn.getMockImplementation()!;
+    transport.spawn.mockImplementation((...args) => {
+      expect(reserve).toHaveBeenCalledExactlyOnceWith(["fixture"]);
+      return spawn(...args);
+    });
+    const scope = ownScope(
+      () => ownScope(async () => void (await spawnCommand(["fixture"], { reject: false }))),
+      { reserve },
+    );
+    expect(reservation.spawned).not.toHaveBeenCalled();
+    fixture.open();
+    await setImmediate();
+    expect(reservation.spawned).toHaveBeenCalledExactlyOnceWith({ pid: 424242, startedAt: 1 });
+    fixture.finish(false);
+    await setImmediate();
+    expect(reservation.settled).not.toHaveBeenCalled();
+    fixture.closed.resolve();
+    await scope;
+    expect(reservation.settled).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])(
+    "retains unknown broker launches unless non-start is proven: %s",
+    async (notStarted) => {
+      const fixture = commandFixture();
+      const reservation = { spawned: vi.fn(), settled: vi.fn() };
+      const scope = ownScope(
+        async () => void (await spawnCommand(["fixture"], { reject: false })),
+        {
+          reserve: () => reservation,
+        },
+      );
+      const outcome = scope.catch((error: unknown) => error);
+      if (notStarted) {
+        fixture.child.markNotStarted();
+      }
+      fixture.fail(new Error("broker lost before PID delivery"));
+      await outcome;
+      expect(reservation.spawned).not.toHaveBeenCalled();
+      expect(reservation.settled).toHaveBeenCalledTimes(notStarted ? 1 : 0);
+    },
+  );
+
+  it("refuses Doctor-style input admission when custody binding fails", async () => {
+    const fixture = commandFixture();
+    fixture.child.stdin = new PassThrough();
+    const beforeInput = vi.fn();
+    const reservation = {
+      spawned: vi.fn(() => {
+        throw new Error("custody receipt unavailable");
+      }),
+      settled: vi.fn(),
+    };
+    const scope = ownScope(
+      async () => {
+        await runCommandWithTimeout(["fixture"], { input: "private input", beforeInput });
+      },
+      { reserve: () => reservation },
+    );
+    const outcome = scope.catch((error: unknown) => error);
+    fixture.open();
+    await setImmediate();
+    fixture.finish();
+    fixture.cleanup.resolve("forced");
+    expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+    expect(beforeInput).not.toHaveBeenCalled();
+    expect(reservation.settled).not.toHaveBeenCalled();
+  });
+
   it("keeps the bounded runner result separate from scope cleanup", async () => {
     const fixture = commandFixture();
     const controller = new AbortController();
@@ -334,13 +416,34 @@ it("closes nested native admission without waiting for its logical callback", as
   expect(transport.spawn).not.toHaveBeenCalled();
 });
 
-it("recognizes canonical cleanup through aggregates without trusting copied code fields", async () => {
+it("preserves canonical cleanup remedies through nested scopes and module copies", async () => {
   const original = new CommandProcessCleanupError();
   expect(hasCommandProcessCleanupError(new AggregateError([original], "outer"))).toBe(true);
-  expect(
-    hasCommandProcessCleanupError(Object.assign(new Error("other"), { code: original.code })),
-  ).toBe(false);
+  const unrelated = Object.assign(new Error("private unrelated failure"), { code: original.code });
+  expect(hasCommandProcessCleanupError(unrelated)).toBe(false);
+  expect(new CommandProcessCleanupError({ cause: unrelated })).toMatchObject({
+    message: "Command cleanup could not confirm that owned work stopped",
+    cause: unrelated,
+  });
   vi.resetModules();
   const duplicate = await import("./exec-result.js");
-  expect(hasCommandProcessCleanupError(new duplicate.CommandProcessCleanupError())).toBe(true);
+  const refusal = new duplicate.CommandProcessCleanupError();
+  const message =
+    "Doctor processes remain unsettled, data-at-risk. PIDs/process groups: 424242; resolve retained process custody before retrying `openclaw update repair`.";
+  refusal.message = message;
+  const cause = new AggregateError(
+    [original, new Error("private wrapper", { cause: refusal })],
+    "private aggregate",
+    { cause: unrelated },
+  );
+  const failure = await ownScope(() =>
+    ownScope(() =>
+      ownScope(async () => {
+        throw cause;
+      }),
+    ),
+  ).catch((error: unknown) => error);
+  expect(hasCommandProcessCleanupError(failure)).toBe(true);
+  expect(failure).toMatchObject({ message, code: original.code, cleanup: "uncertain" });
+  expect(collectNestedErrorCandidates(failure)).toContain(cause);
 });

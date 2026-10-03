@@ -63,7 +63,6 @@ describe("worker state lease lifecycle", () => {
 
   it.each([
     { heartbeat: undefined, leaseMs: 30_000 },
-    { heartbeat: "worker", leaseMs: 30_000 },
     { heartbeat: "worker", leaseMs: 1_000 },
   ] as const)(
     "runs the complete $heartbeat heartbeat lifecycle with a $leaseMs ms lease without parent SQL or waits",

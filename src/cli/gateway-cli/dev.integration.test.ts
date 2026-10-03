@@ -47,7 +47,6 @@ describe("ensureDevGatewayConfig integration", () => {
     });
     expect(config.agents?.entries).toEqual({
       dev: {
-        default: true,
         workspace: `${workspace}-dev`,
         identity: { name: "C3-PO", theme: "protocol droid", emoji: "🤖" },
       },

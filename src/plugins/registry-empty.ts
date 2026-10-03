@@ -59,6 +59,7 @@ export const pluginArrays = [
 ] as const satisfies ReadonlyArray<keyof PluginRegistry>;
 export const pluginMaps = [
   "workerProviders",
+  "storageProviders",
   "sessionDiscussionProviders",
   "dashboardDataBindings",
   "dashboardActionVerbs",

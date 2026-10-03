@@ -45,7 +45,7 @@ function percentile(values: readonly number[], p: number): number {
   if (values.length === 0) {
     return 0;
   }
-  const sorted = [...values].toSorted((left, right) => left - right);
+  const sorted = values.toSorted((left, right) => left - right);
   const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
   return sorted[index] ?? 0;
 }

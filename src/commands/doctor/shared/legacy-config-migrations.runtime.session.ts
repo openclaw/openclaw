@@ -7,6 +7,7 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { moveLegacyConfigKey } from "./legacy-config-record-shared.js";
 
 /** Match only parser-valid values that resolve to an unsafe zero-duration cutoff. */
 function isZeroDuration(val: unknown): boolean {
@@ -37,13 +38,6 @@ const LEGACY_SESSION_MAINTENANCE_ROTATE_BYTES_RULE: LegacyConfigRule = {
   message:
     'session.maintenance.rotateBytes is deprecated and ignored; run "openclaw doctor --fix" to remove it.',
   match: (value) => Object.hasOwn(getRecord(value) ?? {}, "rotateBytes"),
-};
-
-const LEGACY_SESSION_PARENT_FORK_MAX_TOKENS_RULE: LegacyConfigRule = {
-  path: ["session"],
-  message:
-    'session.parentForkMaxTokens was removed; parent fork sizing is automatic. Run "openclaw doctor --fix" to remove it.',
-  match: (value) => Object.hasOwn(getRecord(value) ?? {}, "parentForkMaxTokens"),
 };
 
 const SESSION_MAINTENANCE_PRUNE_AFTER_ZERO_RULE: LegacyConfigRule = {
@@ -85,16 +79,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
         ["resetByType", "dm", "direct"],
       ] as const) {
         const owner = getRecord(session?.[section]);
-        if (!owner || !Object.hasOwn(owner, legacy)) {
-          continue;
-        }
-        if (owner[canonical] === undefined) {
-          owner[canonical] = owner[legacy];
-          changes.push(`Moved session.${section}.${legacy} → session.${section}.${canonical}.`);
-        } else {
-          changes.push(`Removed session.${section}.${legacy} (${canonical} already set).`);
-        }
-        delete owner[legacy];
+        moveLegacyConfigKey(owner, legacy, canonical, `session.${section}`, changes);
       }
     },
   }),
@@ -109,19 +94,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
       }
       delete maintenance.rotateBytes;
       changes.push("Removed deprecated session.maintenance.rotateBytes.");
-    },
-  }),
-  defineLegacyConfigMigration({
-    id: "session.parentForkMaxTokens",
-    describe: "Remove legacy session.parentForkMaxTokens",
-    legacyRules: [LEGACY_SESSION_PARENT_FORK_MAX_TOKENS_RULE],
-    apply: (raw, changes) => {
-      const session = getRecord(raw.session);
-      if (!session || !Object.hasOwn(session, "parentForkMaxTokens")) {
-        return;
-      }
-      delete session.parentForkMaxTokens;
-      changes.push("Removed session.parentForkMaxTokens; parent fork sizing is automatic.");
     },
   }),
   defineLegacyConfigMigration({

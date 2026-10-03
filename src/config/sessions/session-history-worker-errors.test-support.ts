@@ -1,5 +1,8 @@
 import { vi } from "vitest";
-import type { WorkerTaskOptions } from "../../infra/worker-task-pool.types.js";
+import type {
+  WorkerTaskOptions,
+  WorkerTaskPoolOptions,
+} from "../../infra/worker-task-pool.types.js";
 import type { SessionTranscriptDisplayDeltaResult } from "./session-accessor.sqlite-history-query.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
@@ -10,6 +13,7 @@ type Request = {
   taskId: number;
   interactive?: boolean;
   nativeSections: SharedArrayBuffer;
+  deletedAgentDatabaseFences: [string, string][];
 };
 type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
 type QuarantineDatabase = {
@@ -64,16 +68,33 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/worker-task-pool.js")>();
   return {
     ...actual,
-    createOwnedWorkerTaskPool: () => ({
-      run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
-        if (observed.deferredRun) {
-          return observed.deferredRun(prepare, options);
-        }
-        return observed.run(prepare(), options);
-      },
-      rotate: observed.rotate,
-      closeResources: observed.closeResources,
-    }),
+    createOwnedWorkerTaskPool: (poolOptions: WorkerTaskPoolOptions<unknown>) => {
+      let worker: ReturnType<NonNullable<typeof poolOptions.prepareWorker>> | undefined;
+      return {
+        async run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
+          const prepareInput = () => {
+            const input = prepare();
+            worker ??= poolOptions.prepareWorker?.();
+            return input;
+          };
+          return await (observed.deferredRun
+            ? observed.deferredRun(prepareInput, options)
+            : observed.run(prepareInput(), options));
+        },
+        async rotate() {
+          const previous = worker;
+          worker = undefined;
+          try {
+            await observed.rotate();
+            await previous?.releaseResources?.();
+          } catch (error) {
+            void Promise.resolve(poolOptions.onRetirementFailure?.(error)).catch(() => undefined);
+            throw error;
+          }
+        },
+        closeResources: observed.closeResources,
+      };
+    },
     WorkerTaskPool: class {
       run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
         return observed.run(prepare(), options);
@@ -107,7 +128,6 @@ vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
   },
 }));
 vi.mock("../../state/openclaw-agent-db-readonly-scope.js", () => ({
-  closeOpenClawAgentDatabaseReadOnlyCandidates: vi.fn(),
   OpenClawAgentDatabaseReadOnlyScope: class {
     hasRetainedConnection = true;
     run(_database: unknown, operation: () => unknown) {
@@ -138,7 +158,7 @@ vi.mock("./disk-budget-runtime.js", () => ({
 vi.mock("./session-transcript-hydration.worker.js", () => ({
   streamSessionTranscriptHydration: observed.hydrate,
 }));
-vi.mock("./session-accessor.sqlite-entry.js", () => ({
+vi.mock("./session-accessor.sqlite-exact-read.js", () => ({
   loadSessionEntryReadOnlyInScope: () => observed.read(),
 }));
 vi.mock("./session-sharing-store.js", () => ({

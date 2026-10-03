@@ -227,7 +227,7 @@ actor GatewayConnection: Observable {
         let shutdownGeneration: UInt64
         let activationBindingKey: SymmetricKey?
 
-        func matches(endpoint: EndpointSnapshot, shutdownGeneration: UInt64? = nil) -> Bool {
+        func matches(endpoint: EndpointSnapshot, shutdownGeneration: UInt64) -> Bool {
             self.endpoint.config.url == endpoint.config.url &&
                 self.endpoint.config.token == endpoint.config.token &&
                 self.endpoint.config.password == endpoint.config.password &&
@@ -235,11 +235,7 @@ actor GatewayConnection: Observable {
                 GatewayTLSRoute.hasSameConnectionIdentity(self.endpoint.tls, endpoint.tls) &&
                 self.endpoint.deviceAuthGatewayID == endpoint.deviceAuthGatewayID &&
                 self.endpoint.routeAuthority == endpoint.routeAuthority &&
-                shutdownGeneration.map { self.shutdownGeneration == $0 } ?? true
-        }
-
-        func matches(route: Route) -> Bool {
-            route.matches(self.endpoint)
+                self.shutdownGeneration == shutdownGeneration
         }
     }
 
@@ -703,30 +699,22 @@ extension GatewayConnection {
     func requestDecoded<T: Decodable>(
         method: Method,
         params: [String: AnyCodable]? = nil,
-        timeoutMs: Double? = nil) async throws -> T
-    {
-        let data = try await requestRaw(method: method, params: params, timeoutMs: timeoutMs)
-        do {
-            return try self.decoder.decode(T.self, from: data)
-        } catch {
-            throw GatewayDecodingError(method: method.rawValue, message: error.localizedDescription)
-        }
-    }
-
-    func requestDecoded<T: Decodable>(
-        method: Method,
-        params: [String: AnyCodable]? = nil,
         timeoutMs: Double? = nil,
-        ifCurrentRoute route: Route) async throws -> T
+        ifCurrentRoute route: Route? = nil) async throws -> T
     {
-        let data = try await self.request(
-            method: method.rawValue,
-            params: params,
-            timeoutMs: timeoutMs,
-            ifCurrentRoute: route,
-            distinguishPreDispatchRouteChange: true)
-        guard await self.isCurrentRoute(route) else {
-            throw GatewayRouteChangedAfterDispatchError(method: method.rawValue)
+        let data: Data
+        if let route {
+            data = try await self.request(
+                method: method.rawValue,
+                params: params,
+                timeoutMs: timeoutMs,
+                ifCurrentRoute: route,
+                distinguishPreDispatchRouteChange: true)
+            guard await self.isCurrentRoute(route) else {
+                throw GatewayRouteChangedAfterDispatchError(method: method.rawValue)
+            }
+        } else {
+            data = try await self.requestRaw(method: method, params: params, timeoutMs: timeoutMs)
         }
         do {
             return try self.decoder.decode(T.self, from: data)
@@ -950,12 +938,9 @@ extension GatewayConnection {
     }
 
     private func routeMatchesCurrentState(_ route: Route, endpoint: EndpointSnapshot) -> Bool {
-        route.matches(endpoint) && self.routeMatchesConfiguredConnection(route)
-    }
-
-    private func routeMatchesConfiguredConnection(_ route: Route) -> Bool {
-        route.generation == self.routeGeneration &&
-            self.configuredConnection?.matches(route: route) == true
+        guard let configuredConnection else { return false }
+        return route.matches(endpoint) && route.generation == self.routeGeneration &&
+            route.matches(configuredConnection.endpoint)
     }
 
     func sessionRoutingIdentity(
@@ -1345,10 +1330,8 @@ extension GatewayConnection {
     }
 
     func cachedGatewayVersion() -> String? {
-        guard let snapshot = lastSnapshot else { return nil }
-        let raw = snapshot.server["version"]?.value as? String
-        let trimmed = raw?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+        (self.lastSnapshot?.server["version"]?.value as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
     }
 
     func connectionSummary() -> (connected: Bool, gatewayVersion: String?) {
@@ -1616,7 +1599,8 @@ extension GatewayConnection {
         keys: [String],
         limit: Int? = nil,
         maxChars: Int? = nil,
-        timeoutMs: Int? = nil) async throws -> OpenClawSessionsPreviewPayload
+        timeoutMs: Int? = nil,
+        ifCurrentServerLease lease: ServerLease) async throws -> OpenClawSessionsPreviewPayload
     {
         let resolvedKeys = keys
             .map { self.canonicalizeSessionKey($0) }
@@ -1631,10 +1615,16 @@ extension GatewayConnection {
         if let maxChars {
             params["maxChars"] = AnyCodable(maxChars)
         }
-        return try await self.requestDecoded(
-            method: .sessionsPreview,
+        let data = try await self.request(
+            method: Method.sessionsPreview.rawValue,
             params: params,
-            timeoutMs: timeoutMs.map { Double($0) })
+            timeoutMs: timeoutMs.map { Double($0) },
+            ifCurrentServerLease: lease)
+        do {
+            return try self.decoder.decode(OpenClawSessionsPreviewPayload.self, from: data)
+        } catch {
+            throw GatewayDecodingError(method: Method.sessionsPreview.rawValue, message: error.localizedDescription)
+        }
     }
 
     // MARK: - Chat

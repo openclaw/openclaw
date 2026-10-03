@@ -47,6 +47,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import { withTimeout } from "../utils/with-timeout.js";
 
@@ -182,15 +183,12 @@ async function enqueueGatewayLifecycleNotice(
     await active;
     return { id: deliveryIntentId, created: false };
   }
-  const enqueue = enqueueRestartSentinelNoticeOwned(params, deliveryIntentId, context);
-  activeRestartNoticeEnqueues.set(deliveryIntentId, enqueue);
-  try {
-    return await enqueue;
-  } finally {
-    if (activeRestartNoticeEnqueues.get(deliveryIntentId) === enqueue) {
-      activeRestartNoticeEnqueues.delete(deliveryIntentId);
-    }
-  }
+  return await getOrCreatePromise(
+    activeRestartNoticeEnqueues,
+    deliveryIntentId,
+    () => enqueueRestartSentinelNoticeOwned(params, deliveryIntentId, context),
+    { evictOnSettled: true },
+  );
 }
 
 async function enqueueRestartSentinelNoticeOwned(

@@ -1,6 +1,7 @@
 import { html } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import {
   getChatAttachmentDataUrl,
@@ -25,9 +26,7 @@ function readTextFromDataUrl(dataUrl: string): string | null {
   }
   if (metadata.toLowerCase().includes(";base64")) {
     try {
-      const binary = atob(payload);
-      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-      return new TextDecoder().decode(bytes);
+      return new TextDecoder().decode(base64ToBytes(payload));
     } catch {
       return null;
     }

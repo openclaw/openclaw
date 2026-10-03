@@ -166,7 +166,6 @@ export function normalizeReplyPayloadOutcome(
     text = enrichedPayload.text;
   }
 
-  // Resolve template variables in responsePrefix if context is provided
   const effectivePrefix = opts.responsePrefixContext
     ? resolveResponsePrefixTemplate(opts.responsePrefix, opts.responsePrefixContext)
     : opts.responsePrefix;

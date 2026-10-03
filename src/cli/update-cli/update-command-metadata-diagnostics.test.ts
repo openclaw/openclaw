@@ -23,6 +23,8 @@ import * as commandRun from "./update-command-run.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 import { updateCommand } from "./update-command.js";
 
+vi.mock("../../version.js", () => ({ VERSION: "2026.9.7" }));
+
 const { fixture } = installFreshUpdateFixture();
 
 it.each([

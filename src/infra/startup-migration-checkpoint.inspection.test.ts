@@ -166,124 +166,97 @@ describe("startup lease integrity and admission", () => {
     },
   );
 
-  it.each([false, true])(
-    "starts lease lifetime after slow verification (snapshot invalidated=%s)",
-    async (invalidateSnapshot) => {
-      await initializeLeaseDatabase();
-      const pathname = resolveOpenClawStateSqlitePath(env);
-      const peer = new DatabaseSync(pathname);
-      peer.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 0;");
-      let nowMs = Date.now();
-      let committed = false;
-      const assertIntegrity = sqliteIntegrity.assertSqliteIntegrity;
-      const checker = vi
-        .spyOn(sqliteIntegrity, "assertSqliteIntegrity")
-        .mockImplementation((db, label, check) => {
-          const result = assertIntegrity(db, label, check);
-          // Advance the injected lease clock, not real timers, after native verification.
-          nowMs += STARTUP_MIGRATION_LEASE_TTL_MS + 1;
-          if (invalidateSnapshot && !committed) {
-            peer.exec(
-              "UPDATE schema_meta SET updated_at = updated_at + 1 WHERE meta_key = 'primary'",
-            );
-            committed = true;
-          }
-          return result;
-        });
-      let lease: StartupMigrationLease | undefined;
-      try {
-        lease = await acquireStartupMigrationLeaseWithWait({
-          ...parameters(),
-          timeoutMs: 1000,
-          now: () => nowMs,
-        });
-        expect(lease).toBeDefined();
-        const row = peer
-          .prepare("SELECT expires_at FROM state_leases WHERE owner = ?")
-          .get(lease!.owner);
-        expect(row?.expires_at).toBeGreaterThan(nowMs);
-        expect(committed).toBe(invalidateSnapshot);
-      } finally {
-        checker.mockRestore();
-        lease?.release();
-        peer.close();
-      }
-    },
-  );
+  it("starts lease lifetime after slow verification and a stale-snapshot retry", async () => {
+    await initializeLeaseDatabase();
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    const peer = new DatabaseSync(pathname);
+    peer.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 0;");
+    let nowMs = Date.now();
+    let committed = false;
+    const assertIntegrity = sqliteIntegrity.assertSqliteIntegrity;
+    const checker = vi
+      .spyOn(sqliteIntegrity, "assertSqliteIntegrity")
+      .mockImplementation((db, label, check) => {
+        const result = assertIntegrity(db, label, check);
+        // Advance the injected lease clock, not real timers, after native verification.
+        nowMs += STARTUP_MIGRATION_LEASE_TTL_MS + 1;
+        if (!committed) {
+          peer.exec(
+            "UPDATE schema_meta SET updated_at = updated_at + 1 WHERE meta_key = 'primary'",
+          );
+          committed = true;
+        }
+        return result;
+      });
+    let lease: StartupMigrationLease | undefined;
+    try {
+      lease = await acquireStartupMigrationLeaseWithWait({
+        ...parameters(),
+        timeoutMs: 1000,
+        now: () => nowMs,
+      });
+      expect(lease).toBeDefined();
+      const row = peer
+        .prepare("SELECT expires_at FROM state_leases WHERE owner = ?")
+        .get(lease!.owner);
+      expect(row?.expires_at).toBeGreaterThan(nowMs);
+      expect(committed).toBe(true);
+    } finally {
+      checker.mockRestore();
+      lease?.release();
+      peer.close();
+    }
+  });
 
-  it.each([false, true])(
-    "rechecks schema repair and rolls back damage (snapshot invalidated=%s)",
-    async (invalidateSnapshot) => {
-      await initializeLeaseDatabase();
-      const pathname = resolveOpenClawStateSqlitePath(env);
-      const fixture = new DatabaseSync(pathname);
-      try {
-        fixture.exec(`
+  it("rechecks schema repair and rolls back damage", async () => {
+    await initializeLeaseDatabase();
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    const fixture = new DatabaseSync(pathname);
+    try {
+      fixture.exec(`
         PRAGMA journal_mode = WAL;
         ALTER TABLE schema_meta DROP COLUMN app_version;
         CREATE TABLE repair_fixture (value INTEGER CHECK(value > 0));
       `);
-      } finally {
-        fixture.close();
-      }
-      const assertIntegrity = sqliteIntegrity.assertSqliteIntegrity;
-      let invalidated = false;
-      const checker = vi
-        .spyOn(sqliteIntegrity, "assertSqliteIntegrity")
-        .mockImplementation((db, label, check) => {
-          const result = assertIntegrity(db, label, check);
-          if (invalidateSnapshot && !invalidated) {
-            const peer = new DatabaseSync(pathname);
-            try {
-              peer.exec(
-                "UPDATE schema_meta SET updated_at = updated_at + 1 WHERE meta_key = 'primary'",
-              );
-              invalidated = true;
-            } finally {
-              peer.close();
-            }
-          }
-          return result;
-        });
-      const ensureColumn = schemaHelpers.ensureColumn;
-      const repair = vi
-        .spyOn(schemaHelpers, "ensureColumn")
-        .mockImplementation((db, table, column) => {
-          const changed = ensureColumn(db, table, column);
-          if (table === "schema_meta" && changed) {
-            // Damage is introduced after the real additive repair, in its transaction.
-            db.exec(
-              "PRAGMA ignore_check_constraints = ON; INSERT INTO repair_fixture VALUES (-1); PRAGMA ignore_check_constraints = OFF;",
-            );
-          }
-          return changed;
-        });
-      try {
-        await expect(
-          acquireStartupMigrationLeaseWithWait({ ...parameters(), timeoutMs: 1000 }),
-        ).rejects.toThrow("integrity_check failed");
-      } finally {
-        repair.mockRestore();
-        checker.mockRestore();
-      }
-      expect(invalidated).toBe(invalidateSnapshot);
-      const verify = new DatabaseSync(pathname, { readOnly: true });
-      try {
-        expect(
-          verify
-            .prepare("PRAGMA table_info(schema_meta)")
-            .all()
-            .map((row) => row.name),
-        ).not.toContain("app_version");
-        expect(verify.prepare("SELECT * FROM repair_fixture").all()).toEqual([]);
-        expect(
-          verify.prepare("SELECT owner FROM state_leases WHERE scope = 'startup-migrations'").all(),
-        ).toEqual([]);
-      } finally {
-        verify.close();
-      }
-    },
-  );
+    } finally {
+      fixture.close();
+    }
+    const ensureColumn = schemaHelpers.ensureColumn;
+    const repair = vi
+      .spyOn(schemaHelpers, "ensureColumn")
+      .mockImplementation((db, table, column) => {
+        const changed = ensureColumn(db, table, column);
+        if (table === "schema_meta" && changed) {
+          // Damage is introduced after the real additive repair, in its transaction.
+          db.exec(
+            "PRAGMA ignore_check_constraints = ON; INSERT INTO repair_fixture VALUES (-1); PRAGMA ignore_check_constraints = OFF;",
+          );
+        }
+        return changed;
+      });
+    try {
+      await expect(
+        acquireStartupMigrationLeaseWithWait({ ...parameters(), timeoutMs: 1000 }),
+      ).rejects.toThrow("integrity_check failed");
+    } finally {
+      repair.mockRestore();
+    }
+    const verify = new DatabaseSync(pathname, { readOnly: true });
+    try {
+      expect(
+        verify
+          .prepare("PRAGMA table_info(schema_meta)")
+          .all()
+          .map((row) => row.name),
+      ).not.toContain("app_version");
+      expect(verify.prepare("SELECT * FROM repair_fixture").all()).toEqual([]);
+      expect(
+        verify.prepare("SELECT owner FROM state_leases WHERE scope = 'startup-migrations'").all(),
+      ).toEqual([]);
+    } finally {
+      verify.close();
+    }
+  });
 
   it("rolls back a lease claim when its verified transaction cannot commit", async () => {
     await initializeLeaseDatabase();

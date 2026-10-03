@@ -22,16 +22,11 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createZeroUsage } from "../utils/usage.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
-type ContextUsage = NonNullable<Usage["contextUsage"]>;
-
-type TransportUsage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  contextUsage?: ContextUsage;
-  totalTokens: number;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+type TransportUsage = Pick<
+  Usage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "contextUsage" | "totalTokens"
+> & {
+  cost: Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite" | "total">;
 };
 
 export type WritableTransportStream = Pick<

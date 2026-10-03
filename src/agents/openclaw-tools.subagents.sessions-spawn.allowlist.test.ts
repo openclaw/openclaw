@@ -65,8 +65,8 @@ beforeAll(async () => {
 });
 
 describe("subagent spawn target admission", () => {
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
     setupAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
     setConfig({});

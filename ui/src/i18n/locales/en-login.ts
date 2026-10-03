@@ -32,10 +32,11 @@ const enLogin = {
         retrying: "Retrying now…",
       },
       profileUnavailable: {
-        title: "Profile verification unavailable",
+        title: "Couldn't verify your account",
+        summary: "OpenClaw couldn't check your account right now. Please try again shortly.",
         stepRetry: "Retry shortly.",
         stepAdmin:
-          "If this continues, ask a Gateway administrator to check the identity provider and GitHub API credential.",
+          "If this continues, ask the person who manages OpenClaw to check account access.",
       },
       verifiedUserRequired: {
         title: "Verified identity required",

@@ -6,7 +6,10 @@ import {
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import * as chatDisplayProjection from "./chat-display-projection.core.js";
 import {
   readChatHistoryMessageId,
@@ -15,14 +18,26 @@ import {
 } from "./session-history-tail.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
 
+function historyTarget(state: OpenClawTestState, sessionId: string) {
+  return {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: `${state.sessionsDir()}/sessions.json`,
+  };
+}
+
+const tailDefaults = {
+  readers: sessionTranscriptReaders,
+  entry: undefined,
+  effectiveMaxChars: 8_000,
+  max: 1,
+  maxBytes: 1024 * 1024,
+};
+
 it("applies the head byte budget before loading an older malformed row", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const readScope = {
-      agentId: "main",
-      sessionId: "head-cursor-byte-budget",
-      sessionKey: "agent:main:head-cursor-byte-budget",
-      storePath: `${state.sessionsDir()}/sessions.json`,
-    };
+    const readScope = historyTarget(state, "head-cursor-byte-budget");
     const newestText = "x".repeat(1024 * 1024 + 1);
     await replaceTranscriptEvents(readScope, [
       { type: "session", version: 3, id: readScope.sessionId },
@@ -50,13 +65,10 @@ it("applies the head byte budget before loading an older malformed row", async (
     ).toBe(1);
 
     const tail = await readIncrementalChatHistoryTail({
-      readers: sessionTranscriptReaders,
-      entry: undefined,
+      ...tailDefaults,
       readScope,
       beforeSeq: 99,
       preserveProjectionContext: true,
-      effectiveMaxChars: 8_000,
-      max: 1,
       maxBytes: 1024,
     });
 
@@ -70,12 +82,7 @@ it("applies the head byte budget before loading an older malformed row", async (
 
 it("keeps a sparse tail below its first snapshot when messages append between pages", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const readScope = {
-      agentId: "main",
-      sessionId: "sparse-tail-append",
-      sessionKey: "agent:main:sparse-tail-append",
-      storePath: `${state.sessionsDir()}/sessions.json`,
-    };
+    const readScope = historyTarget(state, "sparse-tail-append");
     const ids = Array.from({ length: 101 }, (_, index) => `row-${index + 1}`);
     await replaceTranscriptEvents(readScope, [
       { type: "session", version: 3, id: readScope.sessionId },
@@ -104,12 +111,8 @@ it("keeps a sparse tail below its first snapshot when messages append between pa
       });
     try {
       const tail = await readIncrementalChatHistoryTail({
-        readers: sessionTranscriptReaders,
-        entry: undefined,
+        ...tailDefaults,
         readScope,
-        effectiveMaxChars: 8_000,
-        max: 1,
-        maxBytes: 1024 * 1024,
       });
 
       expect(await sessionTranscriptReaders.readSessionMessageCountAsync(readScope)).toBe(103);
@@ -127,12 +130,7 @@ it("keeps a sparse tail below its first snapshot when messages append between pa
 
 it("fills sparse pages without repeatedly projecting scanned transcript rows", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const readScope = {
-      agentId: "main",
-      sessionId: "sparse-tail-projection-work",
-      sessionKey: "agent:main:sparse-tail-projection-work",
-      storePath: `${state.sessionsDir()}/sessions.json`,
-    };
+    const readScope = historyTarget(state, "sparse-tail-projection-work");
     const events = Array.from({ length: 1_500 }, (_, index) => ({
       type: "message",
       id: `row-${index}`,
@@ -158,12 +156,9 @@ it("fills sparse pages without repeatedly projecting scanned transcript rows", a
       });
     try {
       const tail = await readIncrementalChatHistoryTail({
-        readers: sessionTranscriptReaders,
-        entry: undefined,
+        ...tailDefaults,
         readScope,
-        effectiveMaxChars: 8_000,
         max: 25,
-        maxBytes: 1024 * 1024,
         offset: 0,
         readOnly: true,
         deferProfileDisplay: true,
@@ -184,12 +179,7 @@ it("fills sparse pages without repeatedly projecting scanned transcript rows", a
 it("does not serialize transcript batches when the extended sparse byte guard is unused", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const sessionId = "history-byte-accounting";
-    const readScope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath: `${state.sessionsDir()}/sessions.json`,
-    };
+    const readScope = historyTarget(state, sessionId);
     // Wide records exceed the initial 1 MiB byte cap, so the ordinary window
     // needs additional pages even though it stays below the message-count limit.
     const events = Array.from({ length: 400 }, (_, index) => ({
@@ -211,10 +201,8 @@ it("does not serialize transcript batches when the extended sparse byte guard is
     const stringify = vi.spyOn(JSON, "stringify");
     try {
       const tail = await readIncrementalChatHistoryTail({
-        readers: sessionTranscriptReaders,
-        entry: undefined,
+        ...tailDefaults,
         readScope,
-        effectiveMaxChars: 8000,
         max: 800,
         maxBytes: 1024,
       });
@@ -238,12 +226,7 @@ it.each(["offset", "sparse"] as const)(
   "preserves ordered %s history while bounding each wide transcript read",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const readScope = {
-        agentId: "main",
-        sessionId: `bounded-wide-${kind}`,
-        sessionKey: `agent:main:bounded-wide-${kind}`,
-        storePath: `${state.sessionsDir()}/sessions.json`,
-      };
+      const readScope = historyTarget(state, `bounded-wide-${kind}`);
       // Stay below the 4 MiB asynchronous rebuild threshold; this fixture tests reader chunking.
       const ids = Array.from({ length: 18 }, (_, index) => `row-${index}`);
       await replaceTranscriptEvents(readScope, [
@@ -291,12 +274,10 @@ it.each(["offset", "sparse"] as const)(
           recordPage(await sessionTranscriptReaders.readSessionMessagesPageWithStatsAsync(...args)),
       };
       const tail = await readIncrementalChatHistoryTail({
+        ...tailDefaults,
         readers,
-        entry: undefined,
         readScope,
-        effectiveMaxChars: 8_000,
         max: kind === "sparse" ? 1 : ids.length,
-        maxBytes: 1024 * 1024,
         ...(kind === "offset" ? { offset: 1 } : {}),
         readOnly: true,
         deferProfileDisplay: true,

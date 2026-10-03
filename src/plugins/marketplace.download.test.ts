@@ -3,9 +3,10 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { installPluginFromMarketplace } from "./marketplace.js";
 import {
   createMarketplaceInstallInput,
   expectMarketplaceInstallSuccess,
@@ -28,7 +29,6 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
     };
   }),
 );
-let installPluginFromMarketplace: typeof import("./marketplace.js").installPluginFromMarketplace;
 
 vi.mock("./install.js", () => ({
   installPluginFromPath: (...args: unknown[]) => installPluginFromPathMock(...args),
@@ -41,10 +41,6 @@ vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
     fetchWithSsrFGuard: (params: { url: string; init?: RequestInit }) =>
       fetchWithSsrFGuardMock(params),
   };
-});
-
-beforeAll(async () => {
-  ({ installPluginFromMarketplace } = await import("./marketplace.js"));
 });
 
 async function listMarketplaceDownloadTempDirs(): Promise<string[]> {

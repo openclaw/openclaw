@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   advanceProtectionScanState,
   createProtectionScanState,
@@ -102,36 +102,67 @@ describe("protection fast path", () => {
 
   it("keeps successive lookups linear instead of rescanning from the start each time", () => {
     // A fresh scan for each candidate made lookup quadratic (#122513).
-    const lineCount = 20_000;
+    const lineCount = 512;
     const body = Array.from({ length: lineCount }, (_, index) => `[read.${index}]`).join("\n");
     const incoming = `\`\`\`toml\n${body}\n\`\`\`\n`;
     const verdict = verdictFor("", incoming);
-    expect(verdict).toBeDefined();
+    if (!verdict) {
+      throw new Error("Expected a protection verdict for fenced text");
+    }
 
     let offset = 0;
-    const start = performance.now();
+    let comparisons = 0;
+    const comparisonBudget = lineCount * 3;
+    // Observe numeric comparisons without exposing the closure's line index.
+    const countedOffset = {
+      [Symbol.toPrimitive]() {
+        comparisons += 1;
+        if (comparisons > comparisonBudget) {
+          throw new Error("Protection lookups exceeded the linear comparison budget");
+        }
+        return offset;
+      },
+    };
     for (let index = 0; index < lineCount; index += 1) {
-      verdict?.(offset);
+      expect(Reflect.apply(verdict, undefined, [countedOffset])).toBe(true);
       offset = incoming.indexOf("\n", offset) + 1;
     }
-    const elapsedMs = performance.now() - start;
 
-    // Distinguish quadratic rescanning from a linear cursor.
-    expect(elapsedMs).toBeLessThan(50);
+    expect(comparisons).toBeGreaterThan(0);
   });
 
   it("advances a long newline-free stream in token-sized deltas without rescanning it", () => {
     // Rescanning partialLine for each small delta made newline-free streams quadratic (#122513).
     const state = createProtectionScanState();
     const chunk = "abcdefghij";
-    const chunkCount = 40_000; // 400 KB in provider-sized deltas.
-    const start = performance.now();
-    for (let index = 0; index < chunkCount; index += 1) {
-      advanceProtectionScanState(state, chunk);
+    const chunkCount = 512;
+    const totalChars = chunk.length * chunkCount;
+    let searchedChars = 0;
+    // oxlint-disable-next-line typescript/unbound-method -- Invoked below with the original string receiver.
+    const indexOf = String.prototype.indexOf;
+    const searches = vi.spyOn(String.prototype, "indexOf").mockImplementation(function (
+      this: string,
+      search,
+      position,
+    ) {
+      const result = indexOf.call(this, search, position);
+      if (search === "\n") {
+        searchedChars += (result === -1 ? this.length : result + 1) - (position ?? 0);
+        if (searchedChars > totalChars * 2) {
+          throw new Error("Protection updates exceeded the linear newline-search budget");
+        }
+      }
+      return result;
+    });
+    try {
+      for (let index = 0; index < chunkCount; index += 1) {
+        advanceProtectionScanState(state, chunk);
+      }
+    } finally {
+      searches.mockRestore();
     }
-    const elapsedMs = performance.now() - start;
 
-    expect(state.partialLine.length).toBe(chunk.length * chunkCount);
-    expect(elapsedMs).toBeLessThan(200);
+    expect(state.partialLine).toBe(chunk.repeat(chunkCount));
+    expect(searchedChars).toBeGreaterThan(0);
   });
 });

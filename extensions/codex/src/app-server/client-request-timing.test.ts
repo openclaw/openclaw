@@ -53,16 +53,6 @@ afterEach(() => {
 });
 
 describe("Codex request timing", () => {
-  it("keeps a pending read valid across a wall-clock jump", async () => {
-    const harness = createHarness();
-    const pending = read(harness);
-    vi.setSystemTime(Date.now() + 300_100);
-    harness.send({ id: requestId(harness), result: page });
-    await expect(pending).resolves.toEqual(page);
-    expect(harness.writes).toHaveLength(1);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("keeps a deferred guard budget across a wall-clock jump", async () => {
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();

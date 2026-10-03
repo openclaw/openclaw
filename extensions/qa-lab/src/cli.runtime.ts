@@ -193,21 +193,6 @@ function normalizeQaSuiteChannelDriver(
   throw new Error(`--channel-driver must be one of qa-channel, crabline, or live, got "${input}".`);
 }
 
-function resolveQaManualLaneModels(opts: {
-  providerMode: QaProviderMode;
-  primaryModel?: string;
-  alternateModel?: string;
-}) {
-  // `qa manual --model` is a one-model probe unless the operator also supplies
-  // `--alt-model`; materialize that contract before shared pair resolution.
-  const explicitPrimaryModel = opts.primaryModel?.trim();
-  return resolveQaRuntimeModelPair({
-    ...opts,
-    primaryModel: explicitPrimaryModel,
-    alternateModel: opts.alternateModel?.trim() || explicitPrimaryModel,
-  });
-}
-
 function parseQaThinkingLevel(
   label: string,
   value: string | undefined,
@@ -519,13 +504,7 @@ function parseQaModelSpecs(label: string, entries: readonly string[] | undefined
       const value = part.slice(separatorIndex + 1).trim();
       switch (key) {
         case "thinking": {
-          const thinkingDefault = parseQaThinkingLevel(`${label} thinking`, value);
-          if (!thinkingDefault) {
-            throw new Error(
-              `${label} thinking must be one of off, minimal, low, medium, high, xhigh, adaptive, max`,
-            );
-          }
-          options.thinkingDefault = thinkingDefault;
+          options.thinkingDefault = parseQaThinkingLevel(`${label} thinking`, value);
           break;
         }
         case "fast":
@@ -1434,10 +1413,12 @@ export async function runQaManualLaneCommand(opts: {
     opts.providerMode === undefined
       ? DEFAULT_QA_LIVE_PROVIDER_MODE
       : normalizeQaProviderMode(opts.providerMode);
-  const models = resolveQaManualLaneModels({
+  // `--model` is a one-model probe unless the operator also supplies `--alt-model`.
+  const primaryModel = opts.primaryModel?.trim();
+  const models = resolveQaRuntimeModelPair({
     providerMode,
-    primaryModel: opts.primaryModel,
-    alternateModel: opts.alternateModel,
+    primaryModel,
+    alternateModel: opts.alternateModel?.trim() || primaryModel,
   });
   const result = await runQaManualLane({
     repoRoot,

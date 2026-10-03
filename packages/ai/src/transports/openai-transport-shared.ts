@@ -195,12 +195,8 @@ type MutableOpenAICompletionsReasoningBatch = {
   hasVisibleText: boolean;
 };
 
-const EMPTY_OPENAI_COMPLETIONS_REASONING_BATCH: OpenAICompletionsReasoningBatch = {
-  deltas: [],
-  mirroredThinking: [],
-  hasThinking: false,
-  hasVisibleText: false,
-};
+const EMPTY_OPENAI_COMPLETIONS_REASONING_BATCH: OpenAICompletionsReasoningBatch =
+  createOpenAICompletionsReasoningBatch();
 
 const OPENAI_COMPLETIONS_REASONING_FIELDS = [
   "reasoning_content",
@@ -343,6 +339,16 @@ export function parseOpenAICompletionsUsage(
   const input = Math.max(0, (rawUsage.prompt_tokens || 0) - cacheRead - cacheWrite);
   const output = rawUsage.completion_tokens || 0;
   const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
+  const hasCoherentContext =
+    [
+      rawUsage.prompt_tokens,
+      rawUsage.completion_tokens,
+      rawUsage.total_tokens,
+      cacheRead,
+      cacheWrite,
+    ].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0) &&
+    rawUsage.prompt_tokens >= cacheRead + cacheWrite &&
+    rawUsage.total_tokens >= rawUsage.prompt_tokens + rawUsage.completion_tokens;
   const usage: MutableAssistantOutput["usage"] = {
     input,
     output,
@@ -354,6 +360,13 @@ export function parseOpenAICompletionsUsage(
     Number.isFinite(reasoningTokens)
       ? { reasoningTokens }
       : {}),
+    contextUsage: hasCoherentContext
+      ? {
+          state: "available",
+          promptTokens: rawUsage.prompt_tokens,
+          totalTokens: Math.max(input + output + cacheRead + cacheWrite, rawUsage.total_tokens),
+        }
+      : { state: "unavailable" },
     totalTokens: input + output + cacheRead + cacheWrite,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };

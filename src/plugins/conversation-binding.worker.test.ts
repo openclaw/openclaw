@@ -95,9 +95,23 @@ function createDiscordCodexBindRequest(
 
 async function requestPendingBinding(input: PluginBindingRequestInput) {
   const request = await requestPluginConversationBinding(input);
-  expect(request.status).toBe("pending");
   assert(request.status === "pending", "expected pending bind request");
   return request;
+}
+
+function holdWorkerOperation() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const original = stateWorker.runOpenClawStateWorkerOperation;
+  const spy = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockImplementationOnce(async (context, operation) => {
+      const value = await original(context, operation);
+      entered.resolve();
+      await release.promise;
+      return value;
+    });
+  return { entered, release, spy };
 }
 
 async function approveBindingRequest(approvalId: string, decision: PluginBindingDecision) {
@@ -132,7 +146,6 @@ describe("plugin conversation approval worker lifetime", () => {
       const input = createDiscordCodexBindRequest("channel:owner-check", "original binding");
       const pending = await requestPendingBinding(input);
       const approved = await approveBindingRequest(pending.approvalId, "allow-once");
-      expect(approved.status).toBe("approved");
       assert(approved.status === "approved", "expected approved bind result");
       const original = approved.binding;
       const bind = sessionBindingState.bind.getMockImplementation();
@@ -202,17 +215,7 @@ describe("plugin conversation approval worker lifetime", () => {
     async (mode) => {
       const input = createDiscordCodexBindRequest("channel:storage-race", "race");
       const pending = mode !== "read" ? await requestPendingBinding(input) : undefined;
-      const entered = createDeferred();
-      const release = createDeferred();
-      const original = stateWorker.runOpenClawStateWorkerOperation;
-      const spy = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementationOnce(async (context, operation) => {
-          const value = await original(context, operation);
-          entered.resolve();
-          await release.promise;
-          return value;
-        });
+      const { entered, release, spy } = holdWorkerOperation();
       const resolutionParams = {
         approvalId: pending?.approvalId ?? "unused",
         decision: "allow-always" as PluginBindingDecision,
@@ -272,17 +275,7 @@ describe("plugin conversation approval worker lifetime", () => {
     const pending = await requestPendingBinding(
       createDiscordCodexBindRequest("channel:reset-write", "reset"),
     );
-    const entered = createDeferred();
-    const release = createDeferred();
-    const original = stateWorker.runOpenClawStateWorkerOperation;
-    const spy = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementationOnce(async (context, operation) => {
-        const value = await original(context, operation);
-        entered.resolve();
-        await release.promise;
-        return value;
-      });
+    const { entered, release, spy } = holdWorkerOperation();
     const resolution = approveBindingRequest(pending.approvalId, "allow-always");
     const observed = resolution.then(
       (value) => ({ value }),

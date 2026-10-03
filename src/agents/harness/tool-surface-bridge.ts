@@ -145,6 +145,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
     let effectiveTools = prepared
       ? projectedUncompactedTools
       : filterRuntimeCompatibleTools(projectedUncompactedTools).tools;
+    const codeModeSkills = prepared?.codeModeSkills;
     const codeModeTools = codeModeControlsEnabled
       ? createCodeModeTools({
           config: params.config,
@@ -159,7 +160,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
           executeTool: prepared?.executeTool ?? params.executeTool,
           forceRestartSafeTools: prepared?.forceRestartSafeTools,
           toolExecutionAllow: prepared?.toolExecutionAllow,
-          codeModeSkills: prepared?.codeModeSkills,
+          codeModeSkills,
         })
       : [];
     const compacted = applyAgentToolSurfaceCatalog({
@@ -176,7 +177,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
       catalogRef: toolSearchCatalogRef,
       toolHookContext: options.hookContext,
       toolExecutionAllow: prepared?.toolExecutionAllow,
-      codeModeSkills: prepared?.codeModeSkills,
+      codeModeSkills,
     });
     const projectedCompactedTools =
       !prepared && options.localModelLeanApplied

@@ -8,6 +8,7 @@ import WebSocket from "ws";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js";
 
 const tempDirs = createTempDirTracker();
@@ -59,7 +60,6 @@ const childScript = `
             if (closeFailure) {
               const error = new TypeError("fixture close owner failed");
               error.stack = "TypeError: fixture close owner failed\\n    at closeOwner (fixture.js:12:3)";
-              if (closeFailure === "sync") throw error;
               return Promise.reject(error);
             }
             return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
@@ -98,7 +98,7 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-function startFixture(initialFailure = false, closeFailure = "") {
+function startFixture(initialFailure = false, closeFailure = "", executable = process.execPath) {
   const directory = tempDirs.make("openclaw-restart-liveness-");
   const home = path.join(directory, "home");
   fs.mkdirSync(home);
@@ -113,7 +113,7 @@ function startFixture(initialFailure = false, closeFailure = "") {
     fs.writeFileSync(faultPath, "refuse");
   }
   const child = spawn(
-    process.execPath,
+    executable,
     [
       "--inspect-port=127.0.0.1:0",
       "--import",
@@ -176,7 +176,7 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
   posixIt(
     "attaches the Node debugger on SIGUSR1 and restarts only on SIGUSR2",
     async () => {
-      const fixture = startFixture();
+      const fixture = startFixture(false, "", resolveTestNodeExecPath());
       await fixture.waitForOutput("ready:1");
       expect(fixture.child.kill("SIGUSR1")).toBe(true);
       await fixture.waitForOutput("Debugger listening on ws://127.0.0.1:");
@@ -231,10 +231,10 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
     60_000,
   );
 
-  posixIt.each(["sync", "rejected"])(
-    "persists %s close failures before a SIGUSR2 force-exit",
-    async (mode) => {
-      const fixture = startFixture(false, mode);
+  posixIt(
+    "persists rejected close failures before a SIGUSR2 force-exit",
+    async () => {
+      const fixture = startFixture(false, "rejected");
       await fixture.waitForOutput("ready:1");
       expect(fixture.child.kill("SIGUSR2")).toBe(true);
       expect(await fixture.closed, fixture.output()).toEqual([1, null]);
@@ -283,14 +283,14 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
     60_000,
   );
 
-  posixIt.each(["SIGTERM", "SIGINT"] as const)(
-    "exits cleanly on %s while waiting after a failed restart",
-    async (signal) => {
+  posixIt(
+    "exits cleanly on SIGTERM while waiting after a failed restart",
+    async () => {
       const fixture = startFixture();
       await fixture.waitForOutput("ready:1");
       fs.writeFileSync(fixture.faultPath, "refuse");
       await expectFailedRestartWaiting(fixture, 2);
-      expect(fixture.child.kill(signal)).toBe(true);
+      expect(fixture.child.kill("SIGTERM")).toBe(true);
       expect(await fixture.closed, fixture.output()).toEqual([0, null]);
       expect(fixture.output()).not.toContain("start:3");
     },

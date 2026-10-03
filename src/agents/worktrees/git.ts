@@ -11,6 +11,7 @@ import {
   executeGitCommandBuffered,
   normalizeGitPathForFilesystem,
   requireGitCommandOutput,
+  type GitBufferedCommandOptions,
   type GitCommandOptions,
 } from "../../infra/git-exec.js";
 import { hasGitWorkerContext, requestGitWorkerCommand } from "../../infra/git-worker-context.js";
@@ -19,7 +20,7 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../../infra/windows-encoding.js";
-import type { BufferedCommandOptions, BufferedCommandResult } from "../../process/exec.js";
+import type { BufferedCommandResult } from "../../process/exec.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
@@ -196,7 +197,7 @@ async function withGitRefAdmission<
 export async function runGitBuffered(
   cwd: string,
   args: string[],
-  options: BufferedCommandOptions & { beforeRun?: () => void } = {},
+  options: GitBufferedCommandOptions = {},
 ): Promise<BufferedCommandResult> {
   if (hasGitWorkerContext()) {
     const { signal: _signal, beforeRun: _beforeRun, ...forwarded } = options;

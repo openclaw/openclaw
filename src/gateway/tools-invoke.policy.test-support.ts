@@ -409,7 +409,7 @@ export function registerToolsInvokeErrorTests({
     setConfig({
       ...getConfig(),
       agents: {
-        list: [{ id: "main", default: true, tools: { allow: ["tools_invoke_test"] } }],
+        entries: { main: { tools: { allow: ["tools_invoke_test"] } } },
       },
     });
 

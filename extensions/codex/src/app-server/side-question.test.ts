@@ -20,7 +20,8 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import * as clientCleanup from "./attempt-client-cleanup.js";
 import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
@@ -30,11 +31,7 @@ import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
-import {
-  createClientHarness,
-  createCodexTestModel,
-  useAutoCleanupTempDirTracker,
-} from "./test-support.js";
+import { createClientHarness, createCodexTestModel } from "./test-support.js";
 
 const {
   readCodexAppServerBindingMock,
@@ -174,12 +171,12 @@ function nativeCommandItem(
 useProviderToolSchemaRuntimeForTest(["openai", "codex", "lmstudio"]);
 
 describe("runCodexAppServerSideQuestion", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useSessionStoreTempDirs(afterAll, "codex-side-question-");
 
   useSideQuestionTestSetup();
 
   it("fences a recovered predecessor when its host rotates before the fork", async () => {
-    const root = tempDirs.make("codex-side-predecessor-");
+    const root = tempDirs.make();
     const storePath = path.join(root, "admitted", "sessions.json");
     const previous = {
       kind: "session" as const,
@@ -2293,7 +2290,7 @@ describe("runCodexAppServerSideQuestion", () => {
     );
   });
   it("executes inherited Gateway shell tools through the side run's host authority", async () => {
-    const workspaceDir = tempDirs.make("codex-side-gateway-shell-");
+    const workspaceDir = tempDirs.make();
     const config = { tools: { exec: { host: "gateway" as const, mode: "full" as const } } };
     const runId = "side-gateway-shell";
     const sessionId = "side-gateway-session";

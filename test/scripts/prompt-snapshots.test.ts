@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   materializeCodexDynamicToolSnapshot,
   materializeCodexPromptSnapshot,
@@ -68,12 +68,16 @@ describe("happy path prompt snapshots", () => {
     }
     setStateDirEnv(poisonedStateRoot);
 
+    // Optional media credentials must not widen or cold-load the pinned tool catalog.
+    vi.stubEnv("OPENAI_API_KEY", "test-prompt-snapshot-openai");
+    vi.stubEnv("ZAI_API_KEY", "test-prompt-snapshot-zai");
     pluginLoaderCallsBefore = getPluginModuleLoaderStats().calls;
     generated = await createHappyPathPromptSnapshotFiles();
     pluginLoaderCallsAfter = getPluginModuleLoaderStats().calls;
   }, 300_000);
 
   afterAll(() => {
+    vi.unstubAllEnvs();
     restoreStateDirEnv(stateDirEnv);
     if (poisonedStateRoot) {
       fs.rmSync(poisonedStateRoot, { recursive: true, force: true });
@@ -111,6 +115,35 @@ describe("happy path prompt snapshots", () => {
 
       const materialized = await materializeCodexDynamicToolSnapshot(name);
       expect(JSON.parse(materialized)).toEqual(JSON.parse(expected!.content));
+
+      if (name === "telegram-direct") {
+        const specs = JSON.parse(expected!.content) as Array<{
+          type: "function" | "namespace";
+          name: string;
+          deferLoading?: boolean;
+          tools?: Array<{ name: string; deferLoading?: boolean }>;
+        }>;
+        const directFunctions = specs.filter((spec) => spec.type === "function");
+        const searchableNamespace = specs.find(
+          (spec) => spec.type === "namespace" && spec.name === "openclaw",
+        );
+        expect(directFunctions).toEqual(
+          expect.arrayContaining([expect.objectContaining({ name: "sessions_spawn" })]),
+        );
+        expect(directFunctions.find((spec) => spec.name === "sessions_spawn")).not.toHaveProperty(
+          "deferLoading",
+        );
+        expect(searchableNamespace?.tools).toEqual(
+          expect.arrayContaining(
+            ["session_status", "web_fetch", "web_search"].map((toolName) =>
+              expect.objectContaining({ name: toolName, deferLoading: true }),
+            ),
+          ),
+        );
+        expect(directFunctions.map((spec) => spec.name)).not.toEqual(
+          expect.arrayContaining(["session_status", "web_fetch", "web_search"]),
+        );
+      }
     }
   });
 

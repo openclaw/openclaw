@@ -237,9 +237,6 @@ function parseOsc8Sequence(value: string): Osc8Link | undefined {
 }
 
 function wrapLine(text: string, width: number): string[] {
-  if (width <= 0) {
-    return [text];
-  }
   // Fitting edge-trimmed ASCII is one column per code unit and needs no ANSI/grapheme scan.
   // Keep edge whitespace on the full path, where wrapping preserves its trimming semantics.
   if (text.length <= width && /^[!-~](?:[ -~]*[!-~])?$/u.test(text)) {

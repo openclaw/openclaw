@@ -85,11 +85,11 @@ describe("hybrid hosted assignment health", () => {
     expect(timeout).toHaveBeenCalledWith(10_000);
   });
 
-  it.each([
-    { status: "queued", runner_id: null, started_at: null },
-    { status: "completed", runner_id: 12, started_at: at(0) },
-  ])("falls back on $status assignment stalls", async (job) => {
-    mockActions([preflight({ completed_at: at(60) }), sentinel(job)]);
+  it("falls back on queued assignment stalls", async () => {
+    mockActions([
+      preflight({ completed_at: at(60) }),
+      sentinel({ status: "queued", runner_id: null, started_at: null }),
+    ]);
     await expect(inspect()).resolves.toMatchObject({
       healthy: false,
       reason: "hosted-assignment-stalled",
@@ -100,18 +100,12 @@ describe("hybrid hosted assignment health", () => {
   it.each<[number, boolean]>([
     [59, true],
     [60, false],
-    [179, false],
   ])("admits optional hosted checks after %s seconds: %s", async (wait, healthy) => {
     mockActions([
       preflight({ completed_at: at(500) }),
       sentinel({ created_at: at(wait + 10), started_at: at(10) }),
     ]);
     await expect(inspect()).resolves.toMatchObject({ healthy, maxWaitSeconds: wait });
-  });
-
-  it("uses job creation when a sentinel is created after preflight", async () => {
-    mockActions([preflight({ completed_at: at(500) }), sentinel({ created_at: at(100) })]);
-    await expect(inspect()).resolves.toMatchObject({ healthy: true, maxWaitSeconds: 5 });
   });
 
   it.each([

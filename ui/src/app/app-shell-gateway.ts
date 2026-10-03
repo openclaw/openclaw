@@ -6,6 +6,7 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   PORTAL_PANEL_TOGGLE_EVENT,
+  PLUGIN_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
@@ -36,6 +37,8 @@ import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
 
 export type StoredOutboxScopeHost = {
+  client: GatewayBrowserClient | null;
+  connected: boolean;
   settings: { gatewayUrl?: string | null };
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
@@ -234,11 +237,16 @@ export class ShellGatewayOwner {
     if (command.kind === "panel") {
       const sessionKey =
         commandParams.sessionKey ??
-        (command.panel === "portal" ? this.host.activeSessionKey : undefined);
+        (command.panel === "portal" || command.panel === "plugin"
+          ? this.host.activeSessionKey
+          : undefined);
       if (
         sessionKey &&
         (!areUiSessionKeysEquivalent(sessionKey, this.host.activeSessionKey) ||
-          !isSessionRouteId(this.host.routeState.routeId))
+          !isSessionRouteId(this.host.routeState.routeId) ||
+          (command.panel === "plugin" &&
+            commandParams.agentId !== undefined &&
+            commandParams.agentId !== context.agentSelection.state.selectedId))
       ) {
         this.host.selectChatSession(sessionKey, commandParams.agentId);
       }
@@ -248,10 +256,18 @@ export class ShellGatewayOwner {
           browser: BROWSER_PANEL_TOGGLE_EVENT,
           desktop: DESKTOP_PANEL_TOGGLE_EVENT,
           portal: PORTAL_PANEL_TOGGLE_EVENT,
+          plugin: PLUGIN_PANEL_TOGGLE_EVENT,
         }[command.panel],
         {
           detail: {
             open: command.open,
+            ...(command.panel === "plugin"
+              ? {
+                  pluginId: command.pluginId,
+                  panelId: command.panelId,
+                  agentId: commandParams.agentId,
+                }
+              : {}),
             ...(sessionKey ? { sessionKey } : {}),
             ...(command.dock ? { dock: command.dock } : {}),
             ...(command.panel === "terminal" && command.terminalSessionId
@@ -265,7 +281,12 @@ export class ShellGatewayOwner {
         },
       );
       if (sessionKey) {
-        rememberSessionPanelToggle(command.panel, panelEvent);
+        rememberSessionPanelToggle(
+          command.panel === "plugin"
+            ? `plugin:${command.pluginId}/${command.panelId}`
+            : command.panel,
+          panelEvent,
+        );
       }
       window.dispatchEvent(panelEvent);
       return;

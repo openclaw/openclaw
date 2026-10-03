@@ -193,6 +193,32 @@ describe("interrupted canonical user replay", () => {
     },
   );
 
+  it("reports a replayed durable user as persisted when its append is suppressed", async () => {
+    await withInterruptedTurn(
+      true,
+      async (fixture) => {
+        const persisted = vi.fn();
+        fixture.attempt.onUserMessagePersisted = persisted;
+        await withReplaySession(fixture, true, async (_session, submit) => {
+          streamMocks.streamSimple.mockImplementation((model) =>
+            createAssistantResultStream(
+              createAssistant(model, [{ type: "text", text: "Continued from completed work" }]),
+            ),
+          );
+          await submit();
+        });
+        // Retries and fallbacks skip re-appending only after this report. A
+        // compacted retry otherwise adopts the keyed row outside its turn.
+        expect(persisted).toHaveBeenCalledOnce();
+        expect(persisted.mock.calls[0]![0]).toMatchObject({
+          role: "user",
+          idempotencyKey: `${fixture.attempt.runId}:user`,
+        });
+      },
+      { interruptedTurn: true, toolProgress: true, compactedInput: true },
+    );
+  });
+
   it.each([
     { appendOnly: false, queue: "steer" },
     { appendOnly: true, queue: "steer" },
@@ -474,10 +500,10 @@ describe("interrupted canonical user replay", () => {
             createAssistant(testModel, [{ type: "text", text: "Already finished" }]),
           );
         }
-        appendCompletedToolWork(
+        await appendCompletedToolWork(
           original,
           boundary === "other-run" ? "unrelated-run" : fixture.attempt.runId,
-          () => {
+          async () => {
             // This row and the nested activity share one omitted context link.
             if (boundary === "hidden-user") {
               const hiddenUser: PersistedUserTurnMessage = {
@@ -486,9 +512,9 @@ describe("interrupted canonical user replay", () => {
                 excludeFromContext: true,
                 timestamp: 2,
               };
-              original.appendMessage(hiddenUser);
+              await original.appendMessageAsync(hiddenUser);
             } else if (boundary === "unknown-activity") {
-              original.appendMessage({
+              await original.appendMessageAsync({
                 role: "custom",
                 customType: "unidentified-activity",
                 content: "Unknown context must close the replay",
@@ -499,7 +525,7 @@ describe("interrupted canonical user replay", () => {
             }
           },
         );
-        appendOversizedCacheSnapshot(original);
+        await appendOversizedCacheSnapshot(original);
         await withReplaySession(fixture, false, async (_session, submit) => {
           await submit();
           expect(streamMocks.streamSimple).not.toHaveBeenCalled();

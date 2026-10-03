@@ -22,7 +22,6 @@ afterEach(() => {
 
 it.each([
   { mode: "doctor", fails: false },
-  { mode: "lint", fails: false },
   { mode: "lint", fails: true },
 ] as const)(
   "inspects each agent through one registration in $mode with detector failure=$fails",
@@ -183,18 +182,16 @@ module.exports = { id, register(api) {
               requirement: "authenticated requester context",
             }),
           );
-          expect(findings.filter((finding) => finding.target === "fleet_tool")).toEqual([
-            expect.objectContaining({
-              message: expect.stringContaining(
-                "Agent alpha tool fleet_tool from plugin fleet-tool",
-              ),
-              path: "plugins.entries.fleet-tool",
-            }),
-            expect.objectContaining({
-              message: expect.stringContaining("Agent beta tool fleet_tool from plugin fleet-tool"),
-              path: "plugins.entries.fleet-tool",
-            }),
-          ]);
+          expect(findings.filter((finding) => finding.target === "fleet_tool")).toEqual(
+            ["alpha", "beta"].map((agentId) =>
+              expect.objectContaining({
+                message: expect.stringContaining(
+                  `Agent ${agentId} tool fleet_tool from plugin fleet-tool`,
+                ),
+                path: "plugins.entries.fleet-tool",
+              }),
+            ),
+          );
           expect(findings).toContainEqual(
             expect.objectContaining({
               target: "failed-tool",
@@ -215,15 +212,14 @@ module.exports = { id, register(api) {
             .map((row) => row.id)
             .toSorted((left, right) => left.localeCompare(right)),
         ).toEqual(["failed-tool", "fleet-tool"]);
-        expect(observed.filter((row) => row.kind === "factory")).toEqual([
-          {
+        expect(observed.filter((row) => row.kind === "factory")).toEqual(
+          ["alpha", "beta"].map((agentId) => ({
             id: "fleet-tool",
             kind: "factory",
-            agentId: "alpha",
-            workspaceDir: state.path("alpha"),
-          },
-          { id: "fleet-tool", kind: "factory", agentId: "beta", workspaceDir: state.path("beta") },
-        ]);
+            agentId,
+            workspaceDir: state.path(agentId),
+          })),
+        );
         expect(
           observed
             .filter((row) => row.kind === "dispose")

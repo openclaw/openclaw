@@ -1,6 +1,6 @@
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
-export { normalizeCompatibilityConfig, legacyConfigRules } from "./config-doctor-api.js";
+export * from "./config-doctor-api.js";
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
   {
@@ -13,6 +13,25 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const { telegramRetiredStateMigration } = await import("./src/state-migrations.js");
       return telegramRetiredStateMigration.migrateLegacyState(params);
+    },
+  },
+  {
+    id: "telegram-json-ingress-spool",
+    label: "Telegram JSON ingress spool",
+    async collectBackupResources(params) {
+      const { telegramIngressSpoolMigration } =
+        await import("./src/telegram-ingress-spool-migration.js");
+      return telegramIngressSpoolMigration.collectBackupResources(params);
+    },
+    async detectLegacyState(params) {
+      const { telegramIngressSpoolMigration } =
+        await import("./src/telegram-ingress-spool-migration.js");
+      return telegramIngressSpoolMigration.detectLegacyState(params);
+    },
+    async migrateLegacyState(params) {
+      const { telegramIngressSpoolMigration } =
+        await import("./src/telegram-ingress-spool-migration.js");
+      return telegramIngressSpoolMigration.migrateLegacyState(params);
     },
   },
 ];

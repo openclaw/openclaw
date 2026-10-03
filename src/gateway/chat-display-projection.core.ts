@@ -189,9 +189,11 @@ function sanitizeAssistantErrorDisplayMessage(
     next.text = next.text.slice(STREAM_ERROR_FALLBACK_TEXT.length);
   }
   const terminalCopy =
+    formatProviderRefusalText(message) ??
     renderAssistantRequestFailureCopy({
       code: typeof message.errorCode === "string" ? message.errorCode : undefined,
-    }) ?? renderRecordedAssistantFailureCopy(message);
+    }) ??
+    renderRecordedAssistantFailureCopy(message);
   if (terminalCopy) {
     // Apply the normal visibility rules before adding host-owned failure copy.
     // Put it first in surviving text so phase filtering and display caps retain it.
@@ -483,18 +485,14 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
   };
 }
 
-function projectChatHistoryRecovery(messages: unknown[], options?: ChatHistoryRecoveryOptions) {
-  const projection = createChatHistoryRecoveryProjection(options);
-  projection.append(messages);
-  return projection.result();
-}
-
 export function projectChatDisplayMessagesWithState(
   messages: unknown[],
   options?: ChatDisplayProjectionOptions,
 ): ChatDisplayProjectionResult {
   options?.subagentCoordination?.assertCurrent?.();
-  const recoveredErrors = projectChatHistoryRecovery(messages, options);
+  const recovery = createChatHistoryRecoveryProjection(options);
+  recovery.append(messages);
+  const recoveredErrors = recovery.result();
   const projectedErrors = projectEmptyAssistantErrorMessages(recoveredErrors.messages);
   const activity =
     options?.activity === false

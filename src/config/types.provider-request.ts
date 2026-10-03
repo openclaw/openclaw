@@ -14,12 +14,3 @@ export type ConfiguredModelProviderRequest = NonNullable<ModelProvidersInput[str
 
 /** Shared provider request overrides used by model providers and media/tool providers. */
 export type ConfiguredProviderRequest = Omit<ConfiguredModelProviderRequest, "allowPrivateNetwork">;
-
-/** Authentication override applied to provider requests after model/provider defaults resolve. */
-export type ConfiguredProviderRequestAuth = NonNullable<ConfiguredProviderRequest["auth"]>;
-
-/** TLS material and verification knobs for provider or proxy connections. */
-export type ConfiguredProviderRequestTls = NonNullable<ConfiguredProviderRequest["tls"]>;
-
-/** Proxy selection for provider requests, including optional TLS settings for proxy transport. */
-export type ConfiguredProviderRequestProxy = NonNullable<ConfiguredProviderRequest["proxy"]>;

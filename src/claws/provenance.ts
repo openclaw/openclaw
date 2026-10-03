@@ -21,6 +21,16 @@ import {
   type PackageRefRow,
   type PersistedClawPackageRef,
 } from "./package-extension-provenance.js";
+import { updateClawPackageRefStatusInDatabase } from "./package-status.kernel.js";
+import {
+  persistClawMigrationOwnershipWithInstallRecordReader,
+  releaseAdoptedClawInstallRecordWithInstallRecordReader,
+} from "./provenance-adopted.js";
+import {
+  decodeClawAgentOwnership,
+  encodeClawAgentOwnership,
+  type ClawAgentOrigin,
+} from "./provenance-agent-origin.js";
 import {
   clawBootstrapProvenanceFromRow,
   selectClawBootstrapProvenanceColumns,
@@ -31,35 +41,19 @@ import {
   deleteCachedClawInstallSchemaVersion,
 } from "./provenance-runtime-read.js";
 import * as installRecordSchema from "./provenance-schema-version.js";
+import type { ClawInstallStatus, PersistedClawInstall } from "./provenance-types.js";
 import type { ClawAddPlan, ClawPackage, ResolvedClawPackage } from "./types.js";
+import type { PersistedClawWorkspaceFile } from "./workspace.js";
 export {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
   type PersistedClawPackageRef,
 } from "./package-extension-provenance.js";
+export type { ClawInstallStatus, PersistedClawInstall } from "./provenance-types.js";
 
-type ClawProvenanceDatabase = Pick<DB, "claw_installs" | "claw_package_refs">;
-
-export type ClawInstallStatus =
-  | "pending"
-  | "workspace_ready"
-  | "config_committed"
-  | "complete"
-  | "partial";
-
-export type PersistedClawInstall = {
-  schemaVersion: ReturnType<typeof installRecordSchema.parseClawInstallRecordSchemaVersion>;
-  claw: ClawAddPlan["claw"];
-  manifestSchemaVersion: ClawAddPlan["manifestSchemaVersion"];
-  planIntegrity: string;
-  agentId: string;
-  workspace: string;
-  agentConfigDigest: string;
-  agentOwnedPaths: string[];
-  bootstrap?: { sourcePath: string; contentDigest: string };
-  status: ClawInstallStatus;
-  addedAtMs: number;
-  updatedAtMs: number;
-};
+type ClawProvenanceDatabase = Pick<
+  DB,
+  "claw_installs" | "claw_package_refs" | "claw_workspace_files"
+>;
 
 type ClawInstallRow = {
   schema_version: string;
@@ -85,6 +79,7 @@ type ClawInstallRow = {
 };
 
 function rowToRecord(row: ClawInstallRow): PersistedClawInstall {
+  const ownership = decodeClawAgentOwnership(row.agent_owned_paths_json, row.schema_version);
   return {
     schemaVersion: installRecordSchema.parseClawInstallRecordSchemaVersion(row.schema_version),
     claw: {
@@ -104,7 +99,8 @@ function rowToRecord(row: ClawInstallRow): PersistedClawInstall {
     agentId: row.agent_id,
     workspace: row.workspace,
     agentConfigDigest: row.agent_config_digest,
-    agentOwnedPaths: JSON.parse(row.agent_owned_paths_json) as string[],
+    agentOrigin: ownership.origin,
+    agentOwnedPaths: ownership.paths,
     ...clawBootstrapProvenanceFromRow(row),
     status: row.status,
     addedAtMs: sqliteNumber(row.added_at_ms),
@@ -171,6 +167,32 @@ export function readClawInstallRecordFromDatabase(
   return row ? rowToRecord(row) : undefined;
 }
 
+export function persistClawMigrationOwnership(
+  plan: ClawAddPlan,
+  workspaceFiles: PersistedClawWorkspaceFile[],
+  options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
+): PersistedClawInstall {
+  return persistClawMigrationOwnershipWithInstallRecordReader(
+    plan,
+    workspaceFiles,
+    readClawInstallRecordFromDatabase,
+    options,
+  );
+}
+
+export function releaseAdoptedClawInstallRecord(
+  agentId: string,
+  expectedPlanIntegrity: string,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  releaseAdoptedClawInstallRecordWithInstallRecordReader(
+    agentId,
+    expectedPlanIntegrity,
+    readClawInstallRecordFromDatabase,
+    options,
+  );
+}
+
 export function readClawInstallRecord(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
@@ -187,12 +209,14 @@ export function persistClawInstallRecord(
     expectedExistingRecord?: PersistedClawInstall;
     expectedExistingPlan?: ClawAddPlan;
     deferLegacyPlanUpgrade?: boolean;
+    agentOrigin?: ClawAgentOrigin;
   } = {},
 ): PersistedClawInstall {
   const nowMs = options.nowMs ?? Date.now();
   const status = options.status ?? "complete";
   const agentConfigDigest = digestClawValue(plan.agent.config);
   const ownedPaths = agentOwnedPaths(plan);
+  const ownership = encodeClawAgentOwnership(ownedPaths, options.agentOrigin ?? "created");
   const bootstrap = bootstrapProvenance(plan);
   const persistedRecord = runOpenClawStateWriteTransaction(({ db }) => {
     const existing = selectClawInstallRow(db, plan.agent.finalId);
@@ -229,7 +253,7 @@ export function persistClawInstallRecord(
         .insertInto("claw_installs")
         .values({
           agent_id: plan.agent.finalId,
-          schema_version: installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION,
+          schema_version: ownership.schemaVersion,
           source_kind: plan.claw.kind,
           claw_name: plan.claw.name,
           claw_version: plan.claw.version,
@@ -242,7 +266,7 @@ export function persistClawInstallRecord(
           plan_integrity: plan.planIntegrity,
           workspace: plan.agent.workspace,
           agent_config_digest: agentConfigDigest,
-          agent_owned_paths_json: JSON.stringify(ownedPaths),
+          agent_owned_paths_json: ownership.agentOwnedPathsJson,
           bootstrap_source_path: bootstrap?.sourcePath ?? null,
           bootstrap_content_digest: bootstrap?.contentDigest ?? null,
           status,
@@ -251,13 +275,14 @@ export function persistClawInstallRecord(
         }),
     );
     return {
-      schemaVersion: installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION,
+      schemaVersion: ownership.schemaVersion,
       claw: plan.claw,
       manifestSchemaVersion: plan.manifestSchemaVersion,
       planIntegrity: plan.planIntegrity,
       agentId: plan.agent.finalId,
       workspace: plan.agent.workspace,
       agentConfigDigest,
+      agentOrigin: options.agentOrigin ?? "created",
       agentOwnedPaths: ownedPaths,
       ...(bootstrap ? { bootstrap } : {}),
       status,
@@ -347,6 +372,7 @@ export function updateClawInstallRecord(
     nowMs?: number;
     expectedClaw?: { version: string; integrity: string };
     status?: ClawInstallStatus;
+    agentConfigDigest?: string;
   } = {},
 ): PersistedClawInstall {
   const current = readClawInstallRecord(plan.agent.finalId, options);
@@ -357,18 +383,19 @@ export function updateClawInstallRecord(
   }
   const updatedAtMs = options.nowMs ?? Date.now();
   const status = options.status ?? "complete";
-  const agentConfigDigest = digestClawValue(plan.agent.config);
+  const agentConfigDigest = options.agentConfigDigest ?? digestClawValue(plan.agent.config);
   const ownedAgentPaths = plan.actions
     .filter((action) => action.kind === "agent")
     .map((action) => action.target);
   const bootstrap = bootstrapProvenance(plan) ?? current.bootstrap;
+  const ownership = encodeClawAgentOwnership(ownedAgentPaths, current.agentOrigin);
   runOpenClawStateWriteTransaction(({ db }) => {
     const result = executeSqliteQuerySync(
       db,
       getNodeSqliteKysely<ClawProvenanceDatabase>(db)
         .updateTable("claw_installs")
         .set({
-          schema_version: installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION,
+          schema_version: ownership.schemaVersion,
           source_kind: plan.claw.kind,
           claw_name: plan.claw.name,
           claw_version: plan.claw.version,
@@ -381,7 +408,7 @@ export function updateClawInstallRecord(
           plan_integrity: plan.planIntegrity,
           workspace: plan.agent.workspace,
           agent_config_digest: agentConfigDigest,
-          agent_owned_paths_json: JSON.stringify(ownedAgentPaths),
+          agent_owned_paths_json: ownership.agentOwnedPathsJson,
           bootstrap_source_path: bootstrap?.sourcePath ?? null,
           bootstrap_content_digest: bootstrap?.contentDigest ?? null,
           status,
@@ -398,13 +425,14 @@ export function updateClawInstallRecord(
     }
   }, options);
   const record = {
-    schemaVersion: installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION,
+    schemaVersion: ownership.schemaVersion,
     claw: plan.claw,
     manifestSchemaVersion: plan.manifestSchemaVersion,
     planIntegrity: plan.planIntegrity,
     agentId: plan.agent.finalId,
     workspace: plan.agent.workspace,
     agentConfigDigest,
+    agentOrigin: current.agentOrigin,
     agentOwnedPaths: ownedAgentPaths,
     ...(bootstrap ? { bootstrap } : {}),
     status,
@@ -539,22 +567,10 @@ export function updateClawPackageRefStatus(
   status: ClawPackageRefStatus,
   options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
 ): PersistedClawPackageRef {
-  const nowMs = options.nowMs ?? Date.now();
-  runOpenClawStateWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<ClawProvenanceDatabase>(db)
-        .updateTable("claw_package_refs")
-        .set({ package_status: status, updated_at_ms: nowMs })
-        .where("agent_id", "=", ref.agentId)
-        .where("package_kind", "=", ref.kind)
-        .where("package_source", "=", ref.source)
-        .where("package_ref", "=", ref.ref)
-        .where("package_version", "=", ref.version)
-        .where("package_integrity", "=", ref.integrity),
-    );
-  }, options);
-  return { ...ref, status, updatedAtMs: nowMs };
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => updateClawPackageRefStatusInDatabase(db, ref, status, options.nowMs ?? Date.now()),
+    options,
+  );
 }
 
 export function readClawPackageRefs(

@@ -102,14 +102,8 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
             await route.continue();
             return;
           }
-          let parsed: URL;
-          try {
-            parsed = new URL(requestUrl);
-          } catch {
-            await route.abort();
-            return;
-          }
-          if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") {
+          const parsed = URL.parse(requestUrl);
+          if (!parsed || parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") {
             await route.abort();
             return;
           }

@@ -247,32 +247,25 @@ export function prepareSessionPoll(session: ProcessSession, scope: object | unde
   if (!scope) {
     return { ...drainSession(session), acknowledge() {} };
   }
-  const pending = session.pendingPollDelivery;
-  if (pending) {
+  let delivery = session.pendingPollDelivery;
+  if (delivery) {
     // The first retry claims the staged bytes for its turn. Parallel siblings then
     // observe that scope and cannot duplicate the recovery result.
-    if (pending.scope === scope) {
+    if (delivery.scope === scope) {
       return { output: "", outputDropped: false, acknowledge() {} };
     }
-    pending.scope = scope;
-    return {
-      output: pending.output,
-      outputDropped: pending.outputDropped,
-      acknowledge() {
-        if (session.pendingPollDelivery === pending) {
-          session.pendingPollDelivery = undefined;
-        }
-      },
-    };
+    delivery.scope = scope;
+  } else {
+    const drained = drainSession(session);
+    if (drained.output.length === 0 && !drained.outputDropped) {
+      return { ...drained, acknowledge() {} };
+    }
+    delivery = { ...drained, scope };
+    session.pendingPollDelivery = delivery;
   }
-  const drained = drainSession(session);
-  if (drained.output.length === 0 && !drained.outputDropped) {
-    return { ...drained, acknowledge() {} };
-  }
-  const delivery = { ...drained, scope };
-  session.pendingPollDelivery = delivery;
   return {
-    ...drained,
+    output: delivery.output,
+    outputDropped: delivery.outputDropped,
     acknowledge() {
       if (session.pendingPollDelivery === delivery) {
         session.pendingPollDelivery = undefined;

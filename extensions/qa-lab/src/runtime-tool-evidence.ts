@@ -1,5 +1,9 @@
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readQaMessageFunctionCalls, readQaTranscriptMessages } from "./runtime-transcript.js";
+import {
+  extractQaContentText,
+  readQaMessageFunctionCalls,
+  readQaTranscriptMessages,
+} from "./runtime-transcript.js";
 import { projectQaToolActivity } from "./tool-activity.js";
 
 type QaRuntimeToolFixtureTranscriptToolCall = {
@@ -49,31 +53,14 @@ function stringifyTranscriptToolResult(value: unknown): string {
 }
 
 function extractTranscriptText(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-  if (!Array.isArray(value)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of value) {
-    if (typeof block === "string" && block.trim()) {
-      parts.push(block.trim());
-      continue;
-    }
-    if (!isRecord(block)) {
-      continue;
-    }
-    const text =
+  return extractQaContentText(
+    value,
+    (block) =>
       normalizeOptionalString(block.text) ??
       normalizeOptionalString(block.content) ??
       normalizeOptionalString(block.message) ??
-      normalizeOptionalString(block.error);
-    if (text) {
-      parts.push(text);
-    }
-  }
-  return parts.join("\n").trim();
+      normalizeOptionalString(block.error),
+  );
 }
 
 function extractTranscriptToolCalls(message: Record<string, unknown>): Record<string, unknown>[] {

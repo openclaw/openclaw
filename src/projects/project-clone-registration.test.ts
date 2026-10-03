@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { materializeProjectClone } from "./project-clone.js";
-import type { ProjectRegistryRecord } from "./project-registry.kernel.js";
+import type { ProjectRegistryRecord } from "./project-registry.types.js";
 
 const fixture = vi.hoisted(() => {
   const lease = () =>
@@ -59,7 +59,7 @@ vi.mock("./project-clone-runtime.js", () => ({
   cloneProjectCheckout: fixture.clone,
 }));
 
-vi.mock("../state/openclaw-state-lease-worker-storage.js", () => ({
+vi.mock("../state/openclaw-state-lease-worker-operation.js", () => ({
   runWithOpenClawStateLeaseWorker: async (
     _lease: OpenClawStateLeaseContext,
     _context: unknown,

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { brotliCompressSync, brotliDecompressSync, gzipSync, gunzipSync } from "node:zlib";
+import { brotliCompressSync, gzipSync, gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configIo from "../config/io.js";
@@ -28,7 +28,6 @@ import {
   createGatewayAuthRateLimiter,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
@@ -162,27 +161,19 @@ describe("handleControlUiHttpRequest", () => {
     Omit<NonNullable<Parameters<typeof handleControlUiHttpRequest>[2]>, "root"> & {
       rootPath: string;
       rootKind?: "resolved" | "bundled";
-      retainedAssets?: ControlUiAssetRetention;
     };
 
   function runControlUiRequest(
     rootPath: string,
     url: string,
-    {
-      rootKind = "resolved",
-      retainedAssets,
-      ...params
-    }: Omit<ControlRequestParams, "url" | "rootPath"> = {},
+    { rootKind = "resolved", ...params }: Omit<ControlRequestParams, "url" | "rootPath"> = {},
   ) {
     return runRequest(
       handleControlUiHttpRequest,
       { ...params, url },
       {
         ...params,
-        root:
-          rootKind === "bundled"
-            ? { kind: rootKind, path: rootPath, retainedAssets }
-            : { kind: rootKind, path: rootPath },
+        root: { kind: rootKind, path: rootPath },
       },
     );
   }
@@ -1310,32 +1301,6 @@ describe("handleControlUiHttpRequest", () => {
     expect(recovery.handled).toBe(true);
     expect(recovery.res.statusCode).toBe(200);
     expect(responseBody(recovery.end)).toContain("plugin-recovery");
-  });
-
-  it("serves a missing bundled asset from an exact retained generation", async () => {
-    const tmp = await createControlUiRoot();
-    const retainedRoot = testTempDirs.make("openclaw-ui-retained-");
-    const source = "console.log('retained');\n".repeat(200);
-    const { filePath } = await writeAssetFile(retainedRoot, "panel-OldBuild.js", source);
-    await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
-    const retainedAssets = {
-      prepare: vi.fn(async () => {}),
-      resolveAsset: vi.fn(() => ({
-        filePath,
-        rootPath: retainedRoot,
-        rootRealPath: fsSync.realpathSync(retainedRoot),
-      })),
-    } satisfies ControlUiAssetRetention;
-
-    const { end, setHeader } = await runControlUiRequest(tmp, "/assets/panel-OldBuild.js", {
-      rootKind: "bundled",
-      retainedAssets,
-      headers: { "accept-encoding": "br, identity;q=0" },
-    });
-
-    expect(retainedAssets.resolveAsset).toHaveBeenCalledWith("assets/panel-OldBuild.js");
-    expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "br");
-    expect(brotliDecompressSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
   });
 
   it("falls through to an acceptable sidecar when the preferred variant is missing", async () => {

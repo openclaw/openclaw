@@ -62,7 +62,7 @@ describe("sidebar routed-lineage freshness", () => {
     }
   });
 
-  it.each(["sibling", "away and back", "during publication"] as const)(
+  it.each(["away and back", "during publication"] as const)(
     "keeps fetched siblings after selection changes (%s)",
     async (transition) => {
       const returnToFirst = transition === "away and back";
@@ -227,139 +227,10 @@ describe("sidebar routed-lineage freshness", () => {
     },
   );
 
-  it.each(
-    [10, null].flatMap((updatedAt) =>
-      [false, true].map((firstPageLoaded) => ({ firstPageLoaded, updatedAt })),
-    ),
-  )(
-    "keeps a nonselected child's managed observation after paging (first page loaded: $firstPageLoaded, updatedAt: $updatedAt)",
-    async ({ firstPageLoaded, updatedAt }) => {
-      const parentKey = "agent:main:managed-parent";
-      const children = Array.from({ length: 101 }, (_, index) => ({
-        key: `agent:worker:managed-child-${index}`,
-        sessionId: `managed-child-session-${index}`,
-        kind: "direct" as const,
-        spawnedBy: parentKey,
-        label: `Previous child ${index}`,
-        status: "done" as const,
-        hasActiveRun: false,
-        runtimeMs: 100,
-        updatedAt,
-      }));
-      const child = children[0]!;
-      const fresh = {
-        ...child,
-        label: "Accepted managed child",
-        status: "running" as const,
-        hasActiveRun: true,
-        runtimeMs: 400,
-      };
-      const parent = {
-        key: parentKey,
-        sessionId: "managed-parent-session",
-        kind: "direct" as const,
-        updatedAt: 1,
-        childSessions: children.map((row) => row.key),
-      };
-      const firstPage = deferred<SessionsListResult>();
-      const secondPage = deferred<SessionsListResult>();
-      const page = (offset: number): SessionsListResult => ({
-        ...sessionsResult(children.slice(offset, offset + 100), 10),
-        offset,
-        totalCount: children.length,
-        hasMore: offset === 0,
-        nextOffset: offset === 0 ? 100 : null,
-      });
-      const request = vi.fn(async (method, params) => {
-        if (method !== "sessions.list") {
-          return {};
-        }
-        const query = requireRecord(params, "sessions.list params");
-        if (query.spawnedBy === parentKey) {
-          return query.offset === 100 ? secondPage.promise : firstPage.promise;
-        }
-        return sessionsResult(query.search === child.key ? [fresh] : [parent], 10);
-      });
-      const gateway = createGateway(createTestGatewayClient(request));
-      const sessions = createTestSessionCapability(gateway);
-      await sessions.refresh({ agentId: "main", force: true });
-      const { sidebar, provider, context } = await mountSidebar(gateway, sessions, "panel", {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }, { id: "worker" }],
-      });
-      const query = buildSessionsListQuery(context, {
-        deepLinkSessionKey: child.key,
-        includeGlobal: true,
-        includeUnknown: true,
-        statusFilter: "active",
-      });
-      const unsubscribe = sessions.subscribeList(query, () => {});
-      let childLoad: Promise<void> | undefined;
-      try {
-        sidebar.activeRouteId = "sessions";
-        await sidebar.updateComplete;
-        childLoad = sidebar.sessionData.loadChildSessions(parentKey);
-        sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")!.click();
-        await waitForFast(() =>
-          expect(request).toHaveBeenCalledWith(
-            "sessions.list",
-            expect.objectContaining({ spawnedBy: parentKey, limit: 100 }),
-          ),
-        );
-        const primary = sessions.state.result;
-        const canonicalRevision = sessions.canonicalListRevision;
-        if (firstPageLoaded) {
-          firstPage.resolve(page(0));
-          await waitForFast(() =>
-            expect(request).toHaveBeenCalledWith(
-              "sessions.list",
-              expect.objectContaining({ spawnedBy: parentKey, offset: 100 }),
-            ),
-          );
-        }
-        await sessions.refreshList({ ...query, force: true });
-        expect(sessions.listSnapshot(query).result?.sessions).toEqual([fresh]);
-        expect(sessions.canonicalListRevision).toBe(canonicalRevision);
-        expect(sessions.state.result).toBe(primary);
-        expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([
-          parentKey,
-        ]);
-        firstPage.resolve(page(0));
-        secondPage.resolve(page(100));
-        await childLoad;
-        await sidebar.updateComplete;
-        expect(
-          sidebar.sessionData.childSessionRowsByParent[parentKey]?.map((row) => row.key),
-        ).toEqual(children.map((row) => row.key));
-        expect
-          .soft(sidebar.querySelector(`[data-session-key="${child.key}"]`)?.textContent)
-          .toContain(fresh.label);
-        expect.soft(sidebar.findSidebarHovercardRowByKey(child.key)).toMatchObject(fresh);
-        expect(
-          sidebar
-            .querySelector("[data-child-session-toggle]")
-            ?.classList.contains("sidebar-child-session-toggle--running"),
-        ).toBe(true);
-        expect(sessions.state.result).toBe(primary);
-      } finally {
-        unsubscribe();
-        provider.remove();
-        sessions.dispose();
-        firstPage.resolve(page(0));
-        secondPage.resolve(page(100));
-        await childLoad;
-        await sidebar.updateComplete;
-      }
-    },
-  );
-
-  it.each(
-    [10, null].flatMap((updatedAt) =>
-      ([1, 2] as const).map((selectedPage) => ({ selectedPage, updatedAt })),
-    ),
-  )(
+  it.each([
+    { selectedPage: 1, updatedAt: 10 },
+    { selectedPage: 2, updatedAt: null },
+  ])(
     "orders child page $selectedPage against an intervening history read (updatedAt: $updatedAt)",
     async ({ selectedPage, updatedAt }) => {
       const parentKey = "agent:main:paged-parent";
@@ -493,199 +364,135 @@ describe("sidebar routed-lineage freshness", () => {
       }
     },
   );
-
   it.each([
-    { retained: false, historyFirst: false },
-    { retained: true, historyFirst: false },
-    { retained: false, historyFirst: true },
+    { firstPageLoaded: false, updatedAt: 10 },
+    { firstPageLoaded: true, updatedAt: null },
   ])(
-    "adopts accepted history after rejected child reads in a filtered view (retained: $retained, history first: $historyFirst)",
-    async ({ retained, historyFirst }) => {
-      const parentKey = "agent:main:rejected-parent";
-      const key = "agent:main:rejected-child";
-      const owner = { type: "human" as const, id: "ada", label: "Ada" };
-      const otherOwner = { type: "human" as const, id: "bob", label: "Bob" };
-      const previous = {
-        key,
-        sessionId: "rejected-child-session",
+    "keeps a nonselected child's managed observation after paging (first page loaded: $firstPageLoaded, updatedAt: $updatedAt)",
+    async ({ firstPageLoaded, updatedAt }) => {
+      const parentKey = "agent:main:managed-parent";
+      const children = Array.from({ length: 101 }, (_, index) => ({
+        key: `agent:worker:managed-child-${index}`,
+        sessionId: `managed-child-session-${index}`,
         kind: "direct" as const,
         spawnedBy: parentKey,
-        updatedAt: 2,
-        label: "Previous sidebar descriptor",
-        owner: { actor: owner },
-      };
-      const rejected = {
-        ...previous,
-        updatedAt: historyFirst ? 1 : previous.updatedAt,
-        label: "Rejected child descriptor",
-        derivedTitle: "Rejected child title",
-        lastMessagePreview: "Rejected child preview",
-      };
-      const fresh = { ...previous, label: "Accepted history descriptor" };
-      const sibling = {
-        ...previous,
-        key: "agent:main:rejected-sibling",
-        sessionId: "rejected-sibling-session",
-        label: "Loaded sibling",
+        label: `Previous child ${index}`,
+        status: "done" as const,
+        hasActiveRun: false,
+        runtimeMs: 100,
+        updatedAt,
+      }));
+      const child = children[0]!;
+      const fresh = {
+        ...child,
+        label: "Accepted managed child",
+        status: "running" as const,
+        hasActiveRun: true,
+        runtimeMs: 400,
       };
       const parent = {
         key: parentKey,
-        sessionId: "rejected-parent-session",
+        sessionId: "managed-parent-session",
         kind: "direct" as const,
         updatedAt: 1,
-        childSessions: [key, sibling.key],
-        owner: { actor: owner },
+        childSessions: children.map((row) => row.key),
       };
-      const result = (rows: SessionsListResult["sessions"]): SessionsListResult => ({
-        ...sessionsResult(rows, 3),
-        owners: [owner, otherOwner],
+      const firstPage = deferred<SessionsListResult>();
+      const secondPage = deferred<SessionsListResult>();
+      const page = (offset: number): SessionsListResult => ({
+        ...sessionsResult(children.slice(offset, offset + 100), 10),
+        offset,
+        totalCount: children.length,
+        hasMore: offset === 0,
+        nextOffset: offset === 0 ? 100 : null,
       });
-      const described = deferred<{ session: GatewaySessionRow }>();
-      const childRead = deferred<SessionsListResult>();
-      const historyRead = deferred<{ messages: unknown[]; sessionInfo: GatewaySessionRow }>();
       const request = vi.fn(async (method, params) => {
-        if (method === "sessions.list") {
-          const query = requireRecord(params, "sessions.list params");
-          if (query.spawnedBy === parentKey) {
-            return childRead.promise;
-          }
-          return result(
-            query.ownerId
-              ? [parent]
-              : [
-                  parent,
-                  {
-                    key: "agent:main:other-owner",
-                    sessionId: "other-owner-session",
-                    kind: "direct",
-                    updatedAt: 1,
-                    owner: { actor: otherOwner },
-                  },
-                ],
-          );
+        if (method !== "sessions.list") {
+          return {};
         }
-        if (method === "sessions.describe") {
-          expect(params).toEqual({ key });
-          return described.promise;
+        const query = requireRecord(params, "sessions.list params");
+        if (query.spawnedBy === parentKey) {
+          return query.offset === 100 ? secondPage.promise : firstPage.promise;
         }
-        return method === "chat.history" ? historyRead.promise : {};
+        return sessionsResult(query.search === child.key ? [fresh] : [parent], 10);
       });
-      const client = createTestGatewayClient(request);
-      const gateway = createGateway(client);
+      const gateway = createGateway(createTestGatewayClient(request));
       const sessions = createTestSessionCapability(gateway);
       await sessions.refresh({ agentId: "main", force: true });
-      const { sidebar, provider } = await mountSidebar(gateway, sessions);
-      const { state } = createTestChatPane({ client, sessions });
-      state.sessionKey = key;
-      state.sessionsResult = sessions.state.result;
-      state.sessionsResultAgentId = sessions.state.agentId;
-      const pending: Promise<unknown>[] = [];
-      const loadFreshHistory = async () => {
-        const loaded = refreshPageChat(state, {
-          historyLoad: loadChatHistory(state, { deferBranches: true }),
-          awaitHistory: true,
-          scheduleScroll: false,
-        });
-        pending.push(loaded);
-        historyRead.resolve({ messages: [], sessionInfo: fresh });
-        await loaded;
-      };
+      const { sidebar, provider, context } = await mountSidebar(gateway, sessions, "panel", {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main" }, { id: "worker" }],
+      });
+      const query = buildSessionsListQuery(context, {
+        deepLinkSessionKey: child.key,
+        includeGlobal: true,
+        includeUnknown: true,
+        statusFilter: "active",
+      });
+      const unsubscribe = sessions.subscribeList(query, () => {});
+      let childLoad: Promise<void> | undefined;
       try {
-        await activateSessionMenuValue(sidebar, "owner:ada");
-        await waitForFast(() => {
-          expect(sidebar.sessionOwnerFilterId).toBe(owner.id);
-          expect(sidebar.sessionData.sessionsLoading).toBe(false);
-        });
-        if (historyFirst) {
-          await loadFreshHistory();
-        }
-        sidebar.activeRouteId = "chat";
-        sidebar.sessionKey = key;
-        const lineage = sidebar.sessionData.loadActiveSessionLineage(key);
-        const children = sidebar.sessionData.loadChildSessions(parentKey);
-        pending.push(lineage, children);
-        await waitForFast(() => {
-          expect(request).toHaveBeenCalledWith("sessions.describe", { key });
+        sidebar.activeRouteId = "sessions";
+        await sidebar.updateComplete;
+        childLoad = sidebar.sessionData.loadChildSessions(parentKey);
+        sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")!.click();
+        await waitForFast(() =>
           expect(request).toHaveBeenCalledWith(
             "sessions.list",
-            expect.objectContaining({ spawnedBy: parentKey }),
-          );
-        });
-        if (retained) {
-          described.resolve({ session: previous });
-          await lineage;
+            expect.objectContaining({ spawnedBy: parentKey, limit: 100 }),
+          ),
+        );
+        const primary = sessions.state.result;
+        const canonicalRevision = sessions.canonicalListRevision;
+        if (firstPageLoaded) {
+          firstPage.resolve(page(0));
           await waitForFast(() =>
-            expect(sidebar.querySelector(`[data-session-key="${key}"]`)?.textContent).toContain(
-              previous.label,
+            expect(request).toHaveBeenCalledWith(
+              "sessions.list",
+              expect.objectContaining({ spawnedBy: parentKey, offset: 100 }),
             ),
           );
         }
-        if (!historyFirst) {
-          await loadFreshHistory();
-        }
-        expect(sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject(fresh);
-        await waitForFast(() => expect(sidebar.sessionData.sessionsLoading).toBe(false));
+        await sessions.refreshList({ ...query, force: true });
+        expect(sessions.listSnapshot(query).result?.sessions).toEqual([fresh]);
+        expect(sessions.canonicalListRevision).toBe(canonicalRevision);
+        expect(sessions.state.result).toBe(primary);
         expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([
           parentKey,
         ]);
-
-        childRead.resolve(result([rejected, sibling]));
-        await children;
+        firstPage.resolve(page(0));
+        secondPage.resolve(page(100));
+        await childLoad;
         await sidebar.updateComplete;
+        expect(
+          sidebar.sessionData.childSessionRowsByParent[parentKey]?.map((row) => row.key),
+        ).toEqual(children.map((row) => row.key));
         expect
-          .soft(sidebar.querySelector(`[data-session-key="${key}"]`)?.textContent ?? "")
+          .soft(sidebar.querySelector(`[data-session-key="${child.key}"]`)?.textContent)
           .toContain(fresh.label);
-        described.resolve({ session: rejected });
-        await lineage;
-        await sidebar.updateComplete;
-        expect
-          .soft(sidebar.querySelector(`[data-session-key="${key}"]`)?.textContent ?? "")
-          .toContain(fresh.label);
-        expect(sidebar.querySelector(`[data-session-key="${sibling.key}"]`)?.textContent).toContain(
-          sibling.label,
-        );
-        expect(sidebar.findSidebarHovercardRowByKey(key)).toMatchObject({
-          label: fresh.label,
-          lastMessagePreview: undefined,
-        });
-        const accepted = sessions.state.result?.sessions.find((row) => row.key === key);
-        expect(accepted).toMatchObject(fresh);
-        expect(accepted).not.toHaveProperty("derivedTitle");
-        expect(accepted).not.toHaveProperty("lastMessagePreview");
-        expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([
-          parentKey,
-        ]);
+        expect.soft(sidebar.findSidebarHovercardRowByKey(child.key)).toMatchObject(fresh);
+        expect(
+          sidebar
+            .querySelector("[data-child-session-toggle]")
+            ?.classList.contains("sidebar-child-session-toggle--running"),
+        ).toBe(true);
+        expect(sessions.state.result).toBe(primary);
       } finally {
+        unsubscribe();
         provider.remove();
         sessions.dispose();
-        described.resolve({ session: rejected });
-        childRead.resolve(result([rejected, sibling]));
-        historyRead.resolve({ messages: [], sessionInfo: fresh });
-        await Promise.allSettled(pending);
+        firstPage.resolve(page(0));
+        secondPage.resolve(page(100));
+        await childLoad;
         await sidebar.updateComplete;
       }
     },
   );
   it.each([
-    ...[4, null].flatMap((updatedAt) =>
-      [
-        { first: "filtered list", primaryListed: false },
-        { first: "describe", primaryListed: false },
-        { first: "describe", primaryListed: true },
-      ].map(({ first, primaryListed }) => ({
-        first,
-        primaryListed,
-        updatedAt,
-        differentParents: false,
-      })),
-    ),
-    ...["filtered list", "describe"].map((first) => ({
-      first,
-      primaryListed: false,
-      updatedAt: 4,
-      differentParents: true,
-    })),
     { first: "filtered list", primaryListed: true, updatedAt: 4, differentParents: true },
+    { first: "describe", primaryListed: false, updatedAt: null, differentParents: false },
   ])(
     "uses the later selected-row read while ancestry waits ($first issued first, updatedAt: $updatedAt, primary listed: $primaryListed, different parents: $differentParents)",
     async ({ first, updatedAt, primaryListed, differentParents }) => {

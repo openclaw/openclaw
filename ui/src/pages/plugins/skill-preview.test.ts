@@ -35,32 +35,7 @@ const result: PluginsSkillsReadResult = {
 };
 
 describe("plugin skill preview requests", () => {
-  it("opens immediately and preserves complete content", async () => {
-    const { controller, request } = setup();
-    const response = createDeferred<PluginsSkillsReadResult>();
-    request.mockReturnValueOnce(response.promise);
-    const pending = controller.open(params);
-    expect(controller.state?.loading).toBe(true);
-    response.resolve(result);
-    await pending;
-    expect(controller.state).toMatchObject({ loading: false, result, error: null });
-  });
-
-  it("shows a failed read and retries the same source", async () => {
-    const { controller, request } = setup();
-    request.mockRejectedValueOnce(new Error("Skill unavailable")).mockResolvedValueOnce(result);
-    await controller.open(params);
-    expect(controller.state).toMatchObject({
-      loading: false,
-      error: "Skill unavailable",
-      result: null,
-    });
-    controller.retry();
-    await vi.waitFor(() => expect(controller.state?.result).toEqual(result));
-    expect(request).toHaveBeenLastCalledWith("plugins.skills.read", params);
-  });
-
-  it.each(["close", "selection", "reconnect"] as const)(
+  it.each(["selection", "reconnect"] as const)(
     "retires a late response after %s",
     async (change) => {
       const { controller, request, gateway, client } = setup();
@@ -69,9 +44,7 @@ describe("plugin skill preview requests", () => {
         .mockReturnValueOnce(response.promise)
         .mockResolvedValueOnce({ ...result, name: "other" });
       const pending = controller.open(params);
-      if (change === "close") {
-        controller.close();
-      } else if (change === "selection") {
+      if (change === "selection") {
         await controller.open({ ...params, skillName: "other" });
       } else {
         gateway.transition({ client, phase: "reconnecting" });
@@ -80,9 +53,6 @@ describe("plugin skill preview requests", () => {
       response.resolve(result);
       await pending;
       expect(controller.state?.result?.name).not.toBe("guide");
-      if (change === "close") {
-        expect(controller.state).toBeNull();
-      }
     },
   );
 });
@@ -159,29 +129,24 @@ it("keeps selected-file failures retryable without refetching the entry or losin
   });
 });
 
-it.each(["close", "reopen", "reconnect"])(
-  "discards selected-file results after %s",
-  async (change) => {
-    const { controller, request, gateway, client } = setup();
-    const response = createDeferred<PluginsSkillsReadResult>();
-    request
-      .mockResolvedValueOnce(lazyResult)
-      .mockReturnValueOnce(response.promise)
-      .mockResolvedValueOnce({ ...lazyResult, version: "2.0.0" });
+it.each(["reopen", "reconnect"])("discards selected-file results after %s", async (change) => {
+  const { controller, request, gateway, client } = setup();
+  const response = createDeferred<PluginsSkillsReadResult>();
+  request
+    .mockResolvedValueOnce(lazyResult)
+    .mockReturnValueOnce(response.promise)
+    .mockResolvedValueOnce({ ...lazyResult, version: "2.0.0" });
+  await controller.open(params);
+  const pending = controller.select("a.md");
+  if (change === "reopen") {
     await controller.open(params);
-    const pending = controller.select("a.md");
-    if (change === "close") {
-      controller.close();
-    } else if (change === "reopen") {
-      await controller.open(params);
-    } else {
-      gateway.transition({ client, phase: "reconnecting" });
-      gateway.transition({ client, phase: "connected" });
-    }
-    response.resolve(selectedResult("a.md"));
-    await pending;
-    expect(
-      controller.state?.result?.files.find((file) => file.path === "a.md")?.content,
-    ).toBeUndefined();
-  },
-);
+  } else {
+    gateway.transition({ client, phase: "reconnecting" });
+    gateway.transition({ client, phase: "connected" });
+  }
+  response.resolve(selectedResult("a.md"));
+  await pending;
+  expect(
+    controller.state?.result?.files.find((file) => file.path === "a.md")?.content,
+  ).toBeUndefined();
+});

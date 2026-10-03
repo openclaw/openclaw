@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { expect, it } from "vitest";
-import { parse, stringify } from "yaml";
+import { stringify } from "yaml";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
@@ -29,8 +29,12 @@ function timeoutCandidate() {
 }
 
 function boundaryTimeoutCandidate(cancelled: boolean, sourceFault?: string) {
-  const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
-  const owner = workflow.jobs["check-additional-shard"];
+  const owner = JSON.parse(
+    readFileSync(
+      new URL("../fixtures/ci/prior-boundary-deadline-owner.json", import.meta.url),
+      "utf8",
+    ),
+  );
   // The failed attempts used the historical 20-minute whole-job budget.
   owner["timeout-minutes"] = sourceFault === "different workflow budget" ? 30 : 20;
   if (sourceFault === "different workflow command") {

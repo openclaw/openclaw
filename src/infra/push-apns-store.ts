@@ -2,14 +2,12 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-// Canonical shared-SQLite store for APNs device and relay registrations.
 import type { Selectable } from "kysely";
 import { z } from "zod";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
+import type {
+  OpenClawStateDatabase,
+  OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
@@ -17,7 +15,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { clearApnsRegistrationFromDatabase } from "./push-apns-store-transaction.js";
 import { ApnsRegistrationPairingChangedError } from "./push-apns-store.errors.js";
 import { apnsRegistrationToRow } from "./push-apns-store.rows.js";
 import type { ApnsEnvironment, ApnsRegistration } from "./push-apns-store.types.js";
@@ -35,34 +32,25 @@ export type {
   RelayApnsRegistration,
 } from "./push-apns-store.types.js";
 
-type RegisterDirectApnsParams = {
+type RegisterApnsParams = {
   nodeId: string;
-  transport?: "direct";
-  token: string;
   topic: string;
   environment?: unknown;
   expectedPairingGeneration?: string;
   assertCurrent?: () => void;
   baseDir?: string;
-};
-
-type RegisterRelayApnsParams = {
-  nodeId: string;
-  transport: "relay";
-  relayHandle: string;
-  sendGrant: string;
-  installationId: string;
-  topic: string;
-  environment?: unknown;
-  distribution?: unknown;
-  relayOrigin?: unknown;
-  tokenDebugSuffix?: unknown;
-  expectedPairingGeneration?: string;
-  assertCurrent?: () => void;
-  baseDir?: string;
-};
-
-type RegisterApnsParams = RegisterDirectApnsParams | RegisterRelayApnsParams;
+} & (
+  | { transport?: "direct"; token: string }
+  | {
+      transport: "relay";
+      relayHandle: string;
+      sendGrant: string;
+      installationId: string;
+      distribution?: unknown;
+      relayOrigin?: unknown;
+      tokenDebugSuffix?: unknown;
+    }
+);
 
 type ApnsRegistrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -128,10 +116,7 @@ export function isValidApnsTopic(value: string): boolean {
 }
 
 function normalizeTokenDebugSuffix(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(value.trim()).replace(/[^0-9a-z]/g, "");
+  const normalized = normalizeLowercaseStringOrEmpty(value).replace(/[^0-9a-z]/g, "");
   return normalized.length > 0 ? normalized.slice(-8) : undefined;
 }
 
@@ -147,9 +132,6 @@ function normalizeRelayOrigin(
   value: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
@@ -159,9 +141,6 @@ function normalizeRelayOrigin(
 }
 
 function normalizePersistedRelayOrigin(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
@@ -170,16 +149,9 @@ function normalizePersistedRelayOrigin(value: unknown): string | undefined {
   return normalized.ok ? normalized.value : undefined;
 }
 
-/** Normalizes the APNs environment string accepted by registration inputs. */
 export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null {
-  if (typeof value !== "string") {
-    return null;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (normalized === "sandbox" || normalized === "production") {
-    return normalized;
-  }
-  return null;
+  return normalized === "sandbox" || normalized === "production" ? normalized : null;
 }
 
 const apnsNodeIdSchema = z.string().transform(normalizeApnsNodeId).refine(isValidApnsNodeId);
@@ -298,31 +270,6 @@ export function apnsRegistrationFromRow(row: ApnsRegistrationRow): ApnsRegistrat
   return normalized;
 }
 
-function apnsRegistrationsEqual(left: ApnsRegistration, right: ApnsRegistration): boolean {
-  if (
-    left.nodeId !== right.nodeId ||
-    left.transport !== right.transport ||
-    left.topic !== right.topic ||
-    left.environment !== right.environment ||
-    left.updatedAtMs !== right.updatedAtMs
-  ) {
-    return false;
-  }
-  if (left.transport === "direct" && right.transport === "direct") {
-    return left.token === right.token;
-  }
-  return (
-    left.transport === "relay" &&
-    right.transport === "relay" &&
-    left.relayHandle === right.relayHandle &&
-    left.sendGrant === right.sendGrant &&
-    left.installationId === right.installationId &&
-    left.distribution === right.distribution &&
-    left.relayOrigin === right.relayOrigin &&
-    left.tokenDebugSuffix === right.tokenDebugSuffix
-  );
-}
-
 /** Persists a validated direct or relay APNs registration for one node id. */
 export async function registerApnsRegistration(
   params: RegisterApnsParams,
@@ -417,7 +364,6 @@ export async function registerApnsRegistration(
   return result.registration;
 }
 
-/** Loads one normalized APNs registration by node id. */
 export async function loadApnsRegistration(
   nodeId: string,
   baseDir?: string,
@@ -434,7 +380,6 @@ export async function loadApnsRegistration(
   });
 }
 
-/** Read and decode one registration through the caller's canonical connection. */
 export function readApnsRegistrationFromDatabase(
   db: OpenClawStateDatabase["db"],
   normalizedNodeId: string,
@@ -459,11 +404,7 @@ export async function loadApnsRegistrations(
     normalizedNodeId: normalizeApnsNodeId(nodeId),
   }));
   const uniqueNodeIds = [
-    ...new Set(
-      normalizedByInput
-        .map((entry) => entry.normalizedNodeId)
-        .filter((nodeId) => isValidApnsNodeId(nodeId)),
-    ),
+    ...new Set(normalizedByInput.map((entry) => entry.normalizedNodeId).filter(isValidApnsNodeId)),
   ];
   if (uniqueNodeIds.length === 0) {
     return [];
@@ -520,18 +461,12 @@ export async function clearApnsRegistrationIfCurrent(params: {
   if (!normalizedNodeId) {
     return false;
   }
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    const stateDb = getNodeSqliteKysely<ApnsRegistrationDatabase>(db);
-    const currentRow = executeSqliteQueryTakeFirstSync(
-      db,
-      stateDb.selectFrom("apns_registrations").selectAll().where("node_id", "=", normalizedNodeId),
-    );
-    if (
-      !currentRow ||
-      !apnsRegistrationsEqual(apnsRegistrationFromRow(currentRow), params.registration)
-    ) {
-      return false;
-    }
-    return clearApnsRegistrationFromDatabase(db, normalizedNodeId);
-  }, apnsStateDatabaseOptions(params.baseDir));
+  const context = captureOpenClawStateWorkerContext(apnsStateDatabaseOptions(params.baseDir));
+  const input = {
+    nodeId: normalizedNodeId,
+    registration: { ...params.registration },
+    nowMs: Date.now(),
+  };
+  const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
+  return executeOpenClawStateWorker(context, { type: "apns.registration.clearIfCurrent", input });
 }

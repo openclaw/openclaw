@@ -72,6 +72,7 @@ export {
   runWithConcurrency,
   splitCuratedMarkdownEntries,
   statRegularFile,
+  stopMemorySqliteWalMaintenance,
   stripMemoryAnnotationCarriers,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 

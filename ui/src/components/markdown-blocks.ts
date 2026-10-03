@@ -1,18 +1,28 @@
 // One lifecycle owner for interactive Markdown in transcripts and previews.
 import { nothing } from "lit";
-import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
 import { t } from "../i18n/index.ts";
+import {
+  PresentationAsyncDirective,
+  type PresentationBinding,
+  type PresentationValue,
+} from "../lit/presentation-binding.ts";
 import { updateCodeBlockWidthOverflow } from "./markdown-code-blocks.ts";
 import { enhanceMarkdownTables, releaseMarkdownTables } from "./markdown-tables.ts";
 
 let codeBlockRegionSequence = 0;
 const blockSelector = ".code-block-wrapper, .markdown-mermaid";
-class MarkdownBlocksDirective extends AsyncDirective {
+class MarkdownBlocksDirective extends PresentationAsyncDirective {
   private root: HTMLElement | undefined;
   private observedRoot: HTMLElement | undefined;
   private scanPending = false;
   private active = true;
+  protected override presentationChanged(binding?: PresentationBinding) {
+    if (binding?.isPresented() === false) {
+      this.active = false;
+      this.release();
+    }
+  }
   private readonly pendingBlocks = new Set<HTMLElement>();
   private readonly observedNodes = new Set<HTMLElement>();
   private readonly resizeObserver =
@@ -64,18 +74,19 @@ class MarkdownBlocksDirective extends AsyncDirective {
     }
   }
 
-  render(_active = true) {
+  render(_presented: PresentationValue = true) {
     return nothing;
   }
 
-  override update(part: ElementPart, [active = true]: [boolean?]) {
+  override update(part: ElementPart, [presented = true]: [PresentationValue?]) {
+    this.updatePresentation(presented);
     const root = part.element instanceof HTMLElement ? part.element : undefined;
     if (root !== this.root) {
       this.release();
       this.root = root;
     }
-    this.active = active;
-    if (active) {
+    this.active = typeof presented === "boolean" ? presented : presented.isPresented();
+    if (this.active) {
       this.scheduleScan();
     } else {
       this.release();
@@ -84,6 +95,7 @@ class MarkdownBlocksDirective extends AsyncDirective {
   }
 
   protected override disconnected(): void {
+    super.disconnected();
     this.release();
   }
 
@@ -100,6 +112,7 @@ class MarkdownBlocksDirective extends AsyncDirective {
   }
 
   protected override reconnected(): void {
+    super.reconnected();
     this.scheduleScan();
   }
 

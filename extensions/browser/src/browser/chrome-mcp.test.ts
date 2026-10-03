@@ -1983,8 +1983,8 @@ describe("chrome MCP page parsing", () => {
     };
     setChromeMcpSessionFactoryForTest(factory);
 
-    await listChromeMcpTabs("chrome-live", "/tmp/brave-a");
-    await listChromeMcpTabs("chrome-live", "/tmp/brave-b");
+    await listChromeMcpTabs("chrome-live", { userDataDir: "/tmp/brave-a" });
+    await listChromeMcpTabs("chrome-live", { userDataDir: "/tmp/brave-b" });
 
     expect(factoryCalls).toEqual([
       { profileName: "chrome-live", userDataDir: "/tmp/brave-a" },

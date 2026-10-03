@@ -3,13 +3,24 @@ import { withCanonicalSessionValidationDeferral } from "../config/sessions/sessi
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { PreparedRepositoryWorkspace } from "../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import * as records from "./session-row-projection-record.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 
-export type SessionRowPreparationOptions = { includeAncestors?: boolean };
+export type SessionRowPreparationOptions = {
+  includeAncestors?: boolean;
+  selection?: boolean;
+};
+
+/** Synchronous selection reenters through the existing exact worker preparation owner. */
+export class SessionRowFactsPending extends Error {
+  constructor(readonly queries: readonly records.Lookup[]) {
+    super("Session row facts require worker reconciliation");
+  }
+}
 
 export type SessionRowReadView = {
   describe(
@@ -85,13 +96,25 @@ export async function withReadySessionRows<T>(
   consume: (read: SessionRowReadView) => T,
   options?: SessionRowPreparationOptions,
 ): Promise<T> {
+  const signal = getAsyncWorkSignal();
+  const select = (config: OpenClawConfig) => {
+    signal?.throwIfAborted();
+    return queries(config);
+  };
+  const consumeCurrent = (read: SessionRowReadView) => {
+    signal?.throwIfAborted();
+    return consume(read);
+  };
   while (true) {
-    const prepared = await owner.withPreparedExactRows(queries, consume, options);
+    signal?.throwIfAborted();
+    const prepared = await owner.withPreparedExactRows(select, consumeCurrent, options);
+    signal?.throwIfAborted();
     if (prepared.kind === "complete") {
       return prepared.value;
     }
     const { certifySessionCanonicalValidationPending } =
       await import("../config/sessions/session-canonical-validation-readiness.js");
+    signal?.throwIfAborted();
     await certifySessionCanonicalValidationPending(prepared.database);
   }
 }

@@ -187,7 +187,6 @@ type StatusUsageSummary = Awaited<ReturnType<typeof resolveStatusUsageSummary>>;
 type StatusGatewayHealth = Awaited<ReturnType<typeof resolveStatusGatewayHealth>>;
 type StatusSecurityAudit = Awaited<ReturnType<typeof resolveStatusSecurityAudit>>;
 
-/** Resolves the full runtime snapshot, including optional security audit, for status JSON/text. */
 export async function resolveStatusRuntimeSnapshot(params: {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;

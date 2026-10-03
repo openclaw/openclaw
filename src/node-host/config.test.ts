@@ -5,7 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createBoundedChildOutput } from "../../test/helpers/bounded-child-output.js";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { logInfo } from "../logger.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
@@ -68,23 +72,18 @@ async function runConcurrentImplicitConfigures(
       }),
     );
     return {
-      ready: Promise.race([
+      ready: awaitGateBeforeSettlement(
         ready.promise,
-        outcome.then(() => {
-          throw new Error("configure worker exited before the start barrier");
-        }),
-      ]),
+        outcome,
+        "configure worker exited before the start barrier",
+      ),
       outcome,
     };
   });
 
   try {
     // Both real processes must finish imports before either can choose its implicit id.
-    const children = await withTestTimeout(
-      Promise.all(workers.map(({ ready }) => ready)),
-      15_000,
-      "timed out waiting for concurrent configure workers",
-    );
+    const children = await withinTest(Promise.all(workers.map(({ ready }) => ready)), signal);
     for (const child of children) {
       child.send("start");
     }

@@ -34,6 +34,15 @@ describe("outbound message planning", () => {
       chunkMode: "newline",
       expected: ["first", "second"],
     },
+    ...[0, -1].map((limit) => ({
+      name: `Markdown paragraphs with disabled limit ${limit}`,
+      text: "```txt\ncontent\n```\n\nafter",
+      limit,
+      chunker: chunkMarkdownText,
+      chunkerMode: "markdown" as const,
+      chunkMode: "newline" as const,
+      expected: ["```txt\ncontent\n```\n\nafter"],
+    })),
     {
       name: "fenced Markdown",
       text: "```txt\naa\nbb\ncc\n```",
@@ -42,6 +51,15 @@ describe("outbound message planning", () => {
       chunkerMode: "markdown",
       chunkMode: "length",
       expected: ["```txt\naa\nbb\n```", "```txt\ncc\n```"],
+    },
+    {
+      name: "long fenced paragraphs with a text-mode chunker",
+      text: "intro\n\n```txt\naa\nbb\ncc\n```",
+      limit: 16,
+      chunker: chunkMarkdownText,
+      chunkerMode: "text",
+      chunkMode: "newline",
+      expected: ["intro", "```txt\naa\nbb\n```", "```txt\ncc\n```"],
     },
   ] as const)("plans $name with one implicit reply", (testCase) => {
     const policy = createReplyToDeliveryPolicy({

@@ -1,5 +1,6 @@
 // Doctor legacy-state e2e tests cover yes-mode state migrations without interactive prompts.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import {
   arrangeLegacyStateMigrationTest,

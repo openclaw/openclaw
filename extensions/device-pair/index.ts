@@ -8,7 +8,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-type NotifyModule = typeof import("./notify.js");
 
 const loadDevicePairApiModule = createLazyRuntimeModule(() => import("./api.js"));
 
@@ -171,10 +170,8 @@ function isMobilePairingCleartextAllowedHost(host: string): boolean {
 }
 
 function validateMobilePairingUrl(url: string, source?: string): string | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     return "Resolved mobile pairing URL is invalid.";
   }
   const protocol =
@@ -189,14 +186,10 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
 }
 
 function isFullAccessMobilePairingUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return (
-      parsed.protocol === "wss:" || (parsed.protocol === "ws:" && isLoopbackHost(parsed.hostname))
-    );
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(url);
+  return (
+    parsed?.protocol === "wss:" || (parsed?.protocol === "ws:" && isLoopbackHost(parsed.hostname))
+  );
 }
 
 async function resolveMobilePairingGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResult> {
@@ -418,17 +411,12 @@ export default definePluginEntry({
   name: "Device Pair",
   description: "QR/bootstrap pairing helpers for OpenClaw devices",
   register(api: OpenClawPluginApi) {
-    let notifierService: ReturnType<NotifyModule["createPairingNotifierService"]> | undefined;
     api.registerService({
       id: "device-pair-notifier",
-      start: async (ctx) => {
-        const { createPairingNotifierService } = await loadNotifyModule();
-        notifierService = createPairingNotifierService(api);
-        await notifierService.start(ctx);
-      },
-      stop: async (ctx) => {
-        await notifierService?.stop?.(ctx);
-        notifierService = undefined;
+      apiVersion: 2,
+      start: async ({ scheduler }) => {
+        const { startPairingNotifier } = await loadNotifyModule();
+        startPairingNotifier(api, scheduler);
       },
     });
 

@@ -1,6 +1,8 @@
 // Gateway node event dispatcher.
 // Handles device/node-originated events and routes them to sessions/channels.
 import { randomUUID } from "node:crypto";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -438,18 +440,7 @@ async function cleanupNodeEventMedia(
 }
 
 function parsePayloadObject(payloadJSON?: string | null): Record<string, unknown> | null {
-  if (!payloadJSON) {
-    return null;
-  }
-  let payload: unknown;
-  try {
-    payload = JSON.parse(payloadJSON) as unknown;
-  } catch {
-    return null;
-  }
-  return typeof payload === "object" && payload !== null
-    ? (payload as Record<string, unknown>)
-    : null;
+  return payloadJSON ? asNullableObjectRecord(safeParseJson(payloadJSON)) : null;
 }
 
 async function sendReceiptAck(params: {

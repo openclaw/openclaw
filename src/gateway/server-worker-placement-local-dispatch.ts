@@ -45,6 +45,7 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
       cfg: getRuntimeConfig(),
       key: sessionKey,
       agentId,
+      preserveQualifiedAddress: true,
       clone: false,
       exactRead: true,
     });

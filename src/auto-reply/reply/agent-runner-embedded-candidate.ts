@@ -36,6 +36,7 @@ import {
 
 export async function runEmbeddedFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
+    candidateAgentRuntime: string;
     effectiveRun: AgentFallbackCandidateCommonParams["candidateRun"];
     directBlockDeliveries: DirectBlockDelivery[];
     getLifecycleGeneration: () => string;
@@ -72,6 +73,7 @@ export async function runEmbeddedFallbackCandidate(
     promptCacheKey: turn.opts?.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     model: params.model,
+    agentRuntime: params.candidateAgentRuntime,
   });
   if (sourceReplyDeliveryRuntime) {
     bindSourceReplyDeliveryRuntime(runBaseParams, sourceReplyDeliveryRuntime);

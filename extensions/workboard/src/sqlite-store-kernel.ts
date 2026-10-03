@@ -30,7 +30,6 @@ import type {
   WorkboardSubscriptionStore,
 } from "./persistence-types.js";
 import {
-  asBlobContent,
   blobToBase64,
   definedFields,
   jsonValue,
@@ -706,7 +705,7 @@ class WorkboardSqliteAttachmentStore implements SyncStore<
           ON CONFLICT(attachment_id) DO UPDATE SET content = excluded.content
         `,
       )
-      .run(attachment.id, asBlobContent(value.contentBase64));
+      .run(attachment.id, Buffer.from(value.contentBase64, "base64"));
   }
 
   lookup(key: string): PersistedWorkboardAttachment | undefined {

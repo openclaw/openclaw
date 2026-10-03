@@ -1,4 +1,11 @@
-import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import { listAgentIds, resolveEffectiveAgentDir } from "../agents/agent-scope-config.js";
+import { resolveInstallAgentDir } from "../agents/install-agent-dir.js";
+import { readCurrentConfigForResolution } from "../config/io.runtime.js";
+import {
+  resolveSessionStoreCompatibilityAgentId,
+  tryGetLegacyDefaultAgentId,
+} from "../config/legacy.default-agent-owner.js";
+import { resolveLegacyAgentRosterOwner } from "../config/legacy.roster.js";
 import { isPerAgentSessionStoreConfig } from "../config/sessions/session-store-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LegacyStateDetection } from "./state-migrations.types.js";
@@ -6,16 +13,42 @@ import type { LegacyStateDetection } from "./state-migrations.types.js";
 const DEFERRED_LEGACY_OWNER_MESSAGE =
   "Deferred legacy agent/session migration: select an agent owner";
 
-export function tryResolveDoctorSessionMigrationAgentId(
-  cfg: OpenClawConfig,
-  migrationAgentId: string | undefined,
-): string | undefined {
-  return (
-    migrationAgentId ??
-    (!isPerAgentSessionStoreConfig(cfg.session?.store)
-      ? resolveSessionStoreCompatibilityAgentId(cfg)
-      : undefined)
+export function hasCustomAgentDirOverride(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim());
+}
+
+export function resolveLegacyStateMigrationOwner(params: {
+  cfg: OpenClawConfig;
+  locatorConfig: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+}) {
+  const { cfg, locatorConfig, env, homedir } = params;
+  const installAgentDir = resolveInstallAgentDir(
+    (resolutionEnv) =>
+      readCurrentConfigForResolution({ config: locatorConfig, env: resolutionEnv }),
+    { env, homedir },
   );
+  const installedTarget = installAgentDir.migrationTarget;
+  const preimageOwner =
+    tryGetLegacyDefaultAgentId(cfg) ?? resolveLegacyAgentRosterOwner(locatorConfig);
+  // Doctor's allocated source identity can differ from both the system agent and raw duplicate ids.
+  const migrationTarget =
+    preimageOwner && listAgentIds(cfg).includes(preimageOwner)
+      ? {
+          owner: preimageOwner,
+          dir: hasCustomAgentDirOverride(env)
+            ? installedTarget?.dir
+            : resolveEffectiveAgentDir(cfg, preimageOwner, { env, homedir }),
+        }
+      : installedTarget;
+  const migrationAgentId = migrationTarget?.owner;
+  const sessionMigrationAgentId =
+    migrationAgentId ??
+    (!isPerAgentSessionStoreConfig(locatorConfig.session?.store)
+      ? resolveSessionStoreCompatibilityAgentId(locatorConfig)
+      : undefined);
+  return { installAgentDir, migrationTarget, migrationAgentId, sessionMigrationAgentId };
 }
 
 /** A migration destination is not proof that runtime consumes the source. */

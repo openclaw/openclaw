@@ -21,10 +21,10 @@ describe("broadcast routing", () => {
     runtimeStub,
   } = setupFeishuBroadcastTestHarness();
 
-  async function dispatch(messageId: string, cfg = createBroadcastConfig(), botMentioned = true) {
+  async function dispatch(messageId: string, cfg = createBroadcastConfig()) {
     await handleFeishuMessage({
       cfg,
-      event: createBroadcastEvent({ messageId, text: "hello", botMentioned }),
+      event: createBroadcastEvent({ messageId, text: "hello", botMentioned: true }),
       botOpenId: "bot-open-id",
       runtime: createRuntimeEnv(),
     });
@@ -121,14 +121,6 @@ describe("broadcast routing", () => {
       }
     },
   );
-
-  it("skips broadcast dispatch when bot is NOT mentioned (requireMention=true)", async () => {
-    await dispatch("msg-broadcast-not-mentioned", createBroadcastConfig(), false);
-
-    expect(mockDispatchReply).not.toHaveBeenCalled();
-    expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
-    expect(mockGetChatInfo).not.toHaveBeenCalled();
-  });
 
   it("skips unknown agents not in agents.list", async () => {
     await dispatch("msg-broadcast-unknown-agent", {

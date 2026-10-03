@@ -1,18 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import {
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveInheritedToolPolicyForSession,
-  resolveSubagentToolPolicyForSession,
-} from "../../agents/agent-tools.policy.js";
+import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
-import {
-  isSubagentEnvelopeSession,
-  resolveSubagentCapabilityStore,
-} from "../../agents/subagents/spawn/subagent-capabilities.js";
-import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
-import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { claimSessionPendingInputDedupeRecovery } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -40,7 +29,10 @@ import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
 import { resolveDispatchConversationBinding } from "./session-conversation-binding.js";
-import { resolveStableMessageToolAvailability } from "./session-stable-reply-mode.js";
+import {
+  resolveReplyMessageToolAvailability,
+  resolveStableMessageToolAvailability,
+} from "./session-stable-reply-mode.js";
 import {
   resolveSourceReplyExpectation,
   isUnauthorizedTextSlashCommand,
@@ -179,20 +171,6 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       undefined,
     chatType: sessionStoreEntry.entry?.chatType,
   });
-  const {
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    profile,
-    providerProfile,
-    profileAlsoAllow,
-    providerProfileAlsoAllow,
-  } = resolveEffectiveToolPolicy({
-    config: cfg,
-    sessionKey: acpDispatchSessionKey,
-    agentId: sessionAgentId,
-  });
   const chatType = normalizeChatType(ctx.ChatType);
   state.replyOperationRunState.replyCompletion = resolveReplyCompletion(
     resolveSourceReplyExpectation({ ctx, cfg, isHeartbeat: params.replyOptions?.isHeartbeat }),
@@ -216,15 +194,6 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       !isExplicitCommandTurnContext(ctx, cfg) &&
       (configuredVisibleReplies === "message_tool" ||
         (!isInternalWebchatTurn && effectiveVisibleReplies === "message_tool")));
-  const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
-    ...(profileAlsoAllow ?? []),
-    ...runtimeProfileAlsoAllow,
-  ]);
-  const providerProfilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(providerProfile), [
-    ...(providerProfileAlsoAllow ?? []),
-    ...runtimeProfileAlsoAllow,
-  ]);
   const groupResolution = resolveGroupSessionKey(ctx);
   const messageProvider = resolveOriginMessageProvider({
     originatingChannel: ctx.OriginatingChannel,
@@ -244,31 +213,13 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     senderUsername: normalizeOptionalString(ctx.SenderUsername),
     senderE164: normalizeOptionalString(ctx.SenderE164),
   });
-  const subagentStore = resolveSubagentCapabilityStore(acpDispatchSessionKey, { cfg });
-  const subagentPolicy =
-    acpDispatchSessionKey &&
-    isSubagentEnvelopeSession(acpDispatchSessionKey, {
-      cfg,
-      store: subagentStore,
-    })
-      ? resolveSubagentToolPolicyForSession(cfg, acpDispatchSessionKey, {
-          store: subagentStore,
-        })
-      : undefined;
-  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(cfg, acpDispatchSessionKey, {
-    store: subagentStore,
-  });
-  const messageToolAvailable = isToolAllowedByPolicies("message", [
-    profilePolicy,
-    providerProfilePolicy,
-    globalProviderPolicy,
-    agentProviderPolicy,
-    globalPolicy,
-    agentPolicy,
+  const messageToolAvailable = resolveReplyMessageToolAvailability({
+    cfg,
+    sessionAgentId,
+    sessionKey: acpDispatchSessionKey,
     groupPolicy,
-    subagentPolicy,
-    inheritedToolPolicy,
-  ]);
+    prefersMessageToolDelivery,
+  });
   // The stable mode's tool-only downgrade must be sender-independent, or a
   // sender-scoped message denial hashes a different binding policy than the
   // sender-less synthetic turns on the same session. Only tool-only candidates

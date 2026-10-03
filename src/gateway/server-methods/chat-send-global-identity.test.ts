@@ -20,6 +20,7 @@ import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
 } from "../../state/openclaw-agent-db.js";
 import * as profileReader from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -224,7 +225,8 @@ it.each<{
       await replaceSessionEntry(row, {
         sessionId: row.sessionId,
         lifecycleRevision: "original",
-        updatedAt: 1,
+        // Identity assertions require live rows, not fixtures eligible for age-retention archiving.
+        updatedAt: Date.now(),
         status: "done",
       });
       await appendTranscriptMessage(row, {
@@ -237,7 +239,7 @@ it.each<{
     const originalPath = state.path("original.sqlite");
     const replacementPath = state.path("replacement.sqlite");
     if (scenario.replaceDatabase === "symlink") {
-      closeOpenClawAgentDatabaseByPath(storePath);
+      await closeOpenClawAgentDatabaseByPathAsync(storePath);
       fs.renameSync(storePath, originalPath);
       fs.copyFileSync(originalPath, replacementPath);
       fs.symlinkSync(originalPath, storePath);
@@ -252,6 +254,10 @@ it.each<{
       transcripts: await Promise.all(rows.map((row) => loadTranscriptEvents(row))),
     });
     let before = await snapshot();
+    if (scenario.replaceDatabase) {
+      // The synchronous selection hook replaces files after fixture readers have drained.
+      await closeOpenClawAgentDatabasesAsync(state.root);
+    }
     const runId = `global-identity-${scenario.name}`;
     const message =
       scenario.replaceDuringPersistence && !scenario.pendingReplacement

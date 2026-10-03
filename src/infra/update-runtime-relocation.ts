@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { parseBunCliLauncher, renderBunCliLauncher } from "../../scripts/lib/bun-cli-launcher.mjs";
 import { hasErrnoCode } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
@@ -91,6 +92,18 @@ export async function relocateRuntimeLauncher(
 ): Promise<void> {
   const prepared = prepareRuntimeRelocations(relocations);
   const original = await fs.readFile(file, "utf8");
+  const bunLauncher = parseBunCliLauncher(original);
+  if (bunLauncher) {
+    const content = renderBunCliLauncher({
+      bunPath: relocateRuntimePath(bunLauncher.bunPath, prepared),
+      entryPath: relocateRuntimePath(bunLauncher.entryPath, prepared),
+    });
+    if (content !== original) {
+      assertBeforeMutation?.();
+      await fs.writeFile(file, content);
+    }
+    return;
+  }
   // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
   // Resolve them before changing the directory; absolute store/runtime paths stay external.
   let content = original.replace(

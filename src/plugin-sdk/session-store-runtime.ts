@@ -367,6 +367,7 @@ export async function cleanupSessionLifecycleArtifacts(
   return await cleanupAccessorSessionLifecycleArtifacts({
     storePath,
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+    ...(params.env !== undefined ? { env: params.env } : {}),
     archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,
     ...(params.pluginOwnerId !== undefined ? { pluginOwnerId: params.pluginOwnerId } : {}),
     sessionKeySegmentPrefix: params.sessionKeySegmentPrefix,

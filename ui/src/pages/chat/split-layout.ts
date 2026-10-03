@@ -31,20 +31,12 @@ export function splitRatio(weights: number[], index: number, context: string): n
   return before / (before + after);
 }
 
-function nextColumnId(layout: ChatSplitLayout): string {
-  const max = layout.columns.reduce(
-    (current, column) => Math.max(current, splitLayoutNumericSuffix(column.id, "c")),
+function nextSplitId(entries: readonly { id: string }[], prefix: "c" | "p"): string {
+  const max = entries.reduce(
+    (current, entry) => Math.max(current, splitLayoutNumericSuffix(entry.id, prefix)),
     0,
   );
-  return `c${max + 1}`;
-}
-
-function nextPaneId(layout: ChatSplitLayout): string {
-  const max = panesOf(layout).reduce(
-    (current, pane) => Math.max(current, splitLayoutNumericSuffix(pane.id, "p")),
-    0,
-  );
-  return `p${max + 1}`;
+  return `${prefix}${max + 1}`;
 }
 
 export function findPane(
@@ -85,7 +77,7 @@ export function insertPane(
   if (!location) {
     return next;
   }
-  const newPaneId = nextPaneId(layout);
+  const newPaneId = nextSplitId(panesOf(layout), "p");
   if (edge === "left" || edge === "right") {
     const sourceWeight = expectDefined(
       next.columnWeights[location.columnIndex],
@@ -93,7 +85,7 @@ export function insertPane(
     );
     const insertIndex = location.columnIndex + (edge === "right" ? 1 : 0);
     next.columns.splice(insertIndex, 0, {
-      id: nextColumnId(layout),
+      id: nextSplitId(layout.columns, "c"),
       panes: [{ id: newPaneId, sessionKey }],
       paneWeights: [1],
     });

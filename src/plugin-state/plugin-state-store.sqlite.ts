@@ -26,7 +26,6 @@ import {
   countLivePluginStateNamespaceEntries,
   lookupPluginStateEntry,
   type PluginStateDatabase,
-  type PluginStateReadRow,
 } from "./plugin-state-store.kernel.js";
 import {
   clearPluginStateNamespace,
@@ -38,7 +37,6 @@ import {
   listPluginStateEntries,
   lookupPluginStateEntries,
   validatePluginStateKeyRange,
-  type PluginStateKeyRangeParams,
 } from "./plugin-state-store.reads.js";
 import {
   countLivePluginStateEntries,
@@ -373,35 +371,46 @@ export function pluginStateDoctorEntriesInKeyRange(params: {
       `Plugin doctor state reads require a valid prefix and a limit of 1-${MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES}.`,
     );
   }
-  return readPluginStateRowsInKeyRange(
-    {
-      ...params,
-      keyStartInclusive: params.after === undefined ? params.prefix : `${params.after}\0`,
-      keyEndExclusive: `${params.prefix}\uffff`,
-    },
-    (row): PluginDoctorRawStateEntry => {
-      const createdAt = normalizeSqliteNumber(row.created_at);
-      const expiresAt = normalizeSqliteNumber(row.expires_at);
-      const entry: PluginDoctorRawStateEntry = {
-        key: row.entry_key,
-        valueJson: row.value_json,
-        createdAt: createdAt ?? 0,
-        expiresAt: expiresAt ?? null,
-      };
-      if (
-        !Number.isSafeInteger(createdAt) ||
-        (createdAt ?? -1) < 0 ||
-        (row.expires_at !== null && !Number.isSafeInteger(expiresAt))
-      ) {
-        return entry;
-      }
-      try {
-        entry.value = JSON.parse(row.value_json) as unknown;
-      } catch {
-        // Keep corrupt rows in the page so Doctor can advance past them safely.
-      }
-      return entry;
-    },
+  const range = {
+    ...params,
+    keyStartInclusive: params.after === undefined ? params.prefix : `${params.after}\0`,
+    keyEndExclusive: `${params.prefix}\uffff`,
+  };
+  validatePluginStateKeyRange(range);
+  return (
+    readPluginState(
+      "entries",
+      "Failed to list plugin state entries by key range.",
+      ({ db }) =>
+        selectPluginStateEntriesInKeyRange(db, {
+          ...range,
+          order: "asc",
+          now: Date.now(),
+        }).map((row): PluginDoctorRawStateEntry => {
+          const createdAt = normalizeSqliteNumber(row.created_at);
+          const expiresAt = normalizeSqliteNumber(row.expires_at);
+          const entry: PluginDoctorRawStateEntry = {
+            key: row.entry_key,
+            valueJson: row.value_json,
+            createdAt: createdAt ?? 0,
+            expiresAt: expiresAt ?? null,
+          };
+          if (
+            !Number.isSafeInteger(createdAt) ||
+            (createdAt ?? -1) < 0 ||
+            (row.expires_at !== null && !Number.isSafeInteger(expiresAt))
+          ) {
+            return entry;
+          }
+          try {
+            entry.value = JSON.parse(row.value_json) as unknown;
+          } catch {
+            // Keep corrupt rows in the page so Doctor can advance past them safely.
+          }
+          return entry;
+        }),
+      params.env,
+    ) ?? []
   );
 }
 
@@ -435,30 +444,6 @@ export function pluginStateEntries(params: {
       "entries",
       "Failed to list plugin state entries.",
       (store) => listPluginStateEntries(store, params),
-      params.env,
-    ) ?? []
-  );
-}
-
-function readPluginStateRowsInKeyRange<T>(
-  params: PluginStateKeyRangeParams & { env?: NodeJS.ProcessEnv },
-  mapRow: (row: PluginStateReadRow, databasePath: string) => T,
-): T[] {
-  validatePluginStateKeyRange(params);
-  return (
-    readPluginState(
-      "entries",
-      "Failed to list plugin state entries by key range.",
-      ({ db, path: databasePath }) =>
-        selectPluginStateEntriesInKeyRange(db, {
-          pluginId: params.pluginId,
-          namespace: params.namespace,
-          keyStartInclusive: params.keyStartInclusive,
-          keyEndExclusive: params.keyEndExclusive,
-          limit: params.limit,
-          order: params.order ?? "asc",
-          now: Date.now(),
-        }).map((row) => mapRow(row, databasePath)),
       params.env,
     ) ?? []
   );

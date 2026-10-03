@@ -5,6 +5,7 @@ import {
   openSqliteWorkerStore,
   runSqliteWorkerStoreOperation,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -19,7 +20,6 @@ import type {
   WorkboardSqliteWorkerOperations,
 } from "./sqlite-store-contract.js";
 import { unwrapWorkboardSqliteResult } from "./sqlite-store-errors.js";
-import { resolveWorkboardSqlitePath } from "./sqlite-store-paths.js";
 
 type WorkboardSqliteStores = {
   cards: WorkboardCardStore;
@@ -35,10 +35,11 @@ type WorkboardSqliteStores = {
 
 export function createWorkboardSqliteStores(options: {
   dbPath?: string;
-  env?: NodeJS.ProcessEnv;
   workerModuleUrl: URL;
 }): WorkboardSqliteStores {
-  const databasePath = path.resolve(options.dbPath ?? resolveWorkboardSqlitePath(options.env));
+  const databasePath = path.resolve(
+    options.dbPath ?? path.join(resolveStateDir(), "plugins", "workboard", "workboard.sqlite"),
+  );
   const worker = openSqliteWorkerStore<WorkboardSqliteWorkerOperations>({
     moduleUrl: options.workerModuleUrl,
     databasePath,
@@ -194,20 +195,16 @@ export function createWorkboardSqliteStores(options: {
       delete: bindOperation((connection, args) =>
         execute("cards.delete", { connection, args }, true),
       ),
-      entries: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.entries", { connection, args: captured }),
-        ),
+      entries: bindOperation((connection, args) => execute("cards.entries", { connection, args })),
       listCardStatuses: bindOperation((connection, args) =>
         execute("cards.listCardStatuses", { connection, args }),
       ),
       listBoardAggregates: bindOperation((connection, args) =>
         execute("cards.listBoardAggregates", { connection, args }),
       ),
-      listStatsAggregates: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.listStatsAggregates", { connection, args: captured }),
-        ),
+      listStatsAggregates: bindOperation((connection, args) =>
+        execute("cards.listStatsAggregates", { connection, args }),
+      ),
       hasCards: bindOperation((connection, args) =>
         execute("cards.hasCards", { connection, args }),
       ),
@@ -230,8 +227,11 @@ export function createWorkboardSqliteStores(options: {
       listPlacements: bindOperation((connection, args) =>
         execute("sessionsBoard.listPlacements", { connection, args }),
       ),
-      writePlacements: bindOperation((connection, args) =>
-        execute("sessionsBoard.writePlacements", { connection, args }, true),
+      repairPlacements: bindOperation((connection, args) =>
+        execute("sessionsBoard.repairPlacements", { connection, args }, true),
+      ),
+      writePlacement: bindOperation((connection, args) =>
+        execute("sessionsBoard.writePlacement", { connection, args }, true),
       ),
     },
     subscriptions: {
@@ -244,10 +244,9 @@ export function createWorkboardSqliteStores(options: {
       delete: bindOperation((connection, args) =>
         execute("subscriptions.delete", { connection, args }, true),
       ),
-      entries: (...args) =>
-        run(args, (connection, captured) =>
-          execute("subscriptions.entries", { connection, args: captured }),
-        ),
+      entries: bindOperation((connection, args) =>
+        execute("subscriptions.entries", { connection, args }),
+      ),
     },
     attachments: {
       register: bindOperation((connection, args) =>

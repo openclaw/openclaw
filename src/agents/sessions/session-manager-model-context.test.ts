@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { LEGACY_MISSING_TOOL_RESULT_TEXT } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptEvent,
@@ -15,6 +15,7 @@ import { waitForSessionTranscriptProjection } from "../../config/sessions/sessio
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
@@ -497,13 +498,17 @@ it.each([
   },
 );
 
-it.each([false, true])("keeps model reads non-persisting (incognito=%s)", async (incognito) => {
+it.each([false, true, "path"])("keeps model reads non-persisting (%s)", async (incognito) => {
   await withOpenClawTestState({ label: "model-readonly" }, async (state) => {
     const scope = {
       agentId: "main",
       sessionId: "readonly",
-      sessionKey: incognito ? "agent:main:dashboard:incognito-readonly" : "agent:main:readonly",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      sessionKey:
+        incognito === true ? "agent:main:dashboard:incognito-readonly" : "agent:main:readonly",
+      storePath:
+        incognito === "path"
+          ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
+          : path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     };
     expect(SessionManager.openModelContext(scope).buildSessionContext().messages).toEqual([]);
     expect(
@@ -835,7 +840,7 @@ it.each(["details", "text", "duplicate-object", "late-array-call"])(
         content: [
           {
             type: "text",
-            text: marker === "details" ? "missing" : DEFAULT_MISSING_TOOL_RESULT_TEXT,
+            text: marker === "details" ? "missing" : LEGACY_MISSING_TOOL_RESULT_TEXT,
           },
         ],
         ...(marker === "details" ? { details: { openclawSyntheticMissingToolResult: true } } : {}),
@@ -862,7 +867,7 @@ it.each(["details", "text", "duplicate-object", "late-array-call"])(
         await waitForSessionTranscriptProjection(scope);
         const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
         // Preserve duplicate members from imported JSON; JavaScript objects would collapse them.
-        const content = `{"part":{"type":"text","text":"ordinary"},"part":{"type":"text","text":${JSON.stringify(DEFAULT_MISSING_TOOL_RESULT_TEXT)}}}`;
+        const content = `{"part":{"type":"text","text":"ordinary"},"part":{"type":"text","text":${JSON.stringify(LEGACY_MISSING_TOOL_RESULT_TEXT)}}}`;
         database.db
           .prepare(
             "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.content', json(?)) WHERE session_id = ? AND json_extract(event_json, '$.id') = ?",

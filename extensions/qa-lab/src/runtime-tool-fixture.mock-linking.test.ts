@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   cleanupRuntimeToolFixtureTempRoots,
   mockToolRequests,
@@ -8,7 +8,7 @@ import {
   simulateRuntimePatchHappyTurn,
 } from "../test/runtime-tool-fixture-helpers.js";
 
-afterEach(cleanupRuntimeToolFixtureTempRoots);
+afterAll(cleanupRuntimeToolFixtureTempRoots);
 
 describe("runtime tool fixture mock request linking", () => {
   it("rejects unrelated tool output after a planned mock runtime tool call", async () => {
@@ -78,5 +78,61 @@ describe("runtime tool fixture mock request linking", () => {
     await expect(runMockRuntimeToolFixture({ requests })).rejects.toThrow(
       "expected mock happy-path tool output for read",
     );
+  });
+  it.each([
+    {
+      label: "happy-path file",
+      happyInput: runtimePatchAddInput("runtime-tool-fixture-wrong.txt"),
+      failureInput: runtimePatchUpdateInput(),
+      expectedError: "expected linked mock apply_patch to add runtime-tool-fixture-patch.txt",
+    },
+    {
+      label: "failure-path file",
+      happyInput: runtimePatchAddInput(),
+      failureInput: runtimePatchUpdateInput("../runtime-tool-fixture-wrong.txt"),
+      expectedError:
+        "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
+    },
+    {
+      label: "failure-path context",
+      happyInput: runtimePatchAddInput(),
+      failureInput: runtimePatchUpdateInput(
+        "../runtime-tool-fixture-denied.txt",
+        "context-that-does-not-exist",
+      ),
+      expectedError:
+        "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
+    },
+    {
+      label: "failure-path operation",
+      happyInput: runtimePatchAddInput(),
+      failureInput: runtimePatchUpdateInput().replace("*** Update File:", "*** Add File:"),
+      expectedError:
+        "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
+    },
+    {
+      label: "failure-path replacement",
+      happyInput: runtimePatchAddInput(),
+      failureInput: runtimePatchUpdateInput().replace(
+        "+runtime patch outside the workspace",
+        "+incorrect replacement",
+      ),
+      expectedError:
+        "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
+    },
+  ])("rejects linked mock patch evidence for the wrong $label", async (testCase) => {
+    await expect(
+      runMockRuntimeToolFixture({
+        toolName: "apply_patch",
+        requests: mockToolRequests({
+          toolName: "apply_patch",
+          happyArgs: { input: testCase.happyInput },
+          failureArgs: { input: testCase.failureInput },
+          happyOutput: "Successfully applied patch",
+          failureOutput: "Error: Path escapes sandbox root",
+        }),
+        runAgentPrompt: vi.fn(simulateRuntimePatchHappyTurn),
+      }),
+    ).rejects.toThrow(testCase.expectedError);
   });
 });

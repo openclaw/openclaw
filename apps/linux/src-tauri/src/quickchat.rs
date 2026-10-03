@@ -893,19 +893,7 @@ pub(crate) fn persist_quickchat_shortcut_state(app: &AppHandle, registered: bool
     let Some(marker) = quickchat_shortcut_disabled_marker(app) else {
         return;
     };
-    let result = if registered {
-        match fs::remove_file(&marker) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        }
-    } else {
-        marker
-            .parent()
-            .map(fs::create_dir_all)
-            .transpose()
-            .and_then(|_| fs::write(&marker, b""))
-    };
+    let result = persist_shortcut_preference(&marker, (!registered).then_some(""));
     if let Err(error) = result {
         eprintln!("Could not persist Quick Chat shortcut preference: {error}");
     }
@@ -1128,7 +1116,7 @@ pub fn quickchat_set_shortcut(
         return state.shortcut_status();
     }
 
-    let configured = accelerator.and_then(|value| non_empty(Some(value)));
+    let configured = non_empty(accelerator);
     let candidate_accelerator = configured
         .clone()
         .unwrap_or_else(|| QUICKCHAT_SHORTCUT.to_string());

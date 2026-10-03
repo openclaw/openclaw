@@ -41,7 +41,7 @@ it.each(["admission", "cron discovery"] as const)(
       });
     try {
       expect(() => structuredClone(configEnv.cloneEnvWithPlatformSemantics(state.env))).toThrow(
-        /could not be cloned/,
+        expect.objectContaining({ name: "DataCloneError", code: 25 }),
       );
       if (mode === "admission") {
         const admitted = await loadSessionEntryForAdmission(scope);

@@ -70,7 +70,7 @@ import {
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
   createCodexSessionCatalogNodeInvokePolicies,
-  codexSessionCatalogRuntime,
+  registerCodexSessionCatalog,
 } from "./src/session-catalog.js";
 import {
   CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
@@ -161,9 +161,12 @@ export default definePluginEntry({
       deleteIf: (key, predicate) => openBindingStateStore().deleteIf!(key, predicate),
       entries: () => openBindingStateStore().entries(),
       lookup: (key) => openBindingStateStore().lookup(key),
-      get lookupMany() {
-        const store = openBindingStateStore();
-        return store.lookupMany?.bind(store);
+      asyncReads: {
+        lookup: (key) => openBindingMutationStore().lookup(key),
+        get lookupMany() {
+          const store = openBindingMutationStore();
+          return store.lookupMany?.bind(store);
+        },
       },
       registerIfAbsent: (key, value, options) =>
         openBindingStateStore().registerIfAbsent(key, value, options),
@@ -218,7 +221,7 @@ export default definePluginEntry({
       stop: () => sessionCatalogControlFactory.stop(),
     });
     if (sessionCatalogEnabled) {
-      codexSessionCatalogRuntime.register({
+      registerCodexSessionCatalog({
         api,
         resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
         bindingStore,

@@ -62,6 +62,7 @@ function appendUniqueEntries(
 
 export class PluginDiscoveryController {
   result: PluginDiscoveryResult | null = null;
+  private overview: CatalogPageLoad | null = null;
   private resultSelection: CatalogPageLoad["selection"] | null = null;
   error: string | null = null;
   remoteError: string | null = null;
@@ -120,33 +121,7 @@ export class PluginDiscoveryController {
         client
           ? this.fetchAvailablePage({ client, intent, category, query, manual, signal })
           : initialState, // Lit returns to INITIAL without invoking onComplete.
-      onComplete: (page) => {
-        this.result = {
-          items: page.items,
-          ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
-        };
-        this.resultSelection = page.selection;
-        this.remoteError = page.remoteError ?? null;
-        if (page.overview) {
-          // The overview is already fetched for cards. Use its canonical categories
-          // if it beats the lightweight read (including older ClawHub servers that
-          // cannot serve that endpoint), and retire the slower request.
-          if (page.categories) {
-            void this.categoriesTask.run([null]);
-            this.categories = page.categories;
-            this.categoriesReady = true;
-            this.categoriesError = null;
-          }
-          this.featured = rankedOverviewShelf(page.items, "featured", "featuredRank").slice(
-            0,
-            CATALOG_SECTION_SIZE,
-          );
-          this.trending = rankedOverviewShelf(page.items, "trending", "trendingRank").slice(
-            0,
-            CATALOG_SECTION_SIZE,
-          );
-        }
-      },
+      onComplete: (page) => this.applyPage(page),
       onError: (error) => {
         this.error = formatUiError(error);
       },
@@ -187,16 +162,46 @@ export class PluginDiscoveryController {
     });
   }
 
+  private applyPage(page: CatalogPageLoad): void {
+    this.result = {
+      items: page.items,
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    };
+    this.resultSelection = page.selection;
+    this.remoteError = page.remoteError ?? null;
+    if (page.overview) {
+      this.overview = page.remoteError ? null : page;
+      // The overview is already fetched for cards. Use its canonical categories
+      // if it beats the lightweight read (including older ClawHub servers that
+      // cannot serve that endpoint), and retire the slower request.
+      if (page.categories) {
+        void this.categoriesTask.run([null]);
+        this.categories = page.categories;
+        this.categoriesReady = true;
+        this.categoriesError = null;
+      }
+      this.featured = rankedOverviewShelf(page.items, "featured", "featuredRank").slice(
+        0,
+        CATALOG_SECTION_SIZE,
+      );
+      this.trending = rankedOverviewShelf(page.items, "trending", "trendingRank").slice(
+        0,
+        CATALOG_SECTION_SIZE,
+      );
+    }
+  }
+
   get loading(): boolean {
     // Keep keyed cards and their open controls during a same-selection refresh.
     // New filters must wait for their own result instead of showing the old selection.
     return (
       this.gateway.isConnected() &&
-      this.browseTask.status === TaskStatus.PENDING &&
-      (!this.result ||
-        this.resultSelection?.intent !== this.intent ||
-        this.resultSelection.category !== this.category ||
-        this.resultSelection.query !== this.committedQuery)
+      (this.query.trim() !== this.committedQuery ||
+        (this.browseTask.status === TaskStatus.PENDING &&
+          (!this.result ||
+            this.resultSelection?.intent !== this.intent ||
+            this.resultSelection.category !== this.category ||
+            this.resultSelection.query !== this.committedQuery)))
     );
   }
 
@@ -288,7 +293,6 @@ export class PluginDiscoveryController {
     // Reconnects reload the latest input without replaying its manual observation.
     this.disconnect();
     this.committedQuery = this.query.trim();
-    void this.browseTask.run([null, this.intent, this.category, this.committedQuery, false]);
     this.result = null;
     this.resultSelection = null;
     this.categories = [];
@@ -302,6 +306,8 @@ export class PluginDiscoveryController {
   }
 
   disconnect(): void {
+    this.overview = null;
+    void this.browseTask.run([null, this.intent, this.category, this.committedQuery, false]);
     this.categoriesStarted = false;
     void this.categoriesTask.run([null]);
     if (this.searchTimer) {
@@ -311,7 +317,13 @@ export class PluginDiscoveryController {
     void this.loadMoreTask.run([null, this.intent, this.category, this.committedQuery, null]);
   }
 
-  async refresh(manual = false): Promise<void> {
+  async refresh(): Promise<void> {
+    // Inventory publication and explicit refresh retire cached local installation facts.
+    this.overview = null;
+    await this.loadSelection();
+  }
+
+  private async loadSelection(manual = false): Promise<void> {
     const client = this.gateway.getClient();
     if (!client || !this.gateway.isConnected()) {
       return;
@@ -320,6 +332,13 @@ export class PluginDiscoveryController {
     this.remoteError = null;
     this.loadMoreError = null;
     void this.loadMoreTask.run([null, this.intent, this.category, this.committedQuery, null]);
+    if (this.isGroupedOverview() && this.overview) {
+      // Retire the search before restoring the overview; late results belong to the old intent.
+      void this.browseTask.run([null, this.intent, this.category, this.committedQuery, false]);
+      this.applyPage(this.overview);
+      this.host.requestUpdate();
+      return;
+    }
     await this.browseTask.run([client, this.intent, this.category, this.committedQuery, manual]);
   }
 
@@ -342,32 +361,50 @@ export class PluginDiscoveryController {
   selectIntent(intent: PluginDiscoveryIntent): void {
     this.intent = intent;
     this.category = null;
-    void this.refresh();
+    void this.loadSelection();
   }
 
   selectCategory(category: string | null): void {
     this.intent = "all";
     this.category = category;
-    void this.refresh();
+    void this.loadSelection();
   }
 
   updateQuery(query: string): void {
+    const previousQuery = this.query.trim();
+    const nextQuery = query.trim();
+    const resetFilters = Boolean(nextQuery) && (this.intent !== "all" || this.category !== null);
     this.query = query;
-    if (query.trim()) {
+    if (nextQuery) {
       this.intent = "all";
       this.category = null;
     }
     this.host.requestUpdate();
     if (this.searchTimer) {
       clearTimeout(this.searchTimer);
+      this.searchTimer = null;
+    }
+    // Canceling a debounce can leave reset filters whose results still need loading.
+    if (
+      nextQuery === this.committedQuery &&
+      !resetFilters &&
+      (nextQuery === previousQuery ||
+        (this.resultSelection?.intent === this.intent &&
+          this.resultSelection.category === this.category))
+    ) {
+      return;
+    }
+    if (!nextQuery) {
+      this.committedQuery = "";
+      void this.loadSelection();
+      return;
     }
     this.searchTimer = setTimeout(() => {
       this.searchTimer = null;
-      const nextQuery = query.trim();
-      // Whitespace edits and repeated input refresh results without recording another search.
+      // Only a newly settled query records a manual search.
       const manual = nextQuery !== this.committedQuery && nextQuery.length >= 2;
       this.committedQuery = nextQuery;
-      void this.refresh(manual);
+      void this.loadSelection(manual);
     }, 250);
   }
 }

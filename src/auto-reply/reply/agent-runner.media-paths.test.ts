@@ -204,6 +204,8 @@ describe("runReplyAgent media path normalization", () => {
     operation.setPhase("running");
     operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
     expect(operation.acceptedSteeredInboundAudio).toBe(false);
+    // An answer sent before this steer must not count as answering it.
+    operation.markSourceReplyDelivered();
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
       sessionId,
@@ -224,6 +226,7 @@ describe("runReplyAgent media path normalization", () => {
     );
 
     expect(operation.acceptedSteeredInboundAudio).toBe(true);
+    expect(operation.sourceReplyDelivered).toBe(false);
     expect(
       queueEmbeddedAgentMessageWithOutcomeAsyncMock.mock.calls.map(([sessionId, prompt]) => [
         sessionId,

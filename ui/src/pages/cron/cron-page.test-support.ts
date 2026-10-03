@@ -96,12 +96,13 @@ export function operatorHello(scopes: string[]): NonNullable<ApplicationGatewayS
 }
 
 export function createContext(
-  gateway: TestGateway,
+  gateway: ApplicationContext["gateway"],
   scopeId: string | null = "main",
   selectedId: string | null = scopeId,
 ): ApplicationContext {
   const subscribe = () => () => undefined;
   let selectionState = { selectedId, scopeId };
+  let intentRevision = 0;
   const selectionListeners = new Set<(state: typeof selectionState) => void>();
   return {
     basePath: "",
@@ -127,16 +128,21 @@ export function createContext(
       subscribe,
     },
     agentSelection: {
+      get intentRevision() {
+        return intentRevision;
+      },
       get state() {
         return selectionState;
       },
       set(agentId: string | null) {
+        intentRevision += 1;
         selectionState = { selectedId: agentId, scopeId: agentId };
         for (const listener of selectionListeners) {
           listener(selectionState);
         }
       },
       setScope(agentId: string | null) {
+        intentRevision += 1;
         selectionState = { ...selectionState, scopeId: agentId };
         for (const listener of selectionListeners) {
           listener(selectionState);

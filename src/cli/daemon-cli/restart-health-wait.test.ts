@@ -1,5 +1,11 @@
 // Managed gateway restart polling tests.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { execLaunchctl } from "../../daemon/launchd-exec.js";
+import { readLaunchAgentRuntime } from "../../daemon/launchd-runtime.js";
+import { resolveLaunchAgentPlistPath } from "../../daemon/launchd-service-files.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import {
@@ -16,6 +22,12 @@ import {
   waitForStoppedFreeGatewayRestart,
 } from "./restart-health.test-helpers.js";
 
+vi.mock("../../daemon/launchd-exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/launchd-exec.js")>()),
+  execLaunchctl: vi.fn(),
+}));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { waitForGatewayHealthyRestart, renderRestartDiagnostics } =
   await import("./restart-health.js");
 
@@ -333,7 +345,40 @@ describe("restart health", () => {
     expect(callGateway).toHaveBeenCalledTimes(reachable.length);
   });
 
-  it("waits for the managed service when running service proof is required", async () => {
+  it("settles the selected LaunchAgent after its temporarily unloaded job returns", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    const env = {
+      HOME: tempDirs.make("openclaw-launchd-settle-"),
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.settle-fixture",
+    };
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    await fs.mkdir(path.dirname(plistPath), { recursive: true });
+    await fs.writeFile(plistPath, "<plist/>");
+    const target = `gui/${process.getuid?.() ?? 501}/${env.OPENCLAW_LAUNCHD_LABEL}`;
+    vi.mocked(execLaunchctl).mockImplementation(async (args) => {
+      expect(args[0]).toBe("print");
+      expect([target, `system/${env.OPENCLAW_LAUNCHD_LABEL}`]).toContain(args[1]);
+      if (args[1] !== target || monotonicClock.nowMs === 0) {
+        return { code: 113, stdout: "", stderr: "Could not find service", termination: "exit" };
+      }
+      return {
+        code: 0,
+        stderr: "",
+        termination: "exit",
+        stdout: [
+          `${target} = {`,
+          "\tstate = running",
+          "\tpid = 8000",
+          "\tresource coalition = {",
+          "\t\tstate = active",
+          "\t}",
+          "\tjetsam coalition = {",
+          "\t\tstate = active",
+          "\t}",
+          "}",
+        ].join("\n"),
+      };
+    });
     callGateway.mockImplementation(
       gatewayHealthResponse({
         server: { version: "2026.4.24", connId: "new" },
@@ -345,25 +390,24 @@ describe("restart health", () => {
       listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
       hints: [],
     });
-    const readRuntime = vi
-      .fn()
-      .mockResolvedValueOnce({ status: "stopped" })
-      .mockResolvedValue({ status: "running", pid: 8000 });
-
     const snapshot = await waitForGatewayHealthyRestart({
-      service: { readRuntime, readCommand: vi.fn(async () => null) } as unknown as GatewayService,
+      service: { readRuntime: readLaunchAgentRuntime, readCommand: async () => null },
+      env,
       port: 18789,
       expectedVersion: "2026.4.24",
       requireRunningService: true,
       attempts: 3,
       delayMs: 1,
+      settle: { probes: 3 },
     });
 
-    expect(snapshot.healthy).toBe(true);
-    expect(snapshot.runtime.status).toBe("running");
-    expect(snapshot.waitOutcome).toBe("healthy");
-    expect(snapshot.elapsedMs).toBe(1);
-    expect(sleep).toHaveBeenCalledOnce();
+    expect(snapshot).toMatchObject({
+      healthy: true,
+      runtime: { status: "running", pid: 8000 },
+      waitOutcome: "healthy",
+      elapsedMs: 3,
+    });
+    expect(sleep).toHaveBeenCalledTimes(3);
   });
 
   it("times out when running service proof never arrives", async () => {

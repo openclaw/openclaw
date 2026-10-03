@@ -159,6 +159,13 @@ describe("printDaemonStatus", () => {
 
   it("preserves Gateway metadata and input while redacting private definitions in JSON", () => {
     const server = { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" };
+    const extraService: ExtraGatewayService = {
+      platform: "linux",
+      label: "sibling.service",
+      detail: "unit: /etc/systemd/system/sibling.service",
+      sourcePath: "/etc/systemd/system/sibling.service",
+      scope: "system",
+    };
     const command: GatewayServiceCommandConfig = {
       programArguments: ["node"],
       environment: {
@@ -175,12 +182,21 @@ describe("printDaemonStatus", () => {
     };
     const original = structuredClone(command);
     printDaemonStatus(
-      { service: { command }, rpc: { ok: true, server } },
+      { service: { command }, rpc: { ok: true, server }, extraServices: [extraService] },
       { json: true, deep: true },
     );
     expect(runtime.writeJson).toHaveBeenCalledOnce();
     const payload = runtime.writeJson.mock.calls[0]?.[0];
     expect(payload).toHaveProperty("rpc.server", server);
+    expect(payload).toHaveProperty("extraServices", [
+      {
+        platform: "linux",
+        label: "sibling.service",
+        detail: "unit: /etc/systemd/system/sibling.service",
+        scope: "system",
+      },
+    ]);
+    expect(extraService.sourcePath).toBe("/etc/systemd/system/sibling.service");
     expect(payload).not.toHaveProperty("service.command.managedDefinition");
     expect(payload).not.toHaveProperty("service.command.managedOverrides");
     expect(payload).not.toHaveProperty("service.command.definitionPaths");

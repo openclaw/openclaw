@@ -9,6 +9,7 @@ import { applyDevUpdateTargetEnv } from "../infra/update-dev-target.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import {
@@ -96,6 +97,7 @@ import {
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
+  const nodeExecutable = resolveTestNodeExecPath();
   const {
     baseSnapshot,
     configSnapshot,
@@ -712,7 +714,11 @@ describe("update-cli", () => {
         steps: [],
         durationMs: 100,
       };
-      mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
+      mockRunningManagedGateway([
+        nodeExecutable,
+        path.join(process.cwd(), "dist", "index.js"),
+        "gateway",
+      ]);
       mockOwnedGitService();
       primeServiceCommand(
         [process.execPath, path.join(process.cwd(), "dist", "index.js"), "gateway"],
@@ -822,7 +828,12 @@ describe("update-cli", () => {
   });
   it("reports activation failure when the updated CLI entrypoint is missing", async () => {
     const root = await mockPackageInstallAtCaseDir();
-    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+    mockRunningManagedGateway([
+      nodeExecutable,
+      path.join(root, "dist", "index.js"),
+      "gateway",
+      "run",
+    ]);
     vi.mocked(resolveGatewayInstallEntrypoint).mockReset().mockResolvedValue(undefined);
     serviceLoaded.mockResolvedValue(true);
     vi.mocked(runDaemonInstall).mockRejectedValueOnce(new Error("refresh failed"));
@@ -840,7 +851,7 @@ describe("update-cli", () => {
     async (json) => {
       const { updatedRoot, updatedEntrypoint } = setupNpmUpdatedRootRefresh();
       serviceLoaded.mockResolvedValue(true);
-      primeServiceCommand(["node", updatedEntrypoint, "gateway", "run"]);
+      primeServiceCommand([nodeExecutable, updatedEntrypoint, "gateway", "run"]);
       mockGatewayInstallFailure(updatedEntrypoint, json ? "runtime warning" : undefined);
       mockGatewayHealth("2026.4.24", "updated-gateway");
 
@@ -883,7 +894,7 @@ describe("update-cli", () => {
         }),
     });
     serviceLoaded.mockResolvedValue(true);
-    primeServiceCommand(["node", oldEntrypoint, "gateway", "run"]);
+    primeServiceCommand([nodeExecutable, oldEntrypoint, "gateway", "run"]);
     mockGatewayInstallFailure(updatedEntrypoint);
     mockGatewayHealth("2026.4.24", "matching-old-service");
 
@@ -908,7 +919,7 @@ describe("update-cli", () => {
 
     expectNoSideEffects(runDaemonRestart);
     const restartCall = gatewayCommandCall(updatedEntrypoint, "restart");
-    expect(restartCall?.[0][0]).toContain("node");
+    expect(restartCall?.[0][0]).toBe(process.execPath);
     expect(restartCall?.[0].slice(4)).toEqual([
       "--preserve-definition",
       "--json",

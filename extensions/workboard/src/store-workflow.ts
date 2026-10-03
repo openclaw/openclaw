@@ -8,7 +8,10 @@ import type {
   WorkboardNotification,
   WorkboardRunAttempt,
 } from "@openclaw/workboard-contract";
-import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveOptionalIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -80,10 +83,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     if (!ownerId) {
       throw new Error("claim ownerId is required.");
     }
-    const ttlSeconds =
-      typeof input.ttlSeconds === "number" && Number.isFinite(input.ttlSeconds)
-        ? Math.max(1, Math.trunc(input.ttlSeconds))
-        : undefined;
+    const ttlSeconds = resolveOptionalIntegerOption(input.ttlSeconds, { min: 1 });
     const token =
       normalizeBoundedString(input.token, undefined, 160, "claim token") ?? randomUUID();
     return await this.enqueueMutation(async () => {

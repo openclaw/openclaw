@@ -121,6 +121,12 @@ export const stateDirGatewayFixtureEntrypoint = {
   distWorkerPath: "cli/state-dir-gateway-check.server-fixture.test-support.js",
 } as const;
 
+export const localStateOwnerFixtureEntrypoint = {
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "local-state-owner.child.test-support",
+  distWorkerPath: "cli/local-state-owner.child.test-support.js",
+} as const;
+
 export const updateFinalizationOutputEntrypoint = {
   currentModuleUrl: import.meta.url,
   sourceWorkerName: "update-finalization-output.test-support",
@@ -188,6 +194,26 @@ export const gatewayDirectStopEntrypoints = {
 
 // Extra update roots share the native fixture generation.
 export const updateExecutorEntrypoints = {
+  gatewayLock: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/gateway-lock",
+    distWorkerPath: "infra/gateway-lock.js",
+  },
+  gatewayOwnerLease: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/gateway-owner-lease",
+    distWorkerPath: "infra/gateway-owner-lease.js",
+  },
+  boundaryPath: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/boundary-path",
+    distWorkerPath: "infra/boundary-path.js",
+  },
+  statePaths: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../state/openclaw-state-db.paths",
+    distWorkerPath: "state/openclaw-state-db.paths.js",
+  },
   sealedRegistry: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/sealed-runtime-registry",

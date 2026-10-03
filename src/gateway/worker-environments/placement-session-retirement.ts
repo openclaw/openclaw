@@ -1,7 +1,7 @@
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./placement-target.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 
 export type PlacementSessionEvidence = "current" | "absent" | "unknown";
 export type PlacementSessionEvidenceResolver = (

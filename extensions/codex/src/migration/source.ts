@@ -78,26 +78,12 @@ type InstalledCuratedPlugin = {
   remote: boolean;
 };
 
-type PluginReadResult =
-  | {
-      ok: true;
-      detail: v2.PluginDetail;
-    }
-  | {
-      ok: false;
-      error: string;
-    };
-
 export function defaultCodexHome(): string {
   const configuredHome = process.env.CODEX_HOME;
   // Codex preserves nonempty CODEX_HOME verbatim; --from remains trimmed below as CLI convenience.
   return resolveHomePath(
     configuredHome !== undefined && configuredHome.length > 0 ? configuredHome : "~/.codex",
   );
-}
-
-function personalAgentsSkillsDir(): string {
-  return path.join(resolveUserHomeDir(), ".agents", "skills");
 }
 
 async function discoverInstalledCuratedPlugins(
@@ -238,23 +224,31 @@ async function withPluginMigrationEligibility(params: {
       continue;
     }
 
-    const detail = await readPluginDetail(
-      params.requestOptions,
-      marketplace,
-      plugin,
-      readPluginName,
-    );
-    if (!detail.ok) {
+    let detail: v2.PluginDetail;
+    try {
+      if (!readPluginName) {
+        throw new Error(
+          `Codex remote plugin "${plugin.pluginName ?? plugin.name}" has no readable remote plugin id.`,
+        );
+      }
+      detail = (
+        await params.requestOptions.request<v2.PluginReadResponse>({
+          method: "plugin/read",
+          requestParams: pluginReadParams(marketplace, readPluginName),
+        })
+      ).plugin;
+    } catch (error) {
+      const message = coerceErrorMessage(error);
       evaluated.push({
         ...plugin,
         migratable: false,
-        migrationBlock: { code: "plugin_read_unavailable", error: detail.error },
-        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" detail could not be read: ${detail.error}`,
+        migrationBlock: { code: "plugin_read_unavailable", error: message },
+        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" detail could not be read: ${message}`,
       });
       continue;
     }
 
-    if (detail.detail.apps.length === 0) {
+    if (detail.apps.length === 0) {
       evaluated.push({
         ...plugin,
         migratable: true,
@@ -262,7 +256,7 @@ async function withPluginMigrationEligibility(params: {
       continue;
     }
 
-    const apps = detail.detail.apps
+    const apps = detail.apps
       .map(({ id, name }) => ({ id, name }))
       .toSorted((left, right) => left.id.localeCompare(right.id));
     pending.push({ plugin, apps });
@@ -325,15 +319,9 @@ async function withPluginMigrationEligibility(params: {
   const appInfoById = new Map(snapshot.apps.map((app) => [app.id, app] as const));
   const installedAppsById = new Map(snapshot.installedApps.map((app) => [app.id, app] as const));
   for (const { plugin, apps: declaredApps } of pending) {
-    const apps = declaredApps
-      .map((app) =>
-        sourcePluginAppFactWithInventory(
-          app,
-          appInfoById.get(app.id),
-          installedAppsById.get(app.id),
-        ),
-      )
-      .toSorted((left, right) => left.id.localeCompare(right.id));
+    const apps = declaredApps.map((app) =>
+      sourcePluginAppFactWithInventory(app, appInfoById.get(app.id), installedAppsById.get(app.id)),
+    );
     const blockCode = migrationBlockCodeForApps(apps);
     if (!blockCode) {
       evaluated.push({ ...plugin, apps, migratable: true });
@@ -365,29 +353,6 @@ async function readSourceCodexAccount(
       return "non_chatgpt";
     default:
       return "missing";
-  }
-}
-
-async function readPluginDetail(
-  options: SourceAppServerRequestOptions,
-  marketplace: CodexPluginMarketplaceRef,
-  plugin: CodexPluginSource,
-  readPluginName: string | undefined,
-): Promise<PluginReadResult> {
-  if (!readPluginName) {
-    return {
-      ok: false,
-      error: `Codex remote plugin "${plugin.pluginName ?? plugin.name}" has no readable remote plugin id.`,
-    };
-  }
-  try {
-    const response = await options.request<v2.PluginReadResponse>({
-      method: "plugin/read",
-      requestParams: pluginReadParams(marketplace, readPluginName),
-    });
-    return { ok: true, detail: response.plugin };
-  } catch (error) {
-    return { ok: false, error: coerceErrorMessage(error) };
   }
 }
 
@@ -512,7 +477,7 @@ export async function discoverCodexSource(
 ): Promise<CodexSource> {
   const codexHome = resolveHomePath(options.input?.trim() || defaultCodexHome());
   const codexSkillsDir = path.join(codexHome, "skills");
-  const agentsSkillsDir = personalAgentsSkillsDir();
+  const agentsSkillsDir = path.join(resolveUserHomeDir(), ".agents", "skills");
   const configPath = path.join(codexHome, "config.toml");
   const authPath = path.join(codexHome, "auth.json");
   const modelsCachePath = path.join(codexHome, "models_cache.json");

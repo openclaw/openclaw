@@ -36,15 +36,10 @@ export function findDoctorLegacyConfigIssues(
   sourceRaw?: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigIssue[] {
-  return findLegacyConfigIssues(
-    raw,
-    sourceRaw,
-    [
-      ...collectChannelLegacyConfigRules(raw, touchedPaths),
-      ...collectPluginLegacyConfigRules(raw, touchedPaths),
-    ],
-    touchedPaths,
-  );
+  return findLegacyConfigIssues(raw, sourceRaw, [
+    ...collectChannelLegacyConfigRules(raw, touchedPaths),
+    ...collectPluginLegacyConfigRules(raw, touchedPaths),
+  ]);
 }
 
 export function addDoctorLegacyIssues(

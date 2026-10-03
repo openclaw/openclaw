@@ -18,14 +18,14 @@ it.each([
   ["prompt reached the tenant maximum", "The agent run failed before producing a reply."],
   [
     "database is locked",
-    "⚠️ Agent run failed: the Gateway state database was busy (SQLite: database is locked). Retry; if it repeats, check Gateway storage health.",
+    "⚠️ OpenClaw is busy saving your conversation. Wait a moment, then check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.",
   ],
 ])("projects recorded failures without discovering provider policy: %s", (error, text) => {
   expect(failure(error)).toMatchObject({ content: [{ type: "text", text }] });
   expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
 });
 
-it("shows the upstream cache limit without proxy metadata", () => {
+it("shows cache-limit recovery guidance without proxy metadata", () => {
   const errorBody = JSON.stringify({
     error: {
       message: "All target providers failed.",
@@ -48,7 +48,7 @@ it("shows the upstream cache limit without proxy metadata", () => {
     content: [
       {
         type: "text",
-        text: "LLM request rejected: provider allows at most 4 cache_control blocks; the request contained 5.",
+        text: "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.",
       },
     ],
   });
@@ -66,7 +66,7 @@ it("keeps safe failure guidance alongside partial reply text", () => {
     content: [
       {
         type: "text",
-        text: "⚠️ LLM request failed (rate limited, HTTP 429). This is usually temporary — try again shortly.\n\nThe first step completed.",
+        text: "⚠️ The AI service needs a short break. Please try again in a few minutes.\n\nThe first step completed.",
       },
     ],
   });

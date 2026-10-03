@@ -81,8 +81,8 @@ describe("memory embedding cache", () => {
     }
   });
 
-  it.each(["legacy JSON", "legacy import", "binary"] as const)(
-    "regenerates inconsistent declared dimensions from %s caches without losing row identity",
+  it.each(["legacy JSON", "retired import", "binary"] as const)(
+    "handles %s cache storage without losing row identity",
     (format) => {
       const db = new DatabaseSync(":memory:");
       const embedding = [1 + Number.EPSILON, 0.1];
@@ -96,7 +96,8 @@ describe("memory embedding cache", () => {
       ];
       const identity = { provider: "local", model: "fixture", providerKey: "canonical" };
       const alias = { ...identity, providerKey: "alias" };
-      const sourceTable = format === "legacy import" ? "embedding_cache" : "memory_embedding_cache";
+      const sourceTable =
+        format === "retired import" ? "embedding_cache" : "memory_embedding_cache";
       try {
         if (format !== "binary") {
           db.exec(`CREATE TABLE ${sourceTable} (
@@ -107,7 +108,7 @@ describe("memory embedding cache", () => {
         } else {
           ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: false });
         }
-        if (format === "legacy import") {
+        if (format === "retired import") {
           db.exec(`
             CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE files (
@@ -143,19 +144,43 @@ describe("memory embedding cache", () => {
             2,
           );
         }
-        const readIdentity = (table = "memory_embedding_cache", includeRowid = true) => {
-          const statement = db.prepare(`SELECT ${includeRowid ? "rowid," : ""}
+        const readIdentity = (table = "memory_embedding_cache") => {
+          const statement = db.prepare(`SELECT rowid,
             provider, model, provider_key, hash, dims, updated_at
             FROM ${table} ORDER BY provider, model, provider_key, hash`);
           statement.setReadBigInts(true);
           return statement.all();
         };
-        const preservesSourceRowid = format !== "legacy import";
-        const originalIdentity = readIdentity(sourceTable, preservesSourceRowid);
+        if (format === "retired import") {
+          const readLegacyRows = db.prepare("SELECT rowid, * FROM embedding_cache ORDER BY rowid");
+          readLegacyRows.setReadBigInts(true);
+          const originalRows = readLegacyRows.all();
+          const readMutationCounters = () => ({
+            schema: db.prepare("PRAGMA schema_version").get(),
+            rows: db.prepare("SELECT total_changes() AS count").get(),
+          });
+          const originalCounters = readMutationCounters();
+          expect(() =>
+            ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: false }),
+          ).toThrow(/retired memory index.*2026\.9\.7/iu);
+          expect(readMutationCounters()).toEqual(originalCounters);
+          expect(readLegacyRows.all()).toEqual(originalRows);
+          expect(
+            db.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'memory_%'").all(),
+          ).toEqual([]);
+          expect(
+            db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name").all(),
+          ).toEqual([
+            { name: "chunks" },
+            { name: "embedding_cache" },
+            { name: "files" },
+            { name: "meta" },
+          ]);
+          return;
+        }
+        const originalIdentity = readIdentity(sourceTable);
         ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: false });
-        expect(readIdentity("memory_embedding_cache", preservesSourceRowid)).toEqual(
-          originalIdentity,
-        );
+        expect(readIdentity()).toEqual(originalIdentity);
         const readMigratedRows = db.prepare(
           "SELECT rowid, * FROM memory_embedding_cache ORDER BY rowid",
         );

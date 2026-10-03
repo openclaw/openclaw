@@ -257,6 +257,11 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.cli-process.config.ts",
     },
     {
+      title: "routes native Windows argv proof to the process owner",
+      target: "src/daemon/schtasks-process.windows.test.ts",
+      config: "test/vitest/vitest.cli-process.config.ts",
+    },
+    {
       title: "routes the Git backup outcome consumer to the infra config",
       target: "src/snapshot/git-backup.test.ts",
       config: "test/vitest/vitest.infra.config.ts",

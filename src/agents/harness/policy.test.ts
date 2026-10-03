@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { resolveOpenAIModelRoutes } from "../openai-model-routes.js";
 import { resolveAgentHarnessPolicy as resolveAgentHarnessPolicyBase } from "./policy.js";
 
@@ -9,7 +9,7 @@ function resolveAgentHarnessPolicy(
 ): ReturnType<typeof resolveAgentHarnessPolicyBase> {
   return resolveAgentHarnessPolicyBase({
     ...params,
-    config: migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig,
+    config: createCanonicalAgentConfigFixture(params.config).config,
   });
 }
 

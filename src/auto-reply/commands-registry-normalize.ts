@@ -155,18 +155,13 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
   return appendMultilineTail(normalizedHead, multilineTail, tokenSpec);
 }
 
-/** Returns cached exact and regex detectors for the current command registry instance. */
-export function getCommandDetection(_cfg?: OpenClawConfig): CommandDetection {
-  return getCommandRegistryLookup().detection;
-}
-
 /** Resolves a raw text command to the matching normalized alias when known. */
-export function maybeResolveTextAlias(raw: string, cfg?: OpenClawConfig) {
+export function maybeResolveTextAlias(raw: string, _cfg?: OpenClawConfig) {
   const trimmed = normalizeCommandBody(raw).trim();
   if (!trimmed.startsWith("/")) {
     return null;
   }
-  const detection = getCommandDetection(cfg);
+  const detection = getCommandRegistryLookup().detection;
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (detection.exact.has(normalized)) {
     return normalized;

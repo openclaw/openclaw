@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
-  type DiagnosticSecurityEvent,
+  type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
@@ -50,7 +50,7 @@ describe("device lifecycle", () => {
           : "caller-missing-scope";
     const wording = operation === "rotate" ? "rotation" : "revocation";
     const order: string[] = [];
-    const events: DiagnosticSecurityEvent[] = [];
+    const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
     const trusted: boolean[] = [];
     const mutation = operation === "rotate" ? rotateDeviceTokenMock : revokeDeviceTokenMock;
     if (denial === "service") {

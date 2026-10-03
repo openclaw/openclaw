@@ -13,6 +13,7 @@ import {
   type RateLimitCheckResult,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
+import { getHeader } from "./http-header-value.js";
 import {
   prepareGatewayIngressAttribution,
   PROXY_ATTRIBUTION_REQUIRED_REASON,
@@ -150,10 +151,6 @@ function resolveConnectSecret(
   return connectAuth?.[mode] ?? connectAuth?.[mode === "token" ? "password" : "token"];
 }
 
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
 /** Validate that the selected gateway auth mode has the required resolved credentials/config. */
 export function assertGatewayAuthConfigured(
   auth: ResolvedGatewayAuth,
@@ -245,15 +242,13 @@ function authorizeTrustedProxy(params: {
 
   const requiredHeaders = trustedProxyConfig.requiredHeaders ?? [];
   for (const header of requiredHeaders) {
-    const value = headerValue(req.headers[normalizeLowercaseStringOrEmpty(header)]);
+    const value = getHeader(req, header);
     if (!value || value.trim() === "") {
       return { reason: `trusted_proxy_missing_header_${header}` };
     }
   }
 
-  const userHeaderValue = headerValue(
-    req.headers[normalizeLowercaseStringOrEmpty(trustedProxyConfig.userHeader)],
-  );
+  const userHeaderValue = getHeader(req, trustedProxyConfig.userHeader);
   if (!userHeaderValue || userHeaderValue.trim() === "") {
     return { reason: "trusted_proxy_user_missing" };
   }

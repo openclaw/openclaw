@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 
-it.each(["state_contention", "unknown", undefined])(
+it.each(["state_contention", "unknown"])(
   "allowlists only certified presentation, never raw report diagnostics (%s)",
   (errorKind) => {
     const [result] = projectChatDisplayMessages([

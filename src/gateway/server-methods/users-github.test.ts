@@ -33,12 +33,11 @@ import {
   resolvePersonalGitHubOwner,
   updateUserGitHubConnection,
 } from "../../state/user-github-connections.js";
+import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
   getUserProfileListItem,
-  linkEmail,
-  setUserProfileRole,
 } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {

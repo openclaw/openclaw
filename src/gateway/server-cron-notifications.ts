@@ -57,6 +57,8 @@ type CronFailureAlertParams = Parameters<
 /**
  * The owner conversation receives the repair request as an ordinary turn: its own session,
  * workspace, and tool policy, with the reply delivered to its last route (thread included).
+ * Only its authored reply reaches the chat: runtime failure payloads (timeouts, provider
+ * errors) are not posted, and the job's next failure alert owns escalation.
  */
 export async function runGatewayCronFailureRepair(
   request: CronFailureRepairRequest,
@@ -79,7 +81,10 @@ export async function runGatewayCronFailureRepair(
           },
           idempotencyKey: `cron-failure-repair:${request.repairId}`,
         },
-        resolveGatewayContext ? { resolveGatewayContext } : {},
+        {
+          internalDeliverySuppressErrors: true,
+          ...(resolveGatewayContext ? { resolveGatewayContext } : {}),
+        },
       ),
     "cron:failure-repair",
   );
@@ -236,6 +241,7 @@ async function postCronWebhookStrict(params: {
   signal?: AbortSignal;
   deadlineAtMs?: number;
   onDeliveryState?: (outcome: CronWebhookDeliveryOutcome) => void;
+  assertCurrent?: () => void;
 }): Promise<void> {
   const remainingMs =
     params.deadlineAtMs === undefined ? CRON_WEBHOOK_TIMEOUT_MS : params.deadlineAtMs - Date.now();
@@ -252,7 +258,10 @@ async function postCronWebhookStrict(params: {
     url: params.webhookUrl,
     timeoutMs: requestTimeoutMs,
     policy: params.ssrfPolicy,
-    beforeRequest: () => params.onDeliveryState?.({ status: "unknown" }),
+    beforeRequest: () => {
+      params.assertCurrent?.();
+      params.onDeliveryState?.({ status: "unknown" });
+    },
     onResponse: () => {
       receivedResponse = true;
     },
@@ -338,6 +347,7 @@ export async function sendGatewayCronWebhook(params: {
   webhookToken?: unknown;
   ssrfPolicy?: SsrFPolicy;
   onDeliveryState?: (outcome: CronWebhookDeliveryOutcome) => void;
+  assertCurrent?: () => void;
 }): Promise<CronWebhookDeliveryOutcome> {
   let outcome: CronWebhookDeliveryOutcome = { status: "not-delivered" };
   const publish = (next: CronWebhookDeliveryOutcome) => {
@@ -365,6 +375,7 @@ export async function sendGatewayCronWebhook(params: {
           signal: params.abortSignal,
           deadlineAtMs: params.deadlineAtMs,
           onDeliveryState: publish,
+          assertCurrent: params.assertCurrent,
         }),
       shouldRetryError: (error) =>
         outcome.status === "not-delivered" && !(error instanceof SsrFBlockedError),
@@ -518,9 +529,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
 export function dispatchGatewayCronFinishedNotifications(params: {
   evt: CronEvent;
   job?: CronJob;
-  deps: CliDeps;
   logger: CronLogger;
-  resolveCronAgent: CronAgentResolver;
   webhookToken?: unknown;
   ssrfPolicy?: SsrFPolicy;
 }): void {

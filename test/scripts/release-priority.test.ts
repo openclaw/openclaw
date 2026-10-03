@@ -54,7 +54,6 @@ function client(
   let variable = options.variable ?? "";
   return {
     calls,
-    cancelRun: async (id: string) => void calls.push(`cancel:${id}`),
     deleteVariable: async (name: string) => {
       calls.push(`delete:${name}`);
       variable = "";

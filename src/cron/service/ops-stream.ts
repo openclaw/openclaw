@@ -12,7 +12,6 @@ import type { CronJob } from "../types.js";
 import { failureNotificationDeliveryFromJobState, resolveFailureAlert } from "./failure-alerts.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
-import { emitCronRunFinished } from "./ops-run-preparation.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import type { CronServiceState } from "./state.js";
@@ -21,6 +20,7 @@ import {
   ensureLoaded,
   runPostPersistCronNotifications,
 } from "./store.js";
+import { emitCronRunFinished } from "./timer-outcome-events.js";
 import { armTimer } from "./timer.js";
 
 type ExternalOutcome = CronRuntimeMutationContracts["cron.mutateExternalState"]["outcome"];

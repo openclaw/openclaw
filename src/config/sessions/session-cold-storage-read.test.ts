@@ -55,18 +55,13 @@ describe("readRestoredSessionTranscript", () => {
     expect(read).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])("restores a cold read once (async=%s)", async (asynchronous) => {
+  it("restores an asynchronously rejected cold read once", async () => {
     const cold = new SessionTranscriptColdError(scope.sessionId);
     const coldRead = { target: scope, readMetadata: vi.fn(async () => undefined) };
     const read = vi
-      .fn<() => string | Promise<string>>()
-      .mockImplementationOnce(() => {
-        if (asynchronous) {
-          return Promise.reject(cold);
-        }
-        throw cold;
-      })
-      .mockReturnValue("retained text");
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(cold)
+      .mockResolvedValue("retained text");
 
     await expect(readRestoredSessionTranscript(scope, read, { coldRead })).resolves.toBe(
       "retained text",

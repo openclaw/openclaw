@@ -3,12 +3,12 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { FILE_TYPE_SNIFF_MAX_BYTES } from "@openclaw/media-core/mime";
 import { registerTestPlugin } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { sendPluginSessionAttachment } from "../host-hook-attachments.js";
 import { clearPluginLoaderCache } from "../loader.test-fixtures.js";
@@ -54,12 +54,12 @@ function createSilentPluginLogger() {
   };
 }
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-attachments-");
+
 async function withSessionStore(
   run: (params: { stateDir: string; storePath: string; filePath: string }) => Promise<void>,
 ) {
-  const stateDir = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-session-attachments-"),
-  );
+  const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const filePath = path.join(stateDir, "x.txt");
   await fs.writeFile(filePath, "x", "utf8");
@@ -76,7 +76,6 @@ async function withSessionStore(
     } else {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
-    await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
 

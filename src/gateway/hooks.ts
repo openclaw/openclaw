@@ -24,7 +24,6 @@ import {
 import type { HookExternalContentSource } from "../security/external-content.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
-  commitHookTransformMappingReload,
   hasHookTemplateExpressions,
   type HookMappingResolved,
   normalizeHookMatchPath,
@@ -133,10 +132,6 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
       allowedSessionKeyPrefixes,
     },
   };
-}
-
-export function commitHooksConfigReload(): void {
-  commitHookTransformMappingReload();
 }
 
 function resolveHookBodyLimitsByPath(mappings: HookMappingResolved[]): ReadonlyMap<string, number> {

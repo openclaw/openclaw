@@ -8,7 +8,7 @@ import {
 } from "../../../config/legacy.shared.js";
 import { mergeMissing } from "../../../config/merge-missing.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
-import { visitAgentEntries } from "./legacy-config-record-shared.js";
+import { moveLegacyConfigKey, visitAgentEntries } from "./legacy-config-record-shared.js";
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
 const LEGACY_TTS_PLUGIN_IDS = new Set(["voice-call"]);
@@ -121,31 +121,6 @@ function migrateLegacyTtsEnabled(
   }
   tts.auto = nextAuto;
   changes.push(`Moved ${pathLabel}.enabled → ${pathLabel}.auto "${nextAuto}".`);
-}
-
-function migrateLegacySpeakerSelectionConfig(
-  providerConfig: Record<string, unknown>,
-  pathLabel: string,
-  changes: string[],
-): void {
-  for (const [legacyKey, canonicalKey] of [
-    ["voice", "speakerVoice"],
-    ["voiceName", "speakerVoice"],
-    ["voiceId", "speakerVoiceId"],
-  ] as const) {
-    if (!Object.hasOwn(providerConfig, legacyKey)) {
-      continue;
-    }
-    if (providerConfig[canonicalKey] === undefined) {
-      providerConfig[canonicalKey] = providerConfig[legacyKey];
-      changes.push(`Moved ${pathLabel}.${legacyKey} → ${pathLabel}.${canonicalKey}.`);
-    } else {
-      changes.push(
-        `Removed ${pathLabel}.${legacyKey} because ${pathLabel}.${canonicalKey} is already set.`,
-      );
-    }
-    delete providerConfig[legacyKey];
-  }
 }
 
 function* visitLegacySpeakerSelectionScope(
@@ -367,7 +342,13 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS: LegacyConfigMigrationSpec[] =
     apply: (raw, changes) => {
       for (const [tts, pathLabel] of visitKnownTtsConfigLocations(raw)) {
         for (const [config, path] of visitLegacyTtsSpeakerConfigs(tts, pathLabel)) {
-          migrateLegacySpeakerSelectionConfig(config, path, changes);
+          for (const [legacyKey, canonicalKey] of [
+            ["voice", "speakerVoice"],
+            ["voiceName", "speakerVoice"],
+            ["voiceId", "speakerVoiceId"],
+          ] as const) {
+            moveLegacyConfigKey(config, legacyKey, canonicalKey, path, changes);
+          }
         }
       }
     },

@@ -42,7 +42,13 @@ async function createTranscript() {
     agentId: "main",
     sessionKey,
     sessionId,
-    storePath: path.join(tempDirs.make("openclaw-delta-budget-"), "sessions.json"),
+    storePath: path.join(
+      tempDirs.make("openclaw-delta-budget-"),
+      "agents",
+      "main",
+      "sessions",
+      "sessions.json",
+    ),
   };
   await replaceSessionEntry(scope, { sessionId, updatedAt: 42 });
   await replaceTranscriptEvents(scope, [{ type: "session", version: 3, id: sessionId }]);

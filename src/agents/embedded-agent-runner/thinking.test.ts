@@ -381,7 +381,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     "thinking or redacted_thinking blocks in the latest assistant message cannot be modified",
   );
   const genericizedProviderError =
-    "LLM request failed: provider rejected the request schema or tool payload.";
+    "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.";
   const terminalThinkingSignatureError =
     "ValidationException: invalid signature on thinking block in message history";
 

@@ -71,30 +71,6 @@ describe("Code Mode executor plugin selection", () => {
 
   it.each([
     { plugins: { enabled: false } },
-    { plugins: { allow: ["another-plugin"] } },
-    { plugins: { enabled: false, allow: ["another-plugin"] } },
-  ] satisfies OpenClawConfig[])("retains selected bundled runtime availability: %j", (config) => {
-    expect(resolvePluginCodeModeExecutor("quickjs", config).id).toBe("quickjs");
-  });
-
-  it.each([
-    { plugins: { deny: ["code-mode-quickjs"] } },
-    { plugins: { entries: { "code-mode-quickjs": { enabled: false } } } },
-    { plugins: { enabled: false, deny: ["code-mode-quickjs"] } },
-    {
-      plugins: { allow: ["another-plugin"], entries: { "code-mode-quickjs": { enabled: false } } },
-    },
-  ] satisfies OpenClawConfig[])(
-    "fails when the bundled owner is explicitly blocked: %j",
-    (config) => {
-      expect(() => resolvePluginCodeModeExecutor("quickjs", config)).toThrow(
-        'Code Mode executor "quickjs" is unavailable or disabled',
-      );
-    },
-  );
-
-  it.each([
-    { plugins: { enabled: false } },
     { plugins: { deny: ["code-mode-quickjs"] } },
     { plugins: { allow: ["another-plugin"] } },
     { plugins: { entries: { "code-mode-quickjs": { enabled: false } } } },

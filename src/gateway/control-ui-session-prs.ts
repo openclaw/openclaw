@@ -1,7 +1,7 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { releaseGitReadCache, runGitReadOperation } from "../infra/git-read-cache.js";
+import { runGitReadOperation } from "../infra/git-read-cache.js";
 import type {
   GitCheckoutContext,
   GitMergedPullHead as MergedPullHead,
@@ -55,6 +55,7 @@ type PullListItem = {
  * checkout filters them against its own default at resolve time.
  */
 type BranchPullRequestsSnapshot = ControlUiSessionPullRequests & {
+  publicationCandidates: ControlUiSessionPullRequest[];
   mergedHeads: MergedPullHead[];
   workingBranchHasLivePullRequest: boolean;
 };
@@ -67,7 +68,11 @@ type CacheEntry = {
   // chips instead of clearing the row.
   lastGood?: Pick<
     BranchPullRequestsSnapshot,
-    "pullRequests" | "mergedHeads" | "repository" | "workingBranchHasLivePullRequest"
+    | "pullRequests"
+    | "publicationCandidates"
+    | "mergedHeads"
+    | "repository"
+    | "workingBranchHasLivePullRequest"
   >;
 };
 
@@ -83,31 +88,6 @@ type LoadSessionPullRequestDeps = {
   ) => Promise<GitCheckoutContext | null>;
 };
 
-function releaseSessionPullRequestLocalGitCache(signal?: AbortSignal): void {
-  releaseGitReadCache("checkout.context", signal);
-  releaseGitReadCache("pull-request.branch-facts", signal);
-}
-
-/**
- * Resolves the GitHub repo + branch, caching detached/default/non-GitHub
- * outcomes too so repeated sidebar requests do not respawn the same probes.
- */
-async function resolveSessionPullRequestGitContext(
-  params: ControlUiSessionPullRequestsParams,
-  deps: LoadSessionPullRequestDeps,
-  capturedSource: string | GitCheckoutContext | null,
-): Promise<GitCheckoutContext | null> {
-  const source = deps.resolveGitRoot ? await deps.resolveGitRoot(params) : capturedSource;
-  if (typeof source !== "string") {
-    releaseSessionPullRequestLocalGitCache(deps.cacheSignal);
-    return source;
-  }
-  return runGitReadOperation(
-    { type: "checkout.context", input: { root: source } },
-    { refresh: params.refresh ? "unversioned" : false, cacheSignal: deps.cacheSignal },
-  );
-}
-
 // git push's own "create a pull request" hint URL; GitHub resolves the base
 // branch (including fork -> parent) so no API call is needed to build it.
 function branchCreateUrl(context: GitCheckoutContext, branchName: string): string {
@@ -120,7 +100,6 @@ function branchCreateUrl(context: GitCheckoutContext, branchName: string): strin
 async function resolveSessionBranch(
   context: GitCheckoutContext,
   mergedHeads: readonly MergedPullHead[],
-  deps: LoadSessionPullRequestDeps,
   refresh: boolean,
 ): Promise<ControlUiSessionBranch | undefined> {
   if (!context.branch || context.branch === context.defaultBranch) {
@@ -142,7 +121,7 @@ async function resolveSessionBranch(
       type: "pull-request.branch-facts",
       input: { root, branch: context.branch, defaultBranch: context.defaultBranch, mergedHeads },
     },
-    { refresh, cacheSignal: deps.cacheSignal },
+    { refresh },
   );
   if (!facts) {
     return undefined;
@@ -345,9 +324,12 @@ async function fetchBranchPullRequests(
     .toSorted((left, right) => Number(isActive(right)) - Number(isActive(left)))
     .slice(0, MAX_PULL_REQUESTS);
   const branchOf = (item: PullListItem) => item.branch ?? context.branch ?? "";
+  // The display cap must not discard evidence needed by publication recovery.
+  const publicationCandidates = items.map((item) => stateOnlyPullRequestChip(item, branchOf(item)));
   const stateOnlySnapshot = () => ({
     pullRequests: capped.map((item) => stateOnlyPullRequestChip(item, branchOf(item))),
     rateLimited: true,
+    publicationCandidates,
     mergedHeads,
     workingBranchHasLivePullRequest,
   });
@@ -358,6 +340,7 @@ async function fetchBranchPullRequests(
     return {
       pullRequests,
       rateLimited: false,
+      publicationCandidates,
       mergedHeads,
       workingBranchHasLivePullRequest,
     };
@@ -409,6 +392,7 @@ async function refreshBranchPullRequests(
     // expiry makes the next window retry full detail.
     entry.lastGood = {
       pullRequests: result.pullRequests,
+      publicationCandidates: result.publicationCandidates,
       mergedHeads: result.mergedHeads,
       workingBranchHasLivePullRequest: result.workingBranchHasLivePullRequest,
       repository,
@@ -421,6 +405,7 @@ async function refreshBranchPullRequests(
     if (rateLimited) {
       return {
         pullRequests: [],
+        publicationCandidates: [],
         mergedHeads: [],
         workingBranchHasLivePullRequest: false,
         ...entry.lastGood,
@@ -439,23 +424,31 @@ export async function loadControlUiSessionPullRequests(
   params: ControlUiSessionPullRequestsParams,
   deps: LoadSessionPullRequestDeps,
 ): Promise<ControlUiSessionPullRequests> {
-  const { target, assertCurrent } = deps.read;
+  const { target, assertCurrent, projection } = deps.read;
   try {
     assertCurrent();
     const request = { ...params, ...target.params };
-    const context = deps.resolveGitContext
-      ? await deps.resolveGitContext(request)
-      : await resolveSessionPullRequestGitContext(request, deps, target.source);
+    let context: GitCheckoutContext | null;
+    if (deps.resolveGitContext) {
+      context = await deps.resolveGitContext(request);
+    } else {
+      const source = deps.resolveGitRoot ? await deps.resolveGitRoot(request) : target.source;
+      context =
+        typeof source === "string"
+          ? await runGitReadOperation(
+              { type: "checkout.context", input: { root: source } },
+              { refresh: request.refresh },
+            )
+          : source;
+    }
     assertCurrent();
     if (!context) {
-      releaseGitReadCache("pull-request.branch-facts", deps.cacheSignal);
       branchCache.release(deps.cacheSignal);
       return { pullRequests: [], rateLimited: false };
     }
     // Conversation text is not evidence of session work. Only the checkout
     // selects PRs; publication receipts remain owned by the publication flow.
     if (!context.branch || context.branch === context.defaultBranch) {
-      releaseGitReadCache("pull-request.branch-facts", deps.cacheSignal);
       branchCache.release(deps.cacheSignal);
       return {
         pullRequests: [],
@@ -463,17 +456,12 @@ export async function loadControlUiSessionPullRequests(
         rateLimited: false,
       };
     }
-    // Normal polling reuses local Git facts across a poll cycle; forced
-    // structural refreshes observe the replacement checkout immediately.
     const result = await cachedBranchPullRequests(
       context,
       deps,
       request.refresh === true,
       JSON.stringify([target.identity, deps.read.sourceIdentity]),
-    ).catch(() => {
-      releaseGitReadCache("pull-request.branch-facts", deps.cacheSignal);
-      return null;
-    });
+    ).catch(() => null);
     assertCurrent();
     if (!result) {
       // Local repository identity survives a cold PR lookup failure, but an
@@ -485,17 +473,19 @@ export async function loadControlUiSessionPullRequests(
         status: "unavailable",
       };
     }
-    const { mergedHeads, workingBranchHasLivePullRequest, ...snapshot } = result;
-    const branch = workingBranchHasLivePullRequest
-      ? undefined
-      : await resolveSessionBranch(context, mergedHeads, deps, request.refresh === true);
+    const { publicationCandidates, mergedHeads, workingBranchHasLivePullRequest, ...snapshot } =
+      result;
+    const branch =
+      projection === "publication" || workingBranchHasLivePullRequest
+        ? undefined
+        : await resolveSessionBranch(context, mergedHeads, request.refresh === true);
     assertCurrent();
     return {
       ...snapshot,
+      pullRequests: projection === "publication" ? publicationCandidates : snapshot.pullRequests,
       ...(branch ? { branch } : {}),
     };
   } catch (error) {
-    releaseSessionPullRequestLocalGitCache(deps.cacheSignal);
     branchCache.release(deps.cacheSignal);
     throw error;
   }
@@ -569,6 +559,7 @@ async function cachedBranchPullRequests(
     expiresAt: 0,
     promise: Promise.resolve({
       pullRequests: [],
+      publicationCandidates: [],
       rateLimited: false,
       mergedHeads: [],
       workingBranchHasLivePullRequest: false,

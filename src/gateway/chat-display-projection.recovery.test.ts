@@ -24,6 +24,47 @@ const projectedIds = (messages: unknown[]) =>
   projectChatDisplayMessages(messages).map((message) => message["__openclaw"]);
 
 it.each([
+  {
+    name: "legacy structured error",
+    errorCode: "misalignment_policy_violation",
+    errorType: "invalid_request_error",
+    expected: "The provider stopped this request as a safety precaution (misalignment).",
+  },
+  {
+    name: "saved code only",
+    errorCode: "misalignment_policy_violation",
+    expected: "The provider stopped this request as a safety precaution (misalignment).",
+  },
+  {
+    name: "current refusal diagnostic",
+    diagnostics: [{ type: "provider_refusal", details: { category: "misalignment" } }],
+    expected: "Chat stopped as a precaution. Review the findings in chat before continuing.",
+  },
+])(
+  "preserves $name guidance with empty and partial replies",
+  ({ name: _name, expected, ...error }) => {
+    for (const content of [[], [text("Partial reply")]]) {
+      const message = {
+        ...failed,
+        ...error,
+        content,
+        errorMessage: "PRIVATE_PROVIDER_DETAIL",
+        errorBody: '{"misalignment":{"detailed_explanation":"PRIVATE_FINDINGS ... [truncated]',
+      };
+      const original = structuredClone(message);
+      const messages = projectChatDisplayMessages([user, message]);
+      expect(messages.at(-1)).toMatchObject({
+        stopReason: "error",
+        content: [text([expected, ...content.map((part) => part.text)].join("\n\n"))],
+      });
+      expect(JSON.stringify(messages)).not.toContain("PRIVATE_");
+      expect(projectChatDisplayMessages(messages)).toEqual(messages);
+      expect(message).toEqual(original);
+    }
+  },
+);
+
+it.each([
   { name: "structured", content: [tool] },
   {
     name: "phased commentary",
@@ -60,7 +101,7 @@ it.each([
       expect.objectContaining({
         type: "text",
         text: expect.stringContaining(
-          "⚠️ The provider returned an unfinished tool call. Earlier actions may have completed; verify their results before continuing.",
+          "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.",
         ),
       }),
     ]),
@@ -68,7 +109,7 @@ it.each([
   const serialized = JSON.stringify(messages);
   expect(serialized).not.toContain("PRIVATE_PROVIDER_DETAIL");
   expect(serialized).not.toContain("PRIVATE_COMMENTARY");
-  expect(serialized.split("The provider returned an unfinished tool call.")).toHaveLength(2);
+  expect(serialized.split("The task couldn't finish.")).toHaveLength(2);
   if (JSON.stringify(partial).includes("Partial reply")) {
     expect(serialized).toContain("Partial reply");
   }
@@ -131,7 +172,7 @@ it("retires the empty failure when its fallback answer reaches the output limit"
   ]);
 });
 
-it("refreshes SSE history after an appended failure recovers", () => {
+it("refreshes SSE history after an appended failure recovers", async () => {
   const state = SessionHistorySseState.fromSnapshot({
     target: { sessionId: "session", sessionKey: "agent:main:test" },
     snapshot: {
@@ -141,10 +182,12 @@ it("refreshes SSE history after an appended failure recovers", () => {
       assistantErrorPending: false,
     },
   });
-  expect(state.appendInlineMessage({ message: failed, messageSeq: 2 })?.message).toMatchObject({
+  expect(
+    (await state.prepareInlineMessage({ message: failed, messageSeq: 2 }))()?.message,
+  ).toMatchObject({
     stopReason: "error",
   });
-  expect(state.appendInlineMessage({ message: answer, messageSeq: 3 })).toEqual({
+  expect((await state.prepareInlineMessage({ message: answer, messageSeq: 3 }))()).toEqual({
     shouldRefresh: true,
   });
 });

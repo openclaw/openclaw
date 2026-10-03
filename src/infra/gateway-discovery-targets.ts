@@ -1,3 +1,4 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveGatewayDiscoveryEndpoint,
@@ -16,19 +17,12 @@ type GatewayDiscoveryTarget = {
   sshTarget: string | null;
 };
 
-function pickSshPort(beacon: GatewayBonjourBeacon): number | null {
-  return typeof beacon.sshPort === "number" && Number.isFinite(beacon.sshPort) && beacon.sshPort > 0
-    ? beacon.sshPort
-    : null;
-}
-
-/** Build normalized connection details for a discovered gateway beacon. */
 export function buildGatewayDiscoveryTarget(
   beacon: GatewayBonjourBeacon,
   opts?: { sshUser?: string | null },
 ): GatewayDiscoveryTarget {
   const endpoint = resolveGatewayDiscoveryEndpoint(beacon);
-  const sshPort = pickSshPort(beacon);
+  const sshPort = asPositiveFiniteNumber(beacon.sshPort) ?? null;
   const sshUser = normalizeOptionalString(opts?.sshUser) ?? "";
   const baseSshTarget = endpoint ? (sshUser ? `${sshUser}@${endpoint.host}` : endpoint.host) : null;
   const sshTarget =
@@ -44,14 +38,12 @@ export function buildGatewayDiscoveryTarget(
   };
 }
 
-/** Build the compact label shown in discovery lists. */
 export function buildGatewayDiscoveryLabel(beacon: GatewayBonjourBeacon): string {
   const target = buildGatewayDiscoveryTarget(beacon);
   const hint = target.endpoint ? `${target.endpoint.host}:${target.endpoint.port}` : "host unknown";
   return `${target.title} (${hint})`;
 }
 
-/** Serialize a beacon with resolved websocket information for CLI/UI output. */
 export function serializeGatewayDiscoveryBeacon(beacon: GatewayBonjourBeacon) {
   const target = buildGatewayDiscoveryTarget(beacon);
   return {

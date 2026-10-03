@@ -15,6 +15,8 @@ class WorkspaceIcon extends OpenClawLightDomContentsElement {
   /** Ordered credential candidates; a stale saved token falls through to the session password. */
   @property({ attribute: false }) authTokens: readonly string[] = [];
   @property({ attribute: false }) authReady = false;
+  /** Accepted Gateway connection identity, stable across ordinary header updates. */
+  @property({ attribute: false }) connectionId: string | undefined;
   /** Route whose bytes the browser refused to decode; keyed so a new session retries. */
   @state() private undecodableRouteUrl: string | null = null;
   private readonly loader = new AuthenticatedAvatarRouteLoader(this, {
@@ -30,7 +32,7 @@ class WorkspaceIcon extends OpenClawLightDomContentsElement {
     const routeUrl = this.routeUrl;
     const blobUrl =
       routeUrl && this.authReady && this.undecodableRouteUrl !== routeUrl
-        ? this.loader.resolve(routeUrl, this.authTokens)
+        ? this.loader.resolve(routeUrl, this.authTokens, this.connectionId)
         : null;
     if (!blobUrl) {
       return html`<span class="workspace-icon-fallback" aria-hidden="true">${icons.folder}</span>`;

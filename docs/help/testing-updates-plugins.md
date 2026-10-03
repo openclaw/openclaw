@@ -215,6 +215,9 @@ commit before the update and compare the installed application payload with the
 frozen tarball afterward, before candidate probes. This distinguishes different
 builds with the same version string. npm still owns dependency reification;
 manual tarball runs without a selected source SHA retain their existing contract.
+These generic scenarios do not require a worker-cell baseline identity artifact.
+After the update, missing or unreadable tarballs and installed payloads fail with
+the corresponding candidate identity diagnostic before any candidate probes run.
 
 Useful published-upgrade survivor variants:
 
@@ -248,6 +251,22 @@ Available scenarios: `base`, `acpx-openclaw-tools-bridge`, `feishu-channel`,
 `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=reported-issues` expands the release-soak
 fixtures but excludes the expensive `sqlite-volume` scenario. Use
 `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=far-reaching` to include it.
+
+The opt-in `backup-schedule` scenario uses the published `openclaw@2026.9.7`
+CLI to initialize a Git backup repository, enable its Gateway-owned 24-hour
+schedule, and record one Git backup and one archive backup. The published updater
+installs the source-pinned candidate tarball. After non-interactive Doctor and
+Gateway startup, the scenario checks the original schedule declaration and argv,
+both old ledger rows through `backup.status`, the status backup line, Doctor
+errors, and HTTP readiness. It also requires that `storage.locations` stays
+absent and the Cloudflare plugin stays inactive. This manual/release scenario
+is excluded from aggregate aliases and per-PR CI.
+
+```bash
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS=openclaw@2026.9.7 \
+OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=backup-schedule \
+pnpm test:docker:published-upgrade-survivor
+```
 
 The `custom-plugin-siblings` scenario starts from published 2026.9.4 or later
 with an enabled custom memory plugin importing `../shared/value.mjs` from both

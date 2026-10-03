@@ -7,11 +7,8 @@ import {
   readUserProfileIdentity,
   retainUserProfileCatalog,
 } from "../../state/user-profile-list.js";
-import {
-  ensureProfileForEmail,
-  getUserProfileRole,
-  setUserProfileRole,
-} from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail, getUserProfileRole } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveOperatorRolePolicyForProfile } from "../operator-role-policy.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";

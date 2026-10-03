@@ -12,7 +12,7 @@ import {
   type NativeApprovalTarget,
 } from "./approval-native-helpers.js";
 import type { ChannelApprovalCapability } from "./channel-contract.js";
-import type { OpenClawConfig } from "./config-runtime.js";
+import type { OpenClawConfig } from "./config-contracts.js";
 import { normalizeMessageChannel } from "./routing.js";
 import { normalizeOptionalString } from "./string-coerce-runtime.js";
 

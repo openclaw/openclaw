@@ -28,7 +28,7 @@ export function registerQueuedCollectorLaunchSettlementTest({
   it("keeps an in-flight queued collector pending until launch cleanup settles", async () => {
     const mod = getRegistry();
     const runId = "run-collector-launch-kill";
-    mod.addSubagentRunForTests({
+    await mod.addSubagentRunForTests({
       runId,
       childSessionKey: "agent:main:subagent:launch-kill",
       task: "cancel while gateway launch is unresolved",
@@ -58,10 +58,10 @@ export function registerQueuedCollectorLaunchSettlementTest({
       await started.promise;
       expect(await mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
       expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toBeUndefined();
-      expect(mod.startQueuedSubagentRun(runId, "gateway-launch-kill")).toBe(false);
+      expect(await mod.startQueuedSubagentRun(runId, "gateway-launch-kill")).toBe(false);
       expect(mod.getSubagentRunByRunId("gateway-launch-kill")).toBeUndefined();
 
-      expect(mod.settleFailedQueuedSubagentLaunch(runId, "launch response lost")).toBe(true);
+      expect(await mod.settleFailedQueuedSubagentLaunch(runId, "launch response lost")).toBe(true);
       expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toMatchObject({
         status: "killed",
       });
@@ -182,7 +182,7 @@ export function registerRestartDrainCompletionSettlementTest({
     const mod = getRegistry();
     const now = Date.now();
     const runId = "run-terminal-restart-retry";
-    mod.addSubagentRunForTests({
+    await mod.addSubagentRunForTests({
       runId,
       childSessionKey: "agent:main:subagent:terminal-restart-retry",
       task: "deliver terminal completion after restart",
@@ -270,7 +270,7 @@ export function registerForcedCollectorCompletionSettlementTests({
           ...(schema ? { outputSchema: { type: "object" } } : {}),
         });
         if (captured) {
-          mod.recordSwarmStructuredOutput(
+          await mod.recordSwarmStructuredOutput(
             { runId, childSessionKey },
             { invalidAttempts: 0, structured: { answer: 42 } },
           );

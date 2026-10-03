@@ -158,12 +158,8 @@ function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
 }
 
 function readOllamaHostname(baseUrl: string): string | undefined {
-  try {
-    const host = new URL(baseUrl).hostname.toLowerCase();
-    return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
-  } catch {
-    return undefined;
-  }
+  const host = URL.parse(baseUrl)?.hostname.toLowerCase();
+  return host?.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
 }
 
 function hasExplicitRemoteOllamaApiProvider(

@@ -1,15 +1,13 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import { request as httpRequest, Server } from "node:http";
 import { Socket } from "node:net";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Covers native hook relay registration, bridge invocation, and approval state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { runNativeHookRelayCliFromArgv } from "../../cli/native-hook-relay-cli.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -27,6 +25,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { splitShellArgs } from "../../utils/shell-argv.js";
 import {
   closeAdmittedRunDelegatedAuthority,
@@ -46,6 +45,8 @@ import {
   registerNativeHookRelay,
   resolveNativeHookRelayDeferredToolApproval,
 } from "./native-hook-relay.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-native-relay-policy-");
 
 const NATIVE_HOOK_RELAY_EXEC_PREFIX = process.platform === "win32" ? "" : "exec ";
 
@@ -2315,7 +2316,7 @@ describe("native hook relay registry", () => {
   });
 
   it("passes config to trusted policies for native pre-tool session extension reads", async () => {
-    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-native-relay-policy-"));
+    const stateDir = sessionDirs.make();
     const storePath = path.join(stateDir, "sessions.json");
     const config = { session: { store: storePath } };
     const seen: unknown[] = [];
@@ -2351,48 +2352,44 @@ describe("native hook relay registry", () => {
       },
     ];
     setActivePluginRegistry(registry);
-    try {
-      await replaceSessionEntry({ sessionKey: "agent:main:session-1", storePath }, {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-      } as SessionEntry);
-      const patchResult = await patchPluginSessionExtension({
-        cfg: config as never,
-        sessionKey: "agent:main:session-1",
-        pluginId: "policy-plugin",
-        namespace: "policy",
-        value: { block: true },
-      });
-      expect(patchResult.ok).toBe(true);
+    await replaceSessionEntry({ sessionKey: "agent:main:session-1", storePath }, {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    } as SessionEntry);
+    const patchResult = await patchPluginSessionExtension({
+      cfg: config as never,
+      sessionKey: "agent:main:session-1",
+      pluginId: "policy-plugin",
+      namespace: "policy",
+      value: { block: true },
+    });
+    expect(patchResult.ok).toBe(true);
 
-      const relay = registerRelay({
-        agentId: "main",
-        sessionKey: "agent:main:session-1",
-        config: config as never,
-        allowedEvents: ["pre_tool_use"],
-        preToolUseLoopDetection: false,
-      });
+    const relay = registerRelay({
+      agentId: "main",
+      sessionKey: "agent:main:session-1",
+      config: config as never,
+      allowedEvents: ["pre_tool_use"],
+      preToolUseLoopDetection: false,
+    });
 
-      expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
 
-      const response = await invokeRelay(relay.relayId, "pre_tool_use", {
-        hook_event_name: "PreToolUse",
-        tool_name: "Bash",
-        tool_use_id: "native-policy-call-1",
-        tool_input: { command: "rm -rf dist" },
-      });
+    const response = await invokeRelay(relay.relayId, "pre_tool_use", {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_use_id: "native-policy-call-1",
+      tool_input: { command: "rm -rf dist" },
+    });
 
-      expect(JSON.parse(response.stdout)).toEqual({
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: "blocked by session extension",
-        },
-      });
-      expect(seen).toEqual([{ block: true }]);
-    } finally {
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "blocked by session extension",
+      },
+    });
+    expect(seen).toEqual([{ block: true }]);
   });
 
   it("uses the Codex cwd when deriving apply_patch paths for PreToolUse", async () => {

@@ -2,6 +2,7 @@
 // Normalizes host/IP inputs and classifies local/private gateway requests.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
+import os from "node:os";
 import {
   isCanonicalDottedDecimalIPv4,
   isIpInCidr,
@@ -16,16 +17,16 @@ import type { GatewayBindMode } from "../config/types.gateway.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
 import {
   pickMatchingExternalInterfaceAddress,
-  readNetworkInterfaces,
   safeNetworkInterfaces,
   type NetworkInterfacesSnapshot,
 } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
+import { firstHeaderValue } from "./http-header-value.js";
 import { normalizeWebSocketProtocol } from "./websocket-protocol.js";
 
 /** Pick the primary non-internal IPv4 address, preferring common LAN interface names. */
 export function pickPrimaryLanIPv4(): string | undefined {
-  return pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
+  return pickMatchingExternalInterfaceAddress(os.networkInterfaces(), {
     family: "IPv4",
     preferredNames: ["en0", "eth0"],
   });
@@ -228,10 +229,6 @@ export function resolveClientIp(params: {
   return undefined;
 }
 
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
 export function resolveRequestClientIpFromHeaders(
   req?: IncomingMessage,
   trustedProxies?: string[],
@@ -242,8 +239,8 @@ export function resolveRequestClientIpFromHeaders(
   }
   return resolveClientIp({
     remoteAddr: req.socket?.remoteAddress ?? "",
-    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
-    realIp: headerValue(req.headers?.["x-real-ip"]),
+    forwardedFor: firstHeaderValue(req.headers?.["x-forwarded-for"]),
+    realIp: firstHeaderValue(req.headers?.["x-real-ip"]),
     trustedProxies,
     allowRealIpFallback,
   });

@@ -34,7 +34,6 @@ import {
 } from "../../projects/project-registry.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { readCurrentUserProfileAliases } from "../../state/user-profile-list.js";
-import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import {
   CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
@@ -43,17 +42,20 @@ import {
 } from "../github-public-api.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { searchRemoteProjects } from "../project-github-search.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import { startProjectsListDiagnostics } from "./projects-list-diagnostics.js";
 import { listProjectRecents } from "./projects-recents.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 type ProjectWorktreeService = Pick<
   ManagedWorktreeService,
-  "listRegistryRecords" | "resolveRepositoryIdentity"
+  "listRegistryRecords" | "resolveRepositoryIdentities"
 >;
 
 type ProjectCandidate = {
@@ -150,6 +152,13 @@ function sanitizeProjectRecord(project: ProjectRecord): ProjectRecord {
     ...record,
     ...(sanitizedOriginUrl ? { originUrl: sanitizedOriginUrl } : {}),
   };
+}
+
+function projectCheckoutError(error: unknown) {
+  return errorShape(
+    error instanceof ProjectCheckoutError ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+    formatErrorMessage(error),
+  );
 }
 
 function projectCandidatesToSummaries(candidates: readonly ProjectCandidate[]): ProjectSummary[] {
@@ -255,18 +264,16 @@ async function listObservedProjects(
     });
   }
 
-  // Admit the same newest-first distinct paths before overlapping Git work. Keep facts
-  // request-local: session/registry revisions cannot detect external Git metadata edits.
+  // Admit newest-first paths before canonicalizing the shared discovery pass's key.
   diagnostics?.mark("identityProbes");
   const probePaths = [
     ...new Set(
       rawCandidates.map((raw) => (raw.kind === "worktree" ? raw.repoRoot : raw.checkoutPath)),
     ),
-  ].slice(0, PROJECTS_LIST_MAX_IDENTITY_PROBES);
-  const { results } = await runTasksWithConcurrency({
-    tasks: probePaths.map((checkoutPath) => () => service.resolveRepositoryIdentity(checkoutPath)),
-    limit: 4,
-  });
+  ]
+    .slice(0, PROJECTS_LIST_MAX_IDENTITY_PROBES)
+    .toSorted();
+  const results = probePaths.length ? await service.resolveRepositoryIdentities(probePaths) : [];
   const identities = new Map(
     probePaths.map((checkoutPath, index) => [checkoutPath, results[index]]),
   );
@@ -379,12 +386,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
                 await loadCombinedSessionStoreForGatewayCoreAsync(cfg, { projection: "list" })
               ).store;
             } else {
-              const projection = getSessionRowProjection(context);
-              if (!projection) {
-                throw new Error(
-                  "Session projection is unavailable before Gateway startup completes",
-                );
-              }
+              const projection = requireSessionRowProjection(context);
               do {
                 await projection.ensureMaterialized();
               } while (projection.needsMaterialization);
@@ -461,13 +463,10 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         diagnostics?.finish();
       }
     },
-    "projects.register": async ({ params, respond }) => {
-      if (
-        !assertValidParams(params, validateProjectsRegisterParams, "projects.register", respond)
-      ) {
-        return;
-      }
-      try {
+    "projects.register": defineValidatedGatewayHandler(
+      "projects.register",
+      validateProjectsRegisterParams,
+      async ({ params, respond }) => {
         respond(
           true,
           sanitizeProjectRecord(
@@ -475,19 +474,9 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           ),
           undefined,
         );
-      } catch (error) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            error instanceof ProjectCheckoutError
-              ? ErrorCodes.INVALID_REQUEST
-              : ErrorCodes.UNAVAILABLE,
-            formatErrorMessage(error),
-          ),
-        );
-      }
-    },
+      },
+      projectCheckoutError,
+    ),
     "projects.add": async ({ params, respond, context, signal }) => {
       if (!assertValidParams(params, validateProjectsAddParams, "projects.add", respond)) {
         return;
@@ -537,28 +526,21 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
       }
     },
-    "projects.searchRemote": async ({ params, respond }) => {
-      if (
-        !assertValidParams(
-          params,
-          validateProjectsSearchRemoteParams,
-          "projects.searchRemote",
-          respond,
-        )
-      ) {
-        return;
-      }
-      try {
+    "projects.searchRemote": defineValidatedGatewayHandler(
+      "projects.searchRemote",
+      validateProjectsSearchRemoteParams,
+      async ({ params, respond }) => {
         respond(true, await searchRemoteProjects(params.query), undefined);
-      } catch (error) {
+      },
+      (error) => {
         const { message, ...details } =
           error instanceof gitHubPublicApi.ControlUiGitHubError ||
           isTrustedSecretSurfaceUnavailableError(error)
             ? gitHubPublicApi.formatControlUiGitHubPreviewError(error)
             : { message: "GitHub project search is unavailable. Retry shortly.", retryable: true };
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
-      }
-    },
+        return errorShape(ErrorCodes.UNAVAILABLE, message, details);
+      },
+    ),
     "projects.remove": async ({ params, respond, context }) => {
       if (!assertValidParams(params, validateProjectsRemoveParams, "projects.remove", respond)) {
         return;
@@ -601,16 +583,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
             }
           });
         } catch (error) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              error instanceof ProjectCheckoutError
-                ? ErrorCodes.INVALID_REQUEST
-                : ErrorCodes.UNAVAILABLE,
-              formatErrorMessage(error),
-            ),
-          );
+          respond(false, undefined, projectCheckoutError(error));
           return;
         }
       } else {

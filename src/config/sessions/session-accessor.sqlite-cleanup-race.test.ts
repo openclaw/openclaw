@@ -1,12 +1,10 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   applySessionEntryLifecycleMutation,
   cleanupSessionLifecycleArtifactsCore,
@@ -23,7 +21,7 @@ import type { SessionEntry } from "./types.js";
 
 const hooks = vi.hoisted(() => ({
   before: undefined as (() => Promise<void>) | undefined,
-  after: undefined as (() => void) | undefined,
+  after: undefined as (() => void | Promise<void>) | undefined,
   observe: undefined as ((sessionIds: string[]) => void) | undefined,
   publicationFailure: undefined as Error | undefined,
 }));
@@ -38,7 +36,7 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
       await hooks.before?.();
       hooks.observe?.(args[0].map((plan) => plan.sessionId));
       const result = await actual.materializeSessionStateDeletePlans(...args);
-      hooks.after?.();
+      await hooks.after?.();
       return result;
     },
   };
@@ -60,7 +58,7 @@ vi.mock("./session-accessor.sqlite-archive-store.js", async (importOriginal) => 
     },
   };
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-cleanup-race-");
 type Events = Parameters<typeof replaceTranscriptEvents>[1];
 
 describe("SQLite lifecycle cleanup races", () => {
@@ -68,7 +66,7 @@ describe("SQLite lifecycle cleanup races", () => {
   let storePath: string;
   let now: number;
   beforeEach(() => {
-    tempDir = tempDirs.make("openclaw-session-cleanup-race-");
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     now = Date.now();
   });
@@ -77,7 +75,6 @@ describe("SQLite lifecycle cleanup races", () => {
     hooks.after = undefined;
     hooks.observe = undefined;
     hooks.publicationFailure = undefined;
-    closeOpenClawAgentDatabasesForTest();
   });
 
   async function seed(
@@ -92,7 +89,8 @@ describe("SQLite lifecycle cleanup races", () => {
       ...options,
       sessionKey: options.sessionKey ?? `agent:main:cleanup-race-${sessionId}`,
     };
-    await replaceSessionEntry(scope, { sessionId, updatedAt: now, ...entry });
+    // Automatic maintenance must not consume the explicit cleanup's archive hooks.
+    replaceSessionEntrySync(scope, { sessionId, updatedAt: now, ...entry });
     if (events) {
       await replaceTranscriptEvents(scope, events);
     }
@@ -141,27 +139,24 @@ describe("SQLite lifecycle cleanup races", () => {
       await release.promise;
     };
     const operation = start();
+    const operations: Promise<unknown>[] = [operation];
+    onTestFinished(async () => {
+      release.resolve();
+      await Promise.allSettled(operations);
+    });
     await entered.promise;
     const write = replaceSessionEntry(writer, {
       sessionId: writer.sessionId,
       updatedAt: now + 1,
       label: "progressed",
     });
-    let progressed: boolean;
+    operations.push(write);
     try {
-      progressed = await Promise.race([
-        write.then(() => true),
-        new Promise<false>((resolve) => {
-          setTimeout(() => resolve(false), 500);
-        }),
-      ]);
+      await expect(write).resolves.toMatchObject({ label: "progressed" });
     } finally {
       release.resolve();
     }
-    const result = await operation;
-    await expect(write).resolves.toMatchObject({ label: "progressed" });
-    expect(progressed).toBe(true);
-    return result;
+    return await operation;
   }
 
   it("reclaims only aged rows while preserving fresh admission with or without old transcripts", async () => {
@@ -252,12 +247,13 @@ describe("SQLite lifecycle cleanup races", () => {
     const db = database();
     const refreshed = { label: "refreshed", sessionId: target.sessionId, updatedAt: now + 1 };
     let changed = false;
-    hooks.after = () => {
-      changed = true;
-      db.db
-        .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
-        .run(JSON.stringify(refreshed), refreshed.updatedAt, target.sessionKey);
-    };
+    hooks.after = () =>
+      runOpenClawAgentWriteAdmission({ agentId: "main", path: db.path }, () => {
+        changed = true;
+        db.db
+          .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
+          .run(JSON.stringify(refreshed), refreshed.updatedAt, target.sessionKey);
+      });
     await expect(cleanup({ orphanTranscriptMinAgeMs: 0, nowMs: now + 60_000 })).rejects.toThrow(
       "SQLite lifecycle cleanup entry changed",
     );

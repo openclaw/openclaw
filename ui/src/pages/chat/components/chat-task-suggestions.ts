@@ -10,7 +10,7 @@ import { icons } from "../../../components/icons.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
-import { repoName } from "../../../lib/session-display.ts";
+import { pathDisplayName } from "../../../lib/path-display.ts";
 import { isAbsolutePath } from "../../new-session/path.ts";
 
 export type TaskSuggestionStartMode = Extract<
@@ -90,7 +90,7 @@ export function renderChatTaskSuggestionTray(props: ChatTaskSuggestionTrayProps)
         const tldr = sanitizeTaskSuggestionText(suggestion.tldr);
         const cwd = sanitizeTaskSuggestionText(suggestion.cwd);
         const prompt = sanitizeTaskSuggestionText(suggestion.prompt);
-        const repo = sanitizeTaskSuggestionText(repoName(cwd));
+        const repo = sanitizeTaskSuggestionText(pathDisplayName(cwd));
         const copied = props.taskSuggestionCopiedIds?.has(suggestion.id) ?? false;
         const copyLabel = copied
           ? t("chat.taskSuggestions.promptCopied")

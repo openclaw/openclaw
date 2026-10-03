@@ -24,6 +24,7 @@ import {
   resolvePackageActivationJournalPath,
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
+import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 import {
   readPackageActivationStatus,
   readPackageActivationReceipt,
@@ -31,14 +32,15 @@ import {
   assertNoPendingPackageActivation,
 } from "./package-update-activation.js";
 import { createPackageIntegrityReader } from "./package-update-integrity.js";
-import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 
 const fixtures = createPackageActivationLifetimeFixture();
 const { lifetime, setup, prepare, spawnChild, stopChild, killUncommittedWrite } = fixtures;
 let root: string;
 let assertDatabasePath: (path: string) => void;
-let childGuardEnv: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
+let childGuardEnv: ReturnType<typeof setup>["childGuardEnv"];
 beforeEach(() => {
   ({ root, assertDatabasePath, childGuardEnv } = setup());
 });
@@ -61,7 +63,7 @@ describe.skipIf(process.platform === "win32")(
         let transaction: PackageUpdateTransaction | undefined;
         const result = await swapStagedPackageInstall({
           ...f.params,
-          activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
           onTransaction: async (value) => {
             transaction = value;
             expect(value.databaseBackupRoot).toBeDefined();
@@ -111,7 +113,7 @@ describe.skipIf(process.platform === "win32")(
           const fence = await executor.enter(f.packageRoot);
           return swapStagedPackageInstall({
             ...f.params,
-            activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+            activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
           });
         });
         expect(interrupted).toBe(true);
@@ -204,7 +206,7 @@ describe.skipIf(process.platform === "win32")(
           ...f.params,
           activation: {
             fence,
-            nodeRunner: process.execPath,
+            runtime: packageActivationRuntimeForTest(),
             onPrepared: () => {
               prepared = true;
             },
@@ -754,9 +756,11 @@ describe.skipIf(process.platform === "win32")(
         const before = openPackageActivationJournal(first.anchor).read();
         const failure = new Error(cut);
         const mkdir = fsp.mkdtemp.bind(fsp);
-        const write = fs.writeFileSync.bind(fs);
+        const openHelper = fs.openSync.bind(fs);
+        const sync = fs.fsyncSync.bind(fs);
         const rename = fsp.rename.bind(fsp);
         const open = nodeSqlite.openNodeSqliteDatabase;
+        let helperFd: number | undefined;
         let fired = false;
         vi.spyOn(fsp, "mkdtemp").mockImplementation(async (prefix, options) => {
           const created = await mkdir(prefix, options);
@@ -766,14 +770,20 @@ describe.skipIf(process.platform === "win32")(
           }
           return created;
         });
-        vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
-          write(file, data, options);
+        vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
+          const fd = openHelper(file, flags, mode);
           if (
-            !fired &&
-            cut === "staged-helper" &&
+            flags === "wx" &&
             String(file).includes(".activation-anchor-") &&
             String(file).endsWith(".recovery.mjs")
           ) {
+            helperFd = fd;
+          }
+          return fd;
+        });
+        vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+          sync(fd);
+          if (!fired && cut === "staged-helper" && fd === helperFd) {
             fired = true;
             throw failure;
           }
@@ -809,8 +819,13 @@ describe.skipIf(process.platform === "win32")(
         });
         await expect(prepare()).rejects.toBe(failure);
         expect(fired).toBe(true);
+        if (cut === "staged-helper") {
+          expect(helperFd).toBeTypeOf("number");
+          expect(() => fs.fstatSync(helperFd!)).toThrow();
+        }
         vi.mocked(fsp.mkdtemp).mockRestore();
-        vi.mocked(fs.writeFileSync).mockRestore();
+        vi.mocked(fs.openSync).mockRestore();
+        vi.mocked(fs.fsyncSync).mockRestore();
         vi.mocked(fsp.rename).mockRestore();
         vi.mocked(nodeSqlite.openNodeSqliteDatabase).mockRestore();
         const after = openPackageActivationJournal(first.anchor).read();
@@ -938,7 +953,11 @@ describe.skipIf(process.platform === "win32")(
             packageRoot: f.packageRoot,
             runCommand: createRootRunner(f.globalRoot),
             timeoutMs: 5000,
-            getActivation: () => ({ fence, nodeRunner: process.execPath, onPrepared: () => {} }),
+            getActivation: () => ({
+              fence,
+              runtime: packageActivationRuntimeForTest(),
+              onPrepared: () => {},
+            }),
             runStep: async ({ name, argv, cwd }) => {
               if (name !== "package-install") {
                 throw new Error(`unexpected package-manager leaf ${name}`);

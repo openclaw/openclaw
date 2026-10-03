@@ -3,11 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readLegacySessionStoreEntries } from "../config/sessions/legacy-store-inspection.js";
 import {
   loadLegacySessionStore,
   saveLegacySessionStore,
 } from "./state-migrations.legacy-session-store.js";
-import { resolveStaleLegacySessionFile } from "./state-migrations.session-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -16,7 +16,9 @@ const MAIN_KEY = "agent:main:main";
 const legacyEntry = {
   sessionId: " session-1 ",
   updatedAt: 1,
-  provider: "slack",
+  channel: "slack",
+  provider: false,
+  lastProvider: false,
   pendingFinalDeliveryAttemptCount: -1,
 };
 let root: string;
@@ -138,13 +140,39 @@ it("normalizes file-era rows and drops malformed entries", async () => {
     malformed: null,
     [MAIN_KEY]: {
       ...legacyEntry,
-      lastProvider: "telegram",
+      lastChannel: "telegram",
       pluginExtensions: { " demo ": { " valid ": { ok: true }, invalid: undefined } },
     },
   });
   const store = loadLegacySessionStore(storePath);
   expectNormalized(store, "telegram");
   expect(store[MAIN_KEY]?.pluginExtensions).toEqual({ demo: { valid: { ok: true } } });
+});
+
+it("preserves retired room-only source bytes across inspection, loading, and refused writes", async () => {
+  const store = { [MAIN_KEY]: { sessionId: "session-room", updatedAt: 1, room: "#legacy" } };
+  const raw = `${JSON.stringify(store, null, 2)}\n`;
+  await fs.writeFile(storePath, raw);
+  expect(() => readLegacySessionStoreEntries({ storePath }, [])).toThrow(/2026\.9\.5/);
+  expect(() => loadLegacySessionStore(storePath)).toThrow(/2026\.9\.5/);
+  await expect(saveLegacySessionStore(storePath, store, { skipMaintenance: true })).rejects.toThrow(
+    /2026\.9\.5/,
+  );
+  expect(await fs.readFile(storePath, "utf8")).toBe(raw);
+});
+
+it("imports provider-only fields still preserved by the July Doctor writer", async () => {
+  await writeStore({
+    [MAIN_KEY]: {
+      sessionId: "session-1",
+      updatedAt: 1,
+      provider: "slack",
+      lastProvider: "telegram",
+    },
+  });
+  const raw = await fs.readFile(storePath, "utf8");
+  expectNormalized(loadLegacySessionStore(storePath), "telegram");
+  expect(await fs.readFile(storePath, "utf8")).toBe(raw);
 });
 
 it("normalizes compatibility writes before persistence", async () => {
@@ -158,6 +186,9 @@ it("normalizes compatibility writes before persistence", async () => {
     malformed: null,
     [MAIN_KEY]: {
       ...legacyEntry,
+      provider: "obsolete-provider",
+      lastProvider: "obsolete-provider",
+      lastChannel: "slack",
       skillsSnapshot: {
         ...skillsSnapshot,
         resolvedSkills: [{ name: "demo", description: "runtime-only catalog" }],
@@ -172,27 +203,5 @@ it("normalizes compatibility writes before persistence", async () => {
   expectNormalized(persisted, "slack");
   expect(persisted[MAIN_KEY]?.skillsSnapshot).toMatchObject(skillsSnapshot);
   expect(persisted[MAIN_KEY]?.skillsSnapshot).not.toHaveProperty("resolvedSkills");
-});
-
-it("repairs a stale session file whose header straddles the read chunk boundary", async () => {
-  const sessionId = "sess-boundary-1";
-  const legacyDir = path.join(root, "legacy-sessions");
-  const targetDir = path.join(root, "sessions");
-  await fs.mkdir(legacyDir);
-  await fs.mkdir(targetDir);
-  const legacySessionFile = path.join(legacyDir, `${sessionId}.jsonl`);
-  const targetSessionFile = path.join(targetDir, `${sessionId}.jsonl`);
-  // The three-byte character begins at 8191, splitting it across read chunks.
-  const prefix = Buffer.from(`{"type":"session","id":"${sessionId}","pad":"`);
-  await fs.writeFile(
-    targetSessionFile,
-    Buffer.concat([prefix, Buffer.from("a".repeat(8191 - prefix.length)), Buffer.from('中"}\n')]),
-  );
-  expect(
-    resolveStaleLegacySessionFile({
-      entry: { sessionId, sessionFile: legacySessionFile },
-      legacyDir,
-      targetDir,
-    }),
-  ).toBe(targetSessionFile);
+  expectNormalized(loadLegacySessionStore(storePath), "slack");
 });

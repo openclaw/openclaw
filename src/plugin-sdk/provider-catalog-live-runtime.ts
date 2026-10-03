@@ -128,17 +128,6 @@ function matchesProviderCatalogScope(
   );
 }
 
-function buildProviderConfig<T extends ModelDefinitionConfig>(
-  params: BuildLiveModelProviderConfigParams<T>,
-  models: readonly T[],
-): ModelProviderConfig {
-  return {
-    ...params.providerConfig,
-    ...(params.apiKey ? { apiKey: params.apiKey } : {}),
-    models: [...models],
-  };
-}
-
 async function projectCachedLiveModelRows<T extends ModelDefinitionConfig>(
   params: BuildLiveModelProviderConfigParams<T> & {
     fallback: ModelProviderConfig;
@@ -180,7 +169,11 @@ async function projectCachedLiveModelRows<T extends ModelDefinitionConfig>(
 export async function buildLiveModelProviderConfig<T extends ModelDefinitionConfig>(
   params: BuildLiveModelProviderConfigParams<T>,
 ): Promise<ModelProviderConfig> {
-  const fallback = buildProviderConfig(params, params.models);
+  const fallback: ModelProviderConfig = {
+    ...params.providerConfig,
+    ...(params.apiKey ? { apiKey: params.apiKey } : {}),
+    models: [...params.models],
+  };
   const cacheKeyParts =
     params.discoveryMode === "strict"
       ? [
@@ -220,7 +213,7 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
     const liveModelIdSet = new Set(liveModelIds);
     const models = params.models.filter((model) => liveModelIdSet.has(model.id));
     if (models.length > 0 || params.discoveryMode === "strict") {
-      return buildProviderConfig(params, models);
+      return { ...fallback, models };
     }
   } catch (error) {
     if (params.discoveryMode === "strict") {
@@ -249,6 +242,7 @@ export function createUpstreamProviderCatalog(params: {
   timeoutMs: number;
   ttlMs: number;
   auditContext: string;
+  starterModelAuditContext: string;
   isStaticEntryActive: (entry: ReturnType<ProviderCatalogSnapshot["get"]>) => boolean;
   decorateModel?: Parameters<typeof projectUpstreamProviderCatalogSnapshot>[0]["decorateModel"];
 }) {
@@ -286,7 +280,27 @@ export function createUpstreamProviderCatalog(params: {
     getSnapshot: () => snapshot,
     buildStaticProvider,
     refreshMetadata,
+    async resolveStarterModel(
+      this: void,
+      request: Pick<UpstreamProviderCatalogRequest, "fetchGuard" | "signal"> & {
+        apiKey: string;
+        preferredModelRef: string;
+      },
+    ): Promise<string | undefined> {
+      const liveModelIds = await fetchLiveProviderModelIds({
+        providerId: params.providerId,
+        endpoint: params.modelsEndpoint,
+        discoveryApiKey: request.apiKey,
+        fetchGuard: request.fetchGuard,
+        signal: request.signal,
+        timeoutMs: params.timeoutMs,
+        auditContext: params.starterModelAuditContext,
+      });
+      const preferredModelId = request.preferredModelRef.replace(`${params.providerId}/`, "");
+      return liveModelIds.includes(preferredModelId) ? request.preferredModelRef : undefined;
+    },
     async buildLiveProvider(
+      this: void,
       request: UpstreamProviderCatalogRequest = {},
     ): Promise<ModelProviderConfig> {
       if (!request.apiKey && !request.discoveryApiKey) {

@@ -15,7 +15,7 @@ describe("OpenAI selected Fast capability", () => {
   it.each([
     { change: {}, expected: true },
     { change: { api: "openai-completions" }, expected: false },
-    { change: { baseUrl: "https://proxy.example/v1" }, expected: false },
+    { change: { baseUrl: "https://proxy.example/v1" }, expected: true },
     { change: { api: "azure-openai-responses" }, expected: false },
     { change: { params: { serviceTier: "flex" } }, expected: false },
     { change: { params: { service_tier: " PRIORITY " } }, expected: false },

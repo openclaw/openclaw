@@ -94,7 +94,10 @@ process.exitCode = await withDistArtifactOwnership(process.cwd(), () => runManag
       expect(output).toContain(scenario.diagnostic);
       expect(fs.existsSync(settled), output).toBe(scenario.runsWorkload);
       if (scenario.runsWorkload) {
-        expect(JSON.parse(fs.readFileSync(settled, "utf8"))).toEqual(["plugins:assets:build"]);
+        expect(JSON.parse(fs.readFileSync(settled, "utf8"))).toEqual([
+          "plugins:assets:build",
+          "--defer-isolated",
+        ]);
         expect(output).toContain("fixture joined build failure");
       }
       const lock = resolveDistArtifactLockPath(root);

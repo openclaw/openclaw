@@ -89,6 +89,7 @@ export async function requestEvaluation(params: {
   timeoutMs: number;
   signal?: AbortSignal;
   deadlineMonotonicMs?: number;
+  isAdmissible?: () => boolean;
 }): Promise<unknown> {
   const baseUrl = localBaseUrl(params.baseUrl);
   const endpoint = baseUrl ? `${baseUrl}/v1/systemone` : ENDPOINT;
@@ -116,6 +117,9 @@ export async function requestEvaluation(params: {
       performance.now() >= params.deadlineMonotonicMs
     ) {
       throw new EvaluationError("TypeSafe evaluation timed out.", "transport");
+    }
+    if (params.isAdmissible && !params.isAdmissible()) {
+      throw new EvaluationError("TypeSafe evaluation is no longer admitted.", "transport");
     }
   };
   try {

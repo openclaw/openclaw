@@ -1177,11 +1177,14 @@ describe("canonical descendant lifecycle through real owners", () => {
       );
       const child = expectDefined(fixture.native.threads.get(binding.threadId), "native child");
       expect(child.thread.turns).toHaveLength(12);
-      registerSessionStateWatch({ watcherSessionKey: "agent:main:main", targetSessionKey: key });
-      const events = () => listSessionStateEventsSince(key, "main", 0).events;
-      const before = events();
+      await registerSessionStateWatch({
+        watcherSessionKey: "agent:main:main",
+        targetSessionKey: key,
+      });
+      const events = async () => (await listSessionStateEventsSince(key, "main", 0)).events;
+      const before = await events();
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
-      expect(events()).toEqual(before);
+      expect(await events()).toEqual(before);
       const link = expectDefined(readSessionUpstreamLink(key, "main"), "child link");
       const root = expectDefined(readSessionUpstreamLink(source.sessionKey, "main"), "root link");
       expect(link).toMatchObject({
@@ -1197,11 +1200,11 @@ describe("canonical descendant lifecycle through real owners", () => {
         });
       });
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
-      expect(events().slice(before.length)).toEqual([
+      expect((await events()).slice(before.length)).toEqual([
         expect.objectContaining({ kind: "human_direct_message" }),
       ]);
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
-      expect(events()).toHaveLength(before.length + 1);
+      expect(await events()).toHaveLength(before.length + 1);
     });
   }, 180_000);
 

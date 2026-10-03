@@ -1,25 +1,16 @@
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, expect, it } from "vitest";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { getSessionEntry, patchSessionEntry, upsertSessionEntry } from "./session-store-runtime.js";
 
-const databases = new Set<string>();
-afterEach(() => {
-  for (const database of databases) {
-    closeOpenClawAgentDatabaseByPath(database);
-  }
-  databases.clear();
-});
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "sdk-cli-history-");
 
 it.each(["upsert", "patch"] as const)(
   "preserves private history provenance across a public %s without accepting injected ownership",
   async (operation) => {
-    const storePath = path.join(tempDirs.make("sdk-cli-history-"), "openclaw-agent.sqlite");
-    databases.add(storePath);
+    const storePath = path.join(sessionDirs.make(), "openclaw-agent.sqlite");
     const sessionKey = "agent:main:history";
     const scope = { sessionKey, storePath };
     const initial: InternalSessionEntry = {

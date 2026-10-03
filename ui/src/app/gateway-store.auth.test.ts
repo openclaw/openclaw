@@ -10,6 +10,7 @@ import { goalOperationScopePrefix } from "../lib/chat/goal-operation-storage.ts"
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
+import type { BootRecord } from "./boot-record.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore as createStore,
@@ -58,6 +59,7 @@ describe("createApplicationGateway authentication diagnostics", () => {
   let current: ReturnType<typeof createStore>["current"];
 
   beforeEach(() => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
     stubGatewayStoreTestGlobals();
     store = createStore();
     ({ gateway, current } = store);
@@ -165,8 +167,9 @@ describe("createApplicationGateway authentication diagnostics", () => {
     expect(sessionStorage.getItem(RELOAD_GUARD_KEY)).toBe("replacement-build");
   });
 
-  it("retires automatic build recovery when the connection stops between probes", async () => {
+  it.each(["initial jitter", "probe retry"])("retires build recovery during %s", async (phase) => {
     vi.useFakeTimers();
+    vi.mocked(Math.random).mockReturnValue(phase === "initial jitter" ? 0.5 : 0);
     const { replace, fetchMock } = stubBuildReloadDocument();
     fetchMock
       .mockResolvedValueOnce(new Response(null, { status: 503 }))
@@ -178,7 +181,7 @@ describe("createApplicationGateway authentication diagnostics", () => {
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(replace).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(phase === "initial jitter" ? 0 : 1);
     expect(sessionStorage.getItem(RELOAD_GUARD_KEY)).toBeNull();
   });
 
@@ -513,23 +516,48 @@ describe("createApplicationGateway authentication diagnostics", () => {
   it("clears persisted transcripts on credential change but not an unchanged reconnect", async () => {
     vi.stubGlobal("indexedDB", new IDBFactory());
     vi.stubGlobal("location", new URL("http://control.test/"));
-    const sessionKey = "agent:main:credential-scope";
+    const sessionKey = 'scope:["ws://control.test","account-a"]\u0000agent:main:credential-scope';
     const snapshots = new SessionSnapshotStore();
     snapshots.write(sessionKey, {
       messages: ["private transcript"],
       pagination: { hasMore: false, completeSnapshot: true },
       sessionId: "credential-session",
     });
+    const peerKey = 'scope:["ws://control.test","account-b"]\u0000agent:main:peer';
+    snapshots.write(peerKey, {
+      messages: ["peer transcript"],
+      sessionId: "peer-session",
+      pagination: { hasMore: false, completeSnapshot: true },
+    });
     await snapshots.flush();
     const settings = { ...loadSettings(), gatewayUrl: "ws://control.test", token: "old-token" };
-    ({ gateway } = createStore({ settings }));
+    const peerRecord: BootRecord = {
+      version: 2,
+      scope: settings.gatewayUrl,
+      authMethod: "token",
+      credential: "peer-fingerprint",
+      recoveryScope: "account-b",
+      profileId: "peer-profile",
+      savedAt: Date.now(),
+      agents: { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
+      groups: [],
+      sectionOrder: [],
+    };
+    const peerBootKey = "openclaw.control.bootRecord.v1:" + settings.gatewayUrl;
+    ({ gateway, current } = createStore({ settings }));
     try {
       gateway.connect();
+      current().opts.onHello?.(hello("account-a"));
+      localStorage.setItem(peerBootKey, JSON.stringify(peerRecord));
       expect(await new SessionSnapshotStore().read(sessionKey)).not.toBeNull();
       gateway.connect({ token: "" });
       await vi.waitFor(async () => {
         expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
       });
+      expect((await new SessionSnapshotStore().read(peerKey))?.messages).toEqual([
+        "peer transcript",
+      ]);
+      expect(localStorage.getItem(peerBootKey)).toBe(JSON.stringify(peerRecord));
     } finally {
       await clearStoredChatSnapshots();
     }

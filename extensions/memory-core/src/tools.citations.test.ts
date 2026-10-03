@@ -255,6 +255,20 @@ describe("memory tools", () => {
     expect(result.details).not.toHaveProperty("warning");
   });
 
+  it("surfaces a warning when an unregistered wiki corpus is explicitly requested", async () => {
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_wiki_without_registration", {
+      query: "alpha",
+      corpus: "wiki",
+    });
+
+    expect(result.details).toMatchObject({
+      results: [],
+      corpora: [{ corpus: "wiki", outcome: "not-registered" }],
+      warning: "Wiki corpus is not registered; results do not cover that requested corpus.",
+    });
+  });
+
   it.each(["memory", "wiki"] as const)(
     "isolates results and cooldown when %s stalls",
     async (stalled) => {

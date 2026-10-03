@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginLogger, PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
   consultRealtimeVoiceAgent,
@@ -35,13 +35,12 @@ import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
-import type { CallRecord } from "./types.js";
+import { TerminalStates, type CallRecord, type ToolHandlerContext } from "./types.js";
 import {
   isProviderUnreachableWebhookUrl,
   providerRequiresPublicWebhook,
 } from "./webhook-exposure.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
-import type { ToolHandlerContext } from "./webhook/realtime-handler.js";
 import { cleanupTailscaleExposure, setupTailscaleExposure } from "./webhook/tailscale.js";
 
 export type VoiceCallRuntime = {
@@ -247,16 +246,11 @@ async function createRealtimeInstructionsResolver(params: {
     }),
   );
   const instructionsByAgentId = new Map(entries);
-  return (call) => {
-    const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
-    const effectiveConfig = resolveVoiceCallEffectiveConfig(params.config, numberRouteKey).config;
-    return (
-      instructionsByAgentId.get(resolveCallAgentId(call, effectiveConfig)) ?? genericInstructions
-    );
-  };
+  return (call) => instructionsByAgentId.get(resolveCallAgentId(call)) ?? genericInstructions;
 }
 
 export async function createVoiceCallRuntime(params: {
+  scheduler: PluginServiceSchedulerV1;
   config: VoiceCallConfig;
   coreConfig: OpenClawConfig;
   fullConfig?: OpenClawConfig;
@@ -265,6 +259,7 @@ export async function createVoiceCallRuntime(params: {
   ttsRuntime?: TelephonyTtsRuntime;
   logger?: PluginLogger;
 }): Promise<VoiceCallRuntime> {
+  params.scheduler.signal.throwIfAborted();
   const {
     config: rawConfig,
     coreConfig,
@@ -307,6 +302,7 @@ export async function createVoiceCallRuntime(params: {
   const manager = new CallManager(config, undefined, cfg.session, stateRuntime);
   const realtimeVoiceRuntime = config.realtime.enabled ? await loadRealtimeVoiceRuntime() : null;
   const webhookServer = new VoiceCallWebhookServer(
+    params.scheduler,
     config,
     manager,
     provider,
@@ -329,7 +325,7 @@ export async function createVoiceCallRuntime(params: {
     const resolveCallRegistration = (call: CallRecord) => {
       const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
       const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
-      const agentId = resolveCallAgentId(call, effectiveConfig);
+      const agentId = resolveCallAgentId(call);
       const resolved = realtimeVoiceRuntime.resolveConfiguredRealtimeVoiceProvider({
         configuredProviderId: effectiveConfig.realtime.provider,
         providerConfigs: effectiveConfig.realtime.providers,
@@ -365,7 +361,7 @@ export async function createVoiceCallRuntime(params: {
           }
           const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
           const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
-          const agentId = resolveCallAgentId(call, effectiveConfig);
+          const agentId = resolveCallAgentId(call);
           const sessionKey = resolveVoiceCallSessionKey({
             config: { ...effectiveConfig, agentId },
             callId: call.callId,
@@ -395,6 +391,15 @@ export async function createVoiceCallRuntime(params: {
             labels: {
               audienceLabel: "caller",
               contextName: "OpenClaw memory or session context",
+            },
+            // Memory reads for this caller stay bound to the consult and its live call.
+            liveness: {
+              signal: handlerContext.abortSignal,
+              assertCurrent() {
+                if (manager.getCall(callId) !== call || TerminalStates.has(call.state)) {
+                  throw new Error(`Call "${callId}" is no longer active`);
+                }
+              },
             },
           });
           handlerContext.abortSignal?.throwIfAborted();

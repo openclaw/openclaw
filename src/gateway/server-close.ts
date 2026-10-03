@@ -10,7 +10,7 @@ import { closeSwarmScheduler } from "../agents/subagents/swarm/swarm-scheduler.j
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/session-transcript-reconcile-pool.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateDatabaseAsync } from "../plugin-state/plugin-state-store.js";
@@ -149,15 +149,6 @@ export async function runGatewayClosePrelude(params: {
   await params.closeMcpServer?.().catch(() => {});
 }
 
-function isServerNotRunningError(err: unknown): boolean {
-  return Boolean(
-    err &&
-    typeof err === "object" &&
-    "code" in err &&
-    (err as { code?: unknown }).code === "ERR_SERVER_NOT_RUNNING",
-  );
-}
-
 async function waitForHttpClose(params: {
   closePromise: Promise<void>;
   timeoutMs: number;
@@ -181,7 +172,7 @@ async function closeHttpListener(params: {
   server.closeIdleConnections?.();
   const closePromise = new Promise<void>((resolve, reject) => {
     server.close((err) => {
-      if (!err || isServerNotRunningError(err)) {
+      if (!err || hasErrnoCode(err, "ERR_SERVER_NOT_RUNNING")) {
         resolve();
         return;
       }
@@ -226,8 +217,6 @@ export type GatewayCloseParams = {
   channelIds?: readonly ChannelId[];
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
   pluginServices: PluginServicesHandle | null;
-  disposeSessionMcpRuntimes?: () => Promise<void>;
-  disposeBundleLspRuntimes?: () => Promise<void>;
   disposeAllBundleLspRuntimes: () => Promise<void>;
   drainRetainedOpenAiEmbeddingProviders: () => Promise<void>;
   stopGmailWatcher: () => Promise<void>;
@@ -248,6 +237,7 @@ export type GatewayCloseParams = {
   }>;
   finishRequestEntries?: () => Promise<void>;
   drainSdkWork?: () => Promise<void>;
+  stopScheduler: () => Promise<void>;
   closeSdkResources?: () => Promise<void>;
   wss?: WebSocketServer;
   httpServer?: HttpServer;
@@ -455,14 +445,14 @@ async function closeGatewayResources(
         disposeRuntimeWithShutdownGrace({
           cleanupWork,
           label: "bundle-mcp",
-          dispose: params.disposeSessionMcpRuntimes ?? disposeAllSessionMcpRuntimes,
+          dispose: disposeAllSessionMcpRuntimes,
           graceMs: MCP_RUNTIME_CLOSE_GRACE_MS,
           warnings,
         }),
         disposeRuntimeWithShutdownGrace({
           cleanupWork,
           label: "bundle-lsp",
-          dispose: params.disposeBundleLspRuntimes ?? params.disposeAllBundleLspRuntimes,
+          dispose: params.disposeAllBundleLspRuntimes,
           graceMs: LSP_RUNTIME_CLOSE_GRACE_MS,
           warnings,
         }),
@@ -612,6 +602,8 @@ async function closeGatewayResources(
     if (swarmOwner) {
       await closeSwarmScheduler(swarmOwner).catch(recordResourceCleanupFailure);
     }
+    // Owner cleanup releases scheduled work; join it before retiring shared dependencies.
+    await params.stopScheduler();
     // A sibling Gateway retains metadata before its registry exists. Only the
     // final owner may retire shared state and process-wide plugin caches.
     try {

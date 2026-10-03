@@ -30,16 +30,21 @@ import {
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { AgentsApiClient } from "./agentsapi-client.js";
+import { resolveAgentsApiSessionAccessError } from "./agentsapi-errors.js";
 import * as files from "./agentsapi-files.js";
 import { buildAgentsApiMcpTools } from "./agentsapi-mcp.js";
 import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
-import { buildAgentsApiInstructions, buildAgentsApiTurnInput } from "./agentsapi-prompt.js";
+import {
+  buildAgentsApiInstructions,
+  buildAgentsApiTurnInput,
+  HOSTED_ATTACHMENT_UPLOAD_UNAVAILABLE_FEEDBACK,
+} from "./agentsapi-prompt.js";
 import { resolveAgentsApiReasoningEffort } from "./agentsapi-reasoning.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
 import type { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
 import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
 import { recordAgentsApiNativeToolTranscript } from "./agentsapi-transcript.js";
-import { resolveAgentsApiEnvironment } from "./config.js";
+import { agentsApiConfigSchema, resolveAgentsApiEnvironment } from "./config.js";
 
 export async function runAgentsApiAttempt(
   params: AgentHarnessAttemptParamsV2,
@@ -188,8 +193,9 @@ export async function runAgentsApiAttempt(
       if (!native?.isAvailable()) {
         throw new Error("Agents API turn is not ready for steering");
       }
-      if (options?.images?.length) {
-        throw new Error("Agents API MVP accepts text steering only");
+      if (options?.images?.length || options?.media?.length) {
+        // The queued followup owns attachment preparation; steering can carry only text.
+        throw new Error("Agents API attachments require a separate turn");
       }
       await native.queueMessage(
         buildCurrentInboundPrompt({ context: options?.currentInboundContext, prompt: text }),
@@ -216,7 +222,8 @@ export async function runAgentsApiAttempt(
       params.agentId,
     );
     assertCurrent();
-    const environment = resolveAgentsApiEnvironment(readPluginConfig(), params.workspaceDir);
+    const pluginConfig = agentsApiConfigSchema.parse(readPluginConfig() ?? {});
+    const environment = resolveAgentsApiEnvironment(pluginConfig, params.workspaceDir);
     const surface = buildAgentsApiToolSurface(
       runParams,
       controller.signal,
@@ -228,33 +235,25 @@ export async function runAgentsApiAttempt(
     assertCurrent();
     const sessionIdentity = [
       params.model.id,
-      params.resolvedApiKey,
       // Preserve existing hosted identities only when no network policy is configured.
       ...(environment.type === "self_hosted" || environment.network != null ? [environment] : []),
       ...(mcpTools.length ? [mcpTools] : []),
     ];
     const fingerprint = createHash("sha256").update(JSON.stringify(sessionIdentity)).digest("hex");
-    if (binding && binding.authFingerprint !== fingerprint) {
-      // Normalize bindings created by the unmerged tools implementation.
-      const toolsFingerprint = createHash("sha256")
-        .update(JSON.stringify([params.model.id, params.resolvedApiKey, surface.declarations]))
-        .digest("hex");
-      if (
-        environment.type !== "openai_hosted" ||
-        environment.network != null ||
-        mcpTools.length > 0 ||
-        binding.authFingerprint !== toolsFingerprint
-      ) {
-        throw new Error(
-          "Agents API model, credential, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
-        );
-      }
-      await bind({ sessionId: binding.sessionId, authFingerprint: fingerprint });
+    if (binding && binding.configFingerprint !== fingerprint) {
+      throw new Error(
+        "Agents API model, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
+      );
     }
+    const inputMedia =
+      environment.type === "openai_hosted" && params.hostCapabilities.resolveInputAttachmentMedia
+        ? await params.hostCapabilities.resolveInputAttachmentMedia()
+        : params.media;
+    assertCurrent();
     const inputs =
       environment.type === "openai_hosted"
         ? await files.prepareInputs(
-            params.media,
+            inputMedia,
             params.workspaceDir,
             assertCurrent,
             controller.signal,
@@ -267,11 +266,9 @@ export async function runAgentsApiAttempt(
       ? await buildAgentsApiInstructions(params, surface.declarations, environment)
       : "";
     assertCurrent();
-    const admittedMessage =
-      params.userTurnTranscriptRecorder?.message ??
-      (await params.userTurnTranscriptRecorder?.resolveMessage());
-    assertCurrent();
     const recorder = params.userTurnTranscriptRecorder;
+    const admittedMessage = recorder?.message ?? (await recorder?.resolveMessage());
+    assertCurrent();
     const historyLimits = resolveAgentHarnessHistoryLimits(
       params.contextWindowInfo?.tokens ?? params.contextTokenBudget,
     );
@@ -326,6 +323,7 @@ export async function runAgentsApiAttempt(
         promptBuild.developerInstructions,
         params.model.id,
         {
+          nativeTools: pluginConfig.nativeTools,
           functions: surface.declarations,
           mcpTools,
           files: inputs.files,
@@ -339,7 +337,7 @@ export async function runAgentsApiAttempt(
         },
       );
       assertCurrent();
-      await bind({ sessionId: remoteSessionId, authFingerprint: fingerprint });
+      await bind({ sessionId: remoteSessionId, configFingerprint: fingerprint });
     } else {
       await client.setReasoningEffort(remoteSessionId, reasoningEffort, controller.signal);
     }
@@ -354,13 +352,20 @@ export async function runAgentsApiAttempt(
       });
     }
     if (!creatingSession && inputs.files.length) {
-      await files.uploadInputs(
+      const uploaded = await files.uploadInputs(
         client,
         remoteSessionId,
         inputs.files,
         assertCurrent,
         controller.signal,
       );
+      if (uploaded.status === "unavailable") {
+        // Native recovery can replace the workspace, including earlier files in this batch.
+        inputs.mappingText = "";
+        inputs.feedbackText = [inputs.feedbackText, HOSTED_ATTACHMENT_UPLOAD_UNAVAILABLE_FEEDBACK]
+          .filter(Boolean)
+          .join("\n");
+      }
     }
     projection = new AgentsApiMessageProjection(
       projectionSettlement.params,
@@ -455,6 +460,7 @@ export async function runAgentsApiAttempt(
         promptBuild.prompt,
         inputs.mappingText,
         environment.type,
+        inputs.feedbackText,
       ),
       async () => {
         await params.userTurnTranscriptRecorder?.persistApproved();
@@ -581,13 +587,20 @@ export async function runAgentsApiAttempt(
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
     lifecycle.emitLifecycleTerminal({ phase: terminal.kind === "failed" ? "error" : "end" });
   }
+  if (terminal.kind === "failed") {
+    terminal = {
+      ...terminal,
+      error: resolveAgentsApiSessionAccessError(terminal.error, remoteSessionId),
+    };
+  }
   const result: EmbeddedRunAttemptResult = {
     terminal,
     sessionIdUsed: params.sessionId,
     sessionFileUsed: params.sessionFile,
     agentHarnessId: "agentsapi",
-    messagesSnapshot: SessionManager.open(target, params.workspaceDir).buildSessionContext()
-      .messages,
+    messagesSnapshot: (
+      await SessionManager.openAsync(target, params.workspaceDir)
+    ).buildSessionContext().messages,
     assistantTexts:
       reply?.lastAssistant?.content
         .filter((part) => part.type === "text")

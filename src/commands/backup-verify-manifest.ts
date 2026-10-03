@@ -123,7 +123,19 @@ export function parseUpdateRecoveryBackupManifest(raw: string): UpdateRecoveryBa
   }
   const sources = new Map<string, (typeof manifest.entries)[number]>();
   const payloads = new Set<string>();
+  const excluded = new Set(manifest.excludedRoots);
+  if (
+    excluded.size !== manifest.excludedRoots.length ||
+    [...manifest.roots, ...manifest.protectedPaths, ...manifest.configPaths].some((pathname) =>
+      excluded.has(pathname),
+    )
+  ) {
+    throw new Error("Update recovery exclusions conflict with retained resource inventory.");
+  }
   for (const entry of manifest.entries) {
+    if (excluded.has(entry.sourcePath)) {
+      throw new Error(`Excluded update recovery source has a retained entry: ${entry.sourcePath}`);
+    }
     if (entry.kind === "missing" && entry.sqlite && entry.directory) {
       throw new Error("Missing SQLite inventory cannot describe a directory.");
     }

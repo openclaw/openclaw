@@ -367,7 +367,12 @@ function channelAvatarRevision(reference: string): string {
 }
 
 /** Profile publications invalidate display facts independently of stored session metadata. */
-function projectSessionRowProfiles(input: ReturnType<typeof readSessionRowInputs>["inputs"]) {
+function projectSessionRowProfiles(
+  input: Pick<
+    ReturnType<typeof readSessionRowInputs>["inputs"],
+    "entry" | "cfg" | "userProfileIdentityById" | "configuredAgentIds" | "identityProjection"
+  >,
+) {
   const { entry, cfg, userProfileIdentityById, configuredAgentIds, identityProjection } = input;
   const owner = (identityProjection?.owner ?? projectSessionOwner)(
     entry,
@@ -406,6 +411,25 @@ function projectSessionRowProfiles(input: ReturnType<typeof readSessionRowInputs
 
 export function refreshSessionRowProfiles(materialized: ReturnType<typeof materializeSessionRow>) {
   Object.assign(materialized.row, projectSessionRowProfiles(materialized.source));
+}
+
+/** Child presentation needs live ownership and sharing facts, never the child's stored payload. */
+export function projectSessionRowChildLinks(links: readonly SessionChildLink[] | undefined) {
+  return links?.map(({ key, entry }) => ({
+    key,
+    entry: {
+      sessionId: entry.sessionId,
+      updatedAt: entry.updatedAt,
+      status: entry.status,
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      spawnedBy: entry.spawnedBy,
+      parentSessionKey: entry.parentSessionKey,
+      createdActor: entry.createdActor,
+      visibility: entry.visibility,
+      incognito: entry.incognito,
+    },
+  }));
 }
 
 export function materializeSessionRow(input: ReturnType<typeof readSessionRowInputs>["inputs"]) {
@@ -480,6 +504,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     subject: entry?.subject,
     groupChannel: entry?.groupChannel,
     space: entry?.space,
+    conversationLink: entry?.conversationLink,
     chatType: entry?.chatType,
     origin: storedOrigin
       ? (({ avatar: _avatar, ...safeOrigin }) => safeOrigin)(storedOrigin)
@@ -586,7 +611,29 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lastThreadId: deliveryFields.lastThreadId,
     pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
   };
-  return { row, source: input };
+  return {
+    row,
+    source: {
+      cfg,
+      entry,
+      selectedModel: input.selectedModel,
+      rowModelIdentity: input.rowModelIdentity,
+      thinkingProjection: {
+        acpMeta: input.thinkingProjection.acpMeta,
+        agentRuntime: input.thinkingProjection.agentRuntime,
+      },
+      userProfileIdentityById: input.userProfileIdentityById,
+      identityProjection: input.identityProjection,
+      configuredAgentIds: input.configuredAgentIds,
+      lightweight: input.lightweight,
+      freshSessionTotalTokens: input.freshSessionTotalTokens,
+      usageByFallbackModel: input.usageByFallbackModel,
+      estimatedCostUsd: input.estimatedCostUsd,
+      subagentRunInputs: input.subagentRunInputs,
+      lastMessagePreview: input.lastMessagePreview,
+      childLinks: projectSessionRowChildLinks(input.childLinks),
+    },
+  };
 }
 
 export function presentSessionRow(

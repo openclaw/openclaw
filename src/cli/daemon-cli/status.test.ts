@@ -80,7 +80,6 @@ describe("runDaemonStatus", () => {
     };
     gatherDaemonStatus.mockResolvedValueOnce(gathered);
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
-      target: "2026.7.1",
       version: null,
       nodeEngine: null,
       error: "HTTP 404",

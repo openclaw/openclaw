@@ -34,7 +34,11 @@ function createCapability(
       };
     },
     set: vi.fn<
-      (key: SettingKey, value: boolean | string | string[] | null, onSettled?: () => void) => void
+      (
+        key: SettingKey,
+        value: boolean | string | string[] | null,
+        onSettled?: (error?: Error) => void,
+      ) => void
     >(),
     requestPermission: vi.fn(),
     openSystemSettings: vi.fn(),
@@ -47,9 +51,9 @@ function createCapability(
   } satisfies NativeDeviceSettingsCapability;
   return {
     capability,
-    settle(index: number, next = createNativeDeviceSettingsSnapshot()) {
+    settle(index: number, next = createNativeDeviceSettingsSnapshot(), error?: Error) {
       capability.snapshot = next;
-      capability.set.mock.calls[index]?.[2]?.();
+      capability.set.mock.calls[index]?.[2]?.(error);
       listeners.forEach((listener) => listener(next));
     },
     publish(next: NativeDeviceSettingsSnapshot) {
@@ -171,6 +175,54 @@ describe("native device settings pages", () => {
     toggle(page, title, false);
     expect(native.capability.set).toHaveBeenLastCalledWith("app.nativeExperienceEnabled", false);
     delete saved.app.nativeExperienceEnabled;
+    native.publish(saved);
+    await page.updateComplete;
+    expect(page.textContent).not.toContain(title);
+  });
+
+  it("switches Gateway hosting only when available and follows the native owner's result", async () => {
+    const native = createCapability();
+    const page = await mount("openclaw-device-page", native.capability);
+    const title = "Keep OpenClaw running when the app is closed";
+    const hosting = row(page, title);
+    expect(hosting.previousElementSibling).toBe(row(page, "Launch at login"));
+    expect(hosting.textContent).toContain(
+      "Runs the Gateway as a background service so channels and automations keep working after you quit OpenClaw.",
+    );
+    expect(hosting.querySelector<ToggleElement>("wa-switch")!.checked).toBe(false);
+    toggle(page, title, true);
+    expect(native.capability.set).toHaveBeenCalledExactlyOnceWith(
+      "app.keepGatewayRunning",
+      true,
+      expect.any(Function),
+    );
+    await page.updateComplete;
+    expect(hosting.querySelector<ToggleElement>("wa-switch")!.disabled).toBe(true);
+    const saved = createNativeDeviceSettingsSnapshot();
+    saved.app.keepGatewayRunning = true;
+    native.settle(0, saved);
+    await page.updateComplete;
+    expect(hosting.querySelector<ToggleElement>("wa-switch")!.checked).toBe(true);
+    toggle(page, title, false);
+    expect(native.capability.set).toHaveBeenLastCalledWith(
+      "app.keepGatewayRunning",
+      false,
+      expect.any(Function),
+    );
+    native.settle(1, saved, new Error("Gateway did not become ready."));
+    await page.updateComplete;
+    expect(hosting.querySelector<ToggleElement>("wa-switch")!.checked).toBe(true);
+    expect(hosting.querySelector('[role="alert"]')?.textContent).toContain(
+      "Could not change Gateway hosting. Gateway did not become ready.",
+    );
+    saved.app.keepGatewayRunningAvailable = false;
+    native.publish(saved);
+    await page.updateComplete;
+    expect(hosting.querySelector<ToggleElement>("wa-switch")!.disabled).toBe(true);
+    native.capability.set.mockClear();
+    hosting.click();
+    expect(native.capability.set).not.toHaveBeenCalled();
+    delete saved.app.keepGatewayRunning;
     native.publish(saved);
     await page.updateComplete;
     expect(page.textContent).not.toContain(title);

@@ -812,7 +812,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     }
     const error = (lifecycleError.data as { error?: unknown } | undefined)?.error;
     expect(typeof error).toBe("string");
-    expect(error).toContain("API rate limit reached");
+    expect(error).toContain("The AI service needs a short break");
   });
 
   it("reads terminal abort state before emitting lifecycle:end", () => {

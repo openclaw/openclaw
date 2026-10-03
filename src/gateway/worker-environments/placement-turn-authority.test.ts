@@ -72,6 +72,15 @@ function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-
   return advancePlacementFixtureToActive(store, database, { ...SESSION, executionMode });
 }
 
+function workerClaimInput(name: string, active: Awaited<ReturnType<typeof advanceToActive>>) {
+  return {
+    ...SESSION,
+    claimId: `claim-${name}`,
+    runId: `run-${name}`,
+    owner: placementTurnOwner(active),
+  };
+}
+
 it("fences pending tool revocation and cannot revive grants after claim release", async () => {
   const active = await advanceToActive();
   const claim = await store.claimTurn({
@@ -177,9 +186,9 @@ it.each(["local", "worker-turn", "remote-exec"] as const)(
     try {
       if (active) {
         if (claim.owner.kind === "worker") {
-          store.updateAckCursors({ claim, liveEvent: 2 });
+          await store.updateAckCursors({ claim, liveEvent: 2 });
           expect(authority.isCurrent()).toBe(true);
-          store.startWorkspaceResultDrain(claim);
+          await store.startWorkspaceResultDrain(claim);
         } else {
           store.startDrain({
             sessionId: claim.sessionId,
@@ -202,12 +211,7 @@ it.each(["local", "worker-turn", "remote-exec"] as const)(
 
 it("prepares a persisted failed remote-exec local claim without changing its release contract", async () => {
   const active = await advanceToActive("remote-exec");
-  const claim = await store.claimTurn({
-    ...SESSION,
-    claimId: "claim-failed-remote-exec",
-    runId: "run-failed-remote-exec",
-    owner: placementTurnOwner(active),
-  });
+  const claim = await store.claimTurn(workerClaimInput("failed-remote-exec", active));
   // This persisted shape is accepted by the existing decoder, even though a new drain
   // must pass through reconciliation before failure.
   runOpenClawStateWriteTransaction(
@@ -232,12 +236,7 @@ it("prepares a persisted failed remote-exec local claim without changing its rel
 
 it("rolls back claim fencing and never revives a retained approval after same-ID readmission", async () => {
   const active = await advanceToActive();
-  const input = {
-    ...SESSION,
-    claimId: "claim-reused-after-release",
-    runId: "run-reused-after-release",
-    owner: placementTurnOwner(active),
-  };
+  const input = workerClaimInput("reused-after-release", active);
   const claim = await store.claimTurn(input);
   const instance = createOperationalRunInstanceRef(claim.runId);
   const delegated = claimAgentRunDelegatedAuthority(instance);
@@ -320,12 +319,7 @@ it("rolls back claim fencing and never revives a retained approval after same-ID
 
 it("rejects a prepared reader reply after an identical claim was released and readmitted", async () => {
   const active = await advanceToActive();
-  const input = {
-    ...SESSION,
-    claimId: "claim-delayed-preparation",
-    runId: "run-delayed-preparation",
-    owner: placementTurnOwner(active),
-  };
+  const input = workerClaimInput("delayed-preparation", active);
   const claim = await store.claimTurn(input);
   const read = store.readProjection.bind(store);
   const observed = createDeferredCore();
@@ -354,12 +348,7 @@ it("rejects a prepared reader reply after an identical claim was released and re
 
 it("does not publish an execution owner when its final authority check fails", async () => {
   const active = await advanceToActive();
-  const claim = await store.claimTurn({
-    ...SESSION,
-    claimId: "claim-failed-binding",
-    runId: "run-failed-binding",
-    owner: placementTurnOwner(active),
-  });
+  const claim = await store.claimTurn(workerClaimInput("failed-binding", active));
   const instance = createOperationalRunInstanceRef(claim.runId);
   const delegated = claimAgentRunDelegatedAuthority(instance);
   const assertActive = vi
@@ -382,12 +371,7 @@ it.each(["preparing", "bound"] as const)(
   "rejects a closed %s claim before consulting its original source",
   async (phase) => {
     const active = await advanceToActive();
-    const claim = await store.claimTurn({
-      ...SESSION,
-      claimId: "claim-source-read-order",
-      runId: "run-source-read-order",
-      owner: placementTurnOwner(active),
-    });
+    const claim = await store.claimTurn(workerClaimInput("source-read-order", active));
     const instance = createOperationalRunInstanceRef(claim.runId);
     const delegated = claimAgentRunDelegatedAuthority(instance);
     const assertSourceCurrent = vi.fn();
@@ -430,12 +414,7 @@ it.each(["preparing", "bound"] as const)(
 
 it("retains the original transcript and prompt cache facts while claim authority is prepared", async () => {
   const active = await advanceToActive();
-  const claim = await store.claimTurn({
-    ...SESSION,
-    claimId: "claim-target-snapshot",
-    runId: "run-target-snapshot",
-    owner: placementTurnOwner(active),
-  });
+  const claim = await store.claimTurn(workerClaimInput("target-snapshot", active));
   const instance = createOperationalRunInstanceRef(claim.runId);
   const delegated = claimAgentRunDelegatedAuthority(instance);
   const expected = {
@@ -444,7 +423,13 @@ it("retains the original transcript and prompt cache facts while claim authority
     expectedWriterRunId: claim.runId,
   };
   const requested = { ...expected };
-  const promptCacheContext = { boundaryCount: 2, promptCacheKey: "gateway-cache" };
+  const promptCacheContext = {
+    boundaryCount: 2,
+    promptCacheKey: "gateway-cache",
+    fastMode: true,
+    fastModeStartedAtMs: 123,
+    fastModeAutoOnSeconds: 30,
+  };
   const binding = bindWorkerTurnOwner(
     store,
     claim,
@@ -471,6 +456,9 @@ it("retains the original transcript and prompt cache facts while claim authority
   };
   promptCacheContext.boundaryCount = 99;
   promptCacheContext.promptCacheKey = "replacement-cache";
+  promptCacheContext.fastMode = false;
+  promptCacheContext.fastModeStartedAtMs = 456;
+  promptCacheContext.fastModeAutoOnSeconds = 60;
   requested.sessionId = "replacement-session";
   requested.storePath = path.join(root, "replacement.json");
   requested.expectedLifecycleRevision = "replacement-lifecycle";
@@ -484,6 +472,9 @@ it("retains the original transcript and prompt cache facts while claim authority
     expect(readWorkerTurnPromptCacheContext(connection)).toEqual({
       boundaryCount: 2,
       promptCacheKey: "gateway-cache",
+      fastMode: true,
+      fastModeStartedAtMs: 123,
+      fastModeAutoOnSeconds: 30,
     });
     expect(
       readWorkerTurnPromptCacheContext({ ...connection, runId: "another-run" }),
@@ -501,12 +492,7 @@ it("retains the original transcript and prompt cache facts while claim authority
 
 it("does not adopt a same-claim successor while execution identity preparation returns", async () => {
   const active = await advanceToActive();
-  const claim = await store.claimTurn({
-    ...SESSION,
-    claimId: "claim-owner-replacement",
-    runId: "run-owner-replacement",
-    owner: placementTurnOwner(active),
-  });
+  const claim = await store.claimTurn(workerClaimInput("owner-replacement", active));
   const admission = prepareAgentRunAdmission({
     cfg: {},
     operationalRunInstance: createOperationalRunInstanceRef(claim.runId),
@@ -563,12 +549,7 @@ it("does not adopt a same-claim successor while execution identity preparation r
 
 it("does not read the worker source when its claim closes during run admission", async () => {
   const active = await advanceToActive();
-  const claim = await store.claimTurn({
-    ...SESSION,
-    claimId: "claim-admission-source-order",
-    runId: "run-admission-source-order",
-    owner: placementTurnOwner(active),
-  });
+  const claim = await store.claimTurn(workerClaimInput("admission-source-order", active));
   const admission = prepareAgentRunAdmission({
     cfg: {},
     operationalRunInstance: createOperationalRunInstanceRef(claim.runId),
@@ -612,12 +593,7 @@ it("does not read the worker source when its claim closes during run admission",
 
 it("keeps authority revoked when COMMIT succeeds but its outcome is lost", async () => {
   const active = await advanceToActive();
-  const claim = await store.claimTurn({
-    ...SESSION,
-    claimId: "claim-lost-commit",
-    runId: "run-lost-commit",
-    owner: placementTurnOwner(active),
-  });
+  const claim = await store.claimTurn(workerClaimInput("lost-commit", active));
   const authority = await store.prepareTurnClaimAuthority(claim);
   const exec = database.db.exec.bind(database.db);
   const failure = new Error("synthetic lost placement COMMIT outcome");
@@ -648,12 +624,7 @@ it("keeps authority revoked when COMMIT succeeds but its outcome is lost", async
 
 it("shares claim revocation across facades while restart clearing leaves worker claims live", async () => {
   const active = await advanceToActive();
-  const worker = await store.claimTurn({
-    ...SESSION,
-    claimId: "claim-shared-facade",
-    runId: "run-shared-facade",
-    owner: placementTurnOwner(active),
-  });
+  const worker = await store.claimTurn(workerClaimInput("shared-facade", active));
   const local = await store.claimTurn({
     sessionId: "session-local-restart",
     agentId: "main",
@@ -685,12 +656,7 @@ it("shares claim revocation across facades while restart clearing leaves worker 
 
 it("does not adopt an identical claim from a replacement database", async () => {
   const active = await advanceToActive();
-  const input = {
-    ...SESSION,
-    claimId: "claim-replaced-database",
-    runId: "run-replaced-database",
-    owner: placementTurnOwner(active),
-  };
+  const input = workerClaimInput("replaced-database", active);
   const original = await store.claimTurn(input);
   const authority = await store.prepareTurnClaimAuthority(original);
   const pathname = database.path;

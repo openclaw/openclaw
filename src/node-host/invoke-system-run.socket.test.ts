@@ -6,9 +6,11 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { testing as approvalsTesting } from "../infra/exec-approvals-store.test-support.js";
-import { saveExecApprovals } from "../infra/exec-approvals.js";
-import { requestExecHostViaSocket, type ExecHostRequest } from "../infra/exec-host.js";
+import {
+  saveExecApprovals,
+  testing as approvalsTesting,
+} from "../infra/exec-approvals-store.test-support.js";
+import type { ExecHostRequest } from "../infra/exec-host.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -96,51 +98,26 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
             const runCommand = vi.fn<Parameters<typeof handleSystemRunInvoke>[0]["runCommand"]>();
             const sendInvokeResult = vi.fn();
             const sendNodeEvent = vi.fn();
-            const sendExecFinishedEvent = vi.fn();
             await handleSystemRunInvoke({
-              client: {
-                request: async () => {
-                  throw new Error("Unexpected Gateway request");
-                },
-              },
               params: { command, cwd: dir, sessionKey: "agent:main:proof" },
               skillBins: { current: async () => [] },
               execHostEnforced: true,
               // Production defaults this preference to true; enforcement still forbids replay.
               execHostFallbackAllowed: true,
               preferMacAppExecHost: true,
-              resolveExecSecurity: () => "full",
-              resolveExecAsk: () => "off",
-              isCmdExeInvocation: () => false,
-              sanitizeEnv: () => undefined,
               getRuntimeConfig: () => ({}),
               runCommand,
-              runViaMacAppExecHost: async ({ request }) => {
-                const response = await requestExecHostViaSocket({
-                  socketPath,
-                  token,
-                  request,
-                  timeoutMs: 2_000,
-                });
-                expect(response).toBeNull();
-                order.push("client-null");
-                return response;
-              },
               sendInvokeResult,
               sendNodeEvent,
-              sendExecFinishedEvent,
-              buildExecEventPayload: (payload) => payload,
             });
             await handler;
             expect(failures).toEqual([]);
-            expect(order).toEqual(["child-completed", "response-dropped", "client-null"]);
+            expect(order).toEqual(["child-completed", "response-dropped"]);
             expect(runCommand).not.toHaveBeenCalled();
-            expect(sendExecFinishedEvent).not.toHaveBeenCalled();
             expect(sendInvokeResult).toHaveBeenCalledExactlyOnceWith(
               expect.objectContaining({ ok: false }),
             );
             expect(sendNodeEvent).toHaveBeenCalledExactlyOnceWith(
-              expect.anything(),
               "exec.denied",
               expect.objectContaining({ host: "node" }),
             );

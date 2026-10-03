@@ -28,23 +28,6 @@ export type CommandResolution = {
   blockedWrapper?: string;
 };
 
-function parseFirstToken(command: string): string | null {
-  const trimmed = command.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const first = trimmed[0];
-  if (first === '"' || first === "'") {
-    const end = trimmed.indexOf(first, 1);
-    if (end > 1) {
-      return trimmed.slice(1, end);
-    }
-    return trimmed.slice(1);
-  }
-  const match = /^[^\s]+/.exec(trimmed);
-  return match ? match[0] : null;
-}
-
 function tryResolveRealpath(filePath: string | undefined): string | undefined {
   return filePath ? (safeRealpathSync(filePath) ?? undefined) : undefined;
 }
@@ -57,11 +40,7 @@ function buildExecutableResolution(
     useCache?: boolean;
   },
 ): ExecutableResolution {
-  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, {
-    cwd: params.cwd,
-    env: params.env,
-    useCache: params.useCache,
-  });
+  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, params);
   const resolvedRealPath = tryResolveRealpath(resolvedPath);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
   return {
@@ -71,51 +50,6 @@ function buildExecutableResolution(
     resolvedRealPath,
     executableName,
   };
-}
-
-function buildCommandResolution(params: {
-  rawExecutable: string;
-  policyRawExecutable?: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  useCache?: boolean;
-  effectiveArgv: string[];
-  wrapperChain: string[];
-  policyBlocked: boolean;
-  blockedWrapper?: string;
-}): CommandResolution {
-  const execution = buildExecutableResolution(params.rawExecutable, params);
-  const policy = params.policyRawExecutable
-    ? buildExecutableResolution(params.policyRawExecutable, params)
-    : execution;
-  return {
-    kind: "command",
-    execution,
-    policy,
-    effectiveArgv: params.effectiveArgv,
-    wrapperChain: params.wrapperChain,
-    policyBlocked: params.policyBlocked,
-    blockedWrapper: params.blockedWrapper,
-  };
-}
-
-export function resolveCommandResolution(
-  command: string,
-  cwd?: string,
-  env?: NodeJS.ProcessEnv,
-): CommandResolution | null {
-  const rawExecutable = parseFirstToken(command);
-  if (!rawExecutable) {
-    return null;
-  }
-  return buildCommandResolution({
-    rawExecutable,
-    effectiveArgv: [rawExecutable],
-    wrapperChain: [],
-    policyBlocked: false,
-    cwd,
-    env,
-  });
 }
 
 export function resolveCommandResolutionFromArgv(
@@ -131,17 +65,20 @@ export function resolveCommandResolutionFromArgv(
   if (!rawExecutable) {
     return null;
   }
-  return buildCommandResolution({
-    rawExecutable,
-    policyRawExecutable: plan.policyArgv[0]?.trim(),
+  const resolutionOptions = { cwd, env, useCache: options?.useCache };
+  const execution = buildExecutableResolution(rawExecutable, resolutionOptions);
+  const policyRawExecutable = plan.policyArgv[0]?.trim();
+  return {
+    kind: "command",
+    execution,
+    policy: policyRawExecutable
+      ? buildExecutableResolution(policyRawExecutable, resolutionOptions)
+      : execution,
     effectiveArgv,
     wrapperChain: plan.wrapperChain,
     policyBlocked: plan.policyBlocked,
     blockedWrapper: plan.blockedWrapper,
-    useCache: options?.useCache,
-    cwd,
-    env,
-  });
+  };
 }
 
 function resolveExecutableCandidatePathFromResolution(
@@ -234,24 +171,12 @@ export function resolvePolicyTargetTrustPath(
   );
 }
 
-export function resolveApprovalAuditCandidatePath(
-  resolution: CommandResolution | null,
-  cwd?: string,
-): string | undefined {
-  return resolvePolicyTargetCandidatePath(resolution, cwd);
-}
-
 export function resolveApprovalAuditTrustPath(
   resolution: CommandResolution | null,
   cwd?: string,
 ): string | undefined {
   return resolvePolicyTargetTrustPath(resolution, cwd);
 }
-
-/** @deprecated Use resolveExecutionTargetCandidatePath. */
-export const resolveAllowlistCandidatePath = resolveExecutionTargetCandidatePath;
-
-export const resolvePolicyAllowlistCandidatePath = resolvePolicyTargetCandidatePath;
 
 const LEGACY_HASHED_ARG_PATTERN_PREFIX = "sha256:argv:";
 const CWD_BOUND_HASHED_ARG_PATTERN_PREFIX = "sha256:cwd-argv:v1:";
@@ -457,7 +382,7 @@ export function matchAllowlist(
   return pathOnlyMatch;
 }
 
-export type ExecArgvToken =
+type ExecArgvToken =
   | {
       kind: "empty";
       raw: string;

@@ -37,7 +37,7 @@ describe("models.authRefresh", () => {
       'models.providers["local.service"].apiKey',
     ];
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", workspace: state.workspaceDir }] },
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
       plugins: { enabled: false },
       gateway: { mode: "local", auth: { mode: "token", token } },
       models: {
@@ -140,7 +140,7 @@ describe("models.authRefresh", () => {
     });
     const token = "auth-refresh-integration-token";
     const cfg = {
-      agents: { list: [{ id: "main", workspace: state.workspaceDir }] },
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
       plugins: { enabled: false },
       gateway: { mode: "local", auth: { mode: "token", token } },
     };

@@ -2,6 +2,7 @@ import type { WebClient } from "@slack/web-api";
 import { resolveDirectoryAllowlistEntries } from "openclaw/plugin-sdk/directory-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSlackLookupClient } from "./client.js";
@@ -73,10 +74,7 @@ async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
             realName:
               normalizeOptionalString(profile.real_name) ??
               normalizeOptionalString(member.real_name),
-            email:
-              normalizeOptionalString(profile.email) == null
-                ? undefined
-                : normalizeLowercaseStringOrEmpty(profile.email),
+            email: normalizeOptionalLowercaseString(profile.email),
             deleted: Boolean(member.deleted),
             isBot: Boolean(member.is_bot),
             isAppUser: Boolean(member.is_app_user),

@@ -57,7 +57,8 @@ export function mapRetainedOperation<T, U>(
 ): RetainedOperation<U> {
   const inContext = AsyncLocalStorage.snapshot();
   let servicing = false;
-  const completion = createRetainedOperation<U>(() => inContext(service));
+  const serviceInContext = () => inContext(service);
+  const completion = createRetainedOperation<U>(serviceInContext);
   function service() {
     if (servicing || completion.operation.read().status !== "pending") {
       return;
@@ -77,10 +78,7 @@ export function mapRetainedOperation<T, U>(
       servicing = false;
     }
   }
-  void source.result.then(
-    () => completion.operation.service(),
-    () => completion.operation.service(),
-  );
+  void source.result.then(serviceInContext, serviceInContext);
   completion.operation.service();
   return completion.operation;
 }
@@ -106,7 +104,8 @@ function flatMapRetainedOutcome<T, U>(
   const inContext = AsyncLocalStorage.snapshot();
   let child: RetainedOperation<U> | undefined;
   let servicing = false;
-  const completion = createRetainedOperation<U>(() => inContext(service));
+  const serviceInContext = () => inContext(service);
+  const completion = createRetainedOperation<U>(serviceInContext);
   function service() {
     if (servicing || completion.operation.read().status !== "pending") {
       return;
@@ -125,10 +124,7 @@ function flatMapRetainedOutcome<T, U>(
           return;
         }
         child = next(outcome);
-        void child.result.then(
-          () => completion.operation.service(),
-          () => completion.operation.service(),
-        );
+        void child.result.then(serviceInContext, serviceInContext);
       }
       child.service();
       const outcome = child.read();
@@ -143,10 +139,7 @@ function flatMapRetainedOutcome<T, U>(
       servicing = false;
     }
   }
-  void source.result.then(
-    () => completion.operation.service(),
-    () => completion.operation.service(),
-  );
+  void source.result.then(serviceInContext, serviceInContext);
   completion.operation.service();
   return completion.operation;
 }
@@ -164,7 +157,8 @@ export function finallyRetainedOperation<T>(
   let original: Exclude<RetainedOutcome<T>, { status: "pending" }> | undefined;
   let child: RetainedOperation<void> | undefined;
   let servicing = false;
-  const completion = createRetainedOperation<T>(() => inContext(service));
+  const serviceInContext = () => inContext(service);
+  const completion = createRetainedOperation<T>(serviceInContext);
   function service() {
     if (servicing || completion.operation.read().status !== "pending") {
       return;
@@ -183,10 +177,7 @@ export function finallyRetainedOperation<T>(
           original = { status: "rejected", error };
         }
         child = cleanup(original);
-        void child.result.then(
-          () => completion.operation.service(),
-          () => completion.operation.service(),
-        );
+        void child.result.then(serviceInContext, serviceInContext);
       }
       if (!child) {
         return;
@@ -216,10 +207,7 @@ export function finallyRetainedOperation<T>(
       servicing = false;
     }
   }
-  void source.result.then(
-    () => completion.operation.service(),
-    () => completion.operation.service(),
-  );
+  void source.result.then(serviceInContext, serviceInContext);
   completion.operation.service();
   return completion.operation;
 }

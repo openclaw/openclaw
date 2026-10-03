@@ -7,7 +7,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
-  SessionTranscriptContextVersion,
+  SessionTranscriptBoundedActiveContext,
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
@@ -37,21 +37,6 @@ import {
   transcriptEventResetNavigationSql,
 } from "./transcript-payload.js";
 
-export type SessionTranscriptBoundedActiveContext = {
-  activeLeafEntryId: string | null;
-  version: SessionTranscriptContextVersion;
-  opaqueParents: Map<string, string | null>;
-  parents: Map<string, string | null>;
-  firstKeptRanges: Map<string, { startIndex: number; endIndex: number }>;
-  persistedSuffixStartSeq: number;
-  boundaryCount: number;
-  events: TranscriptEvent[];
-  serializedBytes: number;
-  totalEvents: number;
-  transcriptMutationAt: number | null;
-  truncated: boolean;
-};
-
 function readBoundedRetentionRanges(
   projection: CurrentTranscriptProjection,
   rows: Array<{ event: TranscriptEvent; seq: number }>,
@@ -75,7 +60,7 @@ function readBoundedRetentionRanges(
     (id) => !sequences.has(id),
   );
   if (missing.length > 0) {
-    const lastSelectedSeq = Math.max(...rows.map((row) => row.seq));
+    const lastSelectedSeq = rows.reduce((maximum, row) => Math.max(maximum, row.seq), -Infinity);
     const db = getActiveTranscriptKysely(projection.database);
     const anchors = executeSqliteQuerySync(
       projection.database.db,
@@ -100,7 +85,7 @@ function readBoundedRetentionRanges(
     const unresolved = new Set(cuts.map((cut) => cut.firstKeptEntryId));
     for (const row of iterateUnindexedActiveTranscriptNavigation(projection, {
       eventIds: [...unresolved],
-      maxRawSeq: Math.max(...cuts.map((cut) => cut.seq)) - 1,
+      maxRawSeq: cuts.reduce((maximum, cut) => Math.max(maximum, cut.seq), -Infinity) - 1,
       first: true,
     })) {
       const id = typeof row.event.id === "string" ? row.event.id : undefined;
@@ -225,7 +210,11 @@ export function readSessionTranscriptBoundedActiveContextCore(
     const header = executeSqliteQueryTakeFirstSync(
       projection.database.db,
       transcript
-        .select("seq")
+        .select([
+          "seq",
+          /* kysely-allow-raw: reject an oversized header before acquiring its JSON payload. */
+          sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
+        ])
         .where(
           /* kysely-allow-raw: the canonical transcript event type is stored inside event_json. */
           sql<string>`json_extract(${transcriptEventNavigationSql()}, '$.type')`,
@@ -235,17 +224,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
         .orderBy("seq", "asc")
         .limit(1),
     );
-    const headerBytes = header
-      ? executeSqliteQueryTakeFirstSync(
-          projection.database.db,
-          transcript
-            .select(
-              /* kysely-allow-raw: reject an oversized header before acquiring its JSON payload. */
-              sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
-            )
-            .where("seq", "=", header.seq),
-        )!.serialized_bytes
-      : 0;
+    const headerBytes = header?.serialized_bytes ?? 0;
     if (headerBytes > maxBytes) {
       throw new RangeError("Session transcript header exceeds the active-context byte limit");
     }

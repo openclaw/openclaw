@@ -192,7 +192,7 @@ export function createPluginApprovalHandlers(
           ? { policySubject: { ...p.policySubject } }
           : {}),
         ...(trustedAgentRuntime && p.mcpTool ? { mcpTool: { ...p.mcpTool } } : {}),
-        ...(Array.isArray(p.allowedDecisions)
+        ...(p.allowedDecisions
           ? {
               allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
                 allowedDecisions: p.allowedDecisions,
@@ -269,7 +269,7 @@ export function createPluginApprovalHandlers(
       await handleApprovalWaitDecision({
         authority,
         manager,
-        inputId: (params as { id?: string }).id,
+        inputId: params.id,
         client,
         ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         respond,

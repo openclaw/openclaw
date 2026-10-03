@@ -13,14 +13,10 @@ import {
 import { readUserProfileVersion } from "./user-profile-events.js";
 import { listUserProfilesSync } from "./user-profile-identity.read.js";
 import { retainUserProfileCatalog } from "./user-profile-list.js";
+import { setAvatar, setDisplayName } from "./user-profile-writes.worker.js";
 import { createProfileAvatarReader } from "./user-profiles-avatar.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
-import {
-  adoptTailscaleProfileAvatar,
-  ensureProfileForEmail,
-  setAvatar,
-  setDisplayName,
-} from "./user-profiles.js";
+import { adoptTailscaleProfileAvatar, ensureProfileForEmail } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {

@@ -332,7 +332,7 @@ describe("runtime-config replacement during a turn", () => {
                 model: { primary: provider.primaryRef, fallbacks: [provider.fallbackRef] },
                 thinkingDefault: "low",
               },
-              entries: { main: { default: true } },
+              entries: { main: {} },
             },
             models: { mode: "merge", providers: { [PROVIDER_ID]: provider.config } },
             gateway: { auth: { mode: "token", token: TOKEN } },
@@ -359,7 +359,7 @@ describe("runtime-config replacement during a turn", () => {
         };
         const refreshCatalog = async (rich: boolean) => {
           const requestsBefore = catalogRequests.length;
-          const committed = createDeferred<void>();
+          const committed = createDeferred();
           const checkReady = () => {
             const owner = getPreparedModelCatalogOwnerSnapshot({ config: getRuntimeConfig() });
             const catalog = owner?.readFullModelCatalog?.() ?? owner?.modelCatalog;

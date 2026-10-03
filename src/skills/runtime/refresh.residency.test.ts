@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -75,13 +76,12 @@ describe("skills watcher residency", () => {
   }
 
   function executionTargetStates(executionWorkspaceDir: string) {
-    const key = JSON.stringify([
-      fixture.workspaceDir,
-      path.resolve(executionWorkspaceDir),
-      undefined,
-    ]);
+    const { watcherKey } = registry.resolveSkillsWatchScope({
+      workspaceDir: fixture.workspaceDir,
+      executionWorkspaceDir,
+    });
     const targets = expectDefined(
-      registry.workspaceWatchTargets.get(key),
+      registry.workspaceWatchTargets.get(watcherKey),
       "execution watch targets",
     );
     const states = targets

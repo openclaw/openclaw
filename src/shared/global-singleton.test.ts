@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   drainGlobalSingletonLifecycleState,
+  readGlobalSingleton,
   resolveGlobalMap,
   resolveGlobalSingleton,
 } from "./global-singleton.js";
@@ -18,10 +19,12 @@ describe("resolveGlobalSingleton", () => {
   it("reuses an initialized singleton", () => {
     const create = vi.fn(() => ({ value: 1 }));
 
+    expect(readGlobalSingleton(TEST_KEY)).toBeUndefined();
     const first = resolveGlobalSingleton(TEST_KEY, create);
     const second = resolveGlobalSingleton(TEST_KEY, create);
 
     expect(first).toBe(second);
+    expect(readGlobalSingleton(TEST_KEY)).toBe(first);
     expect(create).toHaveBeenCalledTimes(1);
   });
 

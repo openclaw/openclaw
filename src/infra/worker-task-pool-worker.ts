@@ -1,3 +1,6 @@
+import type { Transferable } from "node:worker_threads";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { captureDeletedAgentDatabaseFences } from "./agent-database-readers.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
 import {
@@ -9,7 +12,33 @@ import type {
   WorkerLifecycle,
 } from "./worker-native-lifecycle.types.js";
 import { releaseWorkerNativeSectionsOnExit } from "./worker-task-native-sections.js";
-import type { Slot, WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
+import type { Slot, Task, WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
+
+export function postWorkerTaskInput<Input, Output>(
+  worker: WorkerLifecycle,
+  slot: Slot<Input, Output>,
+  task: Task<Input, Output>,
+  input: Input,
+  transferList: readonly Transferable[] | undefined,
+): void {
+  const transferStartedAt = performance.now();
+  worker.postMessage(
+    {
+      input,
+      taskId: task.id,
+      interactive: Boolean(task.options.onRequest || task.options.onRequestSync),
+      nativeSections: slot.nativeSections.buffer,
+      deletedAgentDatabaseFences: captureDeletedAgentDatabaseFences(),
+      sampleMemory: true,
+    },
+    transferList,
+  );
+  task.transferMs += performance.now() - transferStartedAt;
+}
+
+export const prepareWorkerTaskResources = createLazyRuntimeModule(
+  () => import("./temp-artifact-cleanup.js"),
+);
 
 /** Physical construction and listeners share the pool's detached creation scope. */
 export function createWorkerTaskPoolWorker<Input, Output>(params: {
@@ -31,10 +60,11 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
     slot.releaseResources = prepared?.releaseResources;
     const temporaryDirectory = prepared?.temporaryDirectory;
     if (temporaryDirectory) {
+      const cleanup = prepareWorkerTaskResources();
       const releaseResources = slot.releaseResources;
       slot.releaseResources = async () => {
         try {
-          const { removeTemporaryArtifacts } = await import("./temp-artifact-cleanup.js");
+          const { removeTemporaryArtifacts } = await cleanup;
           await removeTemporaryArtifacts(temporaryDirectory, "Worker task");
         } finally {
           await releaseResources?.();

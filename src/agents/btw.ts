@@ -1089,6 +1089,7 @@ export async function runBtwSideQuestion(
         imageLimits,
       });
     }
+    params.opts?.abortSignal?.throwIfAborted();
     if (messages.length === 0 && !inFlightPrompt?.trim()) {
       throw new Error("No active session context.");
     }
@@ -1102,11 +1103,9 @@ export async function runBtwSideQuestion(
     });
     const fallbackRuntime = fallbackPolicy.runtime.trim();
     const sessionAuthProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
-    const sessionAuthProfileSource = !sessionAuthProfileId
-      ? undefined
-      : params.sessionEntry.authProfileOverride?.trim() !== sessionAuthProfileId
-        ? "auto"
-        : resolveCollapsedSessionAuthPinSource(params.sessionEntry);
+    const sessionAuthProfileSource = sessionAuthProfileId
+      ? resolveCollapsedSessionAuthPinSource(params.sessionEntry)
+      : undefined;
     const cliProviderFromSessionAuth = sessionAuthProfileId
       ? resolveCliRuntimeExecutionProvider({
           provider: params.provider,

@@ -412,9 +412,9 @@ async function cleanupProfileResources(params: {
 
   if (actor.cleanupChromeMcp.size > 0) {
     try {
-      const { closeChromeMcpSession } = await getChromeMcpModule();
+      const chromeMcp = await getChromeMcpModule.peek();
       for (const profileName of actor.cleanupChromeMcp) {
-        stopped = (await closeChromeMcpSession(profileName)) || stopped;
+        stopped = (await chromeMcp?.closeChromeMcpSession(profileName)) || stopped;
         actor.cleanupChromeMcp.delete(profileName);
       }
     } catch (err) {
@@ -513,9 +513,10 @@ export function beginProfileTransition(
   // Start closing MCP before waiting for a start, lease, or older transition.
   const eagerMcpClose =
     closeSharedAdapters && usesChromeMcp
-      ? getChromeMcpModule()
-          .then(({ closeChromeMcpSession }) => closeChromeMcpSession(ownerProfile.name))
-          .catch(() => false)
+      ? (getChromeMcpModule
+          .peek()
+          ?.then(({ closeChromeMcpSession }) => closeChromeMcpSession(ownerProfile.name))
+          .catch(() => false) ?? null)
       : null;
   const transitionGeneration = actor.generation;
   let cleanupCompleted = false;

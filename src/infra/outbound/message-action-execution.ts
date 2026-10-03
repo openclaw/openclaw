@@ -32,6 +32,7 @@ import { assertOutboundHandoffCurrent, OutboundHandoffRejectedError } from "./de
 import {
   createChannelActionContext,
   type MessageActionGateway,
+  type MessageActionInput,
   type MessageActionResult,
   type ResolvedActionContext,
 } from "./message-action-contracts.js";
@@ -44,7 +45,6 @@ import {
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
-  type CrossContextDecoration,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
 import { executePollAction } from "./outbound-send-service.js";
@@ -67,6 +67,23 @@ const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
 const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
 const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
 const MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS = 30_000;
+
+export function assertMessageDeliveryCurrent(input: MessageActionInput): void {
+  throwIfAborted(input.abortSignal);
+  input.assertDirectAdapterHandoff?.();
+  input.messageActionAuthorization?.scheduled?.assertCurrent();
+  input.messageActionAuthorization?.deliveryAttempt?.assertCurrent();
+}
+
+export async function beforeMessageDeliveryAttempt(input: MessageActionInput): Promise<void> {
+  const deliveryAttempt = input.messageActionAuthorization?.deliveryAttempt;
+  if (!deliveryAttempt) {
+    return;
+  }
+  assertMessageDeliveryCurrent(input);
+  await deliveryAttempt.beforeAttempt();
+  assertMessageDeliveryCurrent(input);
+}
 
 async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionGateway;
@@ -202,35 +219,6 @@ async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Prom
   return randomIdempotencyKey();
 }
 
-function applyCrossContextMessageDecoration({
-  params,
-  message,
-  decoration,
-  preferPresentation,
-}: {
-  params: Record<string, unknown>;
-  message: string;
-  decoration: CrossContextDecoration;
-  preferPresentation: boolean;
-}): string {
-  const applied = applyCrossContextDecoration({
-    message,
-    decoration,
-    preferPresentation,
-  });
-  params.message = applied.message;
-  if (applied.presentation) {
-    const existing = normalizeMessagePresentation(params.presentation);
-    params.presentation = existing
-      ? {
-          ...existing,
-          blocks: [...applied.presentation.blocks, ...existing.blocks],
-        }
-      : applied.presentation;
-  }
-  return applied.message;
-}
-
 export async function applyMessageCrossContextMarker(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -257,12 +245,22 @@ export async function applyMessageCrossContextMarker(params: {
   if (!decoration) {
     return params.message;
   }
-  return applyCrossContextMessageDecoration({
-    params: params.args,
+  const applied = applyCrossContextDecoration({
     message: params.message,
     decoration,
     preferPresentation: params.preferPresentation,
   });
+  params.args.message = applied.message;
+  if (applied.presentation) {
+    const existing = normalizeMessagePresentation(params.args.presentation);
+    params.args.presentation = existing
+      ? {
+          ...existing,
+          blocks: [...applied.presentation.blocks, ...existing.blocks],
+        }
+      : applied.presentation;
+  }
+  return applied.message;
 }
 
 export async function executeGatewayAction(
@@ -578,7 +576,7 @@ export async function executeMessagePlugin(
   }
 
   if (!channelPlugin?.actions?.handleAction) {
-    throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
+    throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
 
   // Plugin actions bypass buildSendPayloadParts, so model-authored text here

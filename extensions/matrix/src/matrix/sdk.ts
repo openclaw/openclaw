@@ -17,6 +17,7 @@ import {
   type MatrixOwnCrossSigningPublicationStatus,
   type MatrixOwnDeviceDeleteResult,
   type MatrixOwnDeviceInfo,
+  type MatrixOwnDeviceVerificationStatus,
   type MatrixRecoveryKeyVerificationResult,
   type MatrixRoomKeyBackupResetOptions,
   type MatrixRoomKeyBackupResetResult,
@@ -56,21 +57,13 @@ export class MatrixClient extends MatrixClientVerification {
   async verifyWithRecoveryKey(
     rawRecoveryKey: string,
   ): Promise<MatrixRecoveryKeyVerificationResult> {
-    const fail = async (
-      error: string,
-      fields: Partial<
-        Pick<
-          MatrixRecoveryKeyVerificationResult,
-          "backupUsable" | "deviceOwnerVerified" | "recoveryKeyAccepted"
-        >
-      > = {},
-    ): Promise<MatrixRecoveryKeyVerificationResult> => {
+    const fail = async (error: string): Promise<MatrixRecoveryKeyVerificationResult> => {
       const status = await this.getOwnDeviceVerificationStatus();
       return {
         success: false,
-        recoveryKeyAccepted: fields.recoveryKeyAccepted ?? false,
-        backupUsable: fields.backupUsable ?? false,
-        deviceOwnerVerified: fields.deviceOwnerVerified ?? status.verified,
+        recoveryKeyAccepted: false,
+        backupUsable: false,
+        deviceOwnerVerified: status.verified,
         error,
         ...status,
       };
@@ -110,8 +103,11 @@ export class MatrixClient extends MatrixClientVerification {
     const storedRecoveryKeyMatches =
       (await this.recoveryKeyStore.getRecoveryKeySummary())?.encodedPrivateKey?.trim() ===
       trimmedRecoveryKey;
-    if (backupUsableBeforeStagedRecovery && storedRecoveryKeyMatches) {
-      const status = await this.getOwnDeviceVerificationStatus();
+    const settleRecoveryKey = async (
+      status: MatrixOwnDeviceVerificationStatus,
+      keyValidated: boolean,
+      reusingStoredKey = false,
+    ): Promise<MatrixRecoveryKeyVerificationResult> => {
       const backupUsable =
         resolveMatrixRoomKeyBackupReadinessError(status.backup, {
           requireServerBackup: true,
@@ -119,47 +115,35 @@ export class MatrixClient extends MatrixClientVerification {
       const backupError = resolveMatrixRoomKeyBackupReadinessError(status.backup, {
         requireServerBackup: false,
       });
-      const recoveryKeyAccepted = backupUsable;
-      if (!status.verified) {
-        if (recoveryKeyAccepted) {
-          await this.recoveryKeyStore.commitStagedRecoveryKey({
-            keyId: stagedKeyId,
-          });
-        } else {
-          await this.recoveryKeyStore.discardStagedRecoveryKey();
-        }
-        return {
-          success: false,
-          recoveryKeyAccepted,
-          backupUsable,
-          deviceOwnerVerified: false,
-          error:
-            "Matrix recovery key was applied, but this device still lacks full Matrix identity trust. The recovery key can unlock usable backup material only when 'Backup usable' is yes; full identity trust still requires Matrix cross-signing verification.",
-          ...status,
-        };
-      }
-      if (backupError) {
+      const recoveryKeyAccepted = reusingStoredKey
+        ? backupUsable
+        : keyValidated && (status.verified || backupUsable);
+      const error = !status.verified
+        ? "Matrix recovery key was applied, but this device still lacks full Matrix identity trust. The recovery key can unlock usable backup material only when 'Backup usable' is yes; full identity trust still requires Matrix cross-signing verification."
+        : (backupError ??
+          (!keyValidated
+            ? "Matrix recovery key could not be verified against active Matrix backup material; existing backup may be usable from previously loaded recovery material."
+            : undefined));
+      const commit = status.verified ? !error : backupUsable && keyValidated;
+      if (commit) {
+        await this.recoveryKeyStore.commitStagedRecoveryKey({ keyId: stagedKeyId });
+      } else {
         await this.recoveryKeyStore.discardStagedRecoveryKey();
-        return {
-          success: false,
-          recoveryKeyAccepted,
-          backupUsable,
-          deviceOwnerVerified: true,
-          error: backupError,
-          ...status,
-        };
       }
-      await this.recoveryKeyStore.commitStagedRecoveryKey({
-        keyId: stagedKeyId,
-      });
+      // Reused keys already have durable diagnostics; new keys need a post-commit read.
+      const committedStatus =
+        commit && !reusingStoredKey ? await this.getOwnDeviceVerificationStatus() : status;
       return {
-        success: true,
-        recoveryKeyAccepted: true,
+        success: !error,
+        recoveryKeyAccepted: error ? recoveryKeyAccepted : true,
         backupUsable,
-        deviceOwnerVerified: true,
-        verifiedAt: new Date().toISOString(),
-        ...status,
+        deviceOwnerVerified: status.verified,
+        ...(error ? { error } : { verifiedAt: new Date().toISOString() }),
+        ...committedStatus,
       };
+    };
+    if (backupUsableBeforeStagedRecovery && storedRecoveryKeyMatches) {
+      return await settleRecoveryKey(await this.getOwnDeviceVerificationStatus(), true, true);
     }
 
     try {
@@ -172,9 +156,6 @@ export class MatrixClient extends MatrixClientVerification {
       });
       await this.enableTrustedRoomKeyBackupIfPossible(crypto);
       const status = await this.getOwnDeviceVerificationStatus();
-      const backupError = resolveMatrixRoomKeyBackupReadinessError(status.backup, {
-        requireServerBackup: false,
-      });
       const backupUsable =
         resolveMatrixRoomKeyBackupReadinessError(status.backup, {
           requireServerBackup: true,
@@ -200,64 +181,7 @@ export class MatrixClient extends MatrixClientVerification {
         (stagedRecoveryKeyUsed &&
           (stagedRecoveryKeyConfirmedBySecretStorage || stagedRecoveryKeyUnlockedBackup)) ||
         (storedRecoveryKeyMatches && backupUsable);
-      const recoveryKeyAccepted = stagedRecoveryKeyValidated && (status.verified || backupUsable);
-      if (!status.verified) {
-        if (backupUsable && stagedRecoveryKeyValidated) {
-          await this.recoveryKeyStore.commitStagedRecoveryKey({
-            keyId: stagedKeyId,
-          });
-        } else {
-          await this.recoveryKeyStore.discardStagedRecoveryKey();
-        }
-        const committedStatus = recoveryKeyAccepted
-          ? await this.getOwnDeviceVerificationStatus()
-          : status;
-        return {
-          success: false,
-          recoveryKeyAccepted,
-          backupUsable,
-          deviceOwnerVerified: false,
-          error:
-            "Matrix recovery key was applied, but this device still lacks full Matrix identity trust. The recovery key can unlock usable backup material only when 'Backup usable' is yes; full identity trust still requires Matrix cross-signing verification.",
-          ...committedStatus,
-        };
-      }
-      if (backupError) {
-        await this.recoveryKeyStore.discardStagedRecoveryKey();
-        return {
-          success: false,
-          recoveryKeyAccepted,
-          backupUsable,
-          deviceOwnerVerified: true,
-          error: backupError,
-          ...status,
-        };
-      }
-      if (!stagedRecoveryKeyValidated) {
-        await this.recoveryKeyStore.discardStagedRecoveryKey();
-        return {
-          success: false,
-          recoveryKeyAccepted: false,
-          backupUsable,
-          deviceOwnerVerified: true,
-          error:
-            "Matrix recovery key could not be verified against active Matrix backup material; existing backup may be usable from previously loaded recovery material.",
-          ...status,
-        };
-      }
-
-      await this.recoveryKeyStore.commitStagedRecoveryKey({
-        keyId: stagedKeyId,
-      });
-      const committedStatus = await this.getOwnDeviceVerificationStatus();
-      return {
-        success: true,
-        recoveryKeyAccepted: true,
-        backupUsable,
-        deviceOwnerVerified: true,
-        verifiedAt: new Date().toISOString(),
-        ...committedStatus,
-      };
+      return await settleRecoveryKey(status, stagedRecoveryKeyValidated);
     } catch (err) {
       await this.recoveryKeyStore.discardStagedRecoveryKey();
       return await fail(formatErrorMessage(err));
@@ -610,9 +534,11 @@ export class MatrixClient extends MatrixClientVerification {
       emitter: this.emitter,
       emitMembershipForRoom: (room) => this.emitMembershipForRoom(room),
       getSelfUserId: () => this.client.getUserId() ?? this.selfUserId ?? "",
-      setCurrentSyncState: (state, error) => {
+      setCurrentSyncState: (state, error, fromCache) => {
         this.currentSyncState = state;
         this.currentSyncError = error;
+        this.currentSyncFromCache = fromCache;
+        this.currentSyncRevision += 1;
       },
     });
   }

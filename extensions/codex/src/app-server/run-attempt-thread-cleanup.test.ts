@@ -162,6 +162,7 @@ describe("Codex app-server main thread cleanup", () => {
       expect(requests.map((entry) => entry.method)).toEqual([
         "config/read",
         "thread/start",
+        "model/list",
         "turn/start",
       ]);
     },
@@ -243,19 +244,23 @@ describe("Codex app-server main thread cleanup", () => {
       "configRequirements/read",
       "account/read",
       "thread/start",
+      "model/list",
       "turn/start",
       "config/read",
       "configRequirements/read",
       "account/read",
       "thread/start",
+      "model/list",
       "turn/start",
       "config/read",
       "configRequirements/read",
       "account/read",
+      "model/list",
       "turn/start",
       "config/read",
       "configRequirements/read",
       "account/read",
+      "model/list",
       "turn/start",
     ]);
     await expect(readCodexAppServerBinding(sessionFiles.a)).resolves.toMatchObject({
@@ -306,11 +311,12 @@ describe("Codex app-server main thread cleanup", () => {
       },
     });
     expect(readAttemptTerminal(await siblingRun).aborted).toBe(false);
-    expect(userRequestMethods().slice(-5)).toEqual([
+    expect(userRequestMethods().slice(-6)).toEqual([
       "thread/unsubscribe",
       "config/read",
       "configRequirements/read",
       "account/read",
+      "model/list",
       "turn/start",
     ]);
   });
@@ -652,6 +658,7 @@ describe("Codex app-server main thread cleanup", () => {
     expect(requests.map((entry) => entry.method)).toEqual([
       "config/read",
       "thread/start",
+      "model/list",
       "turn/start",
       "thread/unsubscribe",
     ]);
@@ -721,6 +728,7 @@ describe("Codex app-server main thread cleanup", () => {
         "config/read",
         "account/read",
         "thread/start",
+        "model/list",
         "turn/start",
         "turn/interrupt",
         ...(!interruptFails ? ["thread/unsubscribe"] : []),
@@ -776,6 +784,7 @@ describe("Codex app-server main thread cleanup", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "config/read",
       "thread/start",
+      "model/list",
       "turn/start",
       "turn/interrupt",
     ]);

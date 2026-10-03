@@ -15,11 +15,9 @@ import {
   resolveWorkerPlacementSessionTarget,
   WorkerDispatchTargetChangedError,
 } from "./server-worker-placement-session-target.js";
-import {
-  matchesWorkerPlacementTarget,
-  type WorkerPlacementReclaimBarriers,
-} from "./worker-environments/placement-reclaim-contract.js";
+import type { WorkerPlacementReclaimBarriers } from "./worker-environments/placement-reclaim-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { matchesWorkerPlacementTarget } from "./worker-environments/placement-target.js";
 import type { WorkerPlacementReclaimRequest } from "./worker-environments/service-contract.js";
 
 type SessionUtilsRuntime = typeof import("./session-utils.js");
@@ -49,6 +47,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
       cfg: getRuntimeConfig(),
       key: sessionKey,
       agentId,
+      preserveQualifiedAddress: true,
       clone: false,
       exactRead: true,
     });
@@ -146,6 +145,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         cfg: getRuntimeConfig(),
         key: sessionKey,
         agentId,
+        preserveQualifiedAddress: true,
         clone: false,
         exactRead: true,
       });
@@ -314,6 +314,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           cfg: getRuntimeConfig(),
           key: sessionKey,
           agentId,
+          preserveQualifiedAddress: true,
           clone: false,
           exactRead: true,
         });

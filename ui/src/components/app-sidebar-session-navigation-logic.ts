@@ -194,7 +194,7 @@ export function buildSidebarSessionNavigationState(input: {
       participantCount: row.participantCount,
       archivedBy: row.archivedBy,
       // Parent attention attributes subagent failures with the worker's own label.
-      label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
+      label: resolveSessionDisplayName(row.key, row),
       userLabel: row.label,
       renameValue: resolveSessionRenameValue(row),
       subtitle: resolveSessionWorkSubtitle(row),
@@ -250,7 +250,7 @@ export function buildSidebarSessionNavigationState(input: {
       hasAutomation: row.hasAutomation === true,
       pullRequest: context?.sessions.pullRequestSummary(row.key),
       outboxAttentionCount: input.outboxAttentionCountForSessionKey(row.key),
-      hasComposerDraft: input.hasSessionDraft(row.key),
+      hasComposerDraft: row.incognito !== true && input.hasSessionDraft(row.key),
       unread: row.archived !== true && row.unread === true,
       hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
       lastMessagePreview: normalizeOptionalString(row.lastMessagePreview),

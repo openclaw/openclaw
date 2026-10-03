@@ -34,7 +34,15 @@ const repositoryToolEntries = [
 
 const config = {
   compilers: productionConfig.compilers,
-  ignoreWorkspaces: ["apps/**", "extensions/**", "packages/**", "ui"],
+  ignoreWorkspaces: [
+    "apps/**",
+    "extensions/**",
+    ...fs
+      .readdirSync("packages")
+      .filter((name) => name !== "gateway-protocol")
+      .map((name) => `packages/${name}`),
+    "ui",
+  ],
   ignore: ["scripts/**/*.d.{mts,cts,ts}", "scripts/**/*.test-support.{js,mjs,cjs,ts,mts,cts}"],
   // Script entrypoints import core and Plugin SDK APIs. Those owners are
   // checked by the application scans; this pass owns only scripts/** exports.
@@ -80,6 +88,7 @@ const config = {
         "src/cli/cli-process-child.test-helpers.test.ts!",
         // Core bootstrap packaging and source updates consume shared script owners.
         "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
+        "src/infra/package-dist-inventory.ts!",
         "src/plugin-sdk/api-baseline.ts!",
         "src/cli/update-cli/update-command-{git-admission,runtime}.ts!",
       ],
@@ -93,9 +102,14 @@ const config = {
         "test/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "src/cli/cli-process-child.test-helpers{,.test}.ts!",
         "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
+        "src/infra/package-dist-inventory.ts!",
         "src/plugin-sdk/api-baseline.ts!",
         "src/cli/update-cli/update-command-{git-admission,runtime}.ts!",
       ],
+    },
+    "packages/gateway-protocol": {
+      entry: ["scripts/native-codegen.ts!"],
+      project: ["scripts/native-codegen.ts!"],
     },
   },
 };

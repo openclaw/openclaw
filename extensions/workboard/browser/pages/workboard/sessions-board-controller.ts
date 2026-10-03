@@ -1,6 +1,8 @@
+import type { UsersSelfResult } from "@openclaw/gateway-protocol";
 import type {
   WorkboardBoardSummary,
   WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardView,
 } from "@openclaw/workboard-contract";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { t } from "../../i18n/index.ts";
@@ -31,6 +33,62 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
   let busy = false;
   let draggedKey: string | undefined;
   let dropColumn: string | undefined;
+  let peopleFilter = "everyone";
+  let viewerProfileId: string | undefined;
+  let gatewayId: string | undefined;
+  let identityLoad: Promise<void> | undefined;
+  let restoredBoardId: string | undefined;
+  const storageKey = (id: string) =>
+    gatewayId && viewerProfileId
+      ? `openclaw.workboard.sessions.people:${JSON.stringify([gatewayId, viewerProfileId, id])}`
+      : undefined;
+  // The preference scope follows the live connection: a reconnect within one mount may
+  // belong to another viewer or Gateway, so identity reloads whenever the view activates.
+  const resetIdentity = () => {
+    identityLoad = undefined;
+    gatewayId = undefined;
+    viewerProfileId = undefined;
+    restoredBoardId = undefined;
+  };
+  const loadIdentity = (): Promise<void> =>
+    (identityLoad ??= (async () => {
+      const receipt = generation;
+      const [gateway, viewer] = await Promise.allSettled([
+        host.request<{ deviceId: string }>("gateway.identity.get", {}),
+        host.request<UsersSelfResult>("users.self", {}),
+      ]);
+      if (receipt !== generation) {
+        // A newer activation or board owns the scope now; reload for it so a read that
+        // was already waiting (for example after switching boards) restores the right key.
+        identityLoad = undefined;
+        if (active) {
+          await loadIdentity();
+        }
+        return;
+      }
+      if (gateway.status === "fulfilled") {
+        gatewayId = gateway.value.deviceId;
+      }
+      if (viewer.status === "fulfilled") {
+        viewerProfileId = viewer.value.profile.id;
+      }
+    })());
+  const restoreFilter = (id: string) => {
+    if (restoredBoardId === id) {
+      return;
+    }
+    restoredBoardId = id;
+    peopleFilter = "everyone";
+    try {
+      const key = storageKey(id);
+      const saved = key ? localStorage.getItem(key) : null;
+      if (saved === "me" || (saved?.startsWith("profile:") && saved.length > 8)) {
+        peopleFilter = saved;
+      }
+    } catch {
+      // Browser storage is optional; the current view remains usable without it.
+    }
+  };
   // Retain the created conversation if saving its reference fails, so Retry never creates a duplicate.
   let createdConversation: { boardId: string; sessionKey: string; agentId: string } | undefined;
   const current = (id: string, receipt: number) =>
@@ -54,9 +112,21 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
     attempted = true;
     const load = (async () => {
       try {
+        await loadIdentity();
+        if (!current(id, receipt)) {
+          return false;
+        }
+        restoreFilter(id);
+        const view: WorkboardSessionsBoardView = {
+          includePeople: true,
+          ...(peopleFilter === "me" ? { involvingMe: true } : {}),
+          ...(peopleFilter.startsWith("profile:")
+            ? { involvingProfileId: peopleFilter.slice(8) }
+            : {}),
+        };
         const result = await host.request<WorkboardSessionsBoardRead>(
           "workboard.sessionsBoard.read",
-          { boardId: id },
+          { boardId: id, view },
         );
         if (!current(id, receipt)) {
           return false;
@@ -116,6 +186,31 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
     get snapshot() {
       return snapshot;
     },
+    get peopleFilter() {
+      return peopleFilter;
+    },
+    get viewerProfileId() {
+      return viewerProfileId;
+    },
+    selectPeople(value: string) {
+      if (!boardId || !active || busy || value === peopleFilter) {
+        return;
+      }
+      peopleFilter = value;
+      try {
+        const key = storageKey(boardId);
+        if (key) {
+          localStorage.setItem(key, value);
+        }
+      } catch {
+        // Keep the selection for this mounted view if storage is unavailable.
+      }
+      generation += 1;
+      pending = undefined;
+      snapshot = snapshot ? { ...snapshot, sessions: [] } : undefined;
+      error = undefined;
+      void read();
+    },
     get error() {
       return error;
     },
@@ -144,8 +239,14 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
         draggedKey = undefined;
         dropColumn = undefined;
         if (boardId !== nextId) {
+          restoredBoardId = undefined;
+          peopleFilter = "everyone";
           snapshot = undefined;
           error = undefined;
+        }
+        if (enabled && !active) {
+          resetIdentity();
+          peopleFilter = "everyone";
         }
         boardId = nextId;
         active = enabled;
@@ -155,10 +256,6 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
       }
     },
     read,
-    refresh: () =>
-      write(async (id) => {
-        await host.request("workboard.sessionsBoard.refresh", { boardId: id });
-      }),
     move: (sessionKey: string, columnId: string) =>
       write(async (id) => {
         await host.request("workboard.sessionsBoard.move", { boardId: id, sessionKey, columnId });

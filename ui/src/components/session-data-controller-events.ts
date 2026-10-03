@@ -2,6 +2,7 @@ import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-l
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
 import type {
   SessionCapability,
@@ -227,11 +228,15 @@ export function subscribeSessionDataGatewayEvents(
 ): () => void {
   return gateway.subscribeEvents((event) => {
     if (event.event === "sessions.catalog.host") {
-      owner.handleSessionCatalogHostEvent(event.payload);
+      if (canCallGatewayMethod(gateway.snapshot, "sessions.catalog.list", "operator.read")) {
+        owner.handleSessionCatalogHostEvent(event.payload);
+      }
       return;
     }
     if (event.event === "sessions.catalog.changed") {
-      owner.handleSessionCatalogChanged(event.payload);
+      if (canCallGatewayMethod(gateway.snapshot, "sessions.catalog.list", "operator.read")) {
+        owner.handleSessionCatalogChanged(event.payload);
+      }
       return;
     }
     if (event.event === "presence") {

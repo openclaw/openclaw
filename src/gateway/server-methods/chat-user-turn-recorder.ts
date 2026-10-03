@@ -14,8 +14,8 @@ import {
 import type { UserTurnOriginalInputCommit } from "../../sessions/user-turn-transcript.types.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import type { MentionInbox } from "../mention-inbox.types.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { formatForLog } from "../ws-log.js";
-import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { buildRestartSafeChatTranscriptState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import {
@@ -24,6 +24,7 @@ import {
 } from "./chat-send-reply-context.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
+import type { createChatSendGoalCommitGuard } from "./chat-send-work-admission.js";
 import { gatewayClientSenderFields } from "./gateway-client-identity.js";
 import type { GatewayClient } from "./shared-types.js";
 
@@ -49,7 +50,7 @@ export function createGatewayChatUserTurnController(params: {
   startedAt: number;
   warn: (message: string) => void;
   mentionInbox?: MentionInbox;
-  assertGoalCurrent?: () => void;
+  goalCommitGuard?: ReturnType<typeof createChatSendGoalCommitGuard>;
   assertOriginalInputCommit?: () => void;
 }): GatewayChatUserTurnController {
   const { admission, request, session } = params;
@@ -130,7 +131,7 @@ export function createGatewayChatUserTurnController(params: {
             kind: "goal",
             operation: request.goalOperation,
             runId: session.clientRunId,
-            assertCurrent: params.assertGoalCurrent,
+            ...params.goalCommitGuard,
           },
         }
       : {}),

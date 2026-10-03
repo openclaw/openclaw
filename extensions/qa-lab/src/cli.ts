@@ -239,12 +239,11 @@ export function registerQaLabCli(program: Command) {
       });
       return;
     }
-    const selfCheckOptions = {
+    const runtime = await loadQaLabCliRuntime();
+    await runtime.runQaLabSelfCheckCommand({
       repoRoot: opts.repoRoot,
       output: opts.output,
-    };
-    const runtime = await loadQaLabCliRuntime();
-    await runtime.runQaLabSelfCheckCommand(selfCheckOptions);
+    });
   });
 
   qa.command("suite")
@@ -473,7 +472,8 @@ export function registerQaLabCli(program: Command) {
         fast?: boolean;
         timeoutMs?: number;
       }) => {
-        const manualOptions = {
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaManualLaneCommand({
           repoRoot: opts.repoRoot,
           transportId: opts.transport,
           providerMode: opts.providerMode,
@@ -482,9 +482,7 @@ export function registerQaLabCli(program: Command) {
           fastMode: opts.fast,
           message: opts.message,
           timeoutMs: opts.timeoutMs,
-        };
-        const runtime = await loadQaLabCliRuntime();
-        await runtime.runQaManualLaneCommand(manualOptions);
+        });
       },
     );
 
@@ -620,9 +618,8 @@ export function registerQaLabCli(program: Command) {
         parseQaCliTcpPortOption(value, "--port"),
       )
       .action(async (opts: { host?: string; port?: number }) => {
-        const providerMode = providerCommand.providerMode;
         const runtime = await loadQaLabCliRuntime();
-        await runtime.runQaProviderServerCommand(providerMode, opts);
+        await runtime.runQaProviderServerCommand(providerCommand.providerMode, opts);
       });
   }
 

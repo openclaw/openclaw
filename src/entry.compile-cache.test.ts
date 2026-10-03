@@ -2,6 +2,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { expectDefined, readStringValue } from "@openclaw/normalization-core";
 import {
@@ -55,6 +56,7 @@ import {
   resolveEntryInstallRoot,
   respawnWithoutOpenClawCompileCacheIfNeeded,
 } from "./entry.compile-cache.js";
+import { resolveNodeCompileCacheEnv } from "./infra/node-compile-cache-env.js";
 
 function enabledDirectory(callIndex = 0): string {
   const [directory] = expectDefined(enableCompileCache.mock.calls[callIndex], "cache enable call");
@@ -148,6 +150,33 @@ describe("entry compile cache", () => {
     expect(directory).toContain(path.join(".node-cache", "openclaw"));
     expect(directory).toContain("2026.4.29");
     expect(path.basename(directory)).toMatch(/^\d+-\d+$/);
+  });
+
+  it("skips cache activation with a warning when Windows TEMP makes the path too long", () => {
+    vi.spyOn(os, "tmpdir").mockReturnValue(path.join(root, "x".repeat(200)));
+    withMockedPlatform("win32", () => {
+      enableOpenClawCompileCache({ env: {}, installRoot: root });
+    });
+    expect(enableCompileCache).not.toHaveBeenCalled();
+    expect(writeStderr).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("Compile cache disabled: Windows cache path exceeds 200 characters"),
+    );
+  });
+
+  it.each([200, 201])("bounds Windows child cache paths at 200 characters: %s", (length) => {
+    const directory = path.join(root, "x".repeat(length - root.length - 1));
+    const env = { NODE_COMPILE_CACHE: directory, KEEP: "unchanged" };
+    withMockedPlatform("win32", () => {
+      const childEnv = resolveNodeCompileCacheEnv(env);
+      if (length === 200) {
+        expect(childEnv).toBe(env);
+        expect(writeStderr).not.toHaveBeenCalled();
+      } else {
+        expect(childEnv).toEqual({ NODE_DISABLE_COMPILE_CACHE: "1", KEEP: "unchanged" });
+        expect(writeStderr).toHaveBeenCalledOnce();
+      }
+    });
+    expect(env.NODE_COMPILE_CACHE).toBe(directory);
   });
 
   it("retires a replaced installation without deleting other applications' compile caches", async () => {

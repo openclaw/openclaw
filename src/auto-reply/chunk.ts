@@ -217,37 +217,25 @@ export function chunkByParagraph(
   const chunks: string[] = [];
   let currentChunk = "";
 
-  const pushParagraph = (paragraph: string, separatorBefore?: string) => {
-    if (!currentChunk) {
-      if (paragraph.length <= limit) {
-        currentChunk = paragraph;
-        return;
-      }
-      if (!splitLongParagraphs) {
-        chunks.push(paragraph);
-        return;
-      }
-      chunks.push(...chunkText(paragraph, limit));
-      return;
-    }
-
-    const candidate = `${currentChunk}${separatorBefore ?? "\n\n"}${paragraph}`;
-    if (candidate.length <= limit) {
-      currentChunk = candidate;
-      return;
-    }
-
-    chunks.push(currentChunk);
-    currentChunk = "";
-    pushParagraph(paragraph);
-  };
-
   for (const [index, part] of parts.entries()) {
     const paragraph = trimEndWhitespaceGraphemes(part);
     if (!paragraph) {
       continue;
     }
-    pushParagraph(paragraph, separators[index - 1]);
+    if (currentChunk) {
+      const candidate = `${currentChunk}${separators[index - 1] ?? "\n\n"}${paragraph}`;
+      if (candidate.length <= limit) {
+        currentChunk = candidate;
+        continue;
+      }
+      chunks.push(currentChunk);
+      currentChunk = "";
+    }
+    if (paragraph.length <= limit) {
+      currentChunk = paragraph;
+    } else {
+      chunks.push(...(splitLongParagraphs ? chunkText(paragraph, limit) : [paragraph]));
+    }
   }
 
   if (currentChunk) {
@@ -272,13 +260,7 @@ export function chunkMarkdownTextWithMode(text: string, limit: number, mode: Chu
     const paragraphChunks = chunkByParagraph(text, normalizedLimit, {
       splitLongParagraphs: false,
     });
-    return paragraphChunks
-      .flatMap((paragraphChunk) =>
-        paragraphChunk.length > normalizedLimit
-          ? splitPackedFenceParagraphChunk(paragraphChunk)
-          : paragraphChunk,
-      )
-      .flatMap((chunk) => chunkMarkdownText(chunk, normalizedLimit));
+    return paragraphChunks.flatMap((chunk) => chunkMarkdownText(chunk, normalizedLimit));
   }
   return chunkMarkdownText(text, normalizedLimit);
 }
@@ -297,34 +279,6 @@ function splitByNewline(
   }
   lines.push(text.slice(start));
   return lines;
-}
-
-function splitPackedFenceParagraphChunk(chunk: string): string[] {
-  const chunks: string[] = [];
-  let start = 0;
-  for (const span of parseFenceSpans(chunk)) {
-    if (span.end <= start) {
-      continue;
-    }
-    const separator = chunk.slice(span.end).match(/^\n[\t ]*\n+/)?.[0];
-    if (!separator) {
-      continue;
-    }
-    const tail = chunk.slice(span.end + separator.length);
-    if (!tail.trim()) {
-      continue;
-    }
-    chunks.push(chunk.slice(start, span.end));
-    start = span.end + separator.length;
-  }
-  if (chunks.length === 0) {
-    return [chunk];
-  }
-  const tail = chunk.slice(start);
-  if (tail) {
-    chunks.push(tail);
-  }
-  return chunks;
 }
 
 export function chunkText(text: string, limit: number): string[] {

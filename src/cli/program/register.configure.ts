@@ -5,7 +5,6 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatDocsHelp } from "../help-format.js";
 import { collectOption } from "./helpers.js";
 
-/** Register the interactive `configure` command and section filter flag. */
 export function registerConfigureCommand(program: Command): void {
   program
     .command("configure")

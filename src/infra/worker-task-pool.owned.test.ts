@@ -5,6 +5,7 @@ import type { MessagePort } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeWorkerTaskPoolResources } from "./worker-task-pool-registry.js";
 import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 
 type PostedTask = {
@@ -696,6 +697,15 @@ describe("owned worker tasks", () => {
       expect(consumed).not.toHaveBeenCalled();
       expect(pool.getSnapshot().pendingTasks).toBe(1);
 
+      const resources = closeWorkerTaskPoolResources("retained-after-failed-close");
+      const receipt = expectDefined(
+        worker.postMessage.mock.calls.at(-1)?.[0].resourcePort,
+        "failed-close resource receipt",
+      );
+      receipt.postMessage({ ok: true }, []);
+      receipt.close();
+      await resources;
+
       await expect(pool.close()).rejects.toBe(secondStop);
       expect(worker.terminate).toHaveBeenCalledTimes(2);
       expect(consumed).not.toHaveBeenCalled();
@@ -707,8 +717,15 @@ describe("owned worker tasks", () => {
       expect(worker.terminate).toHaveBeenCalledTimes(3);
       expect(consumed).not.toHaveBeenCalled();
       expect(pool.getSnapshot().pendingTasks).toBe(1);
+      let resourcesClosed = false;
+      const closingResources = closeWorkerTaskPoolResources("closing-pool").then(() => {
+        resourcesClosed = true;
+      });
+      await nextTurn();
+      expect(resourcesClosed).toBe(false);
       native.release();
       await closing;
+      await closingResources;
       expect(consumed).toHaveBeenCalledOnce();
       expect(pool.getSnapshot().pendingTasks).toBe(0);
       await expect(task.result).rejects.toBe(primary);

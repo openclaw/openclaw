@@ -579,6 +579,7 @@ export async function createGlobalInstallEnv(
     applyNpmFreshnessBypassEnv(merged);
   }
   applyPosixNpmScriptShellEnv(merged);
+  // Candidate lifecycle uses this pin for Bun-only global launchers, including private staging.
   if (process.versions.bun) {
     merged.OPENCLAW_PACKAGE_BUN_LAUNCHER = process.execPath;
   }

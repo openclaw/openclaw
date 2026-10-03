@@ -1,5 +1,6 @@
 // Covers manifest contract eligibility decisions.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { normalizePluginsConfig } from "./config-state.js";
 
 const mocks = vi.hoisted(() => ({

@@ -1,10 +1,10 @@
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
-import type { AcpSessionControlBinding } from "./session-control-owner.js";
 import type {
+  AcpSessionControlBinding,
   AcpSessionControlConstraint,
   AcpSessionSourceReadInput,
 } from "./session-meta-control.types.js";
-import type { AcpSessionReadInput } from "./session-meta-keys.js";
+import type { AcpSessionReadInput } from "./session-meta-read.types.js";
 
 export type AcpSessionMutationDecision =
   | { kind: "keep" }
@@ -33,23 +33,14 @@ export type AcpSessionMutationCommit = {
   control?: AcpSessionControlConstraint;
 };
 
-export type AcpSessionWriteOperations = {
-  "acp.prepareMutation": {
-    input: {
-      nonce: string;
-      read: AcpSessionReadInput;
-      entry?: SessionEntry;
-      updatedAt: number;
-      source: AcpSessionSourceReadInput["source"];
-      sessionKey: string;
-      agentId: string;
-      expectedControlBinding?: AcpSessionControlBinding;
-      control?: AcpSessionControlConstraint;
-    };
-    output: AcpSessionMutationPreparation;
-  };
-  "acp.commitMutation": {
-    input: AcpSessionMutationCommit & { nonce: string };
-    output: { nonce: string };
-  };
+export type AcpSessionMutationPrepareInput = {
+  nonce: string;
+  read: AcpSessionReadInput;
+  entry?: SessionEntry;
+  updatedAt: number;
+  source: AcpSessionSourceReadInput["source"];
+  sessionKey: string;
+  agentId: string;
+  expectedControlBinding?: AcpSessionControlBinding;
+  control?: AcpSessionControlConstraint;
 };

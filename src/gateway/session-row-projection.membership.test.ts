@@ -193,103 +193,97 @@ it("retains prepared membership across config changes and reconciles explicitly 
   });
 });
 
-it.each(["before", "after"] as const)(
-  "publishes final replacement facts to observers registered %s the projection",
-  async (registration) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const scope = { agentId: "main", sessionKey: "agent:main:transaction-members" };
-      await upsertSessionEntryCore(scope, { sessionId: "old", updatedAt: 1, category: "old" });
-      addSessionMember(scope, { identityId: "old-viewer", addedBy: "owner" });
-      recordSessionParticipant(scope, {
-        identity: { type: "agent", id: "research" },
-        promptedAt: 1,
-      });
-      const database = openOpenClawAgentDatabase(scope);
-      let projection: SessionRowProjection | undefined;
-      let observing = false;
-      const observed: Array<{
-        old: boolean;
-        current: boolean;
-        transient: boolean;
-        groups: string[];
-      }> = [];
-      const observe = () => {
-        if (observing && projection) {
-          observed.push({
-            old: projection.hasMembership(database.path, scope.sessionKey, "old-viewer"),
-            current: projection.hasMembership(database.path, scope.sessionKey, "current-viewer"),
-            transient: projection.hasMembership(database.path, scope.sessionKey, "transient"),
-            groups: [...projection.sessionGroupTargets().keys()],
-          });
-        }
-      };
-      let stop = registration === "before" ? sessionChanges.subscribe(observe) : () => {};
-      try {
-        projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
-        await projection.ensureMaterialized();
-        if (registration === "after") {
-          stop = sessionChanges.subscribe(observe);
-        }
-        observing = true;
-        runOpenClawAgentWriteTransaction(() => {
-          replaceSessionEntrySync(scope, {
-            sessionId: "intermediate",
-            updatedAt: 2,
-            category: "intermediate",
-          });
-          replaceSessionEntrySync(scope, {
-            sessionId: "current",
-            updatedAt: 3,
-            category: "current",
-          });
-          addSessionMember(scope, { identityId: "transient", addedBy: "owner" });
-          removeSessionMember(scope, "transient");
-          addSessionMember(scope, { identityId: "current-viewer", addedBy: "owner" });
-          recordSessionParticipant(scope, {
-            identity: { type: "agent", id: "reviewer" },
-            promptedAt: 2,
-          });
-          expect(() =>
-            runOpenClawAgentWriteTransaction(() => {
-              replaceSessionEntrySync(scope, {
-                sessionId: "rolled-back",
-                updatedAt: 4,
-                category: "rolled-back",
-              });
-              addSessionMember(scope, { identityId: "rolled-back", addedBy: "owner" });
-              throw new Error("rollback savepoint");
-            }, scope),
-          ).toThrow("rollback savepoint");
-          expect(observed).toEqual([]);
-        }, scope);
-        expect(observed.length).toBeGreaterThan(0);
-        for (const value of observed) {
-          expect(value).toEqual({
-            old: false,
-            current: true,
-            transient: false,
-            groups: ["current"],
-          });
-        }
-        expect(projection.needsMembershipPreparation()).toBe(false);
-        expect(
-          projection.describe({ agentId: scope.agentId, key: scope.sessionKey })?.entry,
-        ).toMatchObject({
-          sessionId: "current",
-          category: "current",
-          participants: [
-            { identity: { type: "agent", id: "research" } },
-            { identity: { type: "agent", id: "reviewer" } },
-          ],
-          participantCount: 2,
-        });
-      } finally {
-        stop();
-        projection?.dispose();
-      }
+it("publishes final replacement facts to observers registered before the projection", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const scope = { agentId: "main", sessionKey: "agent:main:transaction-members" };
+    await upsertSessionEntryCore(scope, { sessionId: "old", updatedAt: 1, category: "old" });
+    addSessionMember(scope, { identityId: "old-viewer", addedBy: "owner" });
+    recordSessionParticipant(scope, {
+      identity: { type: "agent", id: "research" },
+      promptedAt: 1,
     });
-  },
-);
+    const database = openOpenClawAgentDatabase(scope);
+    let projection: SessionRowProjection | undefined;
+    let observing = false;
+    const observed: Array<{
+      old: boolean;
+      current: boolean;
+      transient: boolean;
+      groups: string[];
+    }> = [];
+    const observe = () => {
+      if (observing && projection) {
+        observed.push({
+          old: projection.hasMembership(database.path, scope.sessionKey, "old-viewer"),
+          current: projection.hasMembership(database.path, scope.sessionKey, "current-viewer"),
+          transient: projection.hasMembership(database.path, scope.sessionKey, "transient"),
+          groups: [...projection.sessionGroupTargets().keys()],
+        });
+      }
+    };
+    const stop = sessionChanges.subscribe(observe);
+    try {
+      projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+      await projection.ensureMaterialized();
+      observing = true;
+      runOpenClawAgentWriteTransaction(() => {
+        replaceSessionEntrySync(scope, {
+          sessionId: "intermediate",
+          updatedAt: 2,
+          category: "intermediate",
+        });
+        replaceSessionEntrySync(scope, {
+          sessionId: "current",
+          updatedAt: 3,
+          category: "current",
+        });
+        addSessionMember(scope, { identityId: "transient", addedBy: "owner" });
+        removeSessionMember(scope, "transient");
+        addSessionMember(scope, { identityId: "current-viewer", addedBy: "owner" });
+        recordSessionParticipant(scope, {
+          identity: { type: "agent", id: "reviewer" },
+          promptedAt: 2,
+        });
+        expect(() =>
+          runOpenClawAgentWriteTransaction(() => {
+            replaceSessionEntrySync(scope, {
+              sessionId: "rolled-back",
+              updatedAt: 4,
+              category: "rolled-back",
+            });
+            addSessionMember(scope, { identityId: "rolled-back", addedBy: "owner" });
+            throw new Error("rollback savepoint");
+          }, scope),
+        ).toThrow("rollback savepoint");
+        expect(observed).toEqual([]);
+      }, scope);
+      expect(observed.length).toBeGreaterThan(0);
+      for (const value of observed) {
+        expect(value).toEqual({
+          old: false,
+          current: true,
+          transient: false,
+          groups: ["current"],
+        });
+      }
+      expect(projection.needsMembershipPreparation()).toBe(false);
+      expect(
+        projection.describe({ agentId: scope.agentId, key: scope.sessionKey })?.entry,
+      ).toMatchObject({
+        sessionId: "current",
+        category: "current",
+        participants: [
+          { identity: { type: "agent", id: "research" } },
+          { identity: { type: "agent", id: "reviewer" } },
+        ],
+        participantCount: 2,
+      });
+    } finally {
+      stop();
+      projection?.dispose();
+    }
+  });
+});
 
 it("installs every category in a worker reply before the first row observer", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

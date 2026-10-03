@@ -109,7 +109,7 @@ suite.define(() => {
       await expectBrowser(bobSection).toHaveCount(0);
       await expectBrowser(adaSection.getByText("Ada research", { exact: true })).toBeVisible();
       const summary = page.locator(".sidebar-session-filter-summary");
-      const funnel = page.locator(".sidebar-session-sort");
+      const funnel = page.getByRole("button", { name: "Filter & sort", exact: true });
       await expectBrowser(summary).toBeVisible();
       await expectBrowser(summary).toContainText("Ada");
       await expectBrowser(summary).toHaveAccessibleName("Ada · Show all sessions");

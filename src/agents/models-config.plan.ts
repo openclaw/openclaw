@@ -3,6 +3,7 @@
  * this module to merge implicit provider discovery, explicit config, and
  * preserved secrets before touching models.json.
  */
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
@@ -216,13 +217,8 @@ function collectGeneratedCatalogProviders(params: {
 }): Record<string, unknown> {
   const providers: Record<string, unknown> = {};
   for (const { pluginId, contents } of params.catalogs) {
-    let catalog: unknown;
-    try {
-      catalog = JSON.parse(contents) as unknown;
-    } catch {
-      continue;
-    }
-    if (!isRecord(catalog) || !isRecord(catalog.providers)) {
+    const catalog = safeParseJsonRecord(contents);
+    if (!catalog || !isRecord(catalog.providers)) {
       continue;
     }
     Object.assign(

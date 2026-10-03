@@ -285,7 +285,7 @@ describe("models-config write serialization", () => {
   it("removes stale plugin-owned model catalogs from the agent SQLite cache", async () => {
     await withModelsTempHome(async (home) => {
       const agentDir = path.join(home, "agent");
-      replacePersistedPluginModelCatalogs({
+      await replacePersistedPluginModelCatalogs({
         agentDir,
         pluginCatalogWrites: {
           [encodePluginModelCatalogRelativePath("old-provider")]: `${JSON.stringify({
@@ -314,7 +314,7 @@ describe("models-config write serialization", () => {
   it("passes persisted catalog bytes to planning without repair or repeated fingerprint changes", async () => {
     await withModelsTempHome(async (home) => {
       const agentDir = path.join(home, "agent");
-      replacePersistedPluginModelCatalogs({
+      await replacePersistedPluginModelCatalogs({
         agentDir,
         pluginCatalogWrites: {
           [encodePluginModelCatalogRelativePath("nvidia")]: JSON.stringify({

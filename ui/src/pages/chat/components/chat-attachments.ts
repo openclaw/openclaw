@@ -98,14 +98,14 @@ function chatAttachmentFromFile(
   return registerChatAttachmentPayload({ attachment, dataUrl, file });
 }
 
-function handleLargeTextPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps): boolean {
+function handleLargeTextPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps): void {
   if (!props.onAttachmentsChange || !uploadsEnabled(props.uploadConfig)) {
     // Large text remains ordinary native paste instead of becoming a file.
-    return false;
+    return;
   }
   const text = e.clipboardData?.getData("text/plain");
   if (!text || text.length <= LARGE_PASTE_TEXT_THRESHOLD) {
-    return false;
+    return;
   }
   e.preventDefault();
   const file = new File([text], `${LARGE_PASTE_TEXT_FILE_PREFIX}${Date.now()}.txt`, {
@@ -114,11 +114,10 @@ function handleLargeTextPaste(e: ClipboardEvent, props: ChatAttachmentControlsPr
   const stagedBytes = stagedAttachmentBytes(props);
   if (admitAttachmentFiles([file], props.attachmentLimits, stagedBytes).length === 0) {
     // The rejection toast named the file; the clipboard still holds the text.
-    return true;
+    return;
   }
   const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text), "paste");
   props.onAttachmentsChange([...currentAttachments(props), attachment]);
-  return true;
 }
 
 /** Normalize clipboard images for the loaded composers. */
@@ -246,6 +245,9 @@ type ChatAttachmentDropProps = ChatAttachmentControlsProps & {
 export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps) {
   let depth = 0;
   const setActive = (event: DragEvent, active: boolean) => {
+    if (isFileDrag(event.dataTransfer)) {
+      event.stopPropagation();
+    }
     const target = event.currentTarget;
     if (!(target instanceof HTMLElement)) {
       return;
@@ -272,18 +274,8 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
     }
   };
   return {
-    onDragenter: (event: DragEvent) => {
-      if (isFileDrag(event.dataTransfer)) {
-        event.stopPropagation();
-      }
-      setActive(event, true);
-    },
-    onDragleave: (event: DragEvent) => {
-      if (isFileDrag(event.dataTransfer)) {
-        event.stopPropagation();
-      }
-      setActive(event, false);
-    },
+    onDragenter: (event: DragEvent) => setActive(event, true),
+    onDragleave: (event: DragEvent) => setActive(event, false),
     onDragover: (event: DragEvent) => {
       if (!isFileDrag(event.dataTransfer)) {
         if (!isEditableDropTarget(event)) {

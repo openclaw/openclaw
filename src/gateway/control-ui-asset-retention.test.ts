@@ -27,7 +27,7 @@ describe("Control UI asset retention", () => {
           });
           const owner = createControlUiAssetRetention(root);
           await owner.prepare();
-          const retained = owner.resolveAsset(asset)!;
+          const retained = (await owner.resolveAsset(asset))!;
           retainedPaths.set(retained.filePath, 0);
         }
         let wholeFileReads = 0;
@@ -62,7 +62,9 @@ describe("Control UI asset retention", () => {
         expect(wholeFileReads).toBe(0);
         for (const [retained, opens] of retainedPaths) {
           expect(opens).toBe(1);
-          expect(owner.resolveAsset(`assets/${path.basename(retained)}`)?.filePath).toBe(retained);
+          expect((await owner.resolveAsset(`assets/${path.basename(retained)}`))?.filePath).toBe(
+            retained,
+          );
         }
       });
     } finally {
@@ -89,7 +91,7 @@ describe("Control UI asset retention", () => {
       );
       for (const build of builds) {
         const kept = build === current || expected.includes(build);
-        expect(owner.resolveAsset(build.assetPath) !== null).toBe(kept);
+        expect((await owner.resolveAsset(build.assetPath)) !== null).toBe(kept);
       }
     });
   });
@@ -100,15 +102,15 @@ describe("Control UI asset retention", () => {
       const current = await seed("b", { size: 48 * 1024 * 1024 });
       const owner = createControlUiAssetRetention(current.root);
       await owner.prepare();
-      expect(owner.resolveAsset(older.assetPath)).not.toBeNull();
-      expect(owner.resolveAsset(current.assetPath)).not.toBeNull();
+      expect(await owner.resolveAsset(older.assetPath)).not.toBeNull();
+      expect(await owner.resolveAsset(current.assetPath)).not.toBeNull();
       expect(await fs.readdir(cache)).toHaveLength(2);
       const tiny = await seed("c", { size: 1 });
       const next = createControlUiAssetRetention(tiny.root);
       await next.prepare();
-      expect(next.resolveAsset(older.assetPath)).toBeNull();
-      expect(next.resolveAsset(current.assetPath)).not.toBeNull();
-      expect(next.resolveAsset(tiny.assetPath)).not.toBeNull();
+      expect(await next.resolveAsset(older.assetPath)).toBeNull();
+      expect(await next.resolveAsset(current.assetPath)).not.toBeNull();
+      expect(await next.resolveAsset(tiny.assetPath)).not.toBeNull();
       expect(await fs.readdir(cache)).toHaveLength(2);
     });
   });
@@ -121,7 +123,7 @@ describe("Control UI asset retention", () => {
       await fs.utimes(previous.target, future, future);
       const owner = createControlUiAssetRetention(current.root);
       await owner.prepare();
-      expect(owner.resolveAsset(current.assetPath)?.filePath).toBe(
+      expect((await owner.resolveAsset(current.assetPath))?.filePath).toBe(
         path.join(previous.target, previous.assetPath),
       );
     });
@@ -135,7 +137,7 @@ describe("Control UI asset retention", () => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(alias, "state") }, async () => {
         const owner = createControlUiAssetRetention(build.root);
         await owner.prepare();
-        expect(owner.resolveAsset(build.assetPath)?.rootRealPath).toBe(
+        expect((await owner.resolveAsset(build.assetPath))?.rootRealPath).toBe(
           path.join(cache, build.manifest.generation),
         );
       });
@@ -149,11 +151,11 @@ describe("Control UI asset retention", () => {
         corrupt: true,
       });
       const owner = createControlUiAssetRetention(current.root);
-      expect(owner.resolveAsset(old.assetPath)).toBeNull();
+      expect(await owner.resolveAsset(old.assetPath)).toBeNull();
       const open = fs.open;
       const observed = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
         if (args[0] === path.join(current.root, current.assetPath)) {
-          expect(owner.resolveAsset(old.assetPath)?.filePath).toBe(
+          expect((await owner.resolveAsset(old.assetPath))?.filePath).toBe(
             path.join(old.target, old.assetPath),
           );
         }
@@ -163,11 +165,11 @@ describe("Control UI asset retention", () => {
       expect(owner.prepare()).toBe(preparing);
       await expect(preparing).rejects.toThrow("changed while being retained");
       expect(observed).toHaveBeenCalled();
-      expect(owner.resolveAsset(old.assetPath)).not.toBeNull();
+      expect(await owner.resolveAsset(old.assetPath)).not.toBeNull();
       expect(await fs.readdir(cache)).toEqual([old.manifest.generation]);
       await writeRetentionBuild(current.root, "current");
       await owner.prepare();
-      expect(owner.resolveAsset(current.assetPath)).not.toBeNull();
+      expect(await owner.resolveAsset(current.assetPath)).not.toBeNull();
     });
   });
 
@@ -186,7 +188,7 @@ describe("Control UI asset retention", () => {
       );
       const owner = createControlUiAssetRetention(root);
       await owner.prepare();
-      expect(owner.resolveAsset("assets/a.js")).toBeNull();
+      expect(await owner.resolveAsset("assets/a.js")).toBeNull();
       expect(await fs.readdir(cache)).toEqual([]);
     });
   });

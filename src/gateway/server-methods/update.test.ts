@@ -210,7 +210,7 @@ describe("update.run acknowledgement", () => {
           channel: "slack",
           to: "C0123ABC",
           threadId: "1234567890.123456",
-          message: `⬆️ Updating OpenClaw 1.0.0 → ${managed ? "2.0.0" : "the latest release"}. The gateway stays available while the update is validated; you'll get a message here when it finishes.`,
+          message: "⬆️ Updating OpenClaw… You'll get a message here when it's done.",
           deliveryIntentId: expect.stringMatching(/^update-run-ack:/),
         }),
         expect.any(Object),
@@ -287,7 +287,7 @@ describe("update.run acknowledgement", () => {
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledTimes(2);
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        message: "⏳ Restarting the gateway now (v1.0.0 → v2.0.0)…",
+        message: "⏳ Restarting OpenClaw…",
       }),
       expect.any(Object),
     );
@@ -328,7 +328,7 @@ describe("update.run acknowledgement", () => {
             type: "message",
             message: expect.objectContaining({
               idempotencyKey: `update-run-activating:${runId}`,
-              content: [{ type: "text", text: "⏳ Restarting the gateway now (v1.0.0 → v2.0.0)…" }],
+              content: [{ type: "text", text: "⏳ Restarting OpenClaw…" }],
             }),
           }),
         );

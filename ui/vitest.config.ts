@@ -8,6 +8,7 @@ import { chromium } from "playwright";
 import type { Plugin } from "vite";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
 import type { Vitest } from "vitest/node";
+import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import {
   filterFilesByPatterns,
   intersectIncludePatterns,
@@ -61,6 +62,10 @@ const workspaceSourceAliases = [
   ...sharedVitestConfig.resolve.alias.filter(
     (alias) => typeof alias.find === "string" && alias.find.startsWith("openclaw/plugin-sdk/"),
   ),
+  {
+    find: "@openclaw/llm-core/types",
+    replacement: path.resolve(repoRoot, "packages/llm-core/src/types.ts"),
+  },
   {
     find: /^@openclaw\/model-catalog-core\/(.+)$/u,
     replacement: path.resolve(repoRoot, "packages/model-catalog-core/src/$1.ts"),
@@ -212,6 +217,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
   return defineProject({
     root: here,
     plugins: [
+      mermaidClassicBundlePlugin(),
       controlUiLocaleModulesPlugin(),
       createVitestProjectCachePlugin(),
       createRedactingReporterPlugin(),

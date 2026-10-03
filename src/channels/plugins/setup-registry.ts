@@ -5,7 +5,7 @@ import {
 } from "../../plugins/runtime.js";
 import { listBundledChannelSetupPlugins } from "./bundled.js";
 import { compareChannelPlugins } from "./registry-loaded.js";
-import type { ChannelPlugin } from "./types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
 function sortChannelSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {

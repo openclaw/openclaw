@@ -4,7 +4,6 @@ import {
   createAgentRunRestartAbortError,
   isAgentRunDirectAbortReason,
 } from "../../agents/run-termination.js";
-import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   beginSessionWorkAdmission,
@@ -25,6 +24,7 @@ import {
   readGatewayDedupeEntry,
   setAbortedAgentDedupeEntries,
 } from "./agent-dedupe.js";
+import { resolveAgentSessionWorkStartError } from "./agent-handler-helpers.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 export function createAgentAdmissionController(params: {
@@ -148,7 +148,7 @@ export function createAgentAdmissionController(params: {
     if (params.getSessionPersisted() && !latestEntry) {
       throw new Error(`Session "${resolvedSessionKey}" was deleted while starting work. Retry.`);
     }
-    const archivedError = resolveSessionWorkStartError(resolvedSessionKey, latestEntry);
+    const archivedError = resolveAgentSessionWorkStartError(resolvedSessionKey, latestEntry);
     if (archivedError) {
       throw new Error(archivedError);
     }

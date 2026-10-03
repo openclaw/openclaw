@@ -189,6 +189,17 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (result.status === "insufficient-scopes") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Pairing was approved, but this browser's previously narrowed token still lacks the requested access. Run openclaw dashboard --json on the Gateway host for a fresh one-time owner pairing link. Open its browserUrl in this browser using the same Control UI address and Gateway URL to restore administrator access.",
+        ),
+      );
+      return;
+    }
     if (result.status === "approved") {
       // Approval may outlive a role change; use the current ceiling before releasing the token.
       const rolePolicy = resolveOperatorRolePolicy(client, context.getRuntimeConfig());

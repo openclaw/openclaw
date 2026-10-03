@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.js";
 import { createAbortError } from "../infra/abort-signal.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import * as mediaStore from "../media/store.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
@@ -214,6 +215,12 @@ describe("gateway server agent", () => {
       },
     });
 
+    let admittedOwner: { sessionKey?: string; agentId?: string } | undefined;
+    agentCommandMock.mockImplementationOnce(async () => {
+      const admitted = getAgentRunContext("idem-agent-owned-global");
+      admittedOwner = { sessionKey: admitted?.sessionKey, agentId: admitted?.agentId };
+      return { payloads: [], meta: { durationMs: 0 } };
+    });
     const res = await rpcReq(gatewaySuite.ws, "agent", {
       message: "hi",
       sessionKey: "global",
@@ -222,6 +229,7 @@ describe("gateway server agent", () => {
     expect(res.ok, JSON.stringify(res)).toBe(true);
 
     const call = await waitForAgentCommandCall("idem-agent-owned-global");
+    expect(admittedOwner).toEqual({ sessionKey: "global", agentId: "ops" });
     expect(call.agentId).toBe("ops");
     expect(call.sessionKey).toBe("global");
     expect(call.sessionId).toBe("sess-ops-global");
@@ -395,7 +403,7 @@ describe("gateway server agent", () => {
     await expect(fs.stat(media?.[0]?.path ?? "")).resolves.toMatchObject({
       isFile: expect.any(Function),
     });
-    const pending = listSessionPendingInputs({
+    const pending = await listSessionPendingInputs({
       agentId: "main",
       sessionId: "sess-main-offloaded-media",
       sessionKey: String(call.sessionKey),

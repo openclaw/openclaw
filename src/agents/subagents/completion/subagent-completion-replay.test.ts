@@ -11,11 +11,10 @@ import {
 } from "../../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
+import { saveSubagentRegistryToSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
-import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryToSqlite,
-} from "../registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import {
   records,
   requesterWakeDriver,
@@ -223,9 +222,23 @@ describe("completed requester delivery replay fence", () => {
         terminalReply: { disposition: "visible", text: "canonical result" },
         triggerCleanup: false,
       });
-      // Admission must start from a real pending obligation, not a marker-less row.
-      input.subagent.requesterSettleWake = { status: "pending", attemptCount: 0 };
-      saveSubagentRegistryToSqlite(subagentRuns);
+      // Admission must start from the committed terminal row and a pending obligation.
+      await mutateSubagentRuns(
+        [input.subagent.runId],
+        (rows) => {
+          const current = rows.get(input.subagent.runId)!;
+          const next = {
+            ...current,
+            requesterSettleWake: { status: "pending" as const, attemptCount: 0 },
+          };
+          return { value: undefined, postimages: new Map([[next.runId, next]]) };
+        },
+        {
+          onPublished(postimages) {
+            input.subagent = postimages.get(input.subagent.runId)!;
+          },
+        },
+      );
       driver.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent);
       await admitted.promise;
       expect(

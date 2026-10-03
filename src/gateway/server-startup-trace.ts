@@ -8,6 +8,7 @@ import {
 import { isTruthyEnvValue } from "../infra/env.js";
 import {
   isUpdateCanaryStartupMilestone,
+  supportsUpdateCanaryProgress,
   UPDATE_CANARY_PROGRESS_PREFIX,
 } from "../infra/update-candidate-canary-progress.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
@@ -16,6 +17,14 @@ import { recordGatewayRestartTraceDetail, recordGatewayRestartTraceSpan } from "
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type Awaitable<T> = T | Promise<T>;
+const STARTUP_PROGRESS_PHASES = new Set([
+  "process.bootstrap",
+  "state.schema-preflight",
+  "config.auth",
+  "startup.maintenance",
+  "http.bound",
+  "ready",
+]);
 
 export type GatewayStartupTrace = {
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
@@ -37,6 +46,7 @@ export function createGatewayStartupTrace(
   startedAt = performance.now(),
   updateCanary = false,
 ) {
+  const progressEnabled = updateCanary && supportsUpdateCanaryProgress(process.argv);
   const logEnabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
   let timelineConfig: OpenClawConfig | undefined;
   let eventLoopDelay: ReturnType<typeof monitorEventLoopDelay> | undefined;
@@ -66,7 +76,7 @@ export function createGatewayStartupTrace(
   let spanSequence = 0;
   let bootstrapSummary = "";
   const reportProgress = (name: string) => {
-    if (updateCanary && !closed && isUpdateCanaryStartupMilestone(name)) {
+    if (progressEnabled && !closed && isUpdateCanaryStartupMilestone(name)) {
       process.stderr.write(`${UPDATE_CANARY_PROGRESS_PREFIX}${name}\n`);
     }
   };
@@ -139,6 +149,8 @@ export function createGatewayStartupTrace(
       log.info(
         `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
       );
+    } else if (STARTUP_PROGRESS_PHASES.has(name)) {
+      log.info(`startup phase: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`);
     }
   };
   return {
@@ -213,6 +225,9 @@ export function createGatewayStartupTrace(
       options: { omitErrorMessage?: boolean } = {},
     ): Promise<T> {
       const before = performance.now();
+      if (STARTUP_PROGRESS_PHASES.has(name)) {
+        log.info(`startup phase: ${name} starting total=${(before - started).toFixed(1)}ms`);
+      }
       const mappedName = mapTimelineName(name);
       const span = {
         name: mappedName,

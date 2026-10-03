@@ -3,13 +3,13 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "./api/gateway.ts";
-import { createWorkboardCatalogRuntime } from "./catalog.ts";
+import { WorkboardCatalog } from "./catalog.ts";
 import { createWorkboardCapability } from "./lib/workboard/capability.ts";
 import { loadWorkboard } from "./lib/workboard/loading.ts";
 import { moveWorkboardCard } from "./lib/workboard/mutations.ts";
 import { getWorkboardState } from "./lib/workboard/runtime.ts";
 import { createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";
-type WorkboardCatalogSnapshot = Parameters<Parameters<typeof createWorkboardCatalogRuntime>[0]>[0];
+type WorkboardCatalogSnapshot = Parameters<ConstructorParameters<typeof WorkboardCatalog>[0]>[0];
 
 const board = (id: string) => ({
   id,
@@ -31,7 +31,7 @@ describe("Workboard catalog", () => {
     const pending = createDeferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
     const request = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue({ cards: [] });
     const host = createHost();
-    const runtime = createWorkboardCatalogRuntime(() => {}, host);
+    const runtime = new WorkboardCatalog(() => {}, host);
     const client = { request } as unknown as GatewayBrowserClient;
     try {
       runtime.sync(client, true);
@@ -57,7 +57,7 @@ describe("Workboard catalog", () => {
       .mockReturnValueOnce(pending.promise)
       .mockResolvedValueOnce({ card: moved });
     const host = createHost();
-    const runtime = createWorkboardCatalogRuntime(() => {}, host);
+    const runtime = new WorkboardCatalog(() => {}, host);
     const client = { request } as unknown as GatewayBrowserClient;
     try {
       runtime.sync(client, true);
@@ -81,7 +81,7 @@ describe("Workboard catalog", () => {
       boards: [{ ...board("ops"), name: "Operations", icon: "⚙", color: "#22c55e" }],
     });
     const host = createHost();
-    const runtime = createWorkboardCatalogRuntime((snapshot) => snapshots.push(snapshot), host);
+    const runtime = new WorkboardCatalog((snapshot) => snapshots.push(snapshot), host);
 
     runtime.sync({ request } as unknown as GatewayBrowserClient, true);
     await vi.waitFor(() => expect(snapshots.at(-1)?.ready).toBe(true));
@@ -101,10 +101,7 @@ describe("Workboard catalog", () => {
       .mockReturnValueOnce(first.promise)
       .mockResolvedValueOnce({ cards: [], boards: [board("ops")] });
     const snapshots: WorkboardCatalogSnapshot[] = [];
-    const runtime = createWorkboardCatalogRuntime(
-      (snapshot) => snapshots.push(snapshot),
-      createHost(),
-    );
+    const runtime = new WorkboardCatalog((snapshot) => snapshots.push(snapshot), createHost());
     const client = { request } as unknown as GatewayBrowserClient;
 
     runtime.sync(client, true);
@@ -125,10 +122,7 @@ describe("Workboard catalog", () => {
     const firstClient = { request: firstRequest } as unknown as GatewayBrowserClient;
     const secondClient = { request: secondRequest } as unknown as GatewayBrowserClient;
     const snapshots: WorkboardCatalogSnapshot[] = [];
-    const runtime = createWorkboardCatalogRuntime(
-      (snapshot) => snapshots.push(snapshot),
-      createHost(),
-    );
+    const runtime = new WorkboardCatalog((snapshot) => snapshots.push(snapshot), createHost());
 
     runtime.sync(firstClient, true);
     runtime.handleGatewayEvent("plugin.workboard.changed");
@@ -151,7 +145,7 @@ describe("Workboard catalog", () => {
       .mockResolvedValueOnce({ cards: [], boards: [board("platform")] });
     const snapshots: WorkboardCatalogSnapshot[] = [];
     const host = createHost();
-    const runtime = createWorkboardCatalogRuntime((snapshot) => snapshots.push(snapshot), host);
+    const runtime = new WorkboardCatalog((snapshot) => snapshots.push(snapshot), host);
     const client = { request } as unknown as GatewayBrowserClient;
 
     runtime.sync(client, true);
@@ -184,7 +178,7 @@ describe("Workboard catalog", () => {
       .mockResolvedValueOnce({ cards: [], boards: [board("platform")] });
     const snapshots: WorkboardCatalogSnapshot[] = [];
     const host = createHost();
-    const runtime = createWorkboardCatalogRuntime((snapshot) => snapshots.push(snapshot), host);
+    const runtime = new WorkboardCatalog((snapshot) => snapshots.push(snapshot), host);
     const client = { request } as unknown as GatewayBrowserClient;
 
     runtime.sync(client, true);
@@ -217,10 +211,7 @@ describe("Workboard catalog", () => {
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({ cards: [], boards: [board("platform")] });
     const snapshots: WorkboardCatalogSnapshot[] = [];
-    const runtime = createWorkboardCatalogRuntime(
-      (snapshot) => snapshots.push(snapshot),
-      createHost(),
-    );
+    const runtime = new WorkboardCatalog((snapshot) => snapshots.push(snapshot), createHost());
     const client = { request } as unknown as GatewayBrowserClient;
 
     runtime.sync(client, true);

@@ -38,6 +38,8 @@ export function createNativeDeviceSettingsSnapshot(): MacDeviceSettingsSnapshot 
       iconAnimationsEnabled: true,
       launchAtLogin: false,
       launchAtLoginAvailable: true,
+      keepGatewayRunning: false,
+      keepGatewayRunningAvailable: true,
       quickChatEnabled: true,
       quickChatShortcut: "⌥Space",
       debugPaneEnabled: false,

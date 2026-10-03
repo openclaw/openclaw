@@ -255,7 +255,8 @@ class LogbookDatabaseStore {
     }
   }
 
-  close(): void {
+  async close(): Promise<void> {
+    await this.walMaintenance.stop();
     try {
       this.walMaintenance.close();
     } finally {

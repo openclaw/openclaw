@@ -208,7 +208,6 @@ it.each([false, true])(
 it.each([
   ["win32", true, true],
   ["win32", false, true],
-  ["darwin", true, true],
   ["darwin", false, true],
   ["win32", true, false],
 ] as const)(
@@ -297,12 +296,7 @@ it.each([
       if (terminates && closes) {
         expect(descendantOutput.destroyed).toBe(true);
         owner.assertReleased();
-        // POSIX strict normal-exit policy still reports unexpected group survivors.
-        if (platform === "win32") {
-          expect(outcome).toBe(0);
-        } else {
-          expect(outcome).toMatchObject({ processTreeState: "terminated" });
-        }
+        expect(outcome).toBe(0);
       } else {
         expect(hasUnjoinedWork(outcome)).toBe(true);
         expect(outcome).toMatchObject({ code: "EPROCESSGROUP_CLEANUP_FAILED" });

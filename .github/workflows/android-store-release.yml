@@ -103,7 +103,7 @@ jobs:
           install-screenshot-emulators: ${{ (github.event_name == 'workflow_dispatch' && inputs.operation == 'release') && 'true' || 'false' }}
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@a0102e0972be65f351c307e2d64b9314a57c8073 # v1.324.0
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
           ruby-version: "3.4.10"
           bundler: "4.0.21"
@@ -148,6 +148,9 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANDROID_RELEASE_DESTINATION: ${{ (github.event_name == 'schedule' || inputs.operation == 'internal') && 'internal' || 'play-store' }}
           GOOGLE_PLAY_JSON_KEY_DATA: ${{ secrets.GOOGLE_PLAY_JSON_KEY_DATA }}
+          FIREBASE_APP_DISTRIBUTION_JSON_KEY_DATA: ${{ secrets.FIREBASE_APP_DISTRIBUTION_JSON_KEY_DATA }}
+          FIREBASE_APP_ID: "1:627614795142:android:3daa833ca787ca67959807"
+          FIREBASE_TESTER_GROUPS: android-daily
           GOOGLE_PLAY_PACKAGE_NAME: ai.openclaw.app
           GOOGLE_PLAY_RELEASE_STATUS: completed
           GOOGLE_PLAY_TRACK: internal
@@ -176,6 +179,7 @@ jobs:
           path: |
             ${{ runner.temp }}/android-release-recovery/release-notes.json
             ${{ runner.temp }}/android-release-recovery/android-plan.json
+            ${{ runner.temp }}/android-release-recovery/firebase-result.json
           if-no-files-found: error
           retention-days: 30
 

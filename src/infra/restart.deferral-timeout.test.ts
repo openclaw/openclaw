@@ -113,7 +113,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     expect(hooks.onTimeout).toHaveBeenCalledOnce();
     expect(consumeGatewayRestartIntent()).toEqual({
       force: true,
-      drainBudgetExhausted: true,
+      waitMs: 300_000,
       reason: "gateway.restart.deferral-timeout",
     });
   });
@@ -367,7 +367,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     expect(hooks.onTimeout).toHaveBeenCalledOnce();
     expect(consumeGatewayRestartIntent()).toEqual({
       force: true,
-      drainBudgetExhausted: true,
+      waitMs: 300_000,
       reason: "gateway.restart.deferral-timeout",
     });
   });
@@ -551,6 +551,6 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     expect(emit).not.toHaveBeenCalledWith("SIGUSR2");
     await vi.advanceTimersByTimeAsync(300_000);
     expect(emit.mock.calls.filter(([event]) => event === "SIGUSR2")).toHaveLength(1);
-    expect(consumeGatewayRestartIntent()).toEqual({ force: true, drainBudgetExhausted: true });
+    expect(consumeGatewayRestartIntent()).toEqual({ force: true, waitMs: 300_000 });
   });
 });

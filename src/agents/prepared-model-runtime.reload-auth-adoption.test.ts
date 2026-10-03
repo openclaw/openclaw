@@ -2,12 +2,13 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { isDeepStrictEqual } from "node:util";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
+  beginPreparedModelRuntimePluginDrain,
   loadPublishedGatewayReplyDispatchRuntime,
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
@@ -18,6 +19,60 @@ const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime"
 const { mocks } = fixture;
 
 describe("prepared model runtime reload auth adoption", () => {
+  it.each(["rollback", "replacement"] as const)(
+    "revokes changed auth immediately and publishes it after plugin drain %s",
+    async (outcome) => {
+      mocks.configuredAgentIds = ["default"];
+      const initialConfig = {};
+      const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+      await refreshPreparedModelRuntimeSnapshots(initialConfig, options);
+      const input = fixture.agentInput("default", initialConfig);
+      const original = await prepareModelRuntimeSnapshot(input);
+      const drain = beginPreparedModelRuntimePluginDrain();
+      let draining = true;
+      mocks.prepareStaticCatalog.mockClear();
+      mocks.prepareStaticCatalog.mockImplementation(async () => {
+        expect(draining).toBe(false);
+        return { entries: [] };
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      let read: ReturnType<typeof prepareModelRuntimeSnapshot> | undefined;
+      let publication: Promise<void> | undefined;
+      try {
+        mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+        expect(original.isCurrent()).toBe(false);
+        let readSettled = false;
+        read = prepareModelRuntimeSnapshot(input, { readPublished: true });
+        void read.then(
+          () => {
+            readSettled = true;
+          },
+          () => {
+            readSettled = true;
+          },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(mocks.prepareStaticCatalog).not.toHaveBeenCalled();
+        expect(readSettled).toBe(false);
+        draining = false;
+        drain.release();
+        if (outcome === "replacement") {
+          publication = refreshPreparedModelRuntimeSnapshots({ plugins: {} }, options);
+          await publication;
+        }
+        const refreshed = await read;
+        expect(refreshed).not.toBe(original);
+        expect(refreshed.isCurrent()).toBe(true);
+        expect(mocks.prepareStaticCatalog).toHaveBeenCalled();
+      } finally {
+        draining = false;
+        drain.release();
+        vi.useRealTimers();
+        await Promise.allSettled([read, publication]);
+      }
+    },
+  );
+
   it("releases a rejected replacement's cached registry after the old catalog finishes", async () => {
     mocks.configuredAgentIds = ["default"];
     const cache = getPluginLoaderCacheState();

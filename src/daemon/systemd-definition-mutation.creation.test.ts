@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";

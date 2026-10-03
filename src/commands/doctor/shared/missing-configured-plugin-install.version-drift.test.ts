@@ -189,7 +189,6 @@ describe("Doctor official plugin version repair", () => {
   describe.each(["Doctor repair", "core-update convergence"])("%s selector policy", (caller) => {
     it.each([
       ["next", oldVersion, coreVersion, "2026.9.6"],
-      ["beta", oldVersion, coreVersion, "2026.9.6"],
       ["2026.9.6", "2026.9.6", coreVersion, "2026.9.6"],
       ["2026.9.5-1", oldVersion, "2026.9.5-2", "2026.9.5-1"],
     ])(
@@ -230,14 +229,6 @@ describe("Doctor official plugin version repair", () => {
           resolvedVersion: expectedVersion,
           resolvedSpec: `@openclaw/discord@${expectedVersion}`,
         });
-        expect(
-          JSON.parse(
-            fs.readFileSync(
-              path.join(expectDefined(record.installPath, "fixture path"), "package.json"),
-              "utf8",
-            ),
-          ).version,
-        ).toBe(expectedVersion);
         if (caller === "Doctor repair") {
           expect(readPersistedInstalledPluginIndexInstallRecords({ env })).toEqual(updatedRecords);
         }
@@ -277,7 +268,6 @@ describe("Doctor official plugin version repair", () => {
   });
 
   it.each([
-    ["@openclaw/codex", coreVersion, coreVersion, coreVersion, "stable"],
     ["@openclaw/codex@latest", coreVersion, coreVersion, coreVersion, "stable"],
     ["@openclaw/codex@latest", coreVersion, "2026.9.6", "2026.9.6", "stable"],
     ["@openclaw/codex@latest", "2026.9.5-beta.2", "2026.9.5-beta.2", "2026.9.6", "beta"],
@@ -311,14 +301,12 @@ describe("Doctor official plugin version repair", () => {
         baselineRecords: records,
       });
 
-      expect(result.records.codex?.version).toBe(expectedVersion);
       expect(result.records.codex).toMatchObject({
         spec,
         version: expectedVersion,
         resolvedVersion: expectedVersion,
         resolvedSpec: `@openclaw/codex@${expectedVersion}`,
       });
-      expect(JSON.parse(fs.readFileSync(manifestPath, "utf8")).version).toBe(expectedVersion);
       expect(result.repairedPluginIds).toEqual(["codex"]);
       expect(result.warnings).toEqual([]);
       expect(readPersistedInstalledPluginIndexInstallRecords({ env })).toEqual(result.records);

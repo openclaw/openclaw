@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { writeProviderAuthConfig } from "../plugins/provider-auth-config.js";
@@ -44,7 +44,6 @@ async function reloadChannels(
     isLifecycleReloadAborted: () => false,
     getChannelAutostartSuppression: () => null,
     channelReloadTargets: () => channels,
-    logSuppressedChannelRestart: vi.fn(),
     scheduleRecoveryRestart,
   });
 }
@@ -335,7 +334,6 @@ it.each(
       isLifecycleReloadAborted: () => false,
       getChannelAutostartSuppression: () => null,
       channelReloadTargets: () => channels,
-      logSuppressedChannelRestart: vi.fn(),
       scheduleRecoveryRestart,
     });
     if (state === "racing") {

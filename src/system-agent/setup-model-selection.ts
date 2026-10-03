@@ -98,7 +98,7 @@ function applySystemAgentModelSelectionWithModules(
   if (params.agentRuntimeId) {
     const runtimeTarget = params.runtimeInDefaults
       ? agentDefaults
-      : (agentEntries[agentEntryKey] ??= { default: true });
+      : (agentEntries[agentEntryKey] ??= {});
     const agentModels = { ...runtimeTarget.models };
     const agentKey = modelConfig.upsertCanonicalModelConfigEntry(agentModels, target);
     agentModels[agentKey] = {

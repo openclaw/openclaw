@@ -14,8 +14,8 @@ import {
 import {
   enqueueRoutedSystemEvent as enqueueActualSystemEvent,
   peekSystemEventEntries,
-  resetSystemEventsForTest,
 } from "openclaw/plugin-sdk/system-event-runtime";
+import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
 import { createTelegramEventBindings } from "./bot-handlers.event-bindings.js";

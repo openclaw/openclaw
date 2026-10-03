@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
+import { brandIcons } from "../../components/brand-icons.ts";
 import { icons } from "../../components/icons.ts";
 import {
   canonicalLobsterLook,
@@ -9,19 +10,18 @@ import {
 } from "../../components/lobster-pet-look.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { currentThemeBranding } from "../../components/neutral-mark.ts";
+import "../../components/tooltip.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
-import "../../components/tooltip.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import "../../styles/about.css";
-import { brandIcons } from "./brand-icons.ts";
+import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 
 export type AboutCommitCopyState = "idle" | "copying" | "copied" | "error";
 

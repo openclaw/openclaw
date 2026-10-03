@@ -84,72 +84,56 @@ function normalizer() {
 }
 
 describe("registered workspace outbound media", () => {
-  it.each(["absolute", "relative"])(
-    "stages Harness bytes for an ordinary %s reply path without using the document bridge",
-    async (kind) => {
-      // Normalizers may be created before service start; access is acquired per source.
-      const normalize = normalizer();
-      bind();
-      const filePath = path.join(outputRoot, "report.txt");
-      const result = await normalize({
-        mediaUrl: kind === "absolute" ? filePath : "output/report.txt",
-      });
-      expect(result.mediaUrl).toBeDefined();
-      expect(result.mediaUrl).not.toBe(filePath);
-      expect(await fs.readFile(result.mediaUrl!, "utf8")).toBe("Harness output");
-      expect(await fs.readFile(filePath, "utf8")).toBe("stale Gateway copy");
-      expect(remoteRead).toHaveBeenCalledWith(filePath, expect.any(Number));
-      expect(host.bridge.readFile).not.toHaveBeenCalled();
-    },
-  );
+  it("stages Harness bytes for a relative reply path without using the document bridge", async () => {
+    // Normalizers may be created before service start; access is acquired per source.
+    const normalize = normalizer();
+    bind();
+    const filePath = path.join(outputRoot, "report.txt");
+    const result = await normalize({
+      mediaUrl: "output/report.txt",
+    });
+    expect(result.mediaUrl).toBeDefined();
+    expect(result.mediaUrl).not.toBe(filePath);
+    expect(await fs.readFile(result.mediaUrl!, "utf8")).toBe("Harness output");
+    expect(await fs.readFile(filePath, "utf8")).toBe("stale Gateway copy");
+    expect(remoteRead).toHaveBeenCalledWith(filePath, expect.any(Number));
+    expect(host.bridge.readFile).not.toHaveBeenCalled();
+  });
 
-  it.each(["not ready", "stopped"])(
-    "fails workspace output when %s, while preserving managed Gateway media and HTTP references",
-    async (state) => {
-      if (state === "not ready") {
-        declareAgentWorkspaceAccess(workspaceDir);
-      } else {
-        bind()();
-      }
-      const saved = await saveMediaBuffer(
-        Buffer.from("Gateway attachment"),
-        "text/plain",
-        "outbound",
-      );
-      const url = "https://example.com/report.txt";
-      const result = await normalizer()({
-        mediaUrls: [path.join(outputRoot, "report.txt"), saved.path, url],
-      });
-      expect(result.mediaUrls).toEqual([saved.path, url]);
-      expect(await fs.readFile(saved.path, "utf8")).toBe("Gateway attachment");
-      expect(remoteRead).not.toHaveBeenCalled();
-      expect(host.bridge.readFile).not.toHaveBeenCalled();
-      // Queue/channel loaders also remain usable without invoking the offline host.
-      const loaded = await loadWebMediaRaw(
-        saved.path,
-        buildOutboundMediaLoadOptions({ mediaAccess: resolveAccess() }),
-      );
-      expect(loaded.buffer.toString()).toBe("Gateway attachment");
-    },
-  );
+  it("fails stopped workspace output while preserving managed Gateway media and HTTP references", async () => {
+    bind()();
+    const saved = await saveMediaBuffer(
+      Buffer.from("Gateway attachment"),
+      "text/plain",
+      "outbound",
+    );
+    const url = "https://example.com/report.txt";
+    const result = await normalizer()({
+      mediaUrls: [path.join(outputRoot, "report.txt"), saved.path, url],
+    });
+    expect(result.mediaUrls).toEqual([saved.path, url]);
+    expect(await fs.readFile(saved.path, "utf8")).toBe("Gateway attachment");
+    expect(remoteRead).not.toHaveBeenCalled();
+    expect(host.bridge.readFile).not.toHaveBeenCalled();
+    // Queue/channel loaders also remain usable without invoking the offline host.
+    const loaded = await loadWebMediaRaw(
+      saved.path,
+      buildOutboundMediaLoadOptions({ mediaAccess: resolveAccess() }),
+    );
+    expect(loaded.buffer.toString()).toBe("Gateway attachment");
+  });
 
-  it.each(["active", "stopped"])(
-    "preserves local attachment delivery for a %s document-only binding",
-    async (state) => {
-      const release = bind({ bridge: host.bridge });
-      if (state === "stopped") {
-        release();
-      }
-      const filePath = path.join(outputRoot, "report.txt");
-      const loaded = await loadWebMediaRaw(
-        filePath,
-        buildOutboundMediaLoadOptions({ mediaAccess: resolveAccess() }),
-      );
-      expect(loaded.buffer.toString()).toBe("stale Gateway copy");
-      expect(remoteRead).not.toHaveBeenCalled();
-      expect(host.bridge.readFile).not.toHaveBeenCalled();
-    },
-  );
+  it("preserves local attachment delivery for a stopped document-only binding", async () => {
+    bind({ bridge: host.bridge })();
+    const filePath = path.join(outputRoot, "report.txt");
+    const loaded = await loadWebMediaRaw(
+      filePath,
+      buildOutboundMediaLoadOptions({ mediaAccess: resolveAccess() }),
+    );
+    expect(loaded.buffer.toString()).toBe("stale Gateway copy");
+    expect(remoteRead).not.toHaveBeenCalled();
+    expect(host.bridge.readFile).not.toHaveBeenCalled();
+  });
 
   it("forwards the loader's source byte limit and propagates remote failure without local fallback", async () => {
     bind();
@@ -283,37 +267,31 @@ describe("registered workspace outbound media", () => {
     },
   );
 
-  it.each(["active", "stopped"])(
-    "preserves the rw sandbox reader for overlapping host and container roots (%s registration)",
-    async (state) => {
-      const release = bind();
-      if (state === "stopped") {
-        release();
-      }
-      // rw sandboxes use the agent workspace as their host root.
-      const containerRoot = "/workspace";
-      const readSandbox = vi.fn(async () => Buffer.from("current sandbox output"));
-      const access = resolveAgentScopedOutboundMediaAccess({
-        cfg,
-        agentId: "writer",
-        workspaceMediaAccess: {
-          localRoots: [workspaceDir, containerRoot],
-          readFile: readSandbox,
-          workspaceDir,
-        },
-      });
-      for (const root of [workspaceDir, containerRoot]) {
-        const filePath = path.join(root, "output/report.txt");
-        const loaded = await loadWebMediaRaw(
-          filePath,
-          buildOutboundMediaLoadOptions({ mediaAccess: access }),
-        );
-        expect(loaded.buffer.toString()).toBe("current sandbox output");
-      }
-      expect(readSandbox).toHaveBeenCalledTimes(2);
-      expect(remoteRead).not.toHaveBeenCalled();
-    },
-  );
+  it("preserves the rw sandbox reader for overlapping registered host and container roots", async () => {
+    bind();
+    // rw sandboxes use the agent workspace as their host root.
+    const containerRoot = "/workspace";
+    const readSandbox = vi.fn(async () => Buffer.from("current sandbox output"));
+    const access = resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      agentId: "writer",
+      workspaceMediaAccess: {
+        localRoots: [workspaceDir, containerRoot],
+        readFile: readSandbox,
+        workspaceDir,
+      },
+    });
+    for (const root of [workspaceDir, containerRoot]) {
+      const filePath = path.join(root, "output/report.txt");
+      const loaded = await loadWebMediaRaw(
+        filePath,
+        buildOutboundMediaLoadOptions({ mediaAccess: access }),
+      );
+      expect(loaded.buffer.toString()).toBe("current sandbox output");
+    }
+    expect(readSandbox).toHaveBeenCalledTimes(2);
+    expect(remoteRead).not.toHaveBeenCalled();
+  });
 
   it("preserves an explicit session workspace reader outside the registered agent workspace", async () => {
     bind();

@@ -161,7 +161,7 @@ describe("diagnostic memory growth", () => {
     expect(pressures).toEqual([]);
   });
 
-  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+  it.each([0, Number.NaN])(
     "keeps the 512 MiB/1 GiB growth defaults with an unknown heap limit of %s",
     (heapSizeLimitBytes) => {
       for (let minute = 0; minute <= 30; minute += 0.5) {

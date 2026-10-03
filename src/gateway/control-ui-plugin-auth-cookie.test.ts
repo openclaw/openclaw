@@ -8,7 +8,9 @@ import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   resolveControlUiPluginAuthCookieGrants,
@@ -108,28 +110,33 @@ describe("Control UI plugin auth cookie profile binding", () => {
           getRuntimeConfig(),
         ),
       });
-      for (const authorization of [undefined, "Bearer independent-owner"]) {
-        const { res } = makeMockHttpResponse();
-        const result = await authorizePluginGatewayHttpRequestOrReply({
-          req: createGatewayRequest({
-            path: "/plugins/example/session",
-            headers: { cookie },
-            authorization,
-          }),
-          res,
-          auth,
-          requestPath: "/plugins/example/session",
-          resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
-        });
-        if (authorization) {
-          expect(result?.requestAuth.operatorRoleActor).toEqual({ kind: "system" });
-          expect(result?.operatorScopes).toContain("operator.admin");
-          expect(res.writableEnded).toBe(false);
-        } else {
-          expect(result).toBeNull();
-          expect(res.statusCode).toBe(403);
+      const catalog = await prepareUserProfileCatalog();
+      try {
+        for (const authorization of [undefined, "Bearer independent-owner"]) {
+          const { res } = makeMockHttpResponse();
+          const result = await authorizePluginGatewayHttpRequestOrReply({
+            req: createGatewayRequest({
+              path: "/plugins/example/session",
+              headers: { cookie },
+              authorization,
+            }),
+            res,
+            auth,
+            requestPath: "/plugins/example/session",
+            resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
+          });
+          if (authorization) {
+            expect(result?.requestAuth.operatorRoleActor).toEqual({ kind: "system" });
+            expect(result?.operatorScopes).toContain("operator.admin");
+            expect(res.writableEnded).toBe(false);
+          } else {
+            expect(result).toBeNull();
+            expect(res.statusCode).toBe(403);
+          }
+          res.destroy();
         }
-        res.destroy();
+      } finally {
+        catalog.release();
       }
     });
   });

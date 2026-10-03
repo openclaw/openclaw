@@ -1,11 +1,10 @@
 // Tests goal command persistence, status transitions, and reply text.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { handleGoalCommand, parseGoalCommand } from "./commands-goal.js";
@@ -13,16 +12,10 @@ import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 
 const sessionKey = "agent:main:web:main";
-let tempRoots: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempRoots.map((root) => fs.rm(root, { recursive: true, force: true })));
-  tempRoots = [];
-});
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-goal-command-");
 
 async function createStorePath(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-goal-command-"));
-  tempRoots.push(root);
+  const root = sessionDirs.make();
   return path.join(root, "sessions.json");
 }
 

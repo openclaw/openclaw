@@ -79,27 +79,13 @@ function isGradiumProviderConfigured(config: SpeechProviderConfig): boolean {
   }
 }
 
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: Record<string, unknown>;
-  warnings?: string[];
-} {
-  switch (ctx.key) {
-    case "voice":
-    case "voice_id":
-    case "voiceid":
-    case "gradium_voice":
-    case "gradiumvoice":
-      if (!ctx.policy.allowVoice) {
-        return { handled: true };
-      }
-      return {
-        handled: true,
-        overrides: { ...ctx.currentOverrides, voiceId: ctx.value },
-      };
-    default:
-      return { handled: false };
+function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
+  if (!["voice", "voice_id", "voiceid", "gradium_voice", "gradiumvoice"].includes(ctx.key)) {
+    return { handled: false };
   }
+  return ctx.policy.allowVoice
+    ? { handled: true, overrides: { ...ctx.currentOverrides, voiceId: ctx.value } }
+    : { handled: true };
 }
 
 export function buildGradiumSpeechProvider(): SpeechProviderPlugin {

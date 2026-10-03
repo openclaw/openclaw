@@ -37,7 +37,6 @@ it("rejects incomplete target inspection output even when Git exits zero", async
 });
 
 it.each([
-  { state: "partial-clone", expected: "promised objects in this partial clone" },
   { state: "unverified", expected: "did not verify repository corruption" },
   { state: "corrupt", expected: "verified repository corruption" },
 ])(
@@ -48,8 +47,8 @@ it.each([
     const runCommand: CommandRunner = async (argv) => {
       if (argv.includes("--get-regexp")) {
         return {
-          code: state === "partial-clone" ? 0 : 1,
-          stdout: state === "partial-clone" ? "remote.origin.promisor true\n" : "",
+          code: 1,
+          stdout: "",
           stderr: "",
         };
       }
@@ -66,10 +65,6 @@ it.each([
       timeoutMs: 1_000,
     });
     expect(result.stderr).toContain(expected);
-    if (state === "partial-clone") {
-      expect(result.stderr).not.toContain("repo corruption");
-      expect(result.stderr).toContain("sed -n 's/^?//p'");
-    }
   },
 );
 
@@ -113,6 +108,8 @@ it("uses the installed checkout runner for partial-clone classification", async 
   expect(transfer).toBeUndefined();
   expect(installedConfigProbed).toBe(true);
   expect(results.at(-1)?.stderrTail).toContain("promised objects in this partial clone");
+  expect(results.at(-1)?.stderrTail).not.toContain("repo corruption");
+  expect(results.at(-1)?.stderrTail).toContain("sed -n 's/^?//p'");
 });
 
 // Windows forcibly terminates children instead of delivering the handled POSIX signal.

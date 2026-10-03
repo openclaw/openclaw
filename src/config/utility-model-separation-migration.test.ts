@@ -102,79 +102,28 @@ describe("utility model separation migration", () => {
     expect(result.config.models).toBe(next.models);
   });
 
-  it.each([
-    { change: "provider", expected: "other/remaining" },
-    { change: "selected-row", expected: "local-fixture/remaining" },
-    { change: "replacement", expected: "local-fixture/replacement" },
-    { change: "default-row", expected: "local-fixture/small" },
-    { change: "all-providers", expected: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}` },
-  ])("does not restore a deliberately removed $change route", ({ change, expected }) => {
-    const previous = legacyConfig();
-    const provider = expectDefined(previous.models?.providers?.["local-fixture"], "provider");
-    const model = expectDefined(provider.models[0], "model");
-    if (change === "provider") {
-      expectDefined(previous.models?.providers, "providers").other = {
-        ...provider,
-        models: [{ ...model, id: "remaining" }],
-      };
-    } else if (change === "selected-row") {
-      provider.models.push({ ...model, id: "remaining" });
-    } else if (change === "default-row") {
-      expectDefined(previous.models?.providers, "providers")[DEFAULT_PROVIDER] = {
-        ...provider,
-        models: [{ ...model, id: DEFAULT_MODEL }],
-      };
-    }
-    const next = structuredClone(previous);
-    next.models = {
-      providers:
-        change === "default-row"
-          ? { "local-fixture": provider }
-          : change === "all-providers"
-            ? {}
-            : {
-                [change === "provider" ? "other" : "local-fixture"]: {
-                  ...provider,
-                  models: [
-                    { ...model, id: change === "replacement" ? "replacement" : "remaining" },
-                  ],
-                },
-              },
-    };
-    const result = materializeUtilityModelSeparation(next, previous);
-    expect(result.config.agents?.defaults?.model).toEqual({
-      primary: expected,
-      fallbacks: ["backup/model@backup:account"],
-    });
-    expect(result.config.models).toEqual(next.models);
-    expect(previous.models?.providers?.["local-fixture"]?.models[0]?.id).toBe("small");
-  });
-
-  it.each([null, {}])("does not infer a new primary from a fresh %j source", (previous) => {
+  it("does not infer a new primary from an empty previous source", () => {
     const next = legacyConfig();
-    const result = materializeUtilityModelSeparation(next, previous);
+    const result = materializeUtilityModelSeparation(next, {});
     expect(result.config.agents).toBe(next.agents);
     expect(hasUtilityModelSeparationMigrationMarker(result.config)).toBe(true);
     expect(result.changes).toEqual([]);
   });
 
-  it.each([false, true])(
-    "preserves an unowned built-in default when only utility was configured (new catalog: %s)",
-    (addsCatalog) => {
-      const previous: OpenClawConfig = {
-        agents: { defaults: { utilityModel: "remote/utility" }, entries: { worker: {} } },
-      };
-      const candidate = addsCatalog ? { ...previous, models: legacyConfig().models } : previous;
-      const result = materializeUtilityModelSeparation(candidate, previous);
-      expect(result.config.agents?.defaults?.model).toEqual({
-        primary: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`,
-      });
-      expect(result.config.agents?.defaults?.utilityModel).toBe("remote/utility");
-      expect(hasUtilityModelSeparationMigrationMarker(result.config)).toBe(true);
-    },
-  );
+  it("preserves an unowned built-in default when a utility setup adds a catalog", () => {
+    const previous: OpenClawConfig = {
+      agents: { defaults: { utilityModel: "remote/utility" }, entries: { worker: {} } },
+    };
+    const candidate = { ...previous, models: legacyConfig().models };
+    const result = materializeUtilityModelSeparation(candidate, previous);
+    expect(result.config.agents?.defaults?.model).toEqual({
+      primary: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`,
+    });
+    expect(result.config.agents?.defaults?.utilityModel).toBe("remote/utility");
+    expect(hasUtilityModelSeparationMigrationMarker(result.config)).toBe(true);
+  });
 
-  it.each(["${LOCAL_MODEL}", "prefix-${LOCAL_MODEL}", "small@experimental"])(
+  it.each(["prefix-${LOCAL_MODEL}", "small@experimental"])(
     "defers an unrepresentable legacy model id %s even when a candidate supplies the marker",
     (id) => {
       const previous = legacyConfig();

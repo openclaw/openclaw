@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
   readChatSessionSnapshot,
+  resolveChatSnapshotKey,
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
@@ -117,7 +118,7 @@ describe("session prefetch pane and navigation ownership", () => {
         pagination: { hasMore: false, completeSnapshot: true },
         sessionId: "stored-first",
       };
-      fixture.store.write(first, stored);
+      fixture.store.write(resolveChatSnapshotKey(snapshotHost, { sessionKey: first }), stored);
       await fixture.store.flush();
       cache.clear();
       const read = createDeferred<ChatSessionSnapshot | null>();

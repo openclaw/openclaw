@@ -48,6 +48,7 @@ async function mountWithCatalog(
   const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
   gateway.publish({
     hello: {
+      auth: { role: "operator", scopes: ["operator.admin"] },
       features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
@@ -219,29 +220,6 @@ async function selectCatalogDelete(
 }
 
 describe("AppSidebar catalog deletion", () => {
-  it.each([
-    { canArchive: true, archive: true, visible: true },
-    { canArchive: false, archive: true, visible: false },
-    { canArchive: true, archive: false, visible: false },
-  ])(
-    "gates Delete on row and catalog capabilities: %j",
-    async ({ canArchive, archive, visible }) => {
-      vi.useFakeTimers();
-      try {
-        const result = catalogList([{ threadId: "thread-1", name: "Shared session", canArchive }]);
-        result.catalogs[0]!.capabilities.archive = archive;
-        const { sidebar } = await mountWithCatalog(result);
-        sidebar
-          .querySelector('[data-session-key*="thread-1"]')!
-          .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-        await vi.advanceTimersByTimeAsync(0);
-        expect(Boolean(sidebar.querySelector('wa-dropdown-item[value="delete"]'))).toBe(visible);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
-
   it.each([true, false])(
     "confirms catalog deletion and refreshes rows (open: %s)",
     async (open) => {

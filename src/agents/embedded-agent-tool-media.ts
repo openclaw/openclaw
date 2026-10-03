@@ -11,22 +11,16 @@ import { readToolResultDetails } from "./tool-result-error.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { getCoreTtsToolResultMediaUrls } from "./tools/tts-tool-result-provenance.js";
 
-function pushUniqueMessagingMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
-  if (typeof value !== "string") {
-    return;
+function pushUniqueMessagingMediaUrl(urls: Set<string>, value: unknown): void {
+  const normalized = normalizeOptionalString(value);
+  if (normalized) {
+    urls.add(normalized);
   }
-  const normalized = value.trim();
-  if (!normalized || seen.has(normalized)) {
-    return;
-  }
-  seen.add(normalized);
-  urls.push(normalized);
 }
 
 /** Collects messaging attachment references from tool-call arguments or result records. */
 export function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
-  const urls: string[] = [];
-  const seen = new Set<string>();
+  const urls = new Set<string>();
   const pushAttachment = (value: unknown) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       return;
@@ -40,7 +34,7 @@ export function collectMessagingMediaUrlsFromRecord(record: Record<string, unkno
       attachment.fileUrl,
       attachment.url,
     ]) {
-      pushUniqueMessagingMediaUrl(urls, seen, candidate);
+      pushUniqueMessagingMediaUrl(urls, candidate);
     }
   };
 
@@ -51,11 +45,11 @@ export function collectMessagingMediaUrlsFromRecord(record: Record<string, unkno
     record.filePath,
     record.fileUrl,
   ]) {
-    pushUniqueMessagingMediaUrl(urls, seen, candidate);
+    pushUniqueMessagingMediaUrl(urls, candidate);
   }
   if (Array.isArray(record.mediaUrls)) {
     for (const mediaUrl of record.mediaUrls) {
-      pushUniqueMessagingMediaUrl(urls, seen, mediaUrl);
+      pushUniqueMessagingMediaUrl(urls, mediaUrl);
     }
   }
   if (Array.isArray(record.attachments)) {
@@ -63,22 +57,18 @@ export function collectMessagingMediaUrlsFromRecord(record: Record<string, unkno
       pushAttachment(attachment);
     }
   }
-  return urls;
+  return [...urls];
 }
 
 /** Collects messaging attachment references from a completed tool result. */
 export function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
-  const urls: string[] = [];
-  const seen = new Set<string>();
+  const urls = new Set<string>();
   const appendFromRecord = (value: unknown) => {
     if (!value || typeof value !== "object") {
       return;
     }
     for (const url of collectMessagingMediaUrlsFromRecord(value as Record<string, unknown>)) {
-      if (!seen.has(url)) {
-        seen.add(url);
-        urls.push(url);
-      }
+      urls.add(url);
     }
   };
 
@@ -94,7 +84,7 @@ export function collectMessagingMediaUrlsFromToolResult(result: unknown): string
       // Ignore non-JSON tool output.
     }
   }
-  return urls;
+  return [...urls];
 }
 
 const TRUSTED_TOOL_RESULT_MEDIA = new Set([
@@ -243,11 +233,10 @@ const REPLY_ATTACHMENT_METADATA_KEYS = new Set([
 ]);
 
 function collectStructuredMedia(media: Record<string, unknown>): ToolResultMediaArtifact {
-  const mediaUrls: string[] = [];
-  const seen = new Set<string>();
+  const mediaUrls = new Set<string>();
   const attachmentsByUrl = new Map<string, ReplyMediaAttachment>();
   const pushString = (value: unknown, attachment?: ReplyMediaAttachment) => {
-    pushUniqueMessagingMediaUrl(mediaUrls, seen, value);
+    pushUniqueMessagingMediaUrl(mediaUrls, value);
     const normalized = typeof value === "string" ? value.trim() : "";
     if (normalized && attachment && !attachmentsByUrl.has(normalized)) {
       attachmentsByUrl.set(normalized, attachment);
@@ -297,9 +286,9 @@ function collectStructuredMedia(media: Record<string, unknown>): ToolResultMedia
     }
   }
   return {
-    mediaUrls,
+    mediaUrls: [...mediaUrls],
     ...(attachmentsByUrl.size > 0
-      ? { attachments: mediaUrls.map((url) => attachmentsByUrl.get(url) ?? {}) }
+      ? { attachments: [...mediaUrls].map((url) => attachmentsByUrl.get(url) ?? {}) }
       : {}),
   };
 }

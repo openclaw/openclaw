@@ -10,7 +10,7 @@ import {
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { compileSafeRegexDetailed } from "openclaw/plugin-sdk/security-runtime";
 import { upsertSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterAll, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { slackPlugin } from "../../channel.js";
 import { registerSlackInstallationState } from "../../installation-identity-state.js";
@@ -127,8 +127,6 @@ function createSlackMessage(overrides: Partial<SlackMessageEvent>): SlackMessage
 describe("slack prepareSlackMessage inbound contract", () => {
   const storeFixture = createSlackSessionStoreFixture("openclaw-slack-thread-");
 
-  beforeAll(() => storeFixture.setup());
-
   beforeEach(() => {
     clearSlackThreadParticipationCache();
     enqueueSystemEventMock.mockClear();
@@ -141,8 +139,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
       created: true,
     });
   });
-
-  afterAll(() => storeFixture.cleanup());
 
   function createInboundSlackCtx(
     params: Partial<Parameters<typeof createInboundSlackTestContext>[0]> = {},
@@ -2467,11 +2463,7 @@ describe("prepareSlackMessage sender prefix", () => {
 describe("slack implicit mention policy", () => {
   const storeFixture = createSlackSessionStoreFixture("openclaw-slack-explicit-mention-");
 
-  beforeAll(() => storeFixture.setup());
-
   beforeEach(clearSlackThreadParticipationCache);
-
-  afterAll(() => storeFixture.cleanup());
 
   function prepareThreadMessage(
     eventScope?: SlackEventScope,

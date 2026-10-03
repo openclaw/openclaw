@@ -12,6 +12,16 @@ import {
 
 const mocks = getAgentTestMocks();
 
+function mockCompletedRun(sessionKey: string): void {
+  const run = createSubagentRunRecord({
+    runId: "previous-run",
+    childSessionKey: sessionKey,
+    execution: { status: "terminal", endedAt: 3 },
+  });
+  mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(run);
+  mocks.getLatestLiveSubagentRunByChildSessionKey.mockReturnValue(run);
+}
+
 function expectReactivationFailure(respond: ReturnType<typeof vi.fn>, runId: string): void {
   expect(mocks.replaceSubagentRunAfterSteer).toHaveBeenCalledOnce();
   expect(respond).toHaveBeenCalledWith(
@@ -25,13 +35,7 @@ function expectReactivationFailure(respond: ReturnType<typeof vi.fn>, runId: str
 export function registerAgentPreDispatchFailureTests() {
   it("removes the chatAbortControllers entry if pre-dispatch reactivation fails", async () => {
     prime("reactivation-session");
-    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(
-      createSubagentRunRecord({
-        runId: "previous-run",
-        childSessionKey: "agent:main:main",
-        execution: { status: "terminal", endedAt: 3 },
-      }),
-    );
+    mockCompletedRun("agent:main:main");
     mocks.replaceSubagentRunAfterSteer.mockImplementationOnce(() => {
       throw new Error("reactivate boom");
     });
@@ -96,13 +100,7 @@ export function registerAgentPreDispatchFailureTests() {
           throw inputError;
         });
       } else {
-        mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(
-          createSubagentRunRecord({
-            runId: "previous-run",
-            childSessionKey: sessionKey,
-            execution: { status: "terminal", endedAt: 3 },
-          }),
-        );
+        mockCompletedRun(sessionKey);
         mocks.replaceSubagentRunAfterSteer.mockImplementationOnce(() => {
           throw new Error("reactivate boom");
         });
@@ -175,13 +173,7 @@ export function registerAgentPreDispatchFailureTests() {
       canonicalKey: sessionKey,
     }));
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
-    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(
-      createSubagentRunRecord({
-        runId: "previous-run",
-        childSessionKey: sessionKey,
-        execution: { status: "terminal", endedAt: 3 },
-      }),
-    );
+    mockCompletedRun(sessionKey);
     mocks.replaceSubagentRunAfterSteer.mockImplementationOnce(() => {
       throw new Error("reactivate boom");
     });

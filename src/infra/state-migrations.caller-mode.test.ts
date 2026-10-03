@@ -284,7 +284,7 @@ describe("legacy state migration caller mode", () => {
     "excludes copied %s agent inputs without overriding live shared-auth authority",
     async (overrideKey) => {
       const fixture = await makeFixture();
-      const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
       openOpenClawStateDatabase({ env: fixture.env });
       const sources = writeAgentScopedLegacySources(fixture.stateDir);
@@ -522,7 +522,7 @@ describe("legacy state migration caller mode", () => {
   });
   it("keeps agent-scoped plan and receipt items for the standard state root", async () => {
     const fixture = await makeFixture();
-    const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
     writeAgentScopedLegacySources(fixture.stateDir);
     const env: NodeJS.ProcessEnv = {

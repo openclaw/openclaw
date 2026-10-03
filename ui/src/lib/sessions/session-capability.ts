@@ -217,6 +217,11 @@ export type SessionCapability = {
   readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached">;
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
+  /** Initial routing hints only; cached agent discovery never grants live authority. */
+  readonly cachedRoutingDefaults?: {
+    readonly mainKey: string;
+    readonly scope: "per-sender" | "global";
+  };
   whenCachedRosterSettled: () => Promise<void>;
   /** Captures the current Gateway connection generation for read-only requests. */
   captureConnectionScope: () => SessionConnectionScope | null;

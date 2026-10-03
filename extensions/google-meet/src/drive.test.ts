@@ -1,6 +1,8 @@
 // Google Meet tests cover bounded Drive document export response reads.
 import { describe, expect, it, vi } from "vitest";
+import { listGoogleMeetCalendarEvents } from "./calendar.js";
 import { exportGoogleDriveDocumentText } from "./drive.js";
+import { fetchGoogleMeetSpace } from "./meet-api.js";
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: vi.fn(),
@@ -9,6 +11,43 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const mockFetch = vi.mocked(fetchWithSsrFGuard);
+
+const googleApiRequests = [
+  {
+    name: "Meet",
+    run: () => fetchGoogleMeetSpace({ accessToken: "tok", meeting: "abc-defg-hij" }),
+  },
+  {
+    name: "Calendar",
+    run: () => listGoogleMeetCalendarEvents({ accessToken: "tok" }),
+  },
+  {
+    name: "Drive",
+    run: () => exportGoogleDriveDocumentText({ accessToken: "tok", documentId: "doc-id" }),
+  },
+];
+
+describe.each(googleApiRequests)("$name guarded response cleanup", ({ run }) => {
+  it.each(["error response", "body read failure"])("releases after %s", async (failure) => {
+    const response =
+      failure === "error response"
+        ? new Response("denied", { status: 403 })
+        : new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(new Error("body read failed"));
+              },
+            }),
+          );
+    const release = vi.fn(async () => undefined);
+    mockFetch.mockResolvedValueOnce({ response, finalUrl: "https://googleapis.com/", release });
+
+    await expect(run()).rejects.toThrow(
+      failure === "error response" ? "failed (403): denied" : "body read failed",
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+});
 
 function makeStreamResponse(sizeBytes: number, status = 200): Response {
   const chunk = new Uint8Array(Math.min(sizeBytes, 65536)).fill(0x78); // 'x'

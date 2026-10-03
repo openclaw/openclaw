@@ -1,13 +1,11 @@
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import type {
-  createWorkerInferenceStoreKernel,
-  WorkerInferenceRetentionPolicy,
-} from "./inference-store.kernel.js";
+import type { createWorkerInferenceStoreKernel } from "./inference-store.kernel.js";
+import type { WorkerInferenceRetentionPolicy } from "./inference-store.types.js";
 import type { WorkerInferenceStoreOperations } from "./inference-store.worker-contract.js";
 
-export type { WorkerInferenceTurnInput } from "./inference-store.kernel.js";
+export type { WorkerInferenceTurnInput } from "./inference-store.types.js";
 
 type Kernel = ReturnType<typeof createWorkerInferenceStoreKernel>;
 type Operations = WorkerInferenceStoreOperations;

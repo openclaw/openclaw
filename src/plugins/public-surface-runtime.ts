@@ -2,20 +2,14 @@
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "./bundled-dir.js";
-import { isTypeScriptPackageEntry } from "./package-entrypoints.js";
+import {
+  isTypeScriptPackageEntry,
+  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
+} from "./package-entrypoints.js";
 import { isPathInside } from "./path-safety.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";
-
-export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
-  ".ts",
-  ".mts",
-  ".js",
-  ".mjs",
-  ".cts",
-  ".cjs",
-] as const;
 
 /** Normalizes a bundled public artifact subpath and rejects traversal/absolute paths. */
 function normalizeBundledPluginArtifactSubpath(artifactBasename: string): string {

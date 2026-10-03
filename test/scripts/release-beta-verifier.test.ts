@@ -155,6 +155,50 @@ describe("verifyBetaRelease workflow outcomes", () => {
     },
   );
 
+  it("accepts the exact historical publisher after delayed registry readback failed", async () => {
+    const fixture = historicalFixture("success", {
+      conclusion: "failure",
+      jobs: [
+        { name: "validate_publish_request", conclusion: "success" },
+        {
+          name: "publish_openclaw_npm",
+          conclusion: "failure",
+          steps: [
+            { name: "Publish", conclusion: "success" },
+            { name: "Verify extended-stable registry readback", conclusion: "failure" },
+          ],
+        },
+      ],
+    });
+
+    await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+
+    expect(
+      JSON.parse(readFileSync(join(fixture.rootDir, "evidence.json"), "utf8")).workflowRuns,
+    ).toEqual([
+      expect.objectContaining({
+        id: "44",
+        runAttempt: 1,
+        url: "https://example.invalid/runs/44/attempts/1",
+      }),
+    ]);
+  });
+
+  it("keeps unrelated failures blocking after a successful historical publish job", async () => {
+    const fixture = historicalFixture("success", {
+      conclusion: "failure",
+      jobs: [
+        { name: "publish_openclaw_npm", conclusion: "success" },
+        { name: "unrelated_failure", conclusion: "failure" },
+      ],
+    });
+
+    await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow(
+      "failed jobs: unrelated_failure",
+    );
+    expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
+  });
+
   it.each([
     { attempt: 2 },
     { databaseId: 45 },

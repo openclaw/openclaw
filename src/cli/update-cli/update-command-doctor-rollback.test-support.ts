@@ -4,10 +4,8 @@ import { expect, it, vi, type Mock } from "vitest";
 import { createConfigIO } from "../../config/io.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
-import {
-  swapStagedPackageInstall,
-  type PackageUpdateTransaction,
-} from "../../infra/package-update-swap.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import * as stateSchemas from "../../infra/update-candidate-state.js";
 import { UpdateDoctorError } from "../../infra/update-doctor-result.js";
@@ -414,9 +412,11 @@ export function registerDoctorRestorationRollbackTests(
         throw new Error("Expected terminal rollback report");
       }
       const report = renderUpdateRunReport(recorded);
-      expect(report.headline).toContain(
-        `rolled back to ${transport === "stale-git-graph" ? updateResult.before?.sha?.slice(0, 8) : installedVersion}`,
-      );
+      const restoredIdentity =
+        transport === "stale-git-graph"
+          ? `${installedVersion} (${updateResult.before?.sha?.slice(0, 8)})`
+          : installedVersion;
+      expect(report.headline).toContain(`rolled back to ${restoredIdentity}:`);
       if (transport === "stale-git-graph") {
         expect(recorded.verification.runningBuildId).toBe("previous-build");
         expect(failure?.detail).toContain("io.write-previous.mjs");

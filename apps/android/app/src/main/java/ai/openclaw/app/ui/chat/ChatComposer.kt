@@ -497,15 +497,6 @@ internal suspend fun stageChatShareDraft(
   )
 }
 
-internal fun canCommitStagedChatShare(
-  stagedId: Long,
-  currentHead: ChatShareDraft?,
-  ownerSnapshot: ChatComposerOwner,
-  currentOwner: ChatComposerOwner,
-): Boolean =
-  currentHead?.id == stagedId &&
-    ownerSnapshot == currentOwner
-
 internal fun appendChatDictationTranscript(
   currentInput: String,
   transcript: String,

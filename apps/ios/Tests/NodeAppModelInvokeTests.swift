@@ -1488,11 +1488,11 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `session key extracts canonical agent ID`() {
-        #expect(SessionKey.agentId(from: "agent:rust-claw:mattermost:channel:w6g") == "rust-claw")
-        #expect(SessionKey.agentId(from: " agent:main:main ") == "main")
-        #expect(SessionKey.agentId(from: "main") == nil)
-        #expect(SessionKey.agentId(from: "agent::main") == nil)
-        #expect(SessionKey.agentId(from: nil) == nil)
+        #expect(OpenClawChatSessionKey.agentID(from: "agent:rust-claw:mattermost:channel:w6g") == "rust-claw")
+        #expect(OpenClawChatSessionKey.agentID(from: " agent:main:main ") == "main")
+        #expect(OpenClawChatSessionKey.agentID(from: "main") == nil)
+        #expect(OpenClawChatSessionKey.agentID(from: "agent::main") == nil)
+        #expect(OpenClawChatSessionKey.agentID(from: nil) == nil)
     }
 
     @Test @MainActor func `chat agent name uses focused canonical session agent`() {
@@ -1557,7 +1557,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         appModel.focusChatSession(rustSessionKey)
 
         appModel.setSelectedAgentId("main")
-        #expect(appModel.defaultChatSessionKey == "main")
         #expect(appModel.mainSessionKey == "main")
         #expect(appModel.chatSessionKey == "main")
     }
@@ -1569,17 +1568,17 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         appModel.openChat(sessionKey: "incident-42")
 
         appModel.setSelectedAgentId("main")
-        #expect(appModel.defaultChatSessionKey == "main")
+        #expect(appModel.mainSessionKey == "main")
         #expect(appModel.chatSessionKey == "incident-42")
     }
 
-    @Test @MainActor func `default chat session key ignores explicit chat focus`() {
+    @Test @MainActor func `main session key ignores explicit chat focus`() {
         let appModel = NodeAppModel()
         appModel.gatewayDefaultAgentId = "main"
         appModel.setSelectedAgentId("rust-claw")
         appModel.openChat(sessionKey: "incident-42")
 
-        #expect(appModel.defaultChatSessionKey == SessionKey.makeAgentSessionKey(
+        #expect(appModel.mainSessionKey == SessionKey.makeAgentSessionKey(
             agentId: "rust-claw",
             baseKey: "main"))
         #expect(appModel.chatSessionKey == "incident-42")
@@ -2830,7 +2829,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             ])]
         let firstModel = NodeAppModel(notificationCenter: notificationCenter)
 
-        #expect(await firstModel.handleExecApprovalResolvedRemotePush(push))
+        await firstModel.handleExecApprovalResolvedRemotePush(push)
         #expect(firstModel.pendingExecApprovalResolvedPushes == [push])
         #expect(notificationCenter.pendingRemovedIdentifiers == [[
             "exec.approval-v2.16:gateway-device-a.approval-resolved-offline",
@@ -3365,7 +3364,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         talkMode.updateGatewayConnected(true)
         defer {
             barrier.release()
-            _ = talkMode.cancelPushToTalk()
+            _ = talkMode.cancelPushToTalk(expectedTranscriptionOnly: false)
         }
         let startResponse = await appModel.handleInvoke(
             talkRequest(id: "fresh-before-stale-cancel", command: .pttStart))
@@ -4683,7 +4682,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer {
             barrier.release()
             appModel.testTalkCapturePreparationHandler = nil
-            _ = talkMode.cancelPushToTalk()
+            _ = talkMode.cancelPushToTalk(expectedTranscriptionOnly: false)
         }
 
         let start = Task { @MainActor in
@@ -7667,8 +7666,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let decomposedResolved = ApprovalNotificationPrompt(
             approvalId: "approval-exact-push-resolved",
             gatewayDeviceId: decomposedOwner)
-        #expect(await appModel.handleExecApprovalResolvedRemotePush(composedResolved))
-        #expect(await appModel.handleExecApprovalResolvedRemotePush(decomposedResolved))
+        await appModel.handleExecApprovalResolvedRemotePush(composedResolved)
+        await appModel.handleExecApprovalResolvedRemotePush(decomposedResolved)
         var resolvedPushes = appModel.pendingExecApprovalResolvedPushes
         #expect(resolvedPushes.count == 2)
         #expect(Set(resolvedPushes.compactMap { GatewayStableIdentifier.key($0.gatewayDeviceId) }).count == 2)
@@ -8997,7 +8996,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let appModel = NodeAppModel()
         let url = try #require(URL(string: "openclaw://agent?message=hello"))
         await appModel.handleDeepLink(url: url)
-        #expect(appModel.lastShareEventText.contains("gateway not connected"))
+        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("gateway not connected") == true)
     }
 
     @Test func `agent deep link logging excludes the original URL`() throws {
@@ -9017,7 +9016,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let msg = String(repeating: "a", count: 20001)
         let url = try #require(URL(string: "openclaw://agent?message=\(msg)"))
         await appModel.handleDeepLink(url: url)
-        #expect(appModel.lastShareEventText.contains("message too large"))
+        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("message too large") == true)
     }
 
     @Test @MainActor func `handle deep link requires confirmation when connected and unkeyed`() async {
@@ -9033,7 +9032,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await appModel.approvePendingAgentDeepLinkPrompt()
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
         #expect(appModel.openChatRequestID == 1)
-        #expect(appModel.lastShareEventText.contains("Sent to gateway"))
+        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Sent to gateway") == true)
     }
 
     @Test @MainActor func `handle deep link coalesces prompt when rate limited`() async throws {
@@ -9074,7 +9073,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         await appModel.handleDeepLink(url: url)
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
-        #expect(appModel.lastShareEventText.contains("Rejected"))
+        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Rejected") == true)
     }
 
     @Test @MainActor func `handle deep link bypasses prompt with valid key`() async {
@@ -9087,7 +9086,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await appModel.handleDeepLink(url: url)
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
         #expect(appModel.openChatRequestID == 1)
-        #expect(appModel.lastShareEventText.contains("Sent to gateway"))
+        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Sent to gateway") == true)
     }
 
     @Test @MainActor func `operator scopes use the active gateway token`() throws {

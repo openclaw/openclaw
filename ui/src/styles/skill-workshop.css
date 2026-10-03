@@ -152,7 +152,6 @@
   color: var(--muted);
 }
 
-/* ── Triage two-pane card ───────────────────────────────────────────── */
 .sw-triage {
   display: grid;
   grid-template-columns:
@@ -175,7 +174,6 @@
   border-radius: var(--radius-lg);
 }
 
-/* ── Installed collection ───────────────────────────────────────────── */
 .sw-collection {
   display: flex;
   flex-direction: column;
@@ -363,7 +361,6 @@
   text-align: center;
 }
 
-/* ── Queue (left) ───────────────────────────────────────────────────── */
 .sw-queue {
   display: flex;
   flex-direction: column;
@@ -395,7 +392,7 @@
 
 .sw-queue__group {
   padding: 10px 14px 4px;
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
@@ -451,7 +448,7 @@
 
 .sw-row__meta {
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   white-space: nowrap;
   align-self: start;
   margin-top: 1px;
@@ -464,7 +461,6 @@
   font-size: 13px;
 }
 
-/* ── Detail (right) ─────────────────────────────────────────────────── */
 .sw-detail {
   display: flex;
   flex-direction: column;
@@ -574,7 +570,7 @@
 .sw-empty-state__eyebrow {
   margin: 0 0 8px;
   color: var(--accent);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -693,14 +689,13 @@
 
 .sw-section__label {
   margin: 0 0 8px;
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
   font-weight: 600;
 }
 
-/* ── Body card (proposal markdown) ─────────────────────────────────── */
 .sw-body-card {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -729,7 +724,6 @@
   letter-spacing: -0.01em;
 }
 
-/* ── Support files ─────────────────────────────────────────────────── */
 .sw-files {
   display: grid;
   gap: 6px;
@@ -765,12 +759,12 @@
 
 .sw-file__size {
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
 }
 
 .sw-file__hint {
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   opacity: 0;
   transition: opacity 100ms;
   margin-left: 6px;
@@ -780,7 +774,6 @@
   opacity: 1;
 }
 
-/* ── Proposal evaluation ───────────────────────────────────────────── */
 .sw-evaluation {
   margin-top: 22px;
   padding-top: 18px;
@@ -981,7 +974,6 @@
   margin-top: 10px;
 }
 
-/* ── Action bar (sticky bottom) ─────────────────────────────────────── */
 .sw-action-toast {
   position: absolute;
   left: 50%;
@@ -1029,7 +1021,7 @@
 .sw-revision-dialog__eyebrow {
   margin-bottom: 6px;
   color: var(--accent);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1251,7 +1243,8 @@
 
   /* A stacked detail must size from its document and actions. The desktop
      height constraint otherwise clips the action bar below an unscrollable card. */
-  .sw-triage {
+  .sw-triage,
+  .sw-collection__panes {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(96px, 22vh) auto;
   }
@@ -1268,12 +1261,6 @@
 
   .sw-queue-resizer {
     display: none;
-  }
-
-  /* Stacked panes: cap the shelf so the skill document stays reachable. */
-  .sw-collection__panes {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(96px, 22vh) auto;
   }
 
   .sw-collection__shelf {
@@ -1312,7 +1299,6 @@
   }
 }
 
-/* ── Mode switch ────────────────────────────────────────────────────── */
 .sw-header-controls {
   display: inline-flex;
   align-items: center;
@@ -1405,8 +1391,8 @@
   stroke-width: 1.6;
 }
 
-/* ── View pane fade-on-switch ───────────────────────────────────────── */
-.sw-view {
+.sw-view,
+.sw-view__pane {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
@@ -1414,10 +1400,6 @@
 }
 
 .sw-view__pane {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
   animation: sw-pane-in 240ms cubic-bezier(0.32, 0.72, 0.32, 1) both;
 }
 

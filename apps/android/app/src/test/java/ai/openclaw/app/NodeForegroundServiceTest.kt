@@ -1004,7 +1004,7 @@ class NodeForegroundServiceTest {
         drainWithMainLooper {
           withTimeout(10_000) { runtime.pendingGatewayTrust.first { it != null } }
         }
-        assertEquals("Accepted TLS must not overwrite the newer queued request's progress", "Connecting…", runtime.statusText.value)
+        assertEquals("Accepted TLS must not overwrite the newer queued request's progress", "Connecting…", runtime.gatewayConnectionDisplay.value.statusText)
         configMutex.unlock()
         configQueueHeld = false
       }

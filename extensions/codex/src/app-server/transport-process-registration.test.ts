@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as pluginState from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import {
@@ -42,10 +43,8 @@ const liveChild: PosixProcess = { ...child, ppid: 1, state: "S" };
 const command = "/opt/codex app-server --listen stdio://";
 const commandFingerprint = createHash("sha256").update(command).digest("hex");
 
-async function openStore() {
-  const { createPluginStateSyncKeyedStore } =
-    await import("openclaw/plugin-sdk/plugin-state-store-runtime");
-  return createPluginStateSyncKeyedStore<{
+function openStore() {
+  return pluginState.createPluginStateSyncKeyedStore<{
     parent: typeof parent;
     child: typeof child & { commandFingerprint?: string };
   }>("codex", {
@@ -57,13 +56,13 @@ async function openStore() {
 
 describe("Codex process registration", () => {
   let root: string;
-  let store: Awaited<ReturnType<typeof openStore>>;
+  let store: ReturnType<typeof openStore>;
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-process-registration-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    store = await openStore();
+    store = openStore();
     vi.mocked(readCodexAppServerProcessSnapshot).mockResolvedValue([
       observer,
       { ...parent, ppid: 1, state: "Z" },
@@ -320,7 +319,6 @@ describe("Codex process registration", () => {
     async (mode) => {
       const registration = { parent, child: { ...child, commandFingerprint } };
       store.register("orphan", registration);
-      const pluginState = await import("openclaw/plugin-sdk/plugin-state-store-runtime");
       const asyncStore = pluginState.createPluginStateKeyedStore<unknown>("codex", {
         namespace: "app-server-processes",
         maxEntries: 512,
