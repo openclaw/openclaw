@@ -243,7 +243,7 @@ export async function writeConfigFileFromContext(
   );
   const resolveValidationCandidate = (candidate: unknown) => {
     // Validate removals now; apply them once to the final authored output after materialization.
-    const config = applyUnsetPathsForWrite(candidate as OpenClawConfig, unsetPaths);
+    const config = applyUnsetPathsForWrite(candidate, unsetPaths);
     if (containsConfigIncludeDirective(config)) {
       return context.resolveRuntimePreflightSourceConfig(
         config,

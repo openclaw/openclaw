@@ -1,4 +1,5 @@
 import type { ScopeUpgradeResult } from "../../packages/gateway-protocol/src/index.js";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getPairedDevice, getPendingDevicePairing } from "../infra/device-pairing.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
@@ -169,13 +170,9 @@ export class ScopeUpgradeCoordinator {
         DURABLE_RECONCILE_INTERVAL_MS,
         Math.max(0, entry.expiresAtMs - this.scheduler.now()),
       );
-      const timer = setTimeout(wake.resolve, delayMs);
-      timer.unref();
       try {
-        await wake.promise;
+        await raceWithTimeout(wake.promise, delayMs, wake.resolve, { ref: false });
       } finally {
-        // A durable notification or close also owns cancellation of the losing timer.
-        clearTimeout(timer);
         if (entry.wake === wake) {
           entry.wake = createDeferredCore();
         }

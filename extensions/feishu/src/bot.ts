@@ -1530,7 +1530,7 @@ export async function handleFeishuMessage(params: {
       const strategy = rawStrategy === "sequential" ? "sequential" : "parallel";
       const activeAgentId =
         ctx.mentionedBot || !requireMention ? normalizeAgentId(route.agentId) : null;
-      const agentIds = (cfg.agents?.list ?? []).map((a: { id: string }) => normalizeAgentId(a.id));
+      const agentIds = Object.keys(cfg.agents?.entries ?? {}).map((id) => normalizeAgentId(id));
       const hasKnownAgents = agentIds.length > 0;
 
       log(
@@ -1545,7 +1545,7 @@ export async function handleFeishuMessage(params: {
         const normalizedAgentId = normalizeAgentId(agentId);
         if (hasKnownAgents && !agentIds.includes(normalizedAgentId)) {
           log(
-            `feishu[${account.accountId}]: broadcast agent ${agentId} not found in agents.list; skipping`,
+            `feishu[${account.accountId}]: broadcast agent ${agentId} not found in agents.entries; skipping`,
           );
           return;
         }

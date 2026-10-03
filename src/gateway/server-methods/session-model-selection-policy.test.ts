@@ -6,10 +6,10 @@ import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-po
 const cfg = {
   agents: {
     defaults: { model: "anthropic/claude-opus-4-6" },
-    list: [
-      { id: "main", default: true },
-      { id: "work", model: "anthropic/claude-sonnet-4-6" },
-    ],
+    entries: {
+      main: {},
+      work: { model: "anthropic/claude-sonnet-4-6" },
+    },
   },
 } satisfies OpenClawConfig;
 

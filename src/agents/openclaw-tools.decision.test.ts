@@ -59,7 +59,7 @@ const config: OpenClawConfig = {
       decisionModel: "fixture/default",
     },
     entries: {
-      main: { default: true },
+      main: {},
       alternate: { decisionModel: "fixture/override" },
       disabled: { decisionModel: "" },
     },

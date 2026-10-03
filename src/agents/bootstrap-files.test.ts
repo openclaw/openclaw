@@ -726,7 +726,7 @@ describe("resolveBootstrapContextForRun", () => {
       config: {
         agents: {
           defaults: { heartbeat: {} },
-          list: [{ id: "main" }],
+          entries: { main: {} },
         },
       },
     });
@@ -998,7 +998,7 @@ describe("resolveContextInjectionMode", () => {
         {
           agents: {
             defaults: { contextInjection: "continuation-skip" },
-            list: [{ id: "strict", contextInjection: "always" }],
+            entries: { strict: { contextInjection: "always" } },
           },
         } as never,
         "strict",
@@ -1012,7 +1012,7 @@ describe("resolveContextInjectionMode", () => {
         {
           agents: {
             defaults: { contextInjection: "never" },
-            list: [{ id: "worker" }],
+            entries: { worker: {} },
           },
         } as never,
         "worker",

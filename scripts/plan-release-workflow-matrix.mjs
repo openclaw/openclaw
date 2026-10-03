@@ -441,7 +441,6 @@ export function createReleaseSourceSelection(options = {}) {
   const releaseProfile = options.releaseProfile ?? "stable";
   const includeOpenWebUI = isEnabled(options.includeOpenWebUI);
   const prepareOnly = isEnabled(options.prepareOnly);
-  const consumers = [];
   const codexSuites = [];
   const docker = [];
   const baseline = options.upgradeSurvivorBaseline ?? "";
@@ -496,14 +495,11 @@ export function createReleaseSourceSelection(options = {}) {
       if (row.suite_id.startsWith("live-codex-harness")) {
         codexSuites.push(row.suite_id);
       }
-      if (row.suite_id.startsWith("live-gateway-") || row.suite_id.startsWith("live-cli-")) {
-        consumers.push("live-cli-backend");
-      }
     }
   }
   return {
     docker,
-    consumers: [...new Set(consumers)],
+    consumers: [],
     codexSuites,
     fsSafeNative: prepareOnly || docker.length > 0,
     preparationLanes,

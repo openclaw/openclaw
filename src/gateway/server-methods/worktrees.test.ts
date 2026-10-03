@@ -228,7 +228,7 @@ describe("worktrees gateway methods", () => {
           client: writeClient,
           context: {
             getRuntimeConfig: () => ({
-              agents: { list: [{ id: "main", default: true, workspace }] },
+              agents: { entries: { main: { workspace } } },
             }),
           },
         },

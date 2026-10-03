@@ -230,7 +230,7 @@ describe("searchSessionTranscripts", () => {
       withEnvAsync({ OPENCLAW_STATE_DIR: paths.stateDir }, () =>
         runSessionColdStorageMaintenance({
           config: {
-            agents: { list: [{ id: "main" }] },
+            agents: { entries: { main: {} } },
             session: {
               store: resolveOpenClawAgentSqlitePath(options),
               maintenance: { coldStorage: { enabled: true, afterDays: 30 } },

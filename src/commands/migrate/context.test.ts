@@ -20,7 +20,7 @@ describe("migration context helpers", () => {
   it("normalizes and validates an explicit migration target agent", () => {
     const config = {
       agents: {
-        list: [{ id: "main", default: true }, { id: "research" }],
+        entries: { main: {}, research: {} },
       },
     };
 

@@ -193,7 +193,7 @@ it.each(["completed", "interrupted"] as const)(
       };
       const cfg: OpenClawConfig = {
         agents: {
-          list: [{ id: "main", default: true, workspace: state.workspaceDir }],
+          entries: { main: { workspace: state.workspaceDir } },
           defaults: {
             workspace: state.workspaceDir,
             model: { primary: "test-provider/owner-model" },

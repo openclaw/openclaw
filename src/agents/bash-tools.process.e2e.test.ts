@@ -2,6 +2,7 @@ import { Value } from "typebox/value";
 import { afterEach, expect, test } from "vitest";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   getFinishedSession,
   getSession,
@@ -98,63 +99,83 @@ const SYNTHETIC_FINALIZER_CREDENTIAL = ["sk", "synthetic", "fixture", "never", "
 
 test.skipIf(process.platform === "win32")(
   "keeps subagent yield blocked until a real finalized background exec is collected",
-  async () => {
-    const scopeKey = "agent:main:subagent:process-yield";
-    const finalization = createDeferredCore();
-    const run = await runSandboxProcess({
-      command: "yield-retention-proof",
-      containerName: "yield-retention-proof",
-      child: "process.exit(2)",
-      async finalizeExec() {
-        await finalization.promise;
-      },
-      notifyOnExit: false,
-      scopeKey,
-      timeoutSec: 10,
-    });
-    markBackgrounded(run.session);
-    let yieldCount = 0;
-    const yieldTool = createSessionsYieldTool({
-      sessionId: "process-yield",
-      claimYield: createRequesterYieldCallback({
-        requesterSessionKey: scopeKey,
-        requesterAgentId: "main",
-      }),
-      onYield: () => {
-        yieldCount += 1;
-      },
-    });
-    try {
-      expect((await yieldTool.execute("yield-running", {})).details).toMatchObject({
-        status: "error",
+  () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scopeKey = "agent:main:subagent:process-yield";
+      const runId = "process-yield-run";
+      const registry = await import("./subagents/registry/subagent-registry.test-helpers.js");
+      await registry.resetSubagentRegistryForTests();
+      await registry.addSubagentRunForTests({
+        runId,
+        childSessionKey: scopeKey,
+        childAgentId: "main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "Collect the owned process before waiting",
+        cleanup: "keep",
+        createdAt: 1,
+        execution: { status: "running" },
+        expectsCompletionMessage: false,
+        completion: { required: false },
+        delivery: { status: "not_required" },
       });
-      finalization.resolve();
-      await run.promise;
-      const retained = getFinishedSession(run.session.id);
-      expect(retained?.scopeKey).toBe(scopeKey);
-      expect(retained?.sessionKey).toBeUndefined();
-      expect((await yieldTool.execute("yield-finished", {})).details).toMatchObject({
-        status: "error",
-        error: expect.stringContaining("Use process to poll and collect"),
+      const finalization = createDeferredCore();
+      const run = await runSandboxProcess({
+        command: "yield-retention-proof",
+        containerName: "yield-retention-proof",
+        child: "process.exit(2)",
+        async finalizeExec() {
+          await finalization.promise;
+        },
+        notifyOnExit: false,
+        scopeKey,
+        timeoutSec: 10,
       });
-      expect(yieldCount).toBe(0);
-      const poll = await createProcessTool({ scopeKey }).execute("poll-finished", {
-        action: "poll",
-        sessionId: run.session.id,
+      markBackgrounded(run.session);
+      let yieldCount = 0;
+      const yieldTool = createSessionsYieldTool({
+        sessionId: "process-yield",
+        claimYield: createRequesterYieldCallback({
+          requesterSessionKey: scopeKey,
+          requesterAgentId: "main",
+          requesterTurnRunId: runId,
+        }),
+        onYield: () => {
+          yieldCount += 1;
+        },
       });
-      acknowledgeInternalToolResult(poll);
-      expect(
-        (await yieldTool.execute("yield-collected", { waitFor: "message" })).details,
-      ).toMatchObject({
-        status: "yielded",
-      });
-      expect(yieldCount).toBe(1);
-    } finally {
-      finalization.resolve();
-      run.kill();
-      await run.promise;
-    }
-  },
+      try {
+        expect((await yieldTool.execute("yield-running", {})).details).toMatchObject({
+          status: "error",
+        });
+        finalization.resolve();
+        await run.promise;
+        const retained = getFinishedSession(run.session.id);
+        expect(retained?.scopeKey).toBe(scopeKey);
+        expect(retained?.sessionKey).toBeUndefined();
+        expect((await yieldTool.execute("yield-finished", {})).details).toMatchObject({
+          status: "error",
+          error: expect.stringContaining("Use process to poll and collect"),
+        });
+        expect(yieldCount).toBe(0);
+        const poll = await createProcessTool({ scopeKey }).execute("poll-finished", {
+          action: "poll",
+          sessionId: run.session.id,
+        });
+        acknowledgeInternalToolResult(poll);
+        expect(
+          (await yieldTool.execute("yield-collected", { waitFor: "message" })).details,
+        ).toMatchObject({
+          status: "yielded",
+        });
+        expect(yieldCount).toBe(1);
+      } finally {
+        finalization.resolve();
+        run.kill();
+        await run.promise;
+        await registry.resetSubagentRegistryForTests();
+      }
+    }),
 );
 
 test.skipIf(process.platform === "win32").each([false, true])(

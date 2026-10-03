@@ -112,7 +112,7 @@ describe("Doctor btrfs NOCOW", () => {
                 loadPersistedAuthProfileStore(path.dirname(agent.path));
               }
               const preflight = await prepareDoctorDatabasePreflight({
-                cfg: { agents: { list: [{ id: "main" }, { id: "secondary" }] } },
+                cfg: { agents: { entries: { main: {}, secondary: {} } } },
               });
               expect(preflight.agentDatabaseMigrationDiscovery?.discovery.targets).toHaveLength(3);
               return inspectDoctorSqliteNoCow([state.path, ...agents.map((agent) => agent.path)])

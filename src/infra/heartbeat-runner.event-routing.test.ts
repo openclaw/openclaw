@@ -280,7 +280,7 @@ describe("Heartbeat event routing", () => {
         storePath: storeTemplate,
         isolatedSession: true,
       });
-      cfg.agents!.list = [{ id: "ops" }];
+      cfg.agents!.entries = { ops: {} };
       cfg.agents!.defaults!.heartbeat = {
         every: "0m",
         isolatedSession: true,

@@ -90,12 +90,7 @@ describe("resolveExtraParams", () => {
               },
             },
           },
-          list: [
-            {
-              id: "risk-reviewer",
-              params: { cacheRetention: "none" },
-            },
-          ],
+          entries: { "risk-reviewer": { params: { cacheRetention: "none" } } },
         },
       },
       provider: "anthropic",
@@ -143,7 +138,7 @@ describe("resolveExtraParams", () => {
           cfg: {
             agents: {
               defaults: { models: { [`openai/${modelId}`]: { params: modelParams } } },
-              list: [{ id: "main", params: agentParams }],
+              entries: { main: { params: agentParams } },
             },
           },
           provider: "openai",
@@ -158,12 +153,7 @@ describe("resolveExtraParams", () => {
     const result = resolveExtraParams({
       cfg: {
         agents: {
-          list: [
-            {
-              id: "risk-reviewer",
-              params: { cacheRetention: "none" },
-            },
-          ],
+          entries: { "risk-reviewer": { params: { cacheRetention: "none" } } },
         },
       },
       provider: "anthropic",

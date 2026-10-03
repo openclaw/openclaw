@@ -13,6 +13,7 @@ import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
 } from "../config/types.agent-defaults.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
@@ -40,7 +41,7 @@ export {
   type ListedAgentEntry,
 } from "./agent-roster.js";
 
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentEntry = AgentConfig;
 type AgentEntriesConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
 type MutableAgentEntry = AgentEntry | AgentEntriesConfig[string];
 export type AgentSelectionContext = {

@@ -14,7 +14,7 @@ describe("resolveHeartbeatIntervalMs", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { heartbeat: { session: "telegram:default" } },
-        list: [{ id: "main", heartbeat: { session: "telegram:alerts" } }],
+        entries: { main: { heartbeat: { session: "telegram:alerts" } } },
       },
     };
 
@@ -40,7 +40,7 @@ describe("resolveHeartbeatIntervalMs", () => {
           defaults: {
             heartbeat: { every: "30m", target: "last", session: "telegram:default" },
           },
-          list: [{ id: "main", heartbeat: { every: "0m", session: "telegram:alerts" } }],
+          entries: { main: { heartbeat: { every: "0m", session: "telegram:alerts" } } },
         },
       },
       session: "telegram:alerts",

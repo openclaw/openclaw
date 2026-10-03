@@ -17,7 +17,7 @@ describe("resolveHumanDelayConfig", () => {
         defaults: {
           humanDelay: { mode: "natural", minMs: 800, maxMs: 1800 },
         },
-        list: [{ id: "main", humanDelay: { mode: "custom", minMs: 400 } }],
+        entries: { main: { humanDelay: { mode: "custom", minMs: 400 } } },
       },
     };
 

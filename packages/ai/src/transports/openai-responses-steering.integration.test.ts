@@ -248,9 +248,9 @@ describe("Responses WebSocket steering handoff", () => {
         { role: "user", content: "original", timestamp: 0 },
         {
           role: "user",
-          content: "runtime context",
+          content: "OpenClaw runtime context:\nruntime context",
           timestamp: 0,
-          runtimeContextCarrier: true,
+          runtimeContext: {},
         },
       ],
     };

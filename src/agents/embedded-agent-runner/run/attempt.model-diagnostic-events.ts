@@ -2,6 +2,7 @@ import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
+import { settlesWithin } from "../../../shared/settle-within.js";
 import type { StreamFn } from "../../runtime/index.js";
 import {
   createModelLifecycle,
@@ -34,22 +35,12 @@ async function safeReturnIterator(
   trackCleanup: ReturnType<typeof captureAsyncWorkTracker>,
 ): Promise<void> {
   const returnResult = trackCleanup(() => iterator.return?.());
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    // Early consumer return should not hang diagnostic completion forever; give
-    // provider cleanup a short chance, then emit completion for the observed call.
-    await Promise.race([
-      Promise.resolve(returnResult).catch(() => undefined),
-      new Promise<void>((resolve) => {
-        timeout = setTimeout(resolve, MODEL_CALL_STREAM_RETURN_TIMEOUT_MS);
-        timeout.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
+  // Early consumer return should not hang diagnostic completion forever; give
+  // provider cleanup a short chance, then emit completion for the observed call.
+  await settlesWithin(
+    Promise.resolve(returnResult).catch(() => undefined),
+    MODEL_CALL_STREAM_RETURN_TIMEOUT_MS,
+  );
 }
 
 function observeModelCallIterator<T>(

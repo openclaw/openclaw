@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -57,24 +58,18 @@ export async function withRuntimeWorkerGeneration<T>(
         const terminate = settled.flatMap((result) =>
           result.status === "fulfilled" && result.value ? [result.value] : [],
         );
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          const terminated = await Promise.race([
-            Promise.allSettled(terminate.map((close) => Promise.resolve().then(close))),
-            new Promise<undefined>((resolve) => {
-              timer = setTimeout(() => resolve(undefined), 10_000);
-            }),
-          ]);
-          if (!terminated || terminated.some((result) => result.status === "rejected")) {
-            retainedDirectory?.(
-              `retained updater worker termination ${terminated ? "failed" : "timed out"} after settlement; retry openclaw update cleanup after this process exits`,
-            );
-            return;
-          }
-          await release();
-        } finally {
-          clearTimeout(timer);
+        const terminated = await raceWithTimeout(
+          Promise.allSettled(terminate.map((close) => Promise.resolve().then(close))),
+          10_000,
+          () => undefined,
+        );
+        if (!terminated || terminated.some((result) => result.status === "rejected")) {
+          retainedDirectory?.(
+            `retained updater worker termination ${terminated ? "failed" : "timed out"} after settlement; retry openclaw update cleanup after this process exits`,
+          );
+          return;
         }
+        await release();
       })());
     };
     // Signal owners drain mutation/recovery barriers before retiring worker code.

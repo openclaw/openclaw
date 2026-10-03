@@ -327,6 +327,18 @@ openclaw-board-widget-cell {
   display: none;
 }
 
+.board-widget__frame-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.board-widget__frame-pane > .board-widget__frame {
+  flex: 1;
+  min-height: 0;
+}
+
 .board-widget__frame {
   background: var(--board-surface);
   border: 0;

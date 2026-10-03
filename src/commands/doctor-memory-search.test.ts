@@ -7,9 +7,8 @@ import { listProviderPolicyOwners as collectPolicyOwners } from "../plugins/prov
 const note = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
 const listAgentIds = vi.hoisted(() =>
-  vi.fn(
-    (cfg: { agents?: { list?: Array<{ id: string }> } }) =>
-      cfg.agents?.list?.map((agent) => agent.id) ?? ["agent-default"],
+  vi.fn((cfg: OpenClawConfig) =>
+    cfg.agents?.entries ? Object.keys(cfg.agents.entries) : ["agent-default"],
   ),
 );
 const resolveAgentDir = vi.hoisted(() =>
@@ -203,12 +202,11 @@ describe("noteMemorySearchHealth", () => {
   ): OpenClawConfig {
     return {
       agents: {
-        list: [
-          {
-            id: "personal",
+        entries: {
+          personal: {
             memory: { search: { rememberAcrossConversations } },
           },
-        ],
+        },
       },
       ...(plugins ? { plugins } : {}),
     } as OpenClawConfig;
@@ -239,9 +237,8 @@ describe("noteMemorySearchHealth", () => {
   beforeEach(() => {
     note.mockClear();
     resolveDefaultAgentId.mockClear();
-    listAgentIds.mockImplementation(
-      (config: { agents?: { list?: Array<{ id: string }> } }) =>
-        config.agents?.list?.map((agent) => agent.id) ?? ["agent-default"],
+    listAgentIds.mockImplementation((config: OpenClawConfig) =>
+      config.agents?.entries ? Object.keys(config.agents.entries) : ["agent-default"],
     );
     resolveAgentDir.mockClear();
     resolveAgentWorkspaceDir.mockClear();
@@ -344,10 +341,12 @@ describe("noteMemorySearchHealth", () => {
     async (multiple) => {
       const config = {
         agents: {
-          list: (multiple ? ["personal", "secondary"] : ["personal"]).map((id) => ({
-            id,
-            memory: { search: { rememberAcrossConversations: false } },
-          })),
+          entries: Object.fromEntries(
+            (multiple ? ["personal", "secondary"] : ["personal"]).map((id) => [
+              id,
+              { memory: { search: { rememberAcrossConversations: false } } },
+            ]),
+          ),
         },
       } as OpenClawConfig;
       resolveMemorySearchConfig.mockReturnValue(undefined);
@@ -844,7 +843,7 @@ describe("noteMemorySearchHealth", () => {
   it("warns when an opted-in agent has memory search disabled", async () => {
     const memoryCfg = {
       agents: {
-        list: [{ id: "personal", memory: { search: { rememberAcrossConversations: true } } }],
+        entries: { personal: { memory: { search: { rememberAcrossConversations: true } } } },
       },
     } as OpenClawConfig;
     resolveMemorySearchConfig.mockImplementation((_cfg: OpenClawConfig, agentId: string) =>
@@ -1147,7 +1146,7 @@ describe("noteMemorySearchHealth", () => {
 
   it("does not warn for secondary key-optional providers when readiness was skipped", async () => {
     const multiAgentCfg = {
-      agents: { list: [{ id: "agent-default" }, { id: "secondary" }] },
+      agents: { entries: { "agent-default": {}, secondary: {} } },
     } as OpenClawConfig;
     resolveAgentDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}`);
     resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}/workspace`);

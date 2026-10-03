@@ -226,7 +226,7 @@ describe("prepared bundled provider static catalogs", () => {
       providerIds: ["google"],
       metadataSnapshot,
       preparedStaticProviderCatalog: {
-        entries: [{ provider, result, providerConfigs }],
+        entries: [{ provider, providerConfigs }],
       },
     });
 
@@ -345,7 +345,6 @@ describe("prepared bundled provider static catalogs", () => {
           entries: [
             {
               provider,
-              result: undefined,
               providerConfigs: {
                 google: {
                   baseUrl: "https://fixture.example/v1",

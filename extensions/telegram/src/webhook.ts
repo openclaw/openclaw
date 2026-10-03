@@ -21,6 +21,7 @@ import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { extractErrorCode, safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
   applyBasicWebhookRequestGuards,
   createFixedWindowRateLimiter,
@@ -71,24 +72,6 @@ function formatWebhookStartupError(error: unknown): string {
   const message = formatErrorMessage(error);
   const code = extractErrorCode(error);
   return code && !message.includes(code) ? `${message} (${code})` : message;
-}
-
-async function waitForWebhookIngressStop(task: Promise<void> | undefined): Promise<void> {
-  if (!task) {
-    return;
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      task,
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, TELEGRAM_WEBHOOK_INGRESS_STOP_GRACE_MS);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 async function initializeTelegramWebhookBot(params: {
@@ -324,7 +307,18 @@ export async function startTelegramWebhook(opts: {
       // The webhook owns this transport because it resolved and injected it into
       // createTelegramBot; close once so abort/startup-failure paths cannot leak sockets.
       await runShutdownPhase("transport close", () => telegramTransport.close());
-      await runShutdownPhase("ingress drain", () => waitForWebhookIngressStop(ingressStopTask));
+      await runShutdownPhase("ingress drain", () =>
+        ingressStopTask
+          ? raceWithTimeout(
+              ingressStopTask,
+              TELEGRAM_WEBHOOK_INGRESS_STOP_GRACE_MS,
+              () => undefined,
+              {
+                ref: false,
+              },
+            )
+          : undefined,
+      );
       await runShutdownPhase("ingress settlement", () => ingressMonitor?.waitForDeferredClaims());
       await runShutdownPhase("status update", () => status.noteStop());
     });

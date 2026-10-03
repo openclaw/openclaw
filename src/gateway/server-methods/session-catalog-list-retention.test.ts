@@ -37,7 +37,7 @@ it.each(["completion", "list"] as const)(
         }),
       },
     ];
-    const config = { agents: { list: [{ id: "main" }] } };
+    const config = { agents: { entries: { main: {} } } };
     const gateway = new AbortController();
     const drain = getGatewayRestartDrainSignal();
     const before = getEventListeners(drain, "abort").length;

@@ -351,7 +351,7 @@ describe("read-only session skill library projection", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     const alice = ensureProfileForEmail("alice@example.test");
     const bob = ensureProfileForEmail("bob@example.test");
-    const cfg = { agents: { list: [{ id: "main", workspace: path.join(root, "workspace") }] } };
+    const cfg = { agents: { entries: { main: { workspace: path.join(root, "workspace") } } } };
     const actor = (profileId: string): SkillLibraryAuthority => ({
       profileId,
       scopes: ["operator.read", "operator.write"],

@@ -30,6 +30,7 @@ const {
 
 const tempRoots: string[] = [];
 const workerDeployArtifactNames = [
+  "code-mode-node.worker.mjs",
   "file-tool-planning.worker.mjs",
   "github-exec-launcher.mjs",
   "image-processor.worker.mjs",

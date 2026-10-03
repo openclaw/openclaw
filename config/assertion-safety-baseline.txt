@@ -6,7 +6,6 @@ extensions/acpx/src/codex-trust-config.ts	1
 extensions/acpx/src/pi-session-catalog-runtime.ts	1
 extensions/acpx/src/process-lease.ts	1
 extensions/acpx/src/runtime.ts	2
-extensions/acpx/src/service.ts	1
 extensions/active-memory/config.ts	2
 extensions/active-memory/index.ts	3
 extensions/active-memory/transcript-result.ts	2
@@ -567,7 +566,7 @@ extensions/memory-core/src/memory/manager.ts	2
 extensions/memory-core/src/memory/search-deadline.ts	1
 extensions/memory-core/src/migration/doctor-host-event-sources.ts	1
 extensions/memory-core/src/migration/doctor-memory-sidecar-import.ts	8
-extensions/memory-core/src/migration/doctor-memory-sidecar.ts	2
+extensions/memory-core/src/migration/doctor-memory-sidecar.ts	1
 extensions/memory-core/src/migration/doctor-workspaces.ts	1
 extensions/memory-core/src/session-backfill-gateway.ts	2
 extensions/memory-core/src/session-backfill-lifecycle.ts	2
@@ -1143,7 +1142,7 @@ packages/ai/src/transports/openai-responses-params-internal.ts	5
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
 packages/ai/src/transports/openai-responses-replay-internal.ts	10
-packages/ai/src/transports/openai-responses-replay-messages-internal.ts	15
+packages/ai/src/transports/openai-responses-replay-messages-internal.ts	14
 packages/ai/src/transports/openai-responses-stream-internal.ts	2
 packages/ai/src/transports/openai-responses-stream-observer-internal.ts	1
 packages/ai/src/transports/openai-responses-stream-slots-internal.ts	2
@@ -1953,7 +1952,7 @@ src/config/io.session-store-owner.ts	2
 src/config/io.snapshot.ts	1
 src/config/io.write-prepare.ts	12
 src/config/io.write-safety.ts	3
-src/config/io.write.ts	2
+src/config/io.write.ts	1
 src/config/issue-location.ts	2
 src/config/legacy.default-agent-roles.ts	1
 src/config/legacy.ts	3
@@ -1965,7 +1964,6 @@ src/config/model-input-normalization.ts	2
 src/config/model-input.ts	1
 src/config/mutate.ts	2
 src/config/official-external-channel-secret-schema.ts	3
-src/config/plugin-auto-enable.apply.ts	1
 src/config/plugin-auto-enable.shared.ts	1
 src/config/plugin-install-record-map.ts	1
 src/config/plugins-allowlist.ts	1
@@ -2081,7 +2079,6 @@ src/gateway/chat-display-projection.history.ts	1
 src/gateway/chat-display-projection.sanitize.ts	5
 src/gateway/chat-sanitize.ts	3
 src/gateway/cli-session-history.claude.ts	5
-src/gateway/cli-session-history.merge.ts	6
 src/gateway/control-ui-plugin-auth-cookie.ts	1
 src/gateway/control-ui-session-pr-subscriptions.ts	2
 src/gateway/control-ui.ts	1
@@ -2142,7 +2139,7 @@ src/gateway/server-methods/chat-transcript-inject.ts	1
 src/gateway/server-methods/chat-transcript-persistence.ts	4
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
-src/gateway/server-methods/config.ts	3
+src/gateway/server-methods/config.ts	1
 src/gateway/server-methods/cron.ts	3
 src/gateway/server-methods/doctor.ts	2
 src/gateway/server-methods/exec-approvals.ts	1
@@ -2370,7 +2367,7 @@ src/infra/state-migrations.meeting-transcripts-files.ts	5
 src/infra/state-migrations.meeting-transcripts.ts	2
 src/infra/state-migrations.node-host.ts	2
 src/infra/state-migrations.runtime-state.ts	1
-src/infra/state-migrations.session-store.ts	6
+src/infra/state-migrations.session-store.ts	5
 src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.state-dir.ts	1
 src/infra/state-migrations.tui-last-session.ts	2
@@ -2597,7 +2594,7 @@ src/plugins/plugin-package-update.ts	1
 src/plugins/plugin-peer-link.ts	2
 src/plugins/plugin-sdk-native-resolver.ts	1
 src/plugins/prepared-message-tool-catalog.ts	1
-src/plugins/provider-auth-choice-helpers.ts	9
+src/plugins/provider-auth-choice-helpers.ts	8
 src/plugins/provider-catalog-result.ts	7
 src/plugins/provider-discovery.runtime.ts	2
 src/plugins/provider-discovery.ts	1

@@ -11,6 +11,7 @@ import {
 } from "../../../agents/provider-tool-policy.js";
 import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ToolPolicyConfig } from "../../../config/types.tools.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
@@ -495,13 +496,16 @@ export async function resolveDoctorChannelPreviewConfig(params: {
 
 /** Collect info and warning notes for doctor preview mode. */
 export async function collectDoctorPreviewNotes(params: {
-  cfg: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
+  cfg: unknown;
+  activationSourceConfig?: OpenClawConfigWithLegacyRoster;
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
   allowExec?: boolean;
   blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): Promise<DoctorPreviewNotes> {
+  if (!hasRecord(params.cfg)) {
+    throw new TypeError("Doctor config preview requires an object");
+  }
   const infoNotes: string[] = [];
   const warnings: string[] = [];
   // Each non-empty scan contributes one note; keep its formatter's line order intact.
@@ -565,7 +569,10 @@ export async function collectDoctorPreviewNotes(params: {
     }
   }
 
-  if ((hasPluginConfig || hasChannelConfig) && params.cfg.plugins?.enabled !== false) {
+  if (
+    (hasPluginConfig || hasChannelConfig) &&
+    (!hasRecord(params.cfg.plugins) || params.cfg.plugins.enabled !== false)
+  ) {
     const {
       collectStalePluginConfigWarnings,
       isStalePluginAutoRepairBlocked,

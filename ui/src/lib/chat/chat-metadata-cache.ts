@@ -34,7 +34,6 @@ export type ChatMetadataRequest = {
   promise: Promise<ChatMetadataResult>;
   publication: ChatMetadataPublication;
   revalidation: boolean;
-  setStartupRetryDeadline: (deadlineAt?: number) => void;
   start: () => void;
 };
 export type ChatMetadataRefresh = {

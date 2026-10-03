@@ -38,6 +38,17 @@ function detectAutoKindForPlugin(input: string, plugin: ChannelPlugin): ChannelR
   ) {
     return "user";
   }
+  try {
+    const chatType = plugin.messaging?.inferTargetChatType?.({ to: trimmed });
+    if (chatType === "direct") {
+      return "user";
+    }
+    if (chatType === "group" || chatType === "channel") {
+      return "group";
+    }
+  } catch {
+    // Some plugins only accept resolved IDs here; names still need directory lookup.
+  }
   const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   const prefixes = [plugin.id, ...(plugin.meta?.aliases ?? [])]
     .map((entry) => normalizeOptionalLowercaseString(entry))

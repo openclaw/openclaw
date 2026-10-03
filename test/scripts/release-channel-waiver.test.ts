@@ -31,7 +31,7 @@ describe("reviewed release channel waiver", () => {
         }),
       ).toEqual(["telegram"]);
     }
-    for (const version of ["2026.9.7", "2026.9.8"]) {
+    for (const version of ["2026.9.7", "2026.9.8", "2026.9.9"]) {
       expect(
         releaseWaivedIntegrationChannels({
           ...approved,

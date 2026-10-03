@@ -44,9 +44,7 @@
       "userTimezone": "UTC"
     },
     "entries": {
-      "main": {
-        "default": true
-      }
+      "main": {}
     }
   },
   "messages": {

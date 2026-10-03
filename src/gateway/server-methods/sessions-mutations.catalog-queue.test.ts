@@ -74,6 +74,30 @@ function patchContext(
   } as unknown as GatewayRequestContext;
 }
 
+function modelConfig(store: string, agents: NonNullable<OpenClawConfig["agents"]>) {
+  const model = makeProviderModelFixture<"openai-completions">({
+    provider: "openai",
+    id: "gpt-5.6-sol",
+    api: "openai-completions",
+    baseUrl: "https://fixture.invalid/v1",
+  });
+  const cfg: OpenClawConfig = {
+    models: {
+      providers: {
+        openai: {
+          api: model.api,
+          baseUrl: model.baseUrl,
+          models: [model].map(({ provider: _provider, ...definition }) => definition),
+        },
+      },
+    },
+    agents: { defaults: { model: "openai/gpt-5.6-sol" }, ...agents },
+    session: { store },
+  };
+  expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
+  return { model, cfg };
+}
+
 function patchRequest(context: GatewayRequestContext) {
   return (params: Record<string, unknown>, respond: ReturnType<typeof vi.fn>) =>
     sessionMutationHandlers["sessions.patch"]!({
@@ -229,7 +253,7 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
           change === "alias"
             ? {
                 session: { mainKey: "work" },
-                agents: { list: [{ id: "main", default: true }] },
+                agents: { entries: { main: {} } },
               }
             : {},
         ),
@@ -353,7 +377,7 @@ test("patchMany prepares singleton agent groups without blocking another session
     const context = patchContext(loadGatewayModelCatalog, {
       agents: {
         defaults: { model: "anthropic/claude-sonnet-4-6" },
-        list: [{ id: "main" }, { id: "secondary" }],
+        entries: { main: {}, secondary: {} },
       },
     });
     const respond = vi.fn();
@@ -641,30 +665,10 @@ test("patchMany creates one shared physical store through original per-agent dir
       );
     }
     const physicalFile = path.join(await fs.realpath(physical), "shared.sqlite");
-    const model = makeProviderModelFixture<"openai-completions">({
-      provider: "openai",
-      id: "gpt-5.6-sol",
-      api: "openai-completions",
-      baseUrl: "https://fixture.invalid/v1",
+    const { model, cfg } = modelConfig(path.join(aliases, "{agentId}", "shared.sqlite"), {
+      ownership: "explicit",
+      entries: { main: {}, work: {} },
     });
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            api: model.api,
-            baseUrl: model.baseUrl,
-            models: [model].map(({ provider: _provider, ...definition }) => definition),
-          },
-        },
-      },
-      agents: {
-        defaults: { model: "openai/gpt-5.6-sol" },
-        ownership: "explicit",
-        entries: { main: {}, work: {} },
-      },
-      session: { store: path.join(aliases, "{agentId}", "shared.sqlite") },
-    };
-    expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
     await state.writeConfig(cfg);
     const context = patchContext(async () => [model], cfg);
     const response = vi.fn();
@@ -741,29 +745,9 @@ test("patchMany creates one shared physical store through original per-agent dir
 test("patchMany retains original RAM facts while its cold durable sibling publishes registration", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = state.statePath("mixed-patch-cold.sqlite");
-    const model = makeProviderModelFixture<"openai-completions">({
-      provider: "openai",
-      id: "gpt-5.6-sol",
-      api: "openai-completions",
-      baseUrl: "https://fixture.invalid/v1",
+    const { model, cfg } = modelConfig(storePath, {
+      entries: { main: {} },
     });
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            api: model.api,
-            baseUrl: model.baseUrl,
-            models: [model].map(({ provider: _provider, ...definition }) => definition),
-          },
-        },
-      },
-      agents: {
-        defaults: { model: "openai/gpt-5.6-sol" },
-        entries: { main: {} },
-      },
-      session: { store: storePath },
-    };
-    expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
     await state.writeConfig(cfg);
     const ramKey = "agent:main:dashboard:incognito-mixed-patch";
     const ramPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
@@ -843,30 +827,10 @@ test("patchMany excludes a revoked cold-store promotion while its independent st
     const successful = targets[1]!;
     const failedPath = path.join(directory, failed.agentId, "store.sqlite");
     const successfulPath = path.join(directory, successful.agentId, "store.sqlite");
-    const model = makeProviderModelFixture<"openai-completions">({
-      provider: "openai",
-      id: "gpt-5.6-sol",
-      api: "openai-completions",
-      baseUrl: "https://fixture.invalid/v1",
+    const { model, cfg } = modelConfig(path.join(directory, "{agentId}", "store.sqlite"), {
+      ownership: "explicit",
+      entries: { main: {}, work: {} },
     });
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            api: model.api,
-            baseUrl: model.baseUrl,
-            models: [model].map(({ provider: _provider, ...definition }) => definition),
-          },
-        },
-      },
-      agents: {
-        defaults: { model: "openai/gpt-5.6-sol" },
-        ownership: "explicit",
-        entries: { main: {}, work: {} },
-      },
-      session: { store: path.join(directory, "{agentId}", "store.sqlite") },
-    };
-    expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
     await state.writeConfig(cfg);
     const context = patchContext(async () => [model], cfg);
     const revoked = new SessionMutationAuthorizationChangedError(

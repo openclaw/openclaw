@@ -33,6 +33,7 @@ import {
   rowToTab,
   rowToHtmlViewMetadata,
   rowToWidget,
+  rowToBoardWidgetDocument,
   serializeManifest,
   updateManifestHeightMode,
   type SelectedBoardTabRow,
@@ -314,10 +315,11 @@ export function readBoardSnapshotWithHtmlViewMetadata(
   return { snapshot: stored.snapshot, htmlViewMetadata: stored.htmlViewMetadata };
 }
 
-export function readBoardWidgetRow(
+export function readBoardWidgetDocument(
   database: BoardDatabaseHandle,
   sessionKey: string,
   name: string,
+  contentKind?: "mcp-app",
 ) {
   if (!hasBoardSession(database, sessionKey) || !boardTablesPresent(database)) {
     return undefined;
@@ -342,7 +344,9 @@ export function readBoardWidgetRow(
       .where("name", "=", name)
       .limit(1),
   ).rows[0];
-  return row;
+  return row && (!contentKind || row.content_kind === contentKind)
+    ? rowToBoardWidgetDocument(row)
+    : undefined;
 }
 
 export function applyBoardOpsToDatabase(

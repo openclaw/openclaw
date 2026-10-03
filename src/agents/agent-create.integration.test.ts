@@ -15,6 +15,7 @@ import {
   transformConfigFileWithRetry,
   withConfigMutationExclusive,
 } from "../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
@@ -762,7 +763,7 @@ describe("agent roster persistence", () => {
   });
 
   it("extends the complete keyed roster after Doctor migrates a legacy list", async () => {
-    const legacy = {
+    const legacy: OpenClawConfigWithLegacyRoster = {
       agents: {
         list: [
           { id: "main", default: true },
@@ -795,8 +796,12 @@ describe("agent roster persistence", () => {
       { id: "main", default: true },
       { id: "ops", workspace: "/srv/ops" },
     ];
+    const legacy: OpenClawConfigWithLegacyRoster = {
+      agents: { list },
+      gateway: { port: 18789 },
+    };
     try {
-      await state.writeConfig({ agents: { list }, gateway: { port: 18789 } });
+      await state.writeConfig(legacy);
       const original = await fs.readFile(state.configPath, "utf8");
       await expect(
         mutateConfigFileWithRetry({
@@ -807,10 +812,12 @@ describe("agent roster persistence", () => {
       ).rejects.toThrow("doctor --fix");
 
       expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
-      const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-      expect(JSON.stringify(persisted.agents?.list)).toBe(JSON.stringify(list));
+      const persisted: OpenClawConfigWithLegacyRoster = JSON.parse(
+        await fs.readFile(state.configPath, "utf8"),
+      );
+      expect(persisted.agents).toEqual({ list });
       expect(persisted.agents).not.toHaveProperty("entries");
-      expect(persisted.gateway?.port).toBe(18789);
+      expect(persisted.gateway).toEqual({ port: 18789 });
     } finally {
       closeOpenClawStateDatabaseForTest();
       await state.cleanup();

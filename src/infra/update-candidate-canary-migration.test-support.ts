@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import { type FakeChild, stubHealthyGateway } from "./update-candidate-canary.test-support.js";
 
@@ -22,13 +22,15 @@ export function registerCanaryMigrationPolicyTests({
   ] as const)(
     "proves preserved-input startup ($migrationPolicy, startup migration=$startupMigration)",
     async ({ migrationPolicy, startupMigration, expected }) => {
-      const original: OpenClawConfig = { agents: { list: [{ id: "main" }] } };
-      let inputAtBoot: OpenClawConfig | undefined;
+      const original: OpenClawConfigWithLegacyRoster = { agents: { list: [{ id: "main" }] } };
+      let inputAtBoot: OpenClawConfigWithLegacyRoster | undefined;
       const spawnNormally = mocks.spawn.getMockImplementation()!;
       mocks.spawn.mockImplementation((command, args: string[], options) => {
         const configPath = options.env.OPENCLAW_CONFIG_PATH;
         const migrate = () => {
-          const config: OpenClawConfig = JSON.parse(readFileSync(configPath, "utf8"));
+          const config: OpenClawConfigWithLegacyRoster = JSON.parse(
+            readFileSync(configPath, "utf8"),
+          );
           config.meta = { ...config.meta, lastTouchedVersion: "2026.9.1" };
           writeFileSync(configPath, JSON.stringify(config));
         };

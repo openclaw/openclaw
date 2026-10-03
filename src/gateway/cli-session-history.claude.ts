@@ -24,7 +24,7 @@ import {
 } from "../config/sessions/cli-session-binding.js";
 import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
-export const CLAUDE_CLI_PROVIDER = "claude-cli";
+const CLAUDE_CLI_PROVIDER = "claude-cli";
 const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
 
 export type ClaudeCliProjectEntry = {

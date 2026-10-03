@@ -43,7 +43,7 @@ const refreshResult = {
 };
 
 const appConfig = {
-  agents: { list: [{ id: "main", default: true }] },
+  agents: { entries: { main: {} } },
 } as OpenClawConfig;
 
 let vaultCounter = 0;
@@ -162,11 +162,11 @@ describe("syncMemoryWikiImportedSources", () => {
   it("serializes different config snapshots for the same vault", async () => {
     const config = createConfig();
     const firstAppConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       update: { channel: "stable" },
     } as OpenClawConfig;
     const secondAppConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       update: { channel: "beta" },
     } as OpenClawConfig;
     const firstGate = deferred<typeof bridgeResult>();

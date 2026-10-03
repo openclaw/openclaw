@@ -3,6 +3,7 @@ import {
   isCompleteAgentPreamble,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { ClickClackClient } from "./http-client.js";
 
 export type ClickClackItemEventPayload = Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0];
@@ -177,23 +178,15 @@ export function createClickClackAgentProgressPublisher(params: {
   };
 
   const waitForDrainWithinFinalizeGrace = async (pending: Promise<void>): Promise<boolean> => {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
     let drained = false;
-    try {
-      await Promise.race([
-        pending.then(() => {
-          drained = true;
-        }),
-        new Promise<void>((resolve) => {
-          timeout = setTimeout(resolve, CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS);
-        }),
-      ]);
-      return drained;
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    }
+    await raceWithTimeout(
+      pending.then(() => {
+        drained = true;
+      }),
+      CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS,
+      () => undefined,
+    );
+    return drained;
   };
 
   const scheduleLineDrain = (): void => {
