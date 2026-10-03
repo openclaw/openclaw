@@ -165,8 +165,13 @@ export function createExecApprovalHandlers(
       });
       const effectiveCommandArgv = approvalContext.commandArgv;
       const effectiveCwd = approvalContext.cwd;
-      const effectiveAgentId = approvalContext.agentId;
-      const effectiveSessionKey = approvalContext.sessionKey;
+      // A prepared node plan stays bound to the retained policy owner so node-side
+      // revalidation observes that owner's deny/allowlist changes. The trusted
+      // runtime identity separately owns and may auto-resolve the approval request.
+      const policyAgentId = approvalContext.agentId;
+      const policySessionKey = approvalContext.sessionKey;
+      const approvalAgentId = trustedAgentRuntime?.agentId ?? policyAgentId;
+      const approvalSessionKey = trustedAgentRuntime?.sessionKey ?? policySessionKey;
       const effectiveCommandText = approvalContext.commandText;
       const requestRunId =
         trustedAgentRuntime?.operationalRunInstance.runId ?? normalizeOptionalString(p.runId);
@@ -217,7 +222,7 @@ export function createExecApprovalHandlers(
       const runtimeConfig = context.getRuntimeConfig();
       const commandHighlighting = resolveExecCommandHighlighting({
         config: runtimeConfig,
-        agentId: effectiveAgentId,
+        agentId: policyAgentId,
       });
       const sanitizedCommandDisplay =
         sanitizeExecApprovalDisplayTextWithStatus(effectiveCommandText);
@@ -250,8 +255,8 @@ export function createExecApprovalHandlers(
           ? buildSystemRunApprovalBinding({
               argv: effectiveCommandArgv,
               cwd: effectiveCwd,
-              agentId: effectiveAgentId,
-              sessionKey: effectiveSessionKey,
+              agentId: policyAgentId,
+              sessionKey: policySessionKey,
               env: p.env,
             })
           : null;
@@ -273,7 +278,7 @@ export function createExecApprovalHandlers(
       const cronRunExecSource =
         host === "gateway" && requestRunId ? lookupCronRunExecSource(requestRunId) : undefined;
       const cronExecutionSource =
-        cronRunExecSource && effectiveAgentId && cronRunExecSource.agentId === effectiveAgentId
+        cronRunExecSource && approvalAgentId && cronRunExecSource.agentId === approvalAgentId
           ? {
               jobId: cronRunExecSource.jobId,
               jobConfigRevision: cronRunExecSource.jobConfigRevision,
@@ -331,9 +336,9 @@ export function createExecApprovalHandlers(
           ask: p.ask ?? null,
           unavailableDecisions,
         }),
-        agentId: effectiveAgentId ?? null,
+        agentId: approvalAgentId ?? null,
         resolvedPath: p.resolvedPath ? sanitizeExecApprovalDisplayText(p.resolvedPath) : null,
-        sessionKey: effectiveSessionKey ?? null,
+        sessionKey: approvalSessionKey ?? null,
         sessionId: trustedAgentRuntime ? null : (normalizeOptionalString(p.sessionId) ?? null),
         runId: requestRunId ?? null,
         toolCallId: normalizeOptionalString(p.toolCallId) ?? null,
