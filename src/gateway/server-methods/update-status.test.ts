@@ -115,62 +115,67 @@ afterEach(async () => {
 });
 
 describe("update history RPCs", () => {
-  it.each(["failed", "running", "unrelated", "hidden-run retry"] as const)(
-    "reconciles an applying campaign against %s history",
-    async (kind) => {
-      const campaign = announceCampaign();
-      const run = createUpdateRun({
-        trigger: "campaign",
-        origin: { campaignId: kind === "unrelated" ? randomUUID() : campaign.id },
+  it.each([
+    "failed",
+    "succeeded",
+    "rolled-back",
+    "skipped",
+    "running",
+    "unrelated",
+    "hidden-run retry",
+  ] as const)("reconciles an applying campaign against %s history", async (kind) => {
+    const campaign = announceCampaign();
+    const run = createUpdateRun({
+      trigger: "campaign",
+      origin: { campaignId: kind === "unrelated" ? randomUUID() : campaign.id },
+    });
+    const keepCampaign = kind === "running" || kind === "unrelated";
+    if (!keepCampaign) {
+      campaignOwner.bindRun(campaign.id, run.runId);
+    }
+    if (kind !== "running") {
+      finishUpdateRun(run.runId, {
+        status: kind === "unrelated" || kind === "hidden-run retry" ? "failed" : kind,
+        ...(kind === "failed" ? { reason: "database-schema-preflight" } : {}),
       });
-      const keepCampaign = kind === "running" || kind === "unrelated";
-      if (!keepCampaign) {
-        campaignOwner.bindRun(campaign.id, run.runId);
-      }
-      if (kind !== "running") {
-        finishUpdateRun(run.runId, {
-          status: "failed",
-          ...(kind === "failed" ? { reason: "database-schema-preflight" } : {}),
-        });
-      }
-      let lastRunId = run.runId;
-      if (kind === "hidden-run retry") {
-        vi.spyOn(Date, "now").mockReturnValue(run.createdAtMs + 1);
-        const newer = createUpdateRun({ trigger: "cli" });
-        finishUpdateRun(newer.runId, { status: "skipped", reason: "dry-run" });
-        lastRunId = newer.runId;
-        vi.spyOn(ledger, "getUpdateRunAsync").mockRejectedValueOnce(
-          new Error("ledger read failed"),
-        );
-        expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({
-            lastRun: expect.objectContaining({ runId: newer.runId }),
-            schedule: { channel: "stable", autoEnabled: true, campaign },
-          }),
-        );
-        expect(campaignOwner.getState()).toEqual(campaign);
-        expect(warn).toHaveBeenCalledWith(
-          "update.status campaign run lookup failed: ledger read failed",
-        );
-      }
+    }
+    let lastRunId = run.runId;
+    if (kind === "hidden-run retry") {
+      vi.spyOn(Date, "now").mockReturnValue(run.createdAtMs + 1);
+      const newer = createUpdateRun({ trigger: "cli" });
+      finishUpdateRun(newer.runId, { status: "skipped", reason: "dry-run" });
+      lastRunId = newer.runId;
+      vi.spyOn(ledger, "getUpdateRunAsync").mockRejectedValueOnce(new Error("ledger read failed"));
       expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
-          lastRun: expect.objectContaining({
-            runId: lastRunId,
-            ...(kind === "failed" ? { status: "failed" } : {}),
-          }),
-          schedule: {
-            channel: "stable",
-            autoEnabled: true,
-            ...(keepCampaign ? { campaign } : {}),
-          },
+          lastRun: expect.objectContaining({ runId: newer.runId }),
+          schedule: { channel: "stable", autoEnabled: true, campaign },
         }),
       );
-      expect(campaignOwner.getState()).toEqual(keepCampaign ? campaign : undefined);
-    },
-  );
+      expect(campaignOwner.getState()).toEqual(campaign);
+      expect(warn).toHaveBeenCalledWith(
+        "update.status campaign run lookup failed: ledger read failed",
+      );
+    }
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        lastRun: expect.objectContaining({
+          runId: lastRunId,
+          ...(kind === "hidden-run retry"
+            ? {}
+            : { status: kind === "unrelated" ? "failed" : kind }),
+        }),
+        schedule: {
+          channel: "stable",
+          autoEnabled: true,
+          ...(keepCampaign ? { campaign } : {}),
+        },
+      }),
+    );
+    expect(campaignOwner.getState()).toEqual(keepCampaign ? campaign : undefined);
+  });
 
   it("does not clear a replacement campaign after an awaited ledger read", async () => {
     const original = announceCampaign();

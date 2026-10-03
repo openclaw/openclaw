@@ -26,6 +26,10 @@ describe("prepared model runtime reload scope", () => {
 describe("prepared provider auth reload invalidation", () => {
   it.each<[changedPaths: string[], invalidates: boolean, reloadPlugins?: boolean]>([
     [["auth"], true],
+    [["env.vars.OPENAI_API_KEY"], true],
+    [["models.providers.openai.api"], true],
+    [["plugins.entries.openai.enabled"], true],
+    [["secrets.providers.default.path"], true],
     [["agents"], true],
     [["agents.list"], true],
     [["agents.defaults"], true],

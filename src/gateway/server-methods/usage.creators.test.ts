@@ -109,6 +109,65 @@ const actor = (id: string): SessionEntry["createdActor"] => ({
 describe("usage creator attribution", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it("filters before the row cap, attributes retained instances, and keeps daily categories in scope", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const ada = ensureProfileForEmail("ada@example.test");
+      const bob = ensureProfileForEmail("bob@example.test");
+      setDisplayName(ada.id, "Ada");
+      const query = fixture(
+        {
+          "agent:main:ada": {
+            sessionId: "ada",
+            updatedAt: 30,
+            createdActor: actor(ada.id),
+            usageFamilySessionIds: ["ada-old"],
+          },
+          "agent:main:bob": { sessionId: "bob", updatedAt: 40, createdActor: actor(bob.id) },
+        },
+        { "ada-old": 20, ada: 10, bob: 30, orphan: 40 },
+      );
+      const all = await query();
+      expect(all.sessions).toHaveLength(1);
+      expect(all.sessions[0]?.sessionId).toBe("bob");
+      expect(all.totals.totalTokens).toBe(100);
+      const adaGroup = expectDefined(
+        all.aggregates.byCreator?.find((creator) => creator.actor?.label === "Ada"),
+        "Ada creator",
+      );
+      expect(adaGroup).toMatchObject({
+        sessionCount: 2,
+        totals: { totalTokens: 30 },
+        daily: [{ date: "2026-08-01", input: 30, totalTokens: 30 }],
+        sessionActivity: [{ dates: ["2026-08-01"], sessionCount: 2 }],
+      });
+      expect(all.aggregates.costDaily).toMatchObject([
+        { date: "2026-08-01", input: 100, totalTokens: 100, inputCost: 1, totalCost: 1 },
+      ]);
+      const selected = await query({ creatorKey: adaGroup.key });
+      expect(selected.totals.totalTokens).toBe(30);
+      expect(selected.sessions).toMatchObject([
+        { sessionId: "ada", creatorKey: adaGroup.key, createdActor: { label: "Ada" } },
+      ]);
+      expect(selected.creatorOptions).toEqual(all.creatorOptions);
+      expect(selected.aggregates.costDaily).toMatchObject([
+        { input: 30, totalTokens: 30, totalCost: expect.closeTo(0.3) },
+      ]);
+      expect(
+        mocks.loadSessionCostSummariesFromCache.mock.lastCall?.[0].sessions.map(
+          (session: { sessionId: string }) => session.sessionId,
+        ),
+      ).toEqual(["ada", "ada-old"]);
+      const bobGroup = expectDefined(
+        all.aggregates.byCreator?.find((creator) => creator.actor?.id === bob.id),
+        "Bob creator",
+      );
+      expect((await query({ creatorKey: bobGroup.key })).totals.totalTokens).toBe(30);
+      expect((await query()).totals.totalTokens).toBe(100);
+      expect(await query({ creatorKey: adaGroup.key })).toEqual(selected);
+      expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(3);
+    });
+  });
+
   it("canonicalizes profile merges without conflating channel senders or mutable owners", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const ada = ensureProfileForEmail("ada@example.test");

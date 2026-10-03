@@ -703,6 +703,38 @@ describe("controlUi.sessionPullRequests.checks", () => {
     });
   });
 
+  it.each([{ incognito: true as const }, { visibility: "draft" as const }])(
+    "does not expose a hidden session to another profile: %j",
+    async (hidden) => {
+      await withOpenClawTestState({ label: "ci-details-hidden" }, async () => {
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: params.sessionKey },
+          {
+            sessionId: "hidden-ci",
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: "owner" },
+            ...hidden,
+          },
+        );
+        const load = vi.fn().mockResolvedValue(result);
+        const handler = expectDefined(
+          createControlUiHandlers(undefined, undefined, load)[
+            "controlUi.sessionPullRequests.checks"
+          ],
+          "CI checks handler",
+        );
+        const respond = vi.fn<RespondFn>();
+        await handler({ ...requestOptions(params, respond), client: identifiedClient("viewer") });
+        expect(load).not.toHaveBeenCalled();
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+      });
+    },
+  );
+
   it("keeps qualified global sessions bound to their resolved agent", async () => {
     await withOpenClawTestState({ label: "ci-details-global" }, async () => {
       const cfg: OpenClawConfig = {

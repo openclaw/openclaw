@@ -122,46 +122,54 @@ describe("tools.catalog handler", () => {
     expectInvalidRequest(respond, message);
   });
 
-  it.each([false, true])("projects configurable core tools (capabilities=%s)", async (enabled) => {
-    using identityCount = vi
-      .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
-      .mockReturnValue(enabled);
-    const { respond, invoke } = createInvokeParams(
-      { includePlugins: false },
-      enabled ? {} : { tools: { swarm: false } },
-    );
-    await invoke();
-    const payload = expectCatalogPayload(respond);
-    expect(payload.agentId).toBe("main");
-    const groups = payload.groups;
-    const tools = groups.flatMap((group) => group.tools);
-    const ids = tools.map((tool) => tool.id);
-    expect(groups.some((group) => group.source === "plugin")).toBe(false);
-    expect(
-      groups
-        .find((group) => group.id === "media")
-        ?.tools.map((tool) => `${tool.source}:${tool.id}`),
-    ).toContain("core:tts");
-    expect(tools.filter((tool) => tool.id === "openclaw")).toEqual([
-      {
-        id: "openclaw",
-        label: "openclaw",
-        description: "Delegate OpenClaw setup and repair",
-        source: "core",
-        defaultProfiles: [],
-      },
-    ]);
-    expect(ids.includes("agents_wait")).toBe(enabled);
-    expect(ids.includes("personal_instructions")).toBe(enabled);
-    if (enabled) {
-      // Collector output is required by its per-run schema, not operator tool policy.
-      const configurableTools = listCoreToolFactoryDescriptors().filter(
-        (tool) => tool.name !== "structured_output",
+  it.each([
+    { swarm: false, multipleProfiles: false },
+    { swarm: true, multipleProfiles: false },
+    { swarm: false, multipleProfiles: true },
+    { swarm: true, multipleProfiles: true },
+  ])(
+    "projects configurable core tools (swarm=$swarm, multipleProfiles=$multipleProfiles)",
+    async ({ swarm, multipleProfiles }) => {
+      using identityCount = vi
+        .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+        .mockReturnValue(multipleProfiles);
+      const { respond, invoke } = createInvokeParams(
+        { includePlugins: false },
+        swarm ? {} : { tools: { swarm: false } },
       );
-      expect(filterToolsByPolicy(configurableTools, { allow: ["*"], deny: ids })).toEqual([]);
-    }
-    expect(identityCount).toHaveBeenCalled();
-  });
+      await invoke();
+      const payload = expectCatalogPayload(respond);
+      expect(payload.agentId).toBe("main");
+      const groups = payload.groups;
+      const tools = groups.flatMap((group) => group.tools);
+      const ids = tools.map((tool) => tool.id);
+      expect(groups.some((group) => group.source === "plugin")).toBe(false);
+      expect(
+        groups
+          .find((group) => group.id === "media")
+          ?.tools.map((tool) => `${tool.source}:${tool.id}`),
+      ).toContain("core:tts");
+      expect(tools.filter((tool) => tool.id === "openclaw")).toEqual([
+        {
+          id: "openclaw",
+          label: "openclaw",
+          description: "Delegate OpenClaw setup and repair",
+          source: "core",
+          defaultProfiles: [],
+        },
+      ]);
+      expect(ids.includes("agents_wait")).toBe(swarm);
+      expect(ids.includes("personal_instructions")).toBe(multipleProfiles);
+      if (swarm && multipleProfiles) {
+        // Collector output is required by its per-run schema, not operator tool policy.
+        const configurableTools = listCoreToolFactoryDescriptors().filter(
+          (tool) => tool.name !== "structured_output",
+        );
+        expect(filterToolsByPolicy(configurableTools, { allow: ["*"], deny: ids })).toEqual([]);
+      }
+      expect(identityCount).toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])(
     "projects plugin tools from their discovery registry (metadata=%s)",
