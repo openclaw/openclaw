@@ -205,17 +205,6 @@ export async function acquireCodexMcpAppRuntime(
   const acquired = retained;
   const admittedBinding = binding;
   try {
-    params.assertCurrent();
-    const current = options.bindingStore.read(identity);
-    if (
-      !current ||
-      current.clientId !== binding.clientId ||
-      current.threadId !== binding.threadId
-    ) {
-      throw new Error("Native MCP session binding changed");
-    }
-    const { createNativeMcpRuntime } = await import("./native-mcp-app.js");
-    params.assertCurrent();
     const assertBinding = () => {
       const latest = options.bindingStore.read(identity);
       if (
@@ -226,6 +215,10 @@ export async function acquireCodexMcpAppRuntime(
         throw new Error("Native MCP session binding changed");
       }
     };
+    params.assertCurrent();
+    assertBinding();
+    const { createNativeMcpRuntime } = await import("./native-mcp-app.js");
+    params.assertCurrent();
     const runtime = createNativeMcpRuntime({
       client: retained.client,
       threadId: binding.threadId,

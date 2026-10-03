@@ -339,7 +339,7 @@ export function invalid(context: FieldContext, message: string): DecodeValue {
   };
 }
 
-export function matchesStringFormat(value: string, format: string): boolean {
+function matchesStringFormat(value: string, format: string): boolean {
   if (format === "email") {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
   }
