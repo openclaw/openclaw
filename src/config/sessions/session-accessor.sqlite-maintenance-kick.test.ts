@@ -18,6 +18,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { loadSessionEntry } from "./session-accessor.js";
 import { readSessionEntryCount, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { importSqliteSessionRowsBatch } from "./session-accessor.sqlite-import.js";
@@ -100,6 +101,28 @@ function observeNextPeriodicMaintenance() {
   return (signal: AbortSignal) =>
     withinTest(scheduled.promise, signal).finally(() => observer.mockRestore());
 }
+
+it("joins an accepted maintenance timer while Doctor drainage waits on other work", async () => {
+  const { request } = createStore();
+  const maintenance = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent() {},
+    assertDatabaseAccess() {},
+  });
+  const blocked = createDeferred();
+  maintenance.track(blocked.promise);
+  maintenance.run(() => kickSessionEntryMaintenanceAfterWrite(request));
+  const closing = maintenance.close();
+  try {
+    await yieldToEventLoop();
+    blocked.resolve();
+    await expect(closing).resolves.toBeUndefined();
+    expect(reclamationRun.runSqliteSessionReclamation).toHaveBeenCalled();
+  } finally {
+    blocked.resolve();
+    await Promise.allSettled([closing]);
+  }
+});
 
 it.each(["before kick", "before immediate", "before periodic", "before another kick"] as const)(
   "stops automatic maintenance when Gateway drain starts %s",
