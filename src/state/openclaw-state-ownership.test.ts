@@ -859,7 +859,11 @@ describe("external shared-state ownership", () => {
       expect(reads.queries).toEqual([indexedOwnershipSql]);
       reads.queries.length = 0;
       runOpenClawStateWriteTransaction(() => undefined, { env: unmarkedEnv, database: opened });
-      expect(reads.queries).toEqual([indexedOwnershipSql, indexedOwnershipSql]);
+      expect(reads.queries).toEqual([
+        indexedOwnershipSql,
+        "PRAGMA data_version",
+        indexedOwnershipSql,
+      ]);
     } finally {
       reads.restore();
     }

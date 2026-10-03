@@ -6,6 +6,7 @@ import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
@@ -59,16 +60,21 @@ export function readOpenClawAgentDatabase<T>(
 
 /** Recheck committed admission facts before using an existing read-only connection. */
 export function hasOpenClawAgentReadOnlySchema(database: OpenClawAgentReadOnlyDatabase): boolean {
-  return runSqliteReadOperationSync(database.db, () => {
-    const userVersion = assertSupportedAgentSchemaVersion(database.db, database.path);
-    assertCanonicalAgentPersistenceVersion(database.db, database.path, userVersion);
-    const schemaMeta = readExistingAgentSchemaMeta(database.db);
-    if (!schemaMeta) {
-      return false;
-    }
-    assertExistingAgentSchemaOwner(schemaMeta, database.agentId, database.path);
-    return true;
-  });
+  return runSqliteReadOperationSync(
+    database.db,
+    () => {
+      const userVersion = assertSupportedAgentSchemaVersion(database.db, database.path);
+      assertCanonicalAgentPersistenceVersion(database.db, database.path, userVersion);
+      const schemaMeta = readExistingAgentSchemaMeta(database.db);
+      if (!schemaMeta) {
+        return false;
+      }
+      assertExistingAgentSchemaOwner(schemaMeta, database.agentId, database.path);
+      assertCanonicalSessionValidationSchema(database.db);
+      return true;
+    },
+    "fresh",
+  );
 }
 
 /** Fresh-only callers do not need the writable runtime's process-held connection cache. */
@@ -139,11 +145,11 @@ export function openOpenClawAgentDatabaseReadOnly(
     enableNodeSqliteKyselyStatementCache(db);
     registerOpenClawAgentDatabaseIdentity(db);
     const database = { agentId, db, path: pathname, close };
+    admitSqliteSchema(db);
     if (!hasOpenClawAgentReadOnlySchema(database)) {
       close();
       return { found: false, reason: "schema-missing" };
     }
-    admitSqliteSchema(db);
     return { found: true, database };
   } catch (error) {
     close();

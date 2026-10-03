@@ -145,6 +145,10 @@ it.each([
     sql: "UPDATE schema_meta SET role = 'state' WHERE meta_key = 'primary'",
     error: "has schema role state",
   },
+  {
+    sql: "DROP TRIGGER session_nodes_canonical_pending_after_update",
+    error: "canonical validation schema is missing or drifted",
+  },
 ])(
   "revalidates retained read admission on the next read after a commit: $sql",
   async ({ sql, error }) => {
