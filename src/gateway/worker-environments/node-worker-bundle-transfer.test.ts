@@ -33,7 +33,7 @@ describe("node worker bundle transfer", () => {
     cleanupServer = undefined;
   });
 
-  it("reports cumulative progress despite a throwing observer and rejects a second HTTP serve", async ({
+  it("reports cumulative progress despite a throwing observer and rejects serves after owner release", async ({
     onTestFinished,
   }) => {
     const source = path.join(root, "source");
@@ -119,6 +119,7 @@ describe("node worker bundle transfer", () => {
       }),
     ).resolves.toEqual(prepared.input.build);
     await served.promise;
+    service.revoke(prepared.token);
     const replay = await fetch(
       `http://127.0.0.1:${address.port}${NODE_WORKER_BUNDLE_TRANSFER_PATH}/bundles/${bundleHash}`,
       { headers: { authorization: `Bearer ${prepared.token}` } },
