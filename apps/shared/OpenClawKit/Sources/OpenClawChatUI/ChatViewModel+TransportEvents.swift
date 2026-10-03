@@ -12,13 +12,6 @@ private final class PendingRunOwnerReference {
 }
 
 extension OpenClawChatViewModel {
-    func resolveInlineWidgetResource(
-        path: String,
-        replacing failedResource: OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
-    {
-        await self.transport.resolveInlineWidgetResource(path: path, replacing: failedResource)
-    }
-
     func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
         guard !self.isTransportDetached else { return }
         self.handleSidebarEvent(evt)
@@ -107,7 +100,7 @@ extension OpenClawChatViewModel {
             Task { [weak self] in await self?.refreshSwarmCapability() }
             self.invalidateHistorySnapshots()
             self.invalidateRunSnapshots()
-            self.clearPendingRuns(reason: nil)
+            self.clearPendingRuns()
             self.invalidateIncompleteLiveRunUsage()
             self.clearStreamingActivity()
             let context = self.beginHistoryRequest()
@@ -1462,11 +1455,8 @@ extension OpenClawChatViewModel {
         }
     }
 
-    func clearPendingRuns(
-        reason: String?,
-        hapticEvent: OpenClawChatHaptics.Event? = nil)
-    {
-        let runIds = Array(pendingRuns)
+    func clearPendingRuns(hapticEvent: OpenClawChatHaptics.Event? = nil) {
+        let hadPendingRuns = !self.pendingRuns.isEmpty
         for runId in self.pendingRuns {
             self.pendingRunOwnerTasks[runId]?.cancel()
             self.clearLiveRunState(for: runId)
@@ -1475,16 +1465,8 @@ extension OpenClawChatViewModel {
         self.pendingRunOwnerArmIDs.removeAll()
         self.pendingRuns.removeAll()
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
-        if !runIds.isEmpty, let hapticEvent {
+        if hadPendingRuns, let hapticEvent {
             self.haptics.perform(hapticEvent)
-        }
-        if let reason, !reason.isEmpty {
-            self.errorText = reason
-            for runId in runIds {
-                self.logDiagnostic(
-                    "chat.ui pending cleared sessionKey=\(self.sessionKey) "
-                        + "runId=\(runId) reason=\(reason)")
-            }
         }
     }
 }
