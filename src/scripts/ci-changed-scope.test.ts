@@ -103,6 +103,21 @@ function expectedScope(overrides: Partial<ReturnType<typeof detectChangedScope>>
 }
 
 describe("detectChangedScope", () => {
+  it.each([
+    "src/agents/shell-utils.ts",
+    "src/agents/shell-utils.test.ts",
+    "src/agents/shell-snapshot.ts",
+    "src/agents/shell-snapshot.test.ts",
+  ])("runs zsh proof on macOS without Swift for %s", (changedPath) => {
+    expect(detectChangedScope([changedPath])).toEqual(
+      expectedScope({ runNode: true, runMacosNode: true }),
+    );
+    const scripts = JSON.parse(fs.readFileSync("package.json", "utf8")).scripts;
+    expect(scripts["test:macos:ci:3"].split(/\s+/)).toContain(
+      changedPath.replace(/(?:\.test)?\.ts$/, ".test.ts"),
+    );
+  });
+
   it("fails safe when no paths are provided", () => {
     expect(detectChangedScope([])).toEqual(
       Object.fromEntries(Object.keys(expectedScope()).map((lane) => [lane, true])),

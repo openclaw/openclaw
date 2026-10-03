@@ -88,6 +88,7 @@ const SWIFT_LINT_OWNER_RE = /^scripts\/(?:run-swiftlint|lib\/check-limits)\.mts$
 const APPLE_SHARED_CONTRACT_FIXTURE_RE = /^test\/fixtures\/talk-config-contract\.json$/;
 const MACOS_NATIVE_RE =
   /^(apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
+const MACOS_NODE_SHELL_SCOPE_RE = /^src\/agents\/shell-(?:utils|snapshot)(?:\.test)?\.ts$/;
 const GIT_OWNER_SCOPE_RE =
   /^(?:\.github\/(?:actions\/(?:git-owner|ensure-base-commit|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)|scripts\/generate-ci-git-owner\.mts$|test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout|windows-process-census)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-windows-process-census\.(?:mjs|py)))$)/;
 const MACOS_SCRIPT_SCOPE_RE =
@@ -227,6 +228,7 @@ export function detectChangedScope(changedPaths) {
 
   let runNode = false;
   let runMacos = false;
+  let hasShellChanges = false;
   let hasGitOwnerChanges = false;
   let hasSkillsWatchChanges = false;
   let hasMacosNodeTestSupportChanges = false;
@@ -260,6 +262,7 @@ export function detectChangedScope(changedPaths) {
 
     hasNonDocs = true;
     hasGitOwnerChanges ||= GIT_OWNER_SCOPE_RE.test(path);
+    hasShellChanges ||= MACOS_NODE_SHELL_SCOPE_RE.test(path);
     hasSkillsWatchChanges ||= SKILLS_WATCH_SCOPE_RE.test(path);
     // Native shell fixture support needs Darwin proof, not Swift or Windows builds.
     hasMacosNodeTestSupportChanges ||= path === "test/scripts/mac-script-fixture.test-support.ts";
@@ -360,7 +363,11 @@ export function detectChangedScope(changedPaths) {
     runNode,
     runMacos,
     runMacosNode:
-      runMacos || hasGitOwnerChanges || hasMacosNodeTestSupportChanges || hasSkillsWatchChanges,
+      runMacos ||
+      hasGitOwnerChanges ||
+      hasMacosNodeTestSupportChanges ||
+      hasSkillsWatchChanges ||
+      hasShellChanges,
     runIosBuild,
     runAndroid,
     runWindows: runWindows || hasGitOwnerChanges || hasSkillsWatchChanges,
