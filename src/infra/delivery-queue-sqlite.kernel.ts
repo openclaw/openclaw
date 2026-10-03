@@ -287,7 +287,15 @@ export function updateDeliveryQueueEntryInDatabase(
   if (!current) {
     throw deliveryQueueEntryNotFoundError(queueName, id);
   }
-  upsertDeliveryQueueEntryInDatabase({ queueName, entry: update(current) }, database);
+  // Only a still-pending row is updated; a concurrent terminalize that lands
+  // between the read and this write must not be resurrected as pending.
+  const applied = upsertDeliveryQueueEntryInDatabase(
+    { queueName, entry: update(current), updatePendingOnly: true },
+    database,
+  );
+  if (!applied) {
+    throw deliveryQueueEntryNotFoundError(queueName, id);
+  }
 }
 
 export type ReserveDeliveryQueueAttemptResult =
