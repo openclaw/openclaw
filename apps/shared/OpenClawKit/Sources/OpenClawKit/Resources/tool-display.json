@@ -42,6 +42,7 @@
     "github_publish": {"emoji":"🔀","title":"GitHub Publish","detailKeys":["title"]},
     "github_identity_status": {"emoji":"🔐","title":"GitHub Identity Status","detailKeys":[]},
     "sessions": {"emoji":"🗂️","title":"Session Settings","actions":{"patch":{"label":"update","detailKeys":["sessionKey","label","pinned","archived","model","thinkingLevel"]},"group_list":{"label":"groups"},"group_set":{"label":"set groups","detailKeys":["names"]},"group_rename":{"label":"rename group","detailKeys":["name","to"]},"group_delete":{"label":"delete group","detailKeys":["name"]}}},
+    "sessions_create": {"emoji":"🗂️","title":"Create Session","detailKeys":["label","agentId","cwd","group"]},
     "sessions_list": {"emoji":"🗂️","title":"Sessions","detailKeys":["kinds","label","agentId","search","limit","activeMinutes","includeDerivedTitles","includeLastMessage","messageLimit"]},
     "conversations_list": {"emoji":"💬","title":"Conversations","detailKeys":["channel","limit"]},
     "conversations_send": {"emoji":"📨","title":"Conversation Send","detailKeys":["conversationRef"]},

@@ -102,6 +102,25 @@ Code mode changes the model-facing orchestration surface only. It does not
 replace tools, plugin tools, MCP tools, auth, approval policy, channel
 behavior, or model selection.
 
+## Creating sessions from Code Mode
+
+The compact surface preserves session routing. An explicit request such as
+“spin up a new task” uses the enabled `sessions_create` tool:
+include `message` to start work, or omit it for an idle session. This creates an
+independent persistent visible session, not a supervised child, so there is no
+completion event or yield expectation. See [Session tools](/concepts/session-tool#creating-an-independent-session).
+
+Availability comes from the current authorized tool set. If the
+compact index omits the tool or its inputs, use `catalog.search(...)` and the
+returned handle's `describe()` in OpenClaw Code Mode. In Codex Code Mode, use its
+`ALL_TOOLS` discovery and `tools` call surface. Neither surface enables a tool
+that the current capability and tool policy do not expose.
+
+Actual delegated helpers still use child tools (`sessions_spawn` for OpenClaw or
+ACP delegation, native collaboration tools for Codex helpers). Proactive,
+unrequested follow-up proposals use `suggest_task` when enabled; suggestion cards
+do not start work until accepted.
+
 ## Why use it
 
 - Smaller prompt surface: providers get two control tools, a bounded native-tool

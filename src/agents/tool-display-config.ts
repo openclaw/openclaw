@@ -213,6 +213,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         group_delete: displayAction("delete group", ["name"]),
       },
     },
+    sessions_create: displayTool("🗂️", "Create Session", ["label", "agentId", "cwd", "group"]),
     sessions_list: displayTool("🗂️", "Sessions", [
       "kinds",
       "label",

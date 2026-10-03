@@ -278,7 +278,12 @@ export function resolveInProcessGatewayDispatch(
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const transfersCreatedInput =
     method === "sessions.create" &&
-    options?.sessionCreation?.via === "spawn" &&
+    (options?.sessionCreation?.via === "spawn" ||
+      (options?.sessionCreation?.via === "operator" &&
+        options.sessionCreation.requesterSessionKey === caller?.sessionKey &&
+        options.sessionCreation.actor?.type === "human" &&
+        options.sessionCreation.actor.source === "profile" &&
+        options.sessionCreation.actor.id === operatorRunAuthority?.profileId)) &&
     caller?.operationalRunInstance !== undefined &&
     assertCallerCurrent !== undefined &&
     options.agentToolCaller?.agentId === caller.agentId &&
@@ -493,6 +498,9 @@ export function resolveInProcessGatewayDispatch(
       assertSourceCurrent();
       if (method !== "agent") {
         assertCallerCurrent?.(method);
+      }
+      if (transfersCreatedInput) {
+        options.agentToolCaller?.assertCurrent?.();
       }
     },
     ...(transfersCreatedInput ? { assertCreatedInputSourceCurrent: assertSourceCurrent } : {}),

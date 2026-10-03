@@ -162,6 +162,49 @@ describe("buildDeveloperInstructions delegation guidance", () => {
     expect(buildDeveloperInstructions({ ...params, toolsAllow: undefined })).toContain("ALL_TOOLS");
   });
 
+  it.each([false, true])(
+    "routes session creation from available tools in suggest mode (deferred: %s)",
+    (deferLoading) => {
+      const params = createParams({ sessionKey: "agent:main:dashboard:task" });
+      const render = (createAvailable: boolean) =>
+        buildDeveloperInstructions(params, {
+          dynamicTools: [
+            ...delegationTools,
+            {
+              type: "namespace",
+              name: "openclaw",
+              description: "OpenClaw tools",
+              tools: [
+                {
+                  type: "function",
+                  name: createAvailable ? "sessions_create" : "sessions",
+                  description: "Session tool",
+                  deferLoading,
+                  inputSchema: { type: "object" },
+                },
+                {
+                  type: "function",
+                  name: "suggest_task",
+                  description: "Suggest a follow-up",
+                  deferLoading,
+                  inputSchema: { type: "object" },
+                },
+              ],
+            },
+          ],
+        });
+      const instructions = render(true);
+
+      expect(instructions).toContain('"spin up a new task"');
+      expect(instructions).toContain("`openclaw.sessions_create`");
+      expect(instructions).toContain("no completion event or yield expectation");
+      expect(instructions).toContain("Actual delegated helpers use native `spawn_agent`");
+      expect(instructions).toContain("unrequested follow-up proposals use `openclaw.suggest_task`");
+      expect(instructions).not.toContain("## Delegation");
+      expect(render(false)).not.toContain("`openclaw.sessions_create`");
+    },
+  );
+
   it("shares the visible-session delegation policy with a canonical main session", () => {
     const instructions = buildInstructions();
 

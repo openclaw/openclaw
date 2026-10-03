@@ -46,6 +46,8 @@ export function buildDeveloperInstructions(
   let dashboardToolName: string | undefined;
   let portalToolName: string | undefined;
   let messageTool: Parameters<typeof buildUiPresentationPrompt>[0]["messageTool"];
+  let sessionsCreateToolName: string | undefined;
+  let suggestTaskToolName: string | undefined;
   let hasSkillWorkshop = false;
   let hasSessionsSpawn = false;
   let hasSessionsYield = false;
@@ -81,6 +83,12 @@ export function buildDeveloperInstructions(
       }
       if (name === "message") {
         messageTool ??= { name: qualifiedName, parameters: tool.inputSchema };
+      }
+      if (name === "sessions_create") {
+        sessionsCreateToolName ??= qualifiedName;
+      }
+      if (name === "suggest_task") {
+        suggestTaskToolName ??= qualifiedName;
       }
       hasSkillWorkshop ||= name === SKILL_WORKSHOP_TOOL_NAME;
       hasSessionsSpawn ||= name === "sessions_spawn";
@@ -144,6 +152,8 @@ export function buildDeveloperInstructions(
           hasSessionsYield,
           hasSubagentsList,
           hasSessionsSend,
+          sessionsCreateToolName,
+          suggestTaskToolName,
         }).join("\n")
       : undefined,
     params.disableTools !== true && params.promptMode !== "minimal" && params.promptMode !== "none"

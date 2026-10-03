@@ -37,6 +37,7 @@ import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
+import { handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -111,6 +112,27 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       context.getRuntimeConfig,
       resolveOperatorSessionCreation(client, { allowTrustedHint: true }),
     );
+    const toolRequester = client?.internal?.agentToolCaller;
+    const agentCreated =
+      sessionCreation.via === "operator" && sessionCreation.requesterSessionKey !== undefined;
+    if (
+      agentCreated &&
+      (!toolRequester?.assertCurrent ||
+        toolRequester.sessionKey !== sessionCreation.requesterSessionKey ||
+        sessionCreation.actor?.type !== "human" ||
+        sessionCreation.actor.source !== "profile" ||
+        sessionCreation.actor.id !== client?.internal?.operatorRunAuthority?.profileId)
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.FORBIDDEN,
+          "Session creation requires a matching live operator tool caller",
+        ),
+      );
+      return;
+    }
     const spawnRequesterSessionKey =
       sessionCreation.via === "spawn"
         ? normalizeOptionalString(sessionCreation.requesterSessionKey)
@@ -140,6 +162,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     // Both uncommitted selections must remain authorized after awaited preparation.
     const commitGuard = () => {
       requestAuthority.assertCurrent();
+      if (agentCreated) {
+        toolRequester?.assertCurrent?.();
+      }
       authority.commitGuard?.();
       sessionMutationAuthorization?.assertCurrent();
       assertPreparedSkillLibrarySelection(sessionCreation.skillLibrarySelections);
@@ -562,16 +587,36 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           scheduleCreatedDashboardSessionTitle(session, cfg, context, p.titleSource);
           return;
         }
+        const sendClient =
+          initialTurnSourceAccepted || agentCreated ? captureAgentTurnPrincipal(client) : client;
+        if (agentCreated && sendClient && toolRequester) {
+          // Creator/access identity remains the verified person. The opening
+          // message was written by their agent, not by that person's connection.
+          sendClient.internal = {
+            ...sendClient.internal,
+            senderAttribution: { id: "agent:" + toolRequester.agentId },
+          };
+        }
         const sendOptions = bindGatewayRequestHandlerMutationAuthority(
           options,
           {
             ...options,
-            client: initialTurnSourceAccepted ? captureAgentTurnPrincipal(client) : client,
+            client: sendClient,
             params: {
               sessionKey: session.key,
               agentId: session.agentId,
               message: message ?? "",
               idempotencyKey: initialRunId,
+              ...(agentCreated
+                ? {
+                    systemInputProvenance: {
+                      kind: "inter_session",
+                      sourceSessionKey: sessionCreation.requesterSessionKey,
+                      sourceTool: "sessions_create",
+                    },
+                    suppressCommandInterpretation: true,
+                  }
+                : {}),
               ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
               ...(p.mentions ? { mentions: p.mentions } : {}),
               ...(attachments ? { attachments } : {}),
@@ -587,7 +632,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           },
           undefined,
         );
-        await handleDirectExternalChatSend(sendOptions);
+        if (agentCreated) {
+          await handleTrustedInternalChatSend(sendOptions, undefined, { stageCreatedInput: true });
+        } else {
+          await handleDirectExternalChatSend(sendOptions);
+        }
       },
     };
     const created = await createGatewaySession(createParams).catch((error: unknown) => {

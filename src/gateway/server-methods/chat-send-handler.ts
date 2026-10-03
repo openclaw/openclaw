@@ -69,6 +69,8 @@ type ChatSendInternalOptions = {
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalResume?: SessionGoalOperation & { action: "resume" };
   trustedSystemInput?: boolean;
+  /** The creation owner has validated an agent-authored opening turn and its source authority. */
+  stageCreatedInput?: true;
   transcript?: Parameters<typeof createGatewayChatUserTurnController>[0]["transcript"];
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   toolsAllow?: string[];
@@ -223,7 +225,12 @@ async function handleChatSendWithOptions(
     });
   let pendingStageAttempted = false;
   try {
+    let assertAcceptedInputCurrent: (() => void) | undefined;
     const assertInputAdmissionCurrent = () => {
+      if (assertAcceptedInputCurrent) {
+        assertAcceptedInputCurrent();
+        return;
+      }
       admitted.value.assertClientUploadAllowed?.();
       admitted.value.assertWorkAdmissionCurrent();
       admitted.value.assertSessionTargetCurrent();
@@ -307,7 +314,9 @@ async function handleChatSendWithOptions(
     if (
       entry?.sessionId &&
       userTurn.baseInput.display !== false &&
-      (!systemInputProvenance || systemInputProvenance.kind === "external_user") &&
+      (!systemInputProvenance ||
+        systemInputProvenance.kind === "external_user" ||
+        options?.stageCreatedInput === true) &&
       !isInternalTextSlashCommandTurn &&
       !normalizedRequest.value.goalOperation
     ) {
@@ -353,6 +362,12 @@ async function handleChatSendWithOptions(
       }
       if (!staged) {
         throw new Error("Chat input was not durably admitted; refresh and retry.");
+      }
+      if (options?.stageCreatedInput) {
+        // Session creation alone does not transfer input. Only this committed
+        // pending row can outlive the originating tool, under its retained
+        // operator, target, and Gateway authority.
+        assertAcceptedInputCurrent = assertCustodyCurrent;
       }
       const approved = userTurnRecorder.getPendingInputMessage?.();
       const text =
@@ -696,7 +711,7 @@ export async function handleTrustedInternalChatSend(
   onAdmissionOwned?: () => Promise<boolean>,
   inputOptions?: Pick<
     ChatSendInternalOptions,
-    "transcript" | "toolsAllow" | "prepareAssistantTranscriptMessage"
+    "transcript" | "toolsAllow" | "prepareAssistantTranscriptMessage" | "stageCreatedInput"
   >,
 ): Promise<void> {
   await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {

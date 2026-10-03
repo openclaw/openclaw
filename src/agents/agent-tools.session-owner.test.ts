@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
@@ -91,4 +92,35 @@ describe("session responsibility assignment in non-owner turns", () => {
       expect(denied.some((candidate) => candidate.name === "sessions")).toBe(false);
     },
   );
+});
+
+describe("standalone session creation tool registration", () => {
+  it("exposes creation only with admitted session-write authority and preserves explicit denies", async () => {
+    const authority = createAdmittedRunOperatorAuthority({
+      profileId: "profile-requester",
+      scopes: ["operator.sessions.write"],
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+    });
+    const assemble = (deny?: string[]) =>
+      createOpenClawCodingTools({
+        config: { tools: { allow: ["sessions", "sessions_create"], deny } },
+        sessionKey: "agent:main:main",
+        senderIsOwner: false,
+        workspaceDir: process.cwd(),
+      });
+    expect(assemble().some((tool) => tool.name === "sessions_create")).toBe(false);
+    await withSessionToolTestCaller(async () => {
+      const tools = assemble();
+      expect(tools.find((tool) => tool.name === "sessions_create")).toBeDefined();
+      expect(tools.find((tool) => tool.name === "sessions")?.parameters).toHaveProperty(
+        "properties.action.enum",
+        ["patch", "assign_owner"],
+      );
+      expect(assemble(["sessions_create"]).some((tool) => tool.name === "sessions_create")).toBe(
+        false,
+      );
+      expect(assemble(["sessions"]).some((tool) => tool.name === "sessions_create")).toBe(true);
+    }, authority);
+  });
 });

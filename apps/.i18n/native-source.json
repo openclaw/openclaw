@@ -1092,6 +1092,7 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json","kind":"tool-display","surface":"android","id":"native.android.b286dbd34808bb86","source":"Conversation Turn"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json","kind":"tool-display","surface":"android","id":"native.android.5185c9c1a72c8259","source":"Conversations"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json","kind":"tool-display","surface":"android","id":"native.android.c9a5ccf2172f6138","source":"Create Goal"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json","kind":"tool-display","surface":"android","id":"native.android.51fb59c14b09fa1d","source":"Create Session"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json","kind":"tool-display","surface":"android","id":"native.android.e4cddc43d759d3dc","source":"Cron"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json","kind":"tool-display","surface":"android","id":"native.android.04f46f44fbd21f2a","source":"Dashboard"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json","kind":"tool-display","surface":"android","id":"native.android.7dd516c94bea8780","source":"Decision Evaluation"},

@@ -506,19 +506,21 @@ export function buildAgentSystemPrompt(params: {
   const collapsibleDetailsSupported = runtimeCapabilitiesLower.has("markdowndetails");
   const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
   const proactiveSubagentOrchestration = params.proactiveSubagentOrchestration === true;
-  const subagentDelegationPreferenceSection = hasSessionsSpawn
-    ? buildDelegationGuidanceSection({
-        mode: proactiveSubagentOrchestration
-          ? "suggest"
-          : (params.subagentDelegationMode ?? "suggest"),
-        isMinimal,
-        hiddenDelegationTool: "`sessions_spawn`",
-        hasVisibleSessionSpawn: hasSessionsSpawn,
-        hasSessionsYield: availableTools.has("sessions_yield"),
-        hasSubagentsList: availableTools.has("subagents"),
-        hasSessionsSend: availableTools.has("sessions_send"),
-      })
-    : [];
+  const subagentDelegationPreferenceSection = buildDelegationGuidanceSection({
+    mode: proactiveSubagentOrchestration ? "suggest" : (params.subagentDelegationMode ?? "suggest"),
+    isMinimal,
+    hiddenDelegationTool: hasSessionsSpawn ? "`sessions_spawn`" : "",
+    hasVisibleSessionSpawn: hasSessionsSpawn,
+    hasSessionsYield: availableTools.has("sessions_yield"),
+    hasSubagentsList: availableTools.has("subagents"),
+    hasSessionsSend: availableTools.has("sessions_send"),
+    sessionsCreateToolName: availableTools.has("sessions_create")
+      ? resolveToolName("sessions_create")
+      : undefined,
+    suggestTaskToolName: availableTools.has("suggest_task")
+      ? resolveToolName("suggest_task")
+      : undefined,
+  });
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const messageChannelOptions = availableTools.has("message")
     ? buildMessageChannelOptions(runtimeChannel)
@@ -699,7 +701,7 @@ export function buildAgentSystemPrompt(params: {
               ? [
                   "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner.",
                   '`sessions_spawn`: clean context => `context:"isolated"`; transcript needed => `context:"fork"`. Follow the accepted completion mode.',
-                  "Once delegation is appropriate, use a hidden subagent unless the user needs a separate, independently steerable session.",
+                  "Once delegation is appropriate, use a hidden subagent unless the user needs to revisit or steer deliberately supervised child work.",
                 ]
               : []),
             ...(availableTools.has("screen")
@@ -1019,7 +1021,7 @@ export function buildAgentSystemPrompt(params: {
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
       silentReplyPromptMode,
-      delegationSectionRenders: subagentDelegationPreferenceSection.length > 0,
+      delegationSectionRenders: subagentDelegationPreferenceSection.includes("## Delegation"),
     }),
     // Capability-gated reply guidance stays below the cache boundary so channel changes
     // cannot alter the byte-identical stable prefix shared across sessions.
