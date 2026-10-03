@@ -1,8 +1,11 @@
+import { ContextProvider } from "@lit/context";
 import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
+import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
+import { McpAppPanel } from "./mcp-app-panel.ts";
 import {
   MCP_APP_VIEW_EXPIRED_EVENT,
   MCP_APP_MESSAGE_EVENT,
@@ -292,7 +295,7 @@ describe("mcp-app-view localization", () => {
     expect(received).toHaveLength(1);
   });
 
-  it("signals its board owner when the view lease has expired", async () => {
+  it("signals its board owner and marks an expired view inactive", async () => {
     const request = vi.fn(async () => {
       throw Object.assign(new Error("MCP App view expired"), {
         details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED },
@@ -313,8 +316,80 @@ describe("mcp-app-view localization", () => {
 
     await expect.poll(() => expired).toHaveBeenCalledOnce();
     await expect
-      .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
-      .toContain("MCP App view expired");
+      .poll(() => view.shadowRoot?.querySelector('[role="status"]')?.textContent)
+      .toContain("This app session ended. Relaunch to interact");
+  });
+
+  it("relaunches an ended entrypoint through the panel's existing launch request", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "mcp.app.launch") {
+        return { viewId: "expired-entrypoint" };
+      }
+      throw Object.assign(new Error("expired"), {
+        details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED },
+      });
+    });
+    const client = { request };
+    const context = {
+      gateway: {
+        snapshot: { client, phase: "connected" },
+        connectionRevision: 1,
+        connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
+        subscribe: () => () => {},
+      },
+    };
+    const panel = new McpAppPanel();
+    Reflect.set(panel, "context", context);
+    new ContextProvider(panel, {
+      context: applicationContext,
+      initialValue: context as unknown as ApplicationContext,
+    });
+    const expired = deferred();
+    panel.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, () => expired.resolve(), { once: true });
+    panel.launch = {
+      owner: client as NonNullable<typeof panel.launch>["owner"],
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      serverName: "parts",
+      entrypoint: {
+        toolName: "library",
+        title: "Parts library",
+        resourceUri: "ui://parts/library",
+        entrypoint: { type: "global" },
+      },
+    };
+    document.body.append(panel);
+    await expired.promise;
+    const view = panel.querySelector("mcp-app-view")!;
+    await view.updateComplete;
+    const button = [...view.shadowRoot!.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent?.trim() === "Relaunch",
+    );
+    expect(button).toBeDefined();
+    button!.click();
+    await vi.dynamicImportSettled();
+    expect(request.mock.calls.filter(([method]) => method === "mcp.app.launch")).toEqual([
+      [
+        "mcp.app.launch",
+        {
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          serverName: "parts",
+          toolName: "library",
+          entrypointType: "global",
+        },
+      ],
+      [
+        "mcp.app.launch",
+        {
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          serverName: "parts",
+          toolName: "library",
+          entrypointType: "global",
+        },
+      ],
+    ]);
   });
 
   it("does not renew the view for unrelated upstream expiry errors", async () => {
@@ -341,12 +416,31 @@ describe("mcp-app-view localization", () => {
   });
 
   it("does not advertise or install message support for read-only views", async () => {
-    const { bridge } = await mountBridge(`view-read-only-${crypto.randomUUID()}`, false);
+    const { bridge, view } = await mountBridge(`view-read-only-${crypto.randomUUID()}`, false);
+    expect(view.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain(
+      "Send a message to interact again",
+    );
     expect(bridge.capabilities).not.toHaveProperty("message");
     expect(bridge.messageHandler).toBeUndefined();
     expect(bridge.capabilities).not.toHaveProperty("updateModelContext");
     expect(bridge.capabilities).not.toHaveProperty("serverResources");
     expect(bridge.updateModelContextHandler).toBeUndefined();
+  });
+
+  it("shows an inactive banner after a bridge request expires", async () => {
+    const { bridge, request, view } = await mountBridge(`view-expired-${crypto.randomUUID()}`);
+    request.mockRejectedValueOnce(
+      Object.assign(new Error("MCP App view expired or is not authorized"), {
+        details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED },
+      }),
+    );
+    await expect(
+      bridge.updateModelContextHandler?.({ content: [{ type: "text", text: "selection" }] }),
+    ).rejects.toThrow("expired");
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain(
+      "This app session ended. Relaunch to interact",
+    );
   });
 
   it("forwards update-model-context through the bound Gateway view", async () => {

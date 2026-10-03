@@ -7,7 +7,7 @@ import {
 } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
-import { property } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { createRef, ref } from "lit/directives/ref.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { navigateMcpAppLink } from "../app/mcp-app-routing.ts";
@@ -172,6 +172,19 @@ export class McpAppView extends LitElement {
       top: 4px;
       right: 8px;
     }
+    .inactive {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px;
+      background: var(--bg-accent);
+      color: var(--text);
+      font-size: 13px;
+    }
+    .inactive button {
+      flex-shrink: 0;
+    }
     .error {
       padding: 14px;
       color: var(--danger, #dc2626);
@@ -189,6 +202,9 @@ export class McpAppView extends LitElement {
   @property({ type: Boolean, attribute: "fill-container", reflect: true }) fillContainer = false;
   @property() override title = "";
   @property({ attribute: false }) deepLink: string | undefined;
+  @property({ attribute: false }) onRelaunch: (() => void) | undefined;
+  @property({ type: Boolean }) relaunching = false;
+  @state() private inactive: "ended" | "reconstructed" | null = null;
   @property({ attribute: "display-mode", reflect: true }) displayMode: "inline" | "fullscreen" =
     "inline";
   protected readonly i18nController = new I18nController(this);
@@ -209,6 +225,7 @@ export class McpAppView extends LitElement {
       ] as const,
     task: async ([client, sessionKey, viewId, agentId, connectionRevision, hello], { signal }) => {
       await this.teardownResources(this.resources);
+      this.inactive = null;
       if (!sessionKey || !viewId) {
         return null;
       }
@@ -269,7 +286,13 @@ export class McpAppView extends LitElement {
         ? binding.client.request(method, requestParams, { signal })
         : binding.client.request(method, requestParams));
     } catch (error) {
-      if (isMcpAppViewExpiredError(error)) {
+      if (
+        isMcpAppViewExpiredError(error) &&
+        this.viewId === binding.viewId &&
+        this.sessionKey === binding.sessionKey &&
+        this.context?.gateway.snapshot.client === binding.client
+      ) {
+        this.inactive = "ended";
         this.dispatchEvent(
           new CustomEvent(MCP_APP_VIEW_EXPIRED_EVENT, { bubbles: true, composed: true }),
         );
@@ -392,6 +415,7 @@ export class McpAppView extends LitElement {
       )) as McpAppViewPayload;
       const mount = this.mount.value;
       signal.throwIfAborted();
+      this.inactive = payload.messageSupported === false ? "reconstructed" : null;
       if (!mount) {
         throw new Error(t("mcpApp.errors.mountUnavailable"));
       }
@@ -685,11 +709,12 @@ export class McpAppView extends LitElement {
 
   override render() {
     const error = this.setupTask.status === TaskStatus.ERROR ? this.setupTask.error : null;
-    const errorText = error
-      ? t("mcpApp.unavailable", {
-          error: formatUiError(error, t("mcpApp.errors.requestFailed")),
-        })
-      : null;
+    const errorText =
+      error && !this.inactive
+        ? t("mcpApp.unavailable", {
+            error: formatUiError(error, t("mcpApp.errors.requestFailed")),
+          })
+        : null;
     return html`${
         this.displayMode === "fullscreen"
           ? html`<button
@@ -700,6 +725,16 @@ export class McpAppView extends LitElement {
             >
               ${t("common.close")}
             </button>`
+          : nothing
+      }
+      ${
+        this.inactive
+          ? html`<div class="inactive" role="status">
+              <span
+                >${t(this.inactive === "reconstructed" ? "mcpApp.reconstructed" : "mcpApp.sessionEnded")}</span
+              >
+              ${this.inactive === "ended" && this.onRelaunch ? html`<button type="button" ?disabled=${this.relaunching} @click=${this.onRelaunch}>${t("mcpApp.relaunch")}</button>` : nothing}
+            </div>`
           : nothing
       }
       <div ${ref(this.mount)} class="mount"></div>
