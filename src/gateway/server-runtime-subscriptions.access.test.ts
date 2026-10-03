@@ -181,14 +181,50 @@ it("keeps concurrent draft and saved metadata reads available while another sess
   });
 });
 
-it.each([false, true])(
-  "publishes a batched same-ID reset only after commit (rollback: %s)",
-  async (rollback) => {
+it.each([
+  { mode: "batched", rollback: false },
+  { mode: "batched", rollback: true },
+  { mode: "outer transaction", rollback: false },
+  { mode: "outer transaction", rollback: true },
+])(
+  "publishes a same-ID reset only after $mode commits (rollback: $rollback)",
+  async ({ mode, rollback }) => {
     await withAccessFixture(async ({ scope, workspaceDir, start }) => {
       const entry = { sessionId: "same-session", lifecycleRevision: "before", updatedAt: 1 };
       await upsertSessionEntryCore(scope, entry);
       start();
       const revision = readGatewayAccessRevision();
+      if (mode === "outer transaction") {
+        await patchSessionEntryCore(scope, () => ({ label: "metadata only" }));
+        expect(readGatewayAccessRevision()).toBe(revision);
+        const replace = () =>
+          runOpenClawAgentWriteTransaction(
+            () => {
+              replaceSessionEntrySync(scope, {
+                ...entry,
+                lifecycleRevision: "after",
+                updatedAt: 2,
+              });
+              expect(readGatewayAccessRevision()).toBe(revision);
+              if (rollback) {
+                throw new Error("rollback identity");
+              }
+            },
+            { agentId: scope.agentId, path: scope.storePath },
+          );
+        if (rollback) {
+          expect(replace).toThrow("rollback identity");
+          expect(readGatewayAccessRevision()).toBe(revision);
+        } else {
+          replace();
+          expect(readGatewayAccessRevision()).toBeGreaterThan(revision);
+        }
+        expect(loadSessionEntry(scope)).toMatchObject({
+          sessionId: entry.sessionId,
+          lifecycleRevision: rollback ? "before" : "after",
+        });
+        return;
+      }
       const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
       const kinds: string[] = [];
       const observe = onSessionIdentityMutation((mutation) => kinds.push(mutation.kind));
@@ -227,46 +263,6 @@ it.each([false, true])(
           database.db.exec("DROP TRIGGER reject_reset_entry");
         }
       }
-    });
-  },
-);
-
-it.each([false, true])(
-  "waits for the outer same-ID reset commit (rollback: %s)",
-  async (rollback) => {
-    await withAccessFixture(async ({ scope, start }) => {
-      const entry = { sessionId: "original", lifecycleRevision: "before", updatedAt: 1 };
-      await upsertSessionEntryCore(scope, entry);
-      start();
-      const revision = readGatewayAccessRevision();
-      await patchSessionEntryCore(scope, () => ({ label: "metadata only" }));
-      expect(readGatewayAccessRevision()).toBe(revision);
-      const replace = () =>
-        runOpenClawAgentWriteTransaction(
-          () => {
-            replaceSessionEntrySync(scope, {
-              sessionId: "original",
-              lifecycleRevision: "after",
-              updatedAt: 2,
-            });
-            expect(readGatewayAccessRevision()).toBe(revision);
-            if (rollback) {
-              throw new Error("rollback identity");
-            }
-          },
-          { agentId: scope.agentId, path: scope.storePath },
-        );
-      if (rollback) {
-        expect(replace).toThrow("rollback identity");
-        expect(readGatewayAccessRevision()).toBe(revision);
-      } else {
-        replace();
-        expect(readGatewayAccessRevision()).toBeGreaterThan(revision);
-      }
-      expect(loadSessionEntry(scope)).toMatchObject({
-        sessionId: "original",
-        lifecycleRevision: rollback ? "before" : "after",
-      });
     });
   },
 );
