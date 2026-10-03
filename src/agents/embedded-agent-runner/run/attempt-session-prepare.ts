@@ -326,6 +326,14 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     input.setActiveSessionSystemPrompt("");
   }
 
+  // Finalized Talk speech can advance the durable transcript after the session
+  // manager was loaded. Reload before orphan repair so the plan and the
+  // mutation version reflect current durable state, not a stale cached view.
+  if (!preserveExactPrompt) {
+    await sessionManager.reloadPersistedTranscriptAsync(input.abortSignal);
+    input.abortSignal?.throwIfAborted();
+  }
+
   const orphanRepairCandidate = preserveExactPrompt
     ? undefined
     : resolveOrphanRepairPlan({
