@@ -158,7 +158,6 @@ function resolveScopedAbortKey(params: {
 export const sessionAbortHandlers: GatewayRequestHandlers = {
   "sessions.abort": async (options) => {
     const { params, respond, context, client, sessionMutationAuthorization } = options;
-    context.logGateway.info(formatStopRequest("sessions.abort", client, params));
     const authority = readGatewayRequestMutationAuthority(options);
     const requester = resolveChatAbortRequester(client, sessionMutationAuthorization);
     const narrow =
@@ -167,6 +166,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsAbortParams, "sessions.abort", respond)) {
       return;
     }
+    context.logGateway.info(formatStopRequest("sessions.abort", client, params));
     const p = params;
     const cfg = context.getRuntimeConfig();
     const requestedRunId = readStringValue(p.runId);

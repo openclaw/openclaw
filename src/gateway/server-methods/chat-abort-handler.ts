@@ -675,7 +675,11 @@ export async function handleChatAbortRequestWithLifecycle(
 }
 
 export async function handleChatAbortRequest(options: GatewayRequestHandlerOptions): Promise<void> {
-  options.context.logGateway.info(formatStopRequest("chat.abort", options.client, options.params));
+  if (validateChatAbortParams(options.params)) {
+    options.context.logGateway.info(
+      formatStopRequest("chat.abort", options.client, options.params),
+    );
+  }
   try {
     await handleChatAbortRequestWithLifecycle(options);
   } catch (error) {
