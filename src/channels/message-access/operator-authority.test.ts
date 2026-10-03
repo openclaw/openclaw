@@ -34,7 +34,7 @@ import {
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { installDiscordRegistryHooks } from "../../auto-reply/test-helpers/command-auth-registry-fixture.js";
 import { prepareChannelOperatorAdmin } from "../../gateway/channel-operator-authority.js";
-import { mergeImportedChatHistoryMessages } from "../../gateway/cli-session-history.merge.js";
+import { mergeImportedChatHistoryMessages } from "../../gateway/cli-session-history.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { createOperatorClient } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { resolveGatewayScopedTools } from "../../gateway/tool-resolution.js";
