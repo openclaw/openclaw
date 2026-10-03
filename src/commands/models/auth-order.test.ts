@@ -131,6 +131,7 @@ describe("models auth order", () => {
   });
 
   it("clear removes the store order and refreshes a running gateway", async () => {
+    mocks.ensureAuthProfileStore.mockReturnValue(storeWith(["anthropic:a", "anthropic:b"]));
     const runtime = createRuntime();
     await modelsAuthOrderClearCommand({ provider: "anthropic" }, runtime);
 
@@ -146,6 +147,38 @@ describe("models auth order", () => {
     expect(runtime.logs.some((line) => line.includes("Auth profile order override cleared"))).toBe(
       true,
     );
+  });
+
+  it("reports an inherited shared order after clearing the local override", async () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      ...storeWith(["anthropic:a", "anthropic:b"], ["anthropic:b", "anthropic:a"]),
+      runtimeLocalOrderProviderIds: [],
+    });
+    const runtime = createRuntime();
+    await modelsAuthOrderClearCommand({ provider: "anthropic" }, runtime);
+
+    expect(runtime.logs).toContain(
+      "Auth profile order override cleared; inherited shared order remains active: anthropic:b, anthropic:a.",
+    );
+  });
+
+  it("identifies an inherited shared order in text and JSON output", async () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      ...storeWith(["anthropic:a", "anthropic:b"], ["anthropic:b", "anthropic:a"]),
+      runtimeLocalOrderProviderIds: [],
+    });
+    const textRuntime = createRuntime();
+    await modelsAuthOrderGetCommand({ provider: "anthropic" }, textRuntime);
+    expect(textRuntime.logs).toContain(
+      "Auth profile order override (inherited shared): anthropic:b, anthropic:a",
+    );
+
+    const jsonRuntime = createRuntime();
+    await modelsAuthOrderGetCommand({ provider: "anthropic", json: true }, jsonRuntime);
+    expect(JSON.parse(jsonRuntime.logs.join("\n"))).toMatchObject({
+      order: ["anthropic:b", "anthropic:a"],
+      orderSource: "shared",
+    });
   });
 
   it("does not refresh the gateway when the store update fails", async () => {
