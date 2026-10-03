@@ -78,7 +78,7 @@ function formatMetaForDisplay(
     const bodyParts: string[] = [];
     for (const part of meta
       .split(" · ")
-      .map((part) => part.trim())
+      .map((segment) => segment.trim())
       .filter(Boolean)) {
       (part === "elevated" || part === "pty" ? flags : bodyParts).push(part);
     }
