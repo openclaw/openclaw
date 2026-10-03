@@ -68,15 +68,25 @@ export function resolveBlockDownload(
   const audioUrl = asNonEmptyString(block.audio_url);
   const source = asOptionalRecord(block.source);
   const sourceData = readStringValue(source?.data)?.trim();
+  const blob = readStringValue(block.blob)?.trim();
+  const sourceBlob = readStringValue(source?.blob)?.trim();
   const sourceUrl = asNonEmptyString(source?.url);
-  const dataUrl = [url, sourceUrl, imageUrl, audioUrl, data, content, sourceData].find(
-    (value) => typeof value === "string" && /^data:/i.test(value),
-  );
+  const dataUrl = [
+    url,
+    sourceUrl,
+    imageUrl,
+    audioUrl,
+    data,
+    content,
+    sourceData,
+    blob,
+    sourceBlob,
+  ].find((value) => typeof value === "string" && /^data:/i.test(value));
   const base64FromDetectedDataUrl = readArtifactBase64Payload(
     dataUrl ? base64FromDataUrl(dataUrl) : undefined,
     opts,
   );
-  const directBase64 = [data, sourceData, content]
+  const directBase64 = [data, sourceData, content, blob, sourceBlob]
     .filter((value): value is string => typeof value === "string" && !/^data:/i.test(value))
     .map((value) => readArtifactBase64Payload(value, opts))
     .find((value): value is ArtifactBase64Payload => value !== undefined);

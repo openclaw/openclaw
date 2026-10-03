@@ -29,6 +29,26 @@ const scope = {
   sessionId: "computer-images",
 };
 
+const PNG_BASE64 = [
+  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsHeE",
+  "RQyjAWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqAD",
+  "tAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBr",
+  "gA7QGqADtAboAO0B06OyaOxP7RwAAAAASUVORK5CYII=",
+].join("");
+function legacyImageBlocks(payload: string): Record<string, unknown>[] {
+  const dataUrl = `data:image/png;base64,${payload}`;
+  return [
+    { type: "image", data: payload, mimeType: "image/png" },
+    { type: "image", source: { type: "base64", data: payload, media_type: "image/png" } },
+    { type: "image", blob: payload, mimeType: "image/png" },
+    { type: "image", source: { type: "base64", blob: payload, media_type: "image/png" } },
+    { type: "image", url: dataUrl, mimeType: "image/png" },
+    { type: "image", source: { url: dataUrl, media_type: "image/png" } },
+    { type: "image", image_url: dataUrl, mimeType: "image/png" },
+    { type: "image", image_url: { url: dataUrl }, mimeType: "image/png" },
+  ];
+}
+
 async function invoke(
   method: "chat.history" | "artifacts.get" | "artifacts.download",
   params: Record<string, unknown>,
@@ -53,28 +73,40 @@ async function invoke(
   return expectDefined(result, "RPC response");
 }
 
-function imageIds(message: unknown): string[] {
+function imageBlocks(message: unknown): Record<string, unknown>[] {
   const content = asOptionalRecord(message)?.content;
   return Array.isArray(content)
     ? content.flatMap((block) => {
         const image = asOptionalRecord(block);
-        if (image?.type !== "image") {
-          return [];
-        }
-        expect(image).toMatchObject({ omitted: true, artifactId: expect.any(String) });
-        expect(image).not.toHaveProperty("data");
-        if (image.source) {
-          expect(image.source).not.toHaveProperty("data");
-        }
-        return [String(image.artifactId)];
+        return image?.type === "image" ? [image] : [];
       })
     : [];
+}
+
+function expectImagePayloadSanitized(image: Record<string, unknown>) {
+  for (const field of ["data", "blob", "url", "openUrl", "image_url"]) {
+    expect(image).not.toHaveProperty(field);
+  }
+  const source = asOptionalRecord(image.source);
+  if (source) {
+    for (const field of ["data", "blob", "url"]) {
+      expect(source).not.toHaveProperty(field);
+    }
+  }
+}
+
+function imageIds(message: unknown): string[] {
+  return imageBlocks(message).map((image) => {
+    expect(image).toMatchObject({ omitted: true, artifactId: expect.any(String) });
+    expectImagePayloadSanitized(image);
+    return String(image.artifactId);
+  });
 }
 
 describe("persisted chat image artifact recovery", () => {
   it("recovers each visible legacy image when transcript rows reuse a message id", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const images = ["Zmlyc3Q=", "c2Vjb25k"];
+      const images = [PNG_BASE64, PNG_BASE64];
       await seedUnindexedTranscriptForTest({
         ...scope,
         entry: { sessionId: scope.sessionId, updatedAt: 1 },
@@ -114,16 +146,113 @@ describe("persisted chat image artifact recovery", () => {
     });
   });
 
+  it("recovers every supported inline image shape through history, download, and sanitization", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const content = legacyImageBlocks(PNG_BASE64);
+      await seedUnindexedTranscriptForTest({
+        ...scope,
+        entry: { sessionId: scope.sessionId, updatedAt: 1 },
+        events: [
+          {
+            session_id: scope.sessionId,
+            seq: 0,
+            created_at: 0,
+            event_json: JSON.stringify({
+              id: "legacy-image-input-shapes",
+              message: { role: "toolResult", content },
+            }),
+          },
+        ],
+      });
+
+      const history = await invoke("chat.history", {}, null, await createHistoryReadContext());
+      const messages = asOptionalRecord(history.payload)?.messages;
+      const projected = Array.isArray(messages) ? messages.flatMap(imageBlocks) : [];
+      expect(projected).toHaveLength(content.length);
+      const ids = Array.isArray(messages) ? messages.flatMap(imageIds) : [];
+      expect(ids).toHaveLength(content.length);
+      for (const image of projected) {
+        expectImagePayloadSanitized(image);
+      }
+      for (const artifactId of ids) {
+        expect(await invoke("artifacts.download", { artifactId })).toMatchObject({
+          ok: true,
+          payload: { encoding: "base64", data: PNG_BASE64 },
+        });
+      }
+    });
+  });
+
+  it("does not publish handles for malformed base64 in any supported inline image shape", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const content = legacyImageBlocks("not-base64!");
+      await seedUnindexedTranscriptForTest({
+        ...scope,
+        entry: { sessionId: scope.sessionId, updatedAt: 1 },
+        events: [
+          {
+            session_id: scope.sessionId,
+            seq: 0,
+            created_at: 0,
+            event_json: JSON.stringify({
+              id: "malformed-legacy-image-input-shapes",
+              message: { role: "toolResult", content },
+            }),
+          },
+        ],
+      });
+
+      const history = await invoke("chat.history", {}, null, await createHistoryReadContext());
+      const messages = asOptionalRecord(history.payload)?.messages;
+      const projected = Array.isArray(messages) ? messages.flatMap(imageBlocks) : [];
+      expect(projected).toHaveLength(content.length);
+      for (const image of projected) {
+        expect(image).not.toHaveProperty("artifactId");
+        expectImagePayloadSanitized(image);
+      }
+    });
+  });
+
+  it("does not publish handles for valid base64 that is not image data in any supported shape", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const content = legacyImageBlocks("aGVsbG8=");
+      await seedUnindexedTranscriptForTest({
+        ...scope,
+        entry: { sessionId: scope.sessionId, updatedAt: 1 },
+        events: [
+          {
+            session_id: scope.sessionId,
+            seq: 0,
+            created_at: 0,
+            event_json: JSON.stringify({
+              id: "non-image-legacy-input-shapes",
+              message: { role: "toolResult", content },
+            }),
+          },
+        ],
+      });
+
+      const history = await invoke("chat.history", {}, null, await createHistoryReadContext());
+      const messages = asOptionalRecord(history.payload)?.messages;
+      const projected = Array.isArray(messages) ? messages.flatMap(imageBlocks) : [];
+      expect(projected).toHaveLength(content.length);
+      for (const image of projected) {
+        expect(image).not.toHaveProperty("artifactId");
+        expectImagePayloadSanitized(image);
+      }
+    });
+  });
+
   it("downloads the exact image bytes referenced by history and committed live messages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       await appendTranscriptMessage(scope, {
         message: {
           role: "assistant",
-          content: [{ type: "image", data: "b2xk", mimeType: "image/png" }],
+          content: [{ type: "image", data: PNG_BASE64, mimeType: "image/png" }],
         },
       });
-      const images = [Buffer.alloc(300 * 1024, 1).toString("base64"), "c2Vjb25k"];
+      const images = [PNG_BASE64, PNG_BASE64];
       const message = {
         role: "toolResult",
         toolName: "computer",
@@ -131,7 +260,7 @@ describe("persisted chat image artifact recovery", () => {
         content: [
           { type: "text", text: "screenshot 1200x500" },
           null,
-          { type: "image", data: images[0], mimeType: "image/jpeg" },
+          { type: "image", data: images[0], mimeType: "image/png" },
           { type: "text", text: "second screen" },
           { type: "image", source: { type: "base64", data: images[1], media_type: "image/png" } },
         ],
@@ -190,7 +319,7 @@ describe("persisted chat image artifact recovery", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const message = {
         role: "assistant",
-        content: [{ type: "image", data: "b3JpZ2luYWw=", mimeType: "image/png" }],
+        content: [{ type: "image", data: PNG_BASE64, mimeType: "image/png" }],
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       await appendTranscriptMessage(scope, { eventId: "shared-message-id", message });
@@ -226,7 +355,7 @@ describe("persisted chat image artifact recovery", () => {
       expect(currentId).not.toBe(artifactId);
       expect(await invoke("artifacts.download", { artifactId: currentId })).toMatchObject({
         ok: true,
-        payload: { data: "b3JpZ2luYWw=" },
+        payload: { data: PNG_BASE64 },
       });
     });
   });
@@ -250,7 +379,7 @@ describe("persisted chat image artifact recovery", () => {
       const appended = await appendTranscriptMessage(scope, {
         message: {
           role: "assistant",
-          content: [{ type: "image", data: "cHJpdmF0ZQ==", mimeType: "image/png" }],
+          content: [{ type: "image", data: PNG_BASE64, mimeType: "image/png" }],
         },
       });
       const stored = await transcriptReaders.readSessionMessageByIdAsync(scope, appended.messageId);

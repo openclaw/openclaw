@@ -27,6 +27,39 @@ const scope = {
   sessionId: "activity-images",
 };
 
+const PNG_BASE64 = [
+  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsHeE",
+  "RQyjAWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqAD",
+  "tAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBr",
+  "gA7QGqADtAboAO0B06OyaOxP7RwAAAAASUVORK5CYII=",
+].join("");
+const PNG_CRC_TABLE = Array.from({ length: 256 }, (_, value) => {
+  let crc = value;
+  for (let bit = 0; bit < 8; bit++) {
+    crc = (crc >>> 1) ^ ((crc & 1) === 1 ? 0xedb88320 : 0);
+  }
+  return crc >>> 0;
+});
+function pngCrc32(bytes: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc = PNG_CRC_TABLE[(crc ^ byte) & 0xff]! ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+function oversizedPngBytes(): Buffer {
+  const png = Buffer.from(PNG_BASE64, "base64");
+  const iendOffset = png.length - 12;
+  const text = Buffer.alloc(1.5 * 1024 * 1024 - png.length - 12, 0x78);
+  Buffer.from("Description\0").copy(text);
+  const textChunk = Buffer.alloc(text.length + 12);
+  textChunk.writeUInt32BE(text.length, 0);
+  textChunk.write("tEXt", 4, "ascii");
+  textChunk.set(text, 8);
+  textChunk.writeUInt32BE(pngCrc32(textChunk.subarray(4, 8 + text.length)), 8 + text.length);
+  return Buffer.concat([png.subarray(0, iendOffset), textChunk, png.subarray(iendOffset)]);
+}
+
 async function invoke(
   method: "artifacts.list" | "artifacts.download",
   params: Record<string, unknown>,
@@ -166,7 +199,7 @@ describe("bounded Activity image discovery", () => {
   it("pages newest images within one message and includes Markdown local images without reading files", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      await append([{ type: "image", data: "aGVsbG8=", mimeType: "image/png", alt: "inline" }]);
+      await append([{ type: "image", data: PNG_BASE64, mimeType: "image/png", alt: "inline" }]);
       await append(
         Array.from({ length: 5 }, (_, index) => ({
           type: "image",
@@ -190,17 +223,17 @@ describe("bounded Activity image discovery", () => {
       expect(second.artifacts.map((artifact) => artifact.image?.url)).toEqual([
         "https://images.example.test/1.png",
         "https://images.example.test/0.png",
-        "data:image/png;base64,aGVsbG8=",
+        `data:image/png;base64,${PNG_BASE64}`,
       ]);
       expect(second.artifacts[2]).toMatchObject({
         id: expect.stringMatching(/^artifact_transcript_image_/),
         type: "image",
         title: "inline",
         mimeType: "image/png",
-        sizeBytes: 5,
+        sizeBytes: Buffer.from(PNG_BASE64, "base64").byteLength,
         source: "session-transcript",
         download: { mode: "bytes" },
-        image: { url: "data:image/png;base64,aGVsbG8=" },
+        image: { url: `data:image/png;base64,${PNG_BASE64}` },
       });
       expect(second.nextCursor).toBeUndefined();
     });
@@ -226,7 +259,8 @@ describe("bounded Activity image discovery", () => {
   it("discovers oversized inline images as downloadable references after newer text", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const data = Buffer.alloc(1.5 * 1024 * 1024, 1).toString("base64");
+      const dataBytes = oversizedPngBytes();
+      const data = dataBytes.toString("base64");
       await append([{ type: "image", data, mimeType: "image/png", title: "Screenshot" }]);
       await append("newer text");
       await append("newest text");
@@ -242,7 +276,7 @@ describe("bounded Activity image discovery", () => {
         type: "image",
         title: "Screenshot",
         mimeType: "image/png",
-        sizeBytes: 1.5 * 1024 * 1024,
+        sizeBytes: dataBytes.byteLength,
         source: "session-transcript",
         download: { mode: "bytes" },
       });

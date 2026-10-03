@@ -1,7 +1,9 @@
+import { sniffInlineImageMime } from "@openclaw/media-core/inline-image-data-url";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readTranscriptDisplayPosition } from "../chat/transcript-display-position.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
+import { mediaUrlValue, resolveBlockDownload } from "./server-methods/artifacts-content.js";
 
 const PREFIX = "artifact_transcript_image_";
 
@@ -84,10 +86,15 @@ function displayContentField(message: Record<string, unknown>): string {
 }
 
 function hasInlineImagePayload(block: Record<string, unknown>): boolean {
-  const source = asOptionalRecord(block.source);
+  if (block.type !== "image") {
+    return false;
+  }
+
+  const resolved = resolveBlockDownload(block, { includeData: true });
   return (
-    block.type === "image" &&
-    [block.data, source?.data].some((value) => typeof value === "string" && value.length > 0)
+    resolved.mode === "bytes" &&
+    typeof resolved.data === "string" &&
+    sniffInlineImageMime(Buffer.from(resolved.data.slice(0, 128), "base64")) !== undefined
   );
 }
 
@@ -105,10 +112,11 @@ export function projectTranscriptImageArtifacts(message: unknown): unknown {
   let projected: unknown[] | undefined;
   for (let index = 0; index < content.length; index++) {
     const block = asOptionalRecord(content[index]);
+    const blockUrl = mediaUrlValue(block?.url);
     if (
       !block ||
       !hasInlineImagePayload(block) ||
-      (typeof block.url === "string" && block.url.trim())
+      (typeof blockUrl === "string" && !/^data:/i.test(blockUrl))
     ) {
       continue;
     }

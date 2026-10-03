@@ -161,7 +161,7 @@ suite.define(() => {
           { type: "image", mimeType: "image/png", omitted: true, bytes: 12 * 1024 },
         ]);
         await seed(recoveredSessionKey, "recovered-image-history", [
-          { type: "image", mimeType: "image/png", data: retainedImageBase64 },
+          { type: "image", mimeType: "image/png", blob: retainedImageBase64 },
         ]);
         await seed(retainedSessionKey, "retained-image-history", [
           {
@@ -242,9 +242,7 @@ suite.define(() => {
             .locator("a, button, img, audio, video")
             .count();
           expect(omittedInteractiveDescendantCount).toBe(0);
-          if (captureUiProof) {
-            await page.screenshot({ path: path.join(suite.artifactDir, "01-omitted-image.png") });
-          }
+          await page.screenshot({ path: path.join(suite.artifactDir, "01-omitted-image.png") });
 
           await navigateToControlUiSession(page, recoveredSessionKey);
           const recoveredPane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
@@ -262,11 +260,9 @@ suite.define(() => {
               .locator(".chat-assistant-attachment-card", { hasText: "Omitted from history" })
               .count(),
           ).toBe(0);
-          if (captureUiProof) {
-            await page.screenshot({
-              path: path.join(suite.artifactDir, "02-recovered-image.png"),
-            });
-          }
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "02-recovered-image.png"),
+          });
           await recoveredPane.locator(".chat-message-image-button").press("Enter");
           const expanded = page.locator("openclaw-image-lightbox .image");
           await expanded.waitFor({ state: "visible" });
@@ -277,11 +273,9 @@ suite.define(() => {
               ),
             )
             .toBe(64);
-          if (captureUiProof) {
-            await page.screenshot({
-              path: path.join(suite.artifactDir, "03-recovered-lightbox.png"),
-            });
-          }
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "03-recovered-lightbox.png"),
+          });
           await page.getByRole("button", { name: "Close image preview" }).click();
           await page.reload();
           await preview.waitFor({ state: "visible" });
