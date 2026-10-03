@@ -49,19 +49,14 @@ describe("worker Gateway tool transport", () => {
     };
     expect(Value.Check(WorkerGatewayToolResultSchema, escaped)).toBe(true);
     expect(isWorkerGatewayToolFrameWithinBudget(frame(escaped), escaped)).toBe(false);
+    const data = "a".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES);
     const image: WorkerGatewayToolResult = {
-      content: [
-        {
-          type: "image",
-          data: "a".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES),
-          mimeType: "image/png",
-        },
-      ],
+      content: [{ type: "image", data, mimeType: "image/png" }],
     };
     expect(isWorkerGatewayToolFrameWithinBudget(frame(image), image)).toBe(true);
     const details: WorkerGatewayToolResult = {
       content: [],
-      details: { data: "a".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) },
+      details: { data },
     };
     expect(isWorkerGatewayToolFrameWithinBudget(frame(details), details)).toBe(false);
     const mixed = { ...details, content: image.content };

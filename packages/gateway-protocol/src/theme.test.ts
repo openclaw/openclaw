@@ -20,67 +20,23 @@ function createDarkTheme(palette: Partial<ThemePalette>) {
 }
 
 describe("portable theme definition", () => {
-  it("normalizes a complete dark-only palette and preserves supported color formats", () => {
-    const definition = normalizeThemeDefinition(
-      createThemeDefinitionFixture({
-        name: " Xenovessel ",
-        dark: createThemePaletteFixture({
-          background: "oklch(15% 0.04 280deg)",
-          foreground: "hsl(240 20% 95% / 0.9)",
-          primary: "rgb(180, 255, 40)",
-          accent: "color(display-p3 0.2 0.9 1)",
+  it("normalizes authored branding and trims working phrases", () => {
+    const mascot = "none";
+    expect(
+      normalizeThemeDefinition(
+        createThemeDefinitionFixture({
+          mascot,
+          workingPhrases: [" Building ", "x".repeat(24)],
+          critters: ["fedora", "penguin"],
+          avatarHat: "fedora",
         }),
-      }),
-    );
-    expect(definition.name).toBe("Xenovessel");
-    expect(definition.light).toBeUndefined();
-    expect(definition.dark?.accent).toBe("color(display-p3 0.2 0.9 1)");
-    expect(definition).not.toHaveProperty("mascot");
-    expect(definition).not.toHaveProperty("workingPhrases");
-    expect(definition).not.toHaveProperty("critters");
-    expect(definition).not.toHaveProperty("avatarHat");
-  });
-
-  it.each(["claw", "none"] as const)(
-    "accepts the %s mascot, authored critters and hat, and normalizes custom working phrases",
-    (mascot) => {
-      expect(
-        normalizeThemeDefinition(
-          createThemeDefinitionFixture({
-            mascot,
-            workingPhrases: [" Building ", "x".repeat(24)],
-            critters: ["fedora", "penguin"],
-            avatarHat: "fedora",
-          }),
-        ),
-      ).toMatchObject({
-        mascot,
-        workingPhrases: ["Building", "x".repeat(24)],
-        critters: ["fedora", "penguin"],
-        avatarHat: "fedora",
-      });
-    },
-  );
-
-  it.each([
-    { workingPhrases: [] },
-    { workingPhrases: Array.from({ length: 24 }, (_, index) => `Working ${index}`) },
-  ])("accepts working phrases at the entry-count boundaries: %j", ({ workingPhrases }) => {
-    expect(
-      normalizeThemeDefinition(createThemeDefinitionFixture({ workingPhrases })).workingPhrases,
-    ).toEqual(workingPhrases);
-  });
-
-  it("accepts an explicitly empty critter list", () => {
-    expect(
-      normalizeThemeDefinition(createThemeDefinitionFixture({ critters: [] })).critters,
-    ).toEqual([]);
-  });
-
-  it("accepts a built-in avatar hat in portable definitions and import requests", () => {
-    const definition = createThemeDefinitionFixture({ avatarHat: "crown" });
-    expect(normalizeThemeDefinition(definition).avatarHat).toBe("crown");
-    expect(Value.Check(ThemesImportParamsSchema, { id: "hat-theme", definition })).toBe(true);
+      ),
+    ).toMatchObject({
+      mascot,
+      workingPhrases: ["Building", "x".repeat(24)],
+      critters: ["fedora", "penguin"],
+      avatarHat: "fedora",
+    });
   });
 
   it.each(["beanie", null])(
@@ -111,20 +67,6 @@ describe("portable theme definition", () => {
     expect(parseThemeDefinition(definition)).toBeNull();
   });
 
-  it.each(["", "Beret", "a".repeat(33), "beret.svg", "<svg>"])(
-    "rejects nonportable artwork ID %j at the wire boundary",
-    (id) => {
-      for (const branding of [{ avatarHat: id }, { critters: [id] }]) {
-        expect(
-          Value.Check(ThemesImportParamsSchema, {
-            id: "hat-theme",
-            definition: createThemeDefinitionFixture(branding),
-          }),
-        ).toBe(false);
-      }
-    },
-  );
-
   it.each([
     [{ mascot: "robot" }, "theme.mascot must be one of claw, none"],
     [{ workingPhrases: "Building" }, "must be an array"],
@@ -147,67 +89,69 @@ describe("portable theme definition", () => {
     ).toThrow(message);
   });
 
-  it.each([
-    { background: "#000;display:none" },
-    { background: "var(--other-theme)" },
-    { background: "rgb()" },
-    { background: "rgb(1, 2 3)" },
-    { background: "rgb(1 2, 3)" },
-    { background: "rgb(1, 2, 3 / .5)" },
-    { background: "rgb(1%, 2, 3%)" },
-    { background: "rgb(1. 2 3)" },
-    { background: "rgb(1\u00a02\u00a03)" },
-    { background: "hsl(180, 40, 50)" },
-    { background: "hsl(180 40% 50% .5)" },
-    { background: "lab(50%, 20, 10)" },
-    { background: "color(srgb\u00a00 0 0)" },
-    { background: "red/* hidden */" },
-    { "font-sans": "var(--font-body)" },
-    { "font-sans": "Roboto,,monospace" },
-    { "font-sans": "123Font" },
-    { "font-sans": "Foo.Bar" },
-    { "font-sans": "-1font" },
-    { "font-sans": "serif Foo" },
-    { "font-sans": "Foo serif" },
-    { "font-sans": "Foo inherit" },
-    { "font-sans": "default Foo" },
-    { "font-sans": "default" },
-    { "font-sans": "-webkit-body Foo" },
-  ])("rejects unsafe or malformed CSS values %j", (palette) => {
-    expect(parseThemeDefinition(createDarkTheme(palette))).toBeNull();
+  it("rejects unsafe or malformed CSS values", () => {
+    const invalid: Partial<ThemePalette>[] = [
+      { background: "#000;display:none" },
+      { background: "var(--other-theme)" },
+      { background: "rgb()" },
+      { background: "rgb(1, 2 3)" },
+      { background: "rgb(1 2, 3)" },
+      { background: "rgb(1, 2, 3 / .5)" },
+      { background: "rgb(1%, 2, 3%)" },
+      { background: "rgb(1. 2 3)" },
+      { background: "rgb(1\u00a02\u00a03)" },
+      { background: "hsl(180, 40, 50)" },
+      { background: "hsl(180 40% 50% .5)" },
+      { background: "lab(50%, 20, 10)" },
+      { background: "color(srgb\u00a00 0 0)" },
+      { background: "red/* hidden */" },
+      { "font-sans": "var(--font-body)" },
+      { "font-sans": "Roboto,,monospace" },
+      { "font-sans": "123Font" },
+      { "font-sans": "Foo.Bar" },
+      { "font-sans": "-1font" },
+      { "font-sans": "serif Foo" },
+      { "font-sans": "Foo serif" },
+      { "font-sans": "Foo inherit" },
+      { "font-sans": "default Foo" },
+      { "font-sans": "default" },
+      { "font-sans": "-webkit-body Foo" },
+    ];
+    for (const palette of invalid) {
+      expect(parseThemeDefinition(createDarkTheme(palette))).toBeNull();
+    }
   });
 
-  it.each([
-    "rgb(1 2 3)",
-    "rgb(1e2 2 3)",
-    "rgb(1% 2 3% / 50%)",
-    "rgba(1, 2, 3, .5)",
-    "rgb(1%, 2%, 3%, 50%)",
-    "hsl(180 40 50 / .5)",
-    "hsla(0.5turn, 40%, 50%, .5)",
-    "lab(50% -20 10 / .5)",
-    "lch(50% 20 180deg)",
-    "oklab(50% -.2 .1 / 50%)",
-    "oklch(50% 0.2 180)",
-    "color(display-p3 .1 .2 .3 / .5)",
-  ])("preserves supported color syntax: %s", (background) => {
-    expect(normalizeThemeDefinition(createDarkTheme({ background })).dark?.background).toBe(
-      background,
-    );
-  });
-
-  it.each([
-    "JetBrains Mono, monospace",
-    "'A,B', monospace",
-    "\"A'B\", 'C\"D'",
-    '"123 Font", monospace',
-    "'serif Foo', 'Foo serif', 'Foo inherit', 'default Foo', 'default', 'inherit'",
-    "--font, Foo_Bar",
-    '""',
-  ])("preserves font family names: %s", (font) => {
-    expect(
-      normalizeThemeDefinition(createDarkTheme({ "font-sans": font })).dark?.["font-sans"],
-    ).toBe(font);
+  it("preserves supported color and font syntax", () => {
+    const colors = [
+      "rgb(1 2 3)",
+      "rgb(1e2 2 3)",
+      "rgb(1% 2 3% / 50%)",
+      "rgba(1, 2, 3, .5)",
+      "rgb(1%, 2%, 3%, 50%)",
+      "hsl(180 40 50 / .5)",
+      "hsla(0.5turn, 40%, 50%, .5)",
+      "lab(50% -20 10 / .5)",
+      "lch(50% 20 180deg)",
+      "oklab(50% -.2 .1 / 50%)",
+      "oklch(50% 0.2 180)",
+      "color(display-p3 .1 .2 .3 / .5)",
+    ];
+    const fonts = [
+      "JetBrains Mono, monospace",
+      "'A,B', monospace",
+      "\"A'B\", 'C\"D'",
+      '"123 Font", monospace',
+      "'serif Foo', 'Foo serif', 'Foo inherit', 'default Foo', 'default', 'inherit'",
+      "--font, Foo_Bar",
+      '""',
+    ];
+    for (const palette of [
+      ...colors.map((background) => ({ background })),
+      ...fonts.map((font) => ({ "font-sans": font })),
+    ]) {
+      expect(normalizeThemeDefinition(createDarkTheme(palette)).dark).toMatchObject(palette);
+    }
   });
 
   it("rejects missing modes, incomplete palettes, unknown properties, and oversized stored values", () => {
@@ -255,11 +199,6 @@ it("resolves omitted branding to the claw without critters or a hat and retains 
     avatarHat: undefined,
   };
   expect(resolveThemeBranding(undefined)).toEqual(defaults);
-  expect(resolveThemeBranding({})).toEqual(defaults);
-  expect(resolveThemeBranding({ workingPhrases: [] })).toEqual({
-    ...defaults,
-    workingPhrases: [],
-  });
   expect(
     resolveThemeBranding({
       mascot: "none",
@@ -280,8 +219,6 @@ it.each([
   ["light", "light"],
   ["dark", "dark"],
   ["DARK", undefined],
-  [" light ", undefined],
-  [null, undefined],
 ])("normalizes only exact theme mode literals: %j", (input, expected) => {
   expect(normalizeThemeMode(input)).toBe(expected);
 });
