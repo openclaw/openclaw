@@ -7,6 +7,10 @@ import { runAbortableTimeout } from "../../node-host/with-timeout.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 
 const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
+// Progress resets keep a streaming request alive, so the whole operation also has a
+// hard ceiling. Ten windows leaves several times the headroom a near-full-context
+// staged compaction needs, while still stopping a stream that trickles forever.
+const COMPACTION_CEILING_WINDOWS = 10;
 
 export function resolveCompactionTimeoutMs(cfg?: OpenClawConfig): number {
   return (
@@ -24,6 +28,7 @@ export async function compactWithSafetyTimeout<T>(
     onCancel?: () => void;
   },
 ): Promise<T> {
+  const ceilingAt = Date.now() + timeoutMs * COMPACTION_CEILING_WINDOWS;
   let canceled = false;
   const cancel = () => {
     if (canceled) {
@@ -50,7 +55,16 @@ export async function compactWithSafetyTimeout<T>(
 
       try {
         return await racePromiseWithAbortSignal(
-          () => trackAsyncWork(() => compact(composedAbortSignal, resetTimeout)),
+          () =>
+            trackAsyncWork(() =>
+              compact(composedAbortSignal, () => {
+                // A refresh that would outlive the ceiling is ignored, so the window
+                // already armed expires no later than the ceiling.
+                if (Date.now() + timeoutMs <= ceilingAt) {
+                  resetTimeout();
+                }
+              }),
+            ),
           abortSignal,
           (signal) => {
             cancel();
@@ -74,7 +88,8 @@ type ContextEngineCompactParams = Parameters<ContextEngine["compact"]>[0];
 /**
  * Every engine is bounded by one host window and receives the composed
  * timeout/caller cancellation signal. Only the built-in runtime delegate, reached
- * with that signal, refreshes the window as its native stages make progress.
+ * with that signal, refreshes the window while its model requests make progress,
+ * up to the operation ceiling.
  */
 export function compactContextEngineWithSafetyTimeout(
   contextEngine: Pick<ContextEngine, "compact" | "info">,

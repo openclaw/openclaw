@@ -94,8 +94,7 @@ function observeModelCallIterator<T>(
           break;
         }
         const chunk = next.value;
-        lifecycle.observer.observeResponseChunk(lifecycle.startedAt, chunk);
-        lifecycle.observer.maybeEmitStreamProgress(lifecycle.eventBase);
+        lifecycle.observeChunk(chunk);
         yield chunk;
       }
       // EOF can precede result decorators' settlement. Retain that work through
