@@ -36,6 +36,7 @@ export function createCrabboxNodeRuntimeSetup(params: {
   nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
   workerBundle: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
   leaseId: string;
+  target?: CrabboxOperatingSystem;
 }): { command: string; forwardedEnv: Record<string, string> } {
   return createCrabboxNodeSetup(params);
 }
@@ -358,10 +359,35 @@ setPhase("preparation");
           const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
           if (process.platform === "win32" && !fs.existsSync(npmCli)) throw new Error("Cloud worker requires npm beside node.exe; update the Crabbox Windows bootstrap image and reprovision the worker");
           installed = await new Promise((resolve) => {
-            const child = spawn(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), "install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, windowsHide: true, stdio: ["ignore", log, log], timeout: 600000 });
+            const child = spawn(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), "install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", log, log] });
             let error;
+            const stopInstall = () => {
+              if (!child.pid) return;
+              // Kill the owned npm group, including lifecycle scripts, then join close below.
+              try {
+                if (process.platform === "win32") {
+                  const stopped = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { env: nodeEnv, windowsHide: true, stdio: "ignore", timeout: 10000 });
+                  if (stopped.error) error = stopped.error;
+                } else process.kill(-child.pid, "SIGKILL");
+              } catch (cause) { if (cause.code !== "ESRCH") error = cause; }
+            };
+            const timeout = setTimeout(() => {
+              error = new Error("Cloud worker bootstrap package installation timed out");
+              stopInstall();
+            }, 600000);
+            const cancelInstall = () => downloadAbort.abort(new Error("Cloud worker bootstrap installation cancelled"));
+            process.once("SIGTERM", cancelInstall);
+            process.once("SIGINT", cancelInstall);
             child.once("error", (cause) => { error = cause; });
-            child.once("close", (status, signal) => resolve({ status, signal, error }));
+            child.once("close", (status, signal) => {
+              clearTimeout(timeout);
+              process.removeListener("SIGTERM", cancelInstall);
+              process.removeListener("SIGINT", cancelInstall);
+              downloadAbort.signal.removeEventListener("abort", stopInstall);
+              resolve({ status, signal, error });
+            });
+            downloadAbort.signal.addEventListener("abort", stopInstall, { once: true });
+            if (downloadAbort.signal.aborted) stopInstall();
           });
         } finally { fs.closeSync(log); }
         downloadAbort.signal.throwIfAborted();

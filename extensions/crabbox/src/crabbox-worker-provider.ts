@@ -244,10 +244,9 @@ export function createCrabboxWorkerProvider(
     const setupDeadline =
       deadline +
       countCrabboxProvisionSetupPhases(parsed) * CRABBOX_SETUP_TIMEOUT_MS +
-      nodeBootstrapTimeoutMs +
+      2 * nodeBootstrapTimeoutMs +
       (project
         ? CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
-          nodeBootstrapTimeoutMs +
           resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider)
         : 0);
     const context = { binary, provider: parsed.provider };
@@ -449,11 +448,41 @@ export function createCrabboxWorkerProvider(
         );
       }
       let enrollment: CrabboxWorkerNodeEnrollment;
+      let runtimeSetupFailed = false;
       try {
+        if (!project && options?.prepareNodeRuntime) {
+          const runtime = await options.prepareNodeRuntime();
+          assertCurrent();
+          const setup = createCrabboxNodeRuntimeSetup({
+            nodeBootstrap: runtime.nodeBootstrap,
+            workerBundle: runtime.workerBundle,
+            leaseId,
+            target: parsed.target,
+          });
+          await runProvisionSetup({
+            ...inspectedParams,
+            phase: "node runtime preparation",
+            setup: setup.command,
+            forwardedEnv: setup.forwardedEnv,
+            timeoutMs: resolveCrabboxNodeEnrollmentTimeoutMs(runtime.bootstrapTimeoutMs),
+            signal:
+              preparationSignal && runtime.signal
+                ? AbortSignal.any([preparationSignal, runtime.signal])
+                : (preparationSignal ?? runtime.signal),
+          }).catch((error: unknown) => {
+            // Setup owns failure cleanup; the enrollment catch must not stop the lease twice.
+            runtimeSetupFailed = true;
+            throw error;
+          });
+          assertCurrent();
+        }
         enrollment = await beginNodeEnrollment();
         signal?.throwIfAborted();
       } catch (error) {
         signal?.throwIfAborted();
+        if (runtimeSetupFailed) {
+          throw error;
+        }
         if (error instanceof Error && error.name === "AbortError") {
           throw error;
         }
@@ -609,7 +638,6 @@ export function createCrabboxWorkerProvider(
         (parsed.warmImage === false
           ? 0
           : CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
-            resolveCrabboxNodeEnrollmentTimeoutMs(options?.nodeBootstrapTimeoutMs) +
             resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider))
       );
     },

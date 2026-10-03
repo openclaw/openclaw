@@ -18,6 +18,7 @@ import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
@@ -50,6 +51,7 @@ const PREVIOUS_PATTERN = /^[a-f0-9]{64}\.previous-/u;
 const BUNDLE_DELETE_BATCH = 16;
 const WORKER_PREWARM_TIMEOUT_MS = 10 * 60_000;
 const execFileAsync = promisify(execFile);
+const log = createSubsystemLogger("node/worker-bundle");
 
 async function responseBody(response: IncomingMessage, maxBytes = 64 * 1024): Promise<string> {
   const chunks: Buffer[] = [];
@@ -133,6 +135,7 @@ async function acquireBundle(params: {
       } finally {
         await opened.handle.close();
       }
+      log.info(`Worker bundle already prepared locally: ${params.input.archive.sha256}`);
       return;
     }
   }

@@ -739,9 +739,8 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
         await Promise.all([postinstall.requested, worker.requested]);
         if (failure === "worker download") {
           workerResponse.resolve();
-          await worker.closed;
-          expect(fs.existsSync(finished)).toBe(false);
-          expect(fs.readdirSync(runtimeRoot)).toEqual([expect.stringMatching(/^node-bootstrap-/)]);
+          await postinstall.closed;
+          await preparation;
         } else {
           postinstallResponse.resolve();
           await worker.closed;
@@ -759,7 +758,7 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
             : "package installation failed (exit code 17)",
         ),
       });
-      expect(fs.readFileSync(finished, "utf8")).toBe("complete");
+      expect(fs.existsSync(finished)).toBe(failure === "npm installation");
       expect(fs.readdirSync(runtimeRoot)).toEqual([]);
     },
     30_000,
