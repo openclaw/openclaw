@@ -418,6 +418,7 @@ describe("requester pause authority at the Gateway effect", () => {
     "allowed",
     "sibling replay",
     "sibling replay cache missing",
+    "sibling replay operator only cache missing",
     "sibling replay revoked",
     "final replay",
     "late retirement",
@@ -440,9 +441,11 @@ describe("requester pause authority at the Gateway effect", () => {
       const resumedRunId = `split-resumed-${id}`;
       const client = createOperatorClient({
         profileName: `split-${id}`,
-        scopes: ["operator.admin"],
+        scopes: outcome.includes("operator only") ? ["operator.write"] : ["operator.admin"],
       });
-      client.internal = { controlUiAdmin: true };
+      if (!outcome.includes("operator only")) {
+        client.internal = { controlUiAdmin: true };
+      }
       const operatorProfileId = client.authenticatedUserProfile!.profileId;
       await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey: parent },
@@ -643,7 +646,13 @@ describe("requester pause authority at the Gateway effect", () => {
         await dispatch(siblingRunId, sibling);
         if (outcome.startsWith("sibling replay")) {
           const admittedCount = admitted.length;
-          if (outcome === "sibling replay cache missing") {
+          if (outcome.includes("operator only")) {
+            const beforeReplay = sessionAccessor.loadTranscriptEventsSync(transcript);
+            await dispatch(siblingRunId, sibling);
+            expect(admitted).toHaveLength(admittedCount);
+            expect(sessionAccessor.loadTranscriptEventsSync(transcript)).toEqual(beforeReplay);
+          }
+          if (outcome.endsWith("cache missing")) {
             for (const key of context.dedupe.keys()) {
               if (key.includes(siblingRunId)) {
                 context.dedupe.delete(key);
@@ -693,7 +702,10 @@ describe("requester pause authority at the Gateway effect", () => {
         const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
         const execution = vi.spyOn(executionModule, "startAgentRunExecution");
         const resumed = dispatch(resumedRunId, waiting, () => outcome !== "retired delivery claim");
-        const expected = { profileId: operatorProfileId, cronCurrent: true };
+        const expected = {
+          profileId: operatorProfileId,
+          cronCurrent: outcome.includes("operator only") ? undefined : true,
+        };
         if (
           !["operator revoked", "sibling replay revoked", "retired delivery claim"].includes(
             outcome,

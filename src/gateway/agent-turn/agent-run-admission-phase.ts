@@ -25,7 +25,10 @@ import type { FollowupCompletionOwner } from "../../agents/subagents/completion/
 import { getLatestLiveSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
-import { captureRequesterCronAuthorityAdmissionAssertion } from "../../agents/subagents/requester-cron-authority.js";
+import {
+  acceptRequesterCompletionAuthority,
+  captureRequesterCronAuthorityAdmissionAssertion,
+} from "../../agents/subagents/requester-cron-authority.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -623,6 +626,15 @@ export async function prepareAgentRunDispatch(
         return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, failure));
       }
     }
+    const releaseRequesterAuthority = acceptRequesterCompletionAuthority(
+      {
+        runId: params.runId,
+        sessionKey: params.resolvedSessionKey,
+        sessionId: params.getAdmittedSessionId(),
+        inputProvenance: params.inputProvenance,
+      },
+      activeRunAbort.controller.signal,
+    );
     followupCompletion?.markAccepted(params.runId);
     params.markAgentRunAccepted(true);
     adoptedParentResume = undefined;
@@ -671,6 +683,7 @@ export async function prepareAgentRunDispatch(
       ...(cronCreatorAuthority ? { cronCreatorAuthority } : {}),
       releaseCallerAuthority: () => {
         try {
+          releaseRequesterAuthority?.();
           cronCreatorAuthority?.release?.();
         } finally {
           releaseOperatorAuthority();

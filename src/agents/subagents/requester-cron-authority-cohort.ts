@@ -293,3 +293,109 @@ export function settleRequesterAuthorityWave(
     }
   }
 }
+
+/** A non-privileged accepted turn has the same lifetime and receipts as a Cron turn. */
+export function acceptRequesterAuthorityWave(
+  dispatch: RequesterAuthorityDispatch<
+    RequesterAuthorityCohort &
+      ScopedTurnHolder & {
+        kind: "yield";
+        operatorAuthority?: object;
+        requesterSessionKey: string;
+        requesterSessionId: string;
+        admittedWaves?: Map<string, RequesterAuthorityWaveReceipt>;
+      }
+  >,
+  params: RequesterAdmissionTarget,
+  signal: AbortSignal,
+  bindings: WeakMap<object, unknown>,
+  retire: () => void,
+): (() => void) | undefined {
+  if (
+    dispatch.replayOnly ||
+    !matchesRequesterAuthorityAdmissionTarget(dispatch, params) ||
+    !dispatch.isCurrent()
+  ) {
+    throw new Error("Requester authority is no longer current");
+  }
+  signal.throwIfAborted();
+  dispatch.consumed = true;
+  const scoped = dispatch.pause ?? dispatch.wave;
+  if (!scoped) {
+    return undefined;
+  }
+  // This signal is lifecycle-only: it conveys no Cron management entitlement.
+  const lifetime = new AbortController();
+  const release = () => lifetime.abort();
+  signal.addEventListener("abort", release, { once: true });
+  scoped.scope = {
+    get active() {
+      return !lifetime.signal.aborted;
+    },
+    signal: lifetime.signal,
+  };
+  holdRequesterAuthorityTurn(dispatch.authority, lifetime.signal, retire);
+  if (dispatch.wave) {
+    recordRequesterAuthorityWave(
+      dispatch.authority,
+      dispatch.wave.batch,
+      params.runId,
+      bindings,
+      retire,
+    );
+  }
+  return () => {
+    signal.removeEventListener("abort", release);
+    release();
+  };
+}
+
+/** Every accepted wave records the same custody transfer, regardless of tool rights. */
+export function recordRequesterAuthorityWave(
+  authority: RequesterAuthorityCohort & {
+    operatorAuthority?: object;
+    admittedWaves?: Map<string, RequesterAuthorityWaveReceipt>;
+  },
+  batch: readonly SubagentRunRecord[],
+  runId: string,
+  bindings: WeakMap<object, unknown>,
+  retire: () => void,
+): void {
+  if (authority.operatorAuthority) {
+    (authority.admittedWaves ??= new Map()).set(runId, { batch });
+  }
+  if (!detachRequesterAuthorityWave(authority, batch, bindings)) {
+    // The final wave retires admission custody, not already-admitted turns.
+    retire();
+  }
+}
+
+/** Capture the admission guard before storage leaves the dispatch async context. */
+export function captureRequesterAuthorityAdmissionAssertion(
+  dispatch: Parameters<typeof matchesRequesterAuthorityAdmissionTarget>[0] & {
+    replayOnly?: boolean;
+    consumed: boolean;
+    isCurrent: () => boolean;
+  },
+  params: RequesterAdmissionTarget,
+): () => void {
+  if (!matchesRequesterAuthorityAdmissionTarget(dispatch, params)) {
+    throw new Error("Requester authority does not own this continuation");
+  }
+  return () => {
+    if (dispatch.replayOnly || (!dispatch.consumed && !dispatch.isCurrent())) {
+      throw new Error("Requester authority is no longer current");
+    }
+  };
+}
+
+type ScopedDispatch = { scope?: { active: boolean; signal: AbortSignal }; released?: true };
+export type RequesterAuthorityDispatch<Authority> = {
+  authority: Authority;
+  runId: string;
+  isCurrent: () => boolean;
+  consumed: boolean;
+  replayOnly?: boolean;
+  pause?: ScopedDispatch & { entry: SubagentRunRecord };
+  wave?: ScopedDispatch & { batch: readonly SubagentRunRecord[] };
+};

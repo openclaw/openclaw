@@ -33,10 +33,14 @@ import {
   isSameSubagentRunOwner,
 } from "./registry/subagent-run-generation.js";
 import {
+  acceptRequesterAuthorityWave,
+  captureRequesterAuthorityAdmissionAssertion,
+  recordRequesterAuthorityWave,
   detachRequesterAuthorityWave,
   holdRequesterAuthorityTurn,
   settleRequesterAuthorityWave,
   type RequesterAuthorityWaveReceipt,
+  type RequesterAuthorityDispatch,
   matchesRequesterAuthorityAdmissionTarget,
   type RequesterAdmissionTarget,
   isRequesterAuthorityCohortCurrent,
@@ -461,17 +465,7 @@ export function revokeRequesterCronAuthorityBatch(
 }
 
 // A pause or detached wave's turn gets its own scope; the cohort keeps its later waves.
-type ScopedDispatch = { scope?: CronCreatorAuthorityCapability; released?: true };
-type RequesterCronAuthorityDispatch = {
-  authority: RequesterCronAuthority;
-  runId: string;
-  isCurrent: () => boolean;
-  consumed: boolean;
-  replayOnly?: boolean;
-  pause?: ScopedDispatch & { entry: SubagentRunRecord };
-  wave?: ScopedDispatch & { batch: readonly SubagentRunRecord[] };
-};
-const activeDispatch = new AsyncLocalStorage<RequesterCronAuthorityDispatch>();
+const activeDispatch = new AsyncLocalStorage<RequesterAuthorityDispatch<RequesterCronAuthority>>();
 
 export async function withRequesterCronAuthority<T>(
   params: {
@@ -489,7 +483,7 @@ export async function withRequesterCronAuthority<T>(
   const child = params.batch.length === 1 ? params.batch[0] : undefined;
   const replayOnly =
     authority?.kind === "yield" && isRequesterAuthorityWaveReplayCurrent(authority, params);
-  const pause: RequesterCronAuthorityDispatch["pause"] =
+  const pause: RequesterAuthorityDispatch<RequesterCronAuthority>["pause"] =
     child?.pauseReason === "sessions_yield" && child.requesterSettleWake?.pauseNotice
       ? { entry: child }
       : undefined;
@@ -511,7 +505,9 @@ export async function withRequesterCronAuthority<T>(
     }
     return await run();
   }
-  const wave: RequesterCronAuthorityDispatch["wave"] = !pause ? { batch: params.batch } : undefined;
+  const wave: RequesterAuthorityDispatch<RequesterCronAuthority>["wave"] = !pause
+    ? { batch: params.batch }
+    : undefined;
   const scoped = pause ?? wave;
   const current = () => {
     if (replayOnly) {
@@ -542,7 +538,7 @@ export async function withRequesterCronAuthority<T>(
     }
     return await run();
   }
-  const dispatch: RequesterCronAuthorityDispatch = {
+  const dispatch: RequesterAuthorityDispatch<RequesterCronAuthority> = {
     authority,
     runId: params.runId,
     isCurrent: current,
@@ -639,28 +635,34 @@ export function captureRequesterCronAuthorityAdmissionAssertion(params: Requeste
   if (!dispatch || dispatch.consumed || dispatch.authority.kind !== "yield") {
     return undefined;
   }
-  if (!matchesRequesterAuthorityAdmissionTarget(dispatch, params)) {
-    throw new Error("Requester authority does not own this continuation");
-  }
-  // Storage can invoke the pre-commit guard outside this dispatch's async context.
-  return () => {
-    if (dispatch.replayOnly || (!dispatch.consumed && !dispatch.isCurrent())) {
-      throw new Error("Requester authority is no longer current");
-    }
-  };
+  return captureRequesterAuthorityAdmissionAssertion(dispatch, params);
 }
 
-export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissionTarget):
-  | {
-      runId: string;
-      callerOrigin: { kind: "unknown" };
-      managementEntitlement: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
-      requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
-      isCurrent: () => boolean;
-      bindRunScope: (scope: CronCreatorAuthorityCapability) => void;
-      release?: () => void;
-    }
-  | undefined {
+/** Acceptance owns lifecycle tracking independently of privileged Cron admission. */
+export function acceptRequesterCompletionAuthority(
+  params: RequesterAdmissionTarget,
+  signal: AbortSignal,
+) {
+  const dispatch = activeDispatch.getStore();
+  if (
+    !dispatch ||
+    dispatch.authority.kind !== "yield" ||
+    dispatch.authority.managementEntitlement
+  ) {
+    return undefined;
+  }
+  const release = acceptRequesterAuthorityWave(
+    { ...dispatch, authority: dispatch.authority },
+    params,
+    signal,
+    state.byEntry,
+    () => retire(dispatch.authority),
+  );
+  dispatch.consumed = true;
+  return release;
+}
+
+export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissionTarget) {
   const dispatch = activeDispatch.getStore();
   if (
     !dispatch ||
@@ -672,10 +674,10 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
   ) {
     return undefined;
   }
-  dispatch.consumed = true;
   if (!dispatch.authority.managementEntitlement) {
     return undefined;
   }
+  dispatch.consumed = true;
   // A pause or detached wave owns only its turn; the cohort stays admissible for later waves.
   const scoped = dispatch.pause ?? dispatch.wave;
   if (
@@ -688,7 +690,7 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
   }
   return {
     runId: params.runId,
-    callerOrigin: { kind: "unknown" },
+    callerOrigin: { kind: "unknown" as const },
     managementEntitlement: dispatch.authority.managementEntitlement,
     requesterOwner: dispatch.authority.requesterOwner,
     isCurrent: dispatch.isCurrent,
@@ -701,7 +703,7 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
       : dispatch.authority.kind === "followup"
         ? { release: () => discard(dispatch.authority) }
         : {}),
-    bindRunScope: (scope) => {
+    bindRunScope: (scope: CronCreatorAuthorityCapability) => {
       if (
         dispatch.authority.runScopeBound ||
         scoped?.scope ||
@@ -727,13 +729,13 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
         return;
       }
       if (dispatch.wave && authority.kind === "yield") {
-        if (authority.operatorAuthority) {
-          (authority.admittedWaves ??= new Map()).set(scope.runId, { batch: dispatch.wave.batch });
-        }
-        if (!detachRequesterAuthorityWave(authority, dispatch.wave.batch, state.byEntry)) {
-          // The final wave retires admission custody, not already-admitted turns.
-          retire(authority);
-        }
+        recordRequesterAuthorityWave(
+          authority,
+          dispatch.wave.batch,
+          scope.runId,
+          state.byEntry,
+          () => retire(authority),
+        );
         return;
       }
       // Queue acceptance can retire the child outbox before the parent finishes.
