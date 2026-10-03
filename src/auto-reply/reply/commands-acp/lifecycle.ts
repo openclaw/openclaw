@@ -334,17 +334,17 @@ export async function handleAcpCancelAction(
     restTokens,
     run: async ({ acpManager, sessionKey, agentId }) =>
       await withAcpCommandErrorBoundary({
-        run: async () =>
+        run: async () => {
           await acpManager.cancelSession({
             assertActive: params.command.assertOwnerCurrent,
             cfg: params.cfg,
             sessionKey,
             agentId,
             reason: "manual-cancel",
-          }),
-        fallbackCode: "ACP_TURN_FAILED",
+          });
+          return commandReply(`✅ Cancel requested for ACP session ${sessionKey}.`);
+        },
         fallbackMessage: "ACP cancel failed before completion.",
-        onSuccess: () => commandReply(`✅ Cancel requested for ACP session ${sessionKey}.`),
       }),
   });
 }
@@ -444,8 +444,8 @@ export async function handleAcpSteerAction(
   }
 
   return await withAcpCommandErrorBoundary({
-    run: async () =>
-      await runAcpSteer({
+    run: async () => {
+      const steerOutput = await runAcpSteer({
         assertOwnerCurrent: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
@@ -453,15 +453,13 @@ export async function handleAcpSteerAction(
         requestId: `${resolveCommandRequestId(params)}:steer`,
         channelAdmissionEvidence: readChannelContextAdmissionEvidence(params.rootCtx ?? params.ctx),
         gatewayLocalUserIngress: getGatewayLocalUserIngress(params.rootCtx ?? params.ctx),
-      }),
-    fallbackCode: "ACP_TURN_FAILED",
-    fallbackMessage: "ACP steer failed before completion.",
-    onSuccess: (steerOutput) => {
+      });
       if (!steerOutput) {
         return commandReply(`✅ ACP steer sent to ${target.sessionKey}.`);
       }
       return commandReply(`✅ ACP steer sent to ${target.sessionKey}.\n${steerOutput}`);
     },
+    fallbackMessage: "ACP steer failed before completion.",
   });
 }
 

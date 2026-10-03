@@ -20,11 +20,7 @@ import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
-import {
-  type GatewayLockRole,
-  type LockPayload,
-  parseGatewayLockPayload,
-} from "./gateway-lock-payload.js";
+import { type LockPayload, parseGatewayLockPayload } from "./gateway-lock-payload.js";
 import {
   ensureOwnerDirectory,
   removeCreatedProjectionDirectories,
@@ -238,10 +234,7 @@ export function resolveGatewayStateOwnerPath(databasePath: string): string {
   );
 }
 
-function defaultPayload(
-  databasePath: string,
-  role: GatewayLockRole = "sqlite-maintenance",
-): LockPayload {
+function defaultPayload(databasePath: string): LockPayload {
   const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
   const startTime = getFileLockProcessStartTime(process.pid);
   return {
@@ -250,7 +243,7 @@ function defaultPayload(
     createdAt: new Date().toISOString(),
     stateDir,
     configPath: path.join(stateDir, "openclaw.json"),
-    role,
+    role: "sqlite-maintenance",
     ...(startTime === null ? {} : { startTime }),
   };
 }

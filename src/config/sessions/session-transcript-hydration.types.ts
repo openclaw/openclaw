@@ -1,16 +1,20 @@
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type {
-  SessionTranscriptBoundedActiveContext,
   SessionTranscriptContextVersion,
   SessionTranscriptReadScope,
   SessionTranscriptWriteScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
-import type { loadTranscriptReadSnapshotSync } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type {
+  PreparedSessionTranscriptHydration,
+  SessionTranscriptReadSnapshot,
+} from "./session-history-read.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+
+export type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
 
 export type SessionTranscriptMaintenanceRead =
   | { operation: "previous"; beforeSeq: number }
@@ -34,14 +38,10 @@ export type SessionTranscriptMaintenanceFacts = {
   events?: TranscriptEvent[];
 };
 
-export type PreparedSessionTranscriptHydration =
-  | { kind: "full"; snapshot: ReturnType<typeof loadTranscriptReadSnapshotSync> }
-  | { kind: "bounded"; snapshot: SessionTranscriptBoundedActiveContext };
-
 export type SessionTranscriptHydrationWorkerResult =
   | {
       kind: "full";
-      version: ReturnType<typeof loadTranscriptReadSnapshotSync>["version"];
+      version: SessionTranscriptReadSnapshot["version"];
       eventCount: number;
     }
   | Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;

@@ -48,7 +48,6 @@ export type {
 export { normalizeOptionalStringValue };
 
 const DOT_DIR = ".clawhub";
-const LEGACY_DOT_DIR = ".clawdhub";
 const CLAWHUB_OWNER_HANDLE_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,38}[a-z0-9])?$/;
 const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const GITHUB_REPO_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
@@ -62,10 +61,6 @@ type StrictOriginReadResult =
   | { kind: "found"; origin: ClawHubSkillOrigin; path: string }
   | { kind: "missing" }
   | { kind: "malformed"; path: string; error: string };
-
-function metadataPaths(rootDir: string, filename: string): string[] {
-  return [path.join(rootDir, DOT_DIR, filename), path.join(rootDir, LEGACY_DOT_DIR, filename)];
-}
 
 function normalizeClawHubOwnerHandle(raw: string): string {
   const ownerHandle = raw.trim().toLowerCase();
@@ -239,18 +234,15 @@ function parseClawHubSkillsLockfile(
 export async function readClawHubSkillsLockfile(
   workspaceDir: Parameters<WorkspaceSkillLifecycle["readClawHubSkillsLockfile"]>[0],
 ): Promise<ClawHubSkillsLockfile> {
-  for (const candidate of metadataPaths(workspaceDir, "lock.json")) {
-    try {
-      // Missing metadata is normal before installation. Leave present-file races
-      // and uncertain paths to the strict reader, including its error diagnostics.
-      if ((await statRegularFile(candidate).catch(() => undefined))?.missing) {
-        continue;
-      }
+  const candidate = path.join(workspaceDir, DOT_DIR, "lock.json");
+  try {
+    // Missing metadata is normal before installation. Leave present-file races
+    // and uncertain paths to the strict reader, including its error diagnostics.
+    if (!(await statRegularFile(candidate).catch(() => undefined))?.missing) {
       return parseClawHubSkillsLockfile(await readJson<Partial<ClawHubSkillsLockfile>>(candidate));
-    } catch (err) {
-      if (err instanceof JsonFileReadError && hasErrnoCode(err.cause, "ENOENT")) {
-        continue;
-      }
+    }
+  } catch (err) {
+    if (!(err instanceof JsonFileReadError && hasErrnoCode(err.cause, "ENOENT"))) {
       throw new Error(
         `Malformed workspace ClawHub lockfile at ${candidate}: ${formatErrorMessage(err)}. Repair or restore it before retrying.`,
         { cause: err },
@@ -285,20 +277,18 @@ function readJsonIfExistsSync(
 export function readClawHubSkillsLockfileStatusSync(
   workspaceDir: string,
 ): ClawHubSkillsLockfileStatusRead {
-  for (const candidate of metadataPaths(workspaceDir, "lock.json")) {
-    try {
-      const read = readJsonIfExistsSync(candidate);
-      if (!read.exists) {
-        continue;
-      }
+  const candidate = path.join(workspaceDir, DOT_DIR, "lock.json");
+  try {
+    const read = readJsonIfExistsSync(candidate);
+    if (read.exists) {
       return {
         kind: "found",
         path: candidate,
         lock: parseClawHubSkillsLockfile(read.value as Partial<ClawHubSkillsLockfile>),
       };
-    } catch (err) {
-      return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
     }
+  } catch (err) {
+    return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
   }
   return { kind: "missing" };
 }
@@ -318,31 +308,24 @@ function originResult(
 }
 
 export async function readClawHubSkillOrigin(skillDir: string): Promise<ClawHubSkillOrigin | null> {
-  for (const candidate of metadataPaths(skillDir, "origin.json")) {
-    try {
-      const origin = normalizeClawHubSkillOrigin(
-        await tryReadJson<Partial<ClawHubSkillOrigin>>(candidate),
-      );
-      if (origin) {
-        return origin;
-      }
-    } catch {
-      // ignore
-    }
+  try {
+    return normalizeClawHubSkillOrigin(
+      await tryReadJson<Partial<ClawHubSkillOrigin>>(path.join(skillDir, DOT_DIR, "origin.json")),
+    );
+  } catch {
+    return null;
   }
-  return null;
 }
 
 export function readClawHubSkillOriginStatusSync(skillDir: string): StrictOriginReadResult {
-  for (const candidate of metadataPaths(skillDir, "origin.json")) {
-    try {
-      const read = readJsonIfExistsSync(candidate);
-      if (read.exists) {
-        return originResult(read.value as Partial<ClawHubSkillOrigin>, candidate);
-      }
-    } catch (err) {
-      return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
+  const candidate = path.join(skillDir, DOT_DIR, "origin.json");
+  try {
+    const read = readJsonIfExistsSync(candidate);
+    if (read.exists) {
+      return originResult(read.value as Partial<ClawHubSkillOrigin>, candidate);
     }
+  } catch (err) {
+    return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
   }
   return { kind: "missing" };
 }
@@ -350,15 +333,14 @@ export function readClawHubSkillOriginStatusSync(skillDir: string): StrictOrigin
 export async function readClawHubSkillOriginStrict(
   skillDir: string,
 ): Promise<StrictOriginReadResult> {
-  for (const candidate of metadataPaths(skillDir, "origin.json")) {
-    try {
-      const raw = await readJsonIfExists<Partial<ClawHubSkillOrigin>>(candidate);
-      if (raw) {
-        return originResult(raw, candidate);
-      }
-    } catch (err) {
-      return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
+  const candidate = path.join(skillDir, DOT_DIR, "origin.json");
+  try {
+    const raw = await readJsonIfExists<Partial<ClawHubSkillOrigin>>(candidate);
+    if (raw) {
+      return originResult(raw, candidate);
     }
+  } catch (err) {
+    return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
   }
   return { kind: "missing" };
 }

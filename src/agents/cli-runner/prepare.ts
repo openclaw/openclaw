@@ -133,10 +133,7 @@ import {
 import { prepareCliBundleMcpConfig, resolveCliNativeWebSearchEnabled } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { runCliCleanup } from "./cleanup.js";
-import {
-  resolveBundledCliBackendAuthPolicy,
-  type BundledCliBackendAuthPolicy,
-} from "./cli-backend-auth-policy.js";
+import { resolveBundledCliBackendAuthPolicy } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
 import { resolveCliSessionId } from "./cli-run-recovery.js";
 import {
@@ -242,22 +239,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
       setCliRunnerPrepareTestDeps(overrides as Partial<typeof prepareDeps>);
     },
   };
-}
-
-function shouldResolveAuthProfileForExecution(params: {
-  policy?: BundledCliBackendAuthPolicy;
-  authCredential?: AuthProfileCredential;
-}): boolean {
-  if (!params.policy) {
-    return false;
-  }
-  if (!params.authCredential) {
-    return params.policy.strictSelectedProfile;
-  }
-  if (params.authCredential.type === "oauth") {
-    return params.policy.oauthRefreshOwner === "core";
-  }
-  return params.authCredential.type === "api_key" || params.authCredential.type === "token";
 }
 
 export async function prepareCliRunContext(
@@ -576,10 +557,10 @@ async function prepareCliRunContextWithinReadFence(
     authCredential = undefined;
   } else if (
     effectiveAuthProfileId &&
-    shouldResolveAuthProfileForExecution({
-      policy: backendAuthPolicy,
-      authCredential,
-    })
+    backendAuthPolicy &&
+    (authCredential
+      ? authCredential.type !== "oauth" || backendAuthPolicy.oauthRefreshOwner === "core"
+      : backendAuthPolicy.strictSelectedProfile)
   ) {
     const authProfileId = effectiveAuthProfileId;
     const profileResolutionError = (provider: string, resolvedProfileId?: string) => {
@@ -801,13 +782,11 @@ async function prepareCliRunContextWithinReadFence(
   // resolveAnthropicFixedContextWindow deliberately ignores catalog scalars,
   // so the selected (or default) option must apply after it or a 200k session
   // would auto-compact against a 1M budget.
-  const modelCatalog = params.config
-    ? overlayConfiguredModelCatalog({
-        catalog: prepareDeps.loadManifestModelCatalog({ config: params.config, workspaceDir }),
-        config: params.config,
-        workspaceDir,
-      })
-    : [];
+  const modelCatalog = overlayConfiguredModelCatalog({
+    catalog: prepareDeps.loadManifestModelCatalog({ config: runConfig, workspaceDir }),
+    config: runConfig,
+    workspaceDir,
+  });
   const { selectableContextEntry, providerThinkingLevel } = resolveCliCatalogCapabilities({
     catalog: modelCatalog,
     provider: params.provider,
@@ -955,7 +934,6 @@ async function prepareCliRunContextWithinReadFence(
     nodePlacement: nodeClaudePlacement,
     rooted: Boolean(rootedExecution),
     skipPreparation: skipsTurnPreparation,
-    sideQuestion: isSideQuestion,
   });
   const shouldMaterializeRuntimePolicy =
     runtimeToolsAllowPolicy !== undefined &&

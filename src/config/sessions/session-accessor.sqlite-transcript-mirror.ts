@@ -4,6 +4,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { chunkItems } from "../../utils/chunk-items.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   loadTranscriptEventsFromDatabase,
@@ -98,12 +99,7 @@ function readTranscriptMirrorFactsInSnapshot(
     messagesByIdempotencyKey: new Map(),
   };
   let anchorsReady: boolean | undefined;
-  for (
-    let offset = 0;
-    offset < idempotencyKeys.length;
-    offset += TRANSCRIPT_MIRROR_KEY_QUERY_BATCH_SIZE
-  ) {
-    const batch = idempotencyKeys.slice(offset, offset + TRANSCRIPT_MIRROR_KEY_QUERY_BATCH_SIZE);
+  for (const batch of chunkItems(idempotencyKeys, TRANSCRIPT_MIRROR_KEY_QUERY_BATCH_SIZE)) {
     const rows = executeSqliteQuerySync(
       database.db,
       db

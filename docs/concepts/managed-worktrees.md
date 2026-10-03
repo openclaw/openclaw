@@ -340,7 +340,7 @@ A branch at a shallow history boundary can still be snapshotted and restored. If
 ## Retire an already removed snapshot early
 
 Use `openclaw worktrees retire-snapshot` only when the removed snapshot is redundant
-with a retained local branch or remote-tracking commit. This local CLI operation
+with a retained local branch or remote-tracking commit. This CLI operation
 requires the exact worktree ID, snapshot ref and commit, recorded `removedAt`
 milliseconds, and retained source ref and commit. Read those identities from the
 removed record and repository before invoking it:
@@ -367,8 +367,8 @@ A successful JSON result is `{ "retired": true, "id": "<id>" }`; the removed
 registry entry is then absent and cannot be restored. A refusal is not cleanup
 success. If an interruption occurs after the ref is retired, inspect the remaining
 record and projection custody before further cleanup; this command does not infer
-safe retirement from a missing ref. This operation is CLI-only, not a Gateway or
-Control UI action.
+safe retirement from a missing ref. The CLI uses `worktrees.retireSnapshot` on a
+live same-root Gateway; the Control UI does not expose this action.
 
 ## Exact-state detached retirement
 
@@ -476,20 +476,26 @@ reset the index, reattach HEAD, or prune the registration.
 
 ## CLI
 
-`worktrees create` uses the authenticated Gateway that owns the selected local
-state directory when one is running. It requires `operator.admin`, preserves
-source profiles and repository setup, and never redirects a local repository to
-a configured remote Gateway. The command binds the request to that owner's
-incarnation and the captured repository directory. A changed owner, missing
-capability, authentication failure, or uncertain reply never triggers local
-creation. Upgrade an older Gateway or stop it through its service owner and retry
-offline. After an uncertain reply, inspect `worktrees list --json` and the source
-repository before retrying.
+Worktree CLI mutations use the authenticated Gateway that owns the selected local
+state directory when one is running. This includes creation, ordinary, lossless
+and exact-state removal, restoration, garbage collection, interrupted-removal
+recovery, and snapshot retirement. The route requires `operator.admin`, preserves
+source profiles and repository setup, and never redirects local paths to a
+configured remote Gateway. Creation binds the captured repository directory;
+every mutation binds the request to the current owner's incarnation.
 
-Offline creation holds exclusive state-directory lifecycle ownership through Git
+Each operation requires its own supported parameter and result contract. A Gateway
+that supports routed creation can still lack routed removal or recovery. A changed
+owner, missing capability, authentication failure, or uncertain reply never triggers
+local mutation. Upgrade an older Gateway or stop it through its service owner and
+retry offline. After an uncertain reply, inspect `worktrees list --json`, the source
+repository, and any reported recovery paths before retrying. Exact-state JSON files
+are validated by the CLI and sent as request data, not as client-local filenames.
+
+Offline mutation holds exclusive state-directory lifecycle ownership through Git
 work, database settlement, and cleanup, including interruption. A Gateway starting
-during that operation waits or reports ownership contention. Other worktree
-commands and older CLI/SDK versions retain their existing behavior; this does not
+during that operation waits or reports ownership contention. SDK workspace and
+worktree capabilities and older CLI versions retain their existing behavior; this does not
 exclude arbitrary direct writers or a different state root sharing external files.
 The updater and Doctor retain their existing owners and do not require this routing
 capability to upgrade an older installation. No schema or configuration migration
@@ -503,22 +509,24 @@ openclaw worktrees restore <id> [--recover-exact-state <file>] [--json]
 openclaw worktrees gc [--json]
 ```
 
-The Control UI **Worktrees** page under Settings provides the same actions plus creation with a base-branch picker, shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
+The Control UI **Worktrees** page under Settings provides creation with a base-branch picker, ordinary removal and restoration, and garbage collection. It shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
 
 Leave **Base branch** empty to fetch and use the remote default branch. Branch suggestions do not select a base; choosing or entering a branch or commit uses that exact ref without fetching. Clearing the field restores automatic selection. Fetching updates remote-tracking refs, not the source checkout's local `main`; the local-`HEAD` fallback described above still applies when the remote default is unavailable.
 
-`--if-lossless --json` returns `removed` plus the recorded `cleanup` outcome. A retained checkout returns `removed: false`; it is not a successful deletion. The explicit `--if-lossless` option is CLI-only; Gateway removal retains its archival behavior and result format.
+`--if-lossless --json` returns `removed` plus the recorded `cleanup` outcome. A retained checkout returns `removed: false`; it is not a successful deletion. The qualified Gateway removal contract preserves this outcome. Qualified garbage collection returns its complete summary, including partial results and recovery locations; the CLI prints those details and exits nonzero for partial cleanup. Existing remote clients retain their previous response contracts.
 
 ## Gateway methods
 
-| Method               | Purpose                                                                 |
-| -------------------- | ----------------------------------------------------------------------- |
-| `worktrees.list`     | List active and restorable worktree records.                            |
-| `worktrees.branches` | List local and remote branches of a repository for base-ref pickers.    |
-| `worktrees.create`   | Create or reuse a named managed worktree.                               |
-| `worktrees.remove`   | Snapshot and remove a worktree. Forced removals report `snapshotError`. |
-| `worktrees.restore`  | Restore a removed worktree from its snapshot.                           |
-| `worktrees.gc`       | Run idle, orphan, and retention cleanup now.                            |
+| Method                     | Purpose                                                                 |
+| -------------------------- | ----------------------------------------------------------------------- |
+| `worktrees.list`           | List active and restorable worktree records.                            |
+| `worktrees.branches`       | List local and remote branches of a repository for base-ref pickers.    |
+| `worktrees.create`         | Create or reuse a named managed worktree.                               |
+| `worktrees.remove`         | Snapshot and remove a worktree. Forced removals report `snapshotError`. |
+| `worktrees.restore`        | Restore a removed worktree from its snapshot.                           |
+| `worktrees.gc`             | Run idle, orphan, and retention cleanup now.                            |
+| `worktrees.recoverRemoval` | Complete an interrupted removal from the exact pending snapshot.        |
+| `worktrees.retireSnapshot` | Retire one redundant snapshot with exact retained-source guards.        |
 
 `worktrees.list` requires `operator.read`. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing, restoring, and garbage-collecting worktrees remain admin-only. Branch listing reads existing refs only and never fetches, and remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
 

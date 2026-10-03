@@ -19,6 +19,7 @@ import {
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 import {
+  lastUserMessageIndex,
   resolveAssistantTextTail,
   streamCausalInsertIndex,
   streamCausalInterval,
@@ -70,20 +71,6 @@ type MaterializeVisibleStreamOptions = {
   isHiddenAssistantMessage: AssistantMessageVisibility;
   isHiddenStreamText: StreamVisibility;
 };
-
-function lastUserMessageIndex(messages: unknown[]): number {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
-    if (role === "user") {
-      return index;
-    }
-  }
-  return -1;
-}
 
 export function maybeResetToolStream(
   state: StreamReconciliationState,
@@ -351,10 +338,7 @@ function hasVisibleAssistantMessageAfterUser(
 ): boolean {
   const startIndex = lastUserMessageIndex(messages) + 1;
   return messages.slice(startIndex).some((message) => {
-    if (!message || typeof message !== "object") {
-      return false;
-    }
-    const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
+    const role = normalizeLowercaseStringOrEmpty(asNullableRecord(message)?.role);
     if (role !== "assistant" || isHiddenAssistantMessage(message)) {
       return false;
     }

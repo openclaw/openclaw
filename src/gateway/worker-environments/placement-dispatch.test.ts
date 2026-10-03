@@ -450,7 +450,7 @@ describe("worker placement dispatch", () => {
     const harness = createTestHarness({
       reconcileCommitsManifest: false,
       reconcileCommitsManifestOnApply: true,
-      verifyFailureCall: 3,
+      verifyFailurePhase: "after-apply",
     });
     await harness.service.dispatch(REQUEST);
 

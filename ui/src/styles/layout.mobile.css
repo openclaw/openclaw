@@ -451,18 +451,9 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     padding: 8px;
   }
 
-  .log-time {
-    font-size: 12px;
-  }
-
-  .log-level {
-    font-size: 12px;
-  }
-
-  .log-subsystem {
-    font-size: 12px;
-  }
-
+  .log-time,
+  .log-level,
+  .log-subsystem,
   .log-message {
     font-size: 12px;
   }
@@ -588,10 +579,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     max-width: 200px;
   }
 
-  .session-details-panel {
-    padding: 12px;
-  }
-
+  .session-details-panel,
   .session-details-panel__hero,
   .session-details-section {
     padding: 12px;

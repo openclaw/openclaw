@@ -64,6 +64,19 @@ The full native chat window is a split view:
 - **Find in Conversation**: press Cmd-F to search user and assistant text in the loaded conversation. Return or Cmd-G moves to the next matching message; Shift-Cmd-G moves backward. The selected message is outlined and revealed without incoming replies pulling you away. Escape closes Find. Search does not fetch older history or search hidden reasoning and tool payloads.
 - **Voice controls**: the composer can start or stop the existing macOS Talk Mode without replacing its menu-bar overlay. While Talk Mode is active, the composer shows its listening/thinking/speaking state, live audio activity, and an expandable rolling transcript. Right-click the Talk button to choose **System Default** or a connected microphone; this is the same microphone selection used by Voice Wake and push-to-talk. If a selected microphone disconnects, the active Talk session falls back to the system default and tries the selection again the next time Talk Mode starts. A separate microphone action records a voice note when Talk Mode does not own audio capture.
 
+Cmd-click thread rows to select several, or Shift-click to select a range.
+The batch bar shows the selected count and an **Actions** menu for marking
+threads read or unread, moving them between groups, archiving or restoring,
+and deleting eligible threads. Child threads and rows hidden inside collapsed
+groups are excluded from batch actions. Choose **Done** to leave batch mode.
+Failed operations appear beside the affected rows so you can retry them.
+
+Drag a root thread to **Pages** to pin it, or between pinned threads to change
+its position. Drop it onto a group to move it there and unpin it, onto the
+ungrouped section in category grouping to remove its group, or onto the list background to unpin it while keeping its
+group. Drag group headers to change their order. These actions require write
+access on the connected Gateway; pin ordering requires administrator access.
+
 Right-click a custom-group header and choose **Group defaults…** to choose where
 new sessions in that group start. Use **Agent workspace** or browse folders on
 the connected Gateway. **Separate working copy** is available after the Gateway

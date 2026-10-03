@@ -52,6 +52,7 @@ import {
 import type { ExplicitSkillSelection, SkillSnapshot, SkillResourceSourceReader } from "../types.js";
 import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
 import { resolveSkillResourceCandidates } from "./resource-candidates.js";
+import { SkillResourceDeliveryLimitError } from "./resource-delivery-error.js";
 import { copySkillSnapshotExecutionFileHost } from "./skill-snapshot-provenance.js";
 
 const log = createSubsystemLogger("skills/resources");
@@ -317,9 +318,7 @@ export async function prepareSkillResourceDelivery(
     }
     total += bundle.files.reduce((sum, file) => sum + file.sizeBytes, 0);
     if (total > SKILL_LIBRARY_MAX_BUNDLE_BYTES) {
-      throw new Error(
-        "Selected skill resources exceed the worker delivery limit (8 MiB). Select fewer skills before retrying.",
-      );
+      throw new SkillResourceDeliveryLimitError();
     }
     const sourcePath =
       resolveSkillFileHost(skill) === "workspace" &&

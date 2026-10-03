@@ -72,7 +72,6 @@ export function createTypingController(params: {
       cleanup: () => {},
     };
   }
-  let started = false;
   let active = false;
   let runComplete = false;
   let dispatchIdle = false;
@@ -159,11 +158,10 @@ export function createTypingController(params: {
     if (sealed || runComplete) {
       return;
     }
-    active = true;
-    if (started) {
+    if (active) {
       return;
     }
-    started = true;
+    active = true;
     await scheduleTyping();
   };
 
@@ -184,17 +182,13 @@ export function createTypingController(params: {
     if (!onReplyStart) {
       return;
     }
-    if (!keepalive) {
-      await ensureStart();
-      return;
-    }
-    if (typingLoop.isRunning()) {
+    if (keepalive && typingLoop.isRunning()) {
       return;
     }
     await ensureStart();
     // Cleanup or completion can run while the start callback yields. The loop
     // must not acquire a timer after its owning controller has closed.
-    if (!sealed && !runComplete) {
+    if (keepalive && !sealed && !runComplete) {
       typingLoop.start();
     }
   };

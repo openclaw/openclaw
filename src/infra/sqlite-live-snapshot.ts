@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { getChildLogger } from "../logging/logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { hasErrnoCode } from "./errno.js";
 import { prepareSqliteReadOnlyLocationFromOwnedDatabase } from "./sqlite-readonly-location.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
+import {
+  emitSqliteSnapshotTelemetry,
+  sqliteSnapshotSourceFileSize,
+} from "./sqlite-snapshot-policy.js";
 import { prepareSingleFlightSqliteSnapshot } from "./sqlite-snapshot-single-flight.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
@@ -18,52 +20,6 @@ const liveOwners = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteLiveSnapshotOwners"),
   () => new Map<string, LiveSnapshotOwner>(),
 );
-
-function readSourceSizes(pathname: string): { sourceMainBytes: number; sourceWalBytes: number } {
-  const size = (candidate: string) => {
-    try {
-      const stat = fs.statSync(candidate);
-      return stat.isFile() ? stat.size : 0;
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return 0;
-      }
-      throw error;
-    }
-  };
-  return {
-    sourceMainBytes: size(pathname),
-    sourceWalBytes: size(`${pathname}-wal`),
-  };
-}
-
-function emitLiveSnapshotTelemetry(
-  fields: {
-    attempt: number;
-    copiedBytes: number;
-    durationMs: number;
-    operation: "online-backup";
-    outcome: "error" | "success";
-    owner: string;
-    sourceMainBytes: number;
-    sourceWalBytes: number;
-    waitMs: number;
-  },
-  error?: unknown,
-): void {
-  try {
-    getChildLogger({ subsystem: "infra/sqlite-snapshot" }).debug(
-      {
-        ...fields,
-        errorCode:
-          error && typeof error === "object" && "code" in error ? String(error.code) : undefined,
-      },
-      "SQLite snapshot operation completed.",
-    );
-  } catch {
-    // Snapshot diagnostics must not replace the operation result.
-  }
-}
 
 export function registerLiveSqliteSnapshotOwner(options: {
   assertCurrent: () => void;
@@ -100,7 +56,10 @@ export function prepareSqliteSnapshotFromLiveOwner(
     identity.canonicalPath,
     `live-owner:${owner.owner}`,
     async (flightSignal) => {
-      const sizes = readSourceSizes(identity.canonicalPath);
+      const sizes = {
+        sourceMainBytes: sqliteSnapshotSourceFileSize(identity.canonicalPath),
+        sourceWalBytes: sqliteSnapshotSourceFileSize(`${identity.canonicalPath}-wal`),
+      };
       const started = performance.now();
       try {
         const prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
@@ -108,7 +67,7 @@ export function prepareSqliteSnapshotFromLiveOwner(
           owner.assertCurrent,
           flightSignal,
         );
-        emitLiveSnapshotTelemetry({
+        emitSqliteSnapshotTelemetry({
           ...sizes,
           attempt: 1,
           copiedBytes: fs.statSync(prepared.location).size,
@@ -120,7 +79,7 @@ export function prepareSqliteSnapshotFromLiveOwner(
         });
         return prepared;
       } catch (error) {
-        emitLiveSnapshotTelemetry(
+        emitSqliteSnapshotTelemetry(
           {
             ...sizes,
             attempt: 1,

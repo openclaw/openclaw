@@ -421,7 +421,7 @@ describe("private subagent completion processing receipts", () => {
   it("publishes a failed final when the required receipt write fails, then permits retry", async () => {
     ensureSessionInputCompletionsSchema(database().db);
     database().db.exec(
-      "CREATE TRIGGER fail_private_receipt BEFORE INSERT ON session_input_completions BEGIN SELECT RAISE(ABORT, 'synthetic receipt write unavailable'); END",
+      "CREATE TEMP TRIGGER fail_private_receipt BEFORE INSERT ON session_input_completions BEGIN SELECT RAISE(ABORT, 'synthetic receipt write unavailable'); END",
     );
     agentCommandMock.mockImplementation(processPrivateInput);
     try {
@@ -528,7 +528,7 @@ describe("private subagent completion processing receipts", () => {
       ensureSessionInputCompletionsSchema(database().db);
       const table = phase === "admission" ? "session_pending_inputs" : "session_input_completions";
       database().db.exec(
-        `CREATE TRIGGER fail_private_admission BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT, 'synthetic private transaction failure'); END`,
+        `CREATE TEMP TRIGGER fail_private_admission BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT, 'synthetic private transaction failure'); END`,
       );
       const aborted: Array<{ runId: string; entry: ChatAbortControllerEntry }> = [];
       try {

@@ -2,10 +2,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, matchesGlob } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  createChangedExtensionFallbackShards,
-  createChangedNodeTestShards,
-} from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { rebalanceMeasuredSerialJobs } from "../../scripts/lib/ci-measured-compact-packing.mts";
 import * as nodeTestInventory from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
@@ -4016,20 +4013,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("keeps changed native browser tests in UI jobs and out of extension fallback", () => {
+  it("keeps changed native browser tests in UI jobs", () => {
     const target = "extensions/workboard/browser/catalog.test.ts";
     const shards = createChangedNodeTestShards([target]);
     expect(shards).not.toBeNull();
     expect(shards?.flatMap((shard) => shard.targets ?? shard.includePatterns ?? [])).toContain(
       target,
     );
-    expect(createChangedExtensionFallbackShards([target])).toEqual([]);
   });
 
   it.each(["extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts"])(
-    "prepares the provider runtime in extension fallback for %s",
+    "prepares the provider runtime for selected extension target %s",
     (target) => {
-      const owners = createChangedExtensionFallbackShards([target]).filter((shard) =>
+      const owners = (createChangedNodeTestShards([target]) ?? []).filter((shard) =>
         (shard.groups ?? [shard]).some((group) => group.includePatterns?.includes(target)),
       );
 
@@ -4056,10 +4052,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       changedPaths,
       includeReleaseOnlyPluginShards: false,
     };
-    const shards = [
-      ...createNodeTestShards(options),
-      ...createChangedExtensionFallbackShards(changedPaths),
-    ];
+    const shards = createNodeTestShards(options);
     expect(shards.filter((shard) => shard.shardName === "agentic-plugins")).toEqual([
       {
         checkName: "checks-node-agentic-plugins",

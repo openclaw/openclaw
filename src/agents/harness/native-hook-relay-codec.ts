@@ -1,11 +1,9 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeToolPolicyName } from "../tool-policy.js";
-import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
 import type {
   JsonValue,
   NativeHookRelayInvocation,
   NativeHookRelayInvocationMetadata,
-  NativeHookRelayProviderAdapter,
   NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
 import {
@@ -20,12 +18,6 @@ const CODEX_NATIVE_HOOK_TOOL_NAME_ALIASES: Record<string, string> = {
   write: "apply_patch",
   edit: "apply_patch",
   agent: "spawn_agent",
-};
-
-export const codexNativeHookRelayProviderAdapter: NativeHookRelayProviderAdapter = {
-  readToolInput: readCodexToolInput,
-  readToolResponse: readCodexToolResponse,
-  ...codexNativeHookRelayResponseCodec,
 };
 
 export function normalizeNativeHookInvocation(params: {
@@ -78,7 +70,7 @@ function normalizeCodexHookMetadata(rawPayload: JsonValue): NativeHookRelayInvoc
   return metadata;
 }
 
-function readCodexToolInput(rawPayload: JsonValue): Record<string, JsonValue> {
+export function readCodexToolInput(rawPayload: JsonValue): Record<string, JsonValue> {
   const payload = isJsonObject(rawPayload) ? rawPayload : {};
   const toolInput = payload.tool_input;
   if (isJsonObject(toolInput)) {
@@ -128,7 +120,7 @@ export function nativeHookRelayParamsWereRewritten(
   return stableStringify(candidate) !== originalFingerprint;
 }
 
-function readCodexToolResponse(rawPayload: JsonValue): unknown {
+export function readCodexToolResponse(rawPayload: JsonValue): unknown {
   const payload = isJsonObject(rawPayload) ? rawPayload : {};
   return payload.tool_response;
 }

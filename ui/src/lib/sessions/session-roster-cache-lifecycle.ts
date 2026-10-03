@@ -39,6 +39,16 @@ export function createSessionRosterCacheLifecycle(
   let cachedProfileId = options.bootRecord?.profileId;
   let admittedOwner = options.bootRecord ? bootRecordOwner(options.bootRecord) : undefined;
   const retirement = new AbortController();
+  const clearCachedRoster = () =>
+    host.publish({
+      ...host.readState(),
+      result: null,
+      resultCached: false,
+      agentId: null,
+      groups: [],
+      groupSettings: [],
+      sectionOrder: [],
+    });
   const stopRetirement = subscribeBootRecordChanges(({ scope, replacement, retiredOwner }) => {
     if (
       !scope ||
@@ -66,15 +76,7 @@ export function createSessionRosterCacheLifecycle(
       }
       retirement.abort();
       if (host.readState().resultCached) {
-        host.publish({
-          ...host.readState(),
-          result: null,
-          resultCached: false,
-          agentId: null,
-          groups: [],
-          groupSettings: [],
-          sectionOrder: [],
-        });
+        clearCachedRoster();
       }
     }
   });
@@ -134,15 +136,7 @@ export function createSessionRosterCacheLifecycle(
         cachedScope = currentScope();
         cachedConnectionRevision = gateway.connectionRevision;
         retirement.abort();
-        host.publish({
-          ...host.readState(),
-          result: null,
-          resultCached: false,
-          agentId: null,
-          groups: [],
-          groupSettings: [],
-          sectionOrder: [],
-        });
+        clearCachedRoster();
       }
     },
     persist(state: SessionState) {

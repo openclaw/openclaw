@@ -11,7 +11,7 @@ import { buildConversationRef, normalizeConversationPeerId } from "../routing/co
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { migrateLegacySessionCreator } from "./creator-namespace-migration.js";
 import { ensurePendingInputConsumptionColumn } from "./openclaw-agent-pending-inputs-schema.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 type MigratedConversationEntry = Record<string, unknown>;
 
@@ -354,20 +354,12 @@ export function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set
 /** Installs same-version session projections on first updated-binary open. */
 export function ensureSessionAdditiveColumns(db: DatabaseSync): void {
   ensurePendingInputConsumptionColumn(db);
-  if (hasPendingSessionTranscriptContextEligibilityColumn(db)) {
-    // NULL records an older writer's unclassified projection; the transcript
-    // reconcile owner fills it without parsing payloads during schema open.
-    db.exec("ALTER TABLE session_transcript_active_events ADD COLUMN context_eligible INTEGER;");
-  }
-  const columns = readSqliteTableColumns(db, "session_nodes");
-  if (columns && !columns.has("project_id")) {
-    db.exec("ALTER TABLE session_nodes ADD COLUMN project_id TEXT;");
-  }
-  const conversationColumns = readSqliteTableColumns(db, "session_conversations");
-  if (conversationColumns && !conversationColumns.has("route_context_json")) {
-    db.exec("ALTER TABLE session_conversations ADD COLUMN route_context_json TEXT");
-  }
-  if (conversationColumns) {
+  // NULL records an older writer's unclassified projection; the transcript
+  // reconcile owner fills it without parsing payloads during schema open.
+  ensureColumn(db, "session_transcript_active_events", "context_eligible INTEGER");
+  ensureColumn(db, "session_nodes", "project_id TEXT");
+  ensureColumn(db, "session_conversations", "route_context_json TEXT");
+  if (tableExists(db, "session_conversations")) {
     // Same-version older writers leave the envelope byte-identical. Clear it on their update so
     // stale owner facts cannot survive a downgrade/re-upgrade cycle with an unchanged timestamp.
     db.exec(`
@@ -402,13 +394,9 @@ export function hasPendingSessionTranscriptContextEligibilityColumn(db: Database
 
 /** Adds the v11 exact delivery target before the conversation backfill writes canonical rows. */
 export function migrateConversationDeliveryTargetColumn(db: DatabaseSync): void {
-  const columns = readSqliteTableColumns(db, "conversations");
-  if (!columns || columns.has("delivery_target")) {
-    return;
-  }
   // SQLite requires a default for a NOT NULL additive column. The canonical
   // session projection replaces recoverable rows; backfill drops the rest.
-  db.exec("ALTER TABLE conversations ADD COLUMN delivery_target TEXT NOT NULL DEFAULT '';");
+  ensureColumn(db, "conversations", "delivery_target TEXT NOT NULL DEFAULT ''");
 }
 
 /** Adds the validity projection and settles only rows left pending by older writers. */

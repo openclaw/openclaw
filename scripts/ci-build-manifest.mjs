@@ -493,18 +493,11 @@ const supportsFormatCheck = targetWorkflow.split("pnpm format:check").length - 1
 const runFormatCheck = !frozenTarget || supportsFormatCheck;
 let runBaselineRatchets = runNode && !frozenTarget && !releaseFastLane;
 const checksFastCoreTasks = runBaselineRatchets
-  ? [
-      {
-        check_name: "checks-fast-startup-corpus",
-        runtime: "node",
-        task: "startup-corpus",
-      },
-      {
-        check_name: "checks-fast-coercion-helpers",
-        runtime: "node",
-        task: "coercion-helpers",
-      },
-    ]
+  ? ["startup-corpus", "coercion-helpers"].map((task) => ({
+      check_name: `checks-fast-${task}`,
+      runtime: "node",
+      task,
+    }))
   : [];
 if (runNodeFull && !releaseFastLane) {
   checksFastCoreTasks.push(
@@ -753,10 +746,8 @@ let changedNodeTestShards = null;
 let changedNodeTestFallbackReason;
 if (runtimePullRequest && runNodeFull) {
   // PRs admit only concrete owner plans; missing selection is a planner failure.
-  for (const name of ["createChangedNodeTestShards"]) {
-    if (typeof changedNodeTestPlan[name] !== "function") {
-      throw new Error(`Current PR CI target does not export ${name}`);
-    }
+  if (typeof changedNodeTestPlan.createChangedNodeTestShards !== "function") {
+    throw new Error("Current PR CI target does not export createChangedNodeTestShards");
   }
   changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
     baseRef: process.env.OPENCLAW_CI_CHANGED_BASE,
@@ -1078,7 +1069,7 @@ const uiTestRuntimePolicy =
         "--reporter=verbose",
         "--reporter=github-actions",
         "--reporter=./scripts/lib/vitest-resource-reporter.mts",
-        ...(compatibilityTarget ? [] : ["--shard=1/3"]),
+        "--shard=1/3",
       ],
     },
     testRuntimeMode,
@@ -1233,30 +1224,13 @@ const additionalChecks = [
   },
   // Frozen targets retain their original rows and command boundaries.
   ...(frozenTarget
-    ? [
-        {
-          check_name: "check-export-name-collisions",
-          group: "export-name-collisions",
-          runner: "blacksmith-4vcpu-ubuntu-2404",
-        },
-        {
-          check_name: "check-session-accessor-boundary",
-          group: "session-accessor-boundary",
-          runner: "blacksmith-4vcpu-ubuntu-2404",
-        },
-        {
-          check_name: "check-sqlite-session-schema-baseline",
-          group: "sqlite-session-schema-baseline",
-          runner: "blacksmith-4vcpu-ubuntu-2404",
-        },
-      ]
-    : [
-        {
-          check_name: "check-source-contracts",
-          group: "source-contracts",
-          runner: "blacksmith-4vcpu-ubuntu-2404",
-        },
-      ]),
+    ? ["export-name-collisions", "session-accessor-boundary", "sqlite-session-schema-baseline"]
+    : ["source-contracts"]
+  ).map((group) => ({
+    check_name: `check-${group}`,
+    group,
+    runner: "blacksmith-4vcpu-ubuntu-2404",
+  })),
   // Only dispatches execute this report; scheduled tips have no change range.
   ...(eventName === "workflow_dispatch"
     ? [
@@ -1306,21 +1280,16 @@ if (sharedSdkDeclarations) {
   );
 }
 const checkTasks = [
-  { check_name: "check-guards", task: "guards", runner: "blacksmith-4vcpu-ubuntu-2404" },
-  { check_name: "check-npm-lock", task: "npm-lock", runner: "blacksmith-4vcpu-ubuntu-2404" },
-  {
-    check_name: "check-bundled-channel-config-metadata",
-    task: "bundled-channel-config-metadata",
+  ...["guards", "npm-lock", "bundled-channel-config-metadata", "prod-types"].map((task) => ({
+    check_name: `check-${task}`,
+    task,
     runner: "blacksmith-4vcpu-ubuntu-2404",
-  },
-  { check_name: "check-prod-types", task: "prod-types", runner: "blacksmith-4vcpu-ubuntu-2404" },
-  { check_name: "check-lint", task: "lint", runner: "blacksmith-16vcpu-ubuntu-2404" },
-  {
-    check_name: "check-dependencies",
-    task: "dependencies",
+  })),
+  ...["lint", "dependencies", "test-types"].map((task) => ({
+    check_name: `check-${task}`,
+    task,
     runner: "blacksmith-16vcpu-ubuntu-2404",
-  },
-  { check_name: "check-test-types", task: "test-types", runner: "blacksmith-16vcpu-ubuntu-2404" },
+  })),
 ].filter((row) => {
   if (!narrowCheckScope) {
     return true;

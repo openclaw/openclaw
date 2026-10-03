@@ -61,7 +61,6 @@ type SubagentRunsCacheState<T extends SubagentRunReadRecord> = (
 
 export type SubagentRunsCache<T extends SubagentRunReadRecord> = {
   state: SubagentRunsCacheState<T>;
-  captureAdmission?: (databasePath?: string) => OpenClawStateDatabaseReadAdmission;
   load?: () => Map<string, T>;
   copy: (entry: SubagentRunRecord) => T;
   project: (entry: SubagentRunRecord) => T;
@@ -86,7 +85,7 @@ export function shouldReadPersistedSubagentRuns(): boolean {
   return !isVitestRuntimeEnv() || process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE === "1";
 }
 
-export function captureSubagentFactsAdmission(databasePath = resolveOpenClawStateSqlitePath()) {
+function captureSubagentFactsAdmission(databasePath = resolveOpenClawStateSqlitePath()) {
   return captureOpenClawStateDatabaseReadAdmission(databasePath);
 }
 
@@ -150,7 +149,7 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   let admission: OpenClawStateDatabaseReadAdmission | undefined;
   let retiredPublicationIdentity: DatabasePathIdentity | undefined;
   try {
-    admission = cache.captureAdmission?.(databasePath);
+    admission = captureSubagentFactsAdmission(databasePath);
   } catch (error) {
     if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
       throw error;
@@ -243,7 +242,7 @@ export function getPersistedSubagentRunsSnapshot<T extends SubagentRunReadRecord
     admission = context.admission;
   } else {
     try {
-      admission = cache.captureAdmission?.();
+      admission = captureSubagentFactsAdmission();
     } catch (error) {
       if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
         throw error;
@@ -277,7 +276,7 @@ export function loadPersistedSubagentRunsForRead<T extends SubagentRunReadRecord
     throw new Error("Subagent session-list facts must be prepared before synchronous reads");
   }
   const runs = applySubagentRunChanges(cache.load(), cache.state.changes);
-  const admission = cache.captureAdmission?.();
+  const admission = captureSubagentFactsAdmission();
   cache.state = {
     snapshot: runs,
     admission,

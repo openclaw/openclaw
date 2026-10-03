@@ -229,19 +229,27 @@ export function readAuthProfileStateJsonTextReadOnly(
   return readAuthProfileJsonCellText(acquired.db, "state", "agent");
 }
 
-/** Distinguishes an absent auth row from a present store that could not be read. */
-export function inspectPersistedAuthProfileStoreRaw(
+function inspectPersistedAuthProfileCell(
+  target: "store" | "state",
   agentDir?: string,
   database?: Pick<AuthProfileDatabase, "db">,
 ): PersistedAuthProfileStoreInspection {
   if (database) {
     return inspectAuthProfileJsonCell(
       database.db,
-      "store",
+      target,
       resolveAuthProfileDatabaseKind(agentDir, database),
     );
   }
-  return inspectAuthProfileJsonCellReadOnly(resolveAuthProfileDatabaseOptions(agentDir), "store");
+  return inspectAuthProfileJsonCellReadOnly(resolveAuthProfileDatabaseOptions(agentDir), target);
+}
+
+/** Distinguishes an absent auth row from a present store that could not be read. */
+export function inspectPersistedAuthProfileStoreRaw(
+  agentDir?: string,
+  database?: Pick<AuthProfileDatabase, "db">,
+): PersistedAuthProfileStoreInspection {
+  return inspectPersistedAuthProfileCell("store", agentDir, database);
 }
 
 /** Distinguishes an absent auth-state row from state that could not be read. */
@@ -249,14 +257,7 @@ export function inspectPersistedAuthProfileStateRaw(
   agentDir?: string,
   database?: Pick<AuthProfileDatabase, "db">,
 ): PersistedAuthProfileStoreInspection {
-  if (database) {
-    return inspectAuthProfileJsonCell(
-      database.db,
-      "state",
-      resolveAuthProfileDatabaseKind(agentDir, database),
-    );
-  }
-  return inspectAuthProfileJsonCellReadOnly(resolveAuthProfileDatabaseOptions(agentDir), "state");
+  return inspectPersistedAuthProfileCell("state", agentDir, database);
 }
 
 /** Inspect the shared store for an explicit state root without projecting it to an agent dir. */
@@ -279,8 +280,8 @@ export function inspectPersistedSharedAuthProfileStateRaw(
   );
 }
 
-/** Reads the raw persisted secrets-store payload without coercing the schema. */
-export function readPersistedAuthProfileStoreRaw(
+function readPersistedAuthProfileCell(
+  target: "store" | "state",
   agentDir?: string,
   database?: AuthProfileDatabase,
 ): unknown {
@@ -288,16 +289,21 @@ export function readPersistedAuthProfileStoreRaw(
     return parseJsonCell(
       readAuthProfileJsonCellText(
         database.db,
-        "store",
+        target,
         resolveAuthProfileDatabaseKind(agentDir, database),
       ),
     );
   }
-  const result = inspectAuthProfileJsonCellReadOnly(
-    resolveAuthProfileDatabaseOptions(agentDir),
-    "store",
-  );
+  const result = inspectPersistedAuthProfileCell(target, agentDir);
   return result.status === "readable" ? result.raw : null;
+}
+
+/** Reads the raw persisted secrets-store payload without coercing the schema. */
+export function readPersistedAuthProfileStoreRaw(
+  agentDir?: string,
+  database?: AuthProfileDatabase,
+): unknown {
+  return readPersistedAuthProfileCell("store", agentDir, database);
 }
 
 /** Reads the raw persisted runtime-state payload without coercing the schema. */
@@ -305,20 +311,7 @@ export function readPersistedAuthProfileStateRaw(
   agentDir?: string,
   database?: AuthProfileDatabase,
 ): unknown {
-  if (database) {
-    return parseJsonCell(
-      readAuthProfileJsonCellText(
-        database.db,
-        "state",
-        resolveAuthProfileDatabaseKind(agentDir, database),
-      ),
-    );
-  }
-  const result = inspectAuthProfileJsonCellReadOnly(
-    resolveAuthProfileDatabaseOptions(agentDir),
-    "state",
-  );
-  return result.status === "readable" ? result.raw : null;
+  return readPersistedAuthProfileCell("state", agentDir, database);
 }
 
 /** Read the shared credential row for an explicit state root. */

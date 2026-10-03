@@ -50,6 +50,7 @@ import {
   readTransferredManifest,
   resolveWorkerWorkspaceGitAuthor,
   resolveRemoteWorkspaceManifest,
+  runBoundedInboundRsync as runBoundedInboundRsyncTransfer,
   stableWorkerPathComponent,
   validateWorkspaceSyncRequest,
   WORKER_WORKSPACE_RSYNC_DESTINATION,
@@ -71,7 +72,6 @@ import {
   REMOTE_WORKSPACE_MANIFEST_JS,
   REMOTE_WORKSPACE_SETUP_SCRIPT,
 } from "./workspace-sync-scripts.js";
-import { createWorkerWorkspaceRsyncTransport } from "./workspace-sync-transport.js";
 
 const REMOTE_SETUP_TIMEOUT_MS = 20_000;
 const WORKSPACE_TIMEOUT_MS = 10 * 60_000;
@@ -132,11 +132,35 @@ export function createWorkerWorkspaceActions(
 
   const runTask = (argv: string[], opts: CommandOptions) => track(options.runner.run(argv, opts));
 
-  const { runBoundedInboundRsync, runRsync } = createWorkerWorkspaceRsyncTransport({
-    ownerSignal: options.ownerSignal,
-    runTask,
-    timeoutMs: WORKSPACE_TIMEOUT_MS,
-  });
+  const runRsync = (
+    prepared: PreparedWorkerSsh,
+    argv: (rsyncSsh: string) => string[],
+    assertCurrent?: () => void,
+  ) =>
+    runWorkerSshCandidates(prepared, WORKSPACE_TIMEOUT_MS, (port, timeoutMs) => {
+      assertCurrent?.();
+      return runTask(
+        argv(workerWorkspaceRsyncRemoteCommand(prepared, port)),
+        workerSshCommandOptions({ timeoutMs, signal: options.ownerSignal }),
+      );
+    });
+
+  const runBoundedInboundRsync = (params: {
+    prepared: PreparedWorkerSsh;
+    argv: (rsyncSsh: string) => string[];
+    destinationRoot: string;
+    entryLimit: number;
+    totalByteLimit: number;
+  }) =>
+    runWorkerSshCandidates(params.prepared, WORKSPACE_TIMEOUT_MS, (port, timeoutMs) =>
+      runBoundedInboundRsyncTransfer({
+        ...params,
+        argv: params.argv(workerWorkspaceRsyncRemoteCommand(params.prepared, port)),
+        ownerSignal: options.ownerSignal,
+        runTask,
+        timeoutMs,
+      }),
+    );
   const receiverEntryPath = workerWorkspaceRsyncReceiverEntryPath(options.bundleHash);
 
   const runWorkspaceCommand = async (command: WorkerWorkspaceCommand): Promise<SpawnResult> => {

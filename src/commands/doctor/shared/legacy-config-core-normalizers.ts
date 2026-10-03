@@ -27,7 +27,6 @@ import { modelEntryWithRuntimePolicy } from "./legacy-runtime-model-policy.js";
 import { migrateLegacyRuntimeModelRef } from "./legacy-runtime-model-providers.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
-const INHERITED_ACCOUNT_POLICY_KEYS = ["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"];
 const log = createSubsystemLogger("doctor");
 
 /** Migrate legacy browser/Chrome relay config to current browser profile settings. */
@@ -83,7 +82,7 @@ export function normalizeLegacyBrowserConfig(
   };
 }
 
-/** Move single-account channel fields into accounts.default when account maps exist. */
+/** Seed an empty account map without changing an existing account set or route. */
 export function seedMissingDefaultAccountsFromSingleAccountBase(
   cfg: OpenClawConfig,
   changes: string[],
@@ -103,14 +102,9 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     if (!isRecord(rawAccounts)) {
       continue;
     }
-    const accountKeys = Object.keys(rawAccounts);
-    if (accountKeys.length === 0) {
-      continue;
-    }
-    const hasDefault = accountKeys.some(
-      (key) => normalizeOptionalLowercaseString(key) === DEFAULT_ACCOUNT_ID,
-    );
-    if (hasDefault) {
+    // Shared root policy is not evidence of another identity. Adding a default
+    // beside named accounts changes unqualified routing even if policy is copied.
+    if (Object.keys(rawAccounts).length > 0) {
       continue;
     }
     const promotion = resolveSingleAccountPromotion({
@@ -145,34 +139,7 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     for (const key of keysToMove) {
       delete nextChannel[key];
     }
-    const inheritedPolicyKeys = INHERITED_ACCOUNT_POLICY_KEYS.filter((key) =>
-      keysToMove.includes(key),
-    );
-    const nextAccounts: Record<string, unknown> = {
-      ...rawAccounts,
-      [DEFAULT_ACCOUNT_ID]: defaultAccount,
-    };
-    if (inheritedPolicyKeys.length > 0) {
-      for (const [accountId, rawAccount] of Object.entries(rawAccounts)) {
-        if (!isRecord(rawAccount)) {
-          continue;
-        }
-        const nextAccount = { ...rawAccount };
-        let accountChanged = false;
-        for (const key of inheritedPolicyKeys) {
-          if (Object.hasOwn(nextAccount, key)) {
-            continue;
-          }
-          const value = rawChannel[key];
-          nextAccount[key] = value && typeof value === "object" ? structuredClone(value) : value;
-          accountChanged = true;
-        }
-        if (accountChanged) {
-          nextAccounts[accountId] = nextAccount;
-        }
-      }
-    }
-    nextChannel.accounts = nextAccounts;
+    nextChannel.accounts = { [DEFAULT_ACCOUNT_ID]: defaultAccount };
 
     nextChannels[channelId] = nextChannel;
     channelsChanged = true;

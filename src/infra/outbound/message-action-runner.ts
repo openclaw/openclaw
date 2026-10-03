@@ -169,25 +169,19 @@ async function handleBroadcastAction(
   for (const { channel: targetChannel, plugin: targetChannelPlugin } of targetChannels) {
     for (const target of rawTargets) {
       const receiptDiscriminator = `broadcast:${attemptIndex++}`;
-      if (interrupted) {
-        results.push({
-          channel: targetChannel,
-          to: target,
-          ok: false,
-          attempted: false,
-          error: "Broadcast canceled before this target was attempted.",
-        });
-        continue;
-      }
-      const hadAcceptedResult = hasAcceptedResult();
-      try {
-        throwIfAborted(input.abortSignal);
-        input.assertDirectAdapterHandoff?.();
-      } catch (err) {
-        if (!hadAcceptedResult) {
-          throw err;
+      const hadAcceptedResult = !interrupted && hasAcceptedResult();
+      if (!interrupted) {
+        try {
+          throwIfAborted(input.abortSignal);
+          input.assertDirectAdapterHandoff?.();
+        } catch (err) {
+          if (!hadAcceptedResult) {
+            throw err;
+          }
+          interrupted = true;
         }
-        interrupted = true;
+      }
+      if (interrupted) {
         results.push({
           channel: targetChannel,
           to: target,

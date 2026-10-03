@@ -54,6 +54,8 @@ const DISCONNECT_MARKER = "CODEX_NODE_EXEC_DISCONNECT_PROOF";
 const RECOVERY_MARKER = "CODEX_NODE_EXEC_FRESH_ATTEMPT_PROOF";
 const REQUEST_TIMEOUT_MS = 120_000;
 const WAIT_OPTIONS = { timeout: 60_000, interval: 100 };
+const WORKER_COMMAND_ARGS = new Set(["worker"]);
+const WORKER_OR_CODEX_COMMAND_ARGS = new Set(["worker", "codex"]);
 let receipts: FixtureReceiptChannel;
 
 beforeAll(async () => {
@@ -431,6 +433,15 @@ async function nodeChildCommands(nodePid: number): Promise<string[]> {
     .map((line) => line.slice(String(nodePid).length).trim());
 }
 
+function launchCommandHasArg(command: string, names: ReadonlySet<string>): boolean {
+  const inlineScript = /(?:^|\s)(?:-e|--eval)(?=\s|=)/u.exec(command);
+  const launchCommand = inlineScript ? command.slice(0, inlineScript.index) : command;
+  return launchCommand.split(/\s+/u).some((arg) => {
+    const normalized = arg.toLowerCase();
+    return names.has(normalized) || names.has(path.basename(normalized));
+  });
+}
+
 async function startTurn(
   reviewer: GatewayClient,
   marker: string,
@@ -695,7 +706,7 @@ describe("Codex paired-device exec-server carrier", () => {
         ).toEqual([]);
         expect(
           (await nodeChildCommands(unapprovedNodePid!)).filter((command) =>
-            /(?:^|\s)(?:worker|codex(?:\s+exec-server)?)(?:\s|$)/iu.test(command),
+            launchCommandHasArg(command, WORKER_OR_CODEX_COMMAND_ARGS),
           ),
         ).toEqual([]);
         expect(provider.nativeExecCalls).toBe(0);
@@ -784,7 +795,9 @@ describe("Codex paired-device exec-server carrier", () => {
         const nodePid = node.child.pid;
         expect(nodePid).toBeTruthy();
         const children = await nodeChildCommands(nodePid!);
-        expect(children.filter((command) => /(?:^|\s)worker(?:\s|$)/u.test(command))).toEqual([]);
+        expect(
+          children.filter((command) => launchCommandHasArg(command, WORKER_COMMAND_ARGS)),
+        ).toEqual([]);
 
         const repeated = await startTurn(requester, REPEAT_MARKER);
         await expectSuccessfulTurn({ reviewer, gateway, node, provider, runId: repeated.runId });

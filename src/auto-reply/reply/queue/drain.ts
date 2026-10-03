@@ -573,7 +573,6 @@ type FollowupQueueSummaryState = Pick<
 >;
 
 type QueueSummaryDelivery = {
-  prompt: string;
   droppedCount: number;
   sources: FollowupRun[];
 };
@@ -938,20 +937,18 @@ async function drainElidedOverflowSummary(params: {
   const delivered = await runQueueSummaryDelivery(
     params.queue,
     {
-      prompt,
       droppedCount: retainedSources.length,
       sources: retainedSources,
     },
-    async ({ abortSignal, onAdmitted }) => {
-      await runSyntheticOverflowSummary({
+    ({ abortSignal, onAdmitted }) =>
+      runSyntheticOverflowSummary({
         source,
         sources: [...elidedSources, ...retainedSources],
         prompt,
         abortSignal,
         onAdmitted,
         runFollowup: params.runFollowup,
-      });
-    },
+      }),
     [...elidedSources, ...retainedSources],
   );
   if (!delivered) {
@@ -1011,17 +1008,19 @@ async function drainOverflowSummaryGroup(params: {
   if (!prompt) {
     return false;
   }
-  const delivery = { prompt, droppedCount: sources.length, sources };
-  await runQueueSummaryDelivery(params.queue, delivery, async ({ abortSignal, onAdmitted }) => {
-    await runSyntheticOverflowSummary({
-      source,
-      sources: delivery.sources,
-      prompt: delivery.prompt,
-      abortSignal,
-      onAdmitted,
-      runFollowup: params.runFollowup,
-    });
-  });
+  await runQueueSummaryDelivery(
+    params.queue,
+    { droppedCount: sources.length, sources },
+    ({ abortSignal, onAdmitted }) =>
+      runSyntheticOverflowSummary({
+        source,
+        sources,
+        prompt,
+        abortSignal,
+        onAdmitted,
+        runFollowup: params.runFollowup,
+      }),
+  );
   return true;
 }
 

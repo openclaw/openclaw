@@ -39,22 +39,15 @@ const loadGatewayPluginRuntime = createLazyRuntimeModule(
 
 function createRuntimeGateway(): PluginRuntime["gateway"] {
   return {
-    isAvailable: async () => {
-      const runtime = await loadGatewayPluginRuntime();
-      return runtime.hasInProcessGatewayContext();
-    },
+    isAvailable: async () => (await loadGatewayPluginRuntime()).hasInProcessGatewayContext(),
     request: async (method, params, options) => {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.dispatchTrustedPluginGatewayMethod(method, params, options);
     },
-    openPluginPanel: async (params) => {
-      const runtime = await loadGatewayPluginRuntime();
-      return runtime.openPluginPanelForRequester(params);
-    },
-    readSessionFacts: async (params) => {
-      const runtime = await loadGatewayPluginRuntime();
-      return runtime.readTrustedPluginSessionFacts(params);
-    },
+    openPluginPanel: async (params) =>
+      (await loadGatewayPluginRuntime()).openPluginPanelForRequester(params),
+    readSessionFacts: async (params) =>
+      (await loadGatewayPluginRuntime()).readTrustedPluginSessionFacts(params),
     subscribeSessionChanges: subscribeRuntimeSessionChanges,
     withUserProfileIdentity: async (params, run) => {
       const captured = {
@@ -119,10 +112,7 @@ function createRuntimeLlmFacade(): PluginRuntime["llm"] {
   );
   return {
     acquireLocalService: loadAcquireLocalService,
-    complete: async (params) => {
-      const llm = await loadLlm();
-      return llm.complete(params);
-    },
+    complete: createLazyRuntimeMethod(loadLlm, (llm) => llm.complete),
   };
 }
 

@@ -174,6 +174,26 @@ These adapters remain inactive until P7. Production incognito still uses the
 host owner; no flag selects competing writers. This stage changes no schema,
 retention, durability, session deadline, or update behavior and retires no T1 sites.
 
+### Incognito history (P5a, inactive)
+
+History pages, deltas, selected entries, title/preview, branches, context, search,
+matching, receipts, and hydration can read the actor's retained connection through
+its existing FIFO. Shared selectors also serve durable history; no second SQLite
+reader or database copy is created. Read grants use current actor facts, and
+disclosure rechecks live caller authority after waits. RPC and HTTP composition
+use the existing history kernels with prepared display facts and recheck the
+captured session claim before returning a page.
+
+Hydration acquires one synchronous snapshot and returns detached events through
+the broker's existing result framing. It preserves incognito's full-materialization
+behavior; it does not adopt durable hydration's lower-memory streaming contract.
+Actor loss returns `INCOGNITO_SESSION_ENDED` rather than empty history.
+
+Production incognito remains host-owned until P7. P5b adds usage/projection
+composition, Memory reads, and public SDK Codex history. P5a changes no schema,
+retention, settlement owner, update behavior, or operator configuration, and
+retires no T1 sites before activation.
+
 ### Existing worker flows
 
 Shared-state transaction diagnostics inherit the executing worker command name
@@ -249,6 +269,20 @@ Incognito, maintenance, opaque plugin callbacks, and unclassified internal guard
 retain native transactions and yielding writer admission. Arbitrary async plugin
 updaters retain their existing nested-admission behavior. Schemas, durability,
 public callback contracts, and update behavior are unchanged.
+
+Durable transcript turns append messages, consume pending inputs, evaluate typed
+latest-assistant and active-entry predicates, update entries, and commit goal
+receipts in one agent-executor transaction. Host preparation uses worker-read
+idempotency facts; the transaction rechecks those facts before applying prepared
+messages. Runtime target selection uses the existing history reader, retaining
+the captured store, canonical session key, and selected lifecycle.
+Acknowledged custody and final transcript cursors install before row
+observers, then identity and message-completion callbacks settle within the same
+physical writer FIFO. Lost replies reconcile through the existing entry-patch
+transfer and native COMMIT receipt; uncertain outcomes never replay. Opaque
+released SDK callbacks and dependent callback batches retain their synchronous
+transaction visibility, and process-held incognito retains its existing owner. Reset remains a separate
+cutover. This changes no schema, durability, retention, or update behavior.
 
 Channel setup awaits a fresh policy read after the agent-selection prompt.
 Deferred plugin migration rows are read by the shared-state worker, and setup

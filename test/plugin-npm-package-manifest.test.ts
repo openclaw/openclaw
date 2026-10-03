@@ -14,7 +14,7 @@ import fs, {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import { dirname, join, win32 } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -22,10 +22,10 @@ import {
   generatePluginNpmPackageLockWithRetry,
   resolveAugmentedPluginNpmPackageJson,
   resolveAugmentedPluginNpmManifest,
-  resolvePluginNpmCommand,
   runPluginNpmCiWithRetry,
   withAugmentedPluginNpmManifestForPackage,
 } from "../scripts/lib/plugin-npm-package-manifest.mts";
+import { resolveNpmRunner } from "../scripts/npm-runner.mts";
 import { hasChannelPackageState } from "../src/channels/plugins/package-state-probes.js";
 import type { PluginManifest } from "../src/plugins/manifest-types.js";
 import {
@@ -113,7 +113,9 @@ function parseNpmPackResult(stdout: string): NpmPackResult {
 }
 
 function listNpmPackDryRunFiles(packageDir: string): string[] {
-  const invocation = resolvePluginNpmCommand(["pack", "--dry-run", "--json", "--ignore-scripts"]);
+  const invocation = resolveNpmRunner({
+    npmArgs: ["pack", "--dry-run", "--json", "--ignore-scripts"],
+  });
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: packageDir,
     encoding: "utf8",
@@ -505,41 +507,6 @@ describe("plugin npm package manifest staging", () => {
     ) as { openclaw?: { release?: { bundleRuntimeDependencies?: boolean } } };
 
     expect(packageJson.openclaw?.release?.bundleRuntimeDependencies).toBe(false);
-  });
-
-  it("wraps Windows npm.cmd staging through cmd.exe without shell mode", () => {
-    const nodeDir = "C:\\Program Files\\nodejs";
-    const npmCmdPath = win32.resolve(nodeDir, "npm.cmd");
-
-    expect(
-      resolvePluginNpmCommand(["install", "--package-lock-only"], {
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
-        env: { PATH: "C:\\bin" },
-        execPath: win32.join(nodeDir, "node.exe"),
-        existsSync: (candidate: string) => candidate === npmCmdPath,
-        platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        '""C:\\Program Files\\nodejs\\npm.cmd" install --package-lock-only"',
-      ],
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
-  });
-
-  it("rejects bare npm fallback on Windows plugin package staging", () => {
-    expect(() =>
-      resolvePluginNpmCommand(["install"], {
-        execPath: "C:\\nodejs\\node.exe",
-        existsSync: () => false,
-        platform: "win32",
-      }),
-    ).toThrow("OpenClaw refuses to shell out to bare npm on Windows");
   });
 
   it("retries timed-out bundled dependency installs after cleaning partial output", () => {
@@ -1083,13 +1050,9 @@ describe("plugin npm package manifest staging", () => {
         mkdirSync(consumerDir, { recursive: true });
         writeJsonFile(join(consumerDir, "package.json"), { private: true, type: "module" });
 
-        const packInvocation = resolvePluginNpmCommand([
-          "pack",
-          "--json",
-          "--ignore-scripts",
-          "--pack-destination",
-          consumerDir,
-        ]);
+        const packInvocation = resolveNpmRunner({
+          npmArgs: ["pack", "--json", "--ignore-scripts", "--pack-destination", consumerDir],
+        });
         const pack = spawnSync(packInvocation.command, packInvocation.args, {
           cwd: packageDir,
           encoding: "utf8",
@@ -1529,16 +1492,18 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
         expect(bundled.status, bundled.stderr).toBe(0);
         expect(JSON.parse(bundled.stdout)).toEqual([2, expectedSibling]);
       }
-      const npm = resolvePluginNpmCommand([
-        "install",
-        "--ignore-scripts",
-        "--omit=dev",
-        "--omit=peer",
-        "--legacy-peer-deps",
-        "--workspaces=false",
-        "--no-audit",
-        "--no-fund",
-      ]);
+      const npm = resolveNpmRunner({
+        npmArgs: [
+          "install",
+          "--ignore-scripts",
+          "--omit=dev",
+          "--omit=peer",
+          "--legacy-peer-deps",
+          "--workspaces=false",
+          "--no-audit",
+          "--no-fund",
+        ],
+      });
       await execFileAsync(npm.command, npm.args, {
         cwd: consumerPackage,
         encoding: "utf8",

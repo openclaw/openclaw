@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { UpdateDoctorError } from "../../infra/update-doctor-result.js";
@@ -12,6 +13,7 @@ import {
   ABANDONED_UPDATE_RUN_MS,
   UPDATE_RUN_HEARTBEAT_MS,
 } from "../../infra/update-run-timeouts.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -20,6 +22,39 @@ import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 
 const dirs = createTempDirTracker();
+let stderrWrite: MockInstance<typeof process.stderr.write>;
+
+it("writes successful finalization progress to stderr and failures as errors", async () => {
+  const logPath = path.join(dirs.make("openclaw-finalize-log-"), "openclaw.log");
+  setLoggerOverride({ level: "info", file: logPath });
+  const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
+  await lifecycle.run("doctor", async () => undefined);
+  expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining('"status":"in_progress"'));
+  expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining('"status":"completed"'));
+  await flushLogger();
+  const phaseRecords = fs
+    .readFileSync(logPath, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+    .filter((record) => JSON.stringify(record).includes("finalize:doctor"));
+  expect(phaseRecords).toEqual([
+    expect.objectContaining({ _meta: expect.objectContaining({ logLevelName: "INFO" }) }),
+    expect.objectContaining({ _meta: expect.objectContaining({ logLevelName: "INFO" }) }),
+  ]);
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+  lifecycle.recordWarnings(["A plugin update was deferred."]);
+  expect(console.warn).toHaveBeenCalledWith(
+    expect.stringContaining('"step":"warning:finalize:doctor:0"'),
+  );
+  await expect(
+    lifecycle.run("plugins", async () => {
+      throw new Error("fixture failure");
+    }),
+  ).rejects.toThrow("fixture failure");
+  expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining('"status":"failed"'));
+  lifecycle.fail();
+});
 
 it.each([false, true])(
   "records a Doctor refusal before reporting standalone finalization (nested=%s)",
@@ -118,11 +153,15 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("openclaw-finalize-heartbeat-"));
   vi.stubEnv(UPDATE_RUN_ID_ENV, undefined);
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  resetLogger();
+  setLoggerOverride(null);
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   dirs.cleanup();

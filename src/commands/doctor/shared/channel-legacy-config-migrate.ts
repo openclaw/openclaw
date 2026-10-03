@@ -136,7 +136,8 @@ export function applyChannelDoctorCompatibilityMigrations(
         pluginIds,
       })
     : { config: bundled.config, changes: [] };
-  const warnings = [...(bundled.warnings ?? []), ...(plugins.warnings ?? [])];
+  // Bundled and installed contract views can report the same warning-only condition.
+  const warnings = [...new Set([...(bundled.warnings ?? []), ...(plugins.warnings ?? [])])];
   return {
     next: plugins.config,
     changes: [...changes, ...bundled.changes, ...plugins.changes],

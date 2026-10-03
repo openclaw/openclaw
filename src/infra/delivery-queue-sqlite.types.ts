@@ -13,10 +13,10 @@ export function parseDeliveryQueueCompletionRetention(
   if (value === "permanent") {
     return value;
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const retention = asNullableRecord(value);
+  if (!retention) {
     return undefined;
   }
-  const retention = value as Record<string, unknown>;
   const idPrefix = typeof retention.idPrefix === "string" ? retention.idPrefix : "";
   const maxAgeMs = asPositiveSafeInteger(retention.maxAgeMs);
   const maxEntries = asPositiveSafeInteger(retention.maxEntries);

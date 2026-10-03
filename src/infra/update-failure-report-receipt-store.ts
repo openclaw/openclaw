@@ -414,32 +414,26 @@ export function beginStaleUpdateFailureReportReceiptCleanupRowSync(
   attemptId: string,
   reservationId: string,
 ): boolean {
-  const sentinelKey = receiptKey(attemptId);
-  const current = readRestartSentinelRowForKeySync(db, sentinelKey);
-  const currentReceipt = parseReceipt(current.kind === "valid" ? current.sentinel : null);
-  const nowMs = Date.now();
-  if (
-    current.kind !== "valid" ||
-    !currentReceipt ||
-    currentReceipt.sweepOwnerId !== undefined ||
-    (currentReceipt.status !== "preparing" && currentReceipt.status !== "prepared") ||
-    currentReceipt.preparingSinceMs === undefined ||
-    currentReceipt.preparingSinceMs > nowMs - PREPARING_RECEIPT_STALE_AFTER_MS ||
-    currentReceipt.reservationId !== reservationId
-  ) {
-    return false;
-  }
-  if (!currentReceipt.previewDigest) {
-    return false;
-  }
-  const cleanupReceipt: UpdateFailureReportReceipt = {
-    artifactSweep: "pending",
-    cleanup: "pending",
-    previewDigest: currentReceipt.previewDigest,
-    reservationId,
-    status: "retryable",
-  };
-  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, cleanupReceipt);
+  return mutateReceipt(db, attemptId, (currentReceipt) => {
+    const nowMs = Date.now();
+    if (
+      currentReceipt.sweepOwnerId !== undefined ||
+      (currentReceipt.status !== "preparing" && currentReceipt.status !== "prepared") ||
+      currentReceipt.preparingSinceMs === undefined ||
+      currentReceipt.preparingSinceMs > nowMs - PREPARING_RECEIPT_STALE_AFTER_MS ||
+      currentReceipt.reservationId !== reservationId ||
+      !currentReceipt.previewDigest
+    ) {
+      return false;
+    }
+    return {
+      artifactSweep: "pending",
+      cleanup: "pending",
+      previewDigest: currentReceipt.previewDigest,
+      reservationId,
+      status: "retryable",
+    };
+  });
 }
 
 /** Serializes one attempt-wide retired-artifact sweep against successor publication. */
@@ -450,28 +444,24 @@ export function claimUpdateFailureReportArtifactSweepRowSync(
   sweepOwnerId: string,
   sweepGeneration: string,
 ): boolean {
-  const sentinelKey = receiptKey(attemptId);
-  const current = readRestartSentinelRowForKeySync(db, sentinelKey);
-  const currentReceipt = parseReceipt(current.kind === "valid" ? current.sentinel : null);
-  const nowMs = Date.now();
-  if (
-    current.kind !== "valid" ||
-    !currentReceipt ||
-    currentReceipt.artifactSweep !== "pending" ||
-    currentReceipt.reservationId !== expectedReservationId ||
-    (currentReceipt.sweepOwnerId !== undefined &&
-      currentReceipt.sweepSinceMs !== undefined &&
-      currentReceipt.sweepSinceMs > nowMs - ARTIFACT_SWEEP_STALE_AFTER_MS)
-  ) {
-    return false;
-  }
-  const claimed: UpdateFailureReportReceipt = {
-    ...currentReceipt,
-    sweepGeneration,
-    sweepOwnerId,
-    sweepSinceMs: nowMs,
-  };
-  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, claimed);
+  return mutateReceipt(db, attemptId, (currentReceipt) => {
+    const nowMs = Date.now();
+    if (
+      currentReceipt.artifactSweep !== "pending" ||
+      currentReceipt.reservationId !== expectedReservationId ||
+      (currentReceipt.sweepOwnerId !== undefined &&
+        currentReceipt.sweepSinceMs !== undefined &&
+        currentReceipt.sweepSinceMs > nowMs - ARTIFACT_SWEEP_STALE_AFTER_MS)
+    ) {
+      return false;
+    }
+    return {
+      ...currentReceipt,
+      sweepGeneration,
+      sweepOwnerId,
+      sweepSinceMs: nowMs,
+    };
+  });
 }
 
 /** Checks the exact sweep generation without renewing or otherwise mutating it. */

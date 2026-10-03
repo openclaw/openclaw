@@ -142,6 +142,16 @@ export async function loadAgentEntryPatchOperations() {
   } satisfies Handlers;
 }
 
+export async function loadAgentCompoundOperations() {
+  const turn = await import("../config/sessions/session-turn.worker.js");
+  const predicates = await import("../config/sessions/session-turn-predicate.js");
+  await predicates.prepareSessionTurnPredicates();
+  return {
+    "session.turn.prepare": turn.prepareSessionTurn,
+    "session.turn.commit": turn.commitSessionTurn,
+  } satisfies Handlers;
+}
+
 export async function loadAgentTrajectoryOperations() {
   const kernel = await import("../trajectory/runtime-store.sqlite.js");
   return {
@@ -345,6 +355,7 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
     Awaited<ReturnType<typeof loadAgentReplacementOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryPatchOperations>> &
+    Awaited<ReturnType<typeof loadAgentCompoundOperations>> &
     Awaited<ReturnType<typeof loadAgentRestartRecoveryOperations>> &
     Awaited<ReturnType<typeof loadAgentTrajectoryOperations>> &
     Awaited<ReturnType<typeof loadAgentArchiveOperations>> &

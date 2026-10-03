@@ -427,16 +427,6 @@ function normalizeModelPickerToken(value: unknown): string | undefined {
     : undefined;
 }
 
-function normalizeOptionalModelPickerCursor(
-  record: Record<string, unknown>,
-): { valid: true; cursor?: string } | { valid: false } {
-  if (record.cursor === undefined) {
-    return { valid: true };
-  }
-  const cursor = normalizeModelPickerToken(record.cursor);
-  return cursor ? { valid: true, cursor } : { valid: false };
-}
-
 function normalizeModelPickerAction(
   record: Record<string, unknown>,
 ): ModelPickerAction | undefined {
@@ -448,58 +438,36 @@ function normalizeModelPickerAction(
     return undefined;
   }
   const intent = record.intent;
-  if (intent === "show-providers" || intent === "show-recents") {
-    const cursor = normalizeOptionalModelPickerCursor(record);
-    return cursor.valid
-      ? {
-          type: "model-picker",
-          version: 1,
-          snapshotToken,
-          intent,
-          ...(cursor.cursor ? { cursor: cursor.cursor } : {}),
-        }
-      : undefined;
+  const base = { type: "model-picker", version: 1, snapshotToken } as const;
+  if (intent === "reset" || intent === "cancel") {
+    return { ...base, intent };
   }
-  if (intent === "show-models") {
+  if (intent === "show-providers" || intent === "show-recents" || intent === "show-models") {
+    const cursor = normalizeModelPickerToken(record.cursor);
+    if (record.cursor !== undefined && !cursor) {
+      return undefined;
+    }
+    if (intent !== "show-models") {
+      return { ...base, intent, ...(cursor ? { cursor } : {}) };
+    }
     const providerToken = normalizeModelPickerToken(record.providerToken);
-    const cursor = normalizeOptionalModelPickerCursor(record);
-    return providerToken && cursor.valid
-      ? {
-          type: "model-picker",
-          version: 1,
-          snapshotToken,
-          intent,
-          providerToken,
-          ...(cursor.cursor ? { cursor: cursor.cursor } : {}),
-        }
+    return providerToken
+      ? { ...base, intent, providerToken, ...(cursor ? { cursor } : {}) }
       : undefined;
   }
-  if (intent === "choose-model") {
+  if (intent === "choose-model" || intent === "choose-runtime") {
     const providerToken = normalizeModelPickerToken(record.providerToken);
     const modelToken = normalizeModelPickerToken(record.modelToken);
-    return providerToken && modelToken
-      ? { type: "model-picker", version: 1, snapshotToken, intent, providerToken, modelToken }
-      : undefined;
-  }
-  if (intent === "choose-runtime") {
-    const providerToken = normalizeModelPickerToken(record.providerToken);
-    const modelToken = normalizeModelPickerToken(record.modelToken);
+    if (!providerToken || !modelToken) {
+      return undefined;
+    }
+    if (intent === "choose-model") {
+      return { ...base, intent, providerToken, modelToken };
+    }
     const runtimeToken = normalizeModelPickerToken(record.runtimeToken);
-    return providerToken && modelToken && runtimeToken
-      ? {
-          type: "model-picker",
-          version: 1,
-          snapshotToken,
-          intent,
-          providerToken,
-          modelToken,
-          runtimeToken,
-        }
-      : undefined;
+    return runtimeToken ? { ...base, intent, providerToken, modelToken, runtimeToken } : undefined;
   }
-  return intent === "reset" || intent === "cancel"
-    ? { type: "model-picker", version: 1, snapshotToken, intent }
-    : undefined;
+  return undefined;
 }
 
 function normalizePresentationAction(raw: unknown): MessagePresentationAction | undefined {

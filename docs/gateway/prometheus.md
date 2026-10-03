@@ -193,8 +193,11 @@ observations: an unfinished handler has no handler-duration sample yet. Compare
 request counts, completed timings, and event-loop observations when investigating
 a timeout; low handler latency alone does not establish a responsive client path.
 
-RPC method labels contain canonical core method names, `other` for plugin
-methods, or `unknown`. Outcome totals aggregate by phase and outcome without a
+RPC method labels contain exact core and registered plugin method names, `other`
+for unregistered requests, or `unknown` for unrecognized dedicated worker RPCs.
+Catalog membership is checked at request receipt, so plugin registry replacement
+affects subsequent requests without a separate label cache.
+Outcome totals aggregate by phase and outcome without a
 method dimension. Each method with all four timings occupies five aggregate
 samples in the shared 2,048-sample cap. A duration histogram occupies one sample
 but expands into 19 scrape series (buckets, sum, and count). Existing samples keep

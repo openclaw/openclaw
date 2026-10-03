@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { API } from "typescript/unstable/sync";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   auditCanonicalCoercionExports,
@@ -12,10 +13,9 @@ import {
   type CoercionHelperCarveOut,
   type CoercionHelperDeclaration,
 } from "../../scripts/check-coercion-helper-declarations.mts";
-import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const parser = createNativeTypeScriptParser();
+const parser = new API();
 afterAll(() => parser.close());
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -44,7 +44,7 @@ describe("coercion helper declaration AST guard", () => {
       findBannedCoercionHelperDeclarations(
         source,
         "src/example.ts",
-        parser.parseSourceFile("src/example.ts", source),
+        parser.createSourceFile("src/example.ts", source),
       ),
     ).toEqual([
       { file: "src/example.ts", kind: "function", line: 1, name: "readString" },
@@ -80,7 +80,7 @@ describe("coercion helper declaration AST guard", () => {
       findBannedCoercionHelperDeclarations(
         source,
         "src/example.ts",
-        parser.parseSourceFile("src/example.ts", source),
+        parser.createSourceFile("src/example.ts", source),
       ),
     ).toEqual([]);
   });
@@ -91,7 +91,7 @@ function read\u0053tring() {}`;
 
     expect(
       ["src/first.ts", "src/second.ts"].map((file) =>
-        findBannedCoercionHelperDeclarations(source, file, parser.parseSourceFile(file, source)),
+        findBannedCoercionHelperDeclarations(source, file, parser.createSourceFile(file, source)),
       ),
     ).toEqual([
       [{ file: "src/first.ts", kind: "function", line: 2, name: "readString" }],
@@ -221,7 +221,7 @@ function read\u0053tring() {}`;
       findExportedCallableNames(
         source,
         "src/owner.ts",
-        parser.parseSourceFile("src/owner.ts", source),
+        parser.createSourceFile("src/owner.ts", source),
       ),
     ).toEqual(["alias", "canonical"]);
   });

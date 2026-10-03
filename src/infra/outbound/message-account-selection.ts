@@ -132,12 +132,7 @@ export async function isPotentialConfiguredMessageChannel(params: {
   const channelConfig = (params.cfg.channels as Record<string, unknown> | undefined)?.[
     params.plugin.id
   ];
-  if (
-    channelConfig &&
-    typeof channelConfig === "object" &&
-    !Array.isArray(channelConfig) &&
-    (channelConfig as { enabled?: unknown }).enabled === false
-  ) {
+  if (!Array.isArray(channelConfig) && !isAccountEnabled(channelConfig)) {
     return false;
   }
   if (isConfiguredChannel(params.cfg, params.plugin.id)) {

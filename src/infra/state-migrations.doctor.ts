@@ -1664,10 +1664,6 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     configPath: path.resolve(params.snapshot.configPath),
     stateDir: path.resolve(params.snapshot.stateDir),
   };
-  assertNoRetiredStateFiles(
-    "JSON delivery queues",
-    listRetiredDeliveryQueueFiles(requestedSnapshot.stateDir),
-  );
   const callerEnv = createLegacyStateMigrationCallerEnv({
     env: params.env,
     snapshot: requestedSnapshot,
@@ -1720,6 +1716,13 @@ export async function planLegacyStateMigrationsReadOnly(params: {
       },
     });
   }
+  // The identity owner refuses unusable snapshot paths first; only an admitted
+  // state directory is scanned for retired files, so a non-directory path keeps
+  // its `snapshot-identity-unavailable` refusal instead of an inspection error.
+  assertNoRetiredStateFiles(
+    "JSON delivery queues",
+    listRetiredDeliveryQueueFiles(requestedSnapshot.stateDir),
+  );
   if (identityBefore.configDigest !== configBefore.rootDigest) {
     const message = "Copied config changed while migration planning was starting.";
     return createLegacyStateMigrationPlan({
@@ -2470,7 +2473,7 @@ export async function runLegacyStateMigrations(params: {
     };
   }
 
-  // Index preparation can expose installed plugin owners. Freeze their full live action
+  // Schema repair can expose installed plugin owners. Freeze their full live action
   // inventory before the writer, rather than receipting the earlier pending-only preview.
   const inventory = resolveLivePluginDoctorStateMigrationInventory({ config, env });
   const migrations = await runLegacyStateMigrationSteps(
@@ -2583,8 +2586,8 @@ async function executeLegacyStateMigrations(
   const pluginDoctorConfig = params.pluginDoctorConfig ?? params.cfg;
   const configIncludedPaths = params.configIncludedPaths ?? [];
   const configuredPluginIds = collectRelevantDoctorPluginIds(pluginDoctorConfig);
-  // Retain a pre-preparation snapshot for refusal closure. Successful root/schema/index
-  // preparation can expose installed owners, whose actions are frozen before later writers.
+  // Retain a pre-preparation snapshot for refusal closure. Root relocation or schema repair
+  // can expose installed owners, whose actions are frozen before later writers.
   let pluginStateMigrationInventory = resolveLivePluginDoctorStateMigrationInventory({
     config: pluginDoctorConfig,
     env,

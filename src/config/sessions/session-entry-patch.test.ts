@@ -10,11 +10,13 @@ import { patchSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { retainPreparedSessionGenerationFacts } from "./session-accessor.sqlite-entry-cache.js";
 import {
   readExactSessionEntryRow,
   readSessionEntrySelectionSnapshot,
@@ -24,10 +26,14 @@ import {
   patchSessionEntryCore as patchInternalSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
+import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import { commitSessionEntryPatch } from "./session-entry-patch.worker.js";
 import { readSessionEntryInWorker } from "./session-entry-read-runtime.js";
+import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcript-index.js";
+import * as reconcile from "./session-transcript-reconcile.js";
 
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite() {},
@@ -357,6 +363,78 @@ it("retains nested worker admission for an opaque plugin updater", async ({ sign
     });
     expect(entry?.label).toBe("initial:nested");
     expect(f.read()?.label).toBe("initial:nested");
+  });
+});
+
+it("settles acknowledged entry publication when reconcile scheduling throws", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const scope = {
+      agentId: "main",
+      storePath: database.path,
+      sessionKey: "agent:main:acknowledged-publication",
+      sessionId: "acknowledged-publication",
+    };
+    runOpenClawAgentWriteTransaction(
+      (current) => {
+        appendTranscriptEventsInTransaction(current, scope, [
+          { type: "message", id: "seed", message: { role: "user", content: "seed" } },
+        ]);
+        markSessionTranscriptIndexDirtyInTransaction(current.db, scope.sessionId);
+      },
+      { agentId: scope.agentId, path: database.path },
+    );
+    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+    if (typeof identity !== "string") {
+      throw new Error("Expected a durable publication fixture");
+    }
+    const retained = retainPreparedSessionGenerationFacts({
+      databaseIdentity: `file:${identity}`,
+      sessionKey: scope.sessionKey,
+      entry: undefined,
+    });
+    const identities: string[] = [];
+    const stop = onSessionIdentityMutation((change) => {
+      if (change.kind !== "delete" && change.current.sessionKeys.includes(scope.sessionKey)) {
+        identities.push(change.kind);
+      }
+    });
+    const failure = new Error("reconcile scheduling refused after COMMIT");
+    const scheduling = vi
+      .spyOn(reconcile, "startSessionTranscriptIndexReconcile")
+      .mockImplementationOnce(() => {
+        throw failure;
+      });
+    const committed = vi.fn();
+    try {
+      await expect(
+        appendExpectedSessionTranscriptTurn(scope, {
+          keyFormat: "agent-qualified",
+          expectedSessionId: scope.sessionId,
+          selectedSessionId: null,
+          initialSessionEntry: { sessionId: scope.sessionId, updatedAt: 1 },
+          sessionFile: "synthetic-session.jsonl",
+          messages: [{ eventId: "committed", message: { role: "user", content: "committed" } }],
+          onMessageCommitted: committed,
+        }),
+      ).rejects.toBe(failure);
+      expect(scheduling).toHaveBeenCalledOnce();
+      expect(
+        readTranscriptEventRows(database, scope.sessionId).filter(
+          (row) => JSON.parse(row.eventJson).id === "committed",
+        ),
+      ).toHaveLength(1);
+      expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.sessionId).toBe(
+        scope.sessionId,
+      );
+      expect(retained.prepareRead()).toBeUndefined();
+      expect(retained.readCurrent()?.sessionId).toBe(scope.sessionId);
+      expect(identities).toEqual(["create"]);
+      expect(committed).toHaveBeenCalledOnce();
+    } finally {
+      stop();
+      retained.release();
+    }
   });
 });
 

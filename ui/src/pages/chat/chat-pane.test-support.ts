@@ -123,11 +123,11 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   disconnectedCallback: () => void;
   discardStagedAttachments?: () => void;
   resumeStagedAttachments?: () => void;
-  acceptTaskSuggestion: (
+  resolveTaskSuggestion: (
     suggestion: TaskSuggestion,
+    action: "accept" | "dismiss",
     mode?: TaskSuggestionStartMode,
   ) => Promise<void>;
-  dismissTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   copyTaskSuggestionPrompt: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;

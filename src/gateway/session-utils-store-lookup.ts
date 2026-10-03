@@ -57,6 +57,7 @@ type GatewaySessionStoreLookupParams = {
   store?: Record<string, SessionEntry>;
   storeCache?: GatewaySessionStoreCache;
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+  readStore?: typeof readGatewaySessionStore;
 };
 
 type GatewaySessionStorePlan<T> = {
@@ -70,6 +71,7 @@ function storeReadOptions(
   readOnly: boolean | undefined,
 ): GatewaySessionStoreRead["options"] {
   return {
+    env: params.env,
     readOnly,
     ...(params.exactRead || params.preserveQualifiedAddress ? { exactKeys: keys } : {}),
     ...(params.listCandidatesOnly ? { listKeys: keys } : {}),
@@ -107,7 +109,7 @@ function prepareGatewaySessionStoreLookup(
       resolveGatewaySessionStoreReadResults({
         ...params,
         reads,
-        readStore: readGatewaySessionStore,
+        readStore: params.readStore ?? readGatewaySessionStore,
         scanTargets,
       }),
   };
@@ -160,7 +162,7 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
       }
       const best = resolveGatewaySessionStoreReadResults({
         reads,
-        readStore: readGatewaySessionStore,
+        readStore: params.readStore ?? readGatewaySessionStore,
         scanTargets: lookupSeeds,
         canonicalKey,
       });
@@ -215,7 +217,7 @@ function prepareGatewaySessionStoreTarget(
         storePath,
         canonicalKey,
         storeKeys: [canonicalKey],
-        store: readGatewaySessionStore(read),
+        store: (params.readStore ?? readGatewaySessionStore)(read),
         ...(read.readSource ? { readSource: read.readSource } : {}),
         ...(read.capturedReadSource
           ? {
@@ -250,6 +252,33 @@ function prepareGatewaySessionStoreTarget(
         ...(capturedReadSource ? { capturedReadSource } : {}),
         ...(capturedReadSources ? { capturedReadSources } : {}),
       };
+    },
+  };
+}
+
+/** Prepare discovery before a writer uses transaction-local rows in the same routing selection. */
+export function prepareGatewaySessionStoreTargetLookup(
+  params: GatewaySessionStoreLookupParams,
+): GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore> {
+  const normalized = { ...params, key: normalizeOptionalString(params.key) ?? "" };
+  const deletedMain = prepareExplicitDeletedLegacyMainStoreTarget(normalized);
+  let current: Result<GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore>, unknown>;
+  try {
+    current = ok(prepareGatewaySessionStoreTarget(normalized));
+  } catch (error) {
+    current = err(error);
+  }
+  return {
+    reads: [...(deletedMain?.reads ?? []), ...(current.ok ? current.value.reads : [])],
+    resolve() {
+      const legacy = deletedMain?.resolve();
+      if (legacy) {
+        return legacy;
+      }
+      if (!current.ok) {
+        throw current.error;
+      }
+      return current.value.resolve();
     },
   };
 }

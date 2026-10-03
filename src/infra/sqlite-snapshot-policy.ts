@@ -11,7 +11,7 @@ const SNAPSHOT_RETRY_MAX_MS = 80;
 type SnapshotOperation = "online-backup" | "raw-copy";
 type SnapshotOutcome = "changed" | "error" | "success";
 
-function sourceFileSize(pathname: string): number {
+export function sqliteSnapshotSourceFileSize(pathname: string): number {
   try {
     const stat = fs.statSync(pathname);
     return stat.isFile() ? stat.size : 0;
@@ -20,6 +20,34 @@ function sourceFileSize(pathname: string): number {
       return 0;
     }
     throw error;
+  }
+}
+
+export function emitSqliteSnapshotTelemetry(
+  fields: {
+    attempt: number;
+    copiedBytes: number;
+    durationMs: number;
+    operation: SnapshotOperation;
+    outcome: SnapshotOutcome;
+    owner: string;
+    sourceMainBytes: number;
+    sourceWalBytes: number;
+    waitMs?: number;
+  },
+  error?: unknown,
+): void {
+  try {
+    getChildLogger({ subsystem: "infra/sqlite-snapshot" }).debug(
+      {
+        ...fields,
+        errorCode:
+          error && typeof error === "object" && "code" in error ? String(error.code) : undefined,
+      },
+      "SQLite snapshot operation completed.",
+    );
+  } catch {
+    // Snapshot diagnostics must not replace the operation result.
   }
 }
 
@@ -49,20 +77,18 @@ export function createSnapshotAttemptReporter(
 ) => void {
   return (operation, outcome, prepared, error) => {
     try {
-      getChildLogger({ subsystem: "infra/sqlite-snapshot" }).debug(
+      emitSqliteSnapshotTelemetry(
         {
           attempt: attempt + 1,
           copiedBytes: prepared ? fs.statSync(prepared.location).size : 0,
           durationMs: Math.max(0, performance.now() - started),
           operation,
           outcome,
-          sourceMainBytes: sourceFileSize(pathname),
-          sourceWalBytes: sourceFileSize(`${pathname}-wal`),
+          sourceMainBytes: sqliteSnapshotSourceFileSize(pathname),
+          sourceWalBytes: sqliteSnapshotSourceFileSize(`${pathname}-wal`),
           owner: "path-reader",
-          errorCode:
-            error && typeof error === "object" && "code" in error ? String(error.code) : undefined,
         },
-        "SQLite snapshot operation completed.",
+        error,
       );
     } catch {
       // Snapshot diagnostics must not replace the operation result.

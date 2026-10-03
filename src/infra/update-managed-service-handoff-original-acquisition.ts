@@ -39,14 +39,7 @@ export function createManagedHandoffOriginalAcquisition(deps: {
     originalParent?: ManagedHandoffParent,
   ) => LeaseAcquisition;
   originalUpdateAdmissions: WeakMap<ManagedHandoffLease, ManagedHandoffOriginalAdmission>;
-}): (
-  root: string,
-  owner: string,
-  action: ManagedHandoffLeaseAction,
-  transition?: boolean,
-  legacyParent?: BorrowedLegacyHandoffParent,
-  originalParent?: ManagedHandoffParent,
-) => LeaseAcquisition {
+}) {
   const {
     options,
     acquirePinnedOriginal,
@@ -57,7 +50,7 @@ export function createManagedHandoffOriginalAcquisition(deps: {
     originalUpdateAdmissions,
   } = deps;
   const { databasePath } = options;
-  function acquire(
+  return function acquire(
     root: string,
     owner: string,
     requestedAction: ManagedHandoffLeaseAction,
@@ -147,6 +140,5 @@ export function createManagedHandoffOriginalAcquisition(deps: {
       return { ...result, originalDatabaseIdentity };
     }
     return result;
-  }
-  return acquire;
+  };
 }

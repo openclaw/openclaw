@@ -11,14 +11,17 @@ export function bindExtensionProviderActions(
     unregisterProvider?: (name: string) => void;
   },
 ): void {
+  const registerProvider = (name: string, config: ProviderConfig) => {
+    if (providerActions?.registerProvider) {
+      providerActions.registerProvider(name, config);
+    } else {
+      modelRegistry.registerProvider(name, config);
+    }
+  };
   // Flush provider registrations queued during extension loading
   for (const { name, config, extensionPath } of runtime.pendingProviderRegistrations) {
     try {
-      if (providerActions?.registerProvider) {
-        providerActions.registerProvider(name, config);
-      } else {
-        modelRegistry.registerProvider(name, config);
-      }
+      registerProvider(name, config);
     } catch (err) {
       emitError({
         extensionPath,
@@ -32,13 +35,7 @@ export function bindExtensionProviderActions(
 
   // From this point on, provider registration/unregistration takes effect immediately
   // without requiring a /reload.
-  runtime.registerProvider = (name, config) => {
-    if (providerActions?.registerProvider) {
-      providerActions.registerProvider(name, config);
-      return;
-    }
-    modelRegistry.registerProvider(name, config);
-  };
+  runtime.registerProvider = registerProvider;
   runtime.unregisterProvider = (name) => {
     if (providerActions?.unregisterProvider) {
       providerActions.unregisterProvider(name);

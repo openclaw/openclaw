@@ -42,7 +42,7 @@ extension ChatSessionSidebar {
             decorated: facts
                 .glyph != nil || (attention != nil && !session.isArchived),
             viewingProfileIDs: viewers)
-        return ChatSidebarRow(
+        let content = ChatSidebarRow(
             viewModel: self.viewModel,
             node: node,
             isChild: isChild,
@@ -67,14 +67,21 @@ extension ChatSessionSidebar {
             },
             archive: { self.viewModel.setSessionArchived(session, archived: !session.isArchived) },
             presentedAttention: self.$presentedAttention)
+        return self.interactionRow(content, session: session, isChild: isChild)
             .overlay(alignment: .leading) {
                 OpenClawSessionColorStripe(color: session.color)
                     .offset(x: -6)
             }
-            // Raw child keys retain their Gateway owner in the List selection.
-            .tag(Optional(ChatSessionSidebarModel.selectionTarget(
-                for: session, fallbackAgentID: self.viewModel.selectedAgentID)))
-            .contextMenu { self.contextMenu(for: session, isChild: isChild, now: now) }
+            .tag(self.interactionIdentity(session))
+            .contextMenu {
+                if self.selectedBatchRows.count > 1,
+                   self.batch.selection.keys.contains(self.interactionIdentity(session))
+                {
+                    self.batchMenu.disabled(self.batch.busy)
+                } else {
+                    self.contextMenu(for: session, isChild: isChild, now: now)
+                }
+            }
             .modifier(ChatSidebarAttentionAccessibility(
                 title: ChatSessionSidebarModel.sidebarDisplayName(for: session),
                 targetID: targetID,

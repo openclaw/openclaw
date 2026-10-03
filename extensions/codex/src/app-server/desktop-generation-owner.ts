@@ -1,4 +1,4 @@
-import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 
 const SETTLE_DELAY_MS = 1_000;
 

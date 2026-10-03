@@ -310,7 +310,6 @@ function shouldKeepProfileInLocalStore(params: {
   store: AuthProfileStore;
   profileId: string;
   credential: AuthProfileStore["profiles"][string];
-  agentDir?: string;
   options?: SaveAuthProfileStoreOptions;
   persistedStores: PersistedAuthProfileStores;
   externalProfiles: () => RuntimeExternalOAuthProfile[];
@@ -342,17 +341,12 @@ function shouldKeepProfileInLocalStore(params: {
   if (params.options?.filterExternalAuthProfiles === false) {
     return true;
   }
-  if (params.store.runtimeExternalProfileIds?.includes(params.profileId)) {
+  if (
+    params.store.runtimeExternalProfileIds?.includes(params.profileId) &&
+    !params.persistedStores.localStore?.profiles[params.profileId]
+  ) {
     // Runtime external profiles are normally overlays. Persist only when they
     // have explicit local state or differ from the runtime snapshot.
-    const persistedCredential = params.persistedStores.localStore?.profiles[params.profileId];
-    if (persistedCredential) {
-      return shouldPersistRuntimeExternalOAuthProfile({
-        profileId: params.profileId,
-        credential: params.credential,
-        profiles: params.externalProfiles(),
-      });
-    }
     const runtimeCredential = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(
       params.owner.databasePath,
     )?.profiles[params.profileId];
@@ -1023,7 +1017,6 @@ export function createAuthProfileStoreRuntime(
           store: params.store,
           profileId,
           credential,
-          agentDir: params.agentDir,
           options: params.options,
           persistedStores: params.persistedStores,
           externalProfiles: getExternalProfiles,

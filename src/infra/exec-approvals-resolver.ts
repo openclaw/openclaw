@@ -39,7 +39,7 @@ type ResolvedExecPolicyField<TValue extends ExecSecurity | ExecAsk> = {
   source: string | null;
 };
 
-export function resolveExecApprovalsFromFilePrepared(params: {
+function resolveExecApprovalsFromFilePrepared(params: {
   rawFile: ExecApprovalsFile;
   file: ExecApprovalsFile;
   token: string;

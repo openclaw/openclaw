@@ -14,7 +14,6 @@ import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
-import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
@@ -108,18 +107,6 @@ const memoryFlushSessionRuntimeLoader = createLazyImportLoader(
 const toolResultTruncationRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/embedded-agent-runner/tool-result-truncation.js"),
 );
-
-async function compactEmbeddedAgentSession(
-  ...args: Parameters<typeof import("../../agents/embedded-agent.js").compactEmbeddedAgentSession>
-) {
-  const runtime = await embeddedAgentRuntimeLoader.load();
-  return await runtime.compactEmbeddedAgentSession(...args);
-}
-
-async function runEmbeddedAgent(params: RunEmbeddedAgentInternalParams) {
-  const runtime = await embeddedAgentRuntimeLoader.load();
-  return await runtime.runEmbeddedAgent(params);
-}
 
 function hasMatchingTranscriptByteCompactionLatch(
   entry: SessionEntry,
@@ -426,13 +413,7 @@ export async function runSessionCompactionIfNeeded(params: {
     return entry;
   }
 
-  const runtimeParams = {
-    cfg: params.cfg,
-    followupRun: params.followupRun,
-    sessionEntry: entry,
-    sessionKey: params.sessionKey,
-    agentHarnessId: params.agentHarnessId,
-  };
+  const runtimeParams = { ...params, sessionEntry: entry };
   assertActive();
   const runtimeId = resolveFollowupAgentRuntimeId(runtimeParams);
   const isCli = followupUsesCliRuntime(runtimeParams, runtimeId);
@@ -598,10 +579,7 @@ export async function runSessionCompactionIfNeeded(params: {
     usageProjectedTokenCount ?? 0,
     freshProjectedTokenCount ?? 0,
   );
-  const tokenCountForCompaction =
-    Number.isFinite(projectedTokenCount) && projectedTokenCount > 0
-      ? projectedTokenCount
-      : undefined;
+  const tokenCountForCompaction = asPositiveFiniteNumber(projectedTokenCount);
 
   logVerbose(
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
@@ -724,7 +702,8 @@ export async function runSessionCompactionIfNeeded(params: {
   try {
     await notifyCompaction("start");
     assertActive();
-    const result = await compactEmbeddedAgentSession(
+    const runtime = await embeddedAgentRuntimeLoader.load();
+    const result = await runtime.compactEmbeddedAgentSession(
       {
         sessionId: entry.sessionId,
         sessionKey: compactionSessionKey,
@@ -970,12 +949,7 @@ export async function runMemoryFlushIfNeeded(params: {
   if (entry?.incognito === true || isIncognitoSessionKey(params.sessionKey)) {
     return { sessionEntry: entry, outcome: "skipped" };
   }
-  const runtimeParams = {
-    cfg: params.cfg,
-    followupRun: params.followupRun,
-    sessionEntry: entry,
-    sessionKey: params.sessionKey,
-  };
+  const runtimeParams = { ...params, sessionEntry: entry };
   const runtimeId = resolveFollowupAgentRuntimeId(runtimeParams);
   const isCli =
     followupUsesCliRuntime(runtimeParams, runtimeId) ||
@@ -1365,7 +1339,8 @@ export async function runMemoryFlushIfNeeded(params: {
             promptCacheKey: params.opts?.promptCacheKey,
             allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
           });
-        const result = await runEmbeddedAgent({
+        const runtime = await embeddedAgentRuntimeLoader.load();
+        const result = await runtime.runEmbeddedAgent({
           preparedRunAdmission,
           ...embeddedContext,
           ...senderContext,

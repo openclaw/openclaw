@@ -13,6 +13,7 @@ import { formatUiError } from "../lib/format-error.ts";
 import { McpAppCatalogController } from "../lib/mcp-app-catalog.ts";
 import { mcpAppRouteSearch } from "../lib/mcp-app-route.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
+import { generateUUID } from "../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import { requestMcpAppOpen } from "./mcp-app-launch.ts";
@@ -104,7 +105,7 @@ export class McpAppCatalog extends OpenClawLightDomElement {
       await client.request("mcp.app.onboard", {
         ...target,
         pluginId,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: generateUUID(),
       });
       if (!this.isConnected || context.gateway.snapshot.client !== client) {
         return;

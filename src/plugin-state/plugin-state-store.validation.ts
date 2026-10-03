@@ -59,10 +59,7 @@ export function validateNamespace(
   return validatePluginStoreNamespace({
     value,
     label: "plugin state",
-    errors: {
-      invalid: (message) => invalidInput(message, operation),
-      limit: (message) => invalidInput(message, operation),
-    },
+    invalid: (message) => invalidInput(message, operation),
   });
 }
 
@@ -81,10 +78,7 @@ export function validateKey(
   return validatePluginStoreKey({
     value,
     label: "plugin state",
-    errors: {
-      invalid: (message) => invalidInput(message, operation),
-      limit: (message) => invalidInput(message, operation),
-    },
+    invalid: (message) => invalidInput(message, operation),
   });
 }
 
@@ -107,10 +101,7 @@ export function validateOptionalTtlMs(
   return validateOptionalPluginStoreTtlMs({
     value,
     label: "plugin state ttlMs",
-    errors: {
-      invalid: (message) => invalidInput(message, operation),
-      limit: (message) => invalidInput(message, operation),
-    },
+    invalid: (message) => invalidInput(message, operation),
   });
 }
 

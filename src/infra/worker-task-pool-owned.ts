@@ -125,13 +125,8 @@ function startCloseOwnedWorkerTask<Input, Output>(
   retire = false,
 ): RetainedOperation<void> {
   const owner = task.owner;
-  if (!owner) {
-    const complete = createRetainedOperation<void>(() => {});
-    complete.resolve();
-    return complete.operation;
-  }
-  if (owner.closed) {
-    if (owner.closing) {
+  if (!owner || owner.closed) {
+    if (owner?.closing) {
       return owner.closing;
     }
     const complete = createRetainedOperation<void>(() => {});

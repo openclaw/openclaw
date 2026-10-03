@@ -494,38 +494,32 @@ export function startAcpSpawnParentStreamRelay(params: {
 
     const phase = normalizeOptionalString(event.data.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
+    if (phase !== "end" && phase !== "error") {
+      return;
+    }
+    flushReplaceableAssistantSnapshot();
+    flushPending();
     if (phase === "end") {
-      flushReplaceableAssistantSnapshot();
-      flushPending();
       const startedAt = asFiniteNumber(event.data.startedAt);
       const endedAt = asFiniteNumber(event.data.endedAt);
       const durationMs =
         startedAt != null && endedAt != null && endedAt >= startedAt
           ? endedAt - startedAt
           : undefined;
-      if (durationMs != null) {
-        emit(
-          `${relayLabel} run completed in ${Math.max(1, Math.round(durationMs / 1000))}s.`,
-          `${contextPrefix}:done`,
-        );
-      } else {
-        emit(`${relayLabel} run completed.`, `${contextPrefix}:done`);
-      }
-      dispose();
-      return;
-    }
-
-    if (phase === "error") {
-      flushReplaceableAssistantSnapshot();
-      flushPending();
+      emit(
+        durationMs != null
+          ? `${relayLabel} run completed in ${Math.max(1, Math.round(durationMs / 1000))}s.`
+          : `${relayLabel} run completed.`,
+        `${contextPrefix}:done`,
+      );
+    } else {
       const errorText = normalizeOptionalString(event.data.error);
-      if (errorText) {
-        emit(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`);
-      } else {
-        emit(`${relayLabel} run failed.`, `${contextPrefix}:error`);
-      }
-      dispose();
+      emit(
+        errorText ? `${relayLabel} run failed: ${errorText}` : `${relayLabel} run failed.`,
+        `${contextPrefix}:error`,
+      );
     }
+    dispose();
   });
 
   const dispose = () => {

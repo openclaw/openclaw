@@ -28,14 +28,13 @@ import {
   validatePnpmIsolatedUpdate,
 } from "./package-update-manager-preflight.js";
 import { prepareNpmGitSourceInstallSpec } from "./package-update-npm-pack.js";
-import type { PackageActivationOptions } from "./package-update-swap-contract.js";
 import {
   PackageUpdateActivationError,
-  removePackageUpdatePath,
-  swapStagedPackageInstall,
+  type PackageActivationOptions,
   type PackageUpdateTransaction,
   type StagedPackageInstall,
-} from "./package-update-swap.js";
+} from "./package-update-swap-contract.js";
+import { removePackageUpdatePath, swapStagedPackageInstall } from "./package-update-swap.js";
 import {
   createPackageVerificationFailureStep,
   type PackagePostInstallVerifier,
@@ -62,7 +61,6 @@ import { readPackageManagerProbeValue } from "./update-npm-prefix.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
-export type { PackageUpdateTransaction } from "./package-update-swap.js";
 
 type PackageUpdateStepsResult = {
   localOverrides?: LocalPackageOverridesResult;

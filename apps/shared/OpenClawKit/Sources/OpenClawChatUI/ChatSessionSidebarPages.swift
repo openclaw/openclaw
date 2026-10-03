@@ -160,6 +160,14 @@ extension ChatSessionSidebar {
         }
     }
 
+    func visibleAgentRows(_ nodes: [ChatSessionSidebarModel.Node], agentID: String) -> [ChatSessionSidebarModel.Node] {
+        guard !self.collapsedAgentIDs.contains(agentID) else { return [] }
+        return self.agentReveal.visible(nodes, agentID: agentID) { node in
+            self.viewModel.matchesCurrentSessionKey(
+                incoming: node.id, agentId: node.session.agentId, current: self.viewModel.sessionKey)
+        }
+    }
+
     @ViewBuilder func agentRoster(
         _ sections: [ChatSessionSidebarModel.Section],
         now: Date,
@@ -174,12 +182,7 @@ extension ChatSessionSidebar {
         ForEach(self.viewModel.agentChoices) { agent in
             let nodes = sections.first { $0.id == "agent:\(agent.id):recent" }?.nodes ?? []
             let collapsed = self.collapsedAgentIDs.contains(agent.id)
-            let visible = self.agentReveal.visible(nodes, agentID: agent.id) { node in
-                self.viewModel.matchesCurrentSessionKey(
-                    incoming: node.id,
-                    agentId: node.session.agentId,
-                    current: self.viewModel.sessionKey)
-            }
+            let visible = self.visibleAgentRows(nodes, agentID: agent.id)
             Section {
                 if !collapsed {
                     ForEach(self.homeLoadParents(agentID: agent.id)) { self.childLoadState($0) }

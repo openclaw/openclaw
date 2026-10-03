@@ -162,15 +162,12 @@ describe("plugin subagent sessions_yield follow-up", () => {
       throw failureContext(error);
     }
 
-    const outbound = await transport.waitForCondition(() => {
-      const messages = state
-        .getSnapshot()
-        .messages.filter((message) => message.direction === "outbound");
-      return messages.length >= outboundStartIndex + 2 ? messages : undefined;
-    });
-    // The pause notice and the final completion are distinct requester outcomes.
-    // Each must arrive once; the continued run must not announce its final twice.
-    expect(outbound).toHaveLength(outboundStartIndex + 2);
+    const outbound = state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound");
+    // The queued follow-up supersedes the paused turn before its notice publishes.
+    // Only the final completion may reach the requester, exactly once.
+    expect(outbound).toHaveLength(outboundStartIndex + 1);
     expect(
       outbound.filter((message) => message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER)),
     ).toHaveLength(1);
@@ -207,7 +204,7 @@ describe("plugin subagent sessions_yield follow-up", () => {
         request.prompt?.includes("Subagent self yield qa worker") ||
         request.prompt?.includes("Subagent self yield qa remote job finished"),
     );
-    expect(requests).toHaveLength(3);
+    expect(requests).toHaveLength(2);
     const verdict = {
       schemaVersion: 1,
       scenario: "channel-handoff-adoption",
@@ -232,7 +229,7 @@ describe("plugin subagent sessions_yield follow-up", () => {
     expect(verdict.facts).toEqual({
       sessionsYieldCalls: 1,
       childModelRequests: 2,
-      pauseNoticeRequests: 1,
+      pauseNoticeRequests: 0,
       visibleReplies: 1,
       duplicateRepliesAfterQuietWindow: 0,
       duplicateRepliesAfterGatewayRestart: 0,

@@ -18,9 +18,9 @@ import {
   ensureSessionGoalOperationsSchema,
   SESSION_GOAL_OPERATIONS_TABLE,
 } from "../../state/openclaw-agent-goal-operations-schema.js";
+import { SessionGoalOperationError } from "./goals-operations.types.js";
 import type {
   SessionGoalOperation,
-  SessionGoalOperationErrorCode,
   SessionGoalOperationLookup,
   SessionGoalOperationResult,
   SessionTranscriptTurnMutationResult,
@@ -51,15 +51,7 @@ const MAX_SESSION_RECEIPTS = 4096;
 
 type GoalOperationScope = SessionAccessScope & { expectedSessionId: string };
 
-export class SessionGoalOperationError extends Error {
-  constructor(
-    readonly code: SessionGoalOperationErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = "SessionGoalOperationError";
-  }
-}
+export { SessionGoalOperationError } from "./goals-operations.types.js";
 
 export function assertSessionGoalOperationTime(operation: SessionGoalOperation, now: number): void {
   if (
