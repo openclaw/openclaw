@@ -5,10 +5,8 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  loadSessionEntryReadOnly,
-  patchSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -138,7 +136,7 @@ function hasDifferentLiveSessionModelSelection(
  * which could not distinguish between
  * user-initiated `/model` switches and system-initiated fallback rotations.
  */
-export function shouldSwitchToLiveModel(params: {
+export async function shouldSwitchToLiveModel(params: {
   cfg?: OpenClawConfig | undefined;
   sessionKey?: string;
   agentId?: string;
@@ -150,7 +148,7 @@ export function shouldSwitchToLiveModel(params: {
   currentAgentRuntimeOverride?: string;
   currentAuthProfileId?: string;
   currentAuthProfileIdSource?: string;
-}): LiveSessionModelSelection | undefined {
+}): Promise<LiveSessionModelSelection | undefined> {
   const sessionKey = params.sessionKey?.trim();
   const cfg = params.cfg;
   // A borrowed identity does not own the durable turn's pending switch.
@@ -160,7 +158,7 @@ export function shouldSwitchToLiveModel(params: {
   const storePath = resolveSessionStorePathCore(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
-  const entry = loadSessionEntryReadOnly({
+  const entry = await readSessionEntryReadOnlyInWorker({
     storePath,
     sessionKey,
     hydrateSkillPromptRefs: false,
@@ -271,7 +269,7 @@ export async function consolidateLiveModelSwitchAfterRun(params: {
       delete next.liveModelSwitchPending;
       return next;
     },
-    { replaceEntry: true },
+    { replaceEntry: true, workerGuard: {} },
   );
 }
 
@@ -319,6 +317,6 @@ export async function clearLiveModelSwitchPending(params: {
       delete next.liveModelSwitchPending;
       return next;
     },
-    { replaceEntry: true },
+    { replaceEntry: true, workerGuard: {} },
   );
 }

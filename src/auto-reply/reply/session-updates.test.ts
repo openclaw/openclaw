@@ -62,13 +62,15 @@ vi.mock("../../config/sessions.js", () => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: loadSessionEntryMock,
-  patchSessionEntryCore: vi.fn(),
-  updateSessionEntry: async (...args: unknown[]) => {
+  patchSessionEntryCore: async (...args: unknown[]) => {
     const entry = await updateSessionEntryMock(...args);
     loadSessionEntryMock.mockReturnValue(entry ?? undefined);
     return entry;
   },
+}));
+
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryInWorker: loadSessionEntryMock,
 }));
 
 const { ensureSkillSnapshot } = await import("./session-updates.js");
@@ -160,6 +162,7 @@ describe("ensureSkillSnapshot", () => {
         sessionKey,
       },
       expect.any(Function),
+      { workerGuard: {} },
     );
     expect(result.sessionEntry).toBeUndefined();
     expect(result.systemSent).toBe(false);

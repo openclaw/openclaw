@@ -8,12 +8,11 @@ import {
 import { parseSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
 import {
   listSessionEntriesReadOnly,
-  loadSessionEntry,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
-  updateSessionEntry,
   type SessionTranscriptRuntimeTarget,
 } from "../../../config/sessions/session-accessor.js";
+import { readSessionEntryInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../../config/sessions/session-store-owner.js";
 import { prepareSessionEntryPresenceRead } from "../../../config/sessions/session-transcript-worker-runtime.js";
 import {
@@ -347,9 +346,9 @@ type AgentSessionWriterAdmissionSnapshot = {
   storePath: string;
 };
 
-export function assertAgentHarnessRunAdmission(
+export async function assertAgentHarnessRunAdmission(
   params: RunEmbeddedAgentParams,
-): AgentSessionWriterAdmissionSnapshot | undefined {
+): Promise<AgentSessionWriterAdmissionSnapshot | undefined> {
   if (params.sessionPersistence === "detached") {
     return undefined;
   }
@@ -380,12 +379,19 @@ export function assertAgentHarnessRunAdmission(
   const storePath =
     targetStorePath ??
     resolveSessionStorePathCore(params.config?.session?.store, { agentId: admissionAgentId });
-  const durableEntry = loadSessionEntry({
-    ...(admissionAgentId ? { agentId: admissionAgentId } : {}),
-    readConsistency: "latest",
-    sessionKey,
-    storePath,
-  });
+  const assertActive = params.admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
+    : undefined;
+  const durableEntry = await readSessionEntryInWorker(
+    {
+      ...(admissionAgentId ? { agentId: admissionAgentId } : {}),
+      readConsistency: "latest",
+      sessionKey,
+      storePath,
+    },
+    assertActive,
+  );
+  assertActive?.();
   const admissionError = resolveAgentHarnessRunAdmissionError({
     agentHarnessId: params.agentHarnessId,
     entry: durableEntry,
@@ -413,7 +419,11 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
     }
   | undefined
 > {
-  const snapshot = assertAgentHarnessRunAdmission(params);
+  params.abortSignal?.throwIfAborted();
+  const assertCurrent =
+    (params.admittedRunContext && resolveAdmittedRunActiveAssertion(params.admittedRunContext)) ??
+    params.preparedRunAdmission?.assertSourceCurrent;
+  const snapshot = await assertAgentHarnessRunAdmission(params);
   if (!snapshot) {
     return undefined;
   }
@@ -424,7 +434,8 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
   }
 
   const previousWriterRunId = normalizeOptionalString(snapshot.entry.activeWriterRunId);
-  const claimed = await updateSessionEntry(
+  params.abortSignal?.throwIfAborted();
+  const claimed = await patchSessionEntryCore(
     {
       ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
       sessionKey: snapshot.sessionKey,
@@ -441,8 +452,10 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
         activeWriterRunId: params.runId,
       });
     },
-    { skipMaintenance: true },
+    // Accepted persistence retains source authority without inheriting the lane's abort signal.
+    { skipMaintenance: true, workerGuard: { assertCurrent } },
   );
+  assertCurrent?.();
   if (!claimed || (claimed as InternalSessionEntry).activeWriterRunId !== params.runId) {
     throw new Error(`Session writer claim was not persisted: ${snapshot.sessionKey}`);
   }

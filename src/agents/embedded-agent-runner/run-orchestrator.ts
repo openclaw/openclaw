@@ -154,7 +154,7 @@ async function runEmbeddedAgentInternal(
     sessionKey: paramsBase.sessionKey,
     agentId: paramsBase.agentId,
   });
-  const sessionAdmission = assertAgentHarnessRunAdmission({
+  const sessionAdmission = await assertAgentHarnessRunAdmission({
     ...paramsBase,
     sessionKey: effectiveSessionKey,
   });

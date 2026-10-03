@@ -283,11 +283,16 @@ async function executeAgentTurnInternalLoop(
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let fallbackExhausted = false;
   let terminalRunFailed = false;
-  const modelPatch = createAgentPatchedSessionModelRunGuard({
+  const modelPatch = await createAgentPatchedSessionModelRunGuard({
     cfg: runtimeConfig,
     agentId: params.followupRun.run.agentId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
+    assertReadCurrent: () => {
+      params.replyOperation?.abortSignal?.throwIfAborted();
+      params.opts?.abortSignal?.throwIfAborted();
+      preparedRunAdmission.assertSourceCurrent();
+    },
     onError: (error) =>
       logVerbose(`agent model patch reconciliation failed: ${formatErrorMessage(error)}`),
   });

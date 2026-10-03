@@ -1,4 +1,6 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -14,6 +16,8 @@ import {
   resetAgentEventsForTest,
 } from "../../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
+import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   type AgentRunTerminalOutcome,
@@ -199,16 +203,26 @@ describe("embedded run durable writer admission", () => {
     } as InternalSessionEntry);
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
 
-    await claimAgentSessionWriter({
-      agentId: "main",
-      prompt: "next turn",
-      runId: "run-next",
-      sessionId,
-      sessionKey,
-      sessionTarget: { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
-      timeoutMs: 30_000,
-      workspaceDir: "/tmp",
-    });
+    const sql = observeHostDataSql();
+    try {
+      await claimAgentSessionWriter({
+        agentId: "main",
+        prompt: "next turn",
+        runId: "run-next",
+        sessionId,
+        sessionKey,
+        sessionTarget: { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
+        timeoutMs: 30_000,
+        workspaceDir: "/tmp",
+      });
+      expect(
+        sql.queries.filter((query) =>
+          /session_nodes|session_entry_snapshots|session_participants|session_windows/i.test(query),
+        ),
+      ).toEqual([]);
+    } finally {
+      sql.restore();
+    }
 
     expect(warn).not.toHaveBeenCalled();
     expect(
@@ -303,6 +317,65 @@ describe("embedded run durable writer admission", () => {
     expect(staleAppend).toMatchObject({ ok: false, code: "session-rebound" });
   });
 
+  it.each(["transaction", "commit"] as const)(
+    "refuses a writer claim whose admitted source is revoked at the %s grant",
+    async (stage) => {
+      const scope = { agentId: "main", sessionKey, storePath: fixture.storePath() };
+      const incumbent: InternalSessionEntry = {
+        activeWriterRunId: "run-a",
+        lifecycleRevision,
+        sessionId,
+        updatedAt: 1,
+      };
+      await replaceSessionEntry(scope, incumbent);
+      let sourceCurrent = true;
+      let revokedAtGrant = false;
+      const prepared = prepareSystemAgentRunAdmission({}, "run-b", "main", "writer-test", () => {
+        if (!sourceCurrent) {
+          throw new Error("writer source authority revoked");
+        }
+      });
+      const admittedRunContext = await prepared.admit("embedded");
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+        (callback, attachment) =>
+          createAdmission((request, grant) => {
+            const publication = isRecord(request.facts) ? request.facts.publication : undefined;
+            const kind = isRecord(publication) ? publication.kind : undefined;
+            if (
+              request.stage === stage &&
+              kind ===
+                (stage === "transaction"
+                  ? "session-entry-patch-validated"
+                  : "session-entry-patch-committed")
+            ) {
+              revokedAtGrant = true;
+              sourceCurrent = false;
+            }
+            callback(request, grant);
+          }, attachment),
+      );
+      try {
+        await expect(
+          claimAgentSessionWriter({
+            ...scope,
+            admittedRunContext,
+            prompt: "replacement turn",
+            runId: "run-b",
+            sessionId,
+            sessionTarget: { ...scope, sessionId },
+            timeoutMs: 30_000,
+            workspaceDir: "/tmp",
+          }),
+        ).rejects.toThrow(/authority.*(?:revoked|active)/);
+        expect(revokedAtGrant).toBe(true);
+        expect(loadSessionEntry(scope)).toMatchObject({ activeWriterRunId: "run-a" });
+      } finally {
+        prepared.close();
+      }
+    },
+  );
+
   it("leaves the incumbent live when the replacement claim does not commit", async () => {
     await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {
       activeWriterRunId: "run-a",
@@ -331,7 +404,7 @@ describe("embedded run durable writer admission", () => {
         lifecycleEvents.push(event);
       }
     });
-    vi.spyOn(sessionAccessor, "updateSessionEntry").mockRejectedValueOnce(
+    vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockRejectedValueOnce(
       new Error("replacement claim conflict"),
     );
     let params: RunEmbeddedAgentParams & { sessionFile: string } = {

@@ -10,6 +10,7 @@ import {
   prepareGatewaySessionStoreTargetReadOnly,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
+import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 
 /** Acquire the ordered lookup's data while its discovery and physical readers remain current. */
 export async function resolveGatewaySessionStoreTargetInWorker(params: {
@@ -18,6 +19,7 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   assertActive?: () => void;
+  projection?: "full" | "list";
 }) {
   params.assertActive?.();
   const { agentId, canonicalKey } = resolveSessionStoreIdentity({
@@ -31,7 +33,7 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
       ...params,
       agentId,
       readOnly: true,
-      projection: "list",
+      projection: params.projection ?? "list",
       exactRead: true,
     });
   }
@@ -63,6 +65,7 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
         agentId,
         env: inventory.env,
         targetDiscoveryCache,
+        projection: params.projection,
       },
       async (reads, select) => {
         assertCurrent();
@@ -71,7 +74,7 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
             agentId: read.agentId ?? agentId,
             storePath: read.storePath,
             sessionKeys: read.options.exactKeys!,
-            projection: "list",
+            projection: read.options.projection,
             env: inventory.env,
           })),
           (loaded) => {
@@ -98,4 +101,22 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
   }, params.assertActive);
   params.assertActive?.();
   return target;
+}
+
+/** Full entry preparation shares the Gateway's alias, discovery, and reader owners. */
+export async function loadGatewaySessionEntryReadOnlyInWorker(
+  params: Parameters<typeof resolveGatewaySessionStoreTargetInWorker>[0],
+) {
+  const target = await resolveGatewaySessionStoreTargetInWorker({
+    ...params,
+    projection: "full",
+  });
+  params.assertActive?.();
+  const match = findCanonicalStoreMatch(target.store, target.storeKeys);
+  return {
+    ...target,
+    cfg: params.cfg,
+    entry: match?.entry,
+    legacyKey: match?.key !== target.canonicalKey ? match?.key : undefined,
+  };
 }
