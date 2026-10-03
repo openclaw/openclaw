@@ -111,6 +111,9 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/fleet-cache/runtime-preflight.mjs!",
   // test:e2e:node-auto-update runs the installed-package proof against a frozen tarball.
   "scripts/e2e/lib/node-auto-update/scenario.mjs!",
+  // Installed-package authority proof runs by path and injects its worker preload via NODE_OPTIONS.
+  "scripts/e2e/lib/paired-node-skills-authority/scenario.mjs!",
+  "scripts/e2e/lib/paired-node-skills-authority/pause-worker.mjs!",
   "scripts/e2e/lib/npm-telegram-live/prepare-package.mts!",
   "scripts/e2e/lib/onboard/assert-config.mjs!",
   "scripts/e2e/lib/onboard/write-config.mjs!",
@@ -421,6 +424,9 @@ const rootEntries = [
   "scripts/bench-cron-session-reaper.ts!",
   "scripts/bench-codex-catalog-pages.ts!",
   "scripts/bench-redaction-hot-paths.ts!",
+  // The manual heap-retention CLI launches its private IPC preload by path.
+  "scripts/bench-gateway-heap-retention.ts!",
+  "scripts/lib/gateway-heap-retention-preload.mjs!",
   // docs/reference/test/performance.md invokes this standalone comparison harness.
   "scripts/bench-workspace-computation.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
@@ -880,9 +886,6 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic-vertex`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/acpx`]: bundledPluginWorkspace([
-      // Copied as executable runtime internals by the package artifact manifest.
-      "src/runtime-internals/mcp-command-line.mjs!",
-      "src/runtime-internals/mcp-proxy.mjs!",
       // Spawned by the real-process elicitation regression through CODEX_PATH.
       "test/fixtures/codex-app-server.mjs!",
     ]),

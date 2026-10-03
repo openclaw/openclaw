@@ -10,9 +10,11 @@ import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import { loadPluginRegistryHandle } from "./loader.js";
+import { assertMemoryCallerCurrent, isHostMemoryAudience } from "./memory-audience.js";
 import { adaptLegacyMemoryProvider, bindMemoryProvider } from "./memory-provider-adapter.js";
 import type {
   ActiveMemoryProviderResult,
+  MemoryCallerContext,
   MemoryProviderCapabilities,
   MemoryProviderOpenParams,
 } from "./memory-provider-types.js";
@@ -287,6 +289,18 @@ export async function getActiveMemorySearchManagerCore(params: {
   };
 }
 
+/** Applies the selected memory plugin's authorization policy to raw search hits. */
+export async function authorizeActiveMemorySearchHits(
+  params: MemorySearchAuthorization,
+): Promise<MemorySearchAuthorization["hits"]> {
+  const owner = ensureMemoryRuntime(params);
+  // Session artifacts need plugin-owned identity mapping before they are safe
+  // to expose. Runtimes without that capability may still return memory hits.
+  return owner?.runtime?.authorizeSearchHits
+    ? await owner.runtime.authorizeSearchHits(params)
+    : params.hits.filter((hit) => hit.source !== "sessions");
+}
+
 /**
  * Reports whether the selected slot owner registers the provider-neutral runtime.
  * Consumers keep their legacy manager path for every other owner, so this resolves
@@ -306,8 +320,21 @@ export async function getActiveMemoryProviderCore(
   if (typeof params.context.assertCurrent !== "function") {
     throw new Error("memory provider requires caller authority with assertCurrent");
   }
-  params.context.assertCurrent();
-  params.context.signal?.throwIfAborted();
+  if (
+    params.context.authority.kind === "session" &&
+    params.context.authority.audience !== undefined &&
+    !isHostMemoryAudience(params.context.authority.audience)
+  ) {
+    throw new Error("memory provider requires a host-minted memory audience");
+  }
+  // The audience is part of the caller's authority: a stale grant never reaches open(), and
+  // the provider's own `context.assertCurrent()` before I/O rejects it too.
+  const context: MemoryCallerContext = {
+    ...params.context,
+    assertCurrent: () => assertMemoryCallerCurrent(params.context),
+  };
+  const openParams: MemoryProviderOpenParams = { ...params, context };
+  context.assertCurrent();
   const owner = ensureMemoryRuntime(params);
   if (!owner?.runtime && !owner?.providerRuntime) {
     return { provider: null, error: owner?.error ?? "memory plugin unavailable" };
@@ -321,11 +348,10 @@ export async function getActiveMemoryProviderCore(
   }
   const adapter = owner.providerRuntime ? "native" : "legacy";
   const result = owner.providerRuntime
-    ? await owner.providerRuntime.open(params)
-    : await adaptLegacyMemoryProvider(owner.runtime!, providerId, params);
+    ? await owner.providerRuntime.open(openParams)
+    : await adaptLegacyMemoryProvider(owner.runtime!, providerId, openParams);
   try {
-    params.context.assertCurrent();
-    params.context.signal?.throwIfAborted();
+    context.assertCurrent();
     if (
       result.provider &&
       (typeof result.provider.search !== "function" ||
@@ -359,18 +385,6 @@ export async function getActiveMemoryProviderCore(
         )
       : null,
   };
-}
-
-/** Applies the selected memory plugin's authorization policy to raw search hits. */
-export async function authorizeActiveMemorySearchHits(
-  params: MemorySearchAuthorization,
-): Promise<MemorySearchAuthorization["hits"]> {
-  const owner = ensureMemoryRuntime(params);
-  // Session artifacts need plugin-owned identity mapping before they are safe
-  // to expose. Runtimes without that capability may still return memory hits.
-  return owner?.runtime?.authorizeSearchHits
-    ? await owner.runtime.authorizeSearchHits(params)
-    : params.hits.filter((hit) => hit.source !== "sessions");
 }
 
 /** Classifies workspace memory paths through the selected memory plugin's provenance owner. */

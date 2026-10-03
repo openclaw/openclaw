@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRegistryOwner } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -136,6 +137,7 @@ describe("iMessage plugin payload attachments", () => {
     });
 
     await monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config: {
         channels: { imessage: { includeAttachments: true, dmPolicy: "open" } },
         session: { mainKey: "main" },
@@ -285,6 +287,7 @@ describe("iMessage plugin payload attachments", () => {
       try {
         await withPluginRuntimeRegistryScope(registry, () =>
           monitorIMessageProvider({
+            scheduler: createTestPluginServiceScheduler(),
             config: {
               plugins: { slots: { memory: "none" } },
               channels: {

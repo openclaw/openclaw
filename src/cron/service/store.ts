@@ -19,6 +19,7 @@ import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
   hasCanonicalCronDeliveryMode,
 } from "../store/delivery-codec.js";
+import { publishCronJobNames } from "../store/job-name.js";
 import { cronStoreKey } from "../store/key.js";
 import { assertCronStoreCanPersist } from "../store/row-codec.js";
 import {
@@ -475,13 +476,21 @@ export async function persistCronJobMutation(params: {
       assertAvailable();
       return { value: { nowMs: state.deps.nowMs() }, assertCurrent: assertAvailable };
     },
-    publish({ store, jobsFingerprint: committedJobs, runtimeFingerprint: committedRuntime }) {
+    publish({
+      store,
+      names,
+      jobsFingerprint: committedJobs,
+      runtimeFingerprint: committedRuntime,
+    }) {
       published = true;
       if (changes.changedIds.size > 0) {
         markCommitted?.();
       }
       const unchanged = getCronJobsStoreRevision(source.storeKey) === observedRevision;
       noteCronJobsStoreCommit(source.storeKey);
+      if (unchanged) {
+        publishCronJobNames(source.storeKey, source.context, names);
+      }
       state.store = store;
       state.storeLoadedAtMs = state.deps.nowMs();
       if (quarantine) {

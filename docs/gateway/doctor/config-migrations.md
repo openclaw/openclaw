@@ -31,8 +31,10 @@ untouched so Doctor can report and persist the repair.
 ## Retention policy
 
 OpenClaw supports migrations from formats written by shipped releases on or after
-July 1, 2026. Retain a transform whenever a release in that window can still write
-its input format. A supported release that preserves a legacy
+July 1, 2026. The publication date controls this cutoff: an older version number
+published later, including an extended-stable release, still counts. Retain a
+transform whenever a release in that window can still write its input format.
+A supported release that preserves a legacy
 format when rewriting existing data also counts as a writer. A format last
 written before the cutoff may be retired only with a clear refusal naming an
 intermediate release to upgrade through before retrying. Retirement must never
@@ -40,6 +42,13 @@ silently discard persisted data.
 
 Legacy normalization belongs to Doctor and migration owners, with the existing
 backup and verification flow. Runtime readers consume canonical state.
+
+Unreleased per-agent SQLite session layouts below schema 8 and their pre-landing
+transcript search caches are retired. Doctor refuses those layouts without
+repairing their tables. Shipped schema-1
+memory/auth/cache databases remain supported; see [agent schema
+history](/reference/database-schemas/agent-schema-history) for the supported
+layouts and recovery route.
 
 Old `openclaw.extension.json` npm declaration stubs are ignored by discovery and
 Doctor. They are not plugin manifests, and their files remain unchanged. Reinstall
@@ -53,6 +62,33 @@ settings are also retired, including account overrides. Doctor preserves the
 original config and names the affected path. Install `2026.9.7`, run
 `openclaw doctor --fix`, then upgrade again. The repaired forms are
 `voice.tts.providers.<provider>`, guild-channel `enabled`, and top-level `bindings`.
+
+Device Pair `device-pair-notify.json` is retired. Upgrade through `2026.9.5` and
+run `openclaw doctor --fix` to import subscribers. Verify the imported state
+before updating. If the intermediate release retains the original file for
+rollback or cannot interpret an empty or invalid source, preserve a backup and
+move that file out of the active state directory before retrying. Current Doctor
+refuses the retired source without deleting or rewriting it.
+
+Discord model preferences and thread bindings stored in JSON, plus iMessage
+reply-cache, sent-echo, and catchup files, are also retired. Upgrade through
+`2026.9.5`, run `openclaw doctor --fix`, and verify the imported SQLite state.
+Preserve a backup and move any retained original files out of the active state
+directory before updating; current Doctor refuses these sources without
+modifying their bytes. Discord's July-era command deployment cache migration
+remains supported and rebuilds its disposable hashes.
+
+Voice Call JSONL call logs are retired pre-July state. Upgrade through
+`2026.9.7` and run `openclaw doctor --fix` to import them before updating.
+Current Doctor preserves remaining JSONL sources and reports that intermediate
+upgrade. SQLite schema repair remains supported.
+
+Voice Call config migration remains supported for `provider: "log"`,
+`twilio.from`, flat streaming provider settings, and
+`realtime.agentContext.includeSystemPrompt`. Published `2026.9.7` can preserve
+and rewrite these settings while plugin repair is deferred. Doctor owns their
+normalization, preserves canonical values, and backs up config before writing;
+runtime parsing accepts only the canonical shape.
 
 OpenClaw `v2026.9.7` can still write ownerless and mode-less cron jobs, and its
 migration/import writers can preserve null, `deliver`, or mixed-case delivery
@@ -68,6 +104,13 @@ upgrade to the latest version. Candidate update admission checks the original
 live files and reports the upgrade requirement before activation, including when
 a published updater omits those files from its later rehearsal snapshot. Existing SQLite cron stores,
 including their owner and delivery repairs, keep their normal update path.
+
+Doctor refuses pre-July JSON delivery queue files and leaves them unchanged.
+Upgrade through `2026.9.7` and run its `openclaw doctor --fix` before retrying.
+Current SQLite queues remain supported. Updates driven by `2026.9.7` check these
+original files before stopping the running Gateway. The same early check reports
+the existing recovery guidance for a retired `plugins/installs.json` index. See
+[state migration recovery](/gateway/doctor/state-and-sessions).
 
 Doctor also refuses these retired config inputs:
 

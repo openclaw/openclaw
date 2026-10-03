@@ -320,6 +320,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             input.command.profileIds.every((id) => typeof id === "string")))) ||
       isWorkspaceJournalReadCommand(input.command) ||
       input.command.type === "workers.placementRecoveryCandidates" ||
+      (input.command.type === "workers.placementPendingResults" &&
+        (input.command.sessionId === undefined || typeof input.command.sessionId === "string")) ||
       (input.command.type === "workers.placementProjection" &&
         Array.isArray(input.command.sessionIds) &&
         input.command.sessionIds.every((id) => typeof id === "string") &&

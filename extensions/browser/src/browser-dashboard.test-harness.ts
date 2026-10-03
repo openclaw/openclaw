@@ -44,6 +44,9 @@ export function useBrowserDashboardTestHarness(
       return {
         isAvailable: async () => true,
         request: fixture.readBoard,
+        subscribeSessionChanges() {
+          throw new Error("Unexpected session change subscription");
+        },
         async readSessionFacts() {
           throw new Error("Unexpected session facts request");
         },

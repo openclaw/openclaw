@@ -6,10 +6,6 @@ struct QuickChatTextContext: Equatable, Sendable {
     let appName: String
     let windowTitle: String
     let text: String
-
-    var characterCount: Int {
-        self.text.count
-    }
 }
 
 struct QuickChatTextCollectionLimits: Equatable, Sendable {

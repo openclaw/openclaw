@@ -362,6 +362,7 @@ export function joinClawHubPluginDetail(params: {
       : {}),
     configuration: params.remote.configFields,
     mcpServers: params.remote.mcpServers,
+    ...(params.remote.mcpServerDetails ? { mcpServerDetails: params.remote.mcpServerDetails } : {}),
     skills: params.remote.skills,
     versions: params.remote.versions,
     ...(params.remote.verification ? { verification: params.remote.verification } : {}),

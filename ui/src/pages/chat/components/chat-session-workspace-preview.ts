@@ -30,6 +30,7 @@ export function openWorkspaceItem<T>(
     label: string;
     resolveLabel?: (result: T) => string | undefined;
     resolveKey?: (result: T) => string | undefined;
+    resolveError?: (error: unknown) => string | undefined;
   },
 ) {
   if (!state.client || !state.connected) {
@@ -165,7 +166,7 @@ export function openWorkspaceItem<T>(
         workspace.previews = [...workspace.previews];
       }
     } catch (error) {
-      fail(formatUiError(error));
+      fail(options.resolveError?.(error) ?? formatUiError(error));
     } finally {
       state.requestUpdate?.();
     }

@@ -384,8 +384,10 @@ openclaw gateway call diagnostics.heapProfile --params '{"includeObjectsCollecte
 ```
 
 The Node-only RPC defaults to five seconds and an average sampling interval of
-32 KiB. `durationMs` and `samplingIntervalBytes` must be positive integers. Durations above 30 seconds are
-clamped to 30 seconds; intervals below 4 KiB are clamped to 4 KiB. Smaller intervals
+32 KiB. `durationMs` and `samplingIntervalBytes` must be positive integers. With
+both collection flags false, durations are capped at 15 minutes (900,000 ms).
+Enabling either collection flag keeps the duration cap at 30 seconds;
+intervals below 4 KiB are clamped to 4 KiB. Smaller intervals
 collect more samples at greater CPU and memory cost. Choose a CLI timeout longer
 than the requested capture. The critical-memory warning points to this RPC;
 pressure never starts a capture automatically.
@@ -394,6 +396,20 @@ The optional booleans `includeObjectsCollectedByMajorGC` and
 `includeObjectsCollectedByMinorGC` both default to `false`. Enable both to retain
 samples of objects collected during the window and attribute transient allocation
 churn. Retaining collected samples can increase profiler memory use.
+
+For retention attribution, keep both collection flags false (the default) and
+use a longer window with a coarser sampling interval:
+
+```bash
+openclaw gateway call diagnostics.heapProfile --json --timeout 930000 --params '{"durationMs":900000,"samplingIntervalBytes":262144}'
+```
+
+Read each node's `selfSize` in `profile.head` as estimated bytes **allocated
+during the window and still alive at stop**. These are allocation sites, not
+retaining paths or objects allocated before capture. The 930,000 ms CLI timeout
+allows 30 seconds beyond the requested window for setup and cleanup; event-loop
+stalls can require more time. Disconnection, authority revocation, or Gateway
+shutdown cancels sampling and discards the partial profile after cleanup.
 
 The result includes actual elapsed `durationMs`, `samplingIntervalBytes`,
 `includeObjectsCollectedByMajorGC`, `includeObjectsCollectedByMinorGC`,

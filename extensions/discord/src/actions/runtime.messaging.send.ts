@@ -319,12 +319,17 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const guildId = readStringParam(ctx.params, "guildId", {
         required: true,
       });
-      const channelId = readStringParam(ctx.params, "channelId");
+      const rawChannelId = readStringParam(ctx.params, "channelId");
+      const channelId = rawChannelId ? resolveDiscordChannelId(rawChannelId) : undefined;
       const includeArchived = readBooleanParam(ctx.params, "includeArchived");
       const before = readStringParam(ctx.params, "before");
       const limit = readPositiveIntegerParam(ctx.params, "limit");
-      if (channelId && includeArchived === true) {
-        await ctx.assertReadTargetAllowed({ guildId, channelId });
+      if (channelId) {
+        await ctx.assertReadTargetAllowed({
+          guildId,
+          channelId,
+          requireGuildMetadata: includeArchived !== true,
+        });
       } else {
         await ctx.assertGuildReadTargetAllowed({
           guildId,
@@ -332,7 +337,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
             "Discord active thread lists require a wildcard channel allowlist so each read target can be authorized.",
         });
       }
-      const threads = await discordMessagingActionRuntime.listThreadsDiscord(
+      const response = await discordMessagingActionRuntime.listThreadsDiscord(
         {
           guildId,
           channelId,
@@ -342,6 +347,12 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         },
         ctx.withOpts(),
       );
+      // Discord's active-thread endpoint is guild-wide even when the caller
+      // supplies a parent channel. Never return sibling threads or members.
+      const threads =
+        channelId && includeArchived !== true
+          ? await ctx.filterActiveThreadList({ guildId, channelId, value: response })
+          : response;
       return jsonResult(
         normalizeDiscordThreadListActionResult({
           value: threads,

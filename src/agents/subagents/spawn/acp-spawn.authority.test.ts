@@ -355,6 +355,9 @@ it.each([
     const source = createSessionsSpawnTool({
       config: cfg,
       agentSessionKey: parentSessionKey,
+      // Trusted tool construction facts the ACP child records in its lineage receipt.
+      senderIsOwner: true,
+      expectedParentSessionId: "parent-session",
       requesterRunId: parentRunId,
       requesterTurnRunId: parentRunId,
       ...(thread
@@ -447,6 +450,12 @@ it.each([
         .toHaveBeenCalledTimes(thread && live ? 1 : 0);
       if (live) {
         expect(result).toMatchObject({ details: { status: "accepted", childSessionKey } });
+        expect(sourceBoundary.entry).toMatchObject({
+          spawnedBy: parentSessionKey,
+          parentSessionKey,
+          spawnedBySessionId: "parent-session",
+          spawnedBySenderIsOwner: true,
+        });
         expect(dispatch).toHaveBeenCalledOnce();
         expect(subagentRuns.size).toBe(1);
         expect(subagentRuns.get(acceptedRunId!)).toMatchObject({

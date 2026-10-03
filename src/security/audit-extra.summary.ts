@@ -1,5 +1,9 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { listAgentIds, resolveAgentConfig } from "../agents/agent-scope-config.js";
+import {
+  listAgentEntries,
+  listAgentIds,
+  resolveAgentConfig,
+} from "../agents/agent-scope-config.js";
 // Summarizes extra security audit findings for user-facing output.
 import {
   resolveConfiguredToolPolicies,
@@ -130,7 +134,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
     `\n` +
     "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway. For multiple users or organizations, run one isolated Gateway cell per tenant: https://docs.openclaw.ai/gateway/multi-tenant-hosting";
 
-  return [
+  const findings: SecurityAuditFinding[] = [
     {
       checkId: "summary.attack_surface",
       severity: "info",
@@ -138,6 +142,22 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
       detail,
     },
   ];
+  for (const entry of listAgentEntries(cfg)) {
+    if (typeof entry.id !== "string" || entry.tools?.github?.allowInSandbox !== true) {
+      continue;
+    }
+    const configPath = `agents.entries.${entry.id}.tools.github.allowInSandbox`;
+    findings.push({
+      checkId: "sandbox.github_identity_exposed",
+      severity: "warn",
+      title: "Managed GitHub identity reaches sandboxed execution",
+      detail:
+        `${configPath}=true allows agent "${entry.id}" to use its managed GitHub credentials ` +
+        "and Git author in its own sandboxed execution. Commands in that sandbox can read and use the credentials.",
+      remediation: `Set ${configPath}=false unless this agent's sandboxed code is trusted with its GitHub access.`,
+    });
+  }
+  return findings;
 }
 
 /** Surface default cross-agent session access, escalating when trust boundaries may differ. */

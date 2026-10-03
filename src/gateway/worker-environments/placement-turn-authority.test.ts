@@ -188,7 +188,7 @@ it.each(["local", "worker-turn", "remote-exec"] as const)(
         if (claim.owner.kind === "worker") {
           await store.updateAckCursors({ claim, liveEvent: 2 });
           expect(authority.isCurrent()).toBe(true);
-          store.startWorkspaceResultDrain(claim);
+          await store.startWorkspaceResultDrain(claim);
         } else {
           store.startDrain({
             sessionId: claim.sessionId,

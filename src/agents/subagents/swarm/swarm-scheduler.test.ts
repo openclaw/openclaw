@@ -157,6 +157,114 @@ describe("swarm scheduler", () => {
     }
   });
 
+  it("does not certify an unactivated reservation without a preparation owner", async () => {
+    reserveSwarmRun({ groupId: "unprepared", runId: "child", maxConcurrent: 1, activeRunIds: [] });
+    const released = holdQueuedSwarmRun("child");
+    assert(released);
+    await released.release();
+    expect(released.bindPreparation({ onRemoved: Promise.resolve(undefined) })).toBe(false);
+    const hold = holdQueuedSwarmRun("child");
+    assert(hold);
+    expect(hold.withdraw()).toBe(true);
+    expect(await hold.settleCancellation()).toBe(false);
+    await hold.release();
+  });
+
+  it.each(["success", "failure", "shutdown", "replacement", "removed replacement"] as const)(
+    "joins owned preactivation cleanup without certifying %s incorrectly",
+    async (mode) => {
+      const owner = {};
+      const ready = createDeferred<Parameters<typeof activateSwarmRun>[0]["onRemoved"]>();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const failure = new Error("preparation cleanup failed");
+      reserveSwarmRun({ groupId: "prepared", runId: "child", maxConcurrent: 1, activeRunIds: [] });
+      const producer = holdQueuedSwarmRun("child");
+      assert(producer);
+      expect(producer.bindPreparation({ onRemoved: ready.promise, lifecycleOwner: owner })).toBe(
+        true,
+      );
+      const cancellation = holdQueuedSwarmRun("child");
+      assert(cancellation);
+      expect(cancellation.withdraw()).toBe(true);
+      const published = vi.fn();
+      const settlement = cancellation.settleCancellation().then(
+        (qualified) => {
+          if (qualified) {
+            published();
+          }
+          return { qualified };
+        },
+        (error: unknown) => ({ error }),
+      );
+      ready.resolve(async () => {
+        entered.resolve();
+        await release.promise;
+        if (mode === "failure") {
+          throw failure;
+        }
+      });
+      let closing: Promise<void> | undefined;
+      let replacement: ReturnType<typeof holdQueuedSwarmRun> = undefined;
+      const replacementEntered = createDeferred();
+      const releaseReplacement = createDeferred();
+      let replacementCleaned = false;
+      try {
+        await entered.promise;
+        expect(published).not.toHaveBeenCalled();
+        if (mode === "shutdown") {
+          closing = closeSwarmScheduler(owner);
+        } else if (mode === "replacement" || mode === "removed replacement") {
+          expect(
+            reserveSwarmRun({
+              groupId: "prepared",
+              runId: "child",
+              maxConcurrent: 1,
+              activeRunIds: [],
+            }),
+          ).toBe(true);
+          if (mode === "removed replacement") {
+            replacement = holdQueuedSwarmRun("child");
+            assert(replacement);
+            expect(
+              replacement.bindPreparation({
+                lifecycleOwner: owner,
+                onRemoved: Promise.resolve(async () => {
+                  replacementEntered.resolve();
+                  await releaseReplacement.promise;
+                  replacementCleaned = true;
+                }),
+              }),
+            ).toBe(true);
+            expect(replacement.withdraw()).toBe(true);
+            await replacementEntered.promise;
+            expect(holdQueuedSwarmRun("child")).toBeUndefined();
+          }
+        }
+        release.resolve();
+        expect(await settlement).toEqual(
+          mode === "failure" ? { error: failure } : { qualified: mode === "success" },
+        );
+        expect(published).toHaveBeenCalledTimes(mode === "success" ? 1 : 0);
+        if (mode === "removed replacement") {
+          expect(replacementCleaned).toBe(false);
+        }
+      } finally {
+        release.resolve();
+        releaseReplacement.resolve();
+        await Promise.all([
+          producer.release(),
+          cancellation.release(),
+          replacement?.release(),
+          closing,
+        ]);
+      }
+      if (mode === "failure") {
+        await expect(closeSwarmScheduler(owner)).rejects.toMatchObject({ errors: [failure] });
+      }
+    },
+  );
+
   it.each([false, true])(
     "joins removed queues and preserves retained cleanup failures (%s)",
     async (retained) => {
@@ -729,6 +837,7 @@ describe("swarm scheduler", () => {
         onStartFailure: () => true,
       });
       expect(hold?.withdraw()).toBe(false);
+      expect(hold?.bindPreparation({ onRemoved: Promise.resolve(undefined) })).toBe(false);
       await hold?.release();
       await flushMicrotasks();
       expect(oldStart).not.toHaveBeenCalled();

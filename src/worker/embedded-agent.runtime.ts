@@ -16,7 +16,7 @@ import { createNativeModelOwnedRuntimeModel } from "../agents/defaults.js";
 import { buildBootstrapContextForFiles } from "../agents/embedded-agent-helpers/bootstrap.js";
 import { createEmbeddedAgentResourceLoader } from "../agents/embedded-agent-runner/resource-loader.js";
 import { recordModelFallbackStop } from "../agents/failover-error.js";
-import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.js";
+import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.types.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../agents/sessions/model-registry.js";

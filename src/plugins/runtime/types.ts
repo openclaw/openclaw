@@ -154,6 +154,10 @@ export type PluginRuntime = PluginRuntimeCore & {
     readSessionFacts: (params: {
       sessionKeys: readonly string[];
     }) => Promise<RuntimeSessionFactsResult>;
+    /** Keyed fact invalidations; callers own unsubscribe. Broad store changes are excluded. */
+    subscribeSessionChanges: (
+      listener: (event: { agentId: string; sessionKey: string; factsInvalidated?: string }) => void,
+    ) => () => void;
     withUserProfileIdentity?: <T>(
       params: {
         profileId: string;

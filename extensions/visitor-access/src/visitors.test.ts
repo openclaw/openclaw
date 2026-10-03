@@ -146,15 +146,34 @@ describe("VisitorAccessService", () => {
       otherRole: staffRole,
       access: 'existing role "staff" retained; this invitation does not restrict it',
     },
+    {
+      name: "the declarative GitHub role without an explicit assignment",
+      github: true,
+      assignedRole: undefined,
+      effectiveRole: "staff",
+      roleSource: "githubLogin" as const,
+      otherRole: staffRole,
+      access: 'existing role "staff" retained; this invitation does not restrict it',
+    },
   ])(
     "reports $name through the canonical invitation target",
-    async ({ profileId = "linked-person", github = false, assignedRole, otherRole, access }) => {
+    async ({
+      profileId = "linked-person",
+      github = false,
+      assignedRole,
+      effectiveRole,
+      roleSource,
+      otherRole,
+      access,
+    }) => {
       const fixture = visitorFixture({
         profiles: [
           {
             id: profileId,
             emails: ["primary@example.com", "alias@example.com"],
             role: assignedRole,
+            effectiveRole,
+            roleSource,
           },
         ],
         githubProfiles: github ? [{ accountId: 42, profileId }] : [],

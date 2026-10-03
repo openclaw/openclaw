@@ -77,11 +77,6 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
     legacyIds: string[];
     pathRewrites: Array<{ id: string; fromPath: string; toPath: string }>;
   };
-  deliveryQueues: {
-    outboundPath: string;
-    sessionPath: string;
-    hasLegacy: boolean;
-  };
   pairingStores: { sourcePaths: string[]; hasLegacy: boolean };
   voiceWake: {
     triggersPath: string;

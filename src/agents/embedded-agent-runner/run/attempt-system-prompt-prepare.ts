@@ -236,7 +236,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
                       sessionKey: attempt.sessionKey,
                       sessionId: attempt.sessionId,
                       sandboxed: sandboxInfo?.enabled === true,
-                      senderIsOwner: attempt.senderIsOwner,
+                      audience: attempt.memoryAudience,
                     }
                   : { kind: "host", operation: "project-memory-bootstrap" },
                 assertCurrent: policyPreparation.assertCurrent,

@@ -112,11 +112,6 @@ enum ApplicationRelocator {
         }
     }
 
-    enum RelaunchStrategy: Equatable, Sendable {
-        case openAfterTermination
-        case externalSupervisor
-    }
-
     struct BundleFileReference: Equatable, Sendable {
         let deviceIdentifier: UInt64
         let fileIdentifier: UInt64
@@ -133,7 +128,7 @@ enum ApplicationRelocator {
         }
     }
 
-    private struct KeepAliveSupervisor: Sendable {
+    struct KeepAliveSupervisor: Sendable {
         let label: String
         let plistURL: URL
     }
@@ -200,7 +195,7 @@ enum ApplicationRelocator {
                 guard let installedIdentity = candidate.identity,
                       candidate.isTrusted,
                       installedIdentity.bundleIdentifier == currentIdentity.bundleIdentifier,
-                      compareBuild(installedIdentity.buildVersion, currentIdentity.buildVersion) !=
+                      installedIdentity.buildVersion.compare(currentIdentity.buildVersion, options: .numeric) !=
                       .orderedAscending
                 else { continue }
                 return .handOff(candidate.url)
@@ -270,7 +265,6 @@ enum ApplicationRelocator {
             #endif
             if !processInfo.isRunningTests, !processInfo.isPreview, monitorDebugReplacement {
                 let monitoredBundleURL = replacementSourceBundleURL(
-                    environment: processInfo.environment,
                     fallback: bundle.bundleURL)
                 startBundleReplacementMonitoring(bundle: bundle, at: monitoredBundleURL)
             }
@@ -332,7 +326,6 @@ enum ApplicationRelocator {
         }
 
         let bundleURL = replacementSourceBundleURL(
-            environment: processInfo.environment,
             fallback: bundle.bundleURL)
         let isReadOnlyVolume = (try? bundleURL.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?
             .volumeIsReadOnly ?? false
@@ -356,24 +349,10 @@ extension ApplicationRelocator {
         return .relaunch
     }
 
-    static func relaunchStrategy(
+    static func verifiedKeepAliveSupervisor(
         xpcServiceName: String?,
         executableURL: URL?,
-        homeDirectory: URL,
-        fileManager: FileManager = .default) -> RelaunchStrategy
-    {
-        self.verifiedKeepAliveSupervisor(
-            xpcServiceName: xpcServiceName,
-            executableURL: executableURL,
-            homeDirectory: homeDirectory,
-            fileManager: fileManager) == nil ? .openAfterTermination : .externalSupervisor
-    }
-
-    private static func verifiedKeepAliveSupervisor(
-        xpcServiceName: String?,
-        executableURL: URL?,
-        homeDirectory: URL,
-        fileManager _: FileManager = .default) -> KeepAliveSupervisor?
+        homeDirectory: URL) -> KeepAliveSupervisor?
     {
         guard let serviceName = xpcServiceName?.trimmingCharacters(in: .whitespacesAndNewlines),
               !serviceName.isEmpty,
@@ -574,7 +553,6 @@ extension ApplicationRelocator {
         processInfo: ProcessInfo) -> Environment
     {
         let bundleURL = self.replacementSourceBundleURL(
-            environment: processInfo.environment,
             fallback: bundle.bundleURL)
         let homeDirectory = fileManager.homeDirectoryForCurrentUser.standardizedFileURL
         let appName = bundleURL.lastPathComponent
@@ -619,7 +597,6 @@ extension ApplicationRelocator {
     }
 
     private static func replacementSourceBundleURL(
-        environment _: [String: String],
         fallback: URL) -> URL
     {
         self.authenticatedReplacementSourceBundleURL ?? fallback.standardizedFileURL
@@ -948,24 +925,11 @@ extension ApplicationRelocator {
         matching requirement: SecRequirement?,
         fileManager: FileManager) -> Bool
     {
-        guard let executableURL = bundle.executableURL else { return false }
-        return self.isTrustedInstalledApp(
-            at: bundle.bundleURL,
-            executableURL: executableURL,
-            matching: requirement,
-            fileManager: fileManager)
-    }
-
-    private static func isTrustedInstalledApp(
-        at bundleURL: URL,
-        executableURL: URL,
-        matching requirement: SecRequirement?,
-        fileManager: FileManager) -> Bool
-    {
-        guard let requirement, fileManager.isExecutableFile(atPath: executableURL.path) else { return false }
+        guard let executableURL = bundle.executableURL,
+              let requirement, fileManager.isExecutableFile(atPath: executableURL.path) else { return false }
 
         var code: SecStaticCode?
-        guard SecStaticCodeCreateWithPath(bundleURL as CFURL, SecCSFlags(), &code) == errSecSuccess,
+        guard SecStaticCodeCreateWithPath(bundle.bundleURL as CFURL, SecCSFlags(), &code) == errSecSuccess,
               let code
         else { return false }
         return SecStaticCodeCheckValidity(
@@ -1383,10 +1347,6 @@ extension ApplicationRelocator {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         AppActivation.shared.presentAlert(alert)
-    }
-
-    private static func compareBuild(_ lhs: String, _ rhs: String) -> ComparisonResult {
-        lhs.compare(rhs, options: .numeric)
     }
 
     private static func isInside(_ path: String, root: String) -> Bool {

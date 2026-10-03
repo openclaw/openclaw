@@ -8,10 +8,12 @@ const mocks = vi.hoisted(() => ({
   acquire: vi.fn(),
   capture: vi.fn(),
   legacy: vi.fn(),
+  resolveBackend: vi.fn(),
 }));
 vi.mock("../../plugins/memory-runtime.js", () => ({
   getActiveMemoryProviderCore: mocks.acquire,
   getActiveMemorySearchManagerCore: mocks.legacy,
+  resolveActiveMemoryBackendConfig: mocks.resolveBackend,
 }));
 vi.mock("../operator-run-authority.js", () => ({
   captureGatewayOperatorRunAuthority: mocks.capture,
@@ -94,6 +96,7 @@ describe("provider-neutral memory RPC", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveBackend.mockReturnValue({ backend: "builtin" });
     assertCurrent = vi.fn();
     release = vi.fn();
     mocks.capture.mockResolvedValue({

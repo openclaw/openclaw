@@ -16,7 +16,7 @@ extensions/amazon-bedrock-mantle/register.sync.runtime.ts	2
 extensions/amazon-bedrock/config-compat.ts	5
 extensions/amazon-bedrock/embedding-provider.ts	1
 extensions/amazon-bedrock/register.sync.runtime.ts	13
-extensions/amazon-bedrock/stream.runtime.ts	10
+extensions/amazon-bedrock/stream.runtime.ts	9
 extensions/anthropic-vertex/region.ts	1
 extensions/anthropic-vertex/stream-runtime.ts	4
 extensions/anthropic/cli-backend.ts	2
@@ -30,7 +30,7 @@ extensions/anthropic/session-catalog-parsing.ts	5
 extensions/anthropic/session-catalog-registration.ts	3
 extensions/anthropic/session-catalog-runtime.ts	1
 extensions/anthropic/stream-wrappers.ts	3
-extensions/baseten/models.ts	3
+extensions/baseten/models.ts	1
 extensions/beam/src/mirror.ts	2
 extensions/browser/src/browser-node-fallback.ts	1
 extensions/browser/src/browser-node-proxy.ts	2
@@ -201,10 +201,9 @@ extensions/cua-computer/src/driver-client.ts	10
 extensions/cua-computer/src/driver-result.ts	4
 extensions/cua-computer/src/mcp-driver-client.ts	3
 extensions/cua-computer/src/window-actions.ts	3
-extensions/deepinfra/provider-models.ts	2
+extensions/deepinfra/provider-models.ts	1
 extensions/deepseek/provider-policy-api.ts	2
 extensions/device-pair/index.ts	6
-extensions/device-pair/notify-state.ts	1
 extensions/device-pair/notify.ts	1
 extensions/diagnostics-otel/src/service-content-normalization.ts	1
 extensions/diagnostics-otel/src/service-exporter.ts	1
@@ -224,7 +223,7 @@ extensions/discord/src/accounts.ts	2
 extensions/discord/src/actions/handle-action.ts	2
 extensions/discord/src/actions/runtime.guild.ts	1
 extensions/discord/src/actions/runtime.messaging.send.ts	2
-extensions/discord/src/actions/runtime.messaging.shared.ts	6
+extensions/discord/src/actions/runtime.messaging.shared.ts	4
 extensions/discord/src/actions/runtime.presence.ts	1
 extensions/discord/src/actions/runtime.shared.ts	1
 extensions/discord/src/activities/discord-api.ts	1
@@ -329,7 +328,7 @@ extensions/duckduckgo/src/ddg-search-provider.ts	1
 extensions/elevenlabs/config-compat.ts	2
 extensions/exa/src/exa-web-search-provider.runtime.ts	1
 extensions/fal/video-generation-provider.ts	3
-extensions/feishu/src/accounts.ts	4
+extensions/feishu/src/accounts.ts	3
 extensions/feishu/src/bitable.ts	1
 extensions/feishu/src/bot-broadcast.ts	3
 extensions/feishu/src/bot-content.ts	1
@@ -342,30 +341,29 @@ extensions/feishu/src/card-interaction.ts	1
 extensions/feishu/src/channel.ts	4
 extensions/feishu/src/client.ts	4
 extensions/feishu/src/comment-handler.ts	2
-extensions/feishu/src/comment-reaction.ts	2
 extensions/feishu/src/comment-target.ts	2
 extensions/feishu/src/docx-batch-insert.ts	1
-extensions/feishu/src/docx.ts	4
-extensions/feishu/src/drive.ts	5
+extensions/feishu/src/docx.ts	2
+extensions/feishu/src/drive.ts	2
 extensions/feishu/src/dynamic-agent.ts	2
 extensions/feishu/src/markdown.ts	1
 extensions/feishu/src/media-chunk-idle.ts	1
-extensions/feishu/src/media.ts	9
+extensions/feishu/src/media.ts	5
 extensions/feishu/src/monitor.account.ts	4
-extensions/feishu/src/monitor.comment.ts	2
+extensions/feishu/src/monitor.comment.ts	1
 extensions/feishu/src/monitor.message-handler.ts	1
 extensions/feishu/src/monitor.transport.ts	1
 extensions/feishu/src/monitor.vc-meeting-invited-handler.ts	1
-extensions/feishu/src/perm.ts	2
+extensions/feishu/src/perm.ts	1
 extensions/feishu/src/policy.ts	1
 extensions/feishu/src/presentation-card.ts	1
 extensions/feishu/src/reply-dispatcher.ts	1
 extensions/feishu/src/send.ts	8
 extensions/feishu/src/setup-core.ts	1
-extensions/feishu/src/setup-surface.ts	17
+extensions/feishu/src/setup-surface.ts	9
 extensions/feishu/src/tool-account.ts	1
 extensions/feishu/src/typing-backoff.ts	2
-extensions/feishu/src/wiki.ts	2
+extensions/feishu/src/wiki.ts	1
 extensions/file-transfer/index.ts	4
 extensions/file-transfer/src/node-host/dir-fetch.ts	1
 extensions/file-transfer/src/node-host/dir-list.ts	1
@@ -694,7 +692,7 @@ extensions/opencode/session-catalog-plugin.ts	1
 extensions/opencode/stream.ts	3
 extensions/openrouter/music-generation-provider.ts	2
 extensions/openrouter/provider-routing.ts	2
-extensions/openrouter/stream.ts	4
+extensions/openrouter/stream.ts	2
 extensions/openrouter/video-generation-provider.ts	1
 extensions/openrouter/video-model-catalog.ts	1
 extensions/openshell/src/backend.ts	1
@@ -1000,7 +998,6 @@ extensions/twitch/src/setup-surface.ts	1
 extensions/twitch/src/token.ts	3
 extensions/twitch/src/twitch-ingress.ts	4
 extensions/venice/models.ts	1
-extensions/venice/usage.ts	1
 extensions/vllm/stream.ts	1
 extensions/voice-call/doctor-contract-api.ts	1
 extensions/voice-call/index.ts	2
@@ -1073,7 +1070,7 @@ extensions/xai/src/x-search-config.ts	3
 extensions/xai/stream.ts	3
 extensions/xai/tts.ts	1
 extensions/xai/x-search.ts	5
-extensions/zai/index.ts	2
+extensions/zai/index.ts	1
 extensions/zai/model-definitions.ts	1
 extensions/zalo/setup-api.ts	3
 extensions/zalo/src/accounts.ts	3
@@ -1615,7 +1612,6 @@ src/agents/transcript-redact.ts	2
 src/agents/transport-message-transform.ts	2
 src/agents/utils/frontmatter.ts	2
 src/agents/workspace-legacy-state.ts	2
-src/agents/workspace-state-store.ts	1
 src/agents/workspace.ts	5
 src/agents/worktrees/run-lease.ts	1
 src/audit/execution-identity-admission.ts	3
@@ -1729,7 +1725,6 @@ src/channels/plugins/message-action-dispatch.ts	3
 src/channels/plugins/package-state-probes.ts	2
 src/channels/plugins/read-only-command-defaults.ts	2
 src/channels/plugins/read-only.ts	2
-src/channels/plugins/registry.ts	1
 src/channels/plugins/setup-contract.ts	3
 src/channels/plugins/setup-helpers.ts	3
 src/channels/plugins/setup-promotion-helpers.ts	1
@@ -1781,7 +1776,6 @@ src/cli/claws-cli.gateway-readiness.ts	1
 src/cli/claws-cli.runtime.ts	2
 src/cli/command-config-resolution.ts	2
 src/cli/command-options.ts	1
-src/cli/command-secret-targets.ts	1
 src/cli/completion-runtime.ts	2
 src/cli/config-cli-path.ts	4
 src/cli/config-cli-runner.ts	2
@@ -1910,7 +1904,6 @@ src/commands/doctor/shared/allowlist-policy-repair.ts	3
 src/commands/doctor/shared/channel-doctor.ts	4
 src/commands/doctor/shared/codex-native-assets.ts	1
 src/commands/doctor/shared/codex-route-compaction-repair.ts	2
-src/commands/doctor/shared/codex-route-config-repair.ts	1
 src/commands/doctor/shared/codex-route-session-repair.ts	1
 src/commands/doctor/shared/configured-channel-ids.ts	1
 src/commands/doctor/shared/empty-allowlist-policy.ts	12
@@ -1944,7 +1937,6 @@ src/commands/onboard-config.ts	3
 src/commands/onboard-helpers.ts	2
 src/commands/onboard-non-interactive/local.ts	1
 src/commands/onboard-non-interactive/local/auth-choice-inference.ts	1
-src/commands/onboarding-plugin-install.ts	1
 src/commands/sessions-compact.ts	1
 src/commands/sessions-lifecycle.ts	3
 src/commands/setup.ts	1
@@ -2172,8 +2164,7 @@ src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	4
 src/gateway/server-methods/cron.ts	3
-src/gateway/server-methods/devices.ts	4
-src/gateway/server-methods/doctor.ts	3
+src/gateway/server-methods/doctor.ts	2
 src/gateway/server-methods/exec-approvals.ts	2
 src/gateway/server-methods/memory-search.ts	3
 src/gateway/server-methods/migrations.ts	1
@@ -2186,7 +2177,7 @@ src/gateway/server-methods/nodes.invoke-talk-events.ts	1
 src/gateway/server-methods/nodes.pending-work.ts	1
 src/gateway/server-methods/nodes.read.ts	2
 src/gateway/server-methods/open-path.ts	1
-src/gateway/server-methods/plugin-approval.ts	2
+src/gateway/server-methods/plugin-approval.ts	1
 src/gateway/server-methods/plugin-host-hooks.ts	1
 src/gateway/server-methods/restart-request.ts	8
 src/gateway/server-methods/send.ts	1
@@ -2197,7 +2188,6 @@ src/gateway/server-methods/sessions-compact.ts	1
 src/gateway/server-methods/sessions-create.ts	1
 src/gateway/server-methods/sessions-messaging.ts	3
 src/gateway/server-methods/sessions-patch-engine.ts	1
-src/gateway/server-methods/skills-workspace-handler.ts	1
 src/gateway/server-methods/system-agent-chat-params.ts	2
 src/gateway/server-methods/system-changes.ts	9
 src/gateway/server-methods/task-suggestions.ts	5
@@ -2248,7 +2238,6 @@ src/gateway/tools-invoke-http.ts	1
 src/gateway/tools-invoke-shared.ts	3
 src/gateway/watch-node-http.ts	3
 src/gateway/worker-environments/bundle.ts	5
-src/gateway/worker-environments/inference-control.ts	1
 src/gateway/worker-environments/inference-runtime.ts	2
 src/gateway/worker-environments/live-event-projection.ts	1
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
@@ -2377,7 +2366,7 @@ src/infra/session-cost-usage-collection.ts	2
 src/infra/session-cost-usage-pricing.ts	4
 src/infra/session-cost-usage-reporting.ts	5
 src/infra/session-sqlite-migration-readers.ts	2
-src/infra/sqlite-file-generation.ts	9
+src/infra/sqlite-file-generation.ts	7
 src/infra/sqlite-files.ts	1
 src/infra/sqlite-index-schema.ts	2
 src/infra/sqlite-integrity.ts	2
@@ -2409,7 +2398,6 @@ src/infra/state-migrations.runtime-state.ts	1
 src/infra/state-migrations.session-store.ts	6
 src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.state-dir.ts	1
-src/infra/state-migrations.storage.ts	2
 src/infra/state-migrations.tui-last-session.ts	2
 src/infra/state-migrations.update-check.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	2
@@ -2525,7 +2513,7 @@ src/plugin-sdk/channel-inbound.ts	2
 src/plugin-sdk/channel-ingress-runtime.ts	1
 src/plugin-sdk/channel-outbound.ts	1
 src/plugin-sdk/channel-replay-guard.ts	2
-src/plugin-sdk/core.ts	4
+src/plugin-sdk/core.ts	3
 src/plugin-sdk/dedupe-runtime.ts	1
 src/plugin-sdk/extension-shared.ts	6
 src/plugin-sdk/facade-activation-check.runtime.ts	2
@@ -2648,7 +2636,6 @@ src/plugins/provider-thinking-active.ts	1
 src/plugins/public-surface-loader.ts	2
 src/plugins/recommended-tool-installs.ts	1
 src/plugins/registry-registrars-host.ts	1
-src/plugins/registry-registrars-network.ts	3
 src/plugins/registry-registrars-operations.ts	2
 src/plugins/registry-registrars-tools-hooks.ts	1
 src/plugins/registry-runtime-binding.ts	1
@@ -2820,7 +2807,7 @@ src/tui/gateway-chat.ts	2
 src/tui/tui-autocomplete.ts	1
 src/tui/tui-command-handlers.ts	5
 src/tui/tui-event-handlers.ts	5
-src/tui/tui-formatters.ts	3
+src/tui/tui-formatters.ts	2
 src/tui/tui-session-actions.ts	3
 src/tui/tui-session-events.ts	1
 src/tui/tui-session-projection.ts	2
@@ -2854,7 +2841,7 @@ src/wizard/setup.ts	1
 src/worker/inference-stream.runtime.ts	4
 src/worker/launch-descriptor.ts	5
 src/worker/node-workspace-protocol.ts	1
-src/worker/worker-connection-frames.ts	3
+src/worker/worker-connection-frames.ts	2
 src/worker/worker-process.ts	1
 src/worker/workspace-rsync-receiver.ts	1
 ui/src/app-navigation.ts	1

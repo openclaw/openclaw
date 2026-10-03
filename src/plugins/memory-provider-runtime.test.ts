@@ -1,6 +1,8 @@
 /** Tests selected-owner fallback, caller revocation, and legacy compatibility at the resolver. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { delegateMemoryAudience, resolveMemoryAudienceFromEntry } from "./memory-audience.js";
+import { fakeSessionOwner } from "./memory-audience.test-support.js";
 import type { MemoryCallerContext, MemoryProviderHandle } from "./memory-provider-types.js";
 import type {
   MemoryPluginCapability,
@@ -13,6 +15,14 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 const state = vi.hoisted(() => ({ capability: {} as MemoryPluginCapability }));
 vi.mock("../agents/agent-scope.js", () => ({ resolveAgentWorkspaceDir: vi.fn() }));
 vi.mock("./loader.js", () => ({ loadPluginRegistryHandle: vi.fn() }));
+vi.mock("../config/sessions/session-delivery-generation.js", async () => {
+  const { fakeSessionGenerationModule } = await import("./memory-audience.test-support.js");
+  return fakeSessionGenerationModule;
+});
+vi.mock("../config/sessions/session-entry-read-runtime.js", async () => {
+  const { fakeSessionEntryReadModule } = await import("./memory-audience.test-support.js");
+  return fakeSessionEntryReadModule;
+});
 vi.mock("./memory-state.js", () => ({
   getMemoryRuntime: () => state.capability.runtime,
   getMemoryProviderRuntime: () => state.capability.providerRuntime,
@@ -98,8 +108,96 @@ function manager(): RegisteredMemorySearchManager {
 
 beforeEach(() => {
   state.capability = {};
+  fakeSessionOwner.reset();
 });
+
+async function ownerAudience(sessionKey: string) {
+  const entry = {
+    sessionId: "00000000-0000-4000-8000-000000000001",
+    lifecycleRevision: "generation-1",
+    updatedAt: 1,
+    chatType: "direct" as const,
+  };
+  fakeSessionOwner.rows.set(sessionKey, entry);
+  const resolution = await resolveMemoryAudienceFromEntry(
+    {
+      agentId: "main",
+      sessionKey,
+      sessionId: entry.sessionId,
+      senderIsOwner: true,
+      storePath: "/tmp/openclaw-memory-provider/main.sqlite",
+    },
+    entry,
+  );
+  if (resolution.status !== "granted") {
+    throw new Error(resolution.reason);
+  }
+  return { ...resolution, entry };
+}
 describe("provider-neutral memory resolver", () => {
+  it("rejects a minted audience used by a different session", async () => {
+    const { audience } = await ownerAudience("agent:main:owner");
+    const openProvider = vi.fn(async () => ({ provider: provider() }));
+    state.capability.providerRuntime = { open: openProvider };
+    const caller = context();
+    Reflect.set(caller.value.authority, "audience", audience);
+    await expect(open(caller)).rejects.toThrow("memory audience is bound to a different session");
+    expect(openProvider).not.toHaveBeenCalled();
+    fakeSessionOwner.rows.set(caller.value.authority.sessionKey, {
+      sessionId: "recall-session",
+      updatedAt: 1,
+    });
+    const delegate = await delegateMemoryAudience(audience, {
+      sessionKey: caller.value.authority.sessionKey,
+      storePath: "/tmp/openclaw-memory-provider/main.sqlite",
+    });
+    Reflect.set(caller.value.authority, "audience", delegate.audience);
+    const delegated = await open(caller);
+    await expect(delegated.provider!.health()).resolves.toMatchObject({ status: "ready" });
+    await delegated.provider!.close();
+  });
+
+  it("never opens a provider for an audience that went stale before open", async () => {
+    const sessionKey = "agent:main:chat";
+    const { audience, entry } = await ownerAudience(sessionKey);
+    const openProvider = vi.fn(async () => ({ provider: provider() }));
+    state.capability.providerRuntime = { open: openProvider };
+    const caller = context();
+    Reflect.set(caller.value.authority, "audience", audience);
+    fakeSessionOwner.rows.set(sessionKey, { ...entry, lifecycleRevision: "generation-2" });
+    await expect(open(caller)).rejects.toThrow("memory audience is no longer current");
+    expect(openProvider).not.toHaveBeenCalled();
+  });
+
+  it("closes a provider opened while its audience went stale", async () => {
+    const sessionKey = "agent:main:chat";
+    const { audience, entry } = await ownerAudience(sessionKey);
+    const raw = provider();
+    state.capability.providerRuntime = {
+      open: vi.fn(async () => {
+        fakeSessionOwner.rows.set(sessionKey, { ...entry, lifecycleRevision: "generation-2" });
+        return { provider: raw };
+      }),
+    };
+    const caller = context();
+    Reflect.set(caller.value.authority, "audience", audience);
+    await expect(open(caller)).rejects.toThrow("memory audience is no longer current");
+    expect(raw.close).toHaveBeenCalledOnce();
+    expect(raw.health).not.toHaveBeenCalled();
+  });
+
+  it("rejects a forged session audience before opening a provider", async () => {
+    const openProvider = vi.fn(async () => ({ provider: provider() }));
+    state.capability.providerRuntime = { open: openProvider };
+    const caller = context();
+    Reflect.set(caller.value.authority, "audience", {
+      kind: "owner-private",
+      agentId: "main",
+    });
+    await expect(open(caller)).rejects.toThrow("host-minted memory audience");
+    expect(openProvider).not.toHaveBeenCalled();
+  });
+
   it("prefers the provider runtime and never falls back after errors or unavailable results", async () => {
     const old = legacy(manager());
     const openProvider = vi

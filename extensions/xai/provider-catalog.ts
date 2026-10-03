@@ -30,14 +30,7 @@ const XAI_GROK_OAUTH_MODELS_CACHE_TTL_MS = 60_000;
 const XAI_GROK_OAUTH_REASONING_MODEL_IDS = new Set(["grok-composer-2.5-fast"]);
 
 export function isXaiGrokProxyBaseUrl(baseUrl: string | undefined): boolean {
-  if (!baseUrl) {
-    return false;
-  }
-  try {
-    return new URL(baseUrl).href.replace(/\/+$/u, "") === XAI_GROK_OAUTH_BASE_URL;
-  } catch {
-    return false;
-  }
+  return URL.parse(baseUrl ?? "")?.href.replace(/\/+$/u, "") === XAI_GROK_OAUTH_BASE_URL;
 }
 
 export function buildXaiProvider(

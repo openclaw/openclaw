@@ -51,7 +51,7 @@ import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import { startProjectsListDiagnostics } from "./projects-list-diagnostics.js";
 import { listProjectRecents } from "./projects-recents.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 type ProjectWorktreeService = Pick<
   ManagedWorktreeService,
@@ -152,6 +152,13 @@ function sanitizeProjectRecord(project: ProjectRecord): ProjectRecord {
     ...record,
     ...(sanitizedOriginUrl ? { originUrl: sanitizedOriginUrl } : {}),
   };
+}
+
+function projectCheckoutError(error: unknown) {
+  return errorShape(
+    error instanceof ProjectCheckoutError ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+    formatErrorMessage(error),
+  );
 }
 
 function projectCandidatesToSummaries(candidates: readonly ProjectCandidate[]): ProjectSummary[] {
@@ -456,13 +463,10 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         diagnostics?.finish();
       }
     },
-    "projects.register": async ({ params, respond }) => {
-      if (
-        !assertValidParams(params, validateProjectsRegisterParams, "projects.register", respond)
-      ) {
-        return;
-      }
-      try {
+    "projects.register": defineValidatedGatewayHandler(
+      "projects.register",
+      validateProjectsRegisterParams,
+      async ({ params, respond }) => {
         respond(
           true,
           sanitizeProjectRecord(
@@ -470,19 +474,9 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           ),
           undefined,
         );
-      } catch (error) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            error instanceof ProjectCheckoutError
-              ? ErrorCodes.INVALID_REQUEST
-              : ErrorCodes.UNAVAILABLE,
-            formatErrorMessage(error),
-          ),
-        );
-      }
-    },
+      },
+      projectCheckoutError,
+    ),
     "projects.add": async ({ params, respond, context, signal }) => {
       if (!assertValidParams(params, validateProjectsAddParams, "projects.add", respond)) {
         return;
@@ -532,28 +526,21 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
       }
     },
-    "projects.searchRemote": async ({ params, respond }) => {
-      if (
-        !assertValidParams(
-          params,
-          validateProjectsSearchRemoteParams,
-          "projects.searchRemote",
-          respond,
-        )
-      ) {
-        return;
-      }
-      try {
+    "projects.searchRemote": defineValidatedGatewayHandler(
+      "projects.searchRemote",
+      validateProjectsSearchRemoteParams,
+      async ({ params, respond }) => {
         respond(true, await searchRemoteProjects(params.query), undefined);
-      } catch (error) {
+      },
+      (error) => {
         const { message, ...details } =
           error instanceof gitHubPublicApi.ControlUiGitHubError ||
           isTrustedSecretSurfaceUnavailableError(error)
             ? gitHubPublicApi.formatControlUiGitHubPreviewError(error)
             : { message: "GitHub project search is unavailable. Retry shortly.", retryable: true };
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
-      }
-    },
+        return errorShape(ErrorCodes.UNAVAILABLE, message, details);
+      },
+    ),
     "projects.remove": async ({ params, respond, context }) => {
       if (!assertValidParams(params, validateProjectsRemoveParams, "projects.remove", respond)) {
         return;
@@ -596,16 +583,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
             }
           });
         } catch (error) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              error instanceof ProjectCheckoutError
-                ? ErrorCodes.INVALID_REQUEST
-                : ErrorCodes.UNAVAILABLE,
-              formatErrorMessage(error),
-            ),
-          );
+          respond(false, undefined, projectCheckoutError(error));
           return;
         }
       } else {

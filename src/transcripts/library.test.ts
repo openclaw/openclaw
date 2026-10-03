@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,14 +6,14 @@ import {
   TRANSCRIPTS_LEGACY_RESULT_MAX_BYTES,
   TRANSCRIPTS_RESULT_MAX_BYTES,
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { activeSessions } from "./capture-startup.js";
 import { transcriptLibraryTimezoneEntrypoint } from "./library-timezone-runtime.test-support.js";
 import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
@@ -146,24 +145,21 @@ describe("transcript library SQLite reads", () => {
   it(
     "uses the process timezone for unzoned stored dates and range bounds",
     { timeout: 45_000 },
-    () => {
+    async ({ signal }) => {
       const stateDir = tempDirs.make("transcript-library-timezone-");
-      const child = spawnSync(
-        resolveTestNodeExecPath(),
-        [
-          ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(transcriptLibraryTimezoneEntrypoint)),
+      const child = await runNodeScript(
+        (workerArgv) => [
+          ...workerArgv(resolveRuntimeWorkerUrl(transcriptLibraryTimezoneEntrypoint)),
           stateDir,
         ],
         {
-          encoding: "utf8",
-          timeout: 30_000,
-          env: {
-            ...process.env,
-            TZ: "America/Los_Angeles",
-            OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-          },
+          ...process.env,
+          TZ: "America/Los_Angeles",
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
         },
+        30_000,
+        { signal, maxBuffer: 1024 * 1024, requireProcessTreeExit: process.platform !== "win32" },
       );
       expect(child.error, child.stderr).toBeUndefined();
       expect(child.status, child.stderr).toBe(0);

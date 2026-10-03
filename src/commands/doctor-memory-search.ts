@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import type { HealthCheckContext, HealthFinding } from "../flows/health-checks.js";
 import type { DoctorMemoryEmbeddingRuntimePayload } from "../gateway/server-methods/doctor.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import { getMissingLocalMemoryEmbeddingProviderMessage } from "../plugin-sdk/memory-core-bundled-runtime.js";
@@ -30,7 +31,10 @@ import {
   resolveManifestOwnerBasePolicyBlock,
   type ManifestOwnerBasePolicyBlockReason,
 } from "../plugins/manifest-owner-policy.js";
-import { resolveActiveMemoryBackendConfig } from "../plugins/memory-runtime.js";
+import {
+  getActiveMemoryProviderCore,
+  resolveActiveMemoryBackendConfig,
+} from "../plugins/memory-runtime.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import {
   listProviderPolicyOwners,
@@ -188,6 +192,7 @@ type MemorySearchHealthReporter = (
   message: string,
   path?: MemorySearchHealthPath,
   disabled?: boolean,
+  informational?: boolean,
 ) => void;
 
 function inspectRememberAcrossConversationsHealth(params: {
@@ -278,6 +283,7 @@ async function inspectMemorySearchHealth(
       message,
       path = "memory.search.provider",
       disabled = false,
+      informational = false,
     ) => {
       const text = formatMemoryDoctorAgentMessage(scope.agentId, labelAgents, message);
       const [firstLine, ...details] = text.split("\n");
@@ -289,7 +295,7 @@ async function inspectMemorySearchHealth(
         text,
         // Labeled disabled-agent notes have historically remained lint warnings.
         finding:
-          disabled && !labelAgents
+          informational || (disabled && !labelAgents)
             ? null
             : {
                 checkId: "core/doctor/memory-search",
@@ -355,6 +361,46 @@ async function inspectMemorySearchHealthForAgent(
     );
     return;
   }
+  // Resolve the owner only where Memory Core's checks need it, so these early
+  // returns never load the slot plugin.
+  const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
+  if (backendConfig?.backend === "provider-runtime") {
+    let memoryProvider: Awaited<ReturnType<typeof getActiveMemoryProviderCore>>["provider"] = null;
+    let status = "unavailable";
+    let detail = "provider unavailable";
+    try {
+      const acquired = await getActiveMemoryProviderCore({
+        cfg,
+        agentId,
+        purpose: "status",
+        context: {
+          authority: { kind: "host", operation: "status" },
+          assertCurrent() {},
+        },
+      });
+      memoryProvider = acquired.provider;
+      if (memoryProvider) {
+        const health = await memoryProvider.health();
+        status = health.status;
+        detail = health.message ?? "no provider message";
+      } else {
+        detail = acquired.error ?? detail;
+      }
+    } catch (error) {
+      detail = formatErrorMessage(error);
+    } finally {
+      await memoryProvider?.close().catch(() => {});
+    }
+    report(
+      status === "ready"
+        ? `Not applicable: ${backendConfig.providerId} uses the provider runtime; see its health.\nProvider health: ${status}${detail ? ` (${detail})` : ""}.`
+        : `Memory provider "${backendConfig.providerId}" is ${status}${detail ? `: ${detail}` : ""}.\nCheck the provider's configuration and service availability.`,
+      "plugins.slots.memory",
+      false,
+      status === "ready",
+    );
+    return;
+  }
   inspectRememberAcrossConversationsHealth({
     cfg,
     agentId,
@@ -362,11 +408,6 @@ async function inspectMemorySearchHealthForAgent(
   });
   const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved.remote?.apiKey);
 
-  const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
-  // A provider-runtime owner does not use Memory Core's embedding configuration.
-  if (backendConfig?.backend === "provider-runtime") {
-    return;
-  }
   if (!backendConfig) {
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       return;

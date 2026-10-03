@@ -125,7 +125,7 @@ export type GatewayOperatorRolesConfig = Omit<
   NonNullable<GatewayConfigInput["roles"]>,
   "default"
 > & {
-  /** Required validated default for profiles without a valid assigned role. */
+  /** Required default for profiles without a valid explicit or GitHub login assignment. */
   default?: string;
 };
 

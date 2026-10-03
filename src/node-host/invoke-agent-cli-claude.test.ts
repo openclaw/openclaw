@@ -17,7 +17,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import type { NodeHostClient } from "./client.js";
 import { decodeClaudeCliNodeRunParams } from "./invoke-agent-cli-claude-params.js";
 import { runClaudeCliNodeCommand } from "./invoke-agent-cli-claude.js";
-import { handleSystemRunInvoke } from "./invoke-system-run.js";
 import type { RunResult } from "./invoke-types.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "./invoke.js";
 
@@ -106,7 +105,7 @@ describe("Claude CLI node command", () => {
       let staged = 0;
       let stagedPrompt: string | undefined;
       const writeFile = fs.writeFile.bind(fs);
-      await withEnvAsync({ OPENCLAW_HOME: cwd }, async () => {
+      await withEnvAsync({ OPENCLAW_HOME: cwd, PATH: "/usr/bin:/bin", HOME: cwd }, async () => {
         saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" }, agents: {} });
         setRuntimeConfigSnapshot({ tools: { exec: { mode: "full" } } });
         const staging = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
@@ -136,11 +135,6 @@ describe("Claude CLI node command", () => {
             undefined,
             {
               claudePath: executable,
-              handleSystemRun: (options) =>
-                handleSystemRunInvoke({
-                  ...options,
-                  sanitizeEnv: () => ({ PATH: "/usr/bin:/bin", HOME: cwd }),
-                }),
             },
           );
         } finally {
@@ -159,6 +153,7 @@ describe("Claude CLI node command", () => {
       expect(existsSync(marker)).toBe(!revoke);
       expect(reply?.ok).toBe(!revoke);
       expect(progress).toBe(revoke ? "" : "approved\n");
+      expect(calls.some((call) => call.method === "node.event")).toBe(false);
       if (revoke) {
         expect(reply?.error?.code).toBe("SYSTEM_RUN_DENIED");
         expect(reply?.error?.message).toContain("exec approval changed before execution");
@@ -327,13 +322,9 @@ describe("Claude CLI node command", () => {
       const handleSystemRun = vi.fn(
         async (options: {
           params: { command: string[] };
-          sendNodeEvent: (client: NodeHostClient, event: string, payload: unknown) => Promise<void>;
-          sendExecFinishedEvent: (params: unknown) => Promise<void>;
           sendInvokeResult: (result: unknown) => Promise<void>;
         }) => {
           expect(options.params.command).toEqual([executable, "-p", "--resume", "session-1"]);
-          await options.sendNodeEvent(client(calls), "exec.denied", {});
-          await options.sendExecFinishedEvent({});
           await options.sendInvokeResult({
             ok: false,
             error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: approval required" },

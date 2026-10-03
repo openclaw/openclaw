@@ -479,6 +479,9 @@ async function dispatchChannelTurnWithDeliveryOwner(
         executionIdentityToken: agentRun[1],
         ...durableOptions,
       });
+      if (durable.status === "failed" && isPlatformMessageNotDispatchedError(durable.error)) {
+        await settleFailedPendingFinalDelivery(preparedPayload, durable.error);
+      }
       throwIfDurableInboundReplyDeliveryFailed(durable);
       if (isDurableInboundReplyDeliveryHandled(durable)) {
         // Durable sends emit canonical message_sent after outbound hooks settle.

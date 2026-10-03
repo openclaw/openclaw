@@ -10,6 +10,7 @@ import {
   outputToolArgs,
   outputToolCall,
   outputToolCallId,
+  QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
 } from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
@@ -342,5 +343,30 @@ describe("mock terminal subagents through structured Tool Search", () => {
       ],
     });
     expect(outputText(empty)).toBe("");
+    // Isolated finalization replays the raw task envelope, with the task outside
+    // the two internal scaffolding blocks.
+    const finalization = await expectNonStreamingResponsesJson(server, {
+      ...child,
+      tools: [],
+      input: [
+        user(
+          [
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "[Subagent Context] You are running as a subagent (depth 1/5).",
+            "[Subagent Task]",
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+            String(requireRecord(args.args, "spawn arguments").task),
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "Begin. Execute the assigned task to completion.",
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          ].join("\n\n"),
+        ),
+        write,
+        makeToolOutputWithCallId(outputToolCallId(write, "write"), "Wrote file"),
+        user(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+      ],
+    });
+    expect(outputText(finalization)).toBe("");
+    expect(outputItems(finalization).some((item) => item.type === "function_call")).toBe(false);
   });
 });

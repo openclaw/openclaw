@@ -30,6 +30,7 @@ import {
   setPluginRuntimeLoadContext,
   type PluginRuntimeLoadContext,
 } from "../plugins/runtime/load-context.js";
+import { subscribeRuntimeSessionChanges } from "../plugins/runtime/session-changes.js";
 import type {
   CreatePluginRuntimeOptions,
   PluginRuntime,
@@ -265,6 +266,7 @@ function createGatewayPluginRuntimeBindings(
           openPluginPanelForRequester(params, resolveBoundGatewayContext),
         readSessionFacts: (params) =>
           readTrustedPluginSessionFacts(params, resolveBoundGatewayContext),
+        subscribeSessionChanges: subscribeRuntimeSessionChanges,
         withUserProfileIdentity: (params, run) =>
           withTrustedPluginUserProfileIdentity(params, run, resolveBoundGatewayContext),
       },

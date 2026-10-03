@@ -133,8 +133,7 @@ export function createExecApprovalHandlers(
       }
       const p = params;
       const twoPhase = p.twoPhase === true;
-      const timeoutMs =
-        typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
+      const timeoutMs = p.timeoutMs ?? DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
       // IDs are opaque cross-surface handles. Preserve every supplied byte so
       // the manager can reject unsafe values instead of silently normalizing them.
       const explicitId = p.id ?? null;
@@ -215,8 +214,7 @@ export function createExecApprovalHandlers(
       }
       const envBinding = buildSystemRunApprovalEnvBinding(p.env);
       const warningText = normalizeOptionalString(p.warningText);
-      const runtimeConfig =
-        typeof context.getRuntimeConfig === "function" ? context.getRuntimeConfig() : {};
+      const runtimeConfig = context.getRuntimeConfig();
       const commandHighlighting = resolveExecCommandHighlighting({
         config: runtimeConfig,
         agentId: effectiveAgentId,

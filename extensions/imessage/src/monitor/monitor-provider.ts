@@ -305,7 +305,8 @@ function describeIMessageWatchSubscribeStartupFailure(params: {
   );
 }
 
-export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
+export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promise<void> {
+  const { scheduler } = opts;
   const runtime = opts.runtime ?? createNonExitingRuntime();
   const cfg = opts.config ?? getRuntimeConfig();
   const readConfig = createRuntimeConfigReader(cfg);
@@ -1455,7 +1456,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   }
 
   const activeClient = client;
-  if (!activeClient) {
+  if (!activeClient || scheduler.signal.aborted) {
+    detachAbortHandler();
+    await activeClient?.stop();
     return;
   }
   ingress.start();
@@ -1471,34 +1474,31 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         abortSignal: abort,
       })
     : undefined;
-  let approvalReactionPollInFlight = false;
-  const pollApprovalReactions = async (allowRecentChatDiscovery = false) => {
-    if (approvalReactionPollInFlight) {
-      return;
-    }
-    approvalReactionPollInFlight = true;
-    try {
-      await pollPendingIMessageApprovalReactions({
+  const approvalScheduler = scheduler.scope();
+  let nextDiscoveryAt = 0;
+  approvalScheduler.schedule({
+    id: "approval-reactions",
+    delayMs: 0,
+    everyMs: APPROVAL_REACTION_POLL_INTERVAL_MS,
+    run: () => {
+      const now = approvalScheduler.now();
+      const allowRecentChatDiscovery = now >= nextDiscoveryAt;
+      if (allowRecentChatDiscovery) {
+        nextDiscoveryAt = now + APPROVAL_REACTION_DISCOVERY_INTERVAL_MS;
+      }
+      return pollPendingIMessageApprovalReactions({
+        signal: approvalScheduler.signal,
         client: activeClient,
         cfg,
         accountId: accountInfo.accountId,
         allowRecentChatDiscovery,
         gatewayRuntime: approvalGatewayRuntime,
         logVerboseMessage: logVerbose,
+      }).catch((err: unknown) => {
+        logVerbose(`imessage: approval reaction poll failed: ${String(err)}`);
       });
-    } catch (err) {
-      logVerbose(`imessage: approval reaction poll failed: ${String(err)}`);
-    } finally {
-      approvalReactionPollInFlight = false;
-    }
-  };
-  const approvalReactionPollTimer = setInterval(() => {
-    void pollApprovalReactions();
-  }, APPROVAL_REACTION_POLL_INTERVAL_MS);
-  const approvalReactionDiscoveryTimer = setInterval(() => {
-    void pollApprovalReactions(true);
-  }, APPROVAL_REACTION_DISCOVERY_INTERVAL_MS);
-  void pollApprovalReactions(true);
+    },
+  });
 
   // Legacy opt-in catchup remains the compatibility path for users who
   // explicitly enabled it, including remote SSH setups where the gateway
@@ -1549,11 +1549,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     runtime.error?.(danger(`imessage: monitor failed: ${String(err)}`));
     throw err;
   } finally {
-    clearInterval(approvalReactionPollTimer);
-    clearInterval(approvalReactionDiscoveryTimer);
+    approvalScheduler.beginClose();
     approvalContextLease?.dispose();
     detachAbortHandler();
     await activeClient.stop();
+    await approvalScheduler.stop();
     await ingress.stop();
   }
 }

@@ -165,6 +165,14 @@ function isHeartbeatNoiseEvent(evt: string): boolean {
   );
 }
 
+/** Context-key prefix the restart sentinel gives a continuation queued for one session. */
+export const RESTART_CONTINUATION_CONTEXT_PREFIX = "task:restart-sentinel:";
+
+/** A restart continuation event resumes a specific session's interrupted turn. */
+export function isRestartContinuationEvent(event: { contextKey?: string | null }): boolean {
+  return event.contextKey?.startsWith(RESTART_CONTINUATION_CONTEXT_PREFIX) ?? false;
+}
+
 export function isExecCompletionEvent(evt: string): boolean {
   const trimmed = evt.trimStart();
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);

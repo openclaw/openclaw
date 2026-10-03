@@ -87,6 +87,7 @@ import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -126,7 +127,7 @@ let settleRootWork: ReturnType<typeof observeRootWork>;
 async function settleSessionWork() {
   await continuations.settle();
   await settleRootWork(true);
-  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0);
 }
 
 afterAll(() => {

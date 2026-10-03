@@ -224,6 +224,81 @@ describe("active-memory provider-neutral trigger recall", () => {
     expect((await resolveTriggerRecall(request())).injectedCount).toBe(3);
   });
 
+  it("preserves eligible entries in distinct fragments of the same file", async () => {
+    hoisted.candidates.mockResolvedValue({
+      hits: [
+        result({
+          reference: { providerId: "memory-core", id: "MEMORY.md", fragment: "L1-L3" },
+          excerpt: "Reserve an aisle seat.",
+        }),
+        result({
+          reference: { providerId: "memory-core", id: "MEMORY.md", fragment: "L5-L7" },
+          excerpt: "Allow extra connection time.",
+        }),
+      ],
+    });
+
+    const recalled = await resolveTriggerRecall(request());
+
+    expect(recalled.injectedCount).toBe(2);
+    expect(recalled.context).toContain("Reserve an aisle seat.");
+    expect(recalled.context).toContain("Allow extra connection time.");
+  });
+
+  it.each(["search", "candidates"] as const)(
+    "filters every project key from unfiltered %s results without requesting provider filtering",
+    async (source) => {
+      hoisted.open.mockResolvedValue({
+        provider: {
+          capabilities: {
+            sources: ["memory"],
+            pagination: false,
+            candidates: ["trigger", "project"],
+            projectFilter: false,
+          },
+          search: hoisted.search,
+          candidates: hoisted.candidates,
+          close: hoisted.close,
+        },
+      });
+      hoisted.candidates.mockResolvedValue({ hits: [] });
+      hoisted[source].mockResolvedValue({
+        hits: [
+          result({
+            reference: { providerId: "records", id: "matching" },
+            excerpt: "Matching project fact.",
+            automaticRecall: {
+              eligible: true,
+              triggers: "booking a flight",
+              projectKeys: ["alpha", "beta"],
+            },
+          }),
+          result({
+            reference: { providerId: "records", id: "partial" },
+            excerpt: "Partially matching project fact.",
+            automaticRecall: {
+              eligible: true,
+              triggers: "booking a flight",
+              projectKeys: ["alpha", "inactive"],
+            },
+          }),
+        ],
+      });
+
+      const recalled = await resolveTriggerRecall({
+        ...request(),
+        activeProjectKeys: ["alpha", "beta"],
+      });
+
+      expect(hoisted.search).toHaveBeenCalledOnce();
+      expect(hoisted.search.mock.calls[0]?.[0]).not.toHaveProperty("activeProjectKeys");
+      expect(hoisted.candidates).toHaveBeenCalledExactlyOnceWith({ kind: "trigger" });
+      expect(recalled.injectedCount).toBe(1);
+      expect(recalled.context).toContain("Matching project fact.");
+      expect(recalled.context).not.toContain("Partially matching project fact.");
+    },
+  );
+
   it("prefers eligible candidate facts for the same provider, id, fragment, and revision", async () => {
     hoisted.search.mockResolvedValue({
       hits: [
@@ -280,6 +355,36 @@ describe("active-memory provider-neutral trigger recall", () => {
     await resolveTriggerRecall({ ...params, authorityFingerprint: "authority-b" });
     await resolveTriggerRecall({ ...params, activeProjectKeys: ["alpha"] });
     expect(hoisted.search).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not share trigger candidates across conversation audience sessions", async () => {
+    const params = { ...request(), runId: "run", authorityFingerprint: "authority-a" };
+    const contextForSession = (sessionId: string): MemoryCallerContext => ({
+      authority: {
+        kind: "session",
+        sessionKey: `agent:main:direct:${sessionId}`,
+        sessionId,
+        sandboxed: false,
+        audience: {
+          kind: "conversation",
+          agentId: "main",
+          sessionKey: `agent:main:direct:${sessionId}`,
+          sessionId,
+        },
+      },
+      assertCurrent: vi.fn(),
+    });
+
+    await resolveTriggerRecall({
+      ...params,
+      source: { kind: "native", context: contextForSession("session-a") },
+    });
+    await resolveTriggerRecall({
+      ...params,
+      source: { kind: "native", context: contextForSession("session-b") },
+    });
+
+    expect(hoisted.search).toHaveBeenCalledTimes(2);
   });
 
   it("revalidates authority before releasing cached results", async () => {

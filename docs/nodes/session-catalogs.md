@@ -148,8 +148,11 @@ operator catalog and paired-node catalog commands without disabling Anthropic
 models or the Claude CLI backend.
 A remote macOS app node advertises
 `anthropic.claude.sessions.list.v1` and `anthropic.claude.sessions.read.v1`
-when the Anthropic plugin is enabled and `~/.claude/projects/` exists. Approve
-the node pairing upgrade when those commands first appear.
+when the Anthropic plugin is enabled and its Claude projects directory exists:
+`$CLAUDE_CONFIG_DIR/projects/` when the app's environment sets
+`CLAUDE_CONFIG_DIR`, otherwise `~/.claude/projects/`. Claude Desktop metadata
+always comes from the user's home directory. Approve the node pairing upgrade
+when those commands first appear.
 
 A native node host with the Claude CLI available also advertises
 `anthropic.claude.terminal.resume.v1`. Eligible CLI and Desktop rows can open

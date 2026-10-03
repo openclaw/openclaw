@@ -256,8 +256,8 @@ describe("worker environment runtime refresh", () => {
         ownerEpoch: environment.ownerEpoch,
       },
     });
-    placements.markWorkspaceResultPending(claim);
-    const pending = placements.listPendingWorkspaceResults();
+    await placements.markWorkspaceResultPending(claim);
+    const pending = await placements.listPendingWorkspaceResultsAsync();
     const beforePlacement = placements.get(placement!.sessionId);
     const binding = {
       sessionId: REQUEST.sessionId,
@@ -279,9 +279,10 @@ describe("worker environment runtime refresh", () => {
       ...beforePlacement,
       workerBundleHash: replacement.bundleHash,
     });
-    expect(placements.listPendingWorkspaceResults()).toEqual([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
       { ...pending[0], recoveryRequestedAtMs: nowMs },
     ]);
+    await placements.prepareWorkspaceResultClaim(claim);
     expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
     expect(recoveryGate.validateWorkerTurn(claim)).toBe(false);
     expect(store.getCredential(environment.environmentId)).toBeUndefined();

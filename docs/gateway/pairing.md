@@ -240,8 +240,16 @@ pairing plus role and scope upgrades. This keeps normal same-host and SSH
 tunnel reconnects convenient. A native app that already paired as an operator
 can add its first node role with the same device identity without a device
 approval prompt, including retries of a pending request labeled as a repair.
-This preserves its operator token. Explicitly revoked node tokens still require
-approval; node capability approval remains a separate step.
+This preserves its operator token. The Gateway also approves the initial node
+capability surface directly for a silently paired, non-browser local device,
+including a native app using remote mode to connect to a Gateway on the same
+machine. No app-side SSH check or approval panel is needed.
+
+This uses the same-machine, same-user trust boundary. Gateway command denies
+and node-local OS permissions and exec approvals still apply. Later capability
+surface upgrades and explicitly revoked node tokens still require approval.
+Remote, trusted-CIDR, browser, and proxy connections do not gain local approval
+from a device's earlier silent pairing.
 
 Operators using shell-less, port-forward-only SSH keys or a multi-user Mac can
 require explicit approval for every device:
@@ -258,9 +266,11 @@ require explicit approval for every device:
 }
 ```
 
-With this setting, new pairing requests, role upgrades, and scope upgrades use
-the normal approval flow even when the connection is local. Metadata-only
-reconnect refreshes remain automatic so routine client or OS metadata changes
+With this setting, new pairing requests, role upgrades, scope upgrades, and
+initial node capability requests use the normal approval flow even when the
+connection is local. Re-enabling local auto-approval allows an unapproved initial
+surface to be approved on reconnect, including one previously rejected.
+Metadata-only reconnect refreshes remain automatic so routine client or OS metadata changes
 do not create approval churn.
 
 ## SSH-verified device auto-approval (default)
