@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createDeferredCore } from "./deferred.js";
 
 type BoundedSerialQueueAdmission<T> =
@@ -78,7 +79,9 @@ export class BoundedSerialQueue {
     const task: BoundedSerialQueueTask = {
       sequence: ++this.acceptedSequence,
       weight,
-      run,
+      // Waiting work retains its caller's context, including an absent scope,
+      // rather than inheriting the preceding task's drain microtask.
+      run: AsyncLocalStorage.bind(run),
       resolve: (value) => resolve(value as T),
       reject,
     };
