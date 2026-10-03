@@ -9,7 +9,6 @@ import {
   missingScopeErrorShape,
   normalizeSessionColorValue,
 } from "../../packages/gateway-protocol/src/index.js";
-import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
@@ -64,10 +63,7 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
-import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
-import { isUserModelAuthProfileOwner } from "../state/user-model-accounts.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { ModelAccountConnectAuthorityError } from "./model-account-connect.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import {
@@ -88,6 +84,7 @@ import {
 } from "./session-create-inheritance.js";
 import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
 import {
+  createSessionCreateCommitGuard,
   prepareSessionCreateDefaultAccount,
   prepareSessionCreateModelSelection,
   resolveSessionCreateModelInputError,
@@ -124,7 +121,7 @@ export async function createGatewaySession(
   params: CreateGatewaySessionParams,
 ): Promise<CreateGatewaySessionResult> {
   const { personalModelSelection, personalAccountDefaults, onPhase } = params;
-  let operatorAuthority: AdmittedRunOperatorAuthority | undefined;
+  let operatorAuthority: Parameters<typeof createSessionCreateCommitGuard>[0]["operatorAuthority"];
   let assertPreparedTargetCurrent: (() => void) | undefined;
   let creationOperation: SessionEntryCreationOperation | undefined;
   let createdTargetCommitted = false;
@@ -137,41 +134,34 @@ export async function createGatewaySession(
   // not just the final row. An inherited parent pin is not a new selection.
   let selectedDefaultProfile: string | undefined;
   let validateRuntimeSelection: (() => ErrorShape | undefined) | undefined;
-  const selections = [
-    params.activeParentFork,
-    params.preparedModelSelection,
-    params.preparedPermissionSelection,
-    personalModelSelection,
-    personalAccountDefaults,
-  ];
   const commitGuard =
+    personalModelSelection ||
     params.operatorAuthority ||
-    selections.some(Boolean) ||
+    personalAccountDefaults ||
+    params.activeParentFork ||
+    params.preparedModelSelection ||
+    params.preparedPermissionSelection ||
     typeof params.model === "string" ||
     params.agentRuntime !== undefined
-      ? () => {
-          params.commitGuard?.();
-          assertPreparedTargetCurrent?.();
-          operatorAuthority?.assertCurrent();
-          const error = validateRuntimeSelection?.();
-          if (error) {
-            throw new Error(error.message);
-          }
-          for (const selection of selections) {
-            selection?.assertCurrent();
-          }
-          if (
-            personalAccountDefaults &&
-            selectedDefaultProfile &&
-            isUserModelAuthProfileId(selectedDefaultProfile) &&
-            !isUserModelAuthProfileOwner({
-              profileId: personalAccountDefaults.owner,
-              authProfileId: selectedDefaultProfile,
-            })
-          ) {
-            throw new ModelAccountConnectAuthorityError();
-          }
-        }
+      ? createSessionCreateCommitGuard({
+          assertCallerCurrent: () => {
+            params.commitGuard?.();
+            assertPreparedTargetCurrent?.();
+          },
+          get operatorAuthority() {
+            return operatorAuthority;
+          },
+          selections: [
+            params.activeParentFork,
+            params.preparedModelSelection,
+            params.preparedPermissionSelection,
+            personalModelSelection,
+            personalAccountDefaults,
+          ],
+          personalAccountDefaults,
+          readDefaultProfile: () => selectedDefaultProfile,
+          validateSelection: () => validateRuntimeSelection?.(),
+        })
       : params.commitGuard;
   commitGuard?.();
   const displayName = truncateUtf16Safe(params.displayName?.trim() ?? "", 500).trimEnd();

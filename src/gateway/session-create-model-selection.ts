@@ -22,7 +22,9 @@ import { inheritSessionSelection } from "../config/sessions/session-entry-select
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
+import { isUserModelAuthProfileOwner } from "../state/user-model-accounts.js";
 import type { ModelAccountConnectAction } from "./model-account-authority.js";
+import { ModelAccountConnectAuthorityError } from "./model-account-connect.js";
 import {
   prepareSessionPatchModelSelection,
   resolveSessionPatchModelSelection,
@@ -125,6 +127,40 @@ export function prepareSessionCreateModelSelection(params: {
       ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
       ...(resolved.profile ? { authProfileOverride: resolved.profile } : {}),
     },
+  };
+}
+
+/** Title preparation and the row commit retain the same caller, model, and account fences. */
+export function createSessionCreateCommitGuard(params: {
+  assertCallerCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  selections: readonly ({ assertCurrent: () => void } | undefined)[];
+  personalAccountDefaults?: ModelAccountConnectAction;
+  readDefaultProfile: () => string | undefined;
+  validateSelection: () => ErrorShape | undefined;
+}): () => void {
+  return () => {
+    params.assertCallerCurrent?.();
+    params.operatorAuthority?.assertCurrent();
+    const error = params.validateSelection();
+    if (error) {
+      throw new Error(error.message);
+    }
+    for (const selection of params.selections) {
+      selection?.assertCurrent();
+    }
+    const selectedProfile = params.readDefaultProfile();
+    if (
+      params.personalAccountDefaults &&
+      selectedProfile &&
+      isUserModelAuthProfileId(selectedProfile) &&
+      !isUserModelAuthProfileOwner({
+        profileId: params.personalAccountDefaults.owner,
+        authProfileId: selectedProfile,
+      })
+    ) {
+      throw new ModelAccountConnectAuthorityError();
+    }
   };
 }
 
